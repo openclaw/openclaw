@@ -35,33 +35,25 @@ async function fixture() {
     { database: owner.identity, sessionKey },
     { assertCurrent() {}, assertReadable() {} },
   );
+  const entry = { sessionId: "title", updatedAt: 1, incognito: true };
   try {
-    readSessionActorStorageResult(
-      await actor.storage!.mutate(
-        {
-          type: "session.entry.create",
-          input: { entry: { sessionId: "title", updatedAt: 1, incognito: true } },
-        },
-        authority,
-      ),
+    const result = await actor.storage!.mutate(
+      { type: "session.entry.create", input: { entry } },
+      authority,
     );
+    readSessionActorStorageResult(result);
   } finally {
     await actor.release();
   }
   const scope = { agentId: "main", sessionKey, storePath: owner.path };
+  const params = { cfg, ...scope, sessionId: "title", userMessage: "Plan my workspace" };
   return {
     scope,
     title: () => owner.readSession(sessionKey, authority)?.entry?.displayName,
     generate: () =>
       withPluginMetadataSnapshotScope(
         createPluginMetadataSnapshotFixture(),
-        () =>
-          maybeGenerateSessionTitle({
-            cfg,
-            ...scope,
-            sessionId: "title",
-            userMessage: "Plan my workspace",
-          }),
+        () => maybeGenerateSessionTitle(params),
         { config: cfg, trustConfigIdentity: true },
       ),
   };

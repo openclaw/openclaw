@@ -1,4 +1,3 @@
-// Dashboard title tests cover eligibility, routing, normalization, and guarded persistence.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,25 +48,22 @@ import {
 } from "./dashboard-session-title.js";
 import { deriveGoalSessionTitle } from "./derive-goal-session-title.js";
 
-const cfg = {
+const cfg: OpenClawConfig = {
   agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
-} as OpenClawConfig;
-const baseEntry: SessionEntry = {
+};
+const baseEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
+const titleDefaults = {
+  cfg,
+  agentId: "main",
   sessionId: "session-1",
-  updatedAt: 1,
+  sessionKey: "agent:main:dashboard:chat-1",
+  storePath: "/tmp/openclaw/sessions.json",
+  userMessage: "Help me plan the release",
 };
 
 function titleParams(entry: SessionEntry | undefined = baseEntry) {
   mocks.load.mockReturnValue(entry);
-  return {
-    cfg,
-    agentId: "main",
-    entry,
-    sessionId: "session-1",
-    sessionKey: "agent:main:dashboard:chat-1",
-    storePath: "/tmp/openclaw/sessions.json",
-    userMessage: "Help me plan the release",
-  };
+  return { ...titleDefaults, entry };
 }
 
 function mockSessionUpdate(current: SessionEntry): void {
@@ -77,6 +73,40 @@ function mockSessionUpdate(current: SessionEntry): void {
     mocks.load.mockReturnValue(result);
     return result;
   });
+}
+
+function pendingLabel(once = false) {
+  const started = createDeferredCore();
+  const label = createDeferredCore<string>();
+  const generate = () => {
+    started.resolve();
+    return label.promise;
+  };
+  if (once) {
+    mocks.generate.mockImplementationOnce(generate);
+  } else {
+    mocks.generate.mockImplementation(generate);
+  }
+  return { ...label, started: started.promise };
+}
+
+function expectCalls(count: number, ...fns: Array<{ mock: { calls: unknown[][] } }>) {
+  for (const fn of fns) {
+    expect(fn.mock.calls).toHaveLength(count);
+  }
+}
+
+function worktreeRequest(params = titleParams()) {
+  const callbacks = { onError: vi.fn(), onTitleStateChanged: vi.fn() };
+  return { ...callbacks, worktree: generateWorktreeSessionTitle({ ...params, ...callbacks }) };
+}
+
+async function expectTitleRoute(expected: Record<string, string>, entry = baseEntry, config = cfg) {
+  mockSessionUpdate(entry);
+  await expect(
+    maybeGenerateDashboardSessionTitle({ ...titleParams(entry), cfg: config }),
+  ).resolves.toBe(true);
+  expect(mocks.generate).toHaveBeenCalledWith(expect.objectContaining(expected));
 }
 
 describe("maybeGenerateDashboardSessionTitle", () => {
@@ -95,72 +125,58 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   afterEach(() => vi.useRealTimers());
 
   it("routes both attempts through the effective session model and auth profile", async () => {
-    const entry = {
-      ...baseEntry,
-      providerOverride: "anthropic",
-      modelOverride: "claude-fable-5",
-      authProfileOverride: "work",
-    };
     mocks.utility.mockReturnValue("anthropic/claude-haiku-4-5@work");
-    mockSessionUpdate(entry);
-
-    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
-
+    await expectTitleRoute(
+      {
+        utilityModelRef: "anthropic/claude-haiku-4-5@work",
+        regularModelRef: "anthropic/claude-fable-5@work",
+        preferredProfile: "work",
+      },
+      {
+        ...baseEntry,
+        providerOverride: "anthropic",
+        modelOverride: "claude-fable-5",
+        authProfileOverride: "work",
+      },
+    );
     expect(mocks.utility).toHaveBeenCalledWith({
       cfg,
       agentId: "main",
       primaryProvider: "anthropic",
       primaryModelRef: "anthropic/claude-fable-5@work",
     });
-    expect(mocks.generate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        utilityModelRef: "anthropic/claude-haiku-4-5@work",
-        regularModelRef: "anthropic/claude-fable-5@work",
-        preferredProfile: "work",
-      }),
-    );
   });
 
   it("preserves a locked session harness as the title runtime owner", async () => {
-    const entry = {
-      ...baseEntry,
-      agentHarnessId: "codex",
-      agentRuntimeOverride: "openclaw",
-      modelSelectionLocked: true,
-    };
-    mockSessionUpdate(entry);
-
-    await expect(maybeGenerateDashboardSessionTitle(titleParams(entry))).resolves.toBe(true);
-
-    expect(mocks.generate).toHaveBeenCalledWith(
-      expect.objectContaining({ agentHarnessRuntimeOverride: "codex" }),
+    await expectTitleRoute(
+      { agentHarnessRuntimeOverride: "codex" },
+      {
+        ...baseEntry,
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "openclaw",
+        modelSelectionLocked: true,
+      },
     );
   });
 
   it("preserves the native primary auth profile for utility models under ACP", async () => {
-    const profiledCfg = {
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5@personal" },
-          utilityModel: "openai/gpt-5.6-luna",
-        },
-        entries: {
-          main: { model: "harness-only@harness-profile", runtime: { type: "acp" } },
-        },
-      },
-    } as OpenClawConfig;
     mocks.utility.mockReturnValue("openai/gpt-5.6-luna");
-
-    await expect(
-      maybeGenerateDashboardSessionTitle({ ...titleParams(), cfg: profiledCfg }),
-    ).resolves.toBe(true);
-
-    expect(mocks.generate).toHaveBeenCalledWith(
-      expect.objectContaining({
+    await expectTitleRoute(
+      {
         utilityModelRef: "openai/gpt-5.6-luna",
         regularModelRef: "openai/gpt-5.5@personal",
         preferredProfile: "personal",
-      }),
+      },
+      baseEntry,
+      {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5@personal" },
+            utilityModel: "openai/gpt-5.6-luna",
+          },
+          entries: { main: { model: "harness-only@harness-profile", runtime: { type: "acp" } } },
+        },
+      },
     );
   });
 
@@ -183,15 +199,11 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     await expect(maybeGenerateDashboardSessionTitle({ ...params, entry: baseEntry })).resolves.toBe(
       false,
     );
-    expect(mocks.generate).not.toHaveBeenCalled();
-    expect(mocks.patch).not.toHaveBeenCalled();
+    expectCalls(0, mocks.generate, mocks.patch);
   });
 
   it("titles over an Android platform auto-label without treating it as a rename", async () => {
-    const entry = {
-      ...baseEntry,
-      autoLabel: "OpenClaw App · Pixel · 1234567890ab",
-    };
+    const entry = { ...baseEntry, autoLabel: "OpenClaw App · Pixel · 1234567890ab" };
     mockSessionUpdate(entry);
 
     await expect(
@@ -221,7 +233,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     });
     expect(mocks.generate).not.toHaveBeenCalled();
     transcript.resolve({
-      // The title reader returns normalized task text.
       firstUserMessage: "Original release plan",
       lastMessagePreview: "Latest follow-up",
     });
@@ -269,8 +280,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       label.reject(new Error("conversation label generation failed (primary fallback)"));
       try {
         await vi.advanceTimersByTimeAsync(0);
-        expect(mocks.patch).not.toHaveBeenCalled();
-        expect(onFallback).not.toHaveBeenCalled();
+        expectCalls(0, mocks.patch, onFallback);
         if (outcome === "renamed") {
           mockSessionUpdate({ ...baseEntry, label: "My custom name" });
         }
@@ -301,17 +311,12 @@ describe("maybeGenerateDashboardSessionTitle", () => {
 
   it("bounds a worktree join without cancelling the canonical background naming request", async () => {
     vi.useFakeTimers();
-    const naming = createDeferredCore<string>();
-    mocks.generate.mockReturnValue(naming.promise);
+    const naming = pendingLabel();
     const params = titleParams();
     const background = maybeGenerateDashboardSessionTitle(params);
-    const onError = vi.fn();
-    const onTitleStateChanged = vi.fn();
-    const worktree = generateWorktreeSessionTitle({
+    const { onError, onTitleStateChanged, worktree } = worktreeRequest({
       ...params,
       sessionKey: "dashboard:chat-1",
-      onError,
-      onTitleStateChanged,
     });
     await vi.advanceTimersByTimeAsync(30_000);
     await expect(worktree).resolves.toBeUndefined();
@@ -327,19 +332,12 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     "persists a late %s title after the worktree caller stops waiting",
     async (outcome) => {
       vi.useFakeTimers();
-      const naming = createDeferredCore<string>();
-      const started = createDeferredCore();
-      mocks.generate.mockImplementation(() => {
-        started.resolve();
-        return naming.promise;
-      });
+      const naming = pendingLabel();
       const params = titleParams();
-      const onError = vi.fn();
-      const onTitleStateChanged = vi.fn();
-      const worktree = generateWorktreeSessionTitle({ ...params, onError, onTitleStateChanged });
+      const { onError, onTitleStateChanged, worktree } = worktreeRequest(params);
       const background = maybeGenerateDashboardSessionTitle(params);
 
-      await started.promise;
+      await naming.started;
       await vi.advanceTimersByTimeAsync(8_000);
       expect(onError).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(22_000);
@@ -359,30 +357,21 @@ describe("maybeGenerateDashboardSessionTitle", () => {
           outcome === "generated" ? "Release Planning" : expect.stringMatching(/^[a-z]+-[a-z]+$/),
       });
       expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
-      expect(mocks.patch).toHaveBeenCalledOnce();
-      expect(mocks.generate).toHaveBeenCalledOnce();
+      expectCalls(1, mocks.patch, mocks.generate);
     },
   );
 
   it("retries a joined title write failure only once", async () => {
-    const naming = createDeferredCore<string>();
-    mocks.generate.mockReturnValueOnce(naming.promise);
+    const naming = pendingLabel(true);
     const params = titleParams();
     mocks.patch.mockRejectedValueOnce(new Error("temporary write failure"));
-    const onTitleStateChanged = vi.fn();
-    const worktree = generateWorktreeSessionTitle({
-      ...params,
-      onError: vi.fn(),
-      onTitleStateChanged,
-    });
+    const { onTitleStateChanged, worktree } = worktreeRequest(params);
     const background = maybeGenerateDashboardSessionTitle(params);
     const expected = expect(background).resolves.toBe(true);
     naming.resolve("Release Planning");
     await Promise.all([worktree, expected]);
 
-    expect(mocks.generate).toHaveBeenCalledTimes(2);
-    expect(mocks.patch).toHaveBeenCalledTimes(2);
-    expect(onTitleStateChanged).toHaveBeenCalledTimes(2);
+    expectCalls(2, mocks.generate, mocks.patch, onTitleStateChanged);
     expect(mocks.load().displayName).toBe("Release Planning");
   });
 
@@ -420,8 +409,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   });
 
   it("deduplicates concurrent title requests for one session generation", async () => {
-    const label = createDeferredCore<string>();
-    mocks.generate.mockReturnValue(label.promise);
+    const label = pendingLabel();
 
     const first = maybeGenerateDashboardSessionTitle(titleParams());
     const duplicate = maybeGenerateDashboardSessionTitle(titleParams());
@@ -429,10 +417,7 @@ describe("maybeGenerateDashboardSessionTitle", () => {
     await expect(first).resolves.toBe(true);
     await expect(duplicate).resolves.toBe(false);
 
-    expect(mocks.generate).toHaveBeenCalledOnce();
-    expect(mocks.patch).toHaveBeenCalledOnce();
-    expect(mocks.load).toHaveBeenCalledOnce();
-    expect(mocks.readTranscript).toHaveBeenCalledOnce();
+    expectCalls(1, mocks.generate, mocks.patch, mocks.load, mocks.readTranscript);
   });
 });
 
@@ -480,15 +465,13 @@ function textAttachment(text: string): ChatAttachment {
 }
 
 describe("deriveGoalSessionTitle", () => {
-  it("returns undefined for empty or whitespace input", () => {
-    expect(deriveGoalSessionTitle(undefined)).toBeUndefined();
-    expect(deriveGoalSessionTitle("")).toBeUndefined();
-    expect(deriveGoalSessionTitle("   ")).toBeUndefined();
-  });
-
-  it("skips slash commands", () => {
-    expect(deriveGoalSessionTitle("/new")).toBeUndefined();
-    expect(deriveGoalSessionTitle("/model openai/gpt-5.4")).toBeUndefined();
+  it.each([
+    { name: "empty input", inputs: [undefined, "", "   "] },
+    { name: "commands", inputs: ["/new", "/model openai/gpt-5.4"] },
+  ])("skips unusable goals from $name", ({ inputs }) => {
+    for (const input of inputs) {
+      expect(deriveGoalSessionTitle(input)).toBeUndefined();
+    }
   });
 
   it("prefers a task-verb sentence over earlier banter", () => {
@@ -513,13 +496,11 @@ describe("worktree title source lifecycle", () => {
 
   function sourceTitleParams(name: string) {
     return {
-      cfg,
-      agentId: "main",
+      ...titleDefaults,
       entry: sourceEntry,
       sessionId: sourceEntry.sessionId,
       sessionKey: `agent:main:dashboard:source-${name}`,
       storePath: "/synthetic/title-sessions.sqlite",
-      userMessage: "Help me plan the release",
     };
   }
 

@@ -9,6 +9,7 @@ import type {
 } from "../process/supervisor/types.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createCronStreamWatchers } from "./cron-stream-watchers.js";
+type WatcherParams = Parameters<typeof createCronStreamWatchers>[0];
 
 export function job(overrides: Partial<CronJob> = {}): CronJob {
   const base: CronJob = {
@@ -22,7 +23,7 @@ export function job(overrides: Partial<CronJob> = {}): CronJob {
     sessionTarget: "isolated",
     wakeMode: "now",
     payload: { kind: "agentTurn", message: "base" },
-    state: { streamSourceIdentity: "source:stream-job" },
+    state: {},
   };
   const merged = { ...base, ...overrides };
   return {
@@ -77,7 +78,6 @@ export function fakeSupervisor() {
       activity,
       runId: `run-${runs.length + 1}`,
       startedAtMs: Date.now(),
-      stdin: undefined,
       cancel: vi.fn(() => resolveWait(exitResult({ reason: "manual-cancel" }))),
       detachOutput: vi.fn(),
       wait: () => wait.promise,
@@ -117,10 +117,8 @@ export async function settle(): Promise<void> {
 }
 
 export function createWatchers(
-  params: Omit<Parameters<typeof createCronStreamWatchers>[0], "retireSource" | "scheduler"> & {
-    scheduler?: Parameters<typeof createCronStreamWatchers>[0]["scheduler"];
-    retireSource?: Parameters<typeof createCronStreamWatchers>[0]["retireSource"];
-  },
+  params: Omit<WatcherParams, "retireSource" | "scheduler"> &
+    Partial<Pick<WatcherParams, "retireSource" | "scheduler">>,
 ) {
   return createCronStreamWatchers({
     retireSource: vi.fn(async (_jobId, _scheduleKey, identity) => `${identity}:retired`),

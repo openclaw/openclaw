@@ -9,16 +9,17 @@ import {
   job,
 } from "./cron-stream-watchers.test-helpers.js";
 
-const activeWatchers: ReturnType<typeof createCronStreamWatcherFixture>["watchers"][] = [];
+let activeWatcher: ReturnType<typeof createCronStreamWatcherFixture>["watchers"] | undefined;
 function fixture(...args: Parameters<typeof createCronStreamWatcherFixture>) {
   const result = createCronStreamWatcherFixture(...args);
-  activeWatchers.push(result.watchers);
+  activeWatcher = result.watchers;
   return result;
 }
 afterEach(async () => {
   try {
-    await Promise.all(activeWatchers.splice(0).map((watchers) => watchers.stopAll("shutdown")));
+    await activeWatcher?.stopAll("shutdown");
   } finally {
+    activeWatcher = undefined;
     vi.restoreAllMocks();
   }
 });
@@ -85,13 +86,11 @@ describe("cron stream matching lifecycle", () => {
         fake.inputs[0]?.onStdout?.(chunk);
         const signal = await entered.promise;
         await delay(0);
-        let stopped = false;
-        const stop = watchers.stop("stream-job", "disabled").then(() => {
-          stopped = true;
-        });
+        const stopped = vi.fn();
+        const stop = watchers.stop("stream-job", "disabled").then(stopped);
         expect(signal?.aborted).toBe(true);
         await delay(0);
-        expect(stopped).toBe(false);
+        expect(stopped).not.toHaveBeenCalled();
         result.resolve(true);
         await stop;
         expect(fireBatch).not.toHaveBeenCalled();

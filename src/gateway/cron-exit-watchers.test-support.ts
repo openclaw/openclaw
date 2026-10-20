@@ -5,7 +5,6 @@ import type { ProcessScopeCleanupPolicy } from "../process/supervisor/types.js";
 
 type Exit = { exitCode: number | null; reason: string };
 
-/** Each run's deferred controls command exit independently of spawn admission. */
 export function makeFakeSupervisor(
   opts: { deferSpawn?: boolean; cleanup?: () => Promise<void> } = {},
 ) {
@@ -13,12 +12,9 @@ export function makeFakeSupervisor(
     scopeKey?: string;
     runId: string;
     deferred: ReturnType<typeof createDeferred<Exit>>;
-    waitPromise: Promise<unknown>;
-    cancelled: boolean;
   }[] = [];
-  const cancelledScopes: string[] = [];
+  const cancelled: string[] = [];
   const runCancels: string[] = [];
-  let counter = 0;
   const spawnGate = createDeferred<void>();
   if (!opts.deferSpawn) {
     spawnGate.resolve();
@@ -27,38 +23,26 @@ export function makeFakeSupervisor(
     acquireScopeCleanup: vi.fn(
       (scopeKey: string, _options: { processTree: ProcessScopeCleanupPolicy }) => {
         let closing: Promise<void> | undefined;
-        return () => {
-          if (!closing) {
-            closing = opts.cleanup
-              ? opts.cleanup()
-              : Promise.allSettled(
-                  runs.filter((run) => run.scopeKey === scopeKey).map((run) => run.waitPromise),
-                ).then(() => undefined);
-          }
-          return closing;
-        };
+        return () =>
+          (closing ??= opts.cleanup
+            ? opts.cleanup()
+            : Promise.allSettled(
+                runs.filter((run) => run.scopeKey === scopeKey).map((run) => run.deferred.promise),
+              ).then(() => undefined));
       },
     ),
     spawn: vi.fn(async (input: { scopeKey?: string }) => {
       await spawnGate.promise;
-      const runId = `run-${++counter}`;
+      const runId = `run-${runs.length + 1}`;
       const deferred = createDeferred<Exit>();
-      const waitPromise = deferred.promise;
       // Ownership may be lost before wait(); keep controlled rejection handled.
-      waitPromise.catch(() => {});
-      const entry = {
-        scopeKey: input.scopeKey,
-        runId,
-        deferred,
-        waitPromise,
-        cancelled: false,
-      };
-      runs.push(entry);
+      deferred.promise.catch(() => {});
+      runs.push({ scopeKey: input.scopeKey, runId, deferred });
       return {
         runId,
         startedAtMs: 0,
         wait: () =>
-          waitPromise.then((e) => ({
+          deferred.promise.then((e) => ({
             ...e,
             exitSignal: null,
             durationMs: 1,
@@ -68,20 +52,18 @@ export function makeFakeSupervisor(
             noOutputTimedOut: false,
           })),
         cancel: () => {
-          entry.cancelled = true;
           runCancels.push(runId);
         },
       };
     }),
     cancelScope: vi.fn((scopeKey: string) => {
-      cancelledScopes.push(scopeKey);
+      cancelled.push(scopeKey);
     }),
   };
   return {
     supervisor,
     runs,
-    cancelled: cancelledScopes,
-    cancelledScopes,
+    cancelled,
     runCancels,
     releaseSpawn: () => spawnGate.resolve(),
   };

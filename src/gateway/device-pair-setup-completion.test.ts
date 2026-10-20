@@ -18,9 +18,9 @@ import {
   consumeSetupHandoff,
 } from "./device-pair-setup-completion.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
+import { makeClient } from "./server-broadcast.test-helpers.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 
 const tempDirs = createTrackedTempDirs();
 const deviceId = "device-123";
@@ -36,12 +36,8 @@ async function setupHandoff(
     { [token]: { token, setupId, ts: now, deviceId, profile, issuedAtMs: now } },
     baseDir,
   );
-  const handoff = await consumeSetupHandoff({
-    token,
-    deviceId,
-    baseDir,
-    ...(setupId ? { ts: 3 } : {}),
-  });
+  const ts = setupId ? 3 : undefined;
+  const handoff = await consumeSetupHandoff({ token, deviceId, baseDir, ts });
   expect(handoff).not.toBeNull();
   if (!setupId) {
     return handoff!;
@@ -93,23 +89,13 @@ describe("device pair setup completion", () => {
     expect(JSON.stringify(broadcast.mock.calls)).not.toContain("bootstrap-secret");
   });
 
-  // Recovery must survive a slow socket dropping the only success frame.
   it("keeps the completion recoverable when a slow subscriber drops the frame", async () => {
     const baseDir = await tempDirs.make("openclaw-setup-completion-slow-");
-    const slowSocket = {
-      readyState: 1,
-      bufferedAmount: MAX_BUFFERED_BYTES + 1,
-      send: vi.fn(),
-      close: vi.fn(),
-    };
-    const clients = new GatewayClientRegistry([
-      {
-        socket: slowSocket as unknown as GatewayWsClient["socket"],
-        connect: { role: "operator", scopes: ["operator.pairing"] } as GatewayWsClient["connect"],
-        connId: "c-pairing-slow",
-        usesSharedGatewayAuth: false,
-      },
+    const { client, socket: slowSocket } = makeClient("c-pairing-slow", "operator", [
+      "operator.pairing",
     ]);
+    slowSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
+    const clients = new GatewayClientRegistry([client]);
     const { broadcast } = createGatewayBroadcaster({ clients });
 
     const handoff = await setupHandoff(

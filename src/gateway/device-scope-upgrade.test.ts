@@ -14,10 +14,18 @@ vi.mock("../infra/device-pairing.js", () => ({
 }));
 
 const owner = { deviceId: "device", publicKey: "public-key" };
+const rejected = { status: "rejected", requestId: "upgrade" };
 beforeEach(() => {
   pairing.pending = true;
 });
 afterEach(() => vi.useRealTimers());
+
+function outcome<T>(work: Promise<T>) {
+  return work.then(
+    (value) => ({ value }),
+    (error: unknown) => ({ error }),
+  );
+}
 
 function registeredCoordinator(
   scheduler: ReturnType<typeof createTestGatewayScheduler>,
@@ -39,33 +47,21 @@ describe("scope upgrade observations", () => {
     const scheduler = createTestGatewayScheduler();
     const coordinator = registeredCoordinator(scheduler);
     const observer = new AsyncWorkScope();
-    let firstSettled = false;
-    const first = observer
-      .run(() => coordinator.wait("upgrade", owner))
-      .then(
-        (value) => {
-          firstSettled = true;
-          return { value };
-        },
-        (error: unknown) => {
-          firstSettled = true;
-          return { error };
-        },
-      );
-    let secondSettled = false;
-    const second = coordinator.wait("upgrade", owner).then((value) => {
-      secondSettled = true;
-      return value;
-    });
+    const firstSettled = vi.fn();
+    const first = outcome(observer.run(() => coordinator.wait("upgrade", owner))).finally(
+      firstSettled,
+    );
+    const secondSettled = vi.fn();
+    const second = coordinator.wait("upgrade", owner).finally(secondSettled);
     try {
       observer.beginClose();
       await vi.advanceTimersByTimeAsync(0);
-      expect(firstSettled).toBe(true);
+      expect(firstSettled).toHaveBeenCalledOnce();
       expect(await first).toEqual({ error: expect.objectContaining({ name: "AbortError" }) });
-      expect(secondSettled).toBe(false);
+      expect(secondSettled).not.toHaveBeenCalled();
       pairing.pending = false;
       coordinator.notify("upgrade", "rejected");
-      expect(await second).toEqual({ status: "rejected", requestId: "upgrade" });
+      expect(await second).toEqual(rejected);
     } finally {
       await coordinator.close();
       await Promise.all([first, second]);
@@ -81,12 +77,7 @@ describe("scope upgrade observations", () => {
     const coordinator = registeredCoordinator(scheduler);
     const observer = new AsyncWorkScope();
     const pendingRead = vi.spyOn(devicePairing, "getPendingDevicePairing");
-    const observation = observer
-      .run(() => coordinator.wait("upgrade", owner))
-      .then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+    const observation = outcome(observer.run(() => coordinator.wait("upgrade", owner)));
     try {
       await vi.advanceTimersByTimeAsync(0);
       expect(pendingRead).toHaveBeenCalledTimes(1);
@@ -119,15 +110,9 @@ describe("scope upgrade observations", () => {
       const coordinator = registeredCoordinator(scheduler, 61_000);
       try {
         if (state === "terminal") {
-          expect(await coordinator.wait("upgrade", owner)).toEqual({
-            status: "rejected",
-            requestId: "upgrade",
-          });
+          expect(await coordinator.wait("upgrade", owner)).toEqual(rejected);
           await time.advanceTo(15_999);
-          expect(await coordinator.wait("upgrade", owner)).toEqual({
-            status: "rejected",
-            requestId: "upgrade",
-          });
+          expect(await coordinator.wait("upgrade", owner)).toEqual(rejected);
         }
         time.setTime(state === "pending" ? 90_000 : 30_000);
         await time.wake();
