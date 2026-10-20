@@ -161,7 +161,24 @@ it("opens a catalog-targeted draft from its new-session action", async () => {
       id: "claude",
       label: "Claude Code",
       capabilities: { continueSession: true, archive: false, startTerminal: true },
-      hosts: [],
+      hosts: [
+        {
+          hostId: "gateway:local",
+          label: "Gateway Mac",
+          kind: "gateway",
+          connected: true,
+          sessions: [
+            {
+              threadId: "local-thread",
+              name: "Local plan",
+              status: "stored",
+              archived: false,
+              canContinue: true,
+              canArchive: false,
+            },
+          ],
+        },
+      ],
     },
   ];
   sidebar.sessionData.requestSessionDataUpdate();

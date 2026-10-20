@@ -49,14 +49,14 @@ describe("configured Codex connection verification", () => {
 
   it("ignores local launch settings that a remote service does not consume", () => {
     const binding = captureBinding();
-    const capture = captureCodexConfiguredConnection({
+    const capture = captureConnection({
       ...start,
       command: "/another/local/codex",
       args: ["app-server", "--another-local-option"],
       env: { PATH: "/another/local/path", CODEX_HOME: "/local/home" },
       codexHome: "/another/local/home",
     });
-    expect(validateCodexConfiguredConnectionCapture(binding, capture)).toBe(true);
+    expect(validateConnection(binding, capture)).toBe(true);
   });
 
   it("binds the home-resolved canonical Unix socket", () => {

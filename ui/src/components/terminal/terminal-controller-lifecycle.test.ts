@@ -209,6 +209,8 @@ it.each([false, true])("remeasures fonts only while live (disposed=%s)", async (
 });
 
 it("does not observe a terminal aborted during creation", async () => {
+  const dispose = vi.fn();
+  underlying = terminalController(dispose);
   const created = createDeferred<GhosttyTerminalController>();
   runtimeMocks.create.mockReturnValue(created.promise);
   const abort = new AbortController();
@@ -221,7 +223,7 @@ it("does not observe a terminal aborted during creation", async () => {
   expect(runtimeMocks.observe).not.toHaveBeenCalled();
   expect(runtimeMocks.proposeDimensions).not.toHaveBeenCalled();
   expect(runtimeMocks.disposeMeasurement).toHaveBeenCalledOnce();
-  expect(underlying.dispose).toHaveBeenCalledOnce();
+  expect(dispose).toHaveBeenCalledOnce();
 });
 
 it.each(["replacement", "external", "newer"] as const)(
