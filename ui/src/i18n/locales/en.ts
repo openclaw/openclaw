@@ -3467,6 +3467,16 @@ export const en: TranslationMap & {
       toolCallsOne: "1 tool call",
       toolCallsMany: "{count} tool calls",
     },
+    fileOpen: {
+      defaultApp: "Default App",
+      defaultAppRemote: "Default App only opens files from a Gateway on this Mac.",
+      defaultAppMissing: "This file is no longer on this Mac.",
+      defaultAppUnsupported:
+        "OpenClaw does not hand scripts, apps, or executable files to their default app. Choose an editor instead.",
+      defaultAppNoApp:
+        "No app on this Mac opens this file type. Set one in Finder with Get Info, then Open with.",
+      defaultAppFailed: "Could not open the file in its default app. Choose an editor instead.",
+    },
     sessionDiff: {
       title: "Changes",
       show: "Show session changes",

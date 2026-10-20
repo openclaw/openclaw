@@ -23,11 +23,23 @@ type WebKitMessageHandler<Message> = {
   postMessage(message: Message): void;
 };
 
+// Reply handlers resolve with the native outcome; keep values aligned with
+// DefaultAppOpenOutcome in DashboardWindowController+Files.swift.
+export type DefaultAppOpenOutcome = "opened" | "remote" | "missing" | "unsupported-type" | "no-app";
+export type WebKitReplyHandlers = {
+  openclawFiles: {
+    postMessage(message: {
+      type: "open-default-app";
+      path: string;
+    }): Promise<DefaultAppOpenOutcome>;
+  };
+};
+
 type WebKitHostWindow = Window & {
   webkit?: {
     messageHandlers?: {
       [Name in keyof WebKitHostMessages]?: WebKitMessageHandler<WebKitHostMessages[Name]>;
-    };
+    } & Partial<WebKitReplyHandlers>;
   };
 };
 

@@ -20,7 +20,7 @@ import {
 } from "../../../lib/chat/session-diff-split.ts";
 import { parseSessionDiffPatch, type ParsedFilePatch } from "../../../lib/chat/session-diff.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
-import { openEditor } from "../../../lib/editor-links.ts";
+import { openFile } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createDiffPresentation, type DiffPresentation } from "./chat-diff-render.solid.tsx";
@@ -269,7 +269,7 @@ export function SessionDiffPanel(props: SessionDiffProps) {
         props.revealFile?.(action.path);
         return;
       case "open-editor":
-        openEditor(action.editor, action.path);
+        openFile(action.editor, action.path);
     }
   }
   function Summary(summary: { result: SessionsDiffResult }) {

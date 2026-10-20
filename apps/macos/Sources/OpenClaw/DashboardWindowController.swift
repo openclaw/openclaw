@@ -158,6 +158,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         let deviceSettingsMessageHandler = DashboardDeviceSettingsMessageHandler()
         self.deviceSettingsMessageHandler = deviceSettingsMessageHandler
         let browserMessageHandler = DashboardBrowserMessageHandler()
+        let filesMessageHandler = DashboardFilesMessageHandler()
         let documentHost = ControlUIDocumentHost(
             url: url,
             auth: auth,
@@ -181,6 +182,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
                 deviceSettingsMessageHandler, contentWorld: .page, name: Self.deviceSettingsMessageHandlerName)
             controller.addScriptMessageHandler(
                 browserMessageHandler, contentWorld: .page, name: DashboardBrowserMessageHandler.name)
+            controller.addScriptMessageHandler(
+                filesMessageHandler, contentWorld: .page, name: DashboardFilesMessageHandler.name)
             if shouldEnableUpdateBridge {
                 // Handler presence is the Control UI feature probe; unsigned builds
                 // and remote dashboards must not advertise a local app update.
@@ -234,6 +237,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         appLinkMessageHandler.owner = self
         deviceSettingsMessageHandler.owner = self
         browserMessageHandler.owner = self
+        filesMessageHandler.owner = self
         deviceSettingsMessageHandler.startObserving()
         self.webView.navigationDelegate = self
         self.webView.uiDelegate = self

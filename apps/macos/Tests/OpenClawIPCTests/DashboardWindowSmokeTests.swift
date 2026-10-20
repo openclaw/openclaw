@@ -598,6 +598,52 @@ struct DashboardWindowSmokeTests {
         }
     }
 
+    @Test func `dashboard parses only absolute default app file requests`() {
+        #expect(DashboardWindowController.defaultAppFileRequest(from: [
+            "type": "open-default-app", "path": "/workspace/notes/../README.md",
+        ]) == URL(fileURLWithPath: "/workspace/README.md"))
+        #expect(DashboardWindowController.defaultAppFileRequest(from: [
+            "type": "open-default-app", "path": "README.md",
+        ]) == nil)
+        #expect(DashboardWindowController.defaultAppFileRequest(from: [
+            "type": "open-link", "path": "/workspace/README.md",
+        ]) == nil)
+    }
+
+    @Test func `dashboard hands only document files to the default app`() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-default-app-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        func refusal(_ name: String, executable: Bool = false) throws -> DefaultAppOpenOutcome? {
+            let url = directory.appendingPathComponent(name)
+            try Data("# notes\n".utf8).write(to: url)
+            if executable {
+                try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+            }
+            return DashboardWindowController.defaultAppRefusal(for: url)
+        }
+
+        #expect(try refusal("notes.md") == nil)
+        #expect(try refusal("data.json") == nil)
+        for name in ["run.command", "run.sh", "profile.terminal", "link.webloc"] {
+            #expect(try refusal(name) == .unsupportedType)
+        }
+        #expect(try refusal("marked.md", executable: true) == .unsupportedType)
+        #expect(DashboardWindowController.defaultAppRefusal(for: directory) == .unsupportedType)
+        #expect(DashboardWindowController.defaultAppRefusal(
+            for: directory.appendingPathComponent("missing.md")) == .missing)
+    }
+
+    @Test func `dashboard default app follows the window's live Gateway locality`() {
+        #expect(DashboardWindowController.isLocalGatewayTarget(.local, mode: .remote))
+        #expect(DashboardWindowController.isLocalGatewayTarget(.primary, mode: .local))
+        #expect(!DashboardWindowController.isLocalGatewayTarget(.primary, mode: .remote))
+        #expect(!DashboardWindowController.isLocalGatewayTarget(.profile("studio"), mode: .local))
+        // A window the manager no longer owns has no Gateway authority.
+        #expect(!DashboardWindowController.isLocalGatewayTarget(nil, mode: .local))
+    }
+
     @Test func `dashboard accepts only typed window drag requests`() {
         #expect(ControlUIDocumentHost.isWindowDragRequest(["type": "window-drag"]))
         #expect(!ControlUIDocumentHost.isWindowDragRequest(["type": "open-link"]))

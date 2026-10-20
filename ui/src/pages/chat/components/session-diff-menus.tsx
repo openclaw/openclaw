@@ -10,7 +10,7 @@ import {
   type MenuHandle,
   type MenuItem,
 } from "../../../components/solid/menu.tsx";
-import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
+import { EDITOR_LABELS, type FileOpenTarget, fileOpenTargets } from "../../../lib/editor-links.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 
 export type SessionDiffScope =
@@ -54,7 +54,7 @@ export type SessionDiffMenuAction =
   | { kind: "collapse-code" | "collapse-functions" | "expand-code"; path: string }
   | { kind: "collapse-all" }
   | { kind: "expand-all" }
-  | { kind: "open-editor"; editor: EditorId; path: string }
+  | { kind: "open-editor"; editor: FileOpenTarget; path: string }
   | { kind: "open-file"; path: string }
   | { kind: "reveal-file"; path: string }
   | { kind: "scope"; value: SessionDiffScope }
@@ -137,7 +137,7 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
     ) {
       action = { kind: value, path: menu.path };
     } else if (value.startsWith("open-editor:") && menu.kind === "file" && menu.absolutePath) {
-      const editor = EDITOR_IDS.find((candidate) => value === `open-editor:${candidate}`);
+      const editor = fileOpenTargets().find((candidate) => value === `open-editor:${candidate}`);
       if (editor) {
         action = { kind: "open-editor", editor, path: menu.absolutePath };
       }
@@ -201,8 +201,13 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
                     <Icon name="externalLink" />
                   </span>
                 ),
-                children: EDITOR_IDS.map((editor) =>
-                  menuItem(`open-editor:${editor}`, EDITOR_LABELS[editor]),
+                children: fileOpenTargets().map((target) =>
+                  menuItem(
+                    `open-editor:${target}`,
+                    target === "default-app"
+                      ? t("chat.fileOpen.defaultApp")
+                      : EDITOR_LABELS[target],
+                  ),
                 ),
               },
             ]

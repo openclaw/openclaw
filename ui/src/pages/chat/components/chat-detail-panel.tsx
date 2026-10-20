@@ -8,7 +8,7 @@ import {
   scheduleStaleChunkReload,
 } from "../../../app/stale-chunk-reload.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import { type EditorId, openEditor } from "../../../lib/editor-links.ts";
+import { type FileOpenTarget, openFile } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
@@ -354,7 +354,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
     }
   };
 
-  const openInEditor = (editor: EditorId) => {
+  const openInEditor = (target: FileOpenTarget) => {
     const content = visibleContent;
     if (content?.kind !== "file") {
       return;
@@ -364,7 +364,7 @@ function DetailPanel(props: ChatDetailPanelProps, host: SolidBridgeElement<ChatD
       return;
     }
     fileEditorMenuOpen = false;
-    openEditor(editor, absPath, props.fileNavigation?.line ?? content.line);
+    openFile(target, absPath, props.fileNavigation?.line ?? content.line);
     invalidate();
   };
 

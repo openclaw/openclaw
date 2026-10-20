@@ -1,15 +1,17 @@
 import { Show, createUniqueId } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu } from "../../../components/solid/menu.tsx";
-import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
+import { EDITOR_LABELS, type FileOpenTarget, fileOpenTargets } from "../../../lib/editor-links.ts";
+import { t } from "../../../lib/reactive/i18n.ts";
 
 export function ChatSidebarEditorMenu(props: {
   absolutePath: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onOpenEditor: (editor: EditorId) => void;
+  onOpenEditor: (target: FileOpenTarget) => void;
 }) {
   const id = createUniqueId();
+  const targets = fileOpenTargets();
   return (
     <Show when={props.absolutePath}>
       <div class="sidebar-file-view__editor">
@@ -24,15 +26,15 @@ export function ChatSidebarEditorMenu(props: {
           triggerClass="btn btn--sm sidebar-file-view__action"
           triggerAttributes={{ title: "Open in editor" }}
           trigger={<Icon name="externalLink" />}
-          items={EDITOR_IDS.map((editor) => ({
-            id: editor,
-            label: EDITOR_LABELS[editor],
+          items={targets.map((target) => ({
+            id: target,
+            label: target === "default-app" ? t("chat.fileOpen.defaultApp") : EDITOR_LABELS[target],
             class: "sidebar-file-view__editor-item",
           }))}
           onSelect={(item) => {
-            const editor = EDITOR_IDS.find((candidate) => candidate === item.id);
-            if (editor) {
-              props.onOpenEditor(editor);
+            const target = targets.find((candidate) => candidate === item.id);
+            if (target) {
+              props.onOpenEditor(target);
             }
           }}
         />

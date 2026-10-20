@@ -6,7 +6,7 @@ import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-sk
 import "../../../components/tooltip.ts";
 import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
-import type { EditorId } from "../../../lib/editor-links.ts";
+import type { FileOpenTarget } from "../../../lib/editor-links.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { getSafeLocalStorage } from "../../../local-storage.ts";
 import type { FileCopyAction, FileCopyFeedback } from "./chat-file-copy.ts";
@@ -76,7 +76,7 @@ export type FileViewControls = {
   onDiscard: () => void;
   onEdit: () => void;
   onNextMatch: () => void;
-  onOpenEditor: (editor: EditorId) => void;
+  onOpenEditor: (target: FileOpenTarget) => void;
   onOverwrite: () => void;
   onPreviousMatch: () => void;
   onReload: () => void;
