@@ -1,4 +1,3 @@
-// Run Opengrep tests cover run opengrep script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { devNull } from "node:os";
@@ -20,19 +19,44 @@ function writeFile(filePath: string, content: string): void {
 }
 
 function copyRunOpengrepFiles(repo: string): void {
-  const scriptSource = path.resolve("scripts/run-opengrep.sh");
-  const helperSource = path.resolve("scripts/lib/merge-head-diff-base.mjs");
-  const argUtilsSource = path.resolve("scripts/lib/arg-utils.runtime.mjs");
-  writeFile(path.join(repo, "scripts/run-opengrep.sh"), fs.readFileSync(scriptSource, "utf8"));
-  writeFile(
-    path.join(repo, "scripts/lib/merge-head-diff-base.mjs"),
-    fs.readFileSync(helperSource, "utf8"),
-  );
-  writeFile(
-    path.join(repo, "scripts/lib/arg-utils.runtime.mjs"),
-    fs.readFileSync(argUtilsSource, "utf8"),
-  );
+  for (const file of [
+    "run-opengrep.sh",
+    "lib/merge-head-diff-base.mjs",
+    "lib/arg-utils.runtime.mjs",
+  ]) {
+    writeFile(
+      path.join(repo, "scripts", file),
+      fs.readFileSync(path.join("scripts", file), "utf8"),
+    );
+  }
   fs.chmodSync(path.join(repo, "scripts/run-opengrep.sh"), 0o755);
+}
+
+function createRepo(prefix: string, make = createTempDir) {
+  const repo = make(`openclaw-opengrep-${prefix}-`);
+  git(repo, "init", "-q", "--initial-branch=main");
+  git(repo, "config", "user.email", "test@example.com");
+  git(repo, "config", "user.name", "Test User");
+  copyRunOpengrepFiles(repo);
+  writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
+  return repo;
+}
+
+function commit(repo: string, message = "initial") {
+  git(repo, "add", ".");
+  git(repo, "commit", "-qm", message);
+}
+
+function runScan(repo: string, binDir: string, args = ["--changed"], base = "HEAD") {
+  return spawnSync("bash", ["scripts/run-opengrep.sh", ...args], {
+    cwd: repo,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      OPENCLAW_OPENGREP_BASE_REF: base,
+    },
+  });
 }
 
 function installOpengrepStub(repo: string): { argsPath: string; binDir: string } {
@@ -186,44 +210,22 @@ describe("run-opengrep.sh", () => {
   });
 
   it("validates the rulepack when only OpenGrep rulepack files changed", () => {
-    const repo = createTempDir("openclaw-run-opengrep-");
-    git(repo, "init", "-q");
-    git(repo, "config", "user.email", "test@example.com");
-    git(repo, "config", "user.name", "Test User");
-
-    copyRunOpengrepFiles(repo);
-    writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-qm", "initial");
-
+    const repo = createRepo("rulepack");
+    commit(repo);
     fs.appendFileSync(path.join(repo, "security/opengrep/precise.yml"), "# changed\n");
     const { argsPath, binDir } = installOpengrepStub(repo);
 
-    execFileSync("bash", ["scripts/run-opengrep.sh", "--changed"], {
-      cwd: repo,
-      env: {
-        ...process.env,
-        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-        OPENCLAW_OPENGREP_BASE_REF: "HEAD",
-      },
-      encoding: "utf8",
-    });
+    const result = runScan(repo, binDir);
+    expect(result.status, result.stderr).toBe(0);
 
     const args = fs.readFileSync(argsPath, "utf8");
     expect(args).toContain("security/opengrep/precise.yml");
   });
 
   it("writes empty SARIF when a changed scan has no first-party paths", () => {
-    const repo = createTempDir("openclaw-run-opengrep-empty-sarif-");
-    git(repo, "init", "-q");
-    git(repo, "config", "user.email", "test@example.com");
-    git(repo, "config", "user.name", "Test User");
-
-    copyRunOpengrepFiles(repo);
-    writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
+    const repo = createRepo("empty-sarif");
     writeFile(path.join(repo, ".github/actions/ensure-base-commit/action.yml"), "name: ensure\n");
-    git(repo, "add", ".");
-    git(repo, "commit", "-qm", "initial");
+    commit(repo);
 
     fs.appendFileSync(
       path.join(repo, ".github/actions/ensure-base-commit/action.yml"),
@@ -231,23 +233,18 @@ describe("run-opengrep.sh", () => {
     );
     const { argsPath, binDir } = installOpengrepStub(repo);
 
-    execFileSync("bash", ["scripts/run-opengrep.sh", "--changed", "--sarif", "--error"], {
-      cwd: repo,
-      env: {
-        ...process.env,
-        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-        OPENCLAW_OPENGREP_BASE_REF: "HEAD",
-      },
-      encoding: "utf8",
-    });
+    const result = runScan(repo, binDir, ["--changed", "--sarif", "--error"]);
+    expect(result.status, result.stderr).toBe(0);
 
     const sarif = JSON.parse(
       fs.readFileSync(path.join(repo, ".opengrep-out/precise.sarif"), "utf8"),
     );
-    expect(sarif.version).toBe("2.1.0");
-    expect(sarif.runs[0].tool.driver.name).toBe("Opengrep OSS");
-    expect(sarif.runs[0].tool.driver.semanticVersion).toBe("1.30.2");
-    expect(sarif.runs[0].results).toEqual([]);
+    expect(sarif).toMatchObject({
+      version: "2.1.0",
+      runs: [
+        { tool: { driver: { name: "Opengrep OSS", semanticVersion: "1.30.2" } }, results: [] },
+      ],
+    });
     expect(fs.existsSync(argsPath)).toBe(false);
   });
 
@@ -267,15 +264,8 @@ describe("run-opengrep.sh", () => {
   ])(
     "fails when changed-path discovery hits $failure",
     ({ baseRef, failedGitCommand, errorText }) => {
-      const repo = createTempDir("openclaw-run-opengrep-discovery-failure-");
-      git(repo, "init", "-q");
-      git(repo, "config", "user.email", "test@example.com");
-      git(repo, "config", "user.name", "Test User");
-
-      copyRunOpengrepFiles(repo);
-      writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
-      git(repo, "add", ".");
-      git(repo, "commit", "-qm", "initial");
+      const repo = createRepo("discovery-failure");
+      commit(repo);
 
       const { argsPath, binDir } = installOpengrepStub(repo);
       if (failedGitCommand) {
@@ -297,19 +287,7 @@ describe("run-opengrep.sh", () => {
         fs.chmodSync(path.join(binDir, "git"), 0o755);
       }
 
-      const result = spawnSync(
-        "bash",
-        ["scripts/run-opengrep.sh", "--changed", "--sarif", "--error"],
-        {
-          cwd: repo,
-          env: {
-            ...process.env,
-            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-            OPENCLAW_OPENGREP_BASE_REF: baseRef,
-          },
-          encoding: "utf8",
-        },
-      );
+      const result = runScan(repo, binDir, ["--changed", "--sarif", "--error"], baseRef);
 
       expect.soft(result.status).not.toBe(0);
       expect.soft(result.stderr).toContain(errorText);
@@ -324,29 +302,21 @@ describe("run-opengrep.sh", () => {
     let staleBase: string;
 
     beforeAll(() => {
-      source = sourceDirs.make("openclaw-opengrep-source-");
-      git(source, "init", "-q", "--initial-branch=main");
-      git(source, "config", "user.email", "test@example.com");
-      git(source, "config", "user.name", "Test User");
+      source = createRepo("source", (prefix) => sourceDirs.make(prefix));
       git(source, "config", "uploadpack.allowFilter", "true");
-      copyRunOpengrepFiles(source);
       for (const name of ["ensure-base-commit", "git-owner"]) {
         fs.cpSync(`.github/actions/${name}`, path.join(source, ".github/actions", name), {
           recursive: true,
         });
       }
-      writeFile(path.join(source, "security/opengrep/precise.yml"), "rules: []\n");
-      git(source, "add", ".");
-      git(source, "commit", "-qm", "base");
+      commit(source, "base");
       staleBase = git(source, "rev-parse", "HEAD");
       git(source, "switch", "-q", "-c", "feature");
       writeFile(path.join(source, "src/pr.ts"), "export const pr = true;\n");
-      git(source, "add", ".");
-      git(source, "commit", "-qm", "feature");
+      commit(source, "feature");
       git(source, "switch", "-q", "main");
       writeFile(path.join(source, "src/main-only.ts"), "export const mainOnly = true;\n");
-      git(source, "add", ".");
-      git(source, "commit", "-qm", "main only");
+      commit(source, "main only");
       git(source, "merge", "--no-ff", "feature", "-m", "synthetic merge");
     });
 

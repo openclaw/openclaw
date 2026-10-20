@@ -1,4 +1,3 @@
-// Resolve OpenClaw ref tests cover the release workflow ref resolver script.
 import { execFileSync, spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -53,50 +52,34 @@ function runResolver(remote: string, args: string[]) {
   });
 }
 
-function parseOutput(output: string): Record<string, string> {
-  return Object.fromEntries(
-    output
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => {
-        const separator = line.indexOf("=");
-        return [line.slice(0, separator), line.slice(separator + 1)];
-      }),
-  );
+function expectOutput(output: string, kind: string, fallback = false) {
+  expect(output.trim().split("\n").filter(Boolean).toSorted()).toEqual([
+    `fallback=${fallback}`,
+    `fast=${!fallback}`,
+    `ref_kind=${kind}`,
+    `sha=${remoteSha}`,
+  ]);
 }
 
-function expectSuccessfulOutput(result: ReturnType<typeof runResolver>): Record<string, string> {
-  expect(result.status).toBe(0);
-  expect(result.stderr).toBe("");
-  return parseOutput(result.stdout);
+function expectResolved(args: string[], ref_kind: string, fallback = false) {
+  const result = runResolver(remoteRepo, args);
+  expect(result).toMatchObject({ status: 0, stderr: "" });
+  expectOutput(result.stdout, ref_kind, fallback);
+}
+
+function expectRejected(result: ReturnType<typeof runResolver>, error: string) {
+  expect(result).toMatchObject({ status: 1, stdout: "" });
+  expect(result.stderr).toContain(error);
 }
 
 describe("scripts/github/resolve-openclaw-ref.sh", () => {
   it("resolves branch and tag refs with git ls-remote", () => {
-    expect(expectSuccessfulOutput(runResolver(remoteRepo, ["--ref", "release/test"]))).toEqual({
-      fallback: "false",
-      fast: "true",
-      ref_kind: "branch",
-      sha: remoteSha,
-    });
-    expect(expectSuccessfulOutput(runResolver(remoteRepo, ["--ref", "v2026.6.21"]))).toEqual({
-      fallback: "false",
-      fast: "true",
-      ref_kind: "tag",
-      sha: remoteSha,
-    });
+    expectResolved(["--ref", "release/test"], "branch");
+    expectResolved(["--ref", "v2026.6.21"], "tag");
   });
 
   it("accepts full commit SHA refs without remote lookup", () => {
-    const result = runResolver(remoteRepo, ["--ref", remoteSha.toUpperCase()]);
-
-    expect(expectSuccessfulOutput(result)).toEqual({
-      fallback: "true",
-      fast: "false",
-      ref_kind: "sha",
-      sha: remoteSha,
-    });
+    expectResolved(["--ref", remoteSha.toUpperCase()], "sha", true);
   });
 
   it("writes fallback outputs for unresolved refs when a caller supplies an expected SHA", () => {
@@ -113,12 +96,7 @@ describe("scripts/github/resolve-openclaw-ref.sh", () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("");
-    expect(parseOutput(execFileSync("cat", [outputPath], { encoding: "utf8" }))).toEqual({
-      fallback: "true",
-      fast: "false",
-      ref_kind: "unknown",
-      sha: remoteSha,
-    });
+    expectOutput(execFileSync("cat", [outputPath], { encoding: "utf8" }), "unknown", true);
   });
 
   it("does not let fallback mode hide remote lookup failures", () => {
@@ -131,17 +109,13 @@ describe("scripts/github/resolve-openclaw-ref.sh", () => {
       "--fallback-ok",
     ]);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("does not appear to be a git repository");
-    expect(result.stdout).toBe("");
+    expectRejected(result, "does not appear to be a git repository");
   });
 
   it("rejects ambiguous branch and tag names before emitting outputs", () => {
     const result = runResolver(remoteRepo, ["--ref", "ambiguous"]);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("Ref resolved ambiguously as both branch and tag: ambiguous");
-    expect(result.stdout).toBe("");
+    expectRejected(result, "Ref resolved ambiguously as both branch and tag: ambiguous");
   });
 
   it("rejects a branch whose resolved SHA differs from expected_sha before emitting outputs", () => {
@@ -152,11 +126,10 @@ describe("scripts/github/resolve-openclaw-ref.sh", () => {
       "--expected-sha",
       expectedSha,
     ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe(
-      `Ref release/test resolved to ${remoteSha}, expected ${expectedSha}.\n`,
-    );
+    expect(result).toMatchObject({
+      status: 1,
+      stdout: "",
+      stderr: `Ref release/test resolved to ${remoteSha}, expected ${expectedSha}.\n`,
+    });
   });
 });

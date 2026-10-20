@@ -6,16 +6,10 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
 const fixtureFile = "apps/ios/Sources/LimitFixture.swift";
-const limitRules = [
-  "cyclomatic_complexity",
-  "file_length",
-  "function_body_length",
-  "function_parameter_count",
-  "large_tuple",
-  "line_length",
-  "nesting",
-  "type_body_length",
-];
+const limitRules =
+  "cyclomatic_complexity file_length function_body_length function_parameter_count large_tuple line_length nesting type_body_length".split(
+    " ",
+  );
 
 function violation(rule: string, severity = "Error") {
   return {
@@ -77,12 +71,16 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
     };
   }
 
-  it("keeps local strict lint failures unchanged, even when a local tool sets CI", () => {
-    const result = run([violation("line_length")], { github: false });
-    expect(result.status).toBe(2);
-    expect(result.args).toEqual(["lint", "--strict", "--config", ".swiftlint.yml"]);
+  function expectNoWarnings(result: ReturnType<typeof run>, status: number) {
+    expect(result.status).toBe(status);
     expect(result.output).not.toContain("::warning");
     expect(result.summary).toBe("");
+  }
+
+  it("keeps local strict lint failures unchanged, even when a local tool sets CI", () => {
+    const result = run([violation("line_length")], { github: false });
+    expectNoWarnings(result, 2);
+    expect(result.args).toEqual(["lint", "--strict", "--config", ".swiftlint.yml"]);
   });
 
   it("reports all enabled numeric limit classes as CI warnings with repository-relative paths", () => {
@@ -106,23 +104,14 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
   });
 
   it.each([
-    {
-      rule: "type_name",
-      prefix: "Type name",
-      lengthReason: "Type name 'A' should be between 2 and 60 characters long",
-    },
-    {
-      rule: "generic_type_name",
-      prefix: "Generic type name",
-      lengthReason:
-        "Generic type name 'TTTTTTTTTTTTTTTTTTTTT' should be between 1 and 20 characters long",
-    },
-  ])(
-    "$rule warns only for length and keeps name characters and capitalization blocking",
-    ({ rule, prefix, lengthReason }) => {
+    ["type_name", "Type name", "A", 2, 60],
+    ["generic_type_name", "Generic type name", "TTTTTTTTTTTTTTTTTTTTT", 1, 20],
+  ] as const)(
+    "%s warns only for length and keeps name characters and capitalization blocking",
+    (rule, prefix, name, min, max) => {
       const length = {
         ...violation(rule),
-        reason: lengthReason,
+        reason: `${prefix} '${name}' should be between ${min} and ${max} characters long`,
       };
       const invalidNames = [
         `${prefix} 'lowercase' should start with an uppercase character`,
@@ -154,8 +143,6 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
     })),
   ])("rejects tool failures and malformed reports: $report", ({ report, exit }) => {
     const result = run(report, { exit, raw: true });
-    expect(result.status).toBe(1);
-    expect(result.output).not.toContain("::warning");
-    expect(result.summary).toBe("");
+    expectNoWarnings(result, 1);
   });
 });

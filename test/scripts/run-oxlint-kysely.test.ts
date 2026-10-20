@@ -31,20 +31,15 @@ function createLintFixture() {
     fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
     fs.writeFileSync(path.join(root, file), content);
   };
-  write("package.json", '{"type":"module"}');
-  write(
-    "tsconfig.json",
-    JSON.stringify({ compilerOptions: { strict: true, types: [], module: "nodenext" } }),
-  );
+  const json = (file: string, value: unknown) => write(file, JSON.stringify(value));
+  json("package.json", { type: "module" });
+  json("tsconfig.json", { compilerOptions: { strict: true, types: [], module: "nodenext" } });
   write("config/tsconfig/oxlint.core.json", '{"extends":"../../tsconfig.json"}');
-  write(
-    ".oxlintrc.json",
-    JSON.stringify({
-      plugins: ["typescript"],
-      categories: { correctness: "off" },
-      rules: { "typescript/no-redundant-type-constituents": "error" },
-    }),
-  );
+  json(".oxlintrc.json", {
+    plugins: ["typescript"],
+    categories: { correctness: "off" },
+    rules: { "typescript/no-redundant-type-constituents": "error" },
+  });
   for (const name of ["state", "agent"]) {
     write(
       "src/state/openclaw-" + name + "-schema.sql",

@@ -9,9 +9,11 @@ const tempDirectories = useAutoCleanupTempDirTracker(afterEach);
 
 function commitSource(fsSafeVersion: string, defaults: string, remoteBranch?: string) {
   const root = tempDirectories.make("openclaw-fs-safe-contract-");
-  execFileSync("git", ["init", "-q"], { cwd: root });
-  execFileSync("git", ["config", "user.email", "test@openclaw.local"], { cwd: root });
-  execFileSync("git", ["config", "user.name", "OpenClaw test"], { cwd: root });
+  const git = (...args: string[]) =>
+    execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  git("init", "-q");
+  git("config", "user.email", "test@openclaw.local");
+  git("config", "user.name", "OpenClaw test");
   writeFileSync(
     join(root, "package.json"),
     `${JSON.stringify({ version: "2026.8.33", dependencies: { "@openclaw/fs-safe": fsSafeVersion } })}\n`,
@@ -19,17 +21,12 @@ function commitSource(fsSafeVersion: string, defaults: string, remoteBranch?: st
   const defaultsPath = join(root, "src/infra/fs-safe-defaults.ts");
   mkdirSync(dirname(defaultsPath), { recursive: true });
   writeFileSync(defaultsPath, defaults);
-  execFileSync("git", ["add", "."], { cwd: root });
-  execFileSync("git", ["commit", "-qm", "fixture"], { cwd: root });
+  git("add", ".");
+  git("commit", "-qm", "fixture");
   if (remoteBranch) {
-    execFileSync("git", ["update-ref", `refs/remotes/origin/${remoteBranch}`, "HEAD"], {
-      cwd: root,
-    });
+    git("update-ref", `refs/remotes/origin/${remoteBranch}`, "HEAD");
   }
-  return {
-    root,
-    ref: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
-  };
+  return { root, ref: git("rev-parse", "HEAD") };
 }
 
 function resolveContract(
@@ -45,16 +42,12 @@ function resolveContract(
 }
 
 const legacyDefaults = 'import { configureFsSafePython } from "@openclaw/fs-safe/config";\n';
+const nativeDefaults = 'import { configureFsSafeNative } from "@openclaw/fs-safe/config";\n';
 
 describe("resolve-fs-safe-native-contract", () => {
   it("relaxes only authorized bundled-native frozen source contracts", () => {
     const cases: [string, string, string | undefined, "bundled" | "required"][] = [
-      [
-        "0.5.6",
-        'import { configureFsSafeNative } from "@openclaw/fs-safe/config";\n',
-        "extended-stable/2026.8.33",
-        "bundled",
-      ],
+      ["0.5.6", nativeDefaults, "extended-stable/2026.8.33", "bundled"],
       ["0.3.0", legacyDefaults, undefined, "required"],
       ["0.3.0", legacyDefaults, "release/2026.9.1", "required"],
       ["0.4.1", legacyDefaults, "extended-stable/2026.8.33", "required"],

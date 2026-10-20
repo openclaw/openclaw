@@ -76,17 +76,18 @@ describe("run-android-gradle", () => {
   describe("resolveAndroidSdkEnv", () => {
     const macSdk = path.join("/Users/dev", "Library", "Android", "sdk");
     const linuxSdk = path.join("/home/dev", "Android", "Sdk");
+    function resolveSdk(installed: string | null, platform: "darwin" | "linux" = "darwin") {
+      return resolveAndroidSdkEnv({
+        env: {},
+        platform,
+        homeDir: platform === "darwin" ? "/Users/dev" : "/home/dev",
+        existsSync: (candidate) => candidate === installed,
+      });
+    }
 
     it("discovers the SDK prepared by the existing Android toolchain action", () => {
       const sdk = path.join("/home/dev", ".android-sdk");
-      expect(
-        resolveAndroidSdkEnv({
-          env: {},
-          homeDir: "/home/dev",
-          platform: "linux",
-          existsSync: (candidate) => candidate === sdk,
-        }),
-      ).toEqual({ ANDROID_HOME: sdk });
+      expect(resolveSdk(sdk, "linux")).toEqual({ ANDROID_HOME: sdk });
     });
 
     it("keeps env untouched when ANDROID_HOME or ANDROID_SDK_ROOT is set", () => {
@@ -108,20 +109,8 @@ describe("run-android-gradle", () => {
     });
 
     it("falls back to the Android Studio default SDK path per platform", () => {
-      const darwin = resolveAndroidSdkEnv({
-        env: {},
-        existsSync: (p: string) => p === macSdk,
-        homeDir: "/Users/dev",
-        platform: "darwin",
-      });
-      expect(darwin.ANDROID_HOME).toBe(macSdk);
-      const linux = resolveAndroidSdkEnv({
-        env: {},
-        existsSync: (p: string) => p === linuxSdk,
-        homeDir: "/home/dev",
-        platform: "linux",
-      });
-      expect(linux.ANDROID_HOME).toBe(linuxSdk);
+      expect(resolveSdk(macSdk).ANDROID_HOME).toBe(macSdk);
+      expect(resolveSdk(linuxSdk, "linux").ANDROID_HOME).toBe(linuxSdk);
     });
 
     it("keeps env untouched when no default SDK install exists", () => {
@@ -191,14 +180,10 @@ process.exitCode = await run(
         expect(isProcessAlive(descendantPid)).toBe(false);
         expect(result).toEqual({ code: 143, signal: null });
       } finally {
-        if (isProcessAlive(runnerPid)) {
-          process.kill(runnerPid, "SIGKILL");
-        }
-        if (childPid && isProcessAlive(childPid)) {
-          process.kill(childPid, "SIGKILL");
-        }
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
+        for (const pid of [runnerPid, childPid, descendantPid]) {
+          if (pid && isProcessAlive(pid)) {
+            process.kill(pid, "SIGKILL");
+          }
         }
         await closed;
       }
