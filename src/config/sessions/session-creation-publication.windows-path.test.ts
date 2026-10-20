@@ -35,19 +35,25 @@ const directories = createTempDirTracker();
 const publication = (...args: Parameters<typeof assertSessionEntryCreationPublication>) =>
   expect(() => assertSessionEntryCreationPublication(...args));
 const expired = "Session creation publication owner is no longer current";
+const drive = String.raw`C:\OpenClaw\agents\main\agent.sqlite`;
+const targetFor = (pathname: string) => ({
+  agentId: "main",
+  sessionKey: "agent:main:publication",
+  paths: new Set([pathname]),
+});
+function registeredIdentity() {
+  registerOpenClawAgentDatabaseIdentity(db);
+  const identity = readOpenClawAgentDatabaseIdentity({ db });
+  if (typeof identity.identity !== "string") {
+    throw new Error("Expected a file-backed creation publication fixture");
+  }
+  return { ...identity, identity: identity.identity };
+}
 
 it("binds a native creation to its prepared physical identity", async () => {
   const database = { agentId: "main", path: databasePath, db };
-  const target = {
-    agentId: database.agentId,
-    sessionKey: "agent:main:native-publication",
-    paths: new Set([databasePath]),
-  };
-  registerOpenClawAgentDatabaseIdentity(db);
-  const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-  if (typeof identity !== "string") {
-    throw new Error("Expected a file-backed native creation fixture");
-  }
+  const target = targetFor(databasePath);
+  const { identity } = registeredIdentity();
   await withSessionEntryCreationPublication(
     { agentId: target.agentId, sessionKey: target.sessionKey, database },
     async (operation) => {
@@ -65,31 +71,19 @@ it("binds a native creation to its prepared physical identity", async () => {
 });
 
 it.each([
-  { name: "drive", runtimePath: String.raw`C:\OpenClaw\agents\main\agent.sqlite` },
-  { name: "UNC", runtimePath: String.raw`\\Server\Share\OpenClaw\agents\main\agent.sqlite` },
-  {
-    name: "junction",
-    runtimePath: String.raw`C:\OpenClaw\agents\main\agent.sqlite`,
-    openedPath: String.raw`C:\agent-alias\agent.sqlite`,
-  },
-  {
-    name: "long drive",
-    runtimePath: path.win32.join(
-      "C:\\OpenClaw",
-      ...Array(20).fill("long-directory"),
-      "agent.sqlite",
-    ),
-  },
+  ["drive", drive],
+  ["UNC", String.raw`\\Server\Share\OpenClaw\agents\main\agent.sqlite`],
+  ["junction", drive, String.raw`C:\agent-alias\agent.sqlite`],
+  [
+    "long drive",
+    path.win32.join("C:\\OpenClaw", ...Array(20).fill("long-directory"), "agent.sqlite"),
+  ],
 ])(
-  "retains creation publication custody across $name namespace aliases",
-  async ({ runtimePath, openedPath = runtimePath }) => {
+  "retains publication across %s namespace aliases",
+  async (_name, runtimePath, openedPath = runtimePath) => {
     const metadata = statSync(databasePath, { bigint: true });
     const namespacedPath = path.win32.toNamespacedPath(openedPath);
-    const target = {
-      agentId: "main",
-      sessionKey: "agent:main:windows-publication",
-      paths: new Set([path.win32.resolve(runtimePath)]),
-    };
+    const target = targetFor(path.win32.resolve(runtimePath));
     const resolveWindowsPath = path.win32.resolve;
     mockProcessPlatform("win32");
     vi.spyOn(path, "resolve").mockImplementation(resolveWindowsPath);
@@ -97,11 +91,7 @@ it.each([
     // Model the Windows native boundary while preserving the real handle's physical identity.
     vi.spyOn(realpathSync, "native").mockReturnValue(path.win32.toNamespacedPath(runtimePath));
     vi.mocked(statSync).mockReturnValueOnce(metadata).mockReturnValueOnce(metadata);
-    registerOpenClawAgentDatabaseIdentity(db);
-    const identity = readOpenClawAgentDatabaseIdentity({ db });
-    if (typeof identity.identity !== "string") {
-      throw new Error("Expected a file-backed creation publication fixture");
-    }
+    const identity = registeredIdentity();
     const operation = await withSessionEntryCreationPublication(
       {
         agentId: target.agentId,

@@ -26,6 +26,8 @@ let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createSessionColdStorageFixture>>;
 let embeddedBytes: number;
 let embeddedBlob: Buffer;
+const status = (storePath = fixture.scope.storePath) =>
+  getSessionColdStorageStatus(maintenanceConfig(storePath));
 function setStorage(db: ReturnType<typeof openNodeSqliteDatabase>, storage: "sqlite" | "file") {
   db.prepare(
     "UPDATE session_transcript_cold_archives SET storage = ?, archive_blob = ? WHERE session_id = ?",
@@ -45,8 +47,8 @@ beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
   fixture = await createSessionColdStorageFixture(state.statePath("shared.sqlite"));
   await runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.scope.storePath) });
-  const descriptor = fixture
-    .database()
+  const db = fixture.database();
+  const descriptor = db
     .prepare(
       "SELECT archive_name, archive_bytes FROM session_transcript_cold_archives WHERE session_id = ?",
     )
@@ -55,13 +57,11 @@ beforeAll(async () => {
   embeddedBlob = await fs.readFile(
     path.join(state.stateDir, "cold", String(descriptor.archive_name)),
   );
-  setStorage(fixture.database(), "sqlite");
+  setStorage(db, "sqlite");
   await closeOpenClawAgentDatabasesAsync();
 });
 afterEach(() => vi.restoreAllMocks());
-afterAll(async () => {
-  await state.cleanup();
-});
+afterAll(() => state.cleanup());
 
 it.each(["sqlite", "file"] as const)(
   "reports current %s archive storage without parent SQLite",
@@ -96,9 +96,7 @@ it.each(["sqlite", "file"] as const)(
       ]);
       expect(result[0]!.databaseBytes).toBeGreaterThan(0);
       if (storage === "sqlite") {
-        expect(await getSessionColdStorageStatus(maintenanceConfig(missing))).toEqual([
-          emptyInventory(missing),
-        ]);
+        expect(await status(missing)).toEqual([emptyInventory(missing)]);
         await expect(fs.stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
       }
       expect(observer.counts).toEqual(emptySqliteCounts());
@@ -132,7 +130,7 @@ it("refuses a replaced source while its worker inventory is delayed", async () =
     }
     return reply;
   });
-  const pending = getSessionColdStorageStatus(maintenanceConfig(missing));
+  const pending = status(missing);
   const outcome = pending.catch((error: unknown) => error);
   try {
     await awaitGateBeforeSettlement(entered.promise, pending, "Inventory was not dispatched");
@@ -151,9 +149,7 @@ it("propagates worker rejection without a synchronous fallback", async () => {
   vi.spyOn(historyLane.pool, "run").mockRejectedValueOnce(failure);
   const observer = observeParentSqlite();
   try {
-    await expect(
-      getSessionColdStorageStatus(maintenanceConfig(fixture.scope.storePath)),
-    ).rejects.toBe(failure);
+    await expect(status()).rejects.toBe(failure);
     expect(observer.counts).toEqual(emptySqliteCounts());
   } finally {
     observer.restore();

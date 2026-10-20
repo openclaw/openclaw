@@ -1,3 +1,4 @@
+import type { Compilable } from "kysely";
 import { expect } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -22,12 +23,7 @@ export async function createSessionColdStorageFixture(
   sessionKey = "agent:main:cold-roundtrip",
 ) {
   const options = { agentId: "main", path: storePath };
-  const scope = {
-    agentId: "main",
-    storePath,
-    sessionKey,
-    sessionId: historicalId,
-  };
+  const scope = { agentId: "main", storePath, sessionKey, sessionId: historicalId };
   // Callers own explicit cold-storage maintenance; seeding must not arm automatic age cleanup.
   replaceSessionEntrySync(scope, { sessionId: historicalId, updatedAt: 1 });
   await replaceTranscriptEvents(scope, [
@@ -61,20 +57,16 @@ export async function createSessionColdStorageFixture(
   replaceSessionEntrySync(scope, { sessionId: currentId, updatedAt: 1 });
   runOpenClawAgentWriteTransaction(({ db: database }) => {
     const db = getNodeSqliteKysely<DB>(database);
-    executeSqliteQuerySync(
-      database,
-      db.updateTable("session_windows").set({ previous_session_id: null }),
-    );
-    executeSqliteQuerySync(
-      database,
+    const write = (query: Compilable<unknown>) => executeSqliteQuerySync(database, query);
+    write(db.updateTable("session_windows").set({ previous_session_id: null }));
+    write(
       db
         .updateTable("session_windows")
         .set({ updated_at: 1, transcript_updated_at: 1 })
         .where("session_id", "=", historicalId),
     );
     // Importers preserve raw JSON spacing and identity metadata independently of event payloads.
-    executeSqliteQuerySync(
-      database,
+    write(
       db
         .updateTable("transcript_events")
         .set({
@@ -87,8 +79,7 @@ export async function createSessionColdStorageFixture(
         .where("session_id", "=", historicalId)
         .where("seq", "=", 0),
     );
-    executeSqliteQuerySync(
-      database,
+    write(
       db
         .updateTable("transcript_event_identities")
         .set({ message_idempotency_key: "original-idempotency-key", created_at: 8 })
@@ -130,13 +121,11 @@ export async function createSessionColdStorageFixture(
     };
   };
   const original = snapshot();
-  expect(original.identities).toContainEqual(
-    expect.objectContaining({ message_idempotency_key: "original-idempotency-key" }),
-  );
-  expect(original.active).toContainEqual(expect.objectContaining({ session_id: historicalId }));
-  expect(original.search).toContainEqual(
-    expect.objectContaining({ message_id: "history-user", timestamp: 10 }),
-  );
+  const contains = (rows: unknown[], value: object) =>
+    expect(rows).toContainEqual(expect.objectContaining(value));
+  contains(original.identities, { message_idempotency_key: "original-idempotency-key" });
+  contains(original.active, { session_id: historicalId });
+  contains(original.search, { message_id: "history-user", timestamp: 10 });
   return { options, scope, database, snapshot, original };
 }
 
