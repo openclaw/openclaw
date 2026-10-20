@@ -1,23 +1,33 @@
 import { createSignal } from "solid-js";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderChatQueueSolid as ChatQueue } from "./components/chat-composer-queue.tsx";
 import baseStyles from "../../styles/base.css?inline";
 import queueStyles from "../../styles/chat/composer-queue.css?inline";
 
-async function drawQueue(editingId: string | null = null) {
+let container: HTMLDivElement;
+let styles: HTMLStyleElement;
+
+beforeEach(async () => {
   await page.viewport(960, 700);
-  const styles = document.head.appendChild(document.createElement("style"));
+  styles = document.createElement("style");
   styles.textContent = baseStyles + queueStyles;
-  const container = document.body.appendChild(document.createElement("div"));
+  document.head.append(styles);
+  container = document.createElement("div");
   container.className = "agent-chat__composer-shell";
   container.style.cssText = "position:fixed;bottom:24px;left:24px;width:760px";
-  onTestFinished(() => {
-    container.remove();
-    styles.remove();
-  });
+  document.body.append(container);
+});
+
+afterEach(() => {
+  cleanupSolid();
+  container.remove();
+  styles.remove();
+});
+
+function drawQueue(editingId: string | null = null) {
   const [editing, setEditing] = createSignal(editingId);
   const onEdit = vi.fn((id: string) => setEditing(id));
   mountSolid(
@@ -34,59 +44,62 @@ async function drawQueue(editingId: string | null = null) {
     { container },
   );
   flush();
-  const row = container.querySelector<HTMLElement>('[data-chat-queue-item="first"]')!;
-  const q = <T extends HTMLElement = HTMLElement>(selector: string): T =>
-    row.querySelector<T>(selector)!;
-  return { container, onEdit, q, row, trigger: q<HTMLButtonElement>(".chat-queue__more") };
+  return {
+    onEdit,
+    row: container.querySelector<HTMLElement>('[data-chat-queue-item="first"]')!,
+    trigger: container.querySelector<HTMLButtonElement>(".chat-queue__more")!,
+  };
 }
 
-it.each(["pointer", "keyboard"] as const)(
-  "focuses the editor after %s selection",
-  async (input) => {
-    const { q, row, trigger, onEdit } = await drawQueue();
-    if (input === "pointer") {
-      await page.elementLocator(trigger).click();
-    } else {
-      trigger.focus();
-      await userEvent.keyboard("{ArrowDown}");
-    }
-    await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
-    const edit = q('[role="menuitem"][data-value="edit"]');
-    if (input === "pointer") {
-      await page.elementLocator(edit).click();
-    } else {
-      expect(document.activeElement).toBe(edit);
-      await userEvent.keyboard("{Enter}");
-    }
-    await waitForSolid(() => {
-      expect(onEdit).toHaveBeenCalledExactlyOnceWith("first");
-      const textarea = q<HTMLTextAreaElement>(".chat-queue__edit-input");
-      expect(textarea.value).toBe("First queued prompt");
-      expect(document.activeElement).toBe(textarea);
-      expect(row.hasAttribute("data-edit-keyboard-focus")).toBe(input === "keyboard");
-    });
-  },
-);
+describe("queued message action menu", () => {
+  it.each(["pointer", "keyboard"] as const)(
+    "starts editing with textarea focus through %s selection",
+    async (input) => {
+      const { row, trigger, onEdit } = drawQueue();
+      if (input === "pointer") {
+        await page.elementLocator(trigger).click();
+      } else {
+        trigger.focus();
+        await userEvent.keyboard("{ArrowDown}");
+      }
+      await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+      const edit = row.querySelector<HTMLElement>('[role="menuitem"][data-value="edit"]')!;
+      if (input === "pointer") {
+        await page.elementLocator(edit).click();
+      } else {
+        expect(document.activeElement).toBe(edit);
+        await userEvent.keyboard("{Enter}");
+      }
+      await waitForSolid(() => {
+        expect(onEdit).toHaveBeenCalledExactlyOnceWith("first");
+        const textarea = row.querySelector<HTMLTextAreaElement>(".chat-queue__edit-input")!;
+        expect(textarea.value).toBe("First queued prompt");
+        expect(document.activeElement).toBe(textarea);
+        expect(row.hasAttribute("data-edit-keyboard-focus")).toBe(input === "keyboard");
+      });
+    },
+  );
 
-it("locks other menus while a row is being edited", async () => {
-  const { container, q, trigger, onEdit } = await drawQueue("second");
-  await waitForSolid(() => expect(trigger.disabled).toBe(true));
-  trigger.click();
-  await waitForSolid(() => {
-    expect(trigger.getAttribute("aria-expanded")).toBe("false");
-    expect(q(":popover-open")).toBeNull();
-    expect(onEdit).not.toHaveBeenCalled();
-    expect(container.querySelector(".chat-queue__item--editing")).toMatchObject({
-      dataset: { chatQueueItem: "second" },
+  it("cannot open or activate another row's menu while editing", async () => {
+    const { row, trigger, onEdit } = drawQueue("second");
+    await waitForSolid(() => expect(trigger.disabled).toBe(true));
+    trigger.click();
+    await waitForSolid(() => {
+      expect(trigger.getAttribute("aria-expanded")).toBe("false");
+      expect(row.querySelector(":popover-open")).toBeNull();
+      expect(onEdit).not.toHaveBeenCalled();
+      expect(
+        container.querySelector(".chat-queue__item--editing")?.getAttribute("data-chat-queue-item"),
+      ).toBe("second");
     });
   });
-});
 
-it("does not edit on a double-click of the menu trigger", async () => {
-  const { q, trigger, onEdit } = await drawQueue();
-  await userEvent.dblClick(trigger);
-  await waitForSolid(() => {
-    expect(onEdit).not.toHaveBeenCalled();
-    expect(q(".chat-queue__edit-input")).toBeNull();
+  it("does not treat a double-click on the menu trigger as a row edit", async () => {
+    const { trigger, onEdit } = drawQueue();
+    await userEvent.dblClick(trigger);
+    await waitForSolid(() => {
+      expect(onEdit).not.toHaveBeenCalled();
+      expect(container.querySelector(".chat-queue__edit-input")).toBeNull();
+    });
   });
 });
