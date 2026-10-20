@@ -74,7 +74,10 @@ it("exposes the current navigation face through the real pane host without a gat
     routeFace: "chat",
   });
   const view = mountPane(context, () => <ChatPaneView {...props()} />, false);
-  const pane = expectDefined(view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"));
+  const pane = expectDefined(
+    view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
+    "openclaw-chat-pane",
+  );
   await waitForSolid(() => expect(pane.captureNavigationFace()).toBe("chat"));
 
   setProps((p) => ({ ...p, routeFace: "dashboard" }));
@@ -96,9 +99,15 @@ it("applies a route draft and its focus cue to an already mounted native pane", 
     <ChatPaneView paneId="bridge-draft" sessionKey={sessionKey} {...props()} />
   ));
   const textarea = await waitForSolid(() =>
-    expectDefined(view.container.querySelector<HTMLTextAreaElement>(composerSelector)),
+    expectDefined(
+      view.container.querySelector<HTMLTextAreaElement>(composerSelector),
+      composerSelector,
+    ),
   );
-  const pane = expectDefined(view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"));
+  const pane = expectDefined(
+    view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
+    "openclaw-chat-pane",
+  );
   const runtime = await waitForSolid(() =>
     expectDefined(
       renderProbe.mock.calls.find(
@@ -148,8 +157,14 @@ it("updates held Send as a mounted composer's draft changes between commands and
   const sendChat = vi.spyOn(pane.state, "handleSendChat").mockResolvedValue(undefined);
   pane.state.handleChatDraftChange("/stop");
   await pane.updateComplete;
-  const input = expectDefined(pane.querySelector<HTMLTextAreaElement>(composerSelector));
-  const send = expectDefined(pane.querySelector<HTMLButtonElement>(".chat-send-btn--send"));
+  const input = expectDefined(
+    pane.querySelector<HTMLTextAreaElement>(composerSelector),
+    composerSelector,
+  );
+  const send = expectDefined(
+    pane.querySelector<HTMLButtonElement>(".chat-send-btn--send"),
+    ".chat-send-btn--send",
+  );
   const edit = async (draft: string) => {
     input.value = draft;
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -181,7 +196,10 @@ it("settles clean hidden reads and fences actual property changes until reveal",
     () => <ChatPaneView paneId="clean-hidden" presented={false} />,
     false,
   );
-  const pane = expectDefined(view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"));
+  const pane = expectDefined(
+    view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
+    "openclaw-chat-pane",
+  );
   await pane.updateComplete;
   await expect(pane.updateComplete).resolves.toBe(true);
   render.mockClear();
@@ -210,7 +228,10 @@ it("replaces the command provider while document-hidden rendering is parked", as
   const second = createMockBoardProvider(sessionKey);
   const subscribe = vi.spyOn(second.events, "subscribe");
   const view = render({ boardProvider: first });
-  const pane = expectDefined(view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"));
+  const pane = expectDefined(
+    view.container.querySelector<ChatPaneElement>("openclaw-chat-pane"),
+    "openclaw-chat-pane",
+  );
   await pane.updateComplete;
   visibility = "hidden";
   document.dispatchEvent(new Event("visibilitychange"));
@@ -239,7 +260,10 @@ it("opens provider findings through the mounted pane's first rendered frame", as
   });
   const view = fixture.render({ active: true });
   const reviewButton = await waitForSolid(() =>
-    expectDefined(view.container.querySelector<HTMLButtonElement>(".chat-provider-review button")),
+    expectDefined(
+      view.container.querySelector<HTMLButtonElement>(".chat-provider-review button"),
+      ".chat-provider-review button",
+    ),
   );
   expect(reviewButton.textContent).toContain("Review findings");
   reviewButton.click();

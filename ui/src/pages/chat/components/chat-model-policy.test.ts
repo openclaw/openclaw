@@ -72,8 +72,8 @@ it.each([undefined, "fixture/primary", "fixture/automatic", null])(
     } else if (defaultModel === "fixture/automatic") {
       expected.push(defaultModel);
     }
-    const compare = (a: string, b: string) => a.localeCompare(b);
-    expect(values.toSorted(compare)).toEqual(expected.toSorted(compare));
+    expect(values).toHaveLength(expected.length);
+    expect(values).toEqual(expect.arrayContaining(expected));
     container
       .querySelector<HTMLButtonElement>(modelControlSelector("option", "fixture/custom"))
       ?.click();
