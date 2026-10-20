@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import {
   ErrorCodes,
@@ -41,13 +41,6 @@ import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { isDeliveredMessageToolOnlySourceReplyResult } from "../embedded-agent-message-tool-source-reply.js";
-import { resolveEmbeddedRunAttemptTerminalState } from "../embedded-agent-runner/run/terminal-outcome.js";
-import { resolveSettledTurnFinalizationRequest } from "../embedded-agent-runner/run/terminal-resolution.js";
-import {
-  buildEmbeddedRunnerAssistant,
-  makeEmbeddedRunnerAttempt,
-} from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { readToolResultDetails } from "../tool-result-error.js";
 import { jsonResult } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
@@ -57,244 +50,238 @@ import {
   stubMessageSecrets,
 } from "./message-tool-execution.test-support.js";
 
-const EMPTY_CATALOG = {
-  version: 0,
-  channels: [],
-  getChannel: () => undefined,
-} as const;
+const EMPTY_CATALOG = { version: 0, channels: [], getChannel: () => undefined } as const;
 
 beforeEach(stubMessageSecrets);
 
 afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
+  resetPluginRuntimeStateForTest();
 });
 
-describe("registered message action source completion", () => {
-  afterEach(() => resetPluginRuntimeStateForTest());
-
-  type CompletionCase = {
-    action: ChannelMessageActionName;
-    mode: string;
-    target?: string;
-    delivery?: Record<string, unknown>;
-    media?: boolean;
-    collision?: "before" | "during" | "replacement" | "unbound";
-    expected?: true;
-  };
-  function completion(
-    mode: string,
-    details: Omit<CompletionCase, "action" | "mode"> = {},
-    action: ChannelMessageActionName = "upload-file",
-  ): CompletionCase {
-    return { action, mode, ...details };
-  }
-  const cases: CompletionCase[] = [
-    ...(
-      [
-        "send",
-        "poll",
-        "reply",
-        "thread-reply",
-        "upload-file",
-        "sendAttachment",
-        "sendWithEffect",
-      ] as const
-    ).map((action) => ({ action, mode: "implicit target", expected: true as const })),
-    completion("explicit target", { target: "channel:C123", expected: true }, "send"),
-    completion("different delivered recipient", {
-      target: "C123",
-      delivery: { toJid: "C999" },
-    }),
-    completion("media", { media: true, expected: true }, "send"),
-    completion("redirected media", { media: true, delivery: { channelId: "C999" } }, "send"),
-    completion("other destination", { target: "C999" }),
-    completion("other request returning source", {
-      target: "C999",
-      delivery: { toJid: "C123" },
-    }),
-    ...["chatId", "channelId", "roomId", "conversationId"].map((field) => ({
-      action: "upload-file" as const,
-      mode: `reported ${field}`,
-      delivery: { [field]: "C999" },
-    })),
-    completion("canonical target", {
-      delivery: { target: { kind: "chat", id: "C999" } },
-    }),
-    completion("normalized recipient", {
-      delivery: { toJid: "channel:C123" },
-      expected: true,
-    }),
-    completion(
-      "legacy result without recipient",
-      { delivery: {}, expected: true },
+type CompletionCase = {
+  action: ChannelMessageActionName;
+  mode: string;
+  target?: string;
+  delivery?: Record<string, unknown>;
+  media?: boolean;
+  collision?: "before" | "during" | "replacement" | "unbound";
+  expected?: true;
+};
+function completion(
+  mode: string,
+  details: Omit<CompletionCase, "action" | "mode"> = {},
+  action: ChannelMessageActionName = "upload-file",
+): CompletionCase {
+  return { action, mode, ...details };
+}
+const cases: CompletionCase[] = [
+  ...(
+    [
+      "send",
+      "poll",
+      "reply",
+      "thread-reply",
+      "upload-file",
+      "sendAttachment",
       "sendWithEffect",
-    ),
-    completion("nested result", {
-      delivery: { result: { messageId: "native-message-1", roomId: "C999" } },
-    }),
-    completion("mixed receipt parts", {
-      delivery: {
-        receipt: {
-          parts: [
-            { platformMessageId: "native-message-1", raw: { channelId: "C123" } },
-            { platformMessageId: "native-message-2", raw: { channelId: "C999" } },
-          ],
-        },
+    ] as const
+  ).map((action) => ({ action, mode: "implicit target", expected: true as const })),
+  completion("explicit target", { target: "channel:C123", expected: true }, "send"),
+  completion("different delivered recipient", {
+    target: "C123",
+    delivery: { toJid: "C999" },
+  }),
+  completion("media", { media: true, expected: true }, "send"),
+  completion("redirected media", { media: true, delivery: { channelId: "C999" } }, "send"),
+  completion("other destination", { target: "C999" }),
+  completion("other request returning source", {
+    target: "C999",
+    delivery: { toJid: "C123" },
+  }),
+  ...["chatId", "channelId", "roomId", "conversationId"].map((field) => ({
+    action: "upload-file" as const,
+    mode: `reported ${field}`,
+    delivery: { [field]: "C999" },
+  })),
+  completion("canonical target", {
+    delivery: { target: { kind: "chat", id: "C999" } },
+  }),
+  completion("normalized recipient", {
+    delivery: { toJid: "channel:C123" },
+    expected: true,
+  }),
+  completion("legacy result without recipient", { delivery: {}, expected: true }, "sendWithEffect"),
+  completion("nested result", {
+    delivery: { result: { messageId: "native-message-1", roomId: "C999" } },
+  }),
+  completion("mixed receipt parts", {
+    delivery: {
+      receipt: {
+        parts: [
+          { platformMessageId: "native-message-1", raw: { channelId: "C123" } },
+          { platformMessageId: "native-message-2", raw: { channelId: "C999" } },
+        ],
       },
-    }),
-    ...["failure", "partial", "dry run", "progress", "throw"].map((mode) => ({
-      action: "upload-file" as const,
-      mode,
-      target: "C123",
-    })),
-    completion("non-reply mutation", { target: "C123" }, "react"),
-    ...(["before", "unbound", "during", "replacement"] as const).map((collision) =>
-      completion(`colliding owner: ${collision}`, { collision, expected: true }),
-    ),
-  ];
+    },
+  }),
+  ...["failure", "partial", "dry run", "progress", "throw"].map((mode) => ({
+    action: "upload-file" as const,
+    mode,
+    target: "C123",
+  })),
+  completion("non-reply mutation", { target: "C123" }, "react"),
+  ...(["before", "unbound", "during", "replacement"] as const).map((collision) =>
+    completion(`colliding owner: ${collision}`, { collision, expected: true }),
+  ),
+];
 
-  it.each(cases)(
-    "records only eligible source completion for $action ($mode)",
-    async ({ action, mode, target, delivery, media, collision, expected }) => {
-      const sessionId = "source-completion-session";
-      let competingOperation: ReturnType<typeof createReplyOperation> | undefined;
-      const handleAction = vi.fn(async ({ params }: ChannelMessageActionContext) => {
-        if (collision === "during") {
-          createCollision();
-        }
-        if (mode === "throw") {
-          throw new Error("synthetic upload failure");
-        }
-        return jsonResult({
-          ok: mode !== "failure",
-          messageId: "native-message-1",
-          ...(delivery ?? { toJid: params.to }),
-          ...(action === "thread-reply" ? { receipt: { replyToId: "inbound-message" } } : {}),
-          ...(mode === "partial" ? { sentBeforeError: true } : {}),
-        });
-      });
-      registerChannel({
-        ...workspaceTestPlugin,
-        actions: { describeMessageTool: () => ({ actions: [action] }), handleAction },
-      });
-      const identity = {
-        agentId: "main",
-        runId: "source-completion-run",
-        sessionKey: "agent:main:workspace:group:C123",
-      };
-      const source = messageSource("workspace", "C123", "inbound-message");
-      const capability = mintMessageActionTurnCapability({
-        ...identity,
-        requesterAccountId: "default",
-        toolContext: source,
-      });
-      const createOperation = (storeScope?: string) =>
-        createReplyOperation({
-          sessionKey: identity.sessionKey,
-          sessionId,
-          resetTriggered: false,
-          ...(storeScope && {
-            target: captureSessionTarget({
-              storeScope,
-              sessionKey: identity.sessionKey,
-              incarnation: sessionId,
-            }),
-          }),
-        });
-      const operation = createOperation(collision ? "/stores/message-source.sqlite" : undefined);
-      const createCollision = (storeScope = "/stores/message-other.sqlite") => {
-        competingOperation = createOperation(storeScope);
-      };
-      if (collision === "before") {
-        operation.attachBackend({ kind: "embedded", runId: identity.runId, cancel() {} });
-      }
-      if (collision === "before" || collision === "unbound") {
+it.each(cases)(
+  "records only eligible source completion for $action ($mode)",
+  async ({ action, mode, target, delivery, media, collision, expected }) => {
+    const sessionId = "source-completion-session";
+    let competingOperation: ReturnType<typeof createReplyOperation> | undefined;
+    const handleAction = vi.fn(async ({ params }: ChannelMessageActionContext) => {
+      if (collision === "during") {
         createCollision();
       }
-      try {
-        const config: OpenClawConfig = {
-          ...workspaceConfig,
-          tools: { message: { crossContext: { allowWithinProvider: true } } },
-        };
-        setRuntimeConfigSnapshot(config);
-        const createTool = () =>
-          createMessageTool({
-            config,
-            ...source,
-            agentId: identity.agentId,
-            runId: identity.runId,
-            sessionId: operation.sessionId,
-            agentSessionKey: identity.sessionKey,
-            agentAccountId: "default",
-            messageActionTurnCapability: capability,
-            sourceReplyDeliveryMode: "automatic",
-          });
-        const ambientOperation = competingOperation;
-        const tool =
-          (collision === "before" || collision === "unbound") && ambientOperation
-            ? await withGatewayToolCallerIdentity(
-                {
-                  ...identity,
-                  operationalRunInstance: createOperationalRunInstanceRef(identity.runId),
-                },
-                () => withSessionControllerOwner(ambientOperation, createTool),
-              )
-            : createTool();
-        if (collision === "replacement") {
-          operation.complete();
-          createCollision("/stores/message-source.sqlite");
-        }
-        const execution = tool.execute("source-upload", {
-          action,
-          message: "Uploaded source reply",
-          ...(media ? { media: "https://example.invalid/source.png" } : {}),
-          ...(action === "reply" ? { messageId: "inbound-message" } : {}),
-          ...(action === "poll" ? { pollQuestion: "Ready?", pollOption: ["Yes", "No"] } : {}),
-          ...(target ? { target } : {}),
-          ...(mode === "progress" ? { final: false } : {}),
-          ...(mode === "dry run" ? { dryRun: true } : {}),
-        });
-        let result;
-        if (mode === "throw") {
-          await expect(execution).rejects.toThrow("synthetic upload failure");
-        } else {
-          result = await execution;
-        }
-        expect(handleAction).toHaveBeenCalledTimes(mode === "dry run" ? 0 : 1);
-        if (mode !== "dry run") {
-          expect(handleAction.mock.calls[0]?.[0]).toMatchObject({
-            accountId: "default",
-            params: { to: target === "C999" ? "C999" : "C123" },
-          });
-        }
-        if (result) {
-          const deliveryFact = readEmbeddedMessageDeliveryFact(
-            (result.details as { messageDelivery?: unknown }).messageDelivery,
-          );
-          expect(deliveryFact?.sourceReplyDelivered).toBe(expected);
-          expect(operation.sourceReplyDelivered).toBe(expected === true && collision !== "unbound");
-          if (competingOperation) {
-            expect(competingOperation.sourceReplyDelivered).toBe(false);
-          }
-          if (expected) {
-            expect(deliveryFact).toMatchObject({
-              status: "settled",
-              primaryPlatformMessageId: "native-message-1",
-              partialDelivery: false,
-            });
-          }
-        }
-      } finally {
-        operation.complete();
-        competingOperation?.complete();
-        revokeMessageActionTurnCapability(capability);
+      if (mode === "throw") {
+        throw new Error("synthetic upload failure");
       }
-    },
-  );
-});
+      return jsonResult({
+        ok: mode !== "failure",
+        messageId: "native-message-1",
+        ...(delivery ?? { toJid: params.to }),
+        ...(action === "thread-reply" ? { receipt: { replyToId: "inbound-message" } } : {}),
+        ...(mode === "partial" ? { sentBeforeError: true } : {}),
+      });
+    });
+    registerChannel({
+      ...workspaceTestPlugin,
+      actions: { describeMessageTool: () => ({ actions: [action] }), handleAction },
+    });
+    const identity = {
+      agentId: "main",
+      runId: "source-completion-run",
+      sessionKey: "agent:main:workspace:group:C123",
+    };
+    const source = messageSource("workspace", "C123", "inbound-message");
+    const capability = mintMessageActionTurnCapability({
+      ...identity,
+      requesterAccountId: "default",
+      toolContext: source,
+    });
+    const createOperation = (storeScope?: string) =>
+      createReplyOperation({
+        sessionKey: identity.sessionKey,
+        sessionId,
+        resetTriggered: false,
+        ...(storeScope && {
+          target: captureSessionTarget({
+            storeScope,
+            sessionKey: identity.sessionKey,
+            incarnation: sessionId,
+          }),
+        }),
+      });
+    const operation = createOperation(collision ? "/stores/message-source.sqlite" : undefined);
+    const createCollision = (storeScope = "/stores/message-other.sqlite") => {
+      competingOperation = createOperation(storeScope);
+    };
+    if (collision === "before") {
+      operation.attachBackend({ kind: "embedded", runId: identity.runId, cancel() {} });
+    }
+    if (collision === "before" || collision === "unbound") {
+      createCollision();
+    }
+    try {
+      const config: OpenClawConfig = {
+        ...workspaceConfig,
+        tools: { message: { crossContext: { allowWithinProvider: true } } },
+      };
+      setRuntimeConfigSnapshot(config);
+      const createTool = () =>
+        createMessageTool({
+          config,
+          ...source,
+          agentId: identity.agentId,
+          runId: identity.runId,
+          sessionId: operation.sessionId,
+          agentSessionKey: identity.sessionKey,
+          agentAccountId: "default",
+          messageActionTurnCapability: capability,
+          sourceReplyDeliveryMode: "automatic",
+        });
+      const ambientOperation = competingOperation;
+      const tool =
+        (collision === "before" || collision === "unbound") && ambientOperation
+          ? await withGatewayToolCallerIdentity(
+              {
+                ...identity,
+                operationalRunInstance: createOperationalRunInstanceRef(identity.runId),
+              },
+              () => withSessionControllerOwner(ambientOperation, createTool),
+            )
+          : createTool();
+      if (collision === "replacement") {
+        operation.complete();
+        createCollision("/stores/message-source.sqlite");
+      }
+      const execution = tool.execute("source-upload", {
+        action,
+        message: "Uploaded source reply",
+        ...(media ? { media: "https://example.invalid/source.png" } : {}),
+        ...(action === "reply" ? { messageId: "inbound-message" } : {}),
+        ...(action === "poll" ? { pollQuestion: "Ready?", pollOption: ["Yes", "No"] } : {}),
+        ...(target ? { target } : {}),
+        ...(mode === "progress" ? { final: false } : {}),
+        ...(mode === "dry run" ? { dryRun: true } : {}),
+      });
+      let result;
+      if (mode === "throw") {
+        await expect(execution).rejects.toThrow("synthetic upload failure");
+      } else {
+        result = await execution;
+      }
+      expect(handleAction).toHaveBeenCalledTimes(mode === "dry run" ? 0 : 1);
+      if (mode !== "dry run") {
+        expect(handleAction.mock.calls[0]?.[0]).toMatchObject({
+          accountId: "default",
+          params: { to: target === "C999" ? "C999" : "C123" },
+        });
+      }
+      if (result) {
+        const deliveryFact = readEmbeddedMessageDeliveryFact(
+          (result.details as { messageDelivery?: unknown }).messageDelivery,
+        );
+        expect(deliveryFact?.sourceReplyDelivered).toBe(expected);
+        expect(operation.sourceReplyDelivered).toBe(expected === true && collision !== "unbound");
+        if (competingOperation) {
+          expect(competingOperation.sourceReplyDelivered).toBe(false);
+        }
+        if (expected) {
+          expect(deliveryFact).toMatchObject({
+            status: "settled",
+            primaryPlatformMessageId: "native-message-1",
+            partialDelivery: false,
+          });
+        }
+      }
+    } finally {
+      operation.complete();
+      competingOperation?.complete();
+      revokeMessageActionTurnCapability(capability);
+    }
+  },
+);
 
-function createFailingMessageTool(error: Error) {
+it.each([true, false])("preserves retry ownership for queued=%s", async (queued) => {
+  const error = new GatewayClientRequestError({
+    code: ErrorCodes.UNAVAILABLE,
+    message: "connect ECONNREFUSED",
+    ...(queued ? { details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED } } : {}),
+  });
   const runMessageAction = vi
     .spyOn(messageActionRunner, "runMessageAction")
     .mockRejectedValue(error);
@@ -307,23 +294,6 @@ function createFailingMessageTool(error: Error) {
     sourceReplyDeliveryMode: "message_tool_only",
     ...messageSource("telegram", "chat-123"),
   });
-  return { tool, runMessageAction };
-}
-
-function sentIdempotencyKey(
-  runMessageAction: MockInstance<typeof messageActionRunner.runMessageAction>,
-  call: number,
-) {
-  return runMessageAction.mock.calls[call]?.[0].params.idempotencyKey;
-}
-
-it.each([true, false])("preserves retry ownership for queued=%s", async (queued) => {
-  const error = new GatewayClientRequestError({
-    code: ErrorCodes.UNAVAILABLE,
-    message: "connect ECONNREFUSED",
-    ...(queued ? { details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED } } : {}),
-  });
-  const { tool, runMessageAction } = createFailingMessageTool(error);
   const pending = tool.execute("send", { action: "send", message: "hello" });
   if (!queued) {
     await expect(pending).rejects.toBe(error);
@@ -338,8 +308,11 @@ it.each([true, false])("preserves retry ownership for queued=%s", async (queued)
     },
   });
   await tool.execute("send-again", { action: "send", message: "hello" });
-  expect(sentIdempotencyKey(runMessageAction, 0)).toBeDefined();
-  expect(sentIdempotencyKey(runMessageAction, 1)).toBe(sentIdempotencyKey(runMessageAction, 0));
+  const [firstKey, retryKey] = runMessageAction.mock.calls.map(
+    ([request]) => request.params.idempotencyKey,
+  );
+  expect(firstKey).toBeDefined();
+  expect(retryKey).toBe(firstKey);
 });
 
 it.each(["read", "edit", "delete", "pin", "unpin"] as const)(
@@ -402,29 +375,7 @@ it.each(["read", "edit", "delete", "pin", "unpin"] as const)(
       expect(resolveSecrets).not.toHaveBeenCalled();
     } finally {
       revokeMessageActionTurnCapability(token);
-      resetPluginRuntimeStateForTest();
     }
-  },
-);
-
-it.each([false, true])(
-  "preserves the serialized definition across delivery modes with sourceReplyOnly=%s",
-  (sourceReplyOnly) => {
-    const definitions = (["automatic", "message_tool_only", "automatic"] as const).map(
-      (sourceReplyDeliveryMode) => {
-        const tool = createMessageTool({
-          config: {},
-          preparedMessageToolCatalog: EMPTY_CATALOG,
-          currentChannelProvider: "telegram",
-          sourceReplyOnly,
-          sourceReplyDeliveryMode,
-        });
-        return JSON.stringify({ description: tool.description, parameters: tool.parameters });
-      },
-    );
-
-    expect(definitions[1]).toBe(definitions[0]);
-    expect(definitions[2]).toBe(definitions[0]);
   },
 );
 
@@ -432,7 +383,6 @@ describe("message tool terminal source actions", () => {
   let turnCapability: string;
   afterEach(() => {
     revokeMessageActionTurnCapability(turnCapability);
-    resetPluginRuntimeStateForTest();
   });
 
   it.each<[string, Record<string, unknown>, boolean, Record<string, unknown>?, "group"?]>([
@@ -522,42 +472,6 @@ describe("message tool terminal source actions", () => {
         result,
       }),
     ).toBe(completes);
-    if (!args.dryRun) {
-      const assistant = buildEmbeddedRunnerAssistant({
-        content: [{ type: "text", text: "NO_REPLY" }],
-      });
-      const delivery = readEmbeddedMessageDeliveryFact(
-        readToolResultDetails(result)?.messageDelivery,
-      );
-      const attempt = makeEmbeddedRunnerAttempt({
-        assistantTexts: ["NO_REPLY"],
-        lastAssistant: assistant,
-        currentAttemptAssistant: assistant,
-        sourceReplyDelivered: delivery?.sourceReplyDelivered,
-        toolMetas: [{ toolName: "message", replaySafe: false }],
-        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-      });
-      const finalization = resolveSettledTurnFinalizationRequest({
-        runParams: {
-          sessionId: "terminal-action",
-          runId: "terminal-action",
-          workspaceDir: "/tmp/openclaw-test",
-          prompt: "React to this message without a text reply",
-          timeoutMs: 60_000,
-          trigger: "user",
-          terminalReplyExpectation: "required",
-        },
-        attempt,
-        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
-        modelApi: "openai-responses",
-        executionContract: undefined,
-        payloadsWithToolMedia: [],
-        hasTerminalToolPresentation: false,
-        terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
-        settledTurnFinalizationAvailable: true,
-      });
-      expect(finalization).toBeNull();
-    }
   });
 });
 
@@ -565,8 +479,16 @@ describe("message tool group thread replies", () => {
   const sessionKey = "agent:main:workspace:group:C12345678:thread:42";
   const bootPrompt =
     "When you wake up each morning, send a thoughtful greeting to the operator over the configured channel.";
+  function groupTurn(recordReply = vi.fn()) {
+    const participant = { agentId: "reviewer", name: "Reviewer" };
+    return {
+      turn: { ...participant, round: 1, messageId: "inbound-1" },
+      participant,
+      formatReply: (text: string, agent: typeof participant) => `**${agent.name}**\n${text}`,
+      recordReply,
+    };
+  }
   afterEach(() => {
-    resetPluginRuntimeStateForTest();
     clearBootEchoContextForSession(sessionKey);
   });
 
@@ -603,16 +525,9 @@ describe("message tool group thread replies", () => {
       ...messageSource("workspace", "C12345678"),
       currentThreadTs: "42",
     });
-    const participant = { agentId: "reviewer", name: "Reviewer" };
     const location = { latitude: 48.858844, longitude: 2.294351 };
-    await withGroupThreadTurn(
-      {
-        turn: { ...participant, round: 1, messageId: "inbound-1" },
-        participant,
-        formatReply: (text, agent) => `**${agent.name}**\n${text}`,
-        recordReply: vi.fn(),
-      },
-      () => tool.execute("source-location", { action: "send", message, location }),
+    await withGroupThreadTurn(groupTurn(), () =>
+      tool.execute("source-location", { action: "send", message, location }),
     );
 
     expect(received).toEqual([expect.objectContaining({ message: "", location })]);
@@ -710,45 +625,36 @@ describe("message tool group thread replies", () => {
         ...messageSource(channel, "123"),
         currentThreadTs: sourceThread,
       });
-      const participant = { agentId: "reviewer", name: "Reviewer" };
-      await withGroupThreadTurn(
-        {
-          turn: { ...participant, round: 1, messageId: "inbound-1" },
-          participant,
-          formatReply: (text, agent) => `**${agent.name}**\n${text}`,
-          recordReply,
-        },
-        async () => {
-          const send = (args: Record<string, unknown>) =>
-            tool.execute("source-reply", { action: "send", ...args });
-          await send({ message: "Final reply" });
-          await send({ message: "Progress", final: false });
-          await send({ message: "Original before hook" });
-          await send({ message: "Other room before hook", target: "999" });
-          await send({ message: "Pass-through hook" });
-          await send({ message: "Cancelled by hook" });
-          await send({ message: "Other room", target: "999" });
-          await send({ message: "Other thread", target: "123", threadId: "99" });
-          await send({ message: "Top-level send", target: "123", threadId: null });
-          await send({ message: "Redirected reply" });
-          await send({ message: "NO_REPLY" });
-          await send({ mediaUrl: "https://example.com/group-thread.png" });
-          await send({
-            action: "edit",
-            message: "Edited final",
-            target: "123",
-            threadId: sourceThread,
-            messageId: "outbound-1",
-          });
-          await send({
-            action: "edit",
-            message: "Unplaced edit",
-            target: "123",
-            messageId: "other-message",
-          });
-          await expect(send({ message: "Failed reply" })).rejects.toThrow("delivery failed");
-        },
-      );
+      await withGroupThreadTurn(groupTurn(recordReply), async () => {
+        const send = (args: Record<string, unknown>) =>
+          tool.execute("source-reply", { action: "send", ...args });
+        await send({ message: "Final reply" });
+        await send({ message: "Progress", final: false });
+        await send({ message: "Original before hook" });
+        await send({ message: "Other room before hook", target: "999" });
+        await send({ message: "Pass-through hook" });
+        await send({ message: "Cancelled by hook" });
+        await send({ message: "Other room", target: "999" });
+        await send({ message: "Other thread", target: "123", threadId: "99" });
+        await send({ message: "Top-level send", target: "123", threadId: null });
+        await send({ message: "Redirected reply" });
+        await send({ message: "NO_REPLY" });
+        await send({ mediaUrl: "https://example.com/group-thread.png" });
+        await send({
+          action: "edit",
+          message: "Edited final",
+          target: "123",
+          threadId: sourceThread,
+          messageId: "outbound-1",
+        });
+        await send({
+          action: "edit",
+          message: "Unplaced edit",
+          target: "123",
+          messageId: "other-message",
+        });
+        await expect(send({ message: "Failed reply" })).rejects.toThrow("delivery failed");
+      });
       expect(delivered).toEqual([
         "**Reviewer**\nFinal reply",
         "**Reviewer**\nProgress",

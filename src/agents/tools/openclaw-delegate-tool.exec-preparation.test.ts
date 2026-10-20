@@ -57,36 +57,31 @@ async function expectDelegation(pending: ReturnType<typeof construct>, fullPermi
   await tool!.execute("delegate-policy", { message: "Synthetic repair." });
 }
 
-it("reads fresh delegation policy without caller-thread SQL and retains the captured store", async () => {
-  const root = tempDirs.make("openclaw-delegate-exec-");
-  const source = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  for (const security of ["full", "deny", "full"] as const) {
-    writeExecApprovalsConfigRow({ db: source.db, file: { version: 1, defaults: { security } } });
-    vi.stubEnv("OPENCLAW_STATE_DIR", root);
-    const calls = observeMainThreadSql();
-    const pending = construct();
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-foreign-delegate-exec-"));
-    await expectDelegation(pending, security === "full");
-    calls.expectIdle();
-    calls.restore();
-  }
-});
-
-it("requires approval when the reader fails instead of falling back to host SQL", async () => {
-  const root = tempDirs.make("openclaw-delegate-exec-failure-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  const source = openOpenClawStateDatabase();
-  writeExecApprovalsConfigRow({
-    db: source.db,
-    file: { version: 1, defaults: { security: "full" } },
-  });
-  vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockRejectedValue(
-    new Error("synthetic approval reader unavailable"),
-  );
-  const calls = observeMainThreadSql();
-  await expectDelegation(construct(), false);
-  calls.expectIdle();
-});
+it.each([false, true])(
+  "captures delegation policy without caller-thread SQL (reader failure=%s)",
+  async (failed) => {
+    const root = tempDirs.make("openclaw-delegate-exec-");
+    const source = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
+    if (failed) {
+      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockRejectedValue(
+        new Error("synthetic approval reader unavailable"),
+      );
+    }
+    const policies = failed ? (["full"] as const) : (["full", "deny", "full"] as const);
+    for (const security of policies) {
+      writeExecApprovalsConfigRow({ db: source.db, file: { version: 1, defaults: { security } } });
+      vi.stubEnv("OPENCLAW_STATE_DIR", root);
+      const calls = observeMainThreadSql();
+      const pending = construct();
+      if (!failed) {
+        vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-foreign-delegate-exec-"));
+      }
+      await expectDelegation(pending, !failed && security === "full");
+      calls.expectIdle();
+      calls.restore();
+    }
+  },
+);
 
 it("rejects a construction whose source authority ends during preparation", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-delegate-exec-revoked-"));

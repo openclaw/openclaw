@@ -1,5 +1,3 @@
-// Native PDF provider tests cover direct Anthropic and Gemini request shapes,
-// base URL handling, and bounded API error reporting.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestTimeout } from "../../../test/helpers/promise.js";
 import { mintSecretSentinel } from "../../secrets/sentinel.js";
@@ -33,10 +31,7 @@ function analyzeGemini(overrides: Partial<AnalyzeParams> = {}) {
 describe("native PDF provider API calls", () => {
   const priorFetch = global.fetch;
 
-  const jsonResponse = (payload: unknown, init?: ResponseInit) => Response.json(payload, init);
-
-  const textResponse = (body: string, init?: ResponseInit): Response => new Response(body, init);
-  const anthropicResponse = (text = "ok") => jsonResponse({ content: [{ type: "text", text }] });
+  const anthropicResponse = (text = "ok") => Response.json({ content: [{ type: "text", text }] });
   const customAuth = (value: string) => ({
     request: {
       auth: { mode: "header" as const, headerName: "X-Corp-Credential", value, prefix: "Token-" },
@@ -84,7 +79,6 @@ describe("native PDF provider API calls", () => {
 
   afterEach(() => {
     global.fetch = priorFetch;
-    vi.unstubAllEnvs();
   });
 
   it.each(["Anthropic", "Gemini"])(
@@ -95,12 +89,15 @@ describe("native PDF provider API calls", () => {
       let abortedAtFetch: boolean | undefined;
       const response = anthropic
         ? anthropicResponse("Analysis of PDF")
-        : jsonResponse({ candidates: [{ content: { parts: [{ text: "Gemini PDF analysis" }] } }] });
+        : Response.json({
+            candidates: [{ content: { parts: [{ text: "Gemini PDF analysis" }] } }],
+          });
       const fetchMock = mockFetchResponse(response, (init) => {
         abortedAtFetch = init?.signal?.aborted;
       });
       const analyze = anthropic ? analyzeAnthropic : analyzeGemini;
       const result = await analyze({
+        baseUrl: anthropic ? "https://custom.example.com" : undefined,
         prompt: anthropic ? "Summarize these documents" : "Summarize this",
         ...(anthropic
           ? { pdfs: [{ base64: "cGRmMQ==" }, { base64: "cGRmMg==" }], maxTokens: 4096 }
@@ -112,7 +109,7 @@ describe("native PDF provider API calls", () => {
       expect(opts.headers.get(anthropic ? "x-api-key" : "x-goog-api-key")).toBe("test-key");
       const body = JSON.parse(opts.body);
       if (anthropic) {
-        expect(url).toContain("/v1/messages");
+        expect(url).toContain("https://custom.example.com/v1/messages");
         expect(body).toMatchObject({ model: "claude-opus-4-6" });
         expect(body.messages[0].content).toMatchObject([
           { type: "document", source: { media_type: "application/pdf" } },
@@ -183,7 +180,7 @@ describe("native PDF provider API calls", () => {
 
   it("masks a short Bearer credential actually sent through extra headers", async () => {
     const fetchMock = mockFetchResponse(
-      textResponse("", { status: 401, statusText: "reflected token=abc" }),
+      new Response("", { status: 401, statusText: "reflected token=abc" }),
     );
 
     const error = await captureError(
@@ -197,40 +194,24 @@ describe("native PDF provider API calls", () => {
     expect(error.message).toContain("Anthropic PDF request failed (401 reflected token=***)");
   });
 
-  it("masks a reflected custom request-auth header and credential", async () => {
-    const fetchMock = mockFetchResponse(
-      textResponse("upstream echoed Token-abc123 and fallback-key", { status: 401 }),
-    );
-
+  it.each([false, true])("redacts custom request auth (crosses byte cap=%s)", async (cutoff) => {
+    const credential = cutoff ? "a".repeat(7_900) : "abc123";
+    const body = cutoff
+      ? `${"x".repeat(390)} Token-${credential}`
+      : "upstream echoed Token-abc123 and fallback-key";
+    const fetchMock = mockFetchResponse(new Response(body, { status: 401 }));
     const error = await captureError(
       analyzeGemini({
-        apiKey: "fallback-key",
-        requestConfig: customAuth("abc123"),
-      }),
-    );
-    const [, opts] = firstFetchCall(fetchMock);
-    expect(opts.headers.get("X-Corp-Credential")).toBe("Token-abc123");
-    expect(error.message).not.toContain("abc123");
-    expect(error.message).not.toContain("fallback-key");
-    expect(error.message).toContain("***");
-    expect(error.message).not.toContain("Token-");
-  });
-
-  it("masks a reflected custom credential crossing the byte cutoff", async () => {
-    const credential = "a".repeat(7_900);
-    const fetchMock = mockFetchResponse(
-      textResponse(`${"x".repeat(390)} Token-${credential}`, { status: 401 }),
-    );
-
-    const error = await captureError(
-      analyzeGemini({
+        ...(cutoff ? {} : { apiKey: "fallback-key" }),
         requestConfig: customAuth(credential),
       }),
     );
-    const [, opts] = firstFetchCall(fetchMock);
-    expect(opts.headers.get("X-Corp-Credential")).toBe(`Token-${credential}`);
-    expect(error.message).not.toContain("Token-a");
-    expect(error.message).not.toContain("Token-custom");
+    expect(firstFetchCall(fetchMock)[1].headers.get("X-Corp-Credential")).toBe(
+      `Token-${credential}`,
+    );
+    for (const secret of cutoff ? ["Token-a", "Token-custom"] : ["abc123", "fallback-key"]) {
+      expect(error.message).not.toContain(secret);
+    }
     expect(error.message).toContain("***");
     expect(error.message).not.toContain("Token-");
   });
@@ -282,17 +263,9 @@ describe("native PDF provider API calls", () => {
   });
 
   it("geminiAnalyzePdf throws when no candidates returned", async () => {
-    mockFetchResponse(jsonResponse({ candidates: [] }));
+    mockFetchResponse(Response.json({ candidates: [] }));
 
     await expect(analyzeGemini()).rejects.toThrow("Gemini PDF returned no candidates");
-  });
-
-  it("anthropicAnalyzePdf uses custom base URL", async () => {
-    const fetchMock = mockFetchResponse(anthropicResponse());
-
-    await analyzeAnthropic({ baseUrl: "https://custom.example.com" });
-
-    expect(firstFetchCall(fetchMock)[0]).toContain("https://custom.example.com/v1/messages");
   });
 
   it.each([analyzeAnthropic, analyzeGemini])("%s requires apiKey", async (analyze) => {

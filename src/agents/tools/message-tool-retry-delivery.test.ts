@@ -67,6 +67,7 @@ it.each([
     const sessionId = "retry-session";
     const sourceTurnId = "original-source";
     const storePath = path.join(state.stateDir, "agents", "main", "sessions", "sessions.json");
+    const scope = { ...identity, storePath };
     const source = {
       ...messageSource("retrychat", "C123", "inbound-message"),
       currentSourceTurnId: sourceTurnId,
@@ -82,16 +83,14 @@ it.each([
       status: "done",
       restartRecoveryTerminalRunIds: [sourceTurnId],
     };
-    await replaceSessionEntry({ ...identity, storePath }, entry);
+    await replaceSessionEntry(scope, entry);
     await using actor = createReplyRecoveryActorFixture({
-      ...identity,
-      storePath,
+      ...scope,
       getSessionId: () => sessionId,
     });
     const createClaim = () =>
       createReplyRestartRecoveryClaimController({
-        ...identity,
-        storePath,
+        ...scope,
         sourceTurnId,
         strandedReplyRetry: retry,
         lifecycleGeneration: getAgentEventLifecycleGeneration(),
@@ -144,9 +143,9 @@ it.each([
           readEmbeddedMessageDeliveryFact(readToolResultDetails(first)?.messageDelivery)
             ?.sourceReplyDelivered,
         ).toBe(true);
-        expect(
-          loadSessionEntry({ ...identity, storePath })?.restartRecoveryDeliveryReceiptState,
-        ).toBe("delivered-terminal");
+        expect(loadSessionEntry(scope)?.restartRecoveryDeliveryReceiptState).toBe(
+          "delivered-terminal",
+        );
       } else {
         expect(first).toMatchObject({ details: { status: "already_delivered" } });
       }
