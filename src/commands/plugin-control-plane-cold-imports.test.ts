@@ -1,4 +1,3 @@
-// Plugin control-plane cold-import tests guard setup and plugin metadata paths against runtime-heavy imports.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
@@ -22,6 +21,19 @@ vi.mock("../agents/sandbox/docker.js", () => ({
 
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-command-cold-imports", tempDirs);
+}
+
+function metadataFixture() {
+  const plugin = createColdPluginFixture({ rootDir: makeTempDir() });
+  const workspaceDir = makeTempDir();
+  return {
+    plugin,
+    params: {
+      config: createColdPluginConfig(plugin.rootDir, plugin.pluginId),
+      workspaceDir,
+      env: createColdPluginHermeticEnv(workspaceDir),
+    },
+  };
 }
 
 afterEach(() => {
@@ -82,44 +94,23 @@ describe("command control-plane plugin discovery", () => {
   );
 
   it("resolves channel setup metadata without importing plugin runtime", () => {
-    const plugin = createColdPluginFixture({ rootDir: makeTempDir() });
-    const workspaceDir = makeTempDir();
-    const cfg = createColdPluginConfig(plugin.rootDir, plugin.pluginId);
-    const env = createColdPluginHermeticEnv(workspaceDir);
-
-    expect(
-      listManifestInstalledChannelIds({
-        cfg,
-        workspaceDir,
-        env,
-      }),
-    ).toContain(plugin.channelId);
+    const { plugin, params } = metadataFixture();
+    expect(listManifestInstalledChannelIds({ ...params, cfg: params.config })).toContain(
+      plugin.channelId,
+    );
     expect(isColdPluginRuntimeLoaded(plugin)).toBe(false);
   });
 
   it("builds onboarding auth choices from manifest metadata without importing plugin runtime", () => {
-    const plugin = createColdPluginFixture({ rootDir: makeTempDir() });
-    const workspaceDir = makeTempDir();
-    const cfg = createColdPluginConfig(plugin.rootDir, plugin.pluginId);
-    const env = createColdPluginHermeticEnv(workspaceDir);
-
-    const authChoice = buildAuthChoiceGroups({
-      includeSkip: false,
-      config: cfg,
-      workspaceDir,
-      env,
-    })
+    const { plugin, params } = metadataFixture();
+    const authChoice = buildAuthChoiceGroups({ ...params, includeSkip: false })
       .groups.flatMap((group) => group.options)
       .find((choice) => choice.value === plugin.authChoiceId);
-    expect(authChoice?.label).toBe("Cold Provider API key");
-    expect(authChoice?.groupId).toBe(plugin.providerId);
-    expect(
-      formatAuthChoiceChoicesForCli({
-        config: cfg,
-        workspaceDir,
-        env,
-      }).split("|"),
-    ).toContain(plugin.authChoiceId);
+    expect(authChoice).toMatchObject({
+      label: "Cold Provider API key",
+      groupId: plugin.providerId,
+    });
+    expect(formatAuthChoiceChoicesForCli(params).split("|")).toContain(plugin.authChoiceId);
     expect(isColdPluginRuntimeLoaded(plugin)).toBe(false);
   });
 });

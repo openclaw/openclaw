@@ -1,5 +1,6 @@
 // Registered in the command suite to reuse its reset and setup fixtures.
 import { expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as fetchGuard from "../infra/net/fetch-guard.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
@@ -29,18 +30,38 @@ export function registerOnboardResetDiscoveryTests({
     getMessage: () => string,
   ) => Promise<void>;
 }) {
+  const discoveryFailure = () =>
+    "No models could be discovered from the custom provider. Check the base URL and credentials, or pass --custom-model-id explicitly.";
+  function configureProvider(local: ModelProviderConfig) {
+    const config: OpenClawConfig = { models: { providers: { local } } };
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config,
+      sourceConfig: config,
+    });
+    return config;
+  }
+  const discoveryResponse = (response: Response, finalUrl = "https://example.com/v1/models") => ({
+    response,
+    finalUrl,
+    release: async () => {},
+  });
+  async function runReset(opts: Parameters<typeof setupWizardCommand>[0]) {
+    const runtime = makeRuntime();
+    await setupWizardCommand(
+      { reset: true, nonInteractive: true, acceptRisk: true, ...opts },
+      runtime,
+    );
+    return runtime;
+  }
+
   it("rejects empty discovery before reset", async () => {
     vi.spyOn(nonInteractiveApiKeys, "resolveNonInteractiveApiKey").mockResolvedValue(null);
-    vi.spyOn(fetchGuard, "fetchWithSsrFGuard").mockResolvedValue({
-      response: Response.json({ data: [] }),
-      finalUrl: "https://example.com/v1/models",
-      release: async () => {},
-    });
-    await expectAuthPreflightError(
-      { customBaseUrl: "https://example.com/v1" },
-      () =>
-        "No models could be discovered from the custom provider. Check the base URL and credentials, or pass --custom-model-id explicitly.",
+    vi.spyOn(fetchGuard, "fetchWithSsrFGuard").mockResolvedValue(
+      discoveryResponse(Response.json({ data: [] })),
     );
+    await expectAuthPreflightError({ customBaseUrl: "https://example.com/v1" }, discoveryFailure);
   });
 
   it.each([
@@ -64,52 +85,33 @@ export function registerOnboardResetDiscoveryTests({
       vi.stubEnv("CUSTOM_API_KEY", undefined);
       if (replacement || noAuth) {
         vi.stubEnv("UNRESOLVED_DISCOVERY_KEY", undefined);
-        const config: OpenClawConfig = {
-          models: {
-            providers: {
-              local: {
-                baseUrl: replacement ? "https://previous.example.com/v1" : "https://example.com/v1",
-                ...(persisted ? { auth: "none" as const } : {}),
-                ...(noAuth
-                  ? {
-                      apiKey: {
-                        source: "env",
-                        provider: "default",
-                        id: "UNRESOLVED_DISCOVERY_KEY",
-                      } as const,
-                    }
-                  : {}),
-                models: [],
-              },
-            },
-          },
-        };
-        mocks.readConfigFileSnapshot.mockResolvedValue({
-          exists: true,
-          valid: true,
-          config,
-          sourceConfig: config,
+        configureProvider({
+          baseUrl: replacement ? "https://previous.example.com/v1" : "https://example.com/v1",
+          ...(persisted ? { auth: "none" as const } : {}),
+          ...(noAuth
+            ? {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "UNRESOLVED_DISCOVERY_KEY",
+                } as const,
+              }
+            : {}),
+          models: [],
         });
       }
       vi.spyOn(nonInteractiveApiKeys, "resolveNonInteractiveApiKey").mockResolvedValue(null);
-      const request = vi.spyOn(fetchGuard, "fetchWithSsrFGuard").mockResolvedValue({
-        response: Response.json({ data: [{ id: "first" }, { id: "second" }] }),
-        finalUrl: "https://example.com/v1/models",
-        release: async () => {},
+      const request = vi
+        .spyOn(fetchGuard, "fetchWithSsrFGuard")
+        .mockResolvedValue(
+          discoveryResponse(Response.json({ data: [{ id: "first" }, { id: "second" }] })),
+        );
+      const runtime = await runReset({
+        resetScope: "config",
+        customBaseUrl: "https://example.com/v1",
+        customProviderId: "local",
+        customNoAuth: noAuth && !persisted,
       });
-      const runtime = makeRuntime();
-      await setupWizardCommand(
-        {
-          reset: true,
-          resetScope: "config",
-          nonInteractive: true,
-          acceptRisk: true,
-          customBaseUrl: "https://example.com/v1",
-          customProviderId: "local",
-          customNoAuth: noAuth && !persisted,
-        },
-        runtime,
-      );
       expect(mocks.handleReset).toHaveBeenCalledOnce();
       expect(mocks.runNonInteractiveSetup).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -150,24 +152,12 @@ export function registerOnboardResetDiscoveryTests({
       "loadAuthProfileStoreWithoutExternalProfilesAsync",
     ).mockResolvedValue({ version: 1, profiles: {} });
     vi.stubEnv("CUSTOM_DISCOVERY_TEST_KEY", "fixture-configured-env-key");
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          local: {
-            baseUrl: "https://models.example.com/v1",
-            apiKey: testCase.apiKey,
-            models: [],
-          },
-        },
-      },
-    };
-    const authoredConfig = structuredClone(config);
-    mocks.readConfigFileSnapshot.mockResolvedValue({
-      exists: true,
-      valid: true,
-      config,
-      sourceConfig: config,
+    const config = configureProvider({
+      baseUrl: "https://models.example.com/v1",
+      apiKey: testCase.apiKey,
+      models: [],
     });
+    const authoredConfig = structuredClone(config);
     vi.spyOn(nonInteractiveApiKeys, "resolveNonInteractiveApiKey").mockResolvedValue(
       testCase.customApiKey ? { key: testCase.customApiKey, source: "flag" } : null,
     );
@@ -178,28 +168,19 @@ export function registerOnboardResetDiscoveryTests({
           params.url === "https://models.example.com/v1/models" &&
           new Headers(params.init?.headers).get("authorization") ===
             `Bearer ${testCase.expectedKey}`;
-        return {
-          response: authorized
+        return discoveryResponse(
+          authorized
             ? Response.json({ data: [{ id: "secured-first" }, { id: "secured-second" }] })
             : new Response(null, { status: 401 }),
-          finalUrl: params.url,
-          release: async () => {},
-        };
+          params.url,
+        );
       });
-    const runtime = makeRuntime();
-
-    await setupWizardCommand(
-      {
-        reset: true,
-        nonInteractive: true,
-        acceptRisk: true,
-        authChoice: "custom-api-key",
-        customBaseUrl: "https://models.example.com/v1",
-        customProviderId: "local",
-        ...(testCase.customApiKey ? { customApiKey: testCase.customApiKey } : {}),
-      },
-      runtime,
-    );
+    const runtime = await runReset({
+      authChoice: "custom-api-key",
+      customBaseUrl: "https://models.example.com/v1",
+      customProviderId: "local",
+      ...(testCase.customApiKey ? { customApiKey: testCase.customApiKey } : {}),
+    });
 
     if (!testCase.customApiKey) {
       expect(request).not.toHaveBeenCalled();
@@ -238,24 +219,12 @@ export function registerOnboardResetDiscoveryTests({
   it.each(["inline", "profile"] as const)(
     "does not send a different endpoint's %s credential during reset preflight",
     async (source) => {
-      const config: OpenClawConfig = {
-        models: {
-          providers: {
-            local: {
-              baseUrl: "https://previous.example.com/v1",
-              apiKey: source === "profile" ? "local:bound" : "fixture-previous-endpoint-key",
-              models: [],
-            },
-          },
-        },
-      };
-      const authoredConfig = structuredClone(config);
-      mocks.readConfigFileSnapshot.mockResolvedValue({
-        exists: true,
-        valid: true,
-        config,
-        sourceConfig: config,
+      const config = configureProvider({
+        baseUrl: "https://previous.example.com/v1",
+        apiKey: source === "profile" ? "local:bound" : "fixture-previous-endpoint-key",
+        models: [],
       });
+      const authoredConfig = structuredClone(config);
       vi.spyOn(nonInteractiveApiKeys, "resolveNonInteractiveApiKey").mockImplementation(
         async ({ provider, allowProfile }) =>
           source === "profile" && provider === "local" && allowProfile !== false
@@ -265,11 +234,7 @@ export function registerOnboardResetDiscoveryTests({
       const authorizationHeaders: Array<string | null> = [];
       vi.spyOn(fetchGuard, "fetchWithSsrFGuard").mockImplementation(async (params) => {
         authorizationHeaders.push(new Headers(params.init?.headers).get("authorization"));
-        return {
-          response: new Response(null, { status: 401 }),
-          finalUrl: params.url,
-          release: async () => {},
-        };
+        return discoveryResponse(new Response(null, { status: 401 }), params.url);
       });
 
       await expectAuthPreflightError(
@@ -279,8 +244,7 @@ export function registerOnboardResetDiscoveryTests({
           customProviderId: "local",
           resetScope: "config",
         },
-        () =>
-          "No models could be discovered from the custom provider. Check the base URL and credentials, or pass --custom-model-id explicitly.",
+        discoveryFailure,
       );
 
       expect(authorizationHeaders).toEqual([null]);

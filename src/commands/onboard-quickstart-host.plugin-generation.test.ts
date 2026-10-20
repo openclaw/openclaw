@@ -53,34 +53,25 @@ it.each([false, true])(
           expect(initial.byPluginId.has("codex")).toBe(false);
           const installAndStart = async () => {
             const pluginRoot = state.statePath(
-              "npm",
-              "projects",
-              "codex-fixture",
-              "node_modules",
-              "@fixture",
-              "codex",
+              "npm/projects/codex-fixture/node_modules/@fixture/codex",
             );
             await fs.mkdir(pluginRoot, { recursive: true });
-            await fs.writeFile(
-              path.join(pluginRoot, "package.json"),
-              JSON.stringify({
+            const files = {
+              "package.json": JSON.stringify({
                 name: "@fixture/codex",
                 version: "1.0.0",
                 openclaw: { extensions: ["./index.cjs"] },
               }),
-            );
-            await fs.writeFile(
-              path.join(pluginRoot, "openclaw.plugin.json"),
-              JSON.stringify({
+              "openclaw.plugin.json": JSON.stringify({
                 id: "codex",
                 activation: { onAgentHarnesses: ["codex"] },
                 configSchema: { type: "object", properties: {}, additionalProperties: false },
               }),
-            );
-            await fs.writeFile(
-              path.join(pluginRoot, "index.cjs"),
-              'module.exports = { id: "codex", register() {} };\n',
-            );
+              "index.cjs": 'module.exports = { id: "codex", register() {} };\n',
+            };
+            for (const [name, content] of Object.entries(files)) {
+              await fs.writeFile(path.join(pluginRoot, name), content);
+            }
             // Package acquisition is synthetic; the install ledger and post-install invalidation are real.
             await withPluginLifecycleLease({}, async () => {
               await seedInstalledPluginIndex(
