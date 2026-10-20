@@ -5,7 +5,6 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { availableLinkReaders } from "../../app/link-reader-routing.ts";
 import "./components/chat-details.tsx";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
-import { t } from "../../i18n/index.ts";
 import { latestBrowserTabCards } from "../../lib/chat/browser-tab-preview.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
@@ -13,8 +12,6 @@ import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
 import { clawCreatorFlow } from "../claws/creator-flow.ts";
 import { canCreateClawDraft } from "../claws/draft-navigation.ts";
-import { chatGoalPresentation } from "./chat-goals.ts";
-import type { MobileDetailsRoute } from "./chat-mobile-host.ts";
 import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
 import { PaneAttachmentCatalog } from "./chat-pane-attachment-catalog.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
@@ -26,13 +23,11 @@ import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
 import { createSideChatModelControlProps } from "./chat-session-companion-model-controls.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { listSubagents } from "./chat-subagent-wait.ts";
 import { createChatToolIcons, type PluginToolIcons } from "./chat-tool-icon-controller.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import type { ChatDetailsElements } from "./components/chat-details.tsx";
-import { chatPullRequestId } from "./components/chat-pull-requests.ts";
 import type { SidebarRegionCallbacks } from "./components/chat-sidebar-region-types.ts";
 import { resolveAssistantDisplayAvatar } from "./components/chat-welcome.ts";
 import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
@@ -155,21 +150,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
 
     // What the pane shows. Its controls keep working on the layout as it is saved.
     const sidebarLayout = this.presentSidebarLayout(savedLayout);
-    const openDetailsPage = (details: MobileDetailsRoute, title: string, source?: HTMLElement) =>
-      this.navigateMobileHost(
-        {
-          area: "details",
-          ...(details.kind === "task-progress" || details.kind === "people"
-            ? { backTo: { area: "details" as const } }
-            : {}),
-          page: {
-            key: details.kind === "pull-request" ? details.id : details.kind,
-            title: details.kind === "publication" ? t("chat.pullRequests.publishPr") : title,
-            details,
-          },
-        },
-        source,
-      );
     const conversationVisible = isSidebarSlotVisible(sidebarLayout, "conversation");
     const workspace = resolveSessionWorkspace({
       session: selectedSession,
@@ -239,7 +219,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
     // Only a full pane has a Subagents panel of its own. Elsewhere a subagent's
     // name still opens its session and their count stays text.
     const ownsSubagentsPanel = !catalog && !this.compact;
-    const goalPresentation = chatGoalPresentation(state, selectedSession?.goal ?? undefined);
     const subagentStop =
       chatProps.disabledBanner?.presentation &&
       chatProps.canAbort &&
@@ -263,43 +242,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneHeaderLayout {
         (this.sessionPresentation !== "desktop" || conversationVisible) &&
         chatProps.showNewMessages,
       mobileActivities: mobileHost
-        ? {
-            goal: goalPresentation
-              ? {
-                  executionConfirmed: goalPresentation.executionConfirmed,
-                  onOpen: (source) =>
-                    openDetailsPage({ kind: "goal" }, t("sessionsView.goal"), source),
-                }
-              : undefined,
-            onOpenSubagents: () => {
-              const working = listSubagents(chatProps).filter(
-                (agent) => agent.status === "running" || agent.status === "waiting",
-              );
-              this.showSubagents(working.length === 1 ? working[0]!.key : null);
-            },
-            onOpenProgress: (source) =>
-              openDetailsPage(
-                { kind: "task-progress" },
-                t("sessionProgressCard.composerTitle"),
-                source,
-              ),
-            onOpenPullRequest: (request) =>
-              openDetailsPage(
-                { kind: "pull-request", id: chatPullRequestId(request) },
-                request.title,
-              ),
-            publication: chatProps.githubPublication
-              ? {
-                  eligible: true,
-                  onOpen: (source) =>
-                    openDetailsPage(
-                      { kind: "publication" },
-                      t("chat.activityPills.publication.review"),
-                      source,
-                    ),
-                }
-              : undefined,
-          }
+        ? this.mobileChatActivities(state, selectedSession, chatProps)
         : undefined,
       mobileKeyboardVisible: mobileHost?.keyboardVisible,
       onComposerEditingChange: mobileHost?.onComposerEditingChange,

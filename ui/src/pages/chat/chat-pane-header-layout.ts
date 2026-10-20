@@ -4,18 +4,21 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import { t } from "../../i18n/index.ts";
 import type { PresentationValue } from "../../lib/presentation.ts";
 import { detailsOutputsIcons } from "./chat-details-output-icons.tsx";
+import { chatGoalPresentation } from "./chat-goals.ts";
 import {
   canLoadChatBranches,
   getChatBranchesQueryState,
   loadChatBranches,
 } from "./chat-history-branches.ts";
-import type { ChatMobileHost } from "./chat-mobile-host.ts";
+import type { ChatMobileHost, MobileDetailsRoute } from "./chat-mobile-host.ts";
 import { ChatPaneBrowserAnnotationRender } from "./chat-pane-browser-annotation-render.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { listSubagents } from "./chat-subagent-wait.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import type { ChatDetailsElements, ChatDetailsViewProps } from "./components/chat-details.tsx";
 import type { ChatPaneHeaderProps } from "./components/chat-pane-header.types.ts";
+import { chatPullRequestId } from "./components/chat-pull-requests.ts";
 import {
   getSessionWorkspace,
   isCurrentSessionWorkspace,
@@ -49,6 +52,58 @@ export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRend
     }
     this.dashboardControls = action;
   };
+
+  protected mobileChatActivities(
+    state: ChatPageHost,
+    selectedSession: GatewaySessionRow | undefined,
+    chatProps: ChatProps,
+  ): ChatProps["mobileActivities"] {
+    const goalPresentation = chatGoalPresentation(state, selectedSession?.goal ?? undefined);
+    const openDetailsPage = (details: MobileDetailsRoute, title: string, source?: HTMLElement) =>
+      this.navigateMobileHost(
+        {
+          area: "details",
+          ...(details.kind === "task-progress" || details.kind === "people"
+            ? { backTo: { area: "details" as const } }
+            : {}),
+          page: {
+            key: details.kind === "pull-request" ? details.id : details.kind,
+            title: details.kind === "publication" ? t("chat.pullRequests.publishPr") : title,
+            details,
+          },
+        },
+        source,
+      );
+    return {
+      goal: goalPresentation
+        ? {
+            executionConfirmed: goalPresentation.executionConfirmed,
+            onOpen: (source) => openDetailsPage({ kind: "goal" }, t("sessionsView.goal"), source),
+          }
+        : undefined,
+      onOpenSubagents: () => {
+        const working = listSubagents(chatProps).filter(
+          (agent) => agent.status === "running" || agent.status === "waiting",
+        );
+        this.showSubagents(working.length === 1 ? working[0]!.key : null);
+      },
+      onOpenProgress: (source) =>
+        openDetailsPage({ kind: "task-progress" }, t("sessionProgressCard.composerTitle"), source),
+      onOpenPullRequest: (request) =>
+        openDetailsPage({ kind: "pull-request", id: chatPullRequestId(request) }, request.title),
+      publication: chatProps.githubPublication
+        ? {
+            eligible: true,
+            onOpen: (source) =>
+              openDetailsPage(
+                { kind: "publication" },
+                t("chat.activityPills.publication.review"),
+                source,
+              ),
+          }
+        : undefined,
+    };
+  }
 
   protected configureHeaderPanelPresentation(input: {
     nativeHeader: Pick<
