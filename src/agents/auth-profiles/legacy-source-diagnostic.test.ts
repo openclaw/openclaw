@@ -91,7 +91,7 @@ describe("assertAuthProfileMigrationReady", () => {
     ],
   ] as const)(
     "preserves migration safety for %s sources",
-    async (_name, raw, scoped, blockedProvider = "anthropic") => {
+    async (_name, raw, scoped, blockedProvider?: string) => {
       await withProfileDir(async (agentDir) => {
         const legacyPath = path.join(agentDir, "auth-profiles.json");
         await fs.writeFile(legacyPath, raw);
@@ -104,7 +104,7 @@ describe("assertAuthProfileMigrationReady", () => {
           expect(ready("litellm")).toThrow(unscoped);
           expect(ready("openai")).toThrow(unscoped);
         }
-        expect(ready(blockedProvider)).toThrow("run openclaw doctor --fix");
+        expect(ready(blockedProvider ?? "anthropic")).toThrow("run openclaw doctor --fix");
         // An unscoped operation still cannot publish or mutate this owner.
         expect(ready()).toThrow("requires legacy credential migration");
         expect(await fs.readFile(legacyPath, "utf8")).toBe(raw);
