@@ -1,9 +1,13 @@
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import {
   stagePlacementTurnClaimWorkerPublication,
   stagePlacementWorkspaceJournalWorkerPublication,
@@ -39,6 +43,22 @@ it("retains SQL-free placement facts through bookkeeping, claims, dispatch, reti
         claimId: "local-claim",
       });
       expect(current()).toMatchObject({ state: "local", turnClaim: { claimId: claim.claimId } });
+      const expectedLocal = {
+        ...session,
+        state: "local",
+        turnClaim: { claimId: claim.claimId },
+      };
+      const fetched = (await store.getAsync(session.sessionId))!;
+      fetched.agentId = "caller-mutated-agent";
+      fetched.turnClaim!.claimId = "caller-mutated-claim";
+      expect(current()).toMatchObject(expectedLocal);
+      const listed = (await store.listAsync()).find(
+        (placement) => placement.sessionId === session.sessionId,
+      )!;
+      listed.agentId = "caller-mutated-agent";
+      listed.turnClaim!.claimId = "caller-mutated-claim";
+      expect(current()).toMatchObject(expectedLocal);
+      expect(store.validateTurnClaim(claim)).toBe(true);
       const identity = requireOpenClawStateDatabaseIdentity({ db: database.db });
       const beforeResult = current()!;
       const afterResult = { ...beforeResult, updatedAtMs: beforeResult.updatedAtMs + 1 };
@@ -145,5 +165,47 @@ it("retains a cold async placement read for SQL-free synchronous compatibility a
     } finally {
       sql.restore();
     }
+  });
+});
+
+it("keeps cold async worker placement results independent of retained placement facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawStateDatabase();
+    const store = createWorkerSessionPlacementStore({ database });
+    const session = {
+      agentId: "main",
+      sessionKey: "agent:main:caller-owned-placement",
+      sessionId: "caller-owned-placement",
+    };
+    const environment = { environmentId: "caller-owned-environment", ownerEpoch: 7 };
+    await advancePlacementFixtureToActive(store, database, session, environment);
+    await store.claimTurn({
+      ...session,
+      owner: { kind: "worker", ...environment },
+      runId: "caller-owned-run",
+      claimId: "caller-owned-claim",
+    });
+    await closeOpenClawStateDatabaseAsync();
+    openOpenClawStateDatabase();
+    const reopened = createWorkerSessionPlacementStore();
+    expect(() => reopened.get(session.sessionId)).toThrow("Await getAsync");
+    const result = (await reopened.getManyAsync([session.sessionId])).get(session.sessionId)!;
+    expect(result).toMatchObject({
+      ...session,
+      state: "active",
+      turnClaim: { claimId: "caller-owned-claim" },
+    });
+    result.agentId = "caller-mutated-agent";
+    result.turnClaim!.claimId = "caller-mutated-claim";
+    expect(reopened.get(session.sessionId)).toMatchObject({
+      ...session,
+      turnClaim: { claimId: "caller-owned-claim" },
+    });
+    expect((await reopened.getManyAsync([session.sessionId])).get(session.sessionId)).toMatchObject(
+      {
+        ...session,
+        turnClaim: { claimId: "caller-owned-claim" },
+      },
+    );
   });
 });

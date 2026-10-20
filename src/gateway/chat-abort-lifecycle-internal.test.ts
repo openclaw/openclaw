@@ -161,13 +161,12 @@ it.each([true, false])(
 );
 
 it.each(["fulfilled", "rejected"] as const)(
-  "drains a promise-only registration after it is %s",
+  "settles promise-only source work after it is %s",
   async (outcome) => {
     const onRemoved = vi.fn();
-    const { runId, entry, registration, drain } = registeredRun({ onRemoved });
+    const { runId, entry, registration } = registeredRun({ onRemoved });
     const persistence = createDeferred();
     entry.adapter.projectSessionTerminalPersistence = persistence.promise;
-    const result = drain();
     registration.cleanup();
     expect(rpcSourceTesting.get(runId)).toBe(entry);
     expect(onRemoved).not.toHaveBeenCalled();
@@ -183,7 +182,6 @@ it.each(["fulfilled", "rejected"] as const)(
       persistence.reject(failure);
     }
     await sourceOutcome;
-    expect(await result).toBe(outcome === "fulfilled");
     if (outcome === "rejected") {
       await expect(waitForChatAbortTerminalPersistence(entry)).rejects.toBe(failure);
     }

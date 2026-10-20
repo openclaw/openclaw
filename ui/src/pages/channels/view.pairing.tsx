@@ -293,13 +293,12 @@ function PairingPromptContent(params: {
   prompt: NonNullable<ChannelsProps["pairingPrompt"]>;
   props: ChannelsProps;
 }) {
-  const request = createMemo(() => params.prompt.request);
-  const busy = createMemo(() => params.props.channels.pairingBusyRequestId === request().requestId);
-  const approving = createMemo(() => params.prompt.kind === "approve");
-  const ownerMissing = createMemo(
-    () => params.props.channels.pairingSnapshot?.commandOwnerConfigured === false,
-  );
-  const dialogTitle = createMemo(() => t(`channels.pairing.${params.prompt.kind}DialogTitle`));
+  const request = () => params.prompt.request;
+  const busy = () => params.props.channels.pairingBusyRequestId === request().requestId;
+  const approving = () => params.prompt.kind === "approve";
+  const ownerMissing = () =>
+    params.props.channels.pairingSnapshot?.commandOwnerConfigured === false;
+  const dialogTitle = () => t(`channels.pairing.${params.prompt.kind}DialogTitle`);
   const option = (field: "notify" | "bootstrapCommandOwner", label: string) => (
     <label class="channels-pairing-dialog__option">
       <input

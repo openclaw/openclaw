@@ -105,9 +105,8 @@ function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
 export function AppearanceSection(props: ConfigProps) {
   let customThemeImportInput: HTMLInputElement | undefined;
   let focusFrame = 0;
-  const showCustomThemeImport = createMemo(
-    () => props.hasCustomTheme || props.customThemeImportExpanded === true,
-  );
+  const showCustomThemeImport = () =>
+    props.hasCustomTheme || props.customThemeImportExpanded === true;
   function focusImporter() {
     const input = customThemeImportInput;
     if (!input?.isConnected) {
@@ -160,11 +159,9 @@ export function AppearanceSection(props: ConfigProps) {
   const selectedTheme = createMemo(() =>
     themeOptions().find((option) => option.id === props.theme),
   );
-  const themeUnavailable = createMemo(
-    () =>
-      props.themeCatalog?.unavailableId === props.theme ||
-      (props.theme.includes("/") && Boolean(props.themeCatalog?.themes.length) && !selectedTheme()),
-  );
+  const themeUnavailable = () =>
+    props.themeCatalog?.unavailableId === props.theme ||
+    (props.theme.includes("/") && Boolean(props.themeCatalog?.themes.length) && !selectedTheme());
   const presentedTheme = createMemo(
     () =>
       selectedTheme() ?? {
@@ -177,46 +174,39 @@ export function AppearanceSection(props: ConfigProps) {
       themeOptions().find((option) => option.id === props.themeResetValue)?.label ??
       t("configView.themes.claw.label"),
   );
-  const themeModeDefault = createMemo(() =>
+  const themeModeDefault = () =>
     props.themeModeResetValue === "light"
       ? t("common.light")
       : props.themeModeResetValue === "dark"
         ? t("common.dark")
-        : t("common.system"),
-  );
-  const themeProvenance = createMemo(() => serverUiPrefProvenanceHint(props.themeProvenance));
-  const themeModeProvenance = createMemo(() =>
-    serverUiPrefProvenanceHint(props.themeModeProvenance),
-  );
-  const accentProvenance = createMemo(() => serverUiPrefProvenanceHint(props.accentProvenance));
+        : t("common.system");
+  const themeProvenance = () => serverUiPrefProvenanceHint(props.themeProvenance);
+  const themeModeProvenance = () => serverUiPrefProvenanceHint(props.themeModeProvenance);
+  const accentProvenance = () => serverUiPrefProvenanceHint(props.accentProvenance);
   // The theme swatch is selected whenever resetting would land on the current
   // accent. A boolean `overridden` cannot express that: the resolver reports an
   // inherited server or profile accent as overridden too, which is what left the
   // swatch permanently unselectable and its reset click without a visible effect.
   // Accepted cost: an override equal to its reset target reads as inherited
   // until the two diverge, when the swatches correct themselves.
-  const themeAccentSelected = createMemo(() => props.accent === "theme");
+  const themeAccentSelected = () => props.accent === "theme";
   const accentColor = createMemo(() => (themeAccentSelected() ? undefined : props.accent));
-  const defaultAccentSelected = createMemo(
-    () =>
-      props.accent === props.accentResetValue ||
-      (themeAccentSelected() && props.accentResetValue === undefined),
-  );
+  const defaultAccentSelected = () =>
+    props.accent === props.accentResetValue ||
+    (themeAccentSelected() && props.accentResetValue === undefined);
   // Preview the accent a reset lands on, never var(--accent): the live override
   // would render this swatch as a duplicate of the selected preset.
-  const themeAccentColor = createMemo(() =>
+  const themeAccentColor = () =>
     props.accentResetValue && props.accentResetValue !== "theme"
       ? props.accentResetValue
-      : "var(--theme-chip-accent)",
-  );
+      : "var(--theme-chip-accent)";
   const selectedAccentPreset = createMemo(() =>
     ACCENT_PRESETS.find((preset) => preset.hex !== undefined && preset.hex === props.accent),
   );
-  const customAccentSelected = createMemo(() =>
+  const customAccentSelected = () =>
     Boolean(
       !defaultAccentSelected() && !themeAccentSelected() && props.accent && !selectedAccentPreset(),
-    ),
-  );
+    );
   const accentSelectionStatus = createMemo(() => {
     const preset = selectedAccentPreset();
     return themeAccentSelected()
@@ -441,17 +431,15 @@ export function AppearanceSection(props: ConfigProps) {
               <For each={ACCENT_PRESETS}>
                 {(preset) => {
                   const isDefault = preset.hex === undefined;
-                  const selected = createMemo(() =>
+                  const selected = () =>
                     isDefault
                       ? defaultAccentSelected()
-                      : !defaultAccentSelected() && preset.hex === props.accent,
-                  );
-                  const label = createMemo(() => t(`configView.appearance.accents.${preset.id}`));
-                  const themeChipScope = createMemo(() =>
+                      : !defaultAccentSelected() && preset.hex === props.accent;
+                  const label = () => t(`configView.appearance.accents.${preset.id}`);
+                  const themeChipScope = () =>
                     isDefault
                       ? `settings-accent-theme--${presentedTheme().id.includes("/") ? "custom" : presentedTheme().id}`
-                      : "",
-                  );
+                      : "";
                   return (
                     <button
                       type="button"

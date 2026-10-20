@@ -45,7 +45,6 @@ it.each([
         sessionKey: `agent:${agentId}:topic`,
         dispatchEvent: () => true,
         getBoundingClientRect: () => new DOMRect(0, 0, 1440, 900),
-        querySelector: () => null,
       },
     );
     expect(state.assistantName).toBe(name);

@@ -492,9 +492,13 @@ describe("workspace file tabs", () => {
   });
 
   it("projects the shared hosted-tab contract and keeps inactive preview elements mounted", async () => {
+    const warning = vi.spyOn(console, "warn");
+    onTestFinished(() => {
+      warning.mockRestore();
+    });
     const state = host();
     const a = openSessionWorkspacePreview(state, "a", "a.md", { kind: "markdown", content: "A" });
-    openSessionWorkspacePreview(state, "b", "b.txt", { kind: "markdown", content: "B" });
+    const b = openSessionWorkspacePreview(state, "b", "b.txt", { kind: "markdown", content: "B" });
     const Draft = () => Object.assign(document.createElement("textarea"), { textContent: "draft" });
     const panel = document.createElement("openclaw-chat-files-panel");
     Object.assign(panel, {
@@ -524,8 +528,25 @@ describe("workspace file tabs", () => {
     await panel.updateComplete;
     expect(panel.querySelector(".tabstrip")).toBeNull();
     expect(panel.querySelector("textarea")).toBe(textarea);
+    panel.previews = [
+      { ...b, label: "renamed-b.txt" },
+      { ...a, label: "renamed-a.md" },
+    ];
+    await panel.updateComplete;
+    expect(readPanelHostedTabs(panel)?.hostedTabs.map((tab) => tab.label)).toEqual([
+      "renamed-b.txt",
+      "renamed-a.md",
+    ]);
+    expect([...panel.querySelectorAll("textarea")]).toContain(textarea);
+    expect(textarea.value).toBe("unsaved");
     await hosted.closeHostedTab("a");
     expect(getSessionWorkspace(state).previews).not.toContain(a);
+    panel.previews = getSessionWorkspace(state).previews;
+    await panel.updateComplete;
+    expect(textarea.isConnected).toBe(false);
+    panel.remove();
+    flush();
+    expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
   });
 
   it.each(["close", "reopen", "disconnect"])(

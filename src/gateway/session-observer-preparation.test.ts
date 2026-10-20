@@ -73,11 +73,10 @@ it.each(["claude-cli", "anthropic"])(
       .mockResolvedValueOnce(completion);
     const harness = createHarness({
       config,
-      utilityModelRef: config.agents.defaults.utilityModel,
       prepareModel: vi.fn(defaultPrepareModel),
       completeModel: vi.fn(defaultCompleteModel),
     });
-    startAndAddToolNotes(harness.observer);
+    await startAndAddToolNotes(harness.observer);
     await vi.advanceTimersByTimeAsync(12_000);
     await vi.dynamicImportSettled();
     await flushObserver();
@@ -109,7 +108,7 @@ it.for(["observation ends", "preparation times out"] as const)(
     const prepareModel = vi.fn(() => preparation.promise);
     const harness = createHarness({ prepareModel });
     try {
-      startAndAddToolNotes(harness.observer);
+      await startAndAddToolNotes(harness.observer);
       await advance(outcome === "observation ends" ? 12_000 : 42_000);
       expect(prepareModel).toHaveBeenCalledOnce();
       if (outcome === "observation ends") {
@@ -132,7 +131,7 @@ it("retries after a rejected preparation", async () => {
     .mockRejectedValueOnce(new Error("temporary preparation failure"))
     .mockResolvedValue(preparedModel());
   const harness = createHarness({ prepareModel });
-  startAndAddToolNotes(harness.observer);
+  await startAndAddToolNotes(harness.observer);
 
   await advance(24_000);
 
@@ -154,7 +153,7 @@ it.each([
       ...(override ? { agentHarnessRuntimeOverride: override } : {}),
     }));
     const harness = createHarness({ prepareModel });
-    startAndAddToolNotes(harness.observer);
+    await startAndAddToolNotes(harness.observer);
 
     await vi.advanceTimersByTimeAsync(12_000);
     expect(prepareModel).toHaveBeenCalledOnce();
@@ -165,7 +164,7 @@ it.each([
       });
     }
     override = next;
-    harness.observer.handleEvent(
+    await harness.observer.handleEventAsync(
       event({ stream: "lifecycle", data: { phase: "end", startedAt: 0, endedAt: 40_000 } }),
     );
     await flushObserver();

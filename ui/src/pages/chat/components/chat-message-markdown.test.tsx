@@ -128,11 +128,17 @@ describe("user message disclosure", () => {
     const fonts = Object.assign(new EventTarget(), { ready: Promise.resolve() });
     const previousFonts = Object.getOwnPropertyDescriptor(document, "fonts");
     Object.defineProperty(document, "fonts", { configurable: true, value: fonts });
+    const pendingObservers = new Set<() => void>();
     vi.stubGlobal(
       "ResizeObserver",
       class {
-        observe() {}
-        disconnect() {}
+        constructor(private readonly notify: () => void) {}
+        observe() {
+          pendingObservers.add(this.notify);
+        }
+        disconnect() {
+          pendingObservers.delete(this.notify);
+        }
       },
     );
     const container = document.body.appendChild(document.createElement("div"));
@@ -171,6 +177,10 @@ describe("user message disclosure", () => {
       view.update(current);
     };
     const settle = async () => {
+      for (const notify of pendingObservers) {
+        notify();
+      }
+      pendingObservers.clear();
       await Promise.resolve();
       await Promise.resolve();
     };

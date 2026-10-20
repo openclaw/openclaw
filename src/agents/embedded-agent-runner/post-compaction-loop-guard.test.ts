@@ -26,7 +26,6 @@ describe("createPostCompactionLoopGuard", () => {
     const guard = createPostCompactionLoopGuard();
     const verdict = guard.observe(callOutcome("read", { path: "/x" }, "r1"));
     expect(verdict.shouldAbort).toBe(false);
-    expect(verdict.armed).toBe(false);
   });
 
   it("aborts on the third identical (tool,args,result) call within the window", () => {
@@ -72,18 +71,12 @@ describe("createPostCompactionLoopGuard", () => {
     guard.armPostCompaction();
     expect(guard.observe(callOutcome("read", { path: "/x" }, "r1"))).toEqual({
       shouldAbort: false,
-      armed: true,
-      remainingAttempts: 2,
     });
     expect(guard.observe(callOutcome("read", { path: "/x" }, "r1"))).toEqual({
       shouldAbort: false,
-      armed: true,
-      remainingAttempts: 1,
     });
     expect(guard.observe(callOutcome("read", { path: "/y" }, "r2"))).toEqual({
       shouldAbort: false,
-      armed: false,
-      remainingAttempts: 0,
     });
     const after = guard.observe(callOutcome("read", { path: "/x" }, "r1"));
     expect(after.shouldAbort).toBe(false);
@@ -94,22 +87,16 @@ describe("createPostCompactionLoopGuard", () => {
     guard.armPostCompaction();
     guard.observe(callOutcome("read", { path: "/x" }, "r1"));
     guard.observe(callOutcome("read", { path: "/y" }, "r2"));
-    expect(guard.observe(callOutcome("read", { path: "/x" }, "r1")).armed).toBe(false);
+    expect(guard.observe(callOutcome("read", { path: "/x" }, "r1")).shouldAbort).toBe(false);
     guard.armPostCompaction();
     expect(guard.observe(callOutcome("read", { path: "/x" }, "r1"))).toEqual({
       shouldAbort: false,
-      armed: true,
-      remainingAttempts: 2,
     });
     expect(guard.observe(callOutcome("read", { path: "/x" }, "r1"))).toEqual({
       shouldAbort: false,
-      armed: true,
-      remainingAttempts: 1,
     });
     expect(guard.observe(callOutcome("read", { path: "/x" }, "r1"))).toMatchObject({
       shouldAbort: true,
-      armed: false,
-      remainingAttempts: 0,
       count: 3,
     });
   });

@@ -1,13 +1,16 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
-import "../../../components/elapsed-time.tsx";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { listSubagents, type ChatSubagentActivity } from "../chat-subagent-wait.ts";
+import {
+  listSubagents,
+  type ChatSubagentActivity as ChatSubagentActivityRow,
+} from "../chat-subagent-wait.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
-import "./chat-subagent-activity-live.ts";
+import { ChatSubagentActivity } from "./chat-subagent-activity-live.ts";
 
 type Props = { details: ChatDetailsProps; presented: boolean };
 type State = "running" | "queued" | "failed" | "stopped" | "done";
@@ -20,7 +23,7 @@ const SUMMARY = ["running", "queued", "done", "failed", "stopped"] as const;
 const ORDER: Record<State, number> = { running: 0, queued: 1, failed: 2, stopped: 3, done: 4 };
 const PREVIEW_ROWS = 3;
 
-function subagentState(row: ChatSubagentActivity): State {
+function subagentState(row: ChatSubagentActivityRow): State {
   return row.status === "waiting" ? "running" : row.status;
 }
 
@@ -128,10 +131,7 @@ function ProcessRow(props: { row: SessionProcessSummary; onOpen?: () => void }) 
       </span>
       <span class="chat-details__process-name">{props.row.name}</span>
       <span class="chat-details__process-elapsed" aria-hidden="true">
-        <openclaw-elapsed-time
-          prop:startMs={props.row.startedAt}
-          prop:endMs={props.row.endedAt ?? null}
-        />
+        <ElapsedTime startMs={props.row.startedAt} endMs={props.row.endedAt ?? null} />
       </span>
       <span class="chat-details__process-tail">{lastLine() || status()}</span>
     </>
@@ -202,12 +202,12 @@ export function ChatDetailsBackground(
           onExpandedChange={setSubagentsExpanded}
         >
           {props.presented && (
-            <openclaw-chat-subagent-activity
-              prop:rows={subagents()}
-              prop:limit={subagentsExpanded() ? undefined : PREVIEW_ROWS}
-              prop:compact={true}
-              prop:onOpenSubagent={props.details.onOpenSubagent}
-              prop:onOpenSession={props.details.onSessionSelect}
+            <ChatSubagentActivity
+              rows={subagents()}
+              limit={subagentsExpanded() ? undefined : PREVIEW_ROWS}
+              compact={true}
+              onOpenSubagent={props.details.onOpenSubagent}
+              onOpenSession={props.details.onSessionSelect}
             />
           )}
         </BackgroundGroup>

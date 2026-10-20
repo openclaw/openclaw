@@ -190,6 +190,9 @@ it("projects direct active children through the live observer with stable rounde
     subagentSessions: [child],
     subagentSessionsHydrated: true,
   });
+  await waitForSolid(() =>
+    expect(element.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+  );
   const live = element.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;
   expect(live.rows[0]?.session).toBe(child);
@@ -400,6 +403,9 @@ it("groups every direct subagent with counts, live activity first, and a bounded
       (segment) => segment.dataset.state,
     ),
   ).toEqual(["done", "failed", "stopped", "running", "queued"]);
+  await waitForSolid(() =>
+    expect(lane.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+  );
   const live = lane.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;
   const shownKeys = () =>
@@ -448,6 +454,9 @@ it("shows finished subagents after the parent stops waiting and omits the group 
   const group = element.querySelector('[data-details-group="subagents"]')!;
   expect(group.querySelector(".chat-details__tally-summary")?.textContent).toBe("1 done");
   expect(group.querySelector(".chat-details__more")).toBeNull();
+  await waitForSolid(() =>
+    expect(group.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+  );
   const live = group.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;
   expect(live.querySelector(".chat-subagent-activity__status")?.textContent).toBe("Completed");

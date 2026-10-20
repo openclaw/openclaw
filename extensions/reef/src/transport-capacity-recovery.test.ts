@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { composeOutbound, generateIdentity } from "../protocol/index.js";
+import { generateIdentity, seal } from "../protocol/index.js";
 import { MemoryAuditStore } from "../protocol/memory-stores.test-support.js";
 import { ReefMessageFlow } from "./flow.js";
 import {
@@ -65,16 +65,13 @@ async function fixture(peers = ["alice"], deliveredMaxEntries = REEF_DELIVERED_M
     identities.map(async ({ peer, identity }, index): Promise<InboxEntry> => {
       const seq = index + 1;
       const id = `01JZ${String(seq).padStart(22, "0")}`;
-      const { envelope } = await composeOutbound({
+      const envelope = seal({
         id,
         from: `${peer}#1`,
         to: "bob#1",
         body: { text: `message ${seq}` },
         senderSigningSecretKey: identity.signing.secretKey,
         recipientEncryptionPublicKey: keys.encryption.publicKey,
-        guard: guard(allow),
-        audit: new MemoryAuditStore(new Uint8Array(32).fill(3)),
-        policyVersion: "v1",
       });
       return { seq, peer, id, kind: "message", envelope, ts: Math.floor(Date.now() / 1_000) };
     }),

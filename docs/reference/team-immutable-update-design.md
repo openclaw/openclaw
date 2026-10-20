@@ -38,10 +38,10 @@ controller.
 
 Slice 2 adds a versioned, explicitly enabled adoption record and a native
 activation/recovery owner. It reuses the suspension drain, native systemd
-lifecycle, restart health, and config audit owners. Activation journals pointer
+lifecycle and restart health owners. Activation journals pointer
 intent before publication, verifies the selected physical generation and stable
-service definition, and accepts only candidate-authored additive config writes
-with matching audit evidence and unchanged policy. Startup inspection remains a
+service definition, and accepts additive startup config writes with unchanged
+policy and file ownership without requiring optional audit receipts. Startup inspection remains a
 bounded pending outcome. Successful verification retires the record; safe
 rollback preserves it. `openclaw update recover --root <installation-root>`
 reconciles uncertain effects and verifies an already healthy candidate or

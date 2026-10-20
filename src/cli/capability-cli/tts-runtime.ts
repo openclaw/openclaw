@@ -76,7 +76,7 @@ export async function runTtsConvert(params: {
     const prefsPath = await resolveTtsPrefsPathAsync(ttsConfig);
     const ttsProvider =
       params.provider ??
-      resolveModelRefOverride(normalizeOptionalString(params.modelId)).provider ??
+      resolveModelRefOverride(params.modelId).provider ??
       (await getTtsProviderAsync(ttsConfig, prefsPath));
     const effectiveCfg = await injectTtsAuthProfileApiKey({
       cfg,

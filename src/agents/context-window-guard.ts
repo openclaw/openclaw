@@ -76,8 +76,7 @@ type ContextWindowGuardResult = ContextWindowInfo & {
 };
 
 /** Derive warning/block floors from the resolved model context window. */
-function resolveContextWindowGuardThresholds(contextWindowTokens: number) {
-  const tokens = normalizePositiveInt(contextWindowTokens) ?? 0;
+function resolveContextWindowGuardThresholds(tokens: number) {
   return {
     hardMinTokens: Math.max(
       CONTEXT_WINDOW_HARD_MIN_TOKENS,

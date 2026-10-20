@@ -10,7 +10,7 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
-import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
+import { registerGitHubConnectionsEnglish } from "../../i18n/locales/en-github-connections.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatDateTimeMs } from "../../lib/format.ts";
@@ -513,4 +513,4 @@ export function GitHubIdentity(props: IdentityProps & { onOpenConnections: () =>
   );
 }
 
-registerEnglishCatalog(registerGitHubEnglish);
+registerEnglishCatalog(registerGitHubConnectionsEnglish);

@@ -28,7 +28,7 @@ import {
 } from "../lib/reactive/application.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
 import { projectI18n } from "../lib/reactive/i18n.ts";
-import { projectOwner, projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -86,11 +86,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
   const gateway = projectGateway(context.gateway);
   const config = projectApplicationConfig(context.config);
   const selection = projectAgentSelection(context.agentSelection);
-  const router = projectSource(context.router, {
-    read: (source) => source.getState(),
-    subscribe: (source, notify) => source.subscribe(notify),
-    equality: "revision",
-  });
+  const router = projectOwner(context.router, (source) => source.getState());
   const theme = projectTheme(context.theme);
   const snapshot = () => gateway.read().snapshot;
   const connected = () => snapshot().phase === "connected";
@@ -503,10 +499,14 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
           prop:client={snapshot().client}
           prop:context={context}
           prop:gateway={context.gateway}
+          prop:lookupSidebarRow={(sessionKey: string) =>
+            shell?.navigationSidebar.findSidebarHovercardRowByKey?.(sessionKey)
+          }
         >
           <ShellLoader
             onShell={(owner) => {
               shell = owner;
+              runtime.setShell(owner);
               readiness?.invalidate();
             }}
             runtime={runtime}

@@ -354,6 +354,35 @@ describe("renderSessionProgressCard", () => {
     },
   );
 
+  it("listens to its owned transcript instead of a closer pane's thread", async () => {
+    const ownedPane = createContainer();
+    const ownedThread = document.createElement("div");
+    ownedThread.className = "chat-thread";
+    ownedPane.append(ownedThread);
+    const ownedTranscript = observeTranscript(ownedPane, transcriptCleanups);
+    const container = createContainer();
+    renderTranscriptCard(container, {
+      readingHistory: true,
+      getTranscriptElement: () => ownedThread,
+    });
+    const decoyTranscript = observeTranscript(container, transcriptCleanups);
+    await Promise.resolve();
+    const card = container.querySelector("details")!;
+    expect(card.open).toBe(true);
+
+    decoyTranscript.wheel(200);
+    advance(201);
+    decoyTranscript.wheel(200);
+    advance(300);
+    expect(card.open).toBe(true);
+
+    ownedTranscript.wheel(200);
+    advance(201);
+    ownedTranscript.wheel(200);
+    advance(300);
+    expect(card.open).toBe(false);
+  });
+
   it("keeps gestures across reading-history renders and late native offsets", async () => {
     const container = createContainer();
     const renderHistory = (readingHistory: boolean) =>

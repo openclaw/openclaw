@@ -67,6 +67,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   let active = true;
   let pending = false;
   let literalInput: HTMLInputElement | undefined;
+  let referenceSourceSelect: HTMLSelectElement | undefined;
 
   // Reinspect the Gateway credential when its field, revision, or connection changes.
   createEffect(
@@ -449,6 +450,9 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         ) : null}
         {dialogOpen() ? (
           <openclaw-modal-dialog
+            prop:initialFocus={() =>
+              referenceSourceSelect?.isConnected ? referenceSourceSelect : null
+            }
             ref={(dialog) => dialog.setReturnFocusTarget(referenceTrigger)}
             label={`${t("pluginsPage.credentials.referenceTitle")}: ${props.descriptor.label}`}
             onModal-cancel={(event: Event) => {
@@ -466,6 +470,9 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                   <label>
                     {t("pluginsPage.credentials.source")}
                     <select
+                      ref={(element) => {
+                        referenceSourceSelect = element;
+                      }}
                       autofocus
                       class="settings-input"
                       aria-label={t("pluginsPage.credentials.source")}

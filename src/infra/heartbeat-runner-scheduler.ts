@@ -13,7 +13,6 @@ import {
   resolveHeartbeatIntervalMs,
   type HeartbeatConfig,
 } from "./heartbeat-config.js";
-import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
   isConversationExecCompletion,
   isHeartbeatDeliveryAwarenessEvent,
@@ -36,6 +35,14 @@ import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import { peekDeliverableSystemEventEntries } from "./system-events.js";
 
 const loadHeartbeatExecution = createLazyRuntimeModule(() => import("./heartbeat-runner-run.js"));
+
+const DEFAULT_MIN_WAKE_SPACING_MS = 30_000;
+const DEFAULT_FLOOD_WINDOW_MS = 60_000;
+const DEFAULT_FLOOD_THRESHOLD = 5;
+
+type DeferDecision =
+  | { defer: false }
+  | { defer: true; reason: "not-due" | "min-spacing" | "flood"; retryAtMs: number };
 
 type HeartbeatAgentState = {
   agentId: string;
@@ -103,32 +110,67 @@ export function startHeartbeatRunner(opts: {
       conversationTurn?: boolean;
     } = {},
   ): DeferDecision => {
-    const decision = shouldDeferWake({
-      intent,
-      now,
-      nextDueMs: options.authoritativeScheduledTick ? now : agent.cooldownUntilMs,
-      lastRunStartedAtMs: agent.lastRunStartedAtMs,
-      recentRunStarts: agent.recentRunStarts,
-      retainedWork: options.retainedWork,
-      conversationTurn: options.conversationTurn,
-    });
-    if (decision.defer && decision.reason === "flood") {
-      if (!agent.floodLoggedSinceLastRun) {
-        log.warn("heartbeat: flood guard tripped, deferring wake", {
-          agentId: agent.agentId,
-          reason: reason ?? "(none)",
-          recentRunCount: agent.recentRunStarts.length,
-        });
-        agent.floodLoggedSinceLastRun = true;
+    if (intent === "manual") {
+      return { defer: false };
+    }
+    // System wake-now paths can form feedback loops too; only manual intent is exempt.
+    let inWindow = 0;
+    for (let i = agent.recentRunStarts.length - 1; i >= 0; i--) {
+      const ts = agent.recentRunStarts[i];
+      if (ts === undefined || ts < now - DEFAULT_FLOOD_WINDOW_MS) {
+        break;
+      }
+      if (++inWindow === DEFAULT_FLOOD_THRESHOLD) {
+        if (!agent.floodLoggedSinceLastRun) {
+          log.warn("heartbeat: flood guard tripped, deferring wake", {
+            agentId: agent.agentId,
+            reason: reason ?? "(none)",
+            recentRunCount: agent.recentRunStarts.length,
+          });
+          agent.floodLoggedSinceLastRun = true;
+        }
+        return { defer: true, reason: "flood", retryAtMs: ts + DEFAULT_FLOOD_WINDOW_MS + 1 };
       }
     }
-    return decision;
+    if (intent === "immediate") {
+      return { defer: false };
+    }
+    const nextDueMs = options.authoritativeScheduledTick ? now : agent.cooldownUntilMs;
+    if (intent === "scheduled") {
+      return now < nextDueMs
+        ? { defer: true, reason: "not-due", retryAtMs: nextDueMs }
+        : { defer: false };
+    }
+    // An idle agent can respond to its first event before the first scheduled tick.
+    if (agent.lastRunStartedAtMs === undefined) {
+      return { defer: false };
+    }
+    const spacingRetryAtMs = agent.lastRunStartedAtMs + DEFAULT_MIN_WAKE_SPACING_MS;
+    // A conversation's own completion is its reply, not periodic work; spacing and flood still apply.
+    if (
+      intent !== "task" &&
+      !options.retainedWork &&
+      !options.conversationTurn &&
+      now < nextDueMs
+    ) {
+      return {
+        defer: true,
+        reason: "not-due",
+        retryAtMs: Math.min(nextDueMs, now < spacingRetryAtMs ? spacingRetryAtMs : nextDueMs),
+      };
+    }
+    return now < spacingRetryAtMs
+      ? { defer: true, reason: "min-spacing", retryAtMs: spacingRetryAtMs }
+      : { defer: false };
   };
 
   const recordRunBookkeeping = (agent: HeartbeatAgentState, now: number) => {
     agent.lastRunStartedAtMs = now;
     agent.cooldownUntilMs = now + (agent.intervalMs ?? 0);
-    recordRunStart(agent.recentRunStarts, now);
+    agent.recentRunStarts.push(now);
+    while (agent.recentRunStarts.length > DEFAULT_FLOOD_THRESHOLD + 1) {
+      agent.recentRunStarts.shift();
+    }
     agent.floodLoggedSinceLastRun = false;
   };
 

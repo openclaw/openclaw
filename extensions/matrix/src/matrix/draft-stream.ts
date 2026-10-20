@@ -75,17 +75,15 @@ export function createMatrixDraftStream(params: {
           live: useLive,
         });
         currentEventId = result.messageId;
-        lastSentText = preparedText.trimmedText;
-        lastSentContent = preparedText.convertedText;
         log?.(`draft-stream: created message ${currentEventId}${useLive ? " (MSC4357 live)" : ""}`);
       } else {
         await editMessageMatrix(roomId, currentEventId, preparedText.trimmedText, {
           ...previewOptions,
           live: useLive,
         });
-        lastSentText = preparedText.trimmedText;
-        lastSentContent = preparedText.convertedText;
       }
+      lastSentText = preparedText.trimmedText;
+      lastSentContent = preparedText.convertedText;
       return true;
     } catch (err) {
       log?.(`draft-stream: send/edit failed: ${String(err)}`);

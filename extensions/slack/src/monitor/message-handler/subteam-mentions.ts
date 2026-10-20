@@ -5,6 +5,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getOrCreateWeakOwnerMap } from "../lru-map-cache.js";
 
 const SUBTEAM_MENTION_RE = /<!subteam\^([A-Z0-9]+)(?:\|[^>]*)?>/gi;
 const SUBTEAM_MEMBER_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -39,11 +40,7 @@ async function readSlackSubteamUsers(params: {
   now: number;
   log?: (message: string) => void;
 }): Promise<ReadonlySet<string>> {
-  let bySubteam = subteamMemberCache.get(params.client);
-  if (!bySubteam) {
-    bySubteam = new Map<string, CacheEntry>();
-    subteamMemberCache.set(params.client, bySubteam);
-  }
+  const bySubteam = getOrCreateWeakOwnerMap(subteamMemberCache, params.client);
   const cacheKey = `${normalizeSlackId(params.teamId) ?? ""}:${params.subteamId}`;
   const cached = bySubteam.get(cacheKey);
   const now = asDateTimestampMs(params.now);

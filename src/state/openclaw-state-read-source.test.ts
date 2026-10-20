@@ -95,10 +95,10 @@ it("keeps lazy reads with their captured generation when another generation disp
           const firstTransport = first.createTransport({ type: "backup.runs" });
           const secondTransport = second.createTransport({ type: "backup.runs" });
           try {
-            await expect(firstTransport.startRead(location, authority).result).resolves.toEqual({
+            await expect(firstTransport.startRead(location, authority)).resolves.toEqual({
               value: emptyReply,
             });
-            await expect(secondTransport.startRead(location, authority).result).resolves.toEqual({
+            await expect(secondTransport.startRead(location, authority)).resolves.toEqual({
               value: emptyReply,
             });
             expect(mock.create).toHaveBeenCalledTimes(2);
@@ -113,10 +113,7 @@ it("keeps lazy reads with their captured generation when another generation disp
               expect.objectContaining({ retainedTransport: true }),
             );
           } finally {
-            await Promise.all([
-              firstTransport.startClose().result,
-              secondTransport.startClose().result,
-            ]);
+            await Promise.all([firstTransport.startClose(), secondTransport.startClose()]);
           }
         },
         async () => {},
@@ -159,8 +156,8 @@ it("joins captured domain cleanup before retiring its pool and execution generat
         await transport.startRead(
           { context, location: options.path, checkFreshAdmission: false },
           { signal: new AbortController().signal, assertCurrent: () => {} },
-        ).result;
-        await transport.startClose().result;
+        );
+        await transport.startClose();
         unregister();
         events.push("domain closed");
       });
@@ -216,7 +213,7 @@ it.each(["workerPlacements.changeSnapshot", "agentDeletionJournal.status"] as co
         checkFreshAdmission: false,
       },
       { signal: new AbortController().signal, assertCurrent: () => {} },
-    ).result;
+    );
     try {
       const submitted = await task.submitted;
       dispatch.resolve();
@@ -234,7 +231,7 @@ it.each(["workerPlacements.changeSnapshot", "agentDeletionJournal.status"] as co
           : { ok: true, type, sourceAdmitted: true, status: "absent" },
       );
       await read;
-      await transport.startClose().result;
+      await transport.startClose();
     }
   },
 );

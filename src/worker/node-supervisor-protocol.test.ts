@@ -34,6 +34,15 @@ function launchInput() {
   };
 }
 
+it.each([
+  [undefined, "paramsJSON required"],
+  [null, "paramsJSON required"],
+  ["", "paramsJSON required"],
+  ["{", "paramsJSON malformed JSON"],
+] as const)("rejects invalid lookup framing %j", (raw, message) => {
+  expect(() => parseNodeWorkerLookupInput(raw)).toThrow(`INVALID_REQUEST: ${message}`);
+});
+
 it("accepts only bounded optional status waits", () => {
   for (const waitMs of [undefined, 1, NODE_WORKER_STATUS_WAIT_MAX_MS]) {
     const input = { launchId: identity.launchId, ...(waitMs === undefined ? {} : { waitMs }) };

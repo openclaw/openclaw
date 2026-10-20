@@ -2,7 +2,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startNativeLinkRouting } from "../app/native-link-routing.ts";
-import { resetTranscriptSession } from "../pages/chat/components/chat-thread-interactions.ts";
+import {
+  registerTranscriptElement,
+  resetThreadPresentation,
+  resetTranscriptSession,
+} from "../pages/chat/components/chat-thread-interactions.ts";
 import { installDialogPolyfill, waitForRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import {
   enhanceMarkdownTables,
@@ -106,6 +110,7 @@ describe("Markdown table interactions", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    resetThreadPresentation();
     document.body.replaceChildren();
     restoreProperties
       .splice(0)
@@ -141,44 +146,36 @@ describe("Markdown table interactions", () => {
     }
   });
 
-  it.each([true, false])(
-    "updates retained table overflow without mutation-time layout when observed (ResizeObserver: %s)",
-    async (observed) => {
-      vi.stubGlobal("MutationObserver", originalMutationObserver);
-      if (!observed) {
-        Reflect.deleteProperty(globalThis, "ResizeObserver");
-      }
-      const { owner, shell, viewport } = interactiveOwner(`${table}\n\n${table}`);
-      const otherViewport = owner.querySelectorAll(".markdown-table__viewport")[1]!;
-      const otherWidth = vi.fn(() => 300);
-      const changedWidth = vi.fn(() => 100);
-      Object.defineProperty(otherViewport, "scrollWidth", { configurable: true, get: otherWidth });
-      Object.defineProperty(viewport, "scrollWidth", { configurable: true, get: changedWidth });
+  it("updates retained table overflow without mutation-time layout", async () => {
+    vi.stubGlobal("MutationObserver", originalMutationObserver);
+    const { owner, shell, viewport } = interactiveOwner(`${table}\n\n${table}`);
+    const otherViewport = owner.querySelectorAll(".markdown-table__viewport")[1]!;
+    const otherWidth = vi.fn(() => 300);
+    const changedWidth = vi.fn(() => 100);
+    Object.defineProperty(otherViewport, "scrollWidth", { configurable: true, get: otherWidth });
+    Object.defineProperty(viewport, "scrollWidth", { configurable: true, get: changedWidth });
 
-      try {
-        shell.querySelector("td")!.firstChild!.textContent = "Shorter";
-        await Promise.resolve();
-        await Promise.resolve();
-        if (observed) {
-          expect(changedWidth).not.toHaveBeenCalled();
-          expect(otherWidth).not.toHaveBeenCalled();
-          deliverTableResize(viewport);
-        }
-        expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
-        expect(changedWidth).toHaveBeenCalled();
-        expect(otherWidth).not.toHaveBeenCalled();
+    try {
+      shell.querySelector("td")!.firstChild!.textContent = "Shorter";
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(changedWidth).not.toHaveBeenCalled();
+      expect(otherWidth).not.toHaveBeenCalled();
+      deliverTableResize(viewport);
+      expect(shell.classList.contains("markdown-table--can-scroll-right")).toBe(false);
+      expect(changedWidth).toHaveBeenCalled();
+      expect(otherWidth).not.toHaveBeenCalled();
 
-        changedWidth.mockClear();
-        query(shell, ".markdown-table__copy").replaceChildren(document.createElement("span"));
-        await Promise.resolve();
-        await Promise.resolve();
-        expect(changedWidth).not.toHaveBeenCalled();
-        expect(otherWidth).not.toHaveBeenCalled();
-      } finally {
-        releaseMarkdownTables(owner);
-      }
-    },
-  );
+      changedWidth.mockClear();
+      query(shell, ".markdown-table__copy").replaceChildren(document.createElement("span"));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(changedWidth).not.toHaveBeenCalled();
+      expect(otherWidth).not.toHaveBeenCalled();
+    } finally {
+      releaseMarkdownTables(owner);
+    }
+  });
 
   it("shows a failed current table copy without stale success", async () => {
     vi.useFakeTimers();
@@ -281,6 +278,7 @@ describe("Markdown table interactions", () => {
     const { owner, expand } = interactiveOwner();
     pane.append(owner);
     document.body.append(pane);
+    registerTranscriptElement("retired-pane", owner);
     expand.click();
 
     resetTranscriptSession("retired-pane", pane);

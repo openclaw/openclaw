@@ -102,18 +102,38 @@ it("keeps an incomplete empty snapshot loading and permits retry after catch-up 
   expect(controller.incomplete).toBe(false);
 });
 
-it("retires current work on disconnect and only accepts the replacement query", async () => {
+it.each([
+  { name: "current work", query: "current" as const },
+  { name: "history", query: { personId: null, time: "all" as const, query: "release" } },
+])("retains $name through reconnect and retires it on client replacement", async ({ query }) => {
   const { client, request, controller } = fixture;
-  await controller.load(client, "current");
-  const stale = pendingRefresh();
-  void controller.load(null, null);
-  expect(controller.result).toBeUndefined();
-  expect(controller.incomplete).toBe(false);
-  request.mockResolvedValue(listing([]));
-  void controller.load(client, "current");
-  stale.resolve(listing([active]));
+  await controller.load(client, query);
+  const stale = pendingRefresh(query);
+  void controller.load(client, query, "query", false, false);
+  expect(controller.result?.sessions).toEqual([active]);
+  expect(controller.loading).toBe(false);
+  stale.resolve(listing([]));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(controller.result?.sessions).toEqual([active]);
+  request.mockRejectedValueOnce(new Error("refresh unavailable"));
+  await controller.load(client, query);
+  expect(controller.result?.sessions).toEqual([active]);
+  expect(controller.error).toBe("refresh unavailable");
+  const fresh = createDeferred<SessionsListResult>();
+  request.mockReturnValueOnce(fresh.promise);
+  void controller.load(client, query, "retry");
+  expect(controller.result?.sessions).toEqual([active]);
+  fresh.resolve(listing([]));
   await vi.advanceTimersByTimeAsync(0);
   expect(controller.result?.sessions).toEqual([]);
+  const replacement = setup();
+  const replacementRead = createDeferred<SessionsListResult>();
+  replacement.request.mockReturnValueOnce(replacementRead.promise);
+  void controller.load(replacement.client, query);
+  expect(controller.result).toBeUndefined();
+  replacementRead.resolve(listing([active]));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(controller.result?.sessions).toEqual([active]);
 });
 
 it.each([

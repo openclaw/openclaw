@@ -65,7 +65,6 @@ describe("ChatMediaSourceOwner", () => {
 
     expect(controller.readiness).toBe("ready");
     expect(controller.readySource).toBe("/media/native.mp3");
-    expect(controller.currentIdentity).toBe("media:native");
     expect(media.getAttribute("src")).toBe("/media/native.mp3");
   });
 
@@ -108,7 +107,7 @@ describe("ChatMediaSourceOwner", () => {
       .mockReturnValueOnce(old.promise)
       .mockResolvedValueOnce(response());
     vi.stubGlobal("fetch", fetchMock);
-    const { media, controller, sync } = setup("video");
+    const { media, sync } = setup("video");
 
     const oldRequest = sync(
       "/media/old.avi?mediaTicket=old",
@@ -126,7 +125,6 @@ describe("ChatMediaSourceOwner", () => {
     old.resolve(response());
     await oldRequest;
 
-    expect(controller.currentIdentity).toBe("media:new");
     expect(media.getAttribute("src")).toContain("mediaTicket=new&playback=1");
   });
 

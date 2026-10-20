@@ -214,10 +214,13 @@ export function captureActiveEmbeddedRunPersonalToolParticipants(
     return undefined;
   }
   const delegatedAuthority = registration.delegatedAuthority;
+  // Message identities use the policy session; their source owns the executing run.
+  const executionSessionKey =
+    identity.messageActionContext?.sourceReplySessionKey ?? identity.sessionKey;
   const ownsRegistration = () =>
     registration.operationalRunInstance?.instanceId === instance.instanceId &&
     registration.operationalRunInstance.runId === instance.runId &&
-    registration.sessionKey === identity.sessionKey &&
+    registration.sessionKey === executionSessionKey &&
     registration.agentId === identity.agentId &&
     handle.runId === instance.runId &&
     ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(instance.runId) === registration &&
@@ -386,7 +389,7 @@ function evictPriorLifecycleEmbeddedRuns(): void {
       attachment?.operation &&
       attachment.backend &&
       getSessionControllerEntryForOperation(attachment.operation).active === attachment.operation &&
-      getAttachedBackend(attachment.operation) === attachment.backend
+      getAttachedBackend(attachment.operation) === attachment.backend.handle
     ) {
       controllerOwnedHandles.add(handle);
     }

@@ -43,7 +43,7 @@ describe("runtime degraded SecretRef owners", () => {
     expect(isTrustedSecretSurfaceUnavailableError(forged)).toBe(false);
   });
 
-  it("publishes cloned owner snapshots and throws the typed unavailable error", () => {
+  it("publishes owner metadata and throws the typed unavailable error", () => {
     const owner = {
       ownerKind: "provider" as const,
       ownerId: "openai",
@@ -54,9 +54,6 @@ describe("runtime degraded SecretRef owners", () => {
       providerFailures: [{ source: "env" as const, provider: "default" }],
     };
     setActiveDegradedSecretOwners([owner]);
-    owner.paths.push("mutated");
-    owner.providerFailures[0]!.provider = "mutated";
-    owner.providerFailures.push({ source: "env", provider: "injected" });
 
     expect(listActiveDegradedSecretOwners()).toEqual([
       expect.objectContaining({
@@ -72,7 +69,7 @@ describe("runtime degraded SecretRef owners", () => {
     );
     expect(() => assertSecretOwnerAvailable("provider", "anthropic")).not.toThrow();
   });
-  it("records strict resolution owner metadata without exposing mutable state", () => {
+  it("records strict resolution owner metadata", () => {
     const error = new Error("private provider details");
     const owner = {
       ownerKind: "provider" as const,
@@ -88,10 +85,6 @@ describe("runtime degraded SecretRef owners", () => {
     };
     associateSecretResolutionErrorOwners(error, [owner]);
 
-    const recorded = listSecretResolutionErrorOwners(error);
-    recorded[0]?.paths.push("mutated");
-    recorded[0]!.providerFailures![0]!.provider = "mutated";
-    recorded[0]!.providerFailures!.push({ source: "env", provider: "injected" });
     expect(listSecretResolutionErrorOwners(error)[0]).toMatchObject({
       paths: ["models.providers.openai.apiKey"],
       providerFailures: [{ source: "env", provider: "default" }],

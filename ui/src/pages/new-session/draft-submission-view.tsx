@@ -41,11 +41,8 @@ export function NewSessionSubmission(props: {
     <div class="new-session-page__starting chat-thread-inner">
       <div
         class={[
-          "chat-group user",
-          {
-            "chat-group--with-footer": Boolean(normalized().sender),
-            "chat-group--sender-tint": senderHue() !== null,
-          },
+          "chat-group user chat-group--with-footer",
+          { "chat-group--sender-tint": senderHue() !== null },
         ]}
         style={senderHue() === null ? undefined : `--chat-sender-hue: ${senderHue()}`}
         data-chat-row-key={key}
@@ -99,13 +96,17 @@ export function NewSessionSubmission(props: {
             </Show>
           </div>
         </div>
-        <Show when={normalized().sender && props.avatarPlacement === "footer"}>
-          <div class="chat-group-footer">
-            <div class="chat-group-footer__meta">
-              <ChatAuthorAvatar sender={normalized().sender} />
-            </div>
-          </div>
-        </Show>
+        {/* Chat reserves this row on every user turn; omitting it here would
+            move the working indicator down when Chat replaces this preview. */}
+        <div class="chat-group-footer">
+          <Show when={props.avatarPlacement === "footer" ? normalized().sender : undefined}>
+            {(sender) => (
+              <div class="chat-group-footer__meta">
+                <ChatAuthorAvatar sender={sender()} />
+              </div>
+            )}
+          </Show>
+        </div>
       </div>
       <div class="chat-group assistant chat-group--working">
         <div class="chat-group-messages">

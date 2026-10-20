@@ -8,10 +8,12 @@ import type { ApplicationContext } from "../app/context.ts";
 import { resolveProfileAppearancePrefs } from "../app/server-prefs-profile.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../styles/session-background.css";
 import { backgroundPaletteKey, readBackgroundOpacityLimit } from "./session-background-contrast.ts";
 import { backgroundImageReadIdentity, readBackgroundImage } from "./session-background-image.ts";
+import type { SessionBackgroundLayoutTarget } from "./session-background-layout-context.tsx";
 import { createBackgroundFadeLayout } from "./session-background-layout.ts";
 
 export type SessionBackgroundSurface = "new-session" | "session" | "preview";
@@ -20,6 +22,7 @@ type Props = {
   surface: SessionBackgroundSurface;
   presented: boolean;
   preferenceOverride?: BackgroundPreference;
+  layoutTargets?: readonly SessionBackgroundLayoutTarget[];
 };
 type BackgroundImageRequest = {
   identity: string;
@@ -89,9 +92,9 @@ export const SessionBackground = defineSolidBridge<Props>(
         ? backgroundImageReadIdentity(context()!, source.assetId)
         : null;
     };
-    const syncSurface = () => {
+    const syncSurface = (surfaceKind: SessionBackgroundSurface) => {
       const surface =
-        host.isConnected && props.surface !== "preview"
+        host.isConnected && surfaceKind !== "preview"
           ? host.closest<HTMLElement>(".new-session-page, .sidebar-region")
           : null;
       if (surfaceElement !== surface) {
@@ -102,7 +105,7 @@ export const SessionBackground = defineSolidBridge<Props>(
       surface?.toggleAttribute("data-background-custom", host.hasAttribute("data-custom"));
       surface?.toggleAttribute("data-background-painted", host.hasAttribute("data-painted"));
     };
-    const releaseImage = () => {
+    const releaseImage = (surface = props.surface) => {
       const prior = request;
       request = null;
       prior?.controller.abort();
@@ -111,40 +114,49 @@ export const SessionBackground = defineSolidBridge<Props>(
         // Clear private pixels in the owner notification, before deferred DOM work.
         imageElement?.removeAttribute("src");
         host.removeAttribute("data-painted");
-        syncSurface();
+        syncSurface(surface);
         URL.revokeObjectURL(prior.url);
       }
     };
-    const retireChangedImage = () => {
+    const retireChangedImage = (
+      application: ApplicationContext | undefined,
+      identity: string | null,
+      surface: SessionBackgroundSurface,
+    ) => {
       if (
         request &&
-        (request.context !== context() ||
-          request.client !== context()?.gateway.snapshot.client ||
-          request.identity !== currentIdentity())
+        (request.context !== application ||
+          request.client !== application?.gateway.snapshot.client ||
+          request.identity !== identity)
       ) {
-        releaseImage();
+        releaseImage(surface);
       }
     };
-    createEffect(
-      () => context(),
-      (application) => {
-        const changed = () => {
-          retireChangedImage();
+    const contextProjection = createMemo(() =>
+      projectSource(context(), {
+        read: (application) => application,
+        equality: "revision",
+        subscribe: (application, publish) => {
+          const changed = () => {
+            retireChangedImage(context(), currentIdentity(), props.surface);
+            publish();
+          };
+          const cleanups = [
+            application?.theme.subscribe(changed),
+            application?.gateway.subscribe(changed),
+          ];
+          return () => cleanups.forEach((cleanup) => cleanup?.());
+        },
+      }),
+    );
+    onSettled(() =>
+      subscribeBrowserAuthRestored(() => {
+        if (!request?.url) {
+          failedIdentity = null;
+          releaseImage();
           notify();
-        };
-        const cleanups = [
-          application?.theme.subscribe(changed),
-          application?.gateway.subscribe(changed),
-          subscribeBrowserAuthRestored(() => {
-            if (!request?.url) {
-              failedIdentity = null;
-              releaseImage();
-              notify();
-            }
-          }),
-        ];
-        return () => cleanups.forEach((cleanup) => cleanup?.());
-      },
+        }
+      }),
     );
     const observer = new MutationObserver(notify);
     observer.observe(host.ownerDocument.documentElement, {
@@ -174,6 +186,7 @@ export const SessionBackground = defineSolidBridge<Props>(
     });
     const view = createMemo(() => {
       revision();
+      contextProjection().revision();
       const source = currentSource();
       const fullBleed = preference()?.presentation === "full-bleed";
       const visible = props.presented && !accessibility?.matches;
@@ -202,6 +215,7 @@ export const SessionBackground = defineSolidBridge<Props>(
         surface: props.surface,
         context: context(),
         identity: currentIdentity(),
+        layoutTargets: props.layoutTargets,
       };
     });
     createEffect(
@@ -211,7 +225,7 @@ export const SessionBackground = defineSolidBridge<Props>(
         host.setAttribute("data-presentation", state.fullBleed ? "full-bleed" : "faded");
         host.setAttribute("data-surface", state.surface);
         host.toggleAttribute("data-custom", state.visible && state.source?.kind === "custom");
-        retireChangedImage();
+        retireChangedImage(state.context, state.identity, state.surface);
         host.toggleAttribute(
           "data-painted",
           Boolean(
@@ -220,12 +234,13 @@ export const SessionBackground = defineSolidBridge<Props>(
             (state.source?.kind === "theme" || (state.source?.kind === "custom" && state.image)),
           ),
         );
-        syncSurface();
+        syncSurface(state.surface);
         fadeLayout.update(
           (state.surface === "new-session" || state.surface === "preview") &&
             state.visible &&
             Boolean(state.source && state.source.kind !== "none") &&
             !state.fullBleed,
+          state.layoutTargets,
         );
         if (failedIdentity !== state.identity) {
           failedIdentity = null;
@@ -250,8 +265,8 @@ export const SessionBackground = defineSolidBridge<Props>(
         request = pending;
         void readBackgroundImage(state.context, state.source.assetId, {
           signal: pending.controller.signal,
-          isCurrent: () =>
-            host.isConnected && request === pending && currentIdentity() === pending.identity,
+          // The reader rechecks gateway/profile identity; this effect retires presentation changes.
+          isCurrent: () => host.isConnected && request === pending,
         })
           .then((url) => {
             if (
@@ -304,6 +319,7 @@ export const SessionBackground = defineSolidBridge<Props>(
       surface: { default: "session", attribute: false },
       presented: { default: true, attribute: false },
       preferenceOverride: { default: undefined, attribute: false },
+      layoutTargets: { default: undefined, attribute: false },
     },
   },
 );

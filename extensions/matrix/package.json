@@ -14,9 +14,9 @@
     "fake-indexeddb": "6.2.5",
     "markdown-it": "15.0.2",
     "matrix-js-sdk": "43.0.0",
-    "music-metadata": "12.1.0",
+    "music-metadata": "12.1.1",
     "typebox": "1.3.36",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

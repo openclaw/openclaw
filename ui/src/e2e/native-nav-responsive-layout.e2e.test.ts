@@ -133,7 +133,7 @@ suite.define(() => {
       await drawerSearch.tap();
     } else {
       await header.locator(".chat-header-session-menu__trigger").click();
-      await page.getByText("Open command palette", { exact: true }).click();
+      await page.getByRole("menuitem", { name: "Open command palette" }).click();
     }
     const paletteInput = page.locator(".cmd-palette__input");
     await paletteInput.waitFor({ state: "visible" });

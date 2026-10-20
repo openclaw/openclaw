@@ -1,4 +1,9 @@
 /** Captured destination identity and live generation facts for ordinary session events. */
+
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
@@ -31,7 +36,11 @@ import { narrowSessionEventSettings } from "./session-event-policy.js";
 
 const targetScopes = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionEvents.targetScopes"),
-  () => new WeakMap<SessionEventTarget, { env?: NodeJS.ProcessEnv }>(),
+  () =>
+    new WeakMap<
+      SessionEventTarget,
+      { env?: NodeJS.ProcessEnv; operatorAuthority?: AdmittedRunOperatorAuthority }
+    >(),
 );
 
 export function getSessionEventRuntimeConfig() {
@@ -72,8 +81,15 @@ export async function captureSessionEventTargetForHost(
     assertCaptureCurrent?: () => void;
     /** Prepared host policy survives adapters that translate or clear the original tool cap. */
     producerPolicy?: Readonly<Pick<SessionEventTarget, "toolsAllow" | "settings">>;
+    /** Original host-issued source; the producer owns its lifetime until enqueue. */
+    operatorAuthority?: AdmittedRunOperatorAuthority;
   } = {},
 ): Promise<SessionEventTarget> {
+  const operatorAuthority = options.operatorAuthority;
+  if (operatorAuthority) {
+    assertAdmittedRunOperatorAuthority(operatorAuthority);
+    operatorAuthority.assertCurrent();
+  }
   options.assertCaptureCurrent?.();
   options.assertCurrent?.();
   const agentId = normalizeAgentId(requestedAgentId);
@@ -101,6 +117,7 @@ export async function captureSessionEventTargetForHost(
       ? await prepareGatewayToolCallerAssertion()
       : undefined;
   const assertCaptureCurrent = () => {
+    operatorAuthority?.assertCurrent();
     options.assertCaptureCurrent?.();
     options.assertCurrent?.();
     if (!callerAgentMatches || !caller) {
@@ -170,7 +187,7 @@ export async function captureSessionEventTargetForHost(
         ? narrowSessionEventSettings(producerSettings, destinationSettings)
         : structuredClone(destinationSettings),
     };
-    targetScopes.set(target, { env });
+    targetScopes.set(target, { env, operatorAuthority });
     return target;
   } finally {
     preparedCaller?.release();
@@ -289,6 +306,12 @@ export function readSessionEventTargetEnvironment(
   return targetScopes.get(target)?.env;
 }
 
+export function readSessionEventTargetOperatorAuthority(
+  target: SessionEventTarget,
+): AdmittedRunOperatorAuthority | undefined {
+  return targetScopes.get(target)?.operatorAuthority;
+}
+
 /** Coalesced work retains every producer's original destination and permission bound. */
 export function combineSessionEventTargetsForHost(
   targets: readonly SessionEventTarget[],
@@ -307,9 +330,13 @@ export function combineSessionEventTargetsForHost(
       target.sessionId !== first.sessionId ||
       target.lifecycleRevision !== first.lifecycleRevision ||
       target.chatType !== first.chatType ||
+      readSessionEventTargetOperatorAuthority(target) !==
+        readSessionEventTargetOperatorAuthority(first) ||
       channelRouteDedupeKey(target.deliveryContext) !== route
     ) {
-      throw new Error("Session event batch has different captured destinations");
+      throw new Error(
+        "Session event batch has different captured destinations or requester authority",
+      );
     }
   }
   const assertCurrent = () => {

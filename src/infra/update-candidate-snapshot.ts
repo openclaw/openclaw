@@ -21,7 +21,10 @@ import {
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
 import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
-import { createUpdateStateInspectionDiagnostics } from "./update-candidate-state.diagnostics.js";
+import {
+  createUpdateStateInspectionDiagnostics,
+  formatUpdateStateInspectionProgress,
+} from "./update-candidate-state.diagnostics.js";
 import {
   collectStateDatabasePaths,
   UpdateCandidateSnapshotInventorySchema,
@@ -280,22 +283,11 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     const workerEnv = params.workerEnv(directory);
     const outputController = new AbortController();
     let progressPending = Promise.resolve();
+    let progressWriting = false;
+    let nextProgress: UpdateRunStep | undefined;
     let progressFailure: { error: unknown } | undefined;
     const failProgress = (error: unknown) => {
-      if (!progressFailure) {
-        progressFailure = { error };
-      } else if (
-        !hasCommandProcessCleanupError(progressFailure.error) &&
-        hasCommandProcessCleanupError(error)
-      ) {
-        progressFailure = {
-          error: new AggregateError(
-            [progressFailure.error, error],
-            "Update snapshot progress recording failed",
-            { cause: progressFailure.error },
-          ),
-        };
-      }
+      progressFailure = { error };
       outputController.abort(error);
     };
     let stderrOutputExceeded = false;
@@ -310,31 +302,37 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           outputController.abort(new Error("Update snapshot diagnostic output exceeded its limit"));
         },
       },
-      onProgress: ({ phase, path: database, snapshot }) => {
-        if (!snapshot) {
-          return;
-        }
+      onProgress: (progress) => {
         const detail = redactSupportString(
-          `${phase} ${database}: ${snapshot.status}, attempt 1, ${snapshot.copiedPages}/${snapshot.totalPages} pages${snapshot.copiedBytes === undefined ? "" : `, ${snapshot.copiedBytes.toLocaleString("en-US")} bytes`}, ${(snapshot.elapsedMs / 1000).toFixed(3)} seconds.`,
+          formatUpdateStateInspectionProgress(progress),
           { env: params.env, stateDir: params.stateDir },
           { maxLength: UPDATE_RUN_TEXT_LIMIT },
         );
-        try {
-          // Invoke at emission so the writer captures this source before it yields.
-          const recording = Promise.resolve(
-            params.onProgress?.({
-              step: "candidate-state-snapshot",
-              status: "in_progress",
-              startedAtMs,
-              detail,
-            }),
-          ).catch(failProgress);
-          progressPending = Promise.all([progressPending, recording]).then(() => {});
-        } catch (error) {
-          failProgress(error);
+        nextProgress = {
+          step: "candidate-state-snapshot",
+          status: "in_progress",
+          startedAtMs,
+          detail,
+        };
+        if (!progressWriting && !progressFailure) {
+          progressWriting = true;
+          progressPending = (async () => {
+            try {
+              // Keep one write in flight and only the latest advisory observation behind it.
+              while (nextProgress) {
+                const step = nextProgress;
+                nextProgress = undefined;
+                await params.onProgress?.(step);
+              }
+            } catch (error) {
+              failProgress(error);
+            } finally {
+              progressWriting = false;
+            }
+          })();
         }
         if (
-          snapshot.status === "completed" &&
+          progress.snapshot?.status === "completed" &&
           snapshotDiagnostics.length < UPDATE_RUN_DIAGNOSTIC_LIMIT
         ) {
           snapshotDiagnostics.push(detail);
@@ -343,6 +341,8 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     });
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
+    let workerTermination = "exit";
+    let budgetSignal: AbortSignal | undefined;
     const outcome = await withUpdateCandidateIoBudget(
       {
         directory,
@@ -352,6 +352,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
         operation: "snapshot",
       },
       async (signal) => {
+        budgetSignal = signal;
         signal.throwIfAborted();
         params.assertCurrent?.();
         const result = await runUtf8CommandWithTimeout(
@@ -402,6 +403,8 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
             cleanup: result.cleanup,
           });
         }
+        workerTermination =
+          result.outputLimitExceeded || stderrOutputExceeded ? "output-limit" : result.termination;
         signal.throwIfAborted();
         if (progressFailure) {
           throw progressFailure.error;
@@ -412,21 +415,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
           result.outputLimitExceeded ||
           stderrOutputExceeded
         ) {
-          const termination =
-            result.outputLimitExceeded || stderrOutputExceeded
-              ? "output-limit"
-              : result.termination;
-          const failure = diagnostics.failure(diagnostics.stderr() || result.stderr, termination);
-          throw Object.assign(
-            new Error(
-              `Update state snapshot failed (${termination}): ${redactSupportString(
-                failure.message,
-                { env: params.env, stateDir: params.stateDir },
-                { maxLength: 20_000 },
-              )}`,
-            ),
-            { code: extractErrorCode(failure) },
-          );
+          throw new Error(diagnostics.stderr() || result.stderr);
         }
         return JSON.parse(result.stdout) as unknown;
       },
@@ -445,10 +434,33 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
       }
       throw progressFailure.error;
     }
-    if ("error" in outcome) {
-      throw outcome.error;
+    if ("error" in outcome || params.signal?.aborted) {
+      const error = "error" in outcome ? outcome.error : params.signal?.reason;
+      if (
+        hasCommandProcessCleanupError(error) ||
+        (isRecord(error) && error.cleanup === "uncertain") ||
+        (progressFailure && error === progressFailure.error)
+      ) {
+        throw error;
+      }
+      const termination = params.signal?.aborted
+        ? "cancelled"
+        : budgetSignal?.aborted
+          ? "timeout"
+          : workerTermination;
+      const failure = diagnostics.failure(error, termination);
+      throw Object.assign(
+        new Error(
+          `Update state snapshot failed (${termination}): ${redactSupportString(
+            failure.message,
+            { env: params.env, stateDir: params.stateDir },
+            { maxLength: 20_000 },
+          )}`,
+          { cause: error },
+        ),
+        { code: extractErrorCode(failure) },
+      );
     }
-    params.signal?.throwIfAborted();
     params.assertCurrent?.();
     if (progressFailure) {
       throw progressFailure.error;

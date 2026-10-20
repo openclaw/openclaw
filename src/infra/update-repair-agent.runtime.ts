@@ -27,11 +27,6 @@ import {
   withInstallationTarget,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "./installation-target-context.js";
-import {
-  readUpdateRepairMaintenanceRequest,
-  updateRepairMaintenanceTool,
-  type UpdateRepairMaintenanceRequest,
-} from "./update-repair-maintenance.js";
 import type { UpdateRepairTarget } from "./update-repair-protocol.js";
 import { buildUpdateDoctorEnv } from "./update-runner-doctor.js";
 
@@ -305,7 +300,6 @@ type UpdateRepairTurnParams = {
   isCurrent?: () => boolean;
   /** Repeated run-preparation source checks; defaults to `isCurrent`. */
   isLive?: () => boolean;
-  maintenanceHandoff?: true;
 };
 
 export async function runUpdateRepairTurn(params: UpdateRepairTurnParams) {
@@ -353,7 +347,6 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
     controller.abort(new Error("per-turn-budget"));
   }, params.timeoutMs);
   let cleanupProcessScope: (() => Promise<void>) | undefined;
-  let maintenance: UpdateRepairMaintenanceRequest | undefined;
   let envelope: {
     model: string;
     provider: string;
@@ -428,9 +421,6 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
                     cwd: target.installRoot,
                     config: runConfig,
                     prompt: params.prompt,
-                    clientTools: params.maintenanceHandoff
-                      ? [updateRepairMaintenanceTool]
-                      : undefined,
                     provider,
                     model,
                     ...(route.authProfileId && provider === route.provider
@@ -451,10 +441,6 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
         ),
     );
     const error = extractAgentRunTerminalError(result.result);
-    if (params.maintenanceHandoff && result.terminal.outcome.status === "ok" && !error) {
-      assertCurrent();
-      maintenance = readUpdateRepairMaintenanceRequest(result.result.meta);
-    }
     envelope = {
       model: result.model,
       provider: result.provider,
@@ -485,6 +471,5 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
     status: "completed" as const,
     toolCalls: toolBudget.toolCalls,
     envelope,
-    ...(maintenance ? { maintenance } : {}),
   };
 }

@@ -71,41 +71,6 @@ openclaw-chat-session-rail {
 /* Openers stack against the composer they feed, so the eye travels chips ->
    input without crossing the thread. Left-aligned: they are actions, not
    content, and centring them would read as a second empty state. */
-.chat-session-rail__starters {
-  display: flex;
-  flex: 0 0 auto;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 0 14px 10px;
-}
-
-.chat-session-rail__starter {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 5px 10px;
-  color: var(--text);
-}
-
-/* Icons inline fill, stroke, and stroke-width on the SVG. */
-.chat-session-rail__starter svg {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 auto;
-  color: var(--muted);
-}
-
-.chat-session-rail__starter:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
-.chat-session-rail__starter:disabled:hover {
-  border-color: var(--border);
-  transform: none;
-}
-
 .chat-session-rail__exchange {
   display: grid;
   grid-template-columns: minmax(0, 1fr);

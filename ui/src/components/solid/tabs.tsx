@@ -42,7 +42,7 @@ export function Tabs(props: TabsProps) {
     () => element,
     () => {
       // Tab updates refresh the actual shadow root after a hosted tablist moves.
-      const [extra] = [props.shadowStyles, props.items, props.active, props.defaultActive] as const;
+      const [extra] = [props.shadowStyles, props.items, props.active] as const;
       return [tabsStyles, ...(extra ?? [])];
     },
   );
@@ -56,7 +56,7 @@ export function Tabs(props: TabsProps) {
       class={["oc-tabs", props.class]}
       role="tablist"
       aria-label={props.ariaLabel}
-      aria-orientation={props.orientation ?? "horizontal"}
+      aria-orientation="horizontal"
     >
       <For each={props.items} keyed={(item) => item.value}>
         {(item) => {

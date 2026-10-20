@@ -100,7 +100,7 @@ export function createHovercard({
       subscribe: selection.subscribe,
     },
   } as unknown as ApplicationContext;
-  if (browser) {
+  if (browser || triggerKind === "markdown") {
     Object.assign(context, {
       agents: {
         state: {
@@ -131,10 +131,13 @@ export function createHovercard({
       agentId: browser ? "research" : selectedId,
       label: browser ? "Synthetic provider session" : `${selectedId} session`,
       kind: "direct",
+      hasAutomation: false,
+      hasActiveRun: false,
       ...(browser ? { lastMessagePreview: "Synthetic latest turn" } : {}),
       ...rowDetails,
     }),
   });
+  provider.lookupSidebarRow = sidebar.findSidebarHovercardRowByKey;
   sidebar.hidden = browser; // A registered real sidebar must not render in the browser fixture.
   const row = Object.assign(document.createElement("div"), { className: "sidebar-recent-session" });
   row.dataset.sessionKey = sessionKey;

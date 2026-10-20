@@ -47,7 +47,8 @@ const rows: Array<GatewaySessionRow & ControlUiSessionFixture> = [
     kind: "direct",
     updatedAt: 98,
     status: "failed",
-    lastRunError: "Geometry mismatch",
+    lastRunError:
+      "Preflight compaction required but failed: agent tool caller authority is no longer active",
   },
 ];
 const sessions: SessionsListResult = {
@@ -153,17 +154,72 @@ suite.define(() => {
               .getAttribute("src"),
           ).toBe(imageAvatar);
 
-          const restingPadding = await row.evaluate((el) => getComputedStyle(el).paddingRight);
-          expect(restingPadding).toBe(touch ? "32px" : "0px");
+          // Roster status sits inline at the row end, centered on the row, never on
+          // its own line beneath the preview.
+          const headerLocator = main.locator(".sidebar-agent-roster__header");
+          const attention = main.locator(
+            '.sidebar-agent-roster__signals [data-session-attention="error"]',
+          );
+          await page.mouse.move(640, 880);
+          const restingHeader = (await headerLocator.boundingBox())!;
+          const restingIcon = (await attention.boundingBox())!;
+          const copy = (await main.locator(".sidebar-agent-roster__copy").boundingBox())!;
+          expect(restingHeader.height).toBe(44);
+          expect(
+            Math.abs(
+              restingIcon.y + restingIcon.height / 2 - (restingHeader.y + restingHeader.height / 2),
+            ),
+          ).toBeLessThanOrEqual(1);
+          expect(restingIcon.x).toBeGreaterThanOrEqual(copy.x + copy.width);
+          expect(restingIcon.x + restingIcon.width).toBeLessThanOrEqual(
+            restingHeader.x + restingHeader.width,
+          );
+          await captureSidebarUiProof(
+            suite,
+            page,
+            `attention-inline-${mode}-${width}-${touch}.png`,
+          );
+
           if (!touch) {
-            await main.locator(".sidebar-agent-roster__header").hover();
-            expect(await row.evaluate((el) => getComputedStyle(el).paddingRight)).toBe("32px");
+            // Sidebar attention tooltips open inline to the right of the icon.
+            await attention.hover();
+            const tooltip = main.locator(".tooltip-surface[popover]:popover-open");
+            await expect
+              .poll(() => tooltip.textContent())
+              .toContain("caller authority is no longer active");
+            await captureSidebarUiProof(suite, page, `attention-tooltip-${mode}-${width}.png`);
+            const icon = (await attention.boundingBox())!;
+            const surface = (await tooltip.boundingBox())!;
+            expect(surface.x).toBeGreaterThanOrEqual(icon.x + icon.width);
+            expect(surface.y).toBeLessThan(icon.y + icon.height / 2);
+            expect(surface.y + surface.height).toBeGreaterThan(icon.y + icon.height / 2);
+            await page.mouse.move(640, 880);
+            await tooltip.waitFor({ state: "hidden" });
           }
-          const header = await main.locator(".sidebar-agent-roster__header").boundingBox();
-          const actions = await main.locator(".sidebar-agent-roster__actions").boundingBox();
-          expect(header).not.toBeNull();
-          expect(actions).not.toBeNull();
-          expect(actions!.x + actions!.width).toBeLessThanOrEqual(header!.x + header!.width);
+
+          // Rows without status reserve the revealed actions inside the link; rows
+          // with status step the status left of the actions instead.
+          const plainRow = sidebar.locator(
+            '[data-agent-group="research"] .sidebar-agent-roster__row',
+          );
+          expect(await plainRow.evaluate((el) => getComputedStyle(el).paddingRight)).toBe(
+            touch ? "32px" : "0px",
+          );
+          expect(await row.evaluate((el) => getComputedStyle(el).paddingRight)).toBe("0px");
+          if (!touch) {
+            await plainRow.hover();
+            expect(await plainRow.evaluate((el) => getComputedStyle(el).paddingRight)).toBe("32px");
+            await headerLocator.hover();
+            expect(await row.evaluate((el) => getComputedStyle(el).paddingRight)).toBe("0px");
+          }
+          const header = (await headerLocator.boundingBox())!;
+          const actions = (await main.locator(".sidebar-agent-roster__actions").boundingBox())!;
+          const icon = (await attention.boundingBox())!;
+          expect(actions.x + actions.width).toBeLessThanOrEqual(header.x + header.width);
+          expect(icon.x + icon.width).toBeLessThanOrEqual(actions.x);
+          expect(
+            Math.abs(icon.y + icon.height / 2 - (header.y + header.height / 2)),
+          ).toBeLessThanOrEqual(1);
           await captureSidebarUiProof(suite, page, `agent-only-${mode}-${width}-${touch}.png`);
         },
       );

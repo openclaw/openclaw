@@ -610,7 +610,7 @@ describe("diagnostics-prometheus runtime identity", () => {
         metrics.record({ type: "gateway.rpc", method: `method.${index}`, phase: "received" });
       }
       expect(metrics.render()).toContain(info);
-      expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 53");
+      expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 2153");
       metrics.stop();
       expect(metrics.render()).toBe("");
       identity.processInstanceId = "a6aa1fc7-1f10-4b56-8ae8-4ff8c4dc02ea";

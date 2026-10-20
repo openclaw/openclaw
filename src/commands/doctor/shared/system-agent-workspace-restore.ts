@@ -6,7 +6,8 @@ import {
   GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
   fileDiffersFromTemplate,
 } from "../../../agents/workspace.js";
-import { hasErrnoCode } from "../../../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../../../infra/errno.js";
+import { lstatIfExists } from "../../../infra/path-existence.js";
 
 export type WorkspaceRestorePlan = {
   /** Relative paths copied from the root; seeded template files in the target are replaced. */
@@ -20,41 +21,19 @@ export type WorkspaceRestorePlan = {
 const TEMPLATED_FILES: ReadonlySet<string> = new Set(GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES);
 const RESTORED_DIRS = ["memory", "skills"] as const;
 
-async function readIfPresent(file: string): Promise<Buffer | undefined> {
-  try {
-    return await fs.readFile(file);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-async function lstatIfPresent(file: string) {
-  try {
-    return await fs.lstat(file);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
 async function planFile(from: string, to: string, rel: string, plan: WorkspaceRestorePlan) {
   const templated = TEMPLATED_FILES.has(rel);
-  const source = await readIfPresent(path.join(from, rel));
+  const source = await fs.readFile(path.join(from, rel)).catch(ignoreMissingPath);
   if (!source || (templated && !(await fileDiffersFromTemplate(from, rel)))) {
     return;
   }
   const targetPath = path.join(to, rel);
   // A linked file in the target is kept: copying over it would write to the link's destination.
-  if ((await lstatIfPresent(targetPath))?.isSymbolicLink()) {
+  if ((await lstatIfExists(targetPath, "ENOENT"))?.isSymbolicLink()) {
     plan.conflicts.push(rel);
     return;
   }
-  const target = await readIfPresent(targetPath);
+  const target = await fs.readFile(targetPath).catch(ignoreMissingPath);
   if (!target || (templated && !(await fileDiffersFromTemplate(to, rel)))) {
     plan.copies.push(rel);
   } else if (!target.equals(source)) {
@@ -76,7 +55,7 @@ async function linkTarget(dir: string, rel: string): Promise<string | undefined>
 
 async function planLink(from: string, to: string, rel: string, plan: WorkspaceRestorePlan) {
   const source = await linkTarget(from, rel);
-  if ((await lstatIfPresent(path.join(to, rel))) === undefined) {
+  if ((await lstatIfExists(path.join(to, rel), "ENOENT")) === undefined) {
     plan.links.push(rel);
   } else if (source !== (await linkTarget(to, rel))) {
     plan.conflicts.push(rel);
@@ -88,13 +67,11 @@ async function planTree(from: string, to: string, rel: string, plan: WorkspaceRe
   try {
     entries = await fs.readdir(path.join(from, rel), { withFileTypes: true });
   } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return;
-    }
-    throw error;
+    ignoreMissingPath(error);
+    return;
   }
   // A linked or non-directory target is kept whole: descending would write through it.
-  const target = await lstatIfPresent(path.join(to, rel));
+  const target = await lstatIfExists(path.join(to, rel), "ENOENT");
   if (target && !target.isDirectory()) {
     plan.conflicts.push(rel);
     return;

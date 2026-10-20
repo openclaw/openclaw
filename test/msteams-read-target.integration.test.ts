@@ -7,10 +7,11 @@ import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-c
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import type { ChannelThreadingToolContext } from "../src/channels/plugins/types.public.js";
-import { createDefaultDeps } from "../src/cli/deps.js";
-import * as messageCliHelpers from "../src/cli/program/message/helpers.js";
+import {
+  applyResolvedCommandOutputMode,
+  withConsoleLogsRoutedToStderrForJson,
+} from "../src/cli/json-output-mode.js";
 import { registerMessageCommands } from "../src/cli/program/register.message.js";
-import { messageCommand } from "../src/commands/message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
@@ -28,9 +29,14 @@ import {
 } from "../src/infra/agent-run-registry.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../src/plugins/runtime.js";
 import type { PluginRuntime } from "../src/plugins/runtime/types.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
+import { defaultRuntime } from "../src/runtime.js";
 
 const graph = vi.hoisted(() => ({
   endpoint: undefined as { origin: string; signal: AbortSignal } | undefined,
@@ -408,31 +414,55 @@ function expectGraphRequests(requests: GraphRequest[], action: Action, destinati
 
 describe("Teams message CLI", () => {
   async function runCli(args: string[], action: Action | "read", json = true) {
-    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const runtime = { log: vi.fn(), error: vi.fn() };
     const command = new Command().name("openclaw").exitOverride();
-    const helpers = messageCliHelpers.createMessageCliHelpers("msteams");
-    const createHelpers = vi.spyOn(messageCliHelpers, "createMessageCliHelpers").mockReturnValue({
-      ...helpers,
-      runMessageAction: async (name, opts) => {
-        await messageCommand({ ...opts, action: name }, createDefaultDeps(), runtime);
-      },
+    registerMessageCommands(command, {
+      programVersion: "test",
+      messageChannelOptions: "msteams",
+      agentChannelOptions: "last|msteams",
     });
-    try {
-      registerMessageCommands(command, {
-        programVersion: "test",
-        messageChannelOptions: "msteams",
-        agentChannelOptions: "last|msteams",
-      });
-    } finally {
-      createHelpers.mockRestore();
+    const registry = getActivePluginRegistry();
+    if (!registry) {
+      throw new Error("expected the Teams fixture registry");
     }
-
-    await command.parseAsync(
-      ["message", ...args, "--channel", "msteams", ...(json ? ["--json"] : [])],
-      {
-        from: "user",
-      },
-    );
+    const [configGuard, channelPluginIds, pluginLoader, oneShotExit] = await Promise.all([
+      import("../src/cli/program/config-guard.js"),
+      import("../src/plugins/channel-plugin-ids.js"),
+      import("../src/plugins/loader.js"),
+      import("../src/cli/one-shot-exit.js"),
+    ]);
+    // The harness owns config and registry admission; production owns parsed action dispatch.
+    const spies = [
+      vi.spyOn(configGuard, "ensureConfigReady").mockResolvedValue(undefined),
+      vi
+        .spyOn(channelPluginIds, "resolveDiscoverableScopedChannelPluginIds")
+        .mockImplementation(({ channelIds }) => [...channelIds]),
+      vi.spyOn(pluginLoader, "loadPluginRegistryHandle").mockReturnValue(registry),
+      vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log),
+      vi
+        .spyOn(defaultRuntime, "writeJson")
+        .mockImplementation((value) => runtime.log(JSON.stringify(value))),
+      vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error),
+      vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+        throw new Error(`unexpected CLI exit(${code})`);
+      }),
+      vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true),
+    ];
+    try {
+      const argv = ["message", ...args, "--channel", "msteams", ...(json ? ["--json"] : [])];
+      await withConsoleLogsRoutedToStderrForJson(
+        ["node", "openclaw", ...argv],
+        async () => {
+          applyResolvedCommandOutputMode(json);
+          await command.parseAsync(argv, { from: "user" });
+        },
+        { restoreChanges: true },
+      );
+    } finally {
+      for (const spy of spies) {
+        spy.mockRestore();
+      }
+    }
 
     expect(runtime.error).not.toHaveBeenCalled();
     if (!json) {

@@ -21,6 +21,7 @@ import {
   type OpenClawConfig,
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.test-support.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 
 vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
@@ -28,7 +29,7 @@ vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
 }));
 
 async function driftFixture() {
-  let config: OpenClawConfig = {
+  const config: OpenClawConfig = {
     agents: { defaults: { model: "openai/gpt-5.5" } },
     models: {
       providers: {
@@ -41,17 +42,18 @@ async function driftFixture() {
       },
     },
   };
+  const configFixture = await createInferenceConfigFixture(config);
+  const snapshot = configFixture.snapshot;
+  mocks.readConfigFileSnapshot.mockImplementation(configFixture.read);
   return {
-    verifiedInference: await createAmbientVerifiedBinding(config),
-    readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)),
-    drift: () => {
-      config = { agents: { defaults: { model: "anthropic/claude-opus-4-8" } } };
+    verifiedInference: await createAmbientVerifiedBinding(
+      snapshot.runtimeConfig ?? snapshot.config,
+      snapshot,
+    ),
+    drift: async () => {
+      await configFixture.write({ agents: { defaults: { model: "anthropic/claude-opus-4-8" } } });
     },
   };
-}
-
-function inferenceDeps(config: OpenClawConfig) {
-  return { readConfigFileSnapshot: async () => configSnapshot(config) };
 }
 
 describe("SystemAgentChatEngine facade", () => {
@@ -64,7 +66,6 @@ describe("SystemAgentChatEngine facade", () => {
       },
     };
     const inference = await createSystemAgentVerifiedInferenceTestFixture(config);
-    const deps = inferenceDeps(config);
     expect(inference.binding.execution.agentId).toBe("alternate");
     const inheritedGeneration = {} as PreparedModelRuntimePluginGeneration;
     const observedGenerations: Array<PreparedModelRuntimePluginGeneration | undefined> = [];
@@ -77,14 +78,13 @@ describe("SystemAgentChatEngine facade", () => {
       return null;
     });
     vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
-    mocks.readConfigFileSnapshot.mockImplementation(deps.readConfigFileSnapshot);
+    mocks.readConfigFileSnapshot.mockImplementation(async () => configSnapshot(config));
     const engine = new SystemAgentChatEngine({
       requesterAgentId: requester,
       verifiedInference: inference.binding,
       planGreeting,
       runAgentTurn: runSystemAgentTurn,
       deps: {
-        ...deps,
         loadOverview: fakeOverviewLoader(),
       },
     });
@@ -108,7 +108,6 @@ describe("SystemAgentChatEngine facade", () => {
       agents: { defaults: { model: "openai/gpt-5.6-luna" } },
     };
     const inference = await createSystemAgentVerifiedInferenceTestFixture(config);
-    const deps = inferenceDeps(config);
     const planner = vi
       .spyOn(await import("./assistant.js"), "planSystemAgentCommand")
       .mockResolvedValue({ reply: "A second inference ran." });
@@ -126,7 +125,7 @@ describe("SystemAgentChatEngine facade", () => {
       .mockResolvedValue({ meta: { durationMs: 1, finalAssistantVisibleText: "Ready to retry." } });
     let failedSession: SystemAgentSession | undefined;
     vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
-    mocks.readConfigFileSnapshot.mockImplementation(deps.readConfigFileSnapshot);
+    mocks.readConfigFileSnapshot.mockImplementation(async () => configSnapshot(config));
     const engine = new SystemAgentChatEngine({
       verifiedInference: inference.binding,
       runAgentTurn: (params) => {
@@ -137,7 +136,6 @@ describe("SystemAgentChatEngine facade", () => {
         return runSystemAgentTurn(params);
       },
       deps: {
-        ...deps,
         loadOverview: fakeOverviewLoader(),
       },
     });
@@ -163,16 +161,13 @@ describe("SystemAgentChatEngine facade", () => {
   });
 
   it("rejects a seeded approval when its binding changes during classification", async () => {
-    const { verifiedInference, readConfigFileSnapshot, drift } = await driftFixture();
+    const { verifiedInference, drift } = await driftFixture();
     const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
     const engine = new SystemAgentChatEngine({
       verifiedInference,
       classifyApproval: async () => {
-        drift();
+        await drift();
         return "approve";
-      },
-      deps: {
-        readConfigFileSnapshot,
       },
     });
     engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
@@ -200,16 +195,15 @@ describe("SystemAgentChatEngine facade", () => {
   });
 
   it("does not expose an agent reply after its inference owner drifts", async () => {
-    const { verifiedInference, readConfigFileSnapshot, drift } = await driftFixture();
+    const { verifiedInference, drift } = await driftFixture();
     const runAgentTurn = vi.fn(async () => {
-      drift();
+      await drift();
       return { text: "stale reply" };
     });
     const engine = new SystemAgentChatEngine({
       verifiedInference,
       runAgentTurn,
       deps: {
-        readConfigFileSnapshot,
         loadOverview: fakeOverviewLoader(),
       },
     });

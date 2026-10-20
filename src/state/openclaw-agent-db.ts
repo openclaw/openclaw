@@ -14,7 +14,10 @@ import {
   sqlPublicationAnchor,
   type EngineConnection,
 } from "../infra/sql-connection.js";
-import { readSqliteDatabaseIntegrityVerification } from "../infra/sqlite-database-admission.js";
+import {
+  readSqliteDatabaseIntegrityVerification,
+  readSqliteDatabaseCleanCloseRefusal,
+} from "../infra/sqlite-database-admission.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
   isTerminalSqliteIntegrityError,
@@ -107,7 +110,6 @@ import {
 import {
   agentDatabaseIntegrityBeforeMutationSteps,
   ensureOpenClawAgentSchema,
-  resolveAgentDatabaseIntegrityGateReason,
 } from "./openclaw-agent-db-schema.js";
 import { revalidateAgentDatabaseTerminalOpen } from "./openclaw-agent-db-terminal.js";
 import {
@@ -116,6 +118,7 @@ import {
   getOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidation,
   publishOpenClawAgentDatabaseSchema,
+  hasRevokedOpenClawAgentDatabaseValidation,
   setOpenClawAgentDatabaseValidation,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
@@ -412,10 +415,13 @@ function* openOpenClawAgentDatabaseSteps(
           );
         }
         // The host grant can revoke transferred proof; decide reuse after it returns.
-        diagnostics.integrityGateReason = resolveAgentDatabaseIntegrityGateReason(
-          validationDatabase,
-          { validation, integrityRevoked, reuseIntegrity },
-        );
+        diagnostics.integrityGateReason = integrityRevoked
+          ? "stale-lease-full"
+          : hasRevokedOpenClawAgentDatabaseValidation(pathname, validation)
+            ? "revoked"
+            : reuseIntegrity
+              ? (readSqliteDatabaseCleanCloseRefusal(db) ?? "no-proof")
+              : "lease-class";
         diagnostics.because ??= integrityRevoked
           ? agentDatabaseAdmissionProvenanceRefusal(preparedLease?.provenance, pathname)
           : undefined;

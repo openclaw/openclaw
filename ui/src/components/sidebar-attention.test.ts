@@ -44,12 +44,6 @@ function cronResponse(id?: string, nextRunAtMs?: number) {
 
 const mentionItem = (id: string) => ({ ...inboxMention(id), sessionKey: "agent:writer:review" });
 
-type SidebarAttentionElement = HTMLElement & {
-  context: ApplicationContext;
-  dismissPanel: () => boolean;
-  onNavigate?: ApplicationContext["navigate"];
-};
-
 function authStatus(ts: number, status: "missing" | "ok" = "missing"): ModelAuthStatusResult {
   return { ts, providers: [{ provider: "openai", displayName: "OpenAI", status, profiles: [] }] };
 }
@@ -213,7 +207,7 @@ describe("sidebar attention refresh ownership", () => {
       ...sources,
       sidebarAttention: store,
     } as unknown as ApplicationContext);
-    const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
+    const element = document.createElement("openclaw-sidebar-attention");
     provider.append(element);
     document.body.append(provider);
 
@@ -419,6 +413,24 @@ describe("sidebar attention refresh ownership", () => {
     element.onNavigate = onNavigate;
     issues(element, "button")!.click();
     await waitForFast(() => expect(element.querySelector(".sidebar-mention-row a")).not.toBeNull());
+    const connected = harness.gateway.snapshot;
+    harness.update({ phase: "reconnecting", hello: null, selfUser: null });
+    flush();
+    expect(element.querySelectorAll(".sidebar-mention-row")).toHaveLength(2);
+    expect(
+      element.querySelector<HTMLButtonElement>(
+        ".sidebar-mention-row .sidebar-issues-panel__dismiss",
+      )?.disabled,
+    ).toBe(true);
+    expect(
+      element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")?.disabled,
+    ).toBe(true);
+    harness.update(connected);
+    await waitForFast(() =>
+      expect(
+        element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss-shown")?.disabled,
+      ).toBe(false),
+    );
     element.querySelector<HTMLAnchorElement>(".sidebar-mention-row a")!.click();
     expect(onNavigate).toHaveBeenCalledExactlyOnceWith(
       "chat",

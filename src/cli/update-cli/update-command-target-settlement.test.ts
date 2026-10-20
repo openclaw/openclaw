@@ -26,7 +26,8 @@ vi.mock("../../infra/update-system-package-ownership.js", async (importOriginal)
     assertEntryUnowned: vi.fn(),
   }),
 }));
-vi.mock("./update-command-terminal.js", () => ({
+vi.mock("./update-command-admission-report.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-admission-report.js")>()),
   reportPreMutationUpdateResult: boundary.report,
 }));
 let state: OpenClawTestState;

@@ -4,8 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Client } from "./client.js";
 import { Command, type CommandOptions, type DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
-import { parseCustomId } from "./components.base.js";
-import { Button, StringSelectMenu } from "./components.message.js";
+import { parseCustomId, type BaseMessageInteractiveComponent } from "./components.base.js";
 import { DiscordError } from "./rest.js";
 import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
 
@@ -54,19 +53,19 @@ describe("ComponentRegistry", () => {
   });
 
   it("resolves wildcard parser entries by component type", () => {
-    const registry = new ComponentRegistry<Button | StringSelectMenu>();
-    class WildcardButton extends Button {
-      label = "button";
-      customId = "__button_wildcard__";
-      override customIdParser = wildcardParser(this.customId);
-    }
-    class WildcardSelect extends StringSelectMenu {
-      customId = "__select_wildcard__";
-      options = [];
-      override customIdParser = wildcardParser(this.customId);
-    }
-    const button = new WildcardButton();
-    const select = new WildcardSelect();
+    const registry = new ComponentRegistry<BaseMessageInteractiveComponent>();
+    const button = {
+      type: ComponentType.Button,
+      customId: "__button_wildcard__",
+      customIdParser: wildcardParser("__button_wildcard__"),
+      run() {},
+    };
+    const select = {
+      type: ComponentType.StringSelect,
+      customId: "__select_wildcard__",
+      customIdParser: wildcardParser("__select_wildcard__"),
+      run() {},
+    };
 
     registry.register(button);
     registry.register(select);
@@ -257,58 +256,46 @@ describe("Client gateway event queue", () => {
     return new Client({ clientId: "app1", token: "token", eventQueue }, { listeners });
   }
 
-  it("holds a timed-out listener slot until its underlying promise resolves", async () => {
-    vi.useFakeTimers();
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  it("holds a listener slot until its underlying promise resolves", async () => {
+    const firstStarted = createDeferred<void>();
     const firstSettlement = createDeferred<void>();
     const started: string[] = [];
     const first = listener(async () => {
       started.push("first");
+      firstStarted.resolve();
       await firstSettlement.promise;
     });
     const second = listener(async () => {
       started.push("second");
     });
-    const client = createQueuedClient([first, second], { listenerTimeout: 10, maxConcurrency: 1 });
+    const client = createQueuedClient([first, second], { maxConcurrency: 1 });
 
     const dispatch = client.dispatchGatewayEvent("READY", {});
-    await vi.advanceTimersByTimeAsync(10);
+    await firstStarted.promise;
 
     expect(started).toEqual(["first"]);
 
     firstSettlement.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-
+    await dispatch;
     expect(started).toEqual(["first", "second"]);
     expect(first.handle).toHaveBeenCalledTimes(1);
     expect(second.handle).toHaveBeenCalledTimes(1);
-    await expect(dispatch).resolves.toBeUndefined();
-    expect(errorSpy).toHaveBeenCalledTimes(1);
   });
 
-  it("logs a listener failure that arrives after its dispatch timeout", async () => {
-    vi.useFakeTimers();
+  it("logs a listener failure when its underlying promise rejects", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const settlement = createDeferred<void>();
-    const lateError = new Error("late listener failure");
+    const failure = new Error("listener failure");
     const waiting = listener(async () => await settlement.promise);
-    const client = createQueuedClient([waiting], { listenerTimeout: 10, maxConcurrency: 1 });
+    const client = createQueuedClient([waiting], { maxConcurrency: 1 });
 
     const dispatch = client.dispatchGatewayEvent("READY", {});
-    await vi.advanceTimersByTimeAsync(10);
+    settlement.reject(failure);
     await expect(dispatch).resolves.toBeUndefined();
 
-    settlement.reject(lateError);
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(errorSpy).toHaveBeenNthCalledWith(
-      1,
-      "[EventQueue] Listener Object timed out after 10ms for event READY",
-    );
-    expect(errorSpy).toHaveBeenNthCalledWith(
-      2,
-      "[EventQueue] Listener Object failed after timeout for event READY:",
-      lateError,
+    expect(errorSpy).toHaveBeenCalledExactlyOnceWith(
+      "[EventQueue] Listener Object failed for event READY:",
+      failure,
     );
   });
 
@@ -323,7 +310,6 @@ describe("Client gateway event queue", () => {
     const client = createQueuedClient([waiting], {
       maxConcurrency: 1,
       maxQueueSize: 1,
-      listenerTimeout: 1_000,
     });
 
     const first = client.dispatchGatewayEvent("READY", {});

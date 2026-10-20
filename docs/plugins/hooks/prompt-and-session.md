@@ -79,6 +79,18 @@ For multiple registrations, the first defined provider/model/fallback override a
 restrictions intersect. Recursive `before_prompt_build` contributions on the
 same runner are unsupported; handlers must avoid dispatching themselves.
 
+Each plugin hook's `prependSystemContext` and `appendSystemContext` is separately
+limited to 25% of the resolved model context window, using the shared character
+token estimate (including CJK weighting). When a runtime has no resolved window,
+the default context window is used. Oversized blocks retain their prefix and end
+with `[Plugin system context truncated to fit the model budget.]`; smaller blocks
+are unchanged. The host warns once per plugin and session in its bounded
+process-local warning cache, naming the plugin and original/kept character counts.
+This is a per-contribution limit, not a total prompt budget: multiple plugins,
+workspace instructions, and tool definitions still share the model's window.
+Keep system context small and stable; put turn-specific material in `prependContext`
+or `appendContext` instead.
+
 Message-consuming prompt hooks receive a detached model-context snapshot. Mutating nested messages does not change the caller's history, including when a handler retains its input after returning. Registrations within one dispatch share that snapshot in priority order; prepare, ordinary prompt-build, authorized enrichment, and subsequent prompt rebuilds receive separate snapshots. Storage-only native prompt text and tool-result details are excluded from these snapshots.
 
 ### Restrict a run to local models

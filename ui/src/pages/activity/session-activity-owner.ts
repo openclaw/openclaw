@@ -61,6 +61,7 @@ export function createSessionActivity(notify: () => void) {
   let incomplete = false;
   let requestState: "idle" | "loading" | "retrying" = "idle";
   let currentClient: GatewayBrowserClient | null = null;
+  let connected = false;
   let currentQueryKey: string | undefined;
   let pendingRequest:
     | {
@@ -113,7 +114,7 @@ export function createSessionActivity(notify: () => void) {
     };
   }
 
-  function resetQuery(): void {
+  function suspendRequests(): void {
     clearTimeout(bucketRollover);
     bucketRollover = undefined;
     eventRefresh.reset();
@@ -121,14 +122,19 @@ export function createSessionActivity(notify: () => void) {
     pendingRequest = undefined;
     resetSummaries();
     requestState = "idle";
+    connected = false;
+    pendingChanges.length = 0;
+    changesOverflowed = false;
+  }
+
+  function resetQuery(): void {
+    suspendRequests();
     incomplete = false;
     currentError = undefined;
     currentClient = null;
     currentQueryKey = undefined;
     currentResult = undefined;
     currentFilters = null;
-    pendingChanges.length = 0;
-    changesOverflowed = false;
     historyRows.reset();
     normalizedLocation = "";
   }
@@ -396,9 +402,10 @@ export function createSessionActivity(notify: () => void) {
     filters: ActivityQuery | null,
     reason: "query" | "refresh" | "retry" = "query",
     canEnsureSummaries = summariesAllowed,
+    available = true,
   ): Promise<void> {
-    summariesAllowed = canEnsureSummaries;
-    if (!canEnsureSummaries) {
+    summariesAllowed = available && canEnsureSummaries;
+    if (!summariesAllowed) {
       resetSummaries();
     }
     if (!client || !filters) {
@@ -411,11 +418,6 @@ export function createSessionActivity(notify: () => void) {
       filters === "current" ? undefined : activityPulseBoundaries(filters.time, now.getTime());
     clearTimeout(bucketRollover);
     bucketRollover = undefined;
-    if (boundaries && typeof setTimeout === "function") {
-      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
-      const rollover = Math.min(boundaries.at(-1)!, midnight);
-      bucketRollover = setTimeout(() => eventRefresh.schedule(), rollover - now.getTime() + 1_000);
-    }
     const request = {
       source: "activity",
       excludeDock: true,
@@ -445,13 +447,34 @@ export function createSessionActivity(notify: () => void) {
     } as const;
     const queryKey = JSON.stringify(request);
     const sameQuery = currentClient === client && currentQueryKey === queryKey;
+    const sameFilters =
+      currentClient === client && JSON.stringify(currentFilters) === JSON.stringify(filters);
+    if (!available) {
+      if (!sameFilters) {
+        resetQuery();
+        currentClient = client;
+        currentQueryKey = queryKey;
+        currentFilters = filters;
+      } else {
+        suspendRequests();
+      }
+      notify();
+      return Promise.resolve();
+    }
+    const wasConnected = connected;
+    connected = true;
+    if (boundaries && typeof setTimeout === "function") {
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+      const rollover = Math.min(boundaries.at(-1)!, midnight);
+      bucketRollover = setTimeout(() => eventRefresh.schedule(), rollover - now.getTime() + 1_000);
+    }
     if (sameQuery && pendingRequest && reason !== "retry") {
       if (reason === "refresh") {
         eventRefresh.schedule();
       }
       return pendingRequest.completion.promise;
     }
-    if (reason === "query" && sameQuery) {
+    if (reason === "query" && sameQuery && wasConnected) {
       void ensureSummaries();
       return Promise.resolve();
     }
@@ -469,7 +492,9 @@ export function createSessionActivity(notify: () => void) {
     if (!sameQuery) {
       historyRows.reset();
       resetSummaries();
-      currentResult = undefined;
+      if (!sameFilters) {
+        currentResult = undefined;
+      }
       incomplete = false;
     }
     const readRevision = ++historyRevision;
@@ -503,7 +528,6 @@ export function createSessionActivity(notify: () => void) {
       .catch((error: unknown) => {
         if (pendingRequest === pending && !pending.controller.signal.aborted) {
           if (filters === "current") {
-            currentResult = undefined;
             incomplete = false;
           }
           currentError = error instanceof Error ? error.message : String(error);
@@ -529,7 +553,7 @@ export function createSessionActivity(notify: () => void) {
       ]
     : [];
   function loading() {
-    return requestState !== "idle" || incomplete;
+    return connected && (requestState !== "idle" || incomplete);
   }
   return {
     get result() {

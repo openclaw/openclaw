@@ -26,7 +26,11 @@ import {
   looksLikeExplicitPathToken,
   pathLooksMutableForShellPayloadSync,
 } from "./system-run-mutable-file-policy.js";
-import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
+import {
+  normalizeNonEmptyString,
+  normalizeStringArray,
+  readNonBlankString,
+} from "./system-run-normalize.js";
 import { hasPosixShellStartupEnvironment } from "./system-run-shell-file-operand.js";
 import { analyzeWindowsShellCommand } from "./windows-shell-command.js";
 
@@ -76,7 +80,7 @@ export function buildSystemRunApprovalBinding(params: {
   return {
     binding: {
       argv: normalizeStringArray(params.argv),
-      cwd: normalizeNonEmptyString(params.cwd),
+      cwd: readNonBlankString(params.cwd) ?? null,
       agentId: normalizeNonEmptyString(params.agentId),
       sessionKey: normalizeNonEmptyString(params.sessionKey),
       envHash: envBinding.envHash,
@@ -228,7 +232,7 @@ export type SystemRunMutableFileBinding = {
 
 type SystemRunMutableFileBindingCommand =
   | { kind: "argv"; argv: string[]; shellCommand?: string | null }
-  | { kind: "segments"; segments: ExecCommandSegment[] }
+  | { kind: "segments"; segments: ExecCommandSegment[]; shellCommand?: boolean }
   | { kind: "shell"; text: string };
 
 type SystemRunMutableFileBindingResult =
@@ -283,6 +287,7 @@ function prepareMutableFileBindingsForSegments(params: {
   segments: ExecCommandSegment[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  shellCommand?: boolean;
 }): SystemRunMutableFileBindingResult {
   if (params.segments.length === 0) {
     return {
@@ -341,7 +346,10 @@ function prepareMutableFileBindingsForSegments(params: {
   if (!ordinary.ok) {
     return ordinary;
   }
-  const executables = prepareSystemRunExecutableIdentityBinding({ ...params, shellCommand: true });
+  const executables = prepareSystemRunExecutableIdentityBinding({
+    ...params,
+    shellCommand: params.shellCommand ?? true,
+  });
   if (!executables.ok) {
     return executables;
   }
@@ -469,6 +477,7 @@ export async function prepareSystemRunMutableFileBinding(params: {
       segments: params.command.segments,
       cwd: params.cwd,
       env: params.env,
+      shellCommand: params.command.shellCommand,
     });
   }
 
@@ -534,6 +543,14 @@ export async function revalidateSystemRunMutableFileBinding(params: {
   binding: SystemRunMutableFileBinding;
   cwd?: string;
 }): Promise<{ ok: true } | { ok: false; message: string }> {
+  return revalidateSystemRunMutableFileBindingSync(params);
+}
+
+/** Commit guards use the same file checks without yielding their current authority. */
+export function revalidateSystemRunMutableFileBindingSync(params: {
+  binding: SystemRunMutableFileBinding;
+  cwd?: string;
+}): { ok: true } | { ok: false; message: string } {
   // Carry the prepared argv forward instead of reparsing after the approval;
   // parser drift must not change which executable operands were authorized.
   const current = prepareMutableFileBindingsForArgv({

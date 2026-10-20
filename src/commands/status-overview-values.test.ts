@@ -29,7 +29,7 @@ describe("status-overview-values", () => {
       ],
     };
 
-    expect(buildStatusAllAgentsValue({ agentStatus })).toBe(
+    expect(buildStatusAllAgentsValue(agentStatus)).toBe(
       "3 total · 2 bootstrapping · 1 active · 3 sessions",
     );
   });

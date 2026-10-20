@@ -101,9 +101,7 @@ it.each([
     const storage = storageFor();
     await seedCursor(storage.rootDir, "original-cursor", originallyClean);
     const cfg = { channels: { matrix: { ...clientAuth, encryption } } };
-    await withResolvedRuntimeMatrixClient({ cfg, readiness: "none" }, async (client) => {
-      expect(client.hasPersistedSyncState()).toBe(originallyClean);
-    });
+    await withResolvedRuntimeMatrixClient({ cfg, readiness: "none" }, async () => undefined);
     const reloaded = await SqliteBackedMatrixSyncStore.create(storage.rootDir);
     expect(await reloaded.getSavedSyncToken()).toBe("original-cursor");
     expect(reloaded.hasSavedSyncFromCleanShutdown()).toBe(expectedClean);
@@ -141,7 +139,12 @@ it.each(["fresh", "rotated", "sqlite-crypto"])(
         ...clientAuth,
         accessToken: rootKind === "rotated" ? "rotated-token" : defaultStorageAuth.accessToken,
       });
-      expect(client.hasPersistedSyncState()).toBe(rootKind !== "fresh");
+      const restoredCursors: string[] = [];
+      const disposeIngress = await client.bindSyncIngress(async (sync) => {
+        restoredCursors.push(sync.next_batch);
+      });
+      disposeIngress();
+      expect(restoredCursors).toEqual(rootKind === "fresh" ? [] : ["saved-cursor"]);
       expect(await readState(openMatrixStorageMetaStoreOptions, seeded.rootDir)).toMatchObject({
         homeserver: defaultStorageAuth.homeserver,
         userId: defaultStorageAuth.userId,

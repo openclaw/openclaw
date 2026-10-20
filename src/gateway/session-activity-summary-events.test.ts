@@ -76,6 +76,21 @@ function summaryFixture() {
   return { target, other, initial, projection, preparation, entered, ready, broadcast, publish };
 }
 
+it("publishes the latest recap once per window without extending a busy session's deadline", async () => {
+  const f = summaryFixture();
+  f.ready.resolve();
+  for (let index = 0; index < 20; index++) {
+    f.projection.setEntry("first", { ...f.initial, label: `recap-${index}` });
+    void f.publish();
+    await vi.advanceTimersByTimeAsync(75);
+    expect(f.broadcast).toHaveBeenCalledTimes(Math.floor((index + 1) / 10));
+  }
+  expect(f.broadcast.mock.calls.map(([, payload]) => payload)).toMatchObject([
+    { reason: "activity-summary", session: { label: "recap-9" } },
+    { reason: "activity-summary", session: { label: "recap-19" } },
+  ]);
+});
+
 it("joins deferred recaps, coalesces the latest row, and admits changes made during delivery", async () => {
   const f = summaryFixture();
   const first = f.publish();
@@ -83,6 +98,7 @@ it("joins deferred recaps, coalesces the latest row, and admits changes made dur
   const drain = drainSessionEventPublications(f.projection).then(() => {
     drained = true;
   });
+  await vi.advanceTimersByTimeAsync(1_000);
   await f.entered.promise;
   await Promise.resolve();
   expect(drained).toBe(false);
@@ -112,6 +128,7 @@ it.each([
 ])("keeps replacement recap ownership for $sessionId/$lifecycleRevision", async (replacement) => {
   const f = summaryFixture();
   const first = f.publish();
+  await vi.advanceTimersByTimeAsync(1_000);
   await f.entered.promise;
   f.projection.setEntry("first", { ...f.initial, ...replacement, label: "replacement" });
   const second = f.publish();
@@ -128,6 +145,7 @@ it.each([
 it("keeps identically named rows in different physical stores independent", async () => {
   const f = summaryFixture();
   const first = f.publish();
+  await vi.advanceTimersByTimeAsync(1_000);
   await f.entered.promise;
   const second = f.publish(f.other);
   f.ready.resolve();
@@ -156,6 +174,7 @@ it.each(["preparation", "publication"])(
       });
     }
     const first = f.publish();
+    await vi.advanceTimersByTimeAsync(1_000);
     await f.entered.promise;
     const second = f.publish();
     const settled = Promise.allSettled([first, second]);

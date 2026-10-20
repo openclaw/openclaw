@@ -1,4 +1,4 @@
-import type { JSX } from "@solidjs/web";
+import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, For, onCleanup, onSettled, Show, untrack } from "solid-js";
 import type {
   SessionDiffFile,
@@ -23,7 +23,6 @@ import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { createDiffPresentation, type DiffPresentation } from "./chat-diff-render.solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import {
@@ -69,17 +68,14 @@ function diffStat(file: Pick<SessionDiffFile, "additions" | "deletions">) {
   return { added: file.additions - modified, removed: file.deletions - modified, modified };
 }
 function totalDiffStat(files: readonly SessionDiffFile[]) {
-  return files.reduce(
-    (total, file) => {
-      const stat = diffStat(file);
-      return {
-        added: total.added + stat.added,
-        removed: total.removed + stat.removed,
-        modified: total.modified + stat.modified,
-      };
-    },
-    { added: 0, removed: 0, modified: 0 },
-  );
+  const total = { added: 0, removed: 0, modified: 0 };
+  for (const file of files) {
+    const stat = diffStat(file);
+    total.added += stat.added;
+    total.removed += stat.removed;
+    total.modified += stat.modified;
+  }
+  return total;
 }
 function splitPath(filePath: string) {
   const normalized = filePath.replaceAll("\\", "/");
@@ -92,7 +88,7 @@ function shellArgument(value: string) {
   return /^[A-Za-z0-9_./:@+-]+$/.test(value) ? value : `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
-function SessionDiffContent(props: SessionDiffProps) {
+export function SessionDiffPanel(props: SessionDiffProps) {
   const preferences = loadSessionDiffPreferences();
   const [menu, setMenu] = createSignal<SessionDiffMenuData | null>(null);
   const [scope, setScope] = createSignal<SessionDiffScope>({ scope: "all" });
@@ -412,7 +408,7 @@ function SessionDiffContent(props: SessionDiffProps) {
     }
     setGapRevision((revision) => revision + 1);
   }
-  function Gap(gapProps: { view: FileView; line: DiffLine }): JSX.Element {
+  function Gap(gapProps: { view: FileView; line: DiffLine }): SolidJSX.Element {
     const gap = () => gapProps.line.gap;
     const chunkCount = () => (gap()!.count <= 25 ? gap()!.count : 20);
     return (
@@ -653,55 +649,45 @@ function SessionDiffContent(props: SessionDiffProps) {
     );
   }
   return (
-    <div
-      class={["session-diff", { "session-diff--wrap": wrap() }]}
-      aria-busy={loading() ? "true" : "false"}
-    >
-      <Show when={request()} keyed>
-        {(current) => <RequestLifetime request={current} />}
-      </Show>
-      <Show
-        when={failure()}
-        fallback={
-          <Show
-            when={loading() && (value()?.owner !== props.owner || value()?.scope !== scope())}
-            fallback={<Show when={value()}>{(current) => <ResultBody value={current()} />}</Show>}
-          >
-            <PanelLoadingSkeleton variant="review" label={t("chat.sessionDiff.loading")} />
-          </Show>
-        }
+    <openclaw-session-diff>
+      <div
+        class={["session-diff", { "session-diff--wrap": wrap() }]}
+        aria-busy={loading() ? "true" : "false"}
       >
-        {(failed) => <div class="callout danger">{formatUiError(failed().error)}</div>}
-      </Show>
-      <Show when={menu()} keyed>
-        {(current) => (
-          <SessionDiffMenu
-            menu={current}
-            onAction={handleMenuAction}
-            onClose={() => setMenu(null)}
-          />
-        )}
-      </Show>
-    </div>
+        <Show when={request()} keyed>
+          {(current) => <RequestLifetime request={current} />}
+        </Show>
+        <Show
+          when={failure()}
+          fallback={
+            <Show
+              when={loading() && (value()?.owner !== props.owner || value()?.scope !== scope())}
+              fallback={<Show when={value()}>{(current) => <ResultBody value={current()} />}</Show>}
+            >
+              <PanelLoadingSkeleton variant="review" label={t("chat.sessionDiff.loading")} />
+            </Show>
+          }
+        >
+          {(failed) => <div class="callout danger">{formatUiError(failed().error)}</div>}
+        </Show>
+        <Show when={menu()} keyed>
+          {(current) => (
+            <SessionDiffMenu
+              menu={current}
+              onAction={handleMenuAction}
+              onClose={() => setMenu(null)}
+            />
+          )}
+        </Show>
+      </div>
+    </openclaw-session-diff>
   );
 }
 
-export const SessionDiffPanel = defineSolidBridge<SessionDiffProps>(
-  "openclaw-session-diff",
-  SessionDiffContent,
-  {
-    properties: {
-      owner: { default: null, attribute: false },
-      execNode: { default: null, attribute: false },
-      loader: { default: null, attribute: false },
-      loadFileText: { default: null, attribute: false },
-      openFile: { default: null, attribute: false },
-      revealFile: { default: null, attribute: false },
-    },
-  },
-);
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-session-diff": SolidBridgeElement<SessionDiffProps>;
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-session-diff": HTMLAttributes<HTMLElement>;
+    }
   }
 }

@@ -22,6 +22,18 @@ function fixture(source = "export {};\n") {
   const root = tempDirs.make("openclaw-controller-guard-");
   fs.mkdirSync(path.join(root, "ui/src"), { recursive: true });
   fs.writeFileSync(path.join(root, "ui/src/view.ts"), source);
+  fs.mkdirSync(path.join(root, "config"));
+  for (const pattern of [
+    "createEffect",
+    "untrack",
+    "addEventListener",
+    "querySelector",
+    "flush",
+    "getOwner",
+    "runWithOwner",
+  ]) {
+    fs.writeFileSync(path.join(root, `config/control-ui-${pattern}-baseline.txt`), "");
+  }
   for (const args of [["init"], ["add", "."], ["commit", "-m", "base"]]) {
     git(root, args);
   }
@@ -41,6 +53,188 @@ function runLint(root: string, args: string[]) {
 }
 
 describe("Control UI controller guard", () => {
+  it.each([
+    'import { createRenderEffect as render } from "solid-js"; render(() => 1, () => {});',
+    'import * as solid from "solid-js"; solid.createRenderEffect(() => 1, () => {});',
+    'element["addEventListener"]("click", handler);',
+    'element?.querySelector<HTMLElement>("button");',
+    'element[`querySelectorAll`]("button");',
+  ])("rejects forbidden production call syntax: %s", (source) => {
+    const root = fixture();
+    fs.writeFileSync(path.join(root, "ui/src/new.tsx"), source);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain("ui/src/new.tsx:1");
+    expect(errors.mock.calls.flat().join("\n")).toContain("refactor-checklist.md");
+  });
+
+  it("excludes test helpers, comments, and strings; permits primitive render effects", () => {
+    const root = fixture('// createEffect(() => {});\nconst example = "element.querySelector()";');
+    fs.mkdirSync(path.join(root, "ui/src/lib/reactive"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "ui/src/lib/reactive/binding.ts"),
+      "createRenderEffect(read, write);",
+    );
+    for (const name of [
+      "view.test.tsx",
+      "view.test-helpers.ts",
+      "view.test-support.ts",
+      "view.test-harness.ts",
+    ]) {
+      fs.writeFileSync(
+        path.join(root, "ui/src", name),
+        "element.querySelector('button'); element.addEventListener('click', fn);",
+      );
+    }
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    expect(main(root, [])).toBe(0);
+  });
+
+  it.each([
+    [
+      "createEffect",
+      "ui/src/view.ts",
+      'import { createEffect as effect } from "solid-js"; effect(read, write);',
+    ],
+    ["untrack", "ui/src/view.ts", "untrack(read);"],
+    ["addEventListener", "ui/src/view.ts", "signal.addEventListener('abort', done);"],
+    ["querySelector", "ui/src/components/markdown.ts", "root.querySelectorAll<HTMLElement>('a');"],
+  ])("ratchets %s per file and rejects allowance inflation", (pattern, file, source) => {
+    const root = fixture();
+    const target = path.join(root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, source);
+    const baseline = path.join(root, `config/control-ui-${pattern}-baseline.txt`);
+    fs.writeFileSync(baseline, `${file}\t1\n`);
+    git(root, ["add", "."]);
+    git(root, ["commit", "-m", "existing debt"]);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, [])).toBe(0);
+    const addedCall = pattern === "createEffect" ? "effect(read, write);" : source;
+    fs.writeFileSync(target, `${source}\n${addedCall}`);
+    fs.writeFileSync(baseline, `${file}\t2\n`);
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain("allowances must not increase");
+    fs.writeFileSync(baseline, `${file}\t1\n`);
+    fs.writeFileSync(target, "export {};\n");
+    expect(main(root, [])).toBe(1);
+    expect(main(root, ["--prune"])).toBe(0);
+    expect(fs.readFileSync(baseline, "utf8")).not.toContain(`${file}\t`);
+    fs.writeFileSync(target, source);
+    expect(main(root, [])).toBe(1);
+  });
+
+  it.each(["flush", "getOwner", "runWithOwner"])(
+    "ratchets imported %s aliases and namespace calls only",
+    (pattern) => {
+      const source = [
+        `import { ${pattern} as action } from "solid-js";`,
+        'import * as signals from "@solidjs/signals";',
+        "action<number>();",
+        `signals.${pattern}?.();`,
+        `signals["${pattern}"]();`,
+      ].join("\n");
+      const root = fixture(source);
+      const baseline = path.join(root, `config/control-ui-${pattern}-baseline.txt`);
+      fs.writeFileSync(baseline, "ui/src/view.ts\t3\n");
+      git(root, ["add", "."]);
+      git(root, ["commit", "-m", "existing Solid calls"]);
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(main(root, [])).toBe(0);
+      fs.appendFileSync(path.join(root, "ui/src/view.ts"), "\naction();\n");
+      expect(main(root, [])).toBe(1);
+      expect(errors.mock.calls.flat().join("\n")).toContain(`${pattern} calls must not increase`);
+    },
+  );
+
+  it.each(["flush", "getOwner", "runWithOwner"])(
+    "ignores non-Solid and shadowed %s bindings",
+    (pattern) => {
+      const root = fixture(
+        [
+          `import { ${pattern} as action } from "solid-js";`,
+          'import * as signals from "@solidjs/signals";',
+          `import { ${pattern} } from "./owner.ts";`,
+          `${pattern}();`,
+          `owner.${pattern}();`,
+          `owner["${pattern}"]();`,
+          "function parameter(action: () => void) { action(); }",
+          `function namespace(signals: any) { signals.${pattern}(); }`,
+          "{ const action = () => {}; action(); }",
+          "function hoisted() { { var action = () => {}; } action(); }",
+          "function destructured({ action }: { action: () => void }) { action(); }",
+          `try {} catch (signals) { signals.${pattern}(); }`,
+        ].join("\n"),
+      );
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(main(root, [])).toBe(0);
+    },
+  );
+
+  it.each([
+    'import { createMemo as memo } from "solid-js"; memo(() => true);',
+    'import { createMemo } from "@solidjs/signals"; createMemo<number>(() => 42);',
+    'import * as solid from "solid-js"; solid.createMemo(() => { return "ready"; });',
+    'import * as solid from "solid-js"; solid["createMemo"](() => null);',
+  ])("rejects a memo that only returns a literal: %s", (source) => {
+    const root = fixture(source);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, [])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain("createMemo of a literal is unnecessary");
+  });
+
+  it("preserves equality, async, option-bearing, and non-Solid memos", () => {
+    const root = fixture(
+      [
+        'import { createMemo } from "solid-js";',
+        'import { createMemo as otherMemo } from "./owner.ts";',
+        "createMemo(() => props.value);",
+        "createMemo(() => !props.disabled);",
+        "createMemo(() => false, { equals: false });",
+        "createMemo(async () => true);",
+        "createMemo((previous) => 0);",
+        "createMemo(() => { track(); return 1; });",
+        "createMemo(() => ({}));",
+        "createMemo(() => undefined);",
+        "otherMemo(() => true);",
+        "function local(createMemo: any) { createMemo(() => true); }",
+      ].join("\n"),
+    );
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, [])).toBe(0);
+  });
+
+  it("ignores type-only imports and omitted bindings", () => {
+    const root = fixture(
+      [
+        'import type { flush, createMemo } from "solid-js";',
+        'import { type getOwner } from "@solidjs/signals";',
+        "const [, second] = pair;",
+        "flush(); getOwner(); createMemo(() => true);",
+      ].join("\n"),
+    );
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, [])).toBe(0);
+  });
+
+  it("checks staged Solid debt instead of the working tree", () => {
+    const root = fixture();
+    fs.writeFileSync(path.join(root, "ui/src/view.ts"), "createEffect(read, write);");
+    git(root, ["add", "."]);
+    fs.writeFileSync(path.join(root, "ui/src/view.ts"), "export {};\n");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(main(root, ["--staged"])).toBe(1);
+    expect(main(root, [])).toBe(0);
+  });
+
   it.each(["./lib/reactive/solid-controller-host.ts", "./lib/subscriptions-controller.ts"])(
     "rejects existing and new production or test consumers of retired %s",
     (module) => {

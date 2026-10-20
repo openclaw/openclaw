@@ -1,9 +1,10 @@
-// Tests heartbeat runner guardrails for subagent sessions.
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+// Tests heartbeat runner guardrails for subagent sessions.
+import { bindHeartbeatReply, bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -71,15 +72,12 @@ describe("runHeartbeatOnce", () => {
         return undefined;
       });
 
+      bindHeartbeatReply(replySpy);
+      bindHeartbeatSend("telegram", vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" }));
       await runHeartbeatOnce({
         cfg,
         sessionKey: "agent:main:telegram:default:direct:123",
         source: "exec-event",
-        deps: {
-          getReplyFromConfig: replySpy,
-          telegram: vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" }),
-          nowMs: () => 0,
-        },
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);

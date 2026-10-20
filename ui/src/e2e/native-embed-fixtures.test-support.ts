@@ -1,9 +1,9 @@
 import type { Page } from "playwright";
 import type { SecretsStoreListResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApprovalHistoryResult } from "../../../packages/gateway-protocol/src/schema/approvals.js";
+import type { DevicePairingList } from "../../../src/gateway/device-pairing-list.types.js";
 import type { CronJobsListResult } from "../api/types.ts";
 import type { CommandLaneDiagnostics } from "../lib/gateway-diagnostics.ts";
-import type { DevicePairingList } from "../lib/nodes/index.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createNativeDeviceSettingsSnapshot } from "../test-helpers/native-device-settings.ts";
 

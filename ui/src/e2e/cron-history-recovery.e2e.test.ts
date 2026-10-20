@@ -2,8 +2,12 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { CronJob, CronRunLogEntry } from "../api/types.ts";
-import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import {
+  createCronJob,
+  createCronRunsResult,
+  cronJobsListResponse,
+} from "../lib/cron/cron.test-support.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import {
   createControlUiE2eContextOptions,
@@ -15,39 +19,13 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-function job(id: string, name: string): CronJob {
-  return {
-    id,
-    name,
-    configRevision: `synthetic-${id}`,
-    enabled: true,
-    createdAtMs: 0,
-    updatedAtMs: 0,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "main",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: "Synthetic history diagnostic" },
-    state: {},
-  };
-}
-
-const alpha = job("alpha-history", "Alpha synthetic automation");
-const beta = job("beta-history", "Beta synthetic automation");
+const alpha = createCronJob("alpha-history", "Alpha synthetic automation");
+const beta = createCronJob("beta-history", "Beta synthetic automation");
 const alphaSummary = "Alpha-only completed run";
 const recoveredSummary = "Recovered current run";
 const historyError = "Synthetic run history temporarily unavailable";
-const listResponse = {
-  jobs: [alpha, beta],
-  snapshotRevision: "history-recovery-fixture",
-  total: 2,
-  offset: 0,
-  limit: 50,
-  hasMore: false,
-  nextOffset: null,
-};
-
 function runsResponse(summary: string) {
-  const entries: CronRunLogEntry[] = [
+  return createCronRunsResult([
     {
       ts: Date.parse("2026-09-16T12:00:00.000Z"),
       jobId: alpha.id,
@@ -56,30 +34,30 @@ function runsResponse(summary: string) {
       status: "ok",
       summary,
     },
-  ];
-  return { entries, total: entries.length, offset: 0, limit: 50, hasMore: false, nextOffset: null };
+  ]);
 }
 
 async function installScenario(page: Page, failInitially = false) {
-  return installMockGateway(page, {
+  const gateway = await installMockGateway(page, {
     methodResponses: {
-      "cron.list": cronListResponseFixture(listResponse),
+      "cron.list": cronListResponseFixture(cronJobsListResponse([alpha, beta])),
       "cron.runs": failInitially
         ? { __mockError: { code: "UNAVAILABLE", message: historyError } }
         : runsResponse(alphaSummary),
       "cron.status": { enabled: true, jobs: 2, triggersEnabled: true },
     },
   });
+  await page.goto(`${suite.server.baseUrl}cron`);
+  await page.locator('[data-test-id="cron-list-tab-activity"]').click();
+  return gateway;
 }
 
-async function capture(page: Page, gateway: MockGatewayControls, stage: string) {
+async function capture(page: Page, stage: string) {
   const snapshot = {
-    title: await page.locator(".cron-detail-title").allTextContents(),
     rows: await page.locator(".cron-run-entry").allTextContents(),
     errors: await page.locator(".cron-error-banner").allTextContents(),
     empty: await page.locator(".cron-empty-state").allTextContents(),
     loading: await page.locator('[data-test-id="cron-runs-loading"]').count(),
-    requests: await gateway.getRequests("cron.runs"),
   };
   await page.locator("openclaw-cron-page").scrollIntoViewIfNeeded();
   await page.screenshot({ path: path.join(suite.artifactDir, `${stage}.png`) });
@@ -91,10 +69,8 @@ suite.define(() => {
   it("distinguishes pending, failed, and confirmed empty history after selecting another automation", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installScenario(page);
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await page.locator('[data-test-id="cron-list-tab-activity"]').click();
       await page.locator(".cron-run-entry", { hasText: alphaSummary }).waitFor();
-      await capture(page, gateway, "overview-loaded");
+      await capture(page, "overview-loaded");
 
       await page.locator('[data-test-id="cron-tab-all"]').click();
       await gateway.deferNext("cron.runs", { id: beta.id });
@@ -102,48 +78,36 @@ suite.define(() => {
       await gateway.waitForRequest("cron.runs", { match: { id: beta.id } });
       await page.locator('[data-test-id="cron-detail-tab-history"]').click();
       await page.locator(".cron-detail-title", { hasText: beta.name }).waitFor();
-      const pending = await capture(page, gateway, "beta-history-pending");
+      const pending = await capture(page, "beta-history-pending");
 
       await gateway.rejectDeferred("cron.runs", { code: "UNAVAILABLE", message: historyError });
       await page.locator(".cron-error-banner", { hasText: historyError }).waitFor();
-      const failed = await capture(page, gateway, "beta-history-failed");
+      const failed = await capture(page, "beta-history-failed");
 
-      // Preserve both diagnostic states before evaluating either outcome.
-      expect(pending.rows.join(" ")).not.toContain(alphaSummary);
-      expect(failed.rows.join(" ")).not.toContain(alphaSummary);
-      expect(pending.empty.join(" ")).not.toContain("No runs yet");
-      expect(pending.loading).toBe(1);
-      expect(failed.empty.join(" ")).not.toContain("No runs yet");
-      expect(failed.loading).toBe(0);
+      for (const snapshot of [pending, failed]) {
+        expect(snapshot.rows.join(" ")).not.toContain(alphaSummary);
+        expect(snapshot.empty.join(" ")).not.toContain("No runs yet");
+      }
+      expect([pending, failed]).toMatchObject([{ loading: 1 }, { loading: 0 }]);
 
-      await gateway.setMethodResponse("cron.runs", {
-        entries: [],
-        total: 0,
-        offset: 0,
-        limit: 50,
-        hasMore: false,
-        nextOffset: null,
-      });
+      await gateway.setMethodResponse("cron.runs", createCronRunsResult([]));
       await page.getByRole("button", { name: "Retry", exact: true }).click();
       await page.getByText("No runs yet", { exact: true }).waitFor();
-      const empty = await capture(page, gateway, "beta-history-confirmed-empty");
-      expect(empty.errors).toEqual([]);
-      expect(empty.loading).toBe(0);
+      const empty = await capture(page, "beta-history-confirmed-empty");
+      expect(empty).toMatchObject({ errors: [], loading: 0 });
     });
   });
 
   it("clears the history failure after a successful explicit Refresh", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installScenario(page, true);
-      await page.goto(`${suite.server.baseUrl}cron`);
-      await page.locator('[data-test-id="cron-list-tab-activity"]').click();
       await page.locator(".cron-error-banner", { hasText: historyError }).waitFor();
-      await capture(page, gateway, "history-failed");
+      await capture(page, "history-failed");
 
       await gateway.setMethodResponse("cron.runs", runsResponse(recoveredSummary));
       await page.locator(".cron-refresh").click();
       await page.locator(".cron-run-entry", { hasText: recoveredSummary }).waitFor();
-      const recovered = await capture(page, gateway, "history-refreshed");
+      const recovered = await capture(page, "history-refreshed");
 
       expect(recovered.rows.join(" ")).toContain(recoveredSummary);
       expect(recovered.errors.join(" ")).not.toContain(historyError);

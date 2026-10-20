@@ -178,7 +178,7 @@ export function createFaceTimeCallControl(params: {
             return undefined;
           }
           try {
-            return projectCompleteFaceTimeAbsence(error.result).topologyGeneration;
+            return projectCompleteFaceTimeAbsence(error.result);
           } catch {
             return undefined;
           }
@@ -217,10 +217,7 @@ export function createFaceTimeCallControl(params: {
           const first = projectCompleteFaceTimeAbsence(await inspect());
           await sleepWithAbort(100, undefined, { ref: false });
           const second = projectCompleteFaceTimeAbsence(await inspect());
-          return (
-            first.topologyGeneration === second.topologyGeneration &&
-            params.getHelperTopologyVersion() === topologyVersion
-          );
+          return first === second && params.getHelperTopologyVersion() === topologyVersion;
         } catch {
           return false;
         }

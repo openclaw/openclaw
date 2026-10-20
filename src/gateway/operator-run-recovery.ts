@@ -37,6 +37,7 @@ import {
   sourceRolePolicy,
 } from "./operator-role-source-policy.js";
 import {
+  bindGatewayOperatorContinuationAuthority,
   captureChannelOperatorRunAuthority,
   intersectOperatorRunModelPolicy,
 } from "./operator-run-authority.js";
@@ -88,6 +89,8 @@ export function readGatewayOperatorRecoverySource(
 
 export type RestoredGatewayOperatorAuthority = {
   authority: AdmittedRunOperatorAuthority;
+  /** Original caller policy remains authoritative when its recovered execution is canceled. */
+  assertPolicyCurrent: () => void;
   authenticatedUserProfile: GatewayAuthenticatedUserProfile;
   controlUiAdmin: boolean;
   release: () => void;
@@ -115,12 +118,11 @@ async function restoreGatewayOperatorSnapshot(params: {
     signal.abort(
       new Error("Restart recovery operator authority changed; start a new user turn.", { cause }),
     );
-  const assertOwner = () => {
+  const assertLifetime = () => {
     if (references === 0) {
       throw new Error("Restart recovery operator authority is no longer active.");
     }
     signal.signal.throwIfAborted();
-    assertCurrent();
   };
   const subscriptions: Array<() => void> = [];
   if (params.subscribeToClaim) {
@@ -143,7 +145,8 @@ async function restoreGatewayOperatorSnapshot(params: {
   const release = releaseHold();
   try {
     const prepared = await params.prepareSource();
-    assertOwner();
+    assertLifetime();
+    assertCurrent();
     if (!prepared) {
       release();
       return undefined;
@@ -169,7 +172,7 @@ async function restoreGatewayOperatorSnapshot(params: {
       subscriptions.push(releaseDeviceNotification);
     }
     const assertSourcePolicy = () => {
-      assertOwner();
+      assertLifetime();
       const cfg = getConfig();
       const role = resolveOperatorRolePolicyForAssignment(
         snapshot.profileId,
@@ -193,6 +196,10 @@ async function restoreGatewayOperatorSnapshot(params: {
       return cfg;
     };
     let assertPolicy = assertSourcePolicy;
+    const assertRecoveryCurrent = () => {
+      assertCurrent();
+      return assertPolicy();
+    };
     const recheck = () => {
       if (references > 0 && !signal.signal.aborted) {
         try {
@@ -213,7 +220,7 @@ async function restoreGatewayOperatorSnapshot(params: {
         }
       }),
     );
-    assertSourcePolicy();
+    assertRecoveryCurrent();
     identity = await prepareUserProfileIdentity(snapshot.profileId);
     const profileIdentity = identity;
     let githubAccountIds: readonly number[] | undefined;
@@ -257,7 +264,7 @@ async function restoreGatewayOperatorSnapshot(params: {
       }
     };
     subscriptions.push(onUserProfilesChanged(recheck));
-    assertPolicy();
+    assertRecoveryCurrent();
     if (snapshot.device) {
       const paired = await loadPairedDevicePairingStoreRecordReadOnly(snapshot.device.deviceId);
       if (
@@ -266,10 +273,10 @@ async function restoreGatewayOperatorSnapshot(params: {
         revoke();
       }
     }
-    assertPolicy();
+    assertRecoveryCurrent();
     await prepared.revalidate();
-    assertPolicy();
-    const assertRestoredPolicy = Object.assign(assertPolicy, {
+    assertRecoveryCurrent();
+    const assertRestoredPolicy = Object.assign(assertRecoveryCurrent, {
       onSessionCompactionCommitted: prepared.onSessionCompactionCommitted
         ? (
             ...args: Parameters<NonNullable<SessionSourceAssertion["onSessionCompactionCommitted"]>>
@@ -295,25 +302,38 @@ async function restoreGatewayOperatorSnapshot(params: {
       scopes: snapshot.scopes,
       gatewayAccessGrant: snapshot.grant,
       getRuntimeConfig: getConfig,
-      assertCurrent: assertRestoredPolicy,
+      assertCurrent: assertPolicy,
       signal: signal.signal,
     });
     const originalModels = snapshot.modelPolicy
       ? restoreOperatorModelPolicySnapshot(snapshot.modelPolicy)
       : undefined;
-    const authority = createAdmittedRunOperatorAuthority({
+    const retainPolicy = () => {
+      assertPolicy();
+      references += 1;
+      return releaseHold();
+    };
+    const policyAuthority = createAdmittedRunOperatorAuthority({
       ...live,
       signal: signal.signal,
       recoverySnapshot: snapshot,
-      retain: () => {
-        assertPolicy();
-        references += 1;
-        return releaseHold();
-      },
+      retain: retainPolicy,
       get modelPolicy() {
         return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
       },
     });
+    const authority = createAdmittedRunOperatorAuthority({
+      ...policyAuthority,
+      assertCurrent: assertRestoredPolicy,
+      retain: () => {
+        assertCurrent();
+        return retainPolicy();
+      },
+      get modelPolicy() {
+        return policyAuthority.modelPolicy;
+      },
+    });
+    bindGatewayOperatorContinuationAuthority(authority, policyAuthority);
     authority.assertCurrent();
     const profile = readResidentUserProfileRevision(snapshot.profileId, profileCatalogPath({}));
     if (!profile) {
@@ -322,6 +342,9 @@ async function restoreGatewayOperatorSnapshot(params: {
     const { id, ...display } = projectUserProfileDisplay(profile);
     return {
       authority,
+      assertPolicyCurrent: () => {
+        assertPolicy();
+      },
       authenticatedUserProfile: { profileId: id, ...display, updatedAt: profile.updated_at },
       controlUiAdmin: snapshot.controlUiAdmin,
       release,

@@ -20,10 +20,7 @@ import { isSidebarSlotVisible, type SidebarLayout } from "./sidebar-layout.ts";
 
 type DashboardPane = TestChatPane & {
   visuallyPresented: boolean;
-  pageBoardWidgetMenu: (
-    layout: SidebarLayout,
-    board?: ResolvedBoardView,
-  ) => BoardWidgetPageMenu | undefined;
+  pageBoardWidgetMenu: (layout: SidebarLayout) => BoardWidgetPageMenu | undefined;
   boardProvider: BoardProvider;
   routeFace: "chat" | "dashboard" | undefined;
   dashboardExpanded: boolean;

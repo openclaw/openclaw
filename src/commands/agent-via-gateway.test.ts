@@ -13,7 +13,13 @@ import {
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-output.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
+import * as embeddedStateLock from "../infra/embedded-state-lock.js";
+import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
+import {
+  acquireGatewayLock,
+  GatewayLockError,
+  type GatewayLockOptions,
+} from "../infra/gateway-lock.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -25,10 +31,14 @@ import {
   createGatewayNormalCloseError,
   createGatewayTimeoutError,
   createLocalGatewayLockOptions,
-  createSignalProcess,
+  gatewaySuccessReply,
+  remoteGatewayConfig,
   settleGatewayAgentRequest,
 } from "./agent-via-gateway.test-support.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
+
+const createNativeBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
+const acquireNativeStateLock = embeddedStateLock.acquireEmbeddedStateLock;
 
 const loadConfig = vi.hoisted(() => vi.fn());
 const loadConfigWithShellEnvFallback = vi.hoisted(() => vi.fn());
@@ -82,34 +92,35 @@ function createTempStore() {
 let testStore: ReturnType<typeof createTempStore>;
 
 type CommandOptions = Parameters<typeof agentCliCommand>[0];
-type CommandDeps = Parameters<typeof agentCliCommand>[2];
-function runText(options: CommandOptions, deps?: CommandDeps, output = runtime) {
-  return agentCliCommand({ message: "hi", ...options }, output, deps);
+let signalCaptures: ReturnType<typeof captureNativeSignalBridge>[] = [];
+let originalExitCode: NodeJS.Process["exitCode"];
+
+function captureAgentCliSignals() {
+  const signals = captureNativeSignalBridge(createNativeBridge);
+  signalCaptures.push(signals);
+  vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
+    signals.create,
+  );
+  return signals;
 }
-function runTo(deps?: CommandDeps, options: CommandOptions = {}) {
-  return runText({ to: "+1555", ...options }, deps);
+
+function useLocalGatewayLockOptions(options: GatewayLockOptions) {
+  vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
+    acquireNativeStateLock({ ...params, options }),
+  );
 }
-function runJson(options: CommandOptions, deps?: CommandDeps) {
-  return runText(options, deps, jsonRuntime);
+
+function runText(options: CommandOptions, output = runtime) {
+  return agentCliCommand({ message: "hi", ...options }, output);
 }
-function runSignalled(
-  signals: ReturnType<typeof createSignalProcess>,
-  options: CommandOptions = {},
-  deps?: CommandDeps,
-  output = runtime,
-) {
-  return runText({ to: "+1555", ...options }, { process: signals.processLike, ...deps }, output);
+function runTo(options: CommandOptions = {}) {
+  return runText({ to: "+1555", ...options });
+}
+function runJson(options: CommandOptions) {
+  return runText(options, jsonRuntime);
 }
 function runMessageFile(messageFile: string) {
   return agentCliCommand({ messageFile, sessionKey: "agent:main:incident-42" }, runtime);
-}
-
-function gatewaySuccessReply(text: string) {
-  return {
-    runId: "idem-1",
-    status: "ok",
-    result: { payloads: [{ text }], meta: { stub: true } },
-  };
 }
 
 function mockGatewaySuccessReply(text = "hello") {
@@ -145,10 +156,6 @@ function mockRemoteGatewayRoster(ownership: "sole" | "legacy" | "explicit", agen
       : gatewaySuccessReply("remote");
   });
 }
-
-const remoteGatewayConfig = {
-  gateway: { mode: "remote" as const, remote: { url: "wss://gateway.example" } },
-};
 
 function localResult(text = "local") {
   return {
@@ -196,7 +203,7 @@ function mockAbortableAgent(
   });
 }
 
-function expectNoSignalListeners(signals: ReturnType<typeof createSignalProcess>) {
+function expectNoSignalListeners(signals: ReturnType<typeof captureAgentCliSignals>) {
   expect([signals.listenerCount("SIGTERM"), signals.listenerCount("SIGINT")]).toEqual([0, 0]);
 }
 
@@ -234,13 +241,10 @@ async function waitForGatewayCall(expectedCalls = 1) {
 }
 
 async function expectGatewayFailure(error: Error, runId?: string) {
-  const signal = createSignalProcess();
+  const signal = captureAgentCliSignals();
   const humanBefore = formatCliFailureLines({ title: "failed", error, env: {} });
   await expect(
-    runJson(
-      { sessionKey: "agent:ops:run-proof", runId: "local-idempotency", json: true },
-      { process: signal.processLike },
-    ),
+    runJson({ sessionKey: "agent:ops:run-proof", runId: "local-idempotency", json: true }),
   ).rejects.toBe(error);
   expectCliError(error, runId ? { runId, origin: "gateway" } : {});
   expect(formatCliFailureLines({ title: "failed", error, env: {} })).toEqual(humanBefore);
@@ -300,6 +304,9 @@ vi.mock("../audit/audit-recorder.js", () => ({
 let originalForceConsoleToStderr = false;
 
 beforeEach(() => {
+  originalExitCode = process.exitCode;
+  process.exitCode = undefined;
+  signalCaptures = [];
   vi.clearAllMocks();
   // clearAllMocks preserves rejecting exporter implementations across --local tests.
   startOneShotDiagnosticsExporters.mockReset();
@@ -316,12 +323,20 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  fs.rmSync(testStore.dir, { recursive: true, force: true });
-  vi.doUnmock("./agent/session.runtime.js");
-  vi.unstubAllEnvs();
-  configureExecutionIdentityAdmissionSink(() => false)();
-  vi.useRealTimers();
-  loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
+  try {
+    for (const capture of signalCaptures) {
+      capture.dispose();
+    }
+    fs.rmSync(testStore.dir, { recursive: true, force: true });
+    vi.doUnmock("./agent/session.runtime.js");
+    vi.unstubAllEnvs();
+    configureExecutionIdentityAdmissionSink(() => false)();
+    vi.useRealTimers();
+    loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
+  } finally {
+    process.exitCode = originalExitCode;
+    vi.restoreAllMocks();
+  }
 });
 
 it("rejects blank --to selectors before local or Gateway dispatch", async () => {
@@ -486,6 +501,7 @@ it("refuses --local before embedded startup when a live Gateway owns the state d
   const lockOptions = createLocalGatewayLockOptions(testStore.dir, {
     readProcessStartTime: () => 123_456,
   });
+  useLocalGatewayLockOptions(lockOptions);
   const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
   expect(gatewayLock).not.toBeNull();
   if (!gatewayLock) {
@@ -493,9 +509,7 @@ it("refuses --local before embedded startup when a live Gateway owns the state d
   }
 
   try {
-    await expect(
-      runJson({ to: "+1555", local: true, json: true }, { localGatewayLockOptions: lockOptions }),
-    ).rejects.toThrow(
+    await expect(runJson({ to: "+1555", local: true, json: true })).rejects.toThrow(
       `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Run without --local to use it, or stop the Gateway first (openclaw gateway stop).`,
     );
     expectUncalled(agentCommand, startOneShotDiagnosticsExporters, jsonRuntime.writeJson);
@@ -513,30 +527,21 @@ it("holds one agent-embedded state lock for the run and rejects a concurrent --l
       elapsedMs += ms;
     },
   });
+  useLocalGatewayLockOptions(lockOptions);
   const firstRunStarted = createDeferredCore();
   const firstRunFinished = createDeferredCore();
   agentCommand.mockImplementationOnce(async () => {
     firstRunStarted.resolve();
     await firstRunFinished.promise;
   });
-  const firstRun = runTo(
-    {
-      localGatewayLockOptions: lockOptions,
-    },
-    { message: "first", local: true },
-  );
+  const firstRun = runTo({ message: "first", local: true });
   const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
   try {
     await Promise.race([firstRunStarted.promise, firstRun]);
     const payload: unknown = JSON.parse(fs.readFileSync(stateLockPath, "utf8"));
     expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
 
-    const secondRun = runTo(
-      {
-        localGatewayLockOptions: lockOptions,
-      },
-      { message: "second", local: true },
-    );
+    const secondRun = runTo({ message: "second", local: true });
     await expect(secondRun).rejects.toBeInstanceOf(GatewayLockError);
     await expect(secondRun).rejects.toMatchObject({
       message: expect.stringContaining("wait for the current OpenClaw operation to finish"),
@@ -663,11 +668,11 @@ it.each([
 });
 
 it("exits for successful gateway runs when SIGTERM arrives before return", async () => {
-  const signals = createSignalProcess();
+  const signals = captureAgentCliSignals();
   mockGatewaySuccessReply();
   const signalRuntime = { ...createRuntime(), log: vi.fn(() => signals.emit("SIGTERM")) };
 
-  const result = await runSignalled(signals, {}, undefined, signalRuntime);
+  const result = await runText({ to: "+1555" }, signalRuntime);
 
   expect(result).toBeUndefined();
   expect(callGateway).toHaveBeenCalledTimes(1);
@@ -695,7 +700,7 @@ it.each([
       session: { dmScope: "per-channel-peer" },
     });
   }
-  const signals = createSignalProcess(),
+  const signals = captureAgentCliSignals(),
     started = createDeferredCore();
   const aborts: GatewayAbortCall[] = [];
   let fallbackAbort: Record<string, unknown> | undefined;
@@ -745,8 +750,7 @@ it.each([
         }
       : undefined,
   );
-  const run = runSignalled(
-    signals,
+  const run = runTo(
     recipient
       ? { agent: "ops", channel: "whatsapp", to: "+15551234567", runId }
       : retry
@@ -813,8 +817,9 @@ it.each([
   "releases local state after $signal ($outcome)",
   async ({ signal, exitCode, outcome }) => {
     const { dir } = testStore;
-    const signals = createSignalProcess();
+    const signals = captureAgentCliSignals();
     const lockOptions = createLocalGatewayLockOptions(dir);
+    useLocalGatewayLockOptions(lockOptions);
     agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
       expect(opts.abortSignal).toBeInstanceOf(AbortSignal);
       return await new Promise((resolve, reject) => {
@@ -839,7 +844,7 @@ it.each([
       });
     });
 
-    const run = runSignalled(signals, { local: true }, { localGatewayLockOptions: lockOptions });
+    const run = runTo({ local: true });
     await waitForAgentCommandCall();
     const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
     expect(fs.existsSync(stateLockPath)).toBe(true);
@@ -855,10 +860,10 @@ it.each([
 
 it("aborts while waiting for a transient gateway retry", async () => {
   vi.useFakeTimers();
-  const signals = createSignalProcess();
+  const signals = captureAgentCliSignals();
   callGateway.mockRejectedValueOnce(createGatewayNormalCloseError());
 
-  const run = runSignalled(signals);
+  const run = runTo();
   for (let attempt = 0; attempt < 10 && mockMessages(runtime.error).length === 0; attempt += 1) {
     await Promise.resolve();
   }
@@ -877,7 +882,6 @@ it.each([
 ])(
   "renders timeout with json=$json, RPC ok=$ok, withdrawn=$withdrawn",
   async ({ json, ok, withdrawn }) => {
-    const signals = createSignalProcess();
     const response = {
       runId: "idem-1",
       status: "timeout",
@@ -897,9 +901,9 @@ it.each([
       }),
     );
 
-    await runSignalled(signals, { json }, undefined, jsonRuntime);
+    await runText({ to: "+1555", json }, jsonRuntime);
 
-    expect(signals.processLike.exitCode).toBe(1);
+    expect(process.exitCode).toBe(1);
     expect(jsonRuntime.exit).not.toHaveBeenCalled();
     expect(jsonRuntime.log).toHaveBeenCalledTimes(!json && !withdrawn ? 1 : 0);
     if (json) {
@@ -916,21 +920,20 @@ it.each([
 );
 
 it("surfaces duplicate in-flight gateway runs without pretending a reply arrived", async () => {
-  const signals = createSignalProcess();
   callGateway.mockResolvedValue({
     runId: "idem-1",
     status: "in_flight",
     sessionKey: "agent:main:main",
   });
 
-  await runSignalled(signals, { runId: "idem-1" });
+  await runTo({ runId: "idem-1" });
 
   expect(runtime.error).toHaveBeenCalledWith(
     "Agent run idem-1 is already in flight; not starting a duplicate run.",
   );
   expect(runtime.log).not.toHaveBeenCalledWith("No reply from agent.");
   expect(runtime.exit).not.toHaveBeenCalled();
-  expect(signals.processLike.exitCode).toBe(1);
+  expect(process.exitCode).toBe(1);
 });
 
 it("promotes gateway deliveryStatus to the top-level JSON response", async () => {
@@ -1050,7 +1053,7 @@ it.each([false, true])(
         return localResult();
       });
 
-      await runTo(undefined, { local: true });
+      await runTo({ local: true });
 
       expect(auditRecorderMocks.create).toHaveBeenCalledTimes(existingSink ? 0 : 1);
       expect(auditRecorderMocks.stop).toHaveBeenCalledTimes(existingSink ? 0 : 1);
@@ -1077,13 +1080,13 @@ it.each(["success", "run failure", "exporter failure"])(
       mockLocalAgentReply();
     }
     if (outcome === "run failure") {
-      await expect(runTo(undefined, { local: true })).rejects.toThrow("embedded run failed");
+      await expect(runTo({ local: true })).rejects.toThrow("embedded run failed");
       expectCliError(error);
       expect(stop).toHaveBeenCalledTimes(1);
       return;
     }
     if (outcome === "exporter failure") {
-      await runTo(undefined, { local: true });
+      await runTo({ local: true });
       expect(agentCommand).toHaveBeenCalledTimes(1);
       expect(runtime.log).toHaveBeenCalledWith("local");
       expect(
@@ -1162,7 +1165,6 @@ it.each([false, true])(
 );
 
 it("maps a failed local terminal outcome to exit 1", async () => {
-  const signals = createSignalProcess();
   agentCommand.mockResolvedValueOnce(
     recordAgentRunTerminalOutcome(
       {
@@ -1173,9 +1175,9 @@ it("maps a failed local terminal outcome to exit 1", async () => {
     ),
   );
 
-  await runSignalled(signals, { local: true });
+  await runTo({ local: true });
 
-  expect(signals.processLike.exitCode).toBe(1);
+  expect(process.exitCode).toBe(1);
 });
 
 it("scopes legacy explicit session keys before local embedded runs", async () => {
@@ -1236,8 +1238,8 @@ it("stops dispatch and releases signal listeners when the session module fails t
   vi.doMock("./agent/session.runtime.js", () => {
     throw failure;
   });
-  const signals = createSignalProcess();
-  await expect(runSignalled(signals)).rejects.toMatchObject({ cause: failure });
+  const signals = captureAgentCliSignals();
+  await expect(runTo()).rejects.toMatchObject({ cause: failure });
   expectUncalled(callGateway, agentCommand);
   expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
 });

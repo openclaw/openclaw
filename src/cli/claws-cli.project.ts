@@ -15,7 +15,6 @@ import {
 import { readClawManifestFile } from "../claws/reader.js";
 import { CLAW_OUTPUT_STABILITY, type ClawAddPlan } from "../claws/types.js";
 import { readConfigFileSnapshot } from "../config/config.js";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import {
@@ -91,7 +90,7 @@ async function prepareDev(projectPath: string, opts: ClawsDevOptions): Promise<P
     );
   }
   const config = configSnapshot.resolved;
-  const existingMcpServers = normalizeConfiguredMcpServers(config.mcp?.servers);
+  const existingMcpServers = config.mcp?.servers ?? {};
   const existingAgentIds = listAgentIds(config);
   const plan = await buildClawAddPlan({
     manifest: result.manifest,

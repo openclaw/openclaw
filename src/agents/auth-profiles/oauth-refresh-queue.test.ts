@@ -9,6 +9,7 @@ import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.
 import "./oauth-external-auth-passthrough.test-support.js";
 import "./oauth-file-lock-passthrough.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
+import { mockOAuthProviderOperations } from "./oauth-native-provider.test-support.js";
 import { isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
   OAUTH_AGENT_ENV_KEYS,
@@ -63,6 +64,7 @@ describe("OAuth refresh failure ownership", () => {
   afterEach(async () => {
     await settleCaseWork?.();
     settleCaseWork = undefined;
+    vi.restoreAllMocks();
     envSnapshot.restore();
     resetFileLockStateForTest();
     clearRuntimeAuthProfileStoreSnapshots();
@@ -135,15 +137,14 @@ describe("OAuth refresh failure ownership", () => {
       started.resolve();
       return await release.promise;
     });
-    const manager = createOAuthManager({
+    mockOAuthProviderOperations({
       buildApiKey: async (_provider, value) => {
         settled.resolve();
         return value.access;
       },
-      canRefreshCredential: async () => true,
       refreshCredential,
-      readBootstrapCredential: () => null,
     });
+    const manager = createOAuthManager();
     const params = {
       store: ensureAuthProfileStore(agentDir),
       profileId,

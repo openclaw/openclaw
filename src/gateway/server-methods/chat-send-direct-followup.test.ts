@@ -38,6 +38,7 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
+import * as chatReplyMedia from "./chat-reply-media.js";
 import { loadRealChatDispatch, successfulChatTurn } from "./chat-send-authority.test-support.js";
 import {
   setClientProfile,
@@ -346,6 +347,36 @@ it.for([false, true])(
     const queued = createDeferred();
     const dispatched = createDeferred();
     const settled = createDeferred();
+    const mediaCaptured = createDeferred();
+    const releaseMedia = createDeferred();
+    const stopped = createDeferred();
+    let dispatchReturned = false;
+    let mediaHeld = false;
+    const captureMedia = chatReplyMedia.captureWebchatReplyMediaScope;
+    const mediaCapture = cancel
+      ? vi
+          .spyOn(chatReplyMedia, "captureWebchatReplyMediaScope")
+          .mockImplementation(async (params) => {
+            const media = await captureMedia(params);
+            if (dispatchReturned && !mediaHeld && params.sessionKey === scope.sessionKey) {
+              mediaHeld = true;
+              mediaCaptured.resolve();
+              await releaseMedia.promise;
+            }
+            return media;
+          })
+      : undefined;
+    const clearRun = context.chatRunState.clearRun;
+    const clearStoppedRun = cancel
+      ? vi.spyOn(context.chatRunState, "clearRun").mockImplementation((runId) => {
+          clearRun(runId);
+          if (runId === sendParams.idempotencyKey) {
+            stopped.resolve();
+          }
+        })
+      : undefined;
+    let stop: Promise<void> | undefined;
+    let broadcastsAtStop = 0;
     const consumed: string[] = [];
     let recorder: UserTurnTranscriptRecorder | undefined;
     const directReady = createDeferred();
@@ -372,6 +403,7 @@ it.for([false, true])(
       try {
         return await dispatchActual({ ...params, cfg: config });
       } finally {
+        dispatchReturned = true;
         dispatched.resolve();
       }
     });
@@ -459,9 +491,10 @@ it.for([false, true])(
       expect(consumed).toEqual([]);
       expect(injected).not.toHaveBeenCalled();
       if (cancel) {
+        await wait(mediaCaptured.promise);
         const abortParams = { sessionKey: scope.sessionKey, runId: sendParams.idempotencyKey };
         const respond = vi.fn<RespondFn>();
-        await handleChatAbortRequest({
+        stop = handleChatAbortRequest({
           params: abortParams,
           req: { type: "req", id: "stop-queued-input", method: "chat.abort", params: abortParams },
           client,
@@ -469,6 +502,11 @@ it.for([false, true])(
           respond,
           isWebchatConnect: () => true,
         });
+        void stop.catch(() => {});
+        await waitForGate(stopped.promise, stop, "Stop completed without clearing its chat buffer");
+        broadcastsAtStop = vi.mocked(context.broadcast).mock.calls.length;
+        releaseMedia.resolve();
+        await wait(stop);
         expect(respond).toHaveBeenCalledWith(true, {
           ok: true,
           aborted: true,
@@ -489,28 +527,51 @@ it.for([false, true])(
       await command;
       if (cancel) {
         expect(consumed).toEqual([]);
+        await fixture.finishDispatch();
+        expect(
+          vi
+            .mocked(context.broadcast)
+            .mock.calls.slice(broadcastsAtStop)
+            .filter(
+              ([event, payload]) =>
+                event === "chat" &&
+                isRecord(payload) &&
+                payload.runId === sendParams.idempotencyKey &&
+                payload.state === "delta",
+            ),
+        ).toEqual([]);
+        expect(
+          context.chatRunState.runs.get(sendParams.idempotencyKey)?.releaseBufferAuthority,
+        ).toBeUndefined();
         return;
       }
       await wait(settled.promise);
       expect(consumed).toEqual([expect.stringContaining(sendParams.message)]);
       expect((await listSessionPendingInputs(scope)).total).toBe(0);
     } finally {
-      runs.detachActiveEmbeddedRun(scope.sessionId, handle);
-      runAuthority.releaseAgentRunDelegatedAuthority(authority);
+      releaseMedia.resolve();
       releaseDirect.resolve();
       releaseCleanup.resolve();
-      await command?.catch(() => {});
-      clearSessionQueues(
-        [scope.sessionKey],
-        captureSessionTarget({
-          storeScope: scope.storePath,
-          sessionKey: scope.sessionKey,
-          incarnation: scope.sessionId,
-          agentId: scope.agentId,
-        }),
-      );
-      await fixture.cleanup();
-      runtimeLoader.mockRestore();
+      try {
+        runs.detachActiveEmbeddedRun(scope.sessionId, handle);
+        runAuthority.releaseAgentRunDelegatedAuthority(authority);
+        await command?.catch(() => {});
+        clearSessionQueues(
+          [scope.sessionKey],
+          captureSessionTarget({
+            storeScope: scope.storePath,
+            sessionKey: scope.sessionKey,
+            incarnation: scope.sessionId,
+            agentId: scope.agentId,
+          }),
+        );
+        await stop?.catch(() => {});
+        await fixture.cleanup();
+      } finally {
+        mediaCapture?.mockRestore();
+        clearStoppedRun?.mockRestore();
+        runtimeLoader.mockRestore();
+      }
     }
   },
 );

@@ -37,15 +37,15 @@ import {
   type ExecApprovalsTarget,
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage, type GatewayPageChange } from "../../lib/reactive/gateway-page.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import { createDevicesDialogs } from "./devices-dialogs.ts";
-import { createPageRequest } from "./page-request.ts";
 import { DevicesView } from "./view.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
@@ -86,7 +86,6 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   let canManagePairing = false;
   let canAdmin = false;
   let canRead = true;
-  // RuntimeConfig owns the draft; only accepted presentation custody lives here.
   let configGateway: ApplicationContext["gateway"] | null = null;
   let configClient: ApplicationGatewaySnapshot["client"] = null;
   let execApprovalsTarget: "gateway" | "node" = "gateway";
@@ -95,16 +94,11 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   let stopGatewayEvents: (() => void) | undefined;
   let publishData = () => {};
   // Request admission and policy drafts retain their synchronous mutation contract.
-  const pageData = projectSource(() => dataState, {
-    read: (readState) => readState(),
-    subscribe: (_source, notify) => {
-      publishData = notify;
-      return () => {
-        publishData = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const pageData = projectMutableSource(
+    () => dataState,
+    (readState) => readState(),
+  );
+  publishData = pageData.publish;
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
   const dialogs = createDevicesDialogs({
     canManagePairing: () => gatewayBinding.connected && canManagePairing,
@@ -117,24 +111,31 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       publishData();
     },
   });
-  const presenceTask = createPageRequest({
-    task: (signal) =>
+  const presenceTask = createPageRequest(() => {}, {
+    task: async (_args: void, { signal }) =>
       gatewayBinding.connected && canRead && gatewayBinding.gateway
         ? gatewayBinding.client?.request<PresenceEntry[]>("system-presence", {}, { signal })
         : undefined,
-    onComplete: updatePresence,
+    onComplete: (entries) => {
+      if (entries !== undefined) {
+        updatePresence(entries);
+      }
+    },
     onError: (error) => {
       if (isMissingOperatorReadScopeError(error)) {
         updatePresence([]);
       }
     },
   });
-  const systemInfoTask = createPageRequest({
-    task: (signal) =>
+  const systemInfoTask = createPageRequest(() => {}, {
+    task: async (_args: void, { signal }) =>
       gatewayBinding.gateway && canLoadSystemInfo() && gatewayBinding.client
         ? readSystemInfo(gatewayBinding.gateway, signal).then((sample) => sample.value)
         : undefined,
     onComplete: (result) => {
+      if (result === undefined) {
+        return;
+      }
       setGatewaySystemInfo(result);
       // Quiet node reloads also fetch stats; a fresh snapshot restarts the periodic deadline.
       systemInfoPolling.stop();
@@ -148,8 +149,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       }
     },
   });
-  const environmentsTask = createPageRequest({
-    task: (signal) =>
+  const environmentsTask = createPageRequest(() => {}, {
+    task: async (_args: void, { signal }) =>
       gatewayBinding.gateway && canLoadDesktopEnvironments()
         ? gatewayBinding.client?.request<EnvironmentsListResult>(
             "environments.list",
@@ -157,7 +158,11 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
             { signal },
           )
         : undefined,
-    onComplete: (result) => setDesktopEnvironments(result.environments),
+    onComplete: (result) => {
+      if (result !== undefined) {
+        setDesktopEnvironments(result.environments);
+      }
+    },
     onError: () => setDesktopEnvironments([]),
   });
   const systemInfoPolling = useVisiblePoll(SYSTEM_INFO_POLL_INTERVAL_MS, refreshSystemInfo);
@@ -180,6 +185,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   });
   onSettled(() => {
     syncConfigCustody();
+    // Config receipts record which connection owns the accepted policy draft.
     return configProjection.subscribe(syncConfigCustody);
   });
   onCleanup(() => {
@@ -495,10 +501,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     setDesktopEnvironments([]);
   }
 
-  // A rotation always ends in a dialog: with the replacement when the Gateway issued it
-  // to this operator, otherwise with what it did instead. The reveal sits deliberately
-  // outside the identity-scoped confirmation slot — aborting a shown secret
-  // would destroy the only copy the Gateway can hand out.
+  // Always show the replacement or rotation outcome, outside the identity-scoped confirmation:
+  // aborting a shown secret would destroy the only copy the Gateway can hand out.
   async function reportRotationOutcome(
     device: { id: string; name: string },
     role: string,
@@ -527,9 +531,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
           dismissHint: t("devices.inventory.rotateDismissHint"),
         })
       : showSecretRevealDialog({
-          // The title carries the announcement and the device, so the body is only the
-          // reassurance. Naming the transient disconnect here would raise an alarm the
-          // very next line has to walk back.
+          // The title names the device; the body reassures about the outcome.
           title: t("devices.inventory.rotateWithheldTitle", { device: device.name }),
           status: "success",
           message: t("devices.inventory.rotateWithheldNext"),
@@ -539,11 +541,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
         }));
   }
 
-  // Retargeting discards the draft for the target being left, so a dirty form
-  // asks first. Cancelling restores nothing because nothing is written until the
-  // operator confirms: the target, the form, the scope and the dirty flag are
-  // still the ones the selector was rendered from, and the re-render puts the
-  // selector itself back on that target.
+  // Confirm before discarding a target's dirty draft. Cancellation retains the target, form,
+  // scope, and dirty flag; rendering restores the selector to that retained target.
   async function changeExecApprovalsTarget(kind: "gateway" | "node", nodeId: string | null) {
     const devices = dataState;
     if (devices.execApprovalsDirty && !(await dialogs.confirmExecApprovalsDiscard())) {

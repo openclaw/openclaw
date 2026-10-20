@@ -10,7 +10,7 @@ import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import * as aggregation from "../infra/session-cost-usage-aggregation.js";
 import * as cacheRuntime from "../infra/session-cost-usage-cache-runtime.js";
-import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
+import { sessionCostUsageNotifications } from "../infra/session-cost-usage-events.js";
 import { closeAgentWorkAdmissions } from "../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -32,6 +32,7 @@ import { loadCostUsageSummaryCached } from "./server-methods/usage-result-cache.
 import { startSessionCostUsageProjectionLifetime } from "./session-cost-usage-lifetime.js";
 
 afterEach(() => {
+  sessionCostUsageNotifications.onUpdated = () => {};
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -76,10 +77,10 @@ const mainConfig = () => ({ agents: { entries: { main: {} } } });
 
 function observeProjection(config: Parameters<typeof costWindow>[0]) {
   const publications: SessionCostUsagePublication[] = [];
-  const offUsage = onSessionCostUsageUpdated((event) => publications.push(event));
+  sessionCostUsageNotifications.onUpdated = (event) => publications.push(event);
   const warn = vi.fn();
   const lifetime = startProjection(config, warn);
-  return { publications, offUsage, warn, lifetime };
+  return { publications, warn, lifetime };
 }
 const startProjection = (config: Parameters<typeof costWindow>[0], warn = vi.fn()) =>
   startSessionCostUsageProjectionLifetime({ getConfig: () => config, warn });
@@ -169,13 +170,30 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       deleteFiles: false,
       phase: "draining",
     });
-    const refresh = vi.spyOn(aggregation, "refreshCostUsageCacheForAgent");
-    const { publications, offUsage, warn, lifetime } = observeProjection(config);
+    const mainRefreshStarted = createDeferred();
+    const refreshUsage = aggregation.refreshCostUsageCacheForAgent;
+    const refresh = vi
+      .spyOn(aggregation, "refreshCostUsageCacheForAgent")
+      .mockImplementation((params) => {
+        if (params.agentId === "main") {
+          mainRefreshStarted.resolve();
+        }
+        return refreshUsage(params);
+      });
+    const releaseBackfill = createDeferred();
+    roster.mockImplementationOnce(async (cfg) => {
+      await releaseBackfill.promise;
+      return readRoster(cfg);
+    });
+    const { publications, warn, lifetime } = observeProjection(config);
+    const startupRoster = roster.mock.results.at(-1)!.value;
     try {
       releaseRoster.resolve();
       expect.soft(await cost()).toMatchObject(fresh(10, 0.1));
-      await withinTest(roster.mock.results.at(-1)!.value, signal);
+      releaseBackfill.resolve();
+      await withinTest(startupRoster, signal);
       await vi.advanceTimersByTimeAsync(0);
+      await withinTest(mainRefreshStarted.promise, signal);
       const refreshed = await withinTest(
         Promise.allSettled(refresh.mock.results.map((result) => result.value)),
         signal,
@@ -186,7 +204,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       );
       await lifetime.stop();
       await queued.drain();
-      expect(refreshed).not.toHaveLength(0);
+      expect(refreshed).toContainEqual({ status: "fulfilled", value: "refreshed" });
       expect.soft(refreshed.filter((result) => result.status === "rejected")).toEqual([]);
       expect.soft(publications.filter((event) => event.usageRefreshFailed)).toEqual([]);
       expect(warn).not.toHaveBeenCalled();
@@ -194,11 +212,11 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       expect(await withinTest(reading, signal)).toMatchObject({ totals: { totalTokens: 10 } });
     } finally {
       releaseRoster.resolve();
+      releaseBackfill.resolve();
       await lifetime.stop();
       queued.beginClose();
       await queued.drain();
       await readSettled;
-      offUsage();
       reopen();
       vi.useRealTimers();
     }
@@ -275,7 +293,7 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
       await closeOpenClawStateDatabaseAsync();
       listAgents.mockRestore();
       const recovered = createDeferred();
-      const offUsage = onSessionCostUsageUpdated(() => recovered.resolve());
+      sessionCostUsageNotifications.onUpdated = () => recovered.resolve();
       const restarted = startProjection(config);
       try {
         await withinTest(recovered.promise, signal);
@@ -284,7 +302,7 @@ it("coalesces usage through alias cleanup, flushes exact reads, and recovers def
         await removeUsage(target, config, await readSessionEntryInWorker(target), true);
         expect((await cost()).totals.totalTokens).toBe(0);
       } finally {
-        offUsage();
+        sessionCostUsageNotifications.onUpdated = () => {};
         await restarted.stop();
       }
     } finally {
@@ -338,7 +356,7 @@ it("projects committed usage after startup preparation without borrowing its exp
     });
     const requested = vi.spyOn(cacheRuntime, "requestCostUsageCacheRefresh");
     const roster = vi.spyOn(agentList, "listGatewayAgentsBasic");
-    const { publications, offUsage, warn, lifetime } = publisher.run("owner", () =>
+    const { publications, warn, lifetime } = publisher.run("owner", () =>
       observeProjection(config),
     );
     let pendingRefreshes = -1;
@@ -387,7 +405,6 @@ it("projects committed usage after startup preparation without borrowing its exp
       releaseRefresh.resolve();
       await Promise.all(outcomes);
       await lifetime.stop();
-      offUsage();
     }
   });
   onTestFinished(() => run);

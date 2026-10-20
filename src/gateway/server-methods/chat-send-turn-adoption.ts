@@ -68,48 +68,58 @@ export function createChatSendTurnAdoptionLifecycle(params: {
     if (terminalKnown || !ownsQueueIdentity()) {
       return;
     }
+    const runProjection = params.context.chatRunState.runs.get(params.runId);
     terminalKnown = true;
     markChatAbortTerminalOutcome(params.sourceRef);
     const now = Date.now();
     const failed = completion.kind === "failed";
-    setGatewayDedupeEntry({
-      dedupe: params.context.dedupe,
-      key: `chat:${params.runId}`,
-      session: captureAgentJobSession({
-        ...getRpcSourceIdentity(params.sourceRef),
-        lifecycleGeneration: getRpcSourceLifecycleGeneration(params.sourceRef),
-      }),
-      entry: {
-        ts: now,
-        ok: !failed,
-        payload:
-          completion.kind === "aborted"
-            ? buildAbortedChatSendPayload({
-                runId: params.runId,
-                endedAt: now,
-                stopReason: completion.stopReason,
-              })
-            : {
-                runId: params.runId,
-                status: failed ? (completion.errorKind ?? "error") : "completed",
-                endedAt: now,
-                stopReason: completion.stopReason,
-                ...(failed ? { summary: completion.error } : {}),
-              },
-      },
-    });
-    if (publish && !params.suppressReplies) {
-      broadcastChatTerminal({
-        terminalEntry: params.sourceRef,
-        context: params.context,
-        runId: params.runId,
-        sessionKey: params.sessionKey,
-        agentId: params.agentId,
-        stopReason: completion.stopReason,
-        ...(failed
-          ? { state: "error", errorMessage: completion.error, errorKind: completion.errorKind }
-          : { state: completion.kind === "aborted" ? "aborted" : "final" }),
+    try {
+      setGatewayDedupeEntry({
+        dedupe: params.context.dedupe,
+        key: `chat:${params.runId}`,
+        session: captureAgentJobSession({
+          ...getRpcSourceIdentity(params.sourceRef),
+          lifecycleGeneration: getRpcSourceLifecycleGeneration(params.sourceRef),
+        }),
+        entry: {
+          ts: now,
+          ok: !failed,
+          payload:
+            completion.kind === "aborted"
+              ? buildAbortedChatSendPayload({
+                  runId: params.runId,
+                  endedAt: now,
+                  stopReason: completion.stopReason,
+                })
+              : {
+                  runId: params.runId,
+                  status: failed ? (completion.errorKind ?? "error") : "completed",
+                  endedAt: now,
+                  stopReason: completion.stopReason,
+                  ...(failed ? { summary: completion.error } : {}),
+                },
+        },
       });
+      if (publish && !params.suppressReplies) {
+        broadcastChatTerminal({
+          terminalEntry: params.sourceRef,
+          context: params.context,
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          agentId: params.agentId,
+          stopReason: completion.stopReason,
+          ...(failed
+            ? { state: "error", errorMessage: completion.error, errorKind: completion.errorKind }
+            : { state: completion.kind === "aborted" ? "aborted" : "final" }),
+        });
+      }
+    } finally {
+      if (
+        ownsQueueIdentity() &&
+        params.context.chatRunState.runs.get(params.runId) === runProjection
+      ) {
+        params.context.chatRunState.clearRun(params.runId);
+      }
     }
   };
   const recordQueuedAbort = (publish: boolean) =>
@@ -150,7 +160,10 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         const result = finalizeReply
           ? await finalizeReply({
               ...batch,
-              isCurrent: () => batch.isCurrent() && ownsQueueIdentity(),
+              isCurrent: () =>
+                batch.isCurrent() &&
+                ownsQueueIdentity() &&
+                (batch.clientRunId !== params.runId || !terminalKnown),
             })
           : { kind: "dropped" as const, reason: "no-visible-content" as const };
         if (batch.clientRunId === params.runId && batch.completion.kind !== "progress") {

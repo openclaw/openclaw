@@ -1,43 +1,49 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gitExec from "../../infra/git-exec.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
+import { git, gitIdentity } from "./git-fixture.test-support.js";
 import * as preparation from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
-
-const execFileAsync = promisify(execFile);
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
-}
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
 describe("managed worktree creation groups", () => {
   const initializeRepository = useManagedWorktreeTestRepository();
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      vi.restoreAllMocks();
-      vi.unstubAllEnvs();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-      cleanup();
-    }),
-  );
+  const tempDirs = useWorktreeStateRoots();
   let root: string;
   let repo: string;
   let service: ManagedWorktreeService;
+
+  const create = (name: string) => service.create({ repoRoot: repo, name });
+  const head = (cwd: string) => git(cwd, "rev-parse", "HEAD");
+  function observeReads() {
+    const execute = gitExec.executeGitCommand;
+    const counts = { fetches: 0, statusReads: 0 };
+    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+      if (args[0] === "fetch") {
+        counts.fetches++;
+      }
+      if (args[0] === "status" && path.resolve(cwd) === path.resolve(repo)) {
+        counts.statusReads++;
+      }
+      return await execute(cwd, args, options);
+    });
+    return counts;
+  }
+  async function advanceRemote() {
+    const remote = path.join(root, "remote.git");
+    const args = ["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "remote update"];
+    const commit = await git(remote, ...gitIdentity, ...args);
+    await git(remote, "update-ref", "refs/heads/main", commit);
+    return commit;
+  }
 
   beforeEach(async () => {
     root = tempDirs.make("openclaw-worktree-creation-group-");
@@ -50,23 +56,54 @@ describe("managed worktree creation groups", () => {
     });
   });
 
+  it.each(["branch", "detached"])(
+    "creates from local HEAD without origin on a %s checkout",
+    async (checkout) => {
+      await git(repo, "remote", "remove", "origin");
+      await git(repo, "switch", "-c", "local-work");
+      await fs.writeFile(path.join(repo, "README.md"), "local commit\n");
+      await git(repo, "add", "README.md");
+      await git(repo, ...gitIdentity, "commit", "-m", "local work");
+      const expectedHead = await head(repo);
+      if (checkout === "detached") {
+        await git(repo, "checkout", "--detach", expectedHead);
+      }
+      const allocate = preparation.createWithWorktreeAllocation;
+      const joined = createDeferred();
+      let callers = 0;
+      vi.spyOn(preparation, "createWithWorktreeAllocation").mockImplementation(async (...args) => {
+        if (++callers === 2) {
+          joined.resolve();
+        }
+        await joined.promise;
+        return await allocate(...args);
+      });
+      const execute = gitExec.executeGitCommand;
+      const remoteCommands: string[] = [];
+      vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
+        if (["remote", "ls-remote", "fetch", "merge"].includes(args[0]!)) {
+          remoteCommands.push(args[0]!);
+        }
+        return await execute(cwd, args, options);
+      });
+
+      const records = await Promise.all([create("local-first"), create("local-second")]);
+
+      for (const record of records) {
+        expect(record.baseRef).toBe("HEAD");
+        expect(await head(record.path)).toBe(expectedHead);
+        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe(
+          "local commit\n",
+        );
+      }
+      expect(await head(repo)).toBe(expectedHead);
+      expect(remoteCommands).toEqual(["remote"]);
+    },
+  );
+
   it("shares one dirty local-default decision across a burst of twenty creates", async () => {
-    const localHead = await git(repo, "rev-parse", "HEAD");
-    const remote = path.join(root, "remote.git");
-    const remoteHead = await git(
-      remote,
-      "-c",
-      "user.name=OpenClaw Test",
-      "-c",
-      "user.email=openclaw-test@example.invalid",
-      "commit-tree",
-      "HEAD^{tree}",
-      "-p",
-      "HEAD",
-      "-m",
-      "remote update",
-    );
-    await git(remote, "update-ref", "refs/heads/main", remoteHead);
+    const localHead = await head(repo);
+    const remoteHead = await advanceRemote();
     await fs.writeFile(path.join(repo, "README.md"), "local work\n");
     const allocate = preparation.createWithWorktreeAllocation;
     const joined = createDeferred();
@@ -78,18 +115,7 @@ describe("managed worktree creation groups", () => {
       await joined.promise;
       return await allocate(...args);
     });
-    const execute = gitExec.executeGitCommand;
-    let fetches = 0;
-    let statusReads = 0;
-    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
-      if (args[0] === "fetch") {
-        fetches++;
-      }
-      if (args[0] === "status" && path.resolve(cwd) === path.resolve(repo)) {
-        statusReads++;
-      }
-      return await execute(cwd, args, options);
-    });
+    const reads = observeReads();
     const enqueue = gitExec.enqueueGitRefMutation;
     const failures: unknown[] = [];
     vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation(async (...args) => {
@@ -102,27 +128,22 @@ describe("managed worktree creation groups", () => {
     });
 
     const records = await Promise.all(
-      Array.from({ length: 20 }, (_, index) =>
-        service.create({ repoRoot: repo, name: `burst-${index}` }),
-      ),
+      Array.from({ length: 20 }, (_, index) => create(`burst-${index}`)),
     );
 
     expect(records).toHaveLength(20);
     expect(new Set(records.map((record) => record.baseRef))).toEqual(new Set(["origin/main"]));
-    expect(await git(repo, "rev-parse", "HEAD")).toBe(localHead);
+    expect(await head(repo)).toBe(localHead);
     expect(await git(repo, "rev-parse", "origin/main")).toBe(remoteHead);
     expect(await fs.readFile(path.join(repo, "README.md"), "utf8")).toBe("local work\n");
     expect(failures).toEqual([]);
-    expect(fetches).toBe(1);
-    expect(statusReads).toBe(1);
+    expect(reads).toEqual({ fetches: 1, statusReads: 1 });
   });
 
-  it("shares a prepared default with creators queued past its fetch settlement", async ({
-    signal,
-  }) => {
+  it("shares a prepared default past fetch settlement", async ({ signal }) => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const head = await git(repo, "rev-parse", "HEAD");
+    const expectedHead = await head(repo);
     const secondAdmitted = createDeferred();
     const releaseSecond = createDeferred();
     const allocate = preparation.createWithWorktreeAllocation;
@@ -136,51 +157,36 @@ describe("managed worktree creation groups", () => {
       }
       return await allocate(...args);
     });
-    const execute = gitExec.executeGitCommand;
-    let fetches = 0;
-    vi.spyOn(gitExec, "executeGitCommand").mockImplementation(async (cwd, args, options) => {
-      if (args[0] === "fetch") {
-        fetches++;
-      }
-      return await execute(cwd, args, options);
-    });
-    const first = caller.run("first", () =>
-      service.create({ repoRoot: repo, name: "cohort-first" }),
-    );
-    const second = caller.run("second", () =>
-      service.create({ repoRoot: repo, name: "cohort-second" }),
-    );
+    const reads = observeReads();
+    const first = caller.run("first", () => create("cohort-first"));
+    const second = caller.run("second", () => create("cohort-second"));
     try {
       await withinTest(
-        awaitGateBeforeSettlement(
-          secondAdmitted.promise,
-          first,
-          "second creator did not reach allocation",
-        ),
+        awaitGateBeforeSettlement(secondAdmitted.promise, first, "second creator not admitted"),
         signal,
       );
       const createdFirst = await withinTest(first, signal);
-      expect(fetches).toBe(1);
-      const late = await service.create({ repoRoot: repo, name: "cohort-late" });
-      expect(await git(late.path, "rev-parse", "HEAD")).toBe(head);
-      expect(fetches).toBe(1);
+      expect(reads.fetches).toBe(1);
+      const late = await create("cohort-late");
+      expect(await head(late.path)).toBe(expectedHead);
+      expect(reads.fetches).toBe(1);
       // An overlapping creation must not extend the freshness window indefinitely.
       clock.mockReturnValue(now + 30_000);
-      await service.create({ repoRoot: repo, name: "cohort-expired" });
-      expect(fetches).toBe(2);
+      await create("cohort-expired");
+      expect(reads.fetches).toBe(2);
       releaseSecond.resolve();
       const createdSecond = await withinTest(second, signal);
-      expect(fetches).toBe(2);
-      expect(await git(createdFirst.path, "rev-parse", "HEAD")).toBe(head);
-      expect(await git(createdSecond.path, "rev-parse", "HEAD")).toBe(head);
+      expect(reads.fetches).toBe(2);
+      expect(await head(createdFirst.path)).toBe(expectedHead);
+      expect(await head(createdSecond.path)).toBe(expectedHead);
       expect(
         await git(createdSecond.path, "rev-parse", "--symbolic-full-name", "@{upstream}"),
       ).toBe("refs/remotes/origin/main");
-      const repeated = await service.create({ repoRoot: repo, name: "cohort-second" });
+      const repeated = await create("cohort-second");
       expect(repeated.id).toBe(createdSecond.id);
-      expect(fetches).toBe(2);
-      await service.create({ repoRoot: repo, name: "cohort-fresh" });
-      expect(fetches).toBe(2);
+      expect(reads.fetches).toBe(2);
+      await create("cohort-fresh");
+      expect(reads.fetches).toBe(2);
     } finally {
       secondAdmitted.resolve();
       releaseSecond.resolve();
@@ -191,30 +197,14 @@ describe("managed worktree creation groups", () => {
   it("reuses a recent default, then refreshes after its freshness window", async () => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-    const original = await service.create({ repoRoot: repo, name: "original" });
-    const oldHead = await git(original.path, "rev-parse", "HEAD");
-    const remote = path.join(root, "remote.git");
-    const newHead = await git(
-      remote,
-      "-c",
-      "user.name=OpenClaw Test",
-      "-c",
-      "user.email=openclaw-test@example.invalid",
-      "commit-tree",
-      "HEAD^{tree}",
-      "-p",
-      "HEAD",
-      "-m",
-      "remote update",
-    );
-    await git(remote, "update-ref", "refs/heads/main", newHead);
-
+    const original = await create("original");
+    const oldHead = await head(original.path);
+    const newHead = await advanceRemote();
     clock.mockReturnValue(now + 29_000);
-    const recent = await service.create({ repoRoot: repo, name: "recent" });
-    expect(await git(recent.path, "rev-parse", "HEAD")).toBe(oldHead);
-
+    const recent = await create("recent");
+    expect(await head(recent.path)).toBe(oldHead);
     clock.mockReturnValue(now + 30_000);
-    const refreshed = await service.create({ repoRoot: repo, name: "refreshed" });
-    expect(await git(refreshed.path, "rev-parse", "HEAD")).toBe(newHead);
+    const refreshed = await create("refreshed");
+    expect(await head(refreshed.path)).toBe(newHead);
   });
 });

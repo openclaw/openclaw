@@ -1,4 +1,3 @@
-// Shared attachment controls for chat and new-session composers.
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { showToast } from "../../../lib/toast.ts";

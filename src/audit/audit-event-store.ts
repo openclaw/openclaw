@@ -1,6 +1,5 @@
 /** SQLite persistence and stable cursor queries for metadata-only audit events. */
 import { randomUUID } from "node:crypto";
-import type { Selectable } from "kysely";
 import { AUDIT_ACTIVITY_MESSAGE_KIND } from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import {
   executeSqliteQuerySync,
@@ -17,20 +16,16 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { getAuditEventQueries, type AuditEventInsert } from "./audit-event-queries.js";
+import { parseAgentRunRow, rowToAuditEvent } from "./audit-event-row.js";
 import {
   AUDIT_EVENT_SCHEMA_VERSION,
-  AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS,
-  AUDIT_INBOUND_MESSAGE_SKIPPED_REASONS,
-  AUDIT_OUTBOUND_MESSAGE_SUPPRESSED_REASONS,
-  type AgentRunAuditEventRecord,
+  type AgentRunFinishedAuditEventInput,
+  type AgentRunStartedAuditEventInput,
   type AuditEventInput,
   type AuditEventListQuery,
   type AuditEventListPage,
   type AuditEventRecord,
-  type InboundMessageAuditEventRecord,
   type MessageAuditEventInput,
-  type OutboundMessageAuditEventRecord,
-  type ToolActionAuditEventRecord,
 } from "./audit-event-types.js";
 import {
   clearAuditIdentityKeyCacheForDatabase,
@@ -44,7 +39,6 @@ import {
 } from "./message-execution-binding.js";
 
 type AuditDatabase = Pick<OpenClawStateKyselyDatabase, "audit_events">;
-type AuditEventRow = Selectable<AuditDatabase["audit_events"]>;
 
 export const AUDIT_EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const AUDIT_EVENT_MAX_ROWS = 100_000;
@@ -55,426 +49,6 @@ const auditEventRetention = new WeakMap<
   EngineConnection,
   { rowCount: number; nextExpiryAt: number; nextSequence: number }
 >();
-
-const RUN_ACTIONS = ["agent.run.started", "agent.run.finished"] as const;
-const TOOL_ACTIONS = ["tool.action.started", "tool.action.finished"] as const;
-const CONVERSATION_KINDS = ["direct", "group", "channel", "unknown"] as const;
-const DELIVERY_KINDS = ["text", "media", "other"] as const;
-const FAILURE_STAGES = ["platform_send", "queue", "unknown"] as const;
-const AUDIT_HMAC_REF_RE = /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/u;
-
-const MESSAGE_COLUMNS = [
-  "direction",
-  "channel",
-  "conversation_kind",
-  "message_outcome",
-  "reason_code",
-  "delivery_kind",
-  "failure_stage",
-  "duration_ms",
-  "result_count",
-  "account_ref",
-  "conversation_ref",
-  "message_ref",
-  "target_ref",
-] as const satisfies readonly (keyof AuditEventRow)[];
-
-function corruptAuditRow(row: AuditEventRow, problem: string): never {
-  const sequence = normalizeSqliteNumber(row.sequence);
-  const location = sequence === undefined ? "" : ` ${sequence}`;
-  throw new Error(`corrupt audit event row${location}: ${problem}`);
-}
-
-function requiredInteger(
-  row: AuditEventRow,
-  value: number | bigint | null,
-  field: string,
-  minimum: number,
-): number {
-  const normalized = normalizeSqliteNumber(value);
-  if (normalized === undefined || !Number.isSafeInteger(normalized) || normalized < minimum) {
-    corruptAuditRow(row, `invalid ${field}`);
-  }
-  return normalized;
-}
-
-function optionalInteger(
-  row: AuditEventRow,
-  value: number | bigint | null,
-  field: string,
-  minimum: number,
-): number | undefined {
-  return value === null ? undefined : requiredInteger(row, value, field, minimum);
-}
-
-function requiredText(row: AuditEventRow, value: unknown, field: string): string {
-  if (typeof value !== "string" || value.length === 0) {
-    corruptAuditRow(row, `invalid ${field}`);
-  }
-  return value;
-}
-
-function optionalText(row: AuditEventRow, value: unknown, field: string): string | undefined {
-  return value === null || value === undefined ? undefined : requiredText(row, value, field);
-}
-
-function requiredEnum<const Value extends string>(
-  row: AuditEventRow,
-  value: unknown,
-  field: string,
-  allowed: readonly Value[],
-): Value {
-  for (const candidate of allowed) {
-    if (value === candidate) {
-      return candidate;
-    }
-  }
-  return corruptAuditRow(row, `invalid ${field}`);
-}
-
-function optionalEnum<const Value extends string>(
-  row: AuditEventRow,
-  value: unknown,
-  field: string,
-  allowed: readonly Value[],
-): Value | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  return requiredEnum(row, value, field, allowed);
-}
-
-function requiredHmacRef(row: AuditEventRow, value: unknown, field: string): string {
-  const ref = requiredText(row, value, field);
-  if (!AUDIT_HMAC_REF_RE.test(ref)) {
-    corruptAuditRow(row, `invalid ${field}`);
-  }
-  return ref;
-}
-
-function optionalHmacRef(row: AuditEventRow, value: unknown, field: string): string | undefined {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
-  return requiredHmacRef(row, value, field);
-}
-
-function requireNull(row: AuditEventRow, field: keyof AuditEventRow): void {
-  if (row[field] !== null) {
-    corruptAuditRow(row, `unexpected ${field}`);
-  }
-}
-
-function requireNullColumns(row: AuditEventRow, fields: readonly (keyof AuditEventRow)[]): void {
-  for (const field of fields) {
-    requireNull(row, field);
-  }
-}
-
-function parseAuditRecordBase(row: AuditEventRow) {
-  const schemaVersion = requiredInteger(row, row.schema_version, "schemaVersion", 1);
-  if (schemaVersion !== AUDIT_EVENT_SCHEMA_VERSION) {
-    corruptAuditRow(row, `unsupported schemaVersion ${schemaVersion}`);
-  }
-  return {
-    schemaVersion,
-    sequence: requiredInteger(row, row.sequence, "sequence", 1),
-    eventId: requiredText(row, row.event_id, "eventId"),
-    sourceSequence: requiredInteger(row, row.source_sequence, "sourceSequence", 1),
-    occurredAt: requiredInteger(row, row.occurred_at, "occurredAt", 0),
-    redaction: "metadata_only" as const,
-  };
-}
-
-function parseAgentRecordFields(row: AuditEventRow) {
-  requireNullColumns(row, MESSAGE_COLUMNS);
-  return {
-    ...parseAuditRecordBase(row),
-    actorType: requiredEnum(row, row.actor_type, "actorType", ["agent", "system"]),
-    actorId: requiredText(row, row.actor_id, "actorId"),
-    agentId: requiredText(row, row.agent_id, "agentId"),
-    ...(optionalText(row, row.session_key, "sessionKey") !== undefined
-      ? { sessionKey: requiredText(row, row.session_key, "sessionKey") }
-      : {}),
-    ...(optionalText(row, row.session_id, "sessionId") !== undefined
-      ? { sessionId: requiredText(row, row.session_id, "sessionId") }
-      : {}),
-    runId: requiredText(row, row.run_id, "runId"),
-  };
-}
-
-function parseAgentRunRow(row: AuditEventRow): AgentRunAuditEventRecord {
-  requireNull(row, "tool_call_id");
-  requireNull(row, "tool_name");
-  const common = { ...parseAgentRecordFields(row), kind: "agent_run" as const };
-  const action = requiredEnum(row, row.action, "action", RUN_ACTIONS);
-  if (action === "agent.run.started") {
-    requiredEnum(row, row.status, "status", ["started"]);
-    requireNull(row, "error_code");
-    return { ...common, action, status: "started" };
-  }
-  if (row.status === "succeeded") {
-    requireNull(row, "error_code");
-    return { ...common, action, status: "succeeded" };
-  }
-  const terminal =
-    row.status === "failed"
-      ? { status: "failed" as const, errorCode: "run_failed" as const }
-      : row.status === "cancelled"
-        ? { status: "cancelled" as const, errorCode: "run_cancelled" as const }
-        : row.status === "timed_out"
-          ? { status: "timed_out" as const, errorCode: "run_timed_out" as const }
-          : row.status === "blocked"
-            ? { status: "blocked" as const, errorCode: "run_blocked" as const }
-            : corruptAuditRow(row, "invalid run terminal status");
-  requiredEnum(row, row.error_code, "errorCode", [terminal.errorCode]);
-  return { ...common, action, ...terminal };
-}
-
-function parseToolActionRow(row: AuditEventRow): ToolActionAuditEventRecord {
-  const toolCallId = optionalText(row, row.tool_call_id, "toolCallId");
-  const toolName = optionalText(row, row.tool_name, "toolName");
-  const common = {
-    ...parseAgentRecordFields(row),
-    kind: "tool_action" as const,
-    ...(toolCallId ? { toolCallId } : {}),
-    ...(toolName ? { toolName } : {}),
-  };
-  const action = requiredEnum(row, row.action, "action", TOOL_ACTIONS);
-  if (action === "tool.action.started") {
-    requiredEnum(row, row.status, "status", ["started"]);
-    requireNull(row, "error_code");
-    return { ...common, action, status: "started" };
-  }
-  if (row.status === "succeeded") {
-    requireNull(row, "error_code");
-    return { ...common, action, status: "succeeded" };
-  }
-  const terminal =
-    row.status === "failed"
-      ? { status: "failed" as const, errorCode: "tool_failed" as const }
-      : row.status === "cancelled"
-        ? { status: "cancelled" as const, errorCode: "tool_cancelled" as const }
-        : row.status === "timed_out"
-          ? { status: "timed_out" as const, errorCode: "tool_timed_out" as const }
-          : row.status === "blocked"
-            ? { status: "blocked" as const, errorCode: "tool_blocked" as const }
-            : row.status === "unknown"
-              ? { status: "unknown" as const, errorCode: "tool_outcome_unknown" as const }
-              : corruptAuditRow(row, "invalid tool terminal status");
-  requiredEnum(row, row.error_code, "errorCode", [terminal.errorCode]);
-  return { ...common, action, ...terminal };
-}
-
-function parseMessageRecordFields(row: AuditEventRow) {
-  requireNullColumns(row, ["session_key", "session_id", "tool_call_id", "tool_name"]);
-  const agentId = optionalText(row, row.agent_id, "agentId");
-  const runId = optionalText(row, row.run_id, "runId");
-  const durationMs = optionalInteger(row, row.duration_ms, "durationMs", 0);
-  const resultCount = optionalInteger(row, row.result_count, "resultCount", 0);
-  const accountRef = optionalHmacRef(row, row.account_ref, "accountRef");
-  const conversationRef = optionalHmacRef(row, row.conversation_ref, "conversationRef");
-  const messageRef = optionalHmacRef(row, row.message_ref, "messageRef");
-  const targetRef = optionalHmacRef(row, row.target_ref, "targetRef");
-  return {
-    ...parseAuditRecordBase(row),
-    kind: "message" as const,
-    channel: requiredText(row, row.channel, "channel"),
-    conversationKind: requiredEnum(
-      row,
-      row.conversation_kind,
-      "conversationKind",
-      CONVERSATION_KINDS,
-    ),
-    ...(agentId ? { agentId } : {}),
-    ...(runId ? { runId } : {}),
-    ...(durationMs !== undefined ? { durationMs } : {}),
-    ...(resultCount !== undefined ? { resultCount } : {}),
-    ...(accountRef ? { accountRef } : {}),
-    ...(conversationRef ? { conversationRef } : {}),
-    ...(messageRef ? { messageRef } : {}),
-    ...(targetRef ? { targetRef } : {}),
-  };
-}
-
-function parseInboundMessageRow(row: AuditEventRow): InboundMessageAuditEventRecord {
-  requiredEnum(row, row.action, "action", ["message.inbound.processed"]);
-  requiredEnum(row, row.direction, "direction", ["inbound"]);
-  requireNull(row, "delivery_kind");
-  requireNull(row, "failure_stage");
-  const actorType = requiredEnum(row, row.actor_type, "actorType", ["channel_sender", "system"]);
-  const actorId =
-    actorType === "channel_sender"
-      ? requiredHmacRef(row, row.actor_id, "actorId")
-      : requiredText(row, row.actor_id, "actorId");
-  const common = {
-    ...parseMessageRecordFields(row),
-    action: "message.inbound.processed" as const,
-    direction: "inbound" as const,
-    actorType,
-    actorId,
-  };
-  if (row.status === "succeeded") {
-    requiredEnum(row, row.message_outcome, "outcome", ["completed"]);
-    requireNull(row, "error_code");
-    const reasonCode = optionalEnum(
-      row,
-      row.reason_code,
-      "reasonCode",
-      AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS,
-    );
-    return {
-      ...common,
-      status: "succeeded",
-      outcome: "completed",
-      ...(reasonCode ? { reasonCode } : {}),
-    };
-  }
-  if (row.status === "blocked") {
-    requiredEnum(row, row.message_outcome, "outcome", ["skipped"]);
-    requireNull(row, "error_code");
-    const reasonCode = optionalEnum(
-      row,
-      row.reason_code,
-      "reasonCode",
-      AUDIT_INBOUND_MESSAGE_SKIPPED_REASONS,
-    );
-    return {
-      ...common,
-      status: "blocked",
-      outcome: "skipped",
-      ...(reasonCode ? { reasonCode } : {}),
-    };
-  }
-  if (row.status === "failed") {
-    requiredEnum(row, row.message_outcome, "outcome", ["failed"]);
-    requiredEnum(row, row.error_code, "errorCode", ["message_processing_failed"]);
-    const reasonCode = optionalEnum(row, row.reason_code, "reasonCode", [
-      "acp_dispatch_failed",
-      "plugin_bound_error",
-    ]);
-    return {
-      ...common,
-      status: "failed",
-      outcome: "failed",
-      errorCode: "message_processing_failed",
-      ...(reasonCode ? { reasonCode } : {}),
-    };
-  }
-  return corruptAuditRow(row, "invalid inbound status");
-}
-
-function parseOutboundMessageRow(row: AuditEventRow): OutboundMessageAuditEventRecord {
-  const action = requiredEnum(row, row.action, "action", [
-    "message.outbound.queued",
-    "message.outbound.platform-started",
-    "message.outbound.finished",
-  ]);
-  requiredEnum(row, row.direction, "direction", ["outbound"]);
-  const actorType = requiredEnum(row, row.actor_type, "actorType", ["agent", "system"]);
-  const actorId = requiredText(row, row.actor_id, "actorId");
-  const commonFields = parseMessageRecordFields(row);
-  const common = {
-    ...commonFields,
-    action,
-    direction: "outbound" as const,
-    actorType,
-    actorId,
-  };
-  if (row.status === "started") {
-    requireNull(row, "delivery_kind");
-    requireNullColumns(row, ["error_code", "reason_code", "failure_stage"]);
-    if (action === "message.outbound.queued") {
-      requiredEnum(row, row.message_outcome, "outcome", ["queued"]);
-      return { ...common, action, status: "started", outcome: "queued" };
-    }
-    if (action === "message.outbound.platform-started") {
-      requiredEnum(row, row.message_outcome, "outcome", ["platform_started"]);
-      return { ...common, action, status: "started", outcome: "platform_started" };
-    }
-    return corruptAuditRow(row, "invalid outbound lifecycle action");
-  }
-  requiredEnum(row, action, "action", ["message.outbound.finished"]);
-  const terminalCommon = { ...common, action: "message.outbound.finished" as const };
-  if (row.status === "succeeded") {
-    const deliveryKind = optionalEnum(row, row.delivery_kind, "deliveryKind", DELIVERY_KINDS);
-    requiredEnum(row, row.message_outcome, "outcome", ["sent"]);
-    requireNullColumns(row, ["error_code", "reason_code", "failure_stage"]);
-    return {
-      ...terminalCommon,
-      status: "succeeded",
-      outcome: "sent",
-      ...(deliveryKind ? { deliveryKind } : {}),
-    };
-  }
-  if (row.status === "blocked") {
-    requireNull(row, "delivery_kind");
-    requiredEnum(row, row.message_outcome, "outcome", ["suppressed"]);
-    requireNullColumns(row, ["error_code", "failure_stage"]);
-    const reasonCode = requiredEnum(
-      row,
-      row.reason_code,
-      "reasonCode",
-      AUDIT_OUTBOUND_MESSAGE_SUPPRESSED_REASONS,
-    );
-    return {
-      ...terminalCommon,
-      status: "blocked",
-      outcome: "suppressed",
-      reasonCode,
-    };
-  }
-  if (row.status === "failed") {
-    const deliveryKind = optionalEnum(row, row.delivery_kind, "deliveryKind", DELIVERY_KINDS);
-    requiredEnum(row, row.message_outcome, "outcome", ["failed"]);
-    requireNull(row, "reason_code");
-    const errorCode = requiredEnum(row, row.error_code, "errorCode", [
-      "message_delivery_failed",
-      "message_delivery_partial_failure",
-    ]);
-    const failureStage = requiredEnum(row, row.failure_stage, "failureStage", FAILURE_STAGES);
-    return {
-      ...terminalCommon,
-      status: "failed",
-      outcome: "failed",
-      errorCode,
-      failureStage,
-      ...(deliveryKind ? { deliveryKind } : {}),
-    };
-  }
-  if (row.status === "unknown") {
-    requireNull(row, "delivery_kind");
-    requiredEnum(row, row.message_outcome, "outcome", ["unknown"]);
-    requireNullColumns(row, ["error_code", "reason_code"]);
-    const failureStage = requiredEnum(row, row.failure_stage, "failureStage", FAILURE_STAGES);
-    return {
-      ...terminalCommon,
-      status: "unknown",
-      outcome: "unknown",
-      failureStage,
-    };
-  }
-  return corruptAuditRow(row, "invalid outbound status");
-}
-
-export function rowToAuditEvent(row: AuditEventRow): AuditEventRecord {
-  if (row.kind === "agent_run") {
-    return parseAgentRunRow(row);
-  }
-  if (row.kind === "tool_action") {
-    return parseToolActionRow(row);
-  }
-  if (row.kind !== "message") {
-    corruptAuditRow(row, "invalid kind");
-  }
-  if (row.direction === "inbound") {
-    return parseInboundMessageRow(row);
-  }
-  if (row.direction === "outbound") {
-    return parseOutboundMessageRow(row);
-  }
-  return corruptAuditRow(row, "invalid message direction");
-}
 
 function projectMessageIdentities(db: EngineConnection, input: MessageAuditEventInput) {
   const identity = loadOrCreateAuditIdentityKey(db);
@@ -503,11 +77,11 @@ function projectMessageIdentities(db: EngineConnection, input: MessageAuditEvent
   };
 }
 
-function bindAuditEvent(db: EngineConnection, input: AuditEventInput) {
+function bindAuditEvent(db: EngineConnection, input: AuditEventInput, eventId: string) {
   const message =
     input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? projectMessageIdentities(db, input) : undefined;
   return {
-    event_id: randomUUID(),
+    event_id: eventId,
     source_id: input.sourceId,
     source_sequence: input.sourceSequence,
     schema_version: AUDIT_EVENT_SCHEMA_VERSION,
@@ -573,12 +147,18 @@ function deleteExpiredAuditEvents(db: EngineConnection, now: number) {
   );
 }
 
-function pruneAfterInsert(db: EngineConnection, now: number, at: number, sequence: number): void {
+function pruneAfterInsert(
+  db: EngineConnection,
+  now: number,
+  at: number,
+  insertedCount: number,
+  nextSequence: number,
+): void {
   const kysely = getNodeSqliteKysely<AuditDatabase>(db);
   const cached = auditEventRetention.get(db);
   let retention = cached
     ? {
-        rowCount: cached.rowCount + 1,
+        rowCount: cached.rowCount + insertedCount,
         nextExpiryAt: Math.min(cached.nextExpiryAt, at + AUDIT_EVENT_RETENTION_MS),
       }
     : readAuditEventRetention(db);
@@ -619,13 +199,35 @@ function pruneAfterInsert(db: EngineConnection, now: number, at: number, sequenc
       (normalizeSqliteNumber(oldest?.oldest ?? null) ?? Number.POSITIVE_INFINITY) +
       AUDIT_EVENT_RETENTION_MS;
   }
-  auditEventRetention.set(db, { ...retention, nextSequence: sequence + 1 });
+  auditEventRetention.set(db, { ...retention, nextSequence });
+}
+
+function getAuditAutocommitRetention(db: EngineConnection, now: number, at: number, count: 1 | 2) {
+  const retention = auditEventRetention.get(db);
+  return !db.isTransaction &&
+    !isPostgresSqlConnection(db) &&
+    retention &&
+    retention.rowCount + count <= AUDIT_EVENT_MAX_ROWS &&
+    retention.nextExpiryAt >= now &&
+    at + AUDIT_EVENT_RETENTION_MS >= now &&
+    Number.isSafeInteger(retention.nextSequence + (count - 1))
+    ? retention
+    : undefined;
+}
+
+function parseInsertedAuditSequence(value: string): number {
+  const sequence = Number(value);
+  if (!Number.isSafeInteger(sequence) || sequence < 1) {
+    throw new Error("audit event sequence is outside the supported integer range");
+  }
+  return sequence;
 }
 
 /** Persist one projected event idempotently and prune fixed retention bounds. */
 export function recordAuditEventInDatabase(
   input: AuditEventInput,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
+  eventId: string = randomUUID(),
 ): AuditEventRecord | undefined {
   const executionToken =
     input.kind === "message" && input.direction === "outbound"
@@ -637,22 +239,14 @@ export function recordAuditEventInDatabase(
   const { db } = options.database;
   const nested = db.isTransaction;
   try {
-    const retention = auditEventRetention.get(db);
-    const currentTime = Date.now();
-    const expiry = input.occurredAt + AUDIT_EVENT_RETENTION_MS;
-    if (
-      input.kind !== "message" &&
-      !nested &&
-      !isPostgresSqlConnection(db) &&
-      retention &&
-      retention.rowCount < AUDIT_EVENT_MAX_ROWS &&
-      retention.nextExpiryAt >= currentTime &&
-      expiry >= currentTime &&
-      Number.isSafeInteger(retention.nextSequence)
-    ) {
-      const values = bindAuditEvent(db, input);
-      // This is the only runtime inserter. Validate the complete result before
-      // autocommit; even a duplicate source consumes an AUTOINCREMENT sequence.
+    const retention =
+      input.kind !== "message"
+        ? getAuditAutocommitRetention(db, Date.now(), input.occurredAt, 1)
+        : undefined;
+    if (retention) {
+      const values = bindAuditEvent(db, input, eventId);
+      // Validate the complete result before autocommit; even a duplicate
+      // source consumes an AUTOINCREMENT sequence.
       const record = rowToAuditEvent({ ...values, sequence: retention.nextSequence });
       const queries = getAuditEventQueries(db);
       const inserted = runOpenClawStateWriteTransaction(() => queries.insert(values), options, {
@@ -661,25 +255,26 @@ export function recordAuditEventInDatabase(
       retention.nextSequence += 1;
       if (inserted) {
         retention.rowCount += 1;
-        retention.nextExpiryAt = Math.min(retention.nextExpiryAt, expiry);
+        retention.nextExpiryAt = Math.min(
+          retention.nextExpiryAt,
+          input.occurredAt + AUDIT_EVENT_RETENTION_MS,
+        );
       }
       return inserted ? record : undefined;
     }
     return runOpenClawStateWriteTransaction(() => {
       // Read losslessly so Node's rowid decoding cannot preempt the safe-integer guard.
-      const values = bindAuditEvent(db, input);
+      const values = bindAuditEvent(db, input, eventId);
       const queries = getAuditEventQueries(db);
       const insert = queries.insert(values);
       if (insert === undefined) {
+        // Terminal bindings commit with the event, so a replay settles both rows.
         auditEventRetention.delete(db);
         return undefined;
       }
-      const insertedSequence = Number(insert.sequence);
-      if (!Number.isSafeInteger(insertedSequence) || insertedSequence < 1) {
-        throw new Error("audit event sequence is outside the supported integer range");
-      }
+      const insertedSequence = parseInsertedAuditSequence(insert.sequence);
       const now = Date.now();
-      pruneAfterInsert(db, now, values.occurred_at, insertedSequence);
+      pruneAfterInsert(db, now, values.occurred_at, 1, insertedSequence + 1);
       // Current events cannot be removed by retention: sequence allocation puts
       // them after every existing row. An expired replay may be pruned immediately.
       const row =
@@ -698,6 +293,77 @@ export function recordAuditEventInDatabase(
   } catch (error) {
     auditEventRetention.delete(db);
     clearAuditIdentityKeyCacheForDatabase(db);
+    throw error;
+  }
+}
+
+/** Persist a completed run as one replay-safe insert and one retention pass. */
+export function recordAuditRunInDatabase(
+  start: AgentRunStartedAuditEventInput,
+  finish: AgentRunFinishedAuditEventInput,
+  options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
+  eventIds: readonly [string, string],
+): void {
+  const { db } = options.database;
+  const nested = db.isTransaction;
+  const values = [
+    bindAuditEvent(db, start, eventIds[0]),
+    bindAuditEvent(db, finish, eventIds[1]),
+  ] as const;
+  // Validate both inputs before their atomic INSERT; allocated sequences are checked below.
+  for (const value of values) {
+    parseAgentRunRow({ ...value, sequence: 1 });
+  }
+  const queries = getAuditEventQueries(db);
+  try {
+    const retention = getAuditAutocommitRetention(
+      db,
+      Date.now(),
+      Math.min(start.occurredAt, finish.occurredAt),
+      2,
+    );
+    if (retention) {
+      const { rows } = runOpenClawStateWriteTransaction(() => queries.insertRun(values), options, {
+        singleStatement: true,
+      });
+      // SQLite consumes a sequence for every attempt, including replay conflicts.
+      retention.nextSequence += 2;
+      retention.rowCount += rows.length;
+      retention.nextExpiryAt = Math.min(
+        retention.nextExpiryAt,
+        ...rows.map(
+          (row) =>
+            values[row.event_id === eventIds[0] ? 0 : 1].occurred_at + AUDIT_EVENT_RETENTION_MS,
+        ),
+      );
+      return;
+    }
+    return runOpenClawStateWriteTransaction(() => {
+      const { rows } = queries.insertRun(values);
+      if (rows.length === 0) {
+        auditEventRetention.delete(db);
+        return;
+      }
+      // RETURNING order is not a contract; stable event IDs identify each half.
+      const inserted = rows.map((row) => ({
+        values: row.event_id === eventIds[0] ? values[0] : values[1],
+        sequence: parseInsertedAuditSequence(row.sequence),
+      }));
+      const now = Date.now();
+      pruneAfterInsert(
+        db,
+        now,
+        Math.min(...inserted.map((row) => row.values.occurred_at)),
+        inserted.length,
+        // Both VALUES attempts consume a sequence, including either replay conflict.
+        Math.max(...inserted.map((row) => row.sequence + (row.values === values[0] ? 2 : 1))),
+      );
+      if (nested) {
+        auditEventRetention.delete(db);
+      }
+    }, options);
+  } catch (error) {
+    auditEventRetention.delete(db);
     throw error;
   }
 }

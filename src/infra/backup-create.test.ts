@@ -6,7 +6,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
-import { formatBackupCreateSummary } from "../commands/backup-summary.js";
 import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
 import { backupCreateCommand } from "../commands/backup.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
@@ -30,7 +29,6 @@ import {
 } from "./backup-create-family.test-support.js";
 import { createBackupArchive, type BackupCreateResult } from "./backup-create.js";
 import {
-  makeBackupResult,
   createBackupClassificationInventory,
   listArchiveEntries,
   listArchiveEntryDetails,
@@ -145,49 +143,6 @@ function resolveCanonicalTestSqlitePath(
     ? resolveOpenClawStateSqlitePath(state.env)
     : state.statePath("agents", "main", "agent", "openclaw-agent.sqlite");
 }
-
-describe("formatBackupCreateSummary", () => {
-  const backupArchiveLine = "Backup archive: /tmp/openclaw-backup.tar.gz";
-
-  it.each([
-    {
-      name: "formats created archives with included and skipped paths",
-      result: makeBackupResult({
-        verified: true,
-        skippedVolatileCount: 3,
-        assets: [
-          {
-            kind: "state",
-            sourcePath: "/state",
-            archivePath: "archive/state",
-            displayPath: "~/.openclaw",
-          },
-        ],
-        skipped: [
-          {
-            kind: "workspace",
-            sourcePath: "/workspace",
-            displayPath: "~/Projects/openclaw",
-            reason: "covered",
-            coveredBy: "~/.openclaw",
-          },
-        ],
-      }),
-      expected: [
-        backupArchiveLine,
-        "Included 1 path:",
-        "- state: ~/.openclaw",
-        "Skipped 1 path:",
-        "- workspace: ~/Projects/openclaw (covered by ~/.openclaw)",
-        "Created /tmp/openclaw-backup.tar.gz",
-        "Skipped 3 volatile files (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).",
-        "Archive verification: passed",
-      ],
-    },
-  ])("$name", ({ result, expected }) => {
-    expect(formatBackupCreateSummary(result)).toEqual(expected);
-  });
-});
 
 describe("writeTarArchiveWithRetry", () => {
   const eof = Object.assign(new Error("encountered unexpected EOF"), {

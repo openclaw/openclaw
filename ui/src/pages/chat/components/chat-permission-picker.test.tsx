@@ -79,8 +79,9 @@ it("keeps declared shortcuts in the menu and forwards ordinary typing to the com
     </>
   ));
   flush();
+  const composer = container.querySelector("textarea")!;
   const redirect = (event: KeyboardEvent) =>
-    focusChatComposerFromPrintableKeydown(container, event);
+    focusChatComposerFromPrintableKeydown(container, event, composer);
   document.addEventListener("keydown", redirect, true);
   onTestFinished(() => document.removeEventListener("keydown", redirect, true));
   const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;

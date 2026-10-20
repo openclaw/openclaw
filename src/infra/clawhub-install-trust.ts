@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { resolveClawHubBaseUrl, type ClawHubFetch } from "./clawhub-client.js";
+import { resolveClawHubBaseUrl } from "./clawhub-client.js";
 import { encodeClawHubPackagePath, formatClawHubReleaseLabel } from "./clawhub-display.js";
 import { normalizeClawHubSha256Hex } from "./clawhub-integrity.js";
 import {
@@ -507,7 +507,6 @@ async function fetchClawHubSubjectSecurity(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
 }): Promise<ClawHubFetchedSubjectSecurity> {
   if (params.subject.kind === "plugin" || params.subject.kind === "claw") {
     const security = await fetchClawHubPackageSecurity({
@@ -516,7 +515,6 @@ async function fetchClawHubSubjectSecurity(params: {
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
     });
     return {
       security,
@@ -558,7 +556,6 @@ export async function checkClawHubPackageTrust(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
   logger?: ClawHubInstallLogger;
   mode?: "install" | "update";
   confirmOnUpdate?: boolean;
@@ -575,7 +572,6 @@ export async function checkClawHubPackageTrust(params: {
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
-      fetchImpl: params.fetchImpl,
     });
     const identityFailure = validateClawHubSecurityIdentity({
       security: fetchedSecurity.security,

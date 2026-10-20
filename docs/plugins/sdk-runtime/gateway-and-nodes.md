@@ -537,6 +537,13 @@ Gateway-hosted services also receive `ctx.getCron?.()` for the scheduler operati
 already available to Gateway hooks: `list`, `add`, `update`, `remove`, and
 `removeStaleJobFamily`. Non-Gateway service hosts omit this getter.
 
+Cron operations that require an agent owner reject with error code
+`AGENT_SELECTION_REQUIRED` when no explicit or ambient owner resolves. The
+in-process service handle preserves the error object and its `code` property.
+Pass an explicit `agentId` or configure `agents.defaults.systemAgent.agentId`;
+optional background services can handle this code to defer creation until an
+owner is available. Match the code rather than the human-readable message.
+
 Current service handles also expose `enqueueRun(id, mode)` for service-owned
 work. It uses the normal cron admission queue with the service's live authority,
 independently of a completed agent tool caller. Use `"if-enabled"` to request an

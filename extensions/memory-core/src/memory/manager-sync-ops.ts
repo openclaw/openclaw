@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
+import { resolveActiveMemoryRecallSources } from "./active-memory-session-sources.js";
 import {
   createEmbeddingProvider,
   type EmbeddingProvider,
@@ -184,7 +185,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       return;
     }
     this.assertRequiredProviderAvailable("sync");
-    const existingMeta = this.readMeta();
+    const existingMeta = this.database.facts.meta;
     if (
       !existingMeta ||
       existingMeta.model === "fts-only" ||
@@ -206,6 +207,18 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
     const hasTargetSessionRequest = hasTargetedSessionSyncParams(params);
     let needsFullReindex = Boolean(params?.force && !hasTargetSessionRequest);
     try {
+      if (!needsFullReindex && this.sources.has("sessions")) {
+        const excluded = await resolveActiveMemoryRecallSources({
+          rows: await this.database.readSourceState({ source: "sessions" }),
+          cfg: this.cfg,
+          agentId: this.agentId,
+        });
+        // Invalid helper rows do not need an embedding provider or a forced rebuild.
+        // Reconcile them before an unrelated source can fail to embed.
+        for (const row of excluded) {
+          await this.deleteIndexedFile(row.path, "sessions", row.hash);
+        }
+      }
       // An unavailable configured provider must not replace semantic vectors
       // with FTS-only rows; fresh and already-FTS-only indexes remain safe.
       this.assertFtsOnlySyncAllowed();
@@ -225,7 +238,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       // Keyword-only generations never write vectors, so they must not wait for
       // the vector extension before text and FTS indexing can proceed.
       const vectorReady = syncProvider ? await this.ensureVectorReady() : false;
-      const meta = this.readMeta();
+      const meta = this.database.facts.meta;
       // A sibling manager can publish different dimensions or an empty rebuild.
       if (this.database.ensuredVectorDimensions !== meta?.vectorDims) {
         this.database.ensuredVectorDimensions = undefined;
@@ -248,7 +261,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         : this.providerKey;
       const syncProviderIdentities =
         this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities();
-      const hasIndexedChunks = this.hasIndexedChunks();
+      const hasIndexedChunks = this.database.facts.hasIndexedChunks;
       const indexIdentity = resolveMemoryIndexIdentityState({
         meta,
         // Also detects provider→FTS-only transitions so orphaned old-model FTS rows are cleaned up.
@@ -312,7 +325,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
         syncProvider === null &&
         Boolean(this.settings.provider) &&
         this.settings.provider !== "none";
-      const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.hasSemanticChunks();
+      const hasOnlyFtsChunks = needsFtsOnlyClassification && !this.database.facts.hasSemanticChunks;
       const canRebuildMissingIdentity =
         syncProvider !== null ||
         !this.settings.provider ||
@@ -622,6 +635,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             cacheEnabled: this.cache.enabled,
             ftsEnabled: shadow.fts.enabled,
             ftsTokenizer: this.settings.store.fts.tokenizer,
+            fresh: postgresStage ? undefined : true,
           });
 
           await this.executeSourceSync({
@@ -666,11 +680,10 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
             nextMeta.vectorDims = this.vector.dims;
           }
 
-          await this.writeMeta(nextMeta);
+          await this.database.writeMetadata(nextMeta);
           return {
             nextMeta,
             vectorIndexComplete,
-            hasVectors: shadow.facts.hasVectorTable,
           };
         } finally {
           // Escaped continuations must fail closed, never write to the live DB.
@@ -704,7 +717,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
               sourceIdentity: readMemoryShadowIdentity(tempDbPath),
               metaKey: MEMORY_INDEX_META_KEY,
               expectedRevision: originalRevision,
-              sourceHasVectors: rebuilt.hasVectors,
+              sourceSchema: shadow.searchSchema,
               vectorIndexComplete: rebuilt.vectorIndexComplete,
               extensionPath: shadow.vector.extensionPath,
             },

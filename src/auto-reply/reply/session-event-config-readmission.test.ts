@@ -4,6 +4,11 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
+  createAdmittedRunOperatorAuthority,
+  readAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
+import {
   applyEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
 } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
@@ -14,6 +19,7 @@ import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-ca
 import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
@@ -38,11 +44,18 @@ await Promise.all([
 ]);
 
 /** Attempts the real managed write tool, as the model would, and reports the final effect. */
-async function attemptRealWrite(params: RunEmbeddedAgentParams, filePath: string) {
+async function attemptRealWrite(
+  params: RunEmbeddedAgentParams,
+  filePath: string,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
+) {
   const admittedRunContext = expectDefined(
     await params.preparedRunAdmission?.admit("gateway", params.runId),
     "ordinary reply admission",
   );
+  if (operatorAuthority) {
+    expect(readAdmittedRunOperatorAuthority(admittedRunContext)?.profileId).toBe("original-guest");
+  }
   params.onExecutionPhase?.({ phase: "model_call_started" });
   await params.onExecutionStarted?.();
   await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
@@ -154,6 +167,25 @@ it.for([
           updatedAt: Date.now(),
           sessionStartedAt: Date.now(),
         });
+        let sourceReferences = 1;
+        const operatorAuthority =
+          scenario === "allow-control"
+            ? createAdmittedRunOperatorAuthority({
+                profileId: "original-guest",
+                scopes: ["operator.write"],
+                assertCurrent() {
+                  if (sourceReferences === 0) {
+                    throw new Error("original source released");
+                  }
+                },
+                retain() {
+                  sourceReferences++;
+                  return () => {
+                    sourceReferences--;
+                  };
+                },
+              })
+            : undefined;
         const filePath = path.join(state.workspaceDir, "readmission.txt");
         const firstStarted = createDeferred();
         const releaseFirst = createDeferred();
@@ -171,11 +203,13 @@ it.for([
               firstStarted.resolve();
               await releaseFirst.promise;
             } else {
-              await attemptRealWrite(params, filePath);
+              await attemptRealWrite(params, filePath, operatorAuthority);
             }
             return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
           });
-        const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey);
+        const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey, {
+          operatorAuthority,
+        });
         const first = enqueueSessionEventForHost("First admitted work", {
           ...scope,
           source: "task",
@@ -187,6 +221,7 @@ it.for([
         let storming = false;
         let revoked = false;
         let completion: ReturnType<typeof enqueueSessionEventForHost> | undefined;
+        let replay: ReturnType<typeof enqueueSessionEventForHost> | undefined;
         try {
           await expect(first.accepted).resolves.toEqual({ ok: true });
           await withinTest(firstStarted.promise, signal);
@@ -212,6 +247,7 @@ it.for([
               }
             },
           });
+          sourceReferences--;
           // The active turn accepts the completion as a deferred follow-up.
           await expect(completion.accepted).resolves.toEqual({ ok: true });
           setRuntimeConfigSnapshot({
@@ -240,14 +276,44 @@ it.for([
           // Final effect: only the unrestricted control reaches the filesystem.
           const written = await fs.readFile(filePath, "utf8").catch(() => undefined);
           expect(written).toBe(scenario === "allow-control" ? "written\n" : undefined);
+          if (scenario === "allow-control") {
+            const completed = expectDefined(
+              await readSessionEntryInWorker(scope),
+              "completed source",
+            );
+            expect(completed.restartRecoveryTerminalRunIds).toContain("exec:readmission-process");
+            await fs.writeFile(filePath, "retained after completion\n");
+            replay = enqueueSessionEventForHost("Background exec completed", {
+              ...scope,
+              source: "exec",
+              sourceTurnId: "exec:readmission-process",
+              expectedTarget: await captureSessionEventTargetForHost(
+                scope.agentId,
+                scope.sessionKey,
+              ),
+              abortSignal: signal,
+              deliver: false,
+            });
+            await expect(replay.settled).resolves.toMatchObject({
+              executionStarted: false,
+              delivered: false,
+            });
+            expect(prompts).toHaveLength(2);
+            expect(await fs.readFile(filePath, "utf8")).toBe("retained after completion\n");
+            expect((await readSessionEntryInWorker(scope))?.restartRecoveryTerminalRunIds).toEqual(
+              completed.restartRecoveryTerminalRunIds,
+            );
+            expect(replay.cancel()).toBe(false);
+          }
           // Settled either way: nothing is left for a later ordinary turn to drain.
           expect(completion.cancel()).toBe(false);
+          expect(sourceReferences).toBe(0);
           expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
         } finally {
           storming = false;
           revoked = false;
           releaseFirst.resolve();
-          await Promise.allSettled([first.settled, completion?.settled]);
+          await Promise.allSettled([first.settled, completion?.settled, replay?.settled]);
           await drainGlobalSingletonLifecycleState("restart");
           resetSystemEventsForTest();
         }

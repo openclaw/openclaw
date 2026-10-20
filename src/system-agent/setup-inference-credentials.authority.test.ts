@@ -171,7 +171,7 @@ process.exit(1);
     ]);
     const activate = setupExecution.activateGatewaySetupInference;
     vi.spyOn(setupExecution, "activateGatewaySetupInference").mockImplementation((params) =>
-      setup.runWithMetadata(() => activate({ ...params, modelRef, deps: setup.deps })),
+      setup.runWithMetadata(() => activate({ ...params, modelRef })),
     );
     const tracker = createWizardSessionTracker();
     const controller = new AbortController();
@@ -252,8 +252,9 @@ process.exit(1);
       auth: [{ id: "fixture-login", label: "Muse Code", kind: "device_code", run: login }],
     };
     vi.spyOn(providerRuntime, "resolvePluginProvidersCore").mockReturnValue([provider]);
-    setup.deps.resolveManifestProviderAuthChoice = () =>
-      authChoice("meta", "device-code", "Muse Code");
+    setup.resolveManifestProviderAuthChoice.mockReturnValue(
+      authChoice("meta", "device-code", "Muse Code"),
+    );
     mockPluginRegistry(["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)));
     vi.spyOn(runtimePluginInstall, "ensureModelSelectionRuntimePlugins").mockImplementation(
       async ({ cfg }) => ({ ok: true, cfg, codexInstalled: false }),

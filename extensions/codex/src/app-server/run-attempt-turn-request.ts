@@ -302,7 +302,8 @@ export async function prepareCodexAttemptTurnRequest(
         await turnClient.request("turn/start", turnStartParams, {
           timeoutMs: params.timeoutMs,
           signal: runAbortController.signal,
-          withCurrent: connection.withCurrent,
+          withCurrent: (write) =>
+            runtime.nativeExecutionPolicy.admit(write, connection.withCurrent),
           assertCurrent: () => {
             assertTurnCurrent();
             runtime.nativeExecutionPolicy.source?.();

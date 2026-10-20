@@ -16,6 +16,7 @@ import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
+import { defaultRuntime } from "../runtime.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
@@ -121,7 +122,7 @@ const arrange = createAgentsDeleteFixture((cfg) => {
 });
 const readJson = () => readAgentDeleteJsonLogs(runtime.log.mock.calls)[0];
 const removeAgent = (options: Partial<Parameters<typeof agentsDeleteCommand>[0]> = {}) =>
-  agentsDeleteCommand({ id: "ops", force: true, ...options }, runtime);
+  agentsDeleteCommand({ id: "ops", force: true, ...options });
 const registeredAgentIds = () =>
   listOpenClawRegisteredAgentDatabases().map((entry) => entry.agentId);
 const credentialsError = () =>
@@ -177,8 +178,15 @@ function expectSessionStore(
 }
 
 describe("agents delete command", () => {
+  afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+    vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) =>
+      runtime.log(JSON.stringify(value, null, 2)),
+    );
     vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.replaceConfigFile.mockReset().mockResolvedValue(undefined);
@@ -193,7 +201,7 @@ describe("agents delete command", () => {
   it("requires --force without an interactive terminal", async ({ state }) => {
     await state.setup();
     terminalMocks.isTerminalInteractive.mockReturnValue(false);
-    await agentsDeleteCommand({ id: "ops" }, runtime);
+    await agentsDeleteCommand({ id: "ops" });
     expect(runtime.error).toHaveBeenCalledWith("Non-interactive session. Re-run with --force.");
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(wizardMocks.createClackPrompter).not.toHaveBeenCalled();

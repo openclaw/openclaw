@@ -11,6 +11,11 @@ type HybridInputs = Parameters<typeof mergeHybridResults>[0];
 type VectorHit = HybridInputs["vector"][number];
 type KeywordHit = HybridInputs["keyword"][number];
 
+const disabledRanking: Pick<HybridInputs, "mmr" | "temporalDecay"> = {
+  mmr: { enabled: false, lambda: 0.7 },
+  temporalDecay: { enabled: false, halfLifeDays: 30 },
+};
+
 function vectorHit(id: string, vectorScore: number, details: Partial<VectorHit> = {}): VectorHit {
   return {
     id,
@@ -74,6 +79,7 @@ describe("memory hybrid helpers", () => {
       vectorHit("strict-later", 0.9, { endLine: 1, snippet: "shared semantic topic" }),
     ];
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 0.7,
       textWeight: 0.3,
       mmr: { enabled: true, lambda: 0.2 },
@@ -137,6 +143,7 @@ describe("memory hybrid helpers", () => {
       ];
       const keyword = [keywordHit("old", 0.8, { path: oldPath })];
       const merged = await mergeHybridResults({
+        ...disabledRanking,
         vector,
         keyword,
         vectorWeight: 0.7,
@@ -174,6 +181,7 @@ describe("memory hybrid helpers", () => {
       const vectorCandidates = [vectorHit("strict", 1)];
       const keyword = [keywordHit("keyword", 0, { hasBodyMatch: true, rankingScore: 0.8 })];
       const merged = await mergeHybridResults({
+        ...disabledRanking,
         vectorWeight: 0.7,
         textWeight: 0.3,
         vector: [...vectorCandidates, vectorHit("keyword", vectorScore)],
@@ -195,6 +203,7 @@ describe("memory hybrid helpers", () => {
   it("keeps null importance neutral and deterministically boosts important entries", async () => {
     const baseEntry = vectorHit("neutral", 0.8, { path: "MEMORY.md", endLine: 1 });
     const base = {
+      ...disabledRanking,
       vectorWeight: 1,
       textWeight: 0,
       keyword: [],
@@ -217,6 +226,7 @@ describe("memory hybrid helpers", () => {
 
   it("boosts active-project results, demotes foreign results, and leaves global results neutral", async () => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 1,
       textWeight: 0,
       activeProjectKeys: ["github.com/openclaw/openclaw"],
@@ -256,6 +266,7 @@ describe("memory hybrid helpers", () => {
     },
   ])("keeps a diverse hit in the selected set $label", async ({ activeProjectKeys, expected }) => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 1,
       textWeight: 0,
       mmr: { enabled: true, lambda: 0.7 },
@@ -278,6 +289,7 @@ describe("memory hybrid helpers", () => {
 
   it("uses path BM25 only for partial path-only hybrid hits", async () => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 0.7,
       textWeight: 0.3,
       vector: [],
@@ -297,6 +309,7 @@ describe("memory hybrid helpers", () => {
 
   it("lets a fresh path-only exact hit beat stale content-backed retrieval", async () => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 0.7,
       textWeight: 0.3,
       nowMs: Date.UTC(2026, 6, 11),
@@ -334,6 +347,7 @@ describe("memory hybrid helpers", () => {
 
   it("ignores zero-weight and non-positive content when ordering exact hybrid hits", async () => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 1,
       textWeight: 0,
       vector: [vectorHit("vector", -1, { path: "memory/z/foo.md", exactPathSpecificity: 2 })],
@@ -352,6 +366,7 @@ describe("memory hybrid helpers", () => {
 
   it("uses net weighted content relevance for exact hybrid ordering", async () => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 1,
       textWeight: 1,
       vector: [
@@ -381,6 +396,7 @@ describe("memory hybrid helpers", () => {
 
   it("keeps the full content-backed exact group ahead of path-only hits through MMR", async () => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 0,
       textWeight: 1,
       mmr: { enabled: true, lambda: 0.5 },
@@ -414,6 +430,7 @@ describe("memory hybrid helpers", () => {
 
   it("keeps vector-only exact path candidates ahead of stronger semantic matches", async () => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 1,
       textWeight: 1,
       vector: [
@@ -437,6 +454,7 @@ describe("memory hybrid helpers", () => {
 
   it("uses specificity across exact tiers and combined relevance within one tier", async () => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 0.5,
       textWeight: 0.5,
       vector: [
@@ -481,6 +499,7 @@ describe("memory hybrid helpers", () => {
 
   it("keeps exact path identifiers ahead after decay, oversized weights, and MMR", async () => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 1,
       textWeight: 1,
       nowMs: Date.UTC(2026, 6, 11),
@@ -507,6 +526,7 @@ describe("memory hybrid helpers", () => {
 
   it("mergeHybridResults prefers keyword snippet when ids overlap", async () => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 0.5,
       textWeight: 0.5,
       vector: [vectorHit("a", 0.2, { snippet: "vec-a" })],
@@ -540,6 +560,7 @@ describe("memory hybrid helpers", () => {
         exactPathSpecificity: 0 as const,
       }));
       const merged = await mergeHybridResults({
+        ...disabledRanking,
         vectorWeight: 0.7,
         textWeight: 0.3,
         vector: vectorScore === null ? [] : keyword.map((entry) => ({ ...entry, vectorScore })),
@@ -606,6 +627,7 @@ describe("memory hybrid helpers", () => {
       bothText: "memory/matched.md",
     };
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 0.7,
       textWeight: 0.3,
       isNonTextMediaPath: (path) => /\.(?:png|wav)$/u.test(path),
@@ -633,6 +655,7 @@ describe("memory hybrid helpers", () => {
 
   it("keeps media keyword scoring when vector weight is zero", async () => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 0,
       textWeight: 1,
       isNonTextMediaPath: (candidatePath) => candidatePath.endsWith(".png"),
@@ -645,6 +668,7 @@ describe("memory hybrid helpers", () => {
 
   it("keeps vector-only text scoring when weights total two", async () => {
     const merged = await mergeHybridResults({
+      ...disabledRanking,
       vectorWeight: 1,
       textWeight: 1,
       isNonTextMediaPath: (candidatePath) => candidatePath.endsWith(".png"),

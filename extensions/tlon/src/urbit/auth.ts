@@ -6,7 +6,7 @@ const MAX_AUTH_BODY_DRAIN_BYTES = 64 * 1024;
 
 type UrbitAuthenticateOptions = Pick<
   Parameters<typeof urbitFetch>[0],
-  "ssrfPolicy" | "lookupFn" | "fetchImpl" | "beforeRequest"
+  "ssrfPolicy" | "beforeRequest"
 >;
 
 export async function authenticate(
@@ -23,8 +23,6 @@ export async function authenticate(
       body: new URLSearchParams({ password: code }).toString(),
     },
     ssrfPolicy: options.ssrfPolicy,
-    lookupFn: options.lookupFn,
-    fetchImpl: options.fetchImpl,
     beforeRequest: options.beforeRequest,
     timeoutMs: 15_000,
     maxRedirects: 3,

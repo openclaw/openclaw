@@ -7,6 +7,8 @@ const mockUnbind = vi.fn();
 
 // Event handler storage
 let connectHandler: (() => void) | null = null;
+let authSuccessHandler: (() => void) | null = null;
+let authFailureHandler: (() => void) | null = null;
 let disconnectHandler: ((manually: boolean, reason?: Error) => void) | null = null;
 
 // Event listener mocks that store handlers and return unbind function
@@ -20,7 +22,13 @@ const mockOnDisconnect = vi.fn((handler: (manually: boolean, reason?: Error) => 
   return { unbind: mockUnbind };
 });
 
-const mockOnAuthenticationFailure = vi.fn((_handler: () => void) => {
+const mockOnAuthenticationSuccess = vi.fn((handler: () => void) => {
+  authSuccessHandler = handler;
+  return { unbind: mockUnbind };
+});
+
+const mockOnAuthenticationFailure = vi.fn((handler: () => void) => {
+  authFailureHandler = handler;
   return { unbind: mockUnbind };
 });
 
@@ -30,6 +38,7 @@ const defaultConnectImpl = async () => {
   if (connectHandler) {
     connectHandler();
   }
+  authSuccessHandler?.();
 };
 
 const mockConnect = vi.fn().mockImplementation(defaultConnectImpl);
@@ -43,6 +52,7 @@ vi.mock("@twurple/chat", () => ({
     connect = mockConnect;
     quit = mockQuit;
     onConnect = mockOnConnect;
+    onAuthenticationSuccess = mockOnAuthenticationSuccess;
     onDisconnect = mockOnDisconnect;
     onAuthenticationFailure = mockOnAuthenticationFailure;
   },
@@ -66,6 +76,8 @@ describe("probeTwitch", () => {
     vi.clearAllMocks();
     // Reset handlers
     connectHandler = null;
+    authSuccessHandler = null;
+    authFailureHandler = null;
     disconnectHandler = null;
   });
 
@@ -92,6 +104,19 @@ describe("probeTwitch", () => {
       vi.useRealTimers();
       mockConnect.mockImplementation(defaultConnectImpl);
     }
+  });
+
+  it("rejects credentials refused after the transport connects", async () => {
+    mockConnect.mockImplementationOnce(async () => {
+      connectHandler?.();
+      authFailureHandler?.();
+    });
+
+    const result = await probeTwitch(mockAccount, 5000);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe("Authentication failed");
+    expect(mockQuit).toHaveBeenCalledOnce();
   });
 
   it("trims whitespace before removing the token prefix", async () => {

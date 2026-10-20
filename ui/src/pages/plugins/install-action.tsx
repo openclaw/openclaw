@@ -19,6 +19,7 @@ export type PluginInstallActionHandle = {
 
 export type PluginInstallActionProps = {
   registerInstallAction?: (action: PluginInstallActionHandle) => () => void;
+  onButtonRef?: (button: HTMLButtonElement) => void;
   progress?: PluginInstallProgress;
   busy?: boolean;
   disabled?: boolean;
@@ -114,7 +115,7 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
         }}
       >
         <button
-          ref={setButton}
+          ref={[setButton, props.onButtonRef]}
           type="button"
           class={[
             props.buttonClass,

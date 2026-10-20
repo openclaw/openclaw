@@ -190,7 +190,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Spawn under another configured agent id when allowed by `subagents.allowAgents`.
 </ParamField>
 <ParamField path="cwd" type="string">
-  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work. For visible sessions, paths outside configured agent workspaces require `operator.admin`. With `worktree: true`, omitting `cwd`, `projectId`, and `projectGitUrl` inherits the same-agent parent's live managed repository or directly selected registered project; otherwise the target agent workspace is used.
+  Optional task working directory for the child run. Native sub-agents still load bootstrap files from the target agent workspace; `cwd` only changes where runtime tools and CLI harnesses do the delegated work. Workspace-contained file tools (`apply_patch`/file writes) resolve and contain paths against `cwd`; set `cwd` for edits outside the agent workspace. For visible sessions, paths outside configured agent workspaces require `operator.admin`. With `worktree: true`, omitting `cwd`, `projectId`, and `projectGitUrl` inherits the same-agent parent's live managed repository or directly selected registered project; otherwise the target agent workspace is used.
 </ParamField>
 <ParamField path="projectId" type="string">
   Select a registered project through the same managed-project flow as New session. Native sub-agents only; hidden children require `worktree: true`. Mutually exclusive with `projectGitUrl` and `cwd`. Registry selection does not grant arbitrary host-path access or bypass sandbox containment.
@@ -256,7 +256,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Optional managed-worktree name. Requires `worktree: true` and `runtime: "subagent"`.
 </ParamField>
 <ParamField path="worktreeBaseRef" type="string">
-  Optional git base ref for the managed worktree. Requires `worktree: true` and `runtime: "subagent"`.
+  Optional git base ref for the managed worktree. Omit to use the fetched or cached default branch from `origin`, or the primary checkout's current `HEAD` commit when no `origin` remote is configured. An unavailable configured `origin` never falls back to local `HEAD`. Requires `worktree: true` and `runtime: "subagent"`.
 </ParamField>
 
 <Warning>
@@ -419,7 +419,8 @@ without a result is settled by the first registry sweep after the registry
 restores, and `agents_wait` then returns it. The sweep keeps the outcome and end
 time that earlier version recorded: a row stored as `ok` returns `done` with the
 reply its yielded turn ended on, as a collector that yields now does. A row with
-no recorded outcome returns `failed` with an error that says why. Only collectors are settled this way: a child that declared a message wait
+no recorded outcome returns `failed` with an error that says why and
+`reason: "yielded_without_result"`. Only collectors are settled this way: a child that declared a message wait
 stays paused until a continuation reaches it, however long that takes.
 
 The registry also continues a yielded sub-agent when its announced children
@@ -474,6 +475,15 @@ List entries include the native `runId`, child `sessionKey`, status, outcome,
 and delivery status. A yielded child remains `waiting` until its continuation.
 For an external wait, its controlling parent can send a continuation with
 `sessions_send`; yielding itself does not schedule external work.
+
+A yielded child that only an external continuation can resume also reports
+`pausedForMs`, the milliseconds since it yielded, in list entries and in
+`action: "wait"` run snapshots. The list text appends it, for example
+`waiting for external continuation, paused 1d 18h`. The age comes from the
+recorded yield time (`endedAt`). It is absent for running or finished runs,
+parents waiting on children, and collectors. It is read-only: it does not expire
+the wait, change when anything settles, or say whether a continuation was sent
+or received.
 
 Use `action: "cancel"` with a returned `runId` to stop that native run and its
 descendants. Cancellation requires current controller authority; read access to

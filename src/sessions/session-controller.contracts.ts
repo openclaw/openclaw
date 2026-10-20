@@ -3,10 +3,6 @@ import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.j
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
-import type {
-  SourceReplyDeliveryMode,
-  TaskSuggestionDeliveryMode,
-} from "../auto-reply/get-reply-options.types.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
@@ -405,11 +401,12 @@ export type ReplyOperationAdmission = {
   afterTransition?: (transition: SessionAdmissionTransition) => Promise<void>;
 };
 
-/** The exact backend facts owned by one reply operation. Embedded attempts extend
+/** The exact run facts owned by one reply operation. Embedded attempts extend
  * this object in place and the runner's run-id index points back to that record. */
 type SessionControllerRunAttachment = {
   readonly operation: ReplyOperation;
-  backend?: ReplyBackendHandle;
+  /** Each attach call owns a fresh identity, even when it reuses a backend handle. */
+  backend?: { readonly handle: ReplyBackendHandle };
   projectSessionActive?: boolean;
 };
 
@@ -477,7 +474,12 @@ export type Effect = {
   handoffs: Set<string>;
   validated: Deferred;
 };
-export type SessionMutationKind = "reset" | "delete" | "compaction";
+export type SessionMutationKind =
+  | "reset"
+  | "delete"
+  | "compaction"
+  | "read-marker"
+  | "background-result";
 
 export type Mutation = {
   diagnostic?: LifecycleDiagnosticOperation;
@@ -488,7 +490,6 @@ export type Mutation = {
   operations: Set<ReplyOperation>;
   ready: Deferred;
 };
-type Closure = { reason: Error };
 export type OwnerContext = {
   /** Exact raw producer context, including cleanup before a turn has been claimed. */
   sourceInput?: SessionControllerInput;
@@ -502,7 +503,7 @@ export type SessionControllerLifecycle = {
   operations: Set<ReplyOperation>;
   effects: Set<Effect>;
   mutations: Mutation[];
-  closures: Set<Closure>;
+  closures: Set<{ reason: Error }>;
   changed: Deferred;
   readonly blocksTurnAdmission: boolean;
 };
@@ -625,7 +626,6 @@ export type SessionControllerMailbox = {
     summaryLines: string[];
     sourceRefs: Map<FollowupRun, FollowupRun>;
   }>;
-  evictedSummaryCount: number;
   lastRun?: FollowupRun["run"];
   recentSources: Map<string, { input: SessionControllerInput; expires: number }>;
 };
@@ -759,10 +759,7 @@ export type EmbeddedAgentQueueHandle = {
     revokeApprovals: () => void,
   ) => Promise<boolean>;
   /** Atomically consumes one plain-text answer for this run's pending user-input request. */
-  claimPendingUserInputAnswer?: (
-    text: string,
-    options?: EmbeddedAgentQueueMessageOptions,
-  ) => Promise<boolean>;
+  claimPendingUserInputAnswer?: ReplyBackendHandle["claimPendingUserInputAnswer"];
   /** Cancels this run's pending user-input request before an image is queued as a later turn. */
   cancelPendingUserInput?: (resolvedBy: string) => Promise<boolean>;
   /** Exact heartbeat owner retained after its reply-operation registration clears. */
@@ -790,9 +787,9 @@ export type EmbeddedAgentQueueHandle = {
   readonly supportsCrossProfileSteering?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: (reason?: "restart") => void;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  sourceReplyDeliveryMode?: ReplyBackendHandle["sourceReplyDeliveryMode"];
   terminalReplyExpectation?: ReplyExpectation;
-  taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
+  taskSuggestionDeliveryMode?: ReplyBackendHandle["taskSuggestionDeliveryMode"];
 };
 
 export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
@@ -853,10 +850,7 @@ export type EmbeddedRunRegistration = {
 };
 
 /** The controller's exact attachment for one scoped embedded attempt. */
-export type EmbeddedRunAttachment = EmbeddedRunRegistration & {
-  operation: ReplyOperation;
-  backend?: ReplyBackendHandle;
-};
+export type EmbeddedRunAttachment = EmbeddedRunRegistration & SessionControllerRunAttachment;
 
 /** Unhosted or explicitly detached attempts have no controller operation. */
 export type DetachedEmbeddedRunAttachment = EmbeddedRunRegistration & {

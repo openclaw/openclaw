@@ -8,11 +8,11 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
-import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
+import { registerGitHubConnectionsEnglish } from "../../i18n/locales/en-github-connections.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { createGitHubDeviceAuthorization } from "./github-device-authorization.ts";
 import {
@@ -590,31 +590,23 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
     }
   }
   // Admission and drafts are synchronous; this projection only publishes their outcomes.
-  const projection = projectSource(deps, {
-    read: () => ({
-      status,
-      personal,
-      system,
-      loading,
-      busy,
-      error,
-      statusReadable,
-      configurable,
-      authorizable,
-      scope: readScope(),
-      connectionReady: connectionReady(),
-      draft: readDraft(),
-      authorization: deviceAuthorization.state(),
-      authorizationActive: deviceAuthorization.active(),
-    }),
-    subscribe: (_source, notify) => {
-      publish = notify;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(deps, () => ({
+    status,
+    personal,
+    system,
+    loading,
+    busy,
+    error,
+    statusReadable,
+    configurable,
+    authorizable,
+    scope: readScope(),
+    connectionReady: connectionReady(),
+    draft: readDraft(),
+    authorization: deviceAuthorization.state(),
+    authorizationActive: deviceAuthorization.active(),
+  }));
+  publish = projection.publish;
   onCleanup(release);
   return {
     read: () => ({
@@ -637,4 +629,4 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
   };
 }
 
-registerGitHubEnglish();
+registerGitHubConnectionsEnglish();

@@ -1,9 +1,25 @@
 import type { PendingApprovalView } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { SystemAgentApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { telegramApprovalNativeRuntime } from "./approval-handler.runtime.js";
 import { buildTelegramCanonicalApprovalTerminalText } from "./approval-terminal.js";
+
+const { editMessage, sendMessage, sendTyping } = vi.hoisted(() => ({
+  editMessage: vi.fn(),
+  sendMessage: vi.fn(),
+  sendTyping: vi.fn(),
+}));
+vi.mock("./send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./send.js")>()),
+  editMessageTelegram: editMessage,
+  sendMessageTelegram: sendMessage,
+  sendTypingTelegram: sendTyping,
+  editMessageReplyMarkupTelegram: vi.fn(),
+}));
+beforeEach(() => {
+  vi.resetAllMocks();
+});
 
 const { presentation, transport, observe } = telegramApprovalNativeRuntime;
 const base = { cfg: {}, accountId: "default", context: { token: "tg-token" } };
@@ -85,16 +101,10 @@ async function deliver(
   }
   await transport.deliverPending({ ...params, pendingPayload, preparedTarget: prepared.target });
 }
-function terminalEntry(
-  request: SystemAgentApprovalRequest,
-  editMessage: ReturnType<typeof vi.fn>,
-  sendMessage: ReturnType<typeof vi.fn>,
-  text: string,
-) {
+function terminalEntry(request: SystemAgentApprovalRequest, text: string) {
   return {
     ...base,
     request,
-    context: { ...base.context, deps: { editMessage, sendMessage } },
     approvalKind: "system-agent" as const,
     phase: "resolved" as const,
     payload: { text },
@@ -230,12 +240,12 @@ it("renders an applied system-agent receipt with a bounded UTF-16 summary", asyn
 });
 
 it("updates the pending message and removes actions for terminal events", async () => {
-  const editMessage = vi.fn().mockResolvedValue({ ok: true, chatId: "9", messageId: "m1" });
+  editMessage.mockResolvedValue({ ok: true, chatId: "9", messageId: "m1" });
 
   await transport.updateEntry?.({
     cfg: {} as never,
     accountId: "default",
-    context: { token: "tg-token", deps: { editMessage } },
+    context: { token: "tg-token" },
     entry: { chatId: "9", messageId: "m1" },
     request: execRequest("approval-1"),
     approvalKind: "exec",
@@ -253,8 +263,8 @@ it("updates the pending message and removes actions for terminal events", async 
 });
 
 it("sends one terminal origin result and releases its dedupe entry after finalization", async () => {
-  const editMessage = vi.fn().mockResolvedValue({ ok: true });
-  const sendMessage = vi.fn().mockResolvedValue({ ok: true });
+  editMessage.mockResolvedValue({ ok: true });
+  sendMessage.mockResolvedValue({ ok: true });
   const request = systemRequest("system-agent:origin-followup", {
     turnSourceChannel: "telegram",
     turnSourceTo: "1234",
@@ -263,8 +273,6 @@ it("sends one terminal origin result and releases its dedupe entry after finaliz
 
   const terminal = terminalEntry(
     request,
-    editMessage,
-    sendMessage,
     "✅ OpenClaw change approved. Applying: restart the Gateway",
   );
   await transport.updateEntry?.({ ...terminal, entry: { chatId: "5678", messageId: "m1" } });
@@ -296,8 +304,8 @@ it("sends one terminal origin result and releases its dedupe entry after finaliz
 });
 
 it("sends the origin result when the approver card edit fails", async () => {
-  const editMessage = vi.fn().mockRejectedValue(new Error("message was deleted"));
-  const sendMessage = vi.fn().mockResolvedValue({ ok: true });
+  editMessage.mockRejectedValue(new Error("message was deleted"));
+  sendMessage.mockResolvedValue({ ok: true });
   const request = systemRequest("system-agent:origin-edit-failure", {
     turnSourceChannel: "telegram",
     turnSourceTo: "1234",
@@ -306,7 +314,6 @@ it("sends the origin result when the approver card edit fails", async () => {
   await expect(
     transport.updateEntry?.({
       ...base,
-      context: { ...base.context, deps: { editMessage, sendMessage } },
       entry: { chatId: "5678", messageId: "m1" },
       request,
       approvalKind: "system-agent",
@@ -322,15 +329,15 @@ it("sends the origin result when the approver card edit fails", async () => {
 });
 
 it("sends origin notices only through the originating Telegram account", async () => {
-  const editMessage = vi.fn().mockResolvedValue({ ok: true });
-  const sendMessage = vi.fn().mockResolvedValue({ ok: true });
+  editMessage.mockResolvedValue({ ok: true });
+  sendMessage.mockResolvedValue({ ok: true });
   const request = systemRequest("system-agent:origin-account", {
     turnSourceChannel: "telegram",
     turnSourceTo: "1234",
     turnSourceAccountId: "origin",
   });
   const terminal = {
-    ...terminalEntry(request, editMessage, sendMessage, "✅ OpenClaw change approved and applied."),
+    ...terminalEntry(request, "✅ OpenClaw change approved and applied."),
     entry: { chatId: "5678", messageId: "m1" },
   };
 
@@ -342,8 +349,8 @@ it("sends origin notices only through the originating Telegram account", async (
 });
 
 it("delivers only allowed pending actions into the originating forum topic", async () => {
-  const sendTyping = vi.fn().mockResolvedValue({ ok: true });
-  const sendMessage = vi.fn().mockResolvedValue({ chatId: "-1003841603622", messageId: "m1" });
+  sendTyping.mockResolvedValue({ ok: true });
+  sendMessage.mockResolvedValue({ chatId: "-1003841603622", messageId: "m1" });
   const request = execRequest("req-1");
   const view: PendingApprovalView = {
     approvalKind: "exec",
@@ -360,7 +367,6 @@ it("delivers only allowed pending actions into the originating forum topic", asy
   };
   const params = {
     ...base,
-    context: { ...base.context, deps: { sendTyping, sendMessage } },
     request,
     approvalKind: "exec" as const,
     view,
@@ -394,8 +400,8 @@ it("delivers only allowed pending actions into the originating forum topic", asy
 });
 
 it("delivers plugin scope and actions using channel Direct Messages topic metadata", async () => {
-  const sendTyping = vi.fn().mockResolvedValue({ ok: true });
-  const sendMessage = vi.fn().mockResolvedValue({ chatId: "-1003841603622", messageId: "m1" });
+  sendTyping.mockResolvedValue({ ok: true });
+  sendMessage.mockResolvedValue({ chatId: "-1003841603622", messageId: "m1" });
   const scope = {
     kind: "message-send" as const,
     target: "email",
@@ -428,7 +434,6 @@ it("delivers plugin scope and actions using channel Direct Messages topic metada
   };
   const params = {
     ...base,
-    context: { ...base.context, deps: { sendTyping, sendMessage } },
     request,
     approvalKind: "plugin" as const,
     view,

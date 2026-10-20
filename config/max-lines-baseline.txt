@@ -85,7 +85,6 @@ extensions/matrix/src/matrix/monitor/handler.test.ts
 extensions/matrix/src/matrix/sdk.test.ts
 extensions/matrix/src/matrix/send.test.ts
 extensions/mattermost/src/channel.ts
-extensions/mattermost/src/mattermost/monitor.inbound-system-event.test.ts
 extensions/memory-core/doctor-contract-api.test.ts
 extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-phases.test.ts
@@ -435,7 +434,6 @@ src/logging/diagnostic.test.ts
 src/logging/diagnostic.ts
 src/logging/redact.ts
 src/media-understanding/apply.test.ts
-src/media-understanding/runner.entries.ts
 src/media-understanding/runner.ts
 src/media/web-media.ts
 src/node-host/invoke-system-run-plan.test.ts
@@ -509,7 +507,6 @@ src/wizard/setup.test.ts
 src/worker/worker.runtime.test.ts
 ui/src/api/gateway.node.test.ts
 ui/src/lib/cron/index.test.ts
-ui/src/lib/cron/index.ts
 ui/src/lib/skills/index.test.ts
 ui/src/pages/agents/agents-page-state.ts
 ui/src/pages/chat/chat-gateway.test.ts

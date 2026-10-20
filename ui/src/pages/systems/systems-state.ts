@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
+import { enableHostDesktop as enableHostDesktopConfig } from "../../components/desktop/host-desktop-setup.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveEditableSnapshotConfig } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -222,20 +223,15 @@ export function createSystems(context: ApplicationContext) {
     state.desktopSetupError = null;
     notify();
     try {
-      await runtimeConfig.ensureLoaded();
-      if (!isCurrent() || !canEnableHostDesktop()) {
-        return;
-      }
-      const patched = await runtimeConfig.patch({
-        raw: { desktop: { host: { enabled: true } } },
-        note: "systems: enable host desktop",
-        canDispatch: () => isCurrent() && canEnableHostDesktop(),
-      });
-      if (isCurrent() && !patched) {
-        state.desktopSetupError = runtimeConfig.state.lastError ?? t("systems.desktopSetupFailed");
-      }
-      if (isCurrent() && patched) {
+      const failure = await enableHostDesktopConfig(
+        runtimeConfig,
+        "systems: enable host desktop",
+        () => isCurrent() && canEnableHostDesktop(),
+      );
+      if (isCurrent() && failure === null) {
         await refresh();
+      } else if (isCurrent() && failure !== undefined) {
+        state.desktopSetupError = failure;
       }
     } catch (error) {
       if (isCurrent()) {

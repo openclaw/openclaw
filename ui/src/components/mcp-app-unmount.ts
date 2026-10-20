@@ -14,7 +14,7 @@ export function registerMcpAppUnmountTarget(target: McpAppUnmountTarget): () => 
   };
 }
 
-function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTarget[] {
+export function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTarget[] {
   const leavingRoots = [...roots];
   return [...registeredTargets].filter((target) =>
     leavingRoots.some((root) => root.contains(target)),
@@ -22,10 +22,7 @@ function findMcpAppUnmountTargets(roots: Iterable<ParentNode>): McpAppUnmountTar
 }
 
 /** Keeps rendered DOM and owner state together until one coalesced MCP teardown completes. */
-export function createMcpAppUnmountGate<Value = unknown>(
-  invalidate?: () => void,
-  afterCommit?: () => Promise<void>,
-) {
+export function createMcpAppUnmountGate<Value = unknown>(invalidate?: () => void) {
   let renderedKey: McpAppUnmountKey | null = null;
   let renderedValue: Value;
   let pending = false;
@@ -60,8 +57,6 @@ export function createMcpAppUnmountGate<Value = unknown>(
       };
       if (options.afterCommit) {
         options.afterCommit(restart);
-      } else if (afterCommit) {
-        void afterCommit().then(restart);
       } else {
         queueMicrotask(restart);
       }

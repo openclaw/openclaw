@@ -21,13 +21,19 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import { renderApprovalPresentation } from "./approval-presentation.tsx";
+import {
+  approvalTitle,
+  decisionLabel,
+  renderApprovalPresentation,
+  terminalDescription,
+  terminalTitle,
+  type ResolutionOrigin,
+} from "./approval-presentation.tsx";
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 const APPROVAL_MIN_POLL_DELAY_MS = 250;
 const APPROVAL_REQUIRED_SCOPE = "operator.approvals";
 
 type ApprovalRequestError = "connection" | "unavailable" | null;
-type ResolutionOrigin = "here" | "elsewhere" | "observed";
 
 function isUnavailableApprovalError(error: unknown): boolean {
   if (!(error instanceof GatewayRequestError)) {
@@ -38,16 +44,6 @@ function isUnavailableApprovalError(error: unknown): boolean {
     reason === "APPROVAL_NOT_FOUND" ||
     error.gatewayCode === "APPROVAL_NOT_FOUND" ||
     error.gatewayCode === "INVALID_REQUEST"
-  );
-}
-
-function decisionLabel(decision: ApprovalDecision): string {
-  return t(
-    {
-      "allow-once": "execApproval.allowOnce",
-      "allow-always": "execApproval.alwaysAllow",
-      deny: "execApproval.deny",
-    }[decision],
   );
 }
 
@@ -73,56 +69,6 @@ function ApprovalChip(props: { kind: "plugin" | "tool" | "agent"; value?: string
       )}
     </Show>
   );
-}
-
-function terminalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
-  if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
-    return t("approvalPage.resolvedElsewhere");
-  }
-  if (origin === "here" && approval.status === "allowed") {
-    return t("approvalPage.approvedHere");
-  }
-  if (origin === "here" && approval.status === "denied") {
-    return t("approvalPage.deniedHere");
-  }
-  return t(
-    {
-      allowed: "approvalPage.approved",
-      denied: "approvalPage.denied",
-      expired: "approvalPage.expired",
-      cancelled: "approvalPage.cancelled",
-      pending: "approvalPage.pending",
-    }[approval.status],
-  );
-}
-
-function terminalDescription(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
-  if (origin === "elsewhere" && (approval.status === "allowed" || approval.status === "denied")) {
-    return t("approvalPage.resolvedElsewhereDescription");
-  }
-  if (approval.status === "allowed") {
-    return t(
-      approval.decision === "allow-always"
-        ? "approvalPage.allowedAlwaysDescription"
-        : "approvalPage.allowedOnceDescription",
-    );
-  }
-  return t(
-    {
-      denied: "approvalPage.deniedDescription",
-      expired: "approvalPage.expiredDescription",
-      cancelled: "approvalPage.cancelledDescription",
-      pending: "approvalPage.pendingDescription",
-    }[approval.status],
-  );
-}
-
-function approvalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): string {
-  return approval.status === "pending"
-    ? approval.presentation.kind === "plugin"
-      ? approval.presentation.title
-      : t("approvalPage.execTitle")
-    : terminalTitle(approval, origin);
 }
 
 type ApprovalPageProps = { approvalId: string };
@@ -715,8 +661,10 @@ function ApprovalContent(props: {
                 onClick={() => void props.page.resolveApproval(decision())}
               >
                 {props.page.read().resolvingDecision === decision()
-                  ? t("approvalPage.resolvingDecision", { decision: decisionLabel(decision()) })
-                  : decisionLabel(decision())}
+                  ? t("approvalPage.resolvingDecision", {
+                      decision: decisionLabel(decision(), presentation()),
+                    })
+                  : decisionLabel(decision(), presentation())}
               </button>
             )}
           </For>

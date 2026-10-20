@@ -203,6 +203,7 @@ export async function runAcpHarnessAttempt(params: {
         trigger: input.trigger,
         modelProviderId: input.provider,
         modelId: input.modelId,
+        contextTokenBudget: input.contextTokenBudget ?? input.model.contextWindow,
       },
       bootstrapContextRunKind: input.bootstrapContextRunKind,
     });

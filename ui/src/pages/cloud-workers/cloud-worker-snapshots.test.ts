@@ -5,63 +5,55 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import {
-  button,
-  mountPage,
-  setupSnapshotsDomSuite,
-} from "./cloud-worker-snapshots-dom.test-support.ts";
+import { button } from "./cloud-worker-snapshots-dom.test-support.ts";
 import {
   buildEnvironmentFixture,
   snapshotListFixture,
 } from "./cloud-worker-snapshots.test-support.ts";
+import {
+  setupSnapshotTests,
+  sheet,
+  click,
+  waitText,
+  configPatch,
+  change,
+  makeWorker,
+  preparedInventory,
+  machineProfile,
+} from "./cloud-workers.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
-setupSnapshotsDomSuite();
+const mountTestPage = setupSnapshotTests();
 const methods = ["environments.list", "crabbox.images.list", "config.patch"];
-function sheet(page: Element) {
-  return expectDefined(page.querySelector(".cloud-environments__sheet"), "Environment sheet");
-}
+
 function input(page: Element, label: string) {
   return expectDefined(page.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`), label);
-}
-function changeInput(element: HTMLInputElement, value: string) {
-  element.value = value;
-  element.dispatchEvent(new Event("input", { bubbles: true }));
-  flush();
 }
 
 describe("Cloud environments", () => {
   it("retains loaded environments and pool/policy drafts through a blip, but retires them for another client", async () => {
-    const fixture = mountPage(methods);
-    try {
-      await waitForSolid(() => expect(input(fixture.page, "Refresh after").disabled).toBe(false));
-      await waitForSolid(() => expect(fixture.page.textContent).toContain("github.com/acme/app"));
-      changeInput(input(fixture.page, "Pool cap"), "7");
-      changeInput(input(fixture.page, "Refresh after"), "6h");
-      const hello = gatewayHelloForMethods(methods);
-      fixture.harness.publish(false, fixture.client, null);
-      flush();
-      expect(input(fixture.page, "Pool cap").value).toBe("7");
-      expect(input(fixture.page, "Refresh after").value).toBe("6h");
-      expect(fixture.page.textContent).toContain("github.com/acme/app");
-      expect(button(fixture.page, "Save pool").disabled).toBe(true);
-      expect(button(fixture.page, "Save retention policy").disabled).toBe(true);
-      fixture.harness.publish(true, fixture.client, hello);
-      await waitForSolid(() => expect(button(fixture.page, "Save pool").disabled).toBe(false));
-      expect(input(fixture.page, "Pool cap").value).toBe("7");
-      expect(input(fixture.page, "Refresh after").value).toBe("6h");
-      fixture.harness.publish(
-        true,
-        { request: fixture.request } as unknown as GatewayBrowserClient,
-        hello,
-      );
-      flush();
-      expect(input(fixture.page, "Pool cap").value).not.toBe("7");
-      expect(input(fixture.page, "Refresh after").value).toBe("24h");
-    } finally {
-      fixture.dispose();
-    }
+    const { page, request, harness, client } = mountTestPage(methods);
+    await waitForSolid(() => expect(input(page, "Refresh after").disabled).toBe(false));
+    await waitText(() => page, "github.com/acme/app");
+    change(input(page, "Pool cap"), "7");
+    change(input(page, "Refresh after"), "6h");
+    const hello = gatewayHelloForMethods(methods);
+    harness.publish(false, client, null);
+    flush();
+    expect(input(page, "Pool cap").value).toBe("7");
+    expect(input(page, "Refresh after").value).toBe("6h");
+    expect(page.textContent).toContain("github.com/acme/app");
+    expect(button(page, "Save pool").disabled).toBe(true);
+    expect(button(page, "Save retention policy").disabled).toBe(true);
+    harness.publish(true, client, hello);
+    await waitForSolid(() => expect(button(page, "Save pool").disabled).toBe(false));
+    expect(input(page, "Pool cap").value).toBe("7");
+    expect(input(page, "Refresh after").value).toBe("6h");
+    harness.publish(true, { request } as unknown as GatewayBrowserClient, hello);
+    flush();
+    expect(input(page, "Pool cap").value).not.toBe("7");
+    expect(input(page, "Refresh after").value).toBe("24h");
   });
 
   it("combines repository defaults, images and workers into one minimal row and shows only the selected details", async () => {
@@ -85,18 +77,10 @@ describe("Cloud environments", () => {
       checkpointId: "older",
       createdAtMs: 1,
     });
-    const ready = {
-      ...buildEnvironmentFixture("ready"),
-      id: "ready",
-      preparation: {
-        ...buildEnvironmentFixture().preparation,
-        details: {
-          ...buildEnvironmentFixture().preparation.details,
-          project: { label: "github.com/acme/ready", baseCommit: "abcdef" },
-        },
-      },
-    };
-    const fixture = mountPage(methods, {
+    const ready = buildEnvironmentFixture("ready");
+    ready.id = "ready";
+    ready.preparation.details.project = { label: "github.com/acme/ready", baseCommit: "abcdef" };
+    const { page, request } = mountTestPage(methods, {
       result,
       config: {
         cloudWorkers: {
@@ -115,43 +99,37 @@ describe("Cloud environments", () => {
             }
           : undefined,
     });
-    try {
-      await waitForSolid(() =>
-        expect(fixture.page.querySelectorAll(".cloud-environments__row")).toHaveLength(4),
-      );
-      const rows = [...fixture.page.querySelectorAll(".cloud-environments__row")];
-      expect(rows.map((row) => row.textContent)).toEqual([
-        "github.com/acme/appBuilding",
-        "github.com/acme/coldCold only",
-        "github.com/acme/pausedNeeds attention",
-        expect.stringContaining("github.com/acme/readyReady ·"),
-      ]);
-      expect(rows.every((row) => row.children.length === 2)).toBe(true);
-      expect(sheet(fixture.page).textContent).toContain("01234567");
-      expect(
-        [...sheet(fixture.page).querySelectorAll(".cloud-environments__snapshot")].map((row) =>
-          row.getAttribute("aria-label"),
-        ),
-      ).toEqual(["linux-build", "arm-build"]);
-      expect(
-        sheet(fixture.page).querySelector(".cloud-environments__machine > span")?.textContent,
-      ).toBe("aws · standard · linux");
-      expect(sheet(fixture.page).textContent).not.toContain("Paused: uncertain");
-      expect(fixture.page.querySelector(".settings-segmented")).toBeNull();
-      expect(fixture.page.querySelector("details")?.open).toBe(false);
-      (rows[2] as HTMLButtonElement).click();
-      flush();
-      await waitForSolid(() =>
-        expect(sheet(fixture.page).textContent).toContain("Paused: uncertain"),
-      );
-      expect(button(sheet(fixture.page), "Rebuild").disabled).toBe(true);
-      expect(sheet(fixture.page).textContent).not.toContain("01234567");
-      expect(fixture.request).toHaveBeenCalledWith("environments.list", {
-        includePreparedDetails: true,
-      });
-    } finally {
-      fixture.dispose();
-    }
+    await waitForSolid(() =>
+      expect(page.querySelectorAll(".cloud-environments__row")).toHaveLength(4),
+    );
+    const rows = [...page.querySelectorAll(".cloud-environments__row")];
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "github.com/acme/appBuilding",
+      "github.com/acme/coldCold only",
+      "github.com/acme/pausedNeeds attention",
+      expect.stringContaining("github.com/acme/readyReady ·"),
+    ]);
+    expect(rows.every((row) => row.children.length === 2)).toBe(true);
+    expect(sheet(page).textContent).toContain("01234567");
+    expect(
+      [...sheet(page).querySelectorAll(".cloud-environments__snapshot")].map((row) =>
+        row.getAttribute("aria-label"),
+      ),
+    ).toEqual(["linux-build", "arm-build"]);
+    expect(sheet(page).querySelector(".cloud-environments__machine > span")?.textContent).toBe(
+      "aws · standard · linux",
+    );
+    expect(sheet(page).textContent).not.toContain("Paused: uncertain");
+    expect(page.querySelector(".settings-segmented")).toBeNull();
+    expect(page.querySelector("details")?.open).toBe(false);
+    (rows[2] as HTMLButtonElement).click();
+    flush();
+    await waitText(() => sheet(page), "Paused: uncertain");
+    expect(button(sheet(page), "Rebuild").disabled).toBe(true);
+    expect(sheet(page).textContent).not.toContain("01234567");
+    expect(request).toHaveBeenCalledWith("environments.list", {
+      includePreparedDetails: true,
+    });
   });
 
   it.each([false, true])(
@@ -186,48 +164,36 @@ describe("Cloud environments", () => {
           recipePreparationAtMs: 2000,
         });
       }
-      const fixture = mountPage(methods, { result });
-      try {
-        await waitForSolid(() =>
-          expect(sheet(fixture.page).textContent).toContain("Dev Container"),
-        );
-        expect(fixture.page.querySelector(".cloud-environments__row")?.textContent).toBe(
-          "github.com/acme/appNeeds attention",
-        );
-        expect(
-          sheet(fixture.page).querySelector(".cloud-environments__step--longest")?.textContent,
-        ).toContain("updateContentCommand");
-        expect(sheet(fixture.page).querySelector(".cloud-environments__output")?.textContent).toBe(
-          "synthetic package unavailable",
-        );
-        if (newerSuccessfulProfile) {
-          expect(sheet(fixture.page).querySelector('[role="alert"]')?.textContent).toContain(
-            "linux-build",
-          );
-        }
-        expect(sheet(fixture.page).textContent).not.toContain("MB");
-        expect(sheet(fixture.page).textContent).not.toContain("Install dependencies");
-      } finally {
-        fixture.dispose();
+      const { page } = mountTestPage(methods, { result });
+      await waitText(() => sheet(page), "Dev Container");
+      expect(page.querySelector(".cloud-environments__row")?.textContent).toBe(
+        "github.com/acme/appNeeds attention",
+      );
+      expect(
+        sheet(page).querySelector(".cloud-environments__step--longest")?.textContent,
+      ).toContain("updateContentCommand");
+      expect(sheet(page).querySelector(".cloud-environments__output")?.textContent).toBe(
+        "synthetic package unavailable",
+      );
+      if (newerSuccessfulProfile) {
+        expect(sheet(page).querySelector('[role="alert"]')?.textContent).toContain("linux-build");
       }
+      expect(sheet(page).textContent).not.toContain("MB");
+      expect(sheet(page).textContent).not.toContain("Install dependencies");
     },
   );
 
   it("shows configured repositories without calling an unadvertised snapshot plugin", async () => {
-    const fixture = mountPage(["environments.list"], {
+    const { page, request } = mountTestPage(["environments.list"], {
       config: { cloudWorkers: { projectProfiles: { "github.com/acme/app": "linux" } } },
     });
-    try {
-      await waitForSolid(() =>
-        expect(fixture.page.querySelector(".cloud-environments__row")?.textContent).toBe(
-          "github.com/acme/appCold only",
-        ),
-      );
-      expect(fixture.request).not.toHaveBeenCalledWith("crabbox.images.list", expect.anything());
-      expect(button(sheet(fixture.page), "Rebuild").disabled).toBe(true);
-    } finally {
-      fixture.dispose();
-    }
+    await waitForSolid(() =>
+      expect(page.querySelector(".cloud-environments__row")?.textContent).toBe(
+        "github.com/acme/appCold only",
+      ),
+    );
+    expect(request).not.toHaveBeenCalledWith("crabbox.images.list", expect.anything());
+    expect(button(sheet(page), "Rebuild").disabled).toBe(true);
   });
 
   it.each([
@@ -236,16 +202,15 @@ describe("Cloud environments", () => {
   ])(
     "saves repository default $current → $next without replacing other defaults",
     async ({ current, next }) => {
-      const fixture = mountPage(methods, {
+      const { page, request } = mountTestPage(methods, {
         config: {
           cloudWorkers: {
             profiles: {
-              "linux-build": {
-                provider: "crabbox",
-                settings: { provider: "aws", class: "standard" },
-              },
+              "linux-build": machineProfile(),
               ...(current
-                ? { large: { provider: "crabbox", settings: { provider: "aws", class: "large" } } }
+                ? {
+                    large: machineProfile("large"),
+                  }
                 : {}),
             },
             projectProfiles: {
@@ -255,134 +220,69 @@ describe("Cloud environments", () => {
           },
         },
       });
-      try {
-        await waitForSolid(() =>
-          expect(button(sheet(fixture.page), "Change").disabled).toBe(false),
-        );
-        button(sheet(fixture.page), "Change").click();
-        flush();
-        const select = expectDefined(
-          sheet(fixture.page).querySelector<HTMLSelectElement>(
-            'select[aria-label="Default profile"]',
-          ),
-          "Default profile selector",
-        );
-        expect(select.value).toBe(current ?? "");
-        select.value = next;
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-        flush();
-        await waitForSolid(() =>
-          expect(fixture.request.mock.calls.some(([method]) => method === "config.patch")).toBe(
-            true,
-          ),
-        );
-        const patch = expectDefined(
-          fixture.request.mock.calls.find(([method]) => method === "config.patch"),
-          "Config patch request",
-        )[1];
-        expect(JSON.parse(String(patch?.raw))).toEqual({
-          cloudWorkers: { projectProfiles: { "github.com/acme/app": next } },
-        });
-        expect(patch?.baseHash).toBe("snapshot-config");
-      } finally {
-        fixture.dispose();
-      }
+      await waitForSolid(() => expect(button(sheet(page), "Change").disabled).toBe(false));
+      click(sheet(page), "Change");
+      const select = expectDefined(
+        sheet(page).querySelector<HTMLSelectElement>('select[aria-label="Default profile"]'),
+        "Default profile selector",
+      );
+      expect(select.value).toBe(current ?? "");
+      change(select, next);
+      const patch = await configPatch(request);
+      expect(JSON.parse(String(patch?.raw))).toEqual({
+        cloudWorkers: { projectProfiles: { "github.com/acme/app": next } },
+      });
+      expect(patch?.baseHash).toBe("snapshot-config");
     },
   );
 
   it("validates retention minima and patches only the shared plugin policy", async () => {
-    const fixture = mountPage(methods);
-    try {
-      await waitForSolid(() => expect(input(fixture.page, "Refresh after").disabled).toBe(false));
-      expect(
-        fixture.page.querySelector('.cloud-environments__sheet input[aria-label="Refresh after"]'),
-      ).toBeNull();
-      changeInput(input(fixture.page, "Refresh after"), "30m");
-      button(fixture.page, "Save retention policy").click();
-      flush();
-      await waitForSolid(() =>
-        expect(fixture.page.textContent).toContain("Enter a duration of at least 1h"),
-      );
-      expect(fixture.request.mock.calls.some(([method]) => method === "config.patch")).toBe(false);
-      changeInput(input(fixture.page, "Refresh after"), "2h");
-      changeInput(input(fixture.page, "Retain unused"), "3d");
-      button(fixture.page, "Save retention policy").click();
-      flush();
-      await waitForSolid(() =>
-        expect(fixture.request.mock.calls.some(([method]) => method === "config.patch")).toBe(true),
-      );
-      const patch = expectDefined(
-        fixture.request.mock.calls.find(([method]) => method === "config.patch"),
-        "Config patch request",
-      )[1];
-      expect(JSON.parse(String(patch?.raw))).toEqual({
-        plugins: {
-          entries: {
-            crabbox: {
-              config: { warmImages: { refreshAfter: "2h", retainUnused: "3d", keepPrevious: 0 } },
-            },
+    const { page, request } = mountTestPage(methods);
+    await waitForSolid(() => expect(input(page, "Refresh after").disabled).toBe(false));
+    expect(
+      page.querySelector('.cloud-environments__sheet input[aria-label="Refresh after"]'),
+    ).toBeNull();
+    change(input(page, "Refresh after"), "30m");
+    click(page, "Save retention policy");
+    await waitText(() => page, "Enter a duration of at least 1h");
+    expect(request.mock.calls.some(([method]) => method === "config.patch")).toBe(false);
+    change(input(page, "Refresh after"), "2h");
+    change(input(page, "Retain unused"), "3d");
+    click(page, "Save retention policy");
+    const patch = await configPatch(request);
+    expect(JSON.parse(String(patch?.raw))).toEqual({
+      plugins: {
+        entries: {
+          crabbox: {
+            config: { warmImages: { refreshAfter: "2h", retainUnused: "3d", keepPrevious: 0 } },
           },
         },
-      });
-    } finally {
-      fixture.dispose();
-    }
+      },
+    });
   });
 
   it("counts only usable pool workers and keeps capacity editable in Advanced", async () => {
-    const ready = { ...buildEnvironmentFixture("ready"), status: "available" };
     const inventory = [
-      ready,
-      { ...ready, status: "unavailable" },
-      { ...ready, status: "error" },
-      { ...ready, status: "stopping" },
-      {
-        ...ready,
-        preparation: {
-          ...ready.preparation,
-          details: { ...ready.preparation.details, expiresAtMs: Date.now() - 1 },
-        },
-      },
-      {
-        ...ready,
-        preparation: {
-          ...ready.preparation,
-          details: { ...ready.preparation.details, consumedAtMs: Date.now() },
-        },
-      },
-      { ...ready, preparation: { ...ready.preparation, details: undefined } },
-      { ...ready, worker: { ...ready.worker, destroyRequestedAtMs: Date.now() } },
-      { ...ready, worker: { ...ready.worker, attachedSessionIds: ["active-session"] } },
-    ];
-    for (const [index, environment] of inventory.entries()) {
-      environment.id = `pool-${index}`;
-    }
-    const fixture = mountPage(methods, {
-      response: (method, params) =>
-        method === "environments.list" && params?.includePreparedDetails
-          ? { environments: inventory, profiles: [] }
-          : undefined,
+      makeWorker("ready"),
+      ...(["unavailable", "error", "stopping"] as const).map((status) =>
+        makeWorker("ready", { status }),
+      ),
+      makeWorker("ready", { details: { expiresAtMs: Date.now() - 1 } }),
+      makeWorker("ready", { details: { consumedAtMs: Date.now() } }),
+      makeWorker("ready", { details: null }),
+      makeWorker("ready", { worker: { destroyRequestedAtMs: Date.now() } }),
+      makeWorker("ready", { worker: { attachedSessionIds: ["active-session"] } }),
+    ].map((environment, index) => Object.assign(environment, { id: `pool-${index}` }));
+    const { page, request } = mountTestPage(methods, {
+      response: preparedInventory(inventory),
     });
-    try {
-      await waitForSolid(() => expect(input(fixture.page, "Pool cap").disabled).toBe(false));
-      await waitForSolid(() =>
-        expect(fixture.page.textContent).toContain("1 ready workers · Pool cap"),
-      );
-      changeInput(input(fixture.page, "Pool cap"), "6");
-      button(fixture.page, "Save pool").click();
-      flush();
-      await waitForSolid(() =>
-        expect(fixture.request.mock.calls.some(([method]) => method === "config.patch")).toBe(true),
-      );
-      const patch = expectDefined(
-        fixture.request.mock.calls.find(([method]) => method === "config.patch"),
-        "Config patch request",
-      )[1];
-      expect(JSON.parse(String(patch?.raw))).toEqual({
-        cloudWorkers: { preparedPool: { maxTotal: 6 } },
-      });
-    } finally {
-      fixture.dispose();
-    }
+    await waitForSolid(() => expect(input(page, "Pool cap").disabled).toBe(false));
+    await waitText(() => page, "1 ready workers · Pool cap");
+    change(input(page, "Pool cap"), "6");
+    click(page, "Save pool");
+    const patch = await configPatch(request);
+    expect(JSON.parse(String(patch?.raw))).toEqual({
+      cloudWorkers: { preparedPool: { maxTotal: 6 } },
+    });
   });
 });

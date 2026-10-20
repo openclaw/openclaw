@@ -21,6 +21,7 @@ import {
   uninstallDiagnosticStabilityFatalHook,
 } from "./diagnostic-stability-bundle.js";
 import {
+  getDiagnosticStabilitySnapshot,
   resetDiagnosticStabilityRecorderForTest,
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
@@ -122,6 +123,63 @@ describe("diagnostic memory", () => {
       stop();
     }
   });
+
+  it.each(["resolved", "rejected"])(
+    "preserves worker acquisition age when a delayed proc read is %s",
+    async (outcome) => {
+      vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
+      vi.spyOn(process, "memoryUsage").mockReturnValue(memoryUsage({}));
+      vi.spyOn(process, "uptime").mockReturnValue(12.5);
+      const clock = vi.spyOn(performance, "now").mockReturnValue(1000);
+      const worker = {
+        script: "sqlite-store.worker.js",
+        threadId: 1,
+        heapUsed: 40,
+        heapTotal: 80,
+        sampleAgeMs: 42_000,
+      };
+      const sampleWorkers = vi.mocked(workerMemory.sampleTrackedWorkerMemory);
+      sampleWorkers.mockReturnValue({
+        ...sampleWorkers(),
+        workerCount: 1,
+        workerHeapSampledCount: 1,
+        workerHeapUsedBytes: 40,
+        workerHeapTotalBytes: 80,
+        workerMemoryCoverage: "partial",
+        workerHeaps: [worker],
+      });
+      sampleWorkers.mockClear();
+      const pending = Promise.withResolvers<string>();
+      const readFile = vi.spyOn(fs, "readFile").mockReturnValue(pending.promise);
+      const events: DiagnosticEventPayload[] = [];
+      const stop = onDiagnosticEvent((event) => events.push(event));
+      startDiagnosticStabilityRecorder();
+      try {
+        createDiagnosticMemorySampler(() => true)(true);
+        expect(events).toEqual([]);
+        clock.mockReturnValue(1750);
+        vi.setSystemTime(new Date("2026-04-22T11:00:00.000Z"));
+        if (outcome === "resolved") {
+          pending.resolve("RssAnon:\t1234 kB\n");
+        } else {
+          pending.reject(new Error("proc unavailable"));
+        }
+        await flushDiagnosticEvents();
+        const sample = {
+          type: "diagnostic.memory.sample",
+          ts: Date.now(),
+          memory: { workerHeaps: [{ ...worker, sampleAgeMs: 42_750 }] },
+        };
+        expect(events).toMatchObject([{ ...sample, uptimeMs: 12_500 }]);
+        expect(getDiagnosticStabilitySnapshot().events).toMatchObject([sample]);
+        expect(worker.sampleAgeMs).toBe(42_000);
+        expect(sampleWorkers).toHaveBeenCalledTimes(1);
+        expect(readFile).toHaveBeenCalledTimes(1);
+      } finally {
+        stop();
+      }
+    },
+  );
 
   it("skips proc off Linux and discards a sample after its heartbeat retires", async () => {
     const events: DiagnosticEventPayload[] = [];

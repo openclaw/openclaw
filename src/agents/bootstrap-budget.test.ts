@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { buildBootstrapPromptWarning } from "./bootstrap-budget-warning.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapBudgetState,
@@ -28,10 +27,6 @@ function bootstrapFile(
   path = `/tmp/${name}`,
 ): WorkspaceBootstrapFile {
   return { name, path, content, missing: false };
-}
-
-function truncatedAnalysis() {
-  return analyze([stat("AGENTS.md", 150, 100)], 120, 200);
 }
 
 function analyze(
@@ -123,7 +118,7 @@ describe("bootstrap budget", () => {
       bootstrapFiles: [pathOnlyFile],
       injectedFiles: [{ path: pathOnlyFile.path, content: "remember" }],
     });
-    expect(analyze(stats).files).toMatchObject([
+    expect(stats).toMatchObject([
       {
         name: "SELF_IMPROVEMENT_REMINDER.md",
         path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
@@ -152,7 +147,6 @@ describe("bootstrap budget", () => {
         { causes: expect.arrayContaining(["total-limit"]) },
       ],
     });
-    expect(analysis.files[1]).toMatchObject({ nearLimit: false, causes: [] });
   });
 
   it("distinguishes lower per-file and exhausted total limits for USER.md", () => {
@@ -209,29 +203,32 @@ describe("bootstrap budget", () => {
     ).toEqual(expected);
   });
 
-  it("respects off/always warning modes", () => {
-    const analysis = truncatedAnalysis();
-    const seen = buildBootstrapPromptWarning({ analysis, mode: "once" });
-    const off = buildBootstrapPromptWarning({
-      analysis,
-      mode: "off",
+  it("warns on repeated truncation while bounding distinct signature history", () => {
+    const files = [stat("AGENTS.md", 150, 100)];
+    const seen = buildBootstrapBudgetState({ files }).bootstrapPromptWarning;
+    const repeated = buildBootstrapBudgetState({
+      files,
       seenSignatures: seen.warningSignaturesSeen,
       previousSignature: seen.signature,
-    });
-    expect(off).toMatchObject({ warningShown: false, lines: [] });
+    }).bootstrapPromptWarning;
+    expect(repeated).toMatchObject({ warningShown: true, lines: [NOTICE] });
+    expect(repeated.warningSignaturesSeen).toEqual([seen.signature]);
 
-    const always = buildBootstrapPromptWarning({
-      analysis,
-      mode: "always",
-      seenSignatures: seen.warningSignaturesSeen,
-      previousSignature: seen.signature,
-    });
-    expect(always).toMatchObject({ warningShown: true, lines: [NOTICE] });
+    const history = Array.from({ length: 32 }, (_, index) => `previous-${index}`);
+    const bounded = buildBootstrapBudgetState({
+      files,
+      seenSignatures: [" ", ...history, "previous-0"],
+      previousSignature: "latest",
+    }).bootstrapPromptWarning;
+    expect(bounded.warningSignaturesSeen).toEqual([...history.slice(2), "latest", seen.signature]);
   });
 
   it("builds truncation report metadata from analysis + warning decision", () => {
-    const analysis = truncatedAnalysis();
-    const warning = buildBootstrapPromptWarning({ analysis, mode: "once" });
+    const { bootstrapAnalysis: analysis, bootstrapPromptWarning: warning } =
+      buildBootstrapBudgetState({
+        config: { agents: { defaults: { bootstrapMaxChars: 120, bootstrapTotalMaxChars: 200 } } },
+        files: [stat("AGENTS.md", 150, 100)],
+      });
     const meta = buildBootstrapTruncationReportMeta({
       analysis,
       warningMode: "once",

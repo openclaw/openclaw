@@ -1,18 +1,11 @@
 import { spawnSync } from "node:child_process";
-import {
-  copyFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const json = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
 const variants = [
   {
     name: "clawhub",
@@ -21,8 +14,8 @@ const variants = [
   },
   {
     name: "vercel",
-    version: "63.1.0",
-    hash: "0a83048049df839446b98af4a6d27b26b40903f9ca125e850965baa6cb590c6f",
+    version: "63.1.2",
+    hash: "81a44227cdb0fdb14aeb166302ae0c44ccd91cd99ab9e19d95b507b53373bf74",
   },
 ] as const;
 
@@ -33,16 +26,10 @@ function fixture(variant: (typeof variants)[number]) {
   const output = path.join(root, "github-output");
   const receipt = path.join(root, "npm-receipt.json");
   const bin = path.join(root, "bin");
-  mkdirSync(source);
-  mkdirSync(bin);
-  for (const name of ["package.json", "package-lock.json"]) {
-    copyFileSync(
-      path.join(".github/release", `${variant.name}-cli`, name),
-      path.join(source, name),
-    );
-  }
-  symlinkSync(process.execPath, path.join(bin, "node"));
-  writeFileSync(
+  fs.mkdirSync(bin);
+  fs.cpSync(path.join(".github/release", `${variant.name}-cli`), source, { recursive: true });
+  fs.symlinkSync(process.execPath, path.join(bin, "node"));
+  fs.writeFileSync(
     path.join(bin, "npm"),
     `#!${process.execPath}
 const fs = require("node:fs");
@@ -59,7 +46,6 @@ for (const name of [process.env.FIXTURE_CLI_PACKAGE, "sandbox"]) {
     { mode: 0o755 },
   );
   return {
-    root,
     source,
     destination,
     output,
@@ -99,61 +85,68 @@ describe("pinned release CLI materialization", () => {
       const test = fixture(variant);
       const result = test.run();
       expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(test.receipt, "utf8"))).toEqual({
+      expect(json(test.receipt)).toEqual({
         args: ["ci", "--ignore-scripts", "--no-audit", "--no-fund", "--omit=dev"],
         cwd: test.destination,
       });
       const output = Object.fromEntries(
-        readFileSync(test.output, "utf8")
+        fs
+          .readFileSync(test.output, "utf8")
           .trim()
           .split("\n")
-          .map((line) => {
-            const separator = line.indexOf("=");
-            return [line.slice(0, separator), line.slice(separator + 1)];
-          }),
+          .map((line) => line.split(/[=](.*)/s, 2)),
       );
       expect(output).toEqual({
         cli: path.join(test.destination, "node_modules/.bin", variant.name),
         ...(variant.name === "vercel"
           ? { sandbox_cli: path.join(test.destination, "node_modules/.bin/sandbox") }
           : {}),
-        integrity: JSON.parse(readFileSync(path.join(test.source, "package-lock.json"), "utf8"))
-          .packages[`node_modules/${variant.name}`].integrity,
+        integrity: json(path.join(test.source, "package-lock.json")).packages[
+          `node_modules/${variant.name}`
+        ].integrity,
         lock_sha256: variant.hash,
         version: variant.version,
       });
-      expect(statSync(test.destination).mode & 0o777).toBe(0o700);
-      expect(statSync(path.join(test.destination, "package-lock.json")).mode & 0o777).toBe(0o600);
+      expect(fs.statSync(test.destination).mode & 0o777).toBe(0o700);
+      expect(fs.statSync(path.join(test.destination, "package-lock.json")).mode & 0o777).toBe(
+        0o600,
+      );
       expect(result.stdout).toBe(
         `Materialized ${variant.name}@${variant.version} from lock ${variant.hash}.\n`,
       );
     },
   );
 
-  it("rejects a changed lock before invoking npm or publishing outputs", () => {
-    const test = fixture(variants[0]);
-    writeFileSync(path.join(test.source, "package-lock.json"), "{}\n");
-    const result = test.run();
-    expect(result.status).toBe(1);
-    expect(result.stderr).toBe("Pinned ClawHub CLI lock SHA-256 mismatch.\n");
-    expect(existsSync(test.receipt)).toBe(false);
-    expect(existsSync(test.output)).toBe(false);
-  });
-
-  it("rejects an unexpected installed version before publishing outputs", () => {
-    const test = fixture(variants[0]);
-    const result = test.run({ FIXTURE_CLI_VERSION: "0.0.0" });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toBe("Pinned ClawHub CLI version mismatch: 0.0.0\n");
-    expect(existsSync(test.output)).toBe(false);
-  });
-
-  it("requires Vercel's standalone Sandbox executable before publishing outputs", () => {
-    const test = fixture(variants[1]);
-    const result = test.run({ FIXTURE_MISSING_BIN: "sandbox" });
-    expect(result.status).toBe(1);
-    expect(existsSync(test.receipt)).toBe(true);
-    expect(existsSync(test.output)).toBe(false);
-    expect(result.stdout).toBe("");
-  });
+  it.each(["changed lock", "wrong version", "missing Sandbox executable"])(
+    "rejects %s before publishing outputs",
+    (reason) => {
+      const missingBin = reason === "missing Sandbox executable";
+      const test = fixture(variants[missingBin ? 1 : 0]);
+      const overrides: Record<string, string> = {};
+      if (reason === "wrong version") {
+        overrides.FIXTURE_CLI_VERSION = "0.0.0";
+      } else if (missingBin) {
+        overrides.FIXTURE_MISSING_BIN = "sandbox";
+      } else {
+        fs.writeFileSync(path.join(test.source, "package-lock.json"), "{}\n");
+      }
+      const result = test.run(overrides);
+      expect({ status: result.status, published: fs.existsSync(test.output) }).toEqual({
+        status: 1,
+        published: false,
+      });
+      if (missingBin) {
+        expect(result.stdout).toBe("");
+      } else {
+        expect(result.stderr).toBe(
+          reason === "changed lock"
+            ? "Pinned ClawHub CLI lock SHA-256 mismatch.\n"
+            : "Pinned ClawHub CLI version mismatch: 0.0.0\n",
+        );
+      }
+      if (reason !== "wrong version") {
+        expect(fs.existsSync(test.receipt)).toBe(missingBin);
+      }
+    },
+  );
 });

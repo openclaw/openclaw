@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, onCleanup, refresh, untrack, useContext } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
 import { ChatImageActions } from "./chat-image-actions.tsx";
@@ -69,6 +70,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
   let currentOptions: ImageRenderOptions | undefined;
   let loadedElement: HTMLImageElement | undefined;
   let previewElement: HTMLImageElement | undefined;
+  let previewEvents: { element: HTMLImageElement; stop: () => void } | undefined;
   let managed = false;
   const previewWidth = chatImageRenditionWidth("inline");
   let pendingPreview: Promise<unknown> | undefined;
@@ -200,7 +202,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
       !retainedImage &&
       typeof IntersectionObserver === "function"
     ) {
-      return present(renderImagePlaceholder(image));
+      return renderImagePlaceholder(image);
     }
     admitted = true;
     // A pane owns cancellation; this image alone owns its presentation updates.
@@ -256,23 +258,21 @@ function createMessageImagePresentation(props: MessageImageProps) {
           refreshImage();
         }
       };
-      return present(
-        renderImagePlaceholder(image, reason, {
-          path: isLocalAssistantAttachmentSource(source) ? source : undefined,
-          onAllow:
-            !decodeFailed && availability.status === "unavailable" && availability.canAllow
-              ? () => retryAvailability(true)
-              : undefined,
-          onRetry: decodeFailed
-            ? () => {
-                releaseRetainedImage();
-                refreshImage();
-              }
-            : availability.status === "unavailable" && availability.recoverable
-              ? () => retryAvailability()
-              : undefined,
-        }),
-      );
+      return renderImagePlaceholder(image, reason, {
+        path: isLocalAssistantAttachmentSource(source) ? source : undefined,
+        onAllow:
+          !decodeFailed && availability.status === "unavailable" && availability.canAllow
+            ? () => retryAvailability(true)
+            : undefined,
+        onRetry: decodeFailed
+          ? () => {
+              releaseRetainedImage();
+              refreshImage();
+            }
+          : availability.status === "unavailable" && availability.recoverable
+            ? () => retryAvailability()
+            : undefined,
+      });
     }
     if (!managed) {
       const retained = retainedImage;
@@ -285,21 +285,19 @@ function createMessageImagePresentation(props: MessageImageProps) {
         // native load/error boundary replaces the detached decode preloader.
         retained.timeout = setTimeout(() => failImage(), CANONICAL_IMAGE_HANDOFF_TIMEOUT_MS);
       }
-      return present(
-        renderImageElement(
-          image,
-          availability.status === "available"
-            ? buildAssistantAttachmentUrl(
-                source,
-                options?.resourceBasePath,
-                availability.mediaTicket,
-                options,
-                image.fileName,
-                "thumbnail",
-                previewWidth,
-              )
-            : displayUrl,
-        ),
+      return renderImageElement(
+        image,
+        availability.status === "available"
+          ? buildAssistantAttachmentUrl(
+              source,
+              options?.resourceBasePath,
+              availability.mediaTicket,
+              options,
+              image.fileName,
+              "thumbnail",
+              previewWidth,
+            )
+          : displayUrl,
       );
     }
     return renderManagedImage(image, subscriptionOptions, displayUrl);
@@ -323,14 +321,12 @@ function createMessageImagePresentation(props: MessageImageProps) {
     if (!subscriptionOptions?.onMediaChange && pending) {
       observeStandalonePreview(pending);
     }
-    return present(
-      resource.value
-        ? renderImageElement(image, resource.value)
-        : renderImagePlaceholder(
-            image,
-            resource.value === null ? t("chat.imageLightbox.loadFailed") : undefined,
-          ),
-    );
+    return resource.value
+      ? renderImageElement(image, resource.value)
+      : renderImagePlaceholder(
+          image,
+          resource.value === null ? t("chat.imageLightbox.loadFailed") : undefined,
+        );
   }
 
   function observeStandalonePreview(pending: Promise<unknown>) {
@@ -347,7 +343,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
   }
 
   function renderImageElement(image: ImageBlock, previewUrl: string): ImagePresentation {
-    return { image, previewUrl, managed };
+    return { image, previewUrl, managed, key: imageKey };
   }
 
   function renderPreviewElement(image: ImageBlock, url: string, title: string) {
@@ -358,9 +354,20 @@ function createMessageImagePresentation(props: MessageImageProps) {
       previewElement.decoding = "async";
     }
     const element = previewElement;
-    // Rebind to this presentation when a detached image is adopted by a new row.
-    element.addEventListener("load", onSettled);
-    element.addEventListener("error", onSettled);
+    // Decoded images transfer between rows through the media owner. Bind this
+    // presentation only while it has custody of that foreign DOM node.
+    if (previewEvents?.element !== element) {
+      previewEvents?.stop();
+      const stopLoad = listen(element, "load", onSettled);
+      const stopError = listen(element, "error", onSettled);
+      previewEvents = {
+        element,
+        stop() {
+          stopLoad();
+          stopError();
+        },
+      };
+    }
     if (element.alt !== title) {
       element.alt = title;
     }
@@ -407,6 +414,7 @@ function createMessageImagePresentation(props: MessageImageProps) {
     return {
       image,
       managed,
+      key: active ? imageKey : undefined,
       state: reason === undefined ? "loading" : "unavailable",
       reason,
       actions: {
@@ -455,18 +463,14 @@ function createMessageImagePresentation(props: MessageImageProps) {
     refreshImage();
   }
 
-  function present(value: ImagePresentation): ImagePresentation {
-    return { ...value, key: imageKey };
-  }
-
   const retireHandoff = () => {
     if (retainedImage?.status !== "retaining") {
       return;
     }
     releaseRetainedImage();
     retainedImage = { status: "unavailable" };
-    previewElement?.removeEventListener("load", onSettled);
-    previewElement?.removeEventListener("error", onSettled);
+    previewEvents?.stop();
+    previewEvents = undefined;
     previewElement?.remove();
     previewElement = undefined;
     loadedElement = undefined;
@@ -481,9 +485,9 @@ function createMessageImagePresentation(props: MessageImageProps) {
   onCleanup(() => {
     disconnect?.delete(retireHandoff);
     active = false;
+    previewEvents?.stop();
+    previewEvents = undefined;
     if (previewElement) {
-      previewElement.removeEventListener("load", onSettled);
-      previewElement.removeEventListener("error", onSettled);
       // Do not retain the removed row through the image's parent or listeners.
       previewElement.remove();
     }
@@ -638,7 +642,7 @@ function ImageFrame(props: {
     props.model.managed || (compact() && isLocalAssistantAttachmentSource(image().url ?? ""));
   // A mounted preview keeps its initial frame when the upload receipt adds dimensions.
   // Fresh history mounts use those durable dimensions; older facts retain a stable fallback.
-  const dimensions = untrack(() => resolveChatImagePreviewSize(props.model.image));
+  const initialDimensions = untrack(() => resolveChatImagePreviewSize(props.model.image));
   return (
     <span
       ref={props.presentation.observeFrame}
@@ -650,8 +654,10 @@ function ImageFrame(props: {
         },
       ]}
       style={{
-        "--chat-image-width": `${compact() ? Math.max(MIN_CHAT_IMAGE_PREVIEW_WIDTH, dimensions.width) : dimensions.width}px`,
-        "--chat-image-ratio": compact() ? "auto" : `${dimensions.width} / ${dimensions.height}`,
+        "--chat-image-width": `${compact() ? Math.max(MIN_CHAT_IMAGE_PREVIEW_WIDTH, initialDimensions.width) : initialDimensions.width}px`,
+        "--chat-image-ratio": compact()
+          ? "auto"
+          : `${initialDimensions.width} / ${initialDimensions.height}`,
       }}
       aria-busy={pending() ? "true" : "false"}
       role={pending() ? "status" : undefined}

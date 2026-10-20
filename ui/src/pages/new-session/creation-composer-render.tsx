@@ -1,4 +1,5 @@
 import { createMemo, Show } from "solid-js";
+import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -85,18 +86,23 @@ export function CreationComposer(props: {
     return composer?.canDisplay() ? composer : undefined;
   });
   return (
-    <Show when={visible()}>
+    <Show when={visible()} keyed>
       {(composer) => {
+        const footerControl = createFooterControlRef();
         const prepared = createMemo(() => {
           owner()?.read();
-          return prepareCreationComposer(composer(), props.onOpenImage);
+          return prepareCreationComposer(composer, props.onOpenImage);
         });
-        const error = createMemo(() => {
+        const error = () => {
           owner()?.read();
-          return composer().error;
-        });
+          return composer.error;
+        };
         return (
-          <section class="creation-composer" aria-label={t("newSession.followUps")}>
+          <section
+            ref={footerControl}
+            class="creation-composer"
+            aria-label={t("newSession.followUps")}
+          >
             <Show when={error()}>
               <div class="callout danger" role="alert">
                 {error()}

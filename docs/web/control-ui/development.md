@@ -55,6 +55,25 @@ limits locally and in CI; `pnpm ui:build` reports them without rejecting the bui
 Worker scripts and other URL assets remain available in the offline cache without
 being modulepreloaded into the document.
 
+Selecting a language loads its startup catalog and translations for English namespaces
+that are already registered. Other page-only namespaces and configuration hints load
+when first used, with English fallback while the request is pending. Route loading
+waits for the selected language's newly registered namespaces before mounting the page,
+so editable defaults start in that language. The
+build derives this split from the English startup catalog and canonical translation
+memory for every language. The combined base and configuration-hint catalog size is
+capped at 307,200 B gzip per language; `pnpm ui:check-performance` enforces this cap
+both locally and in CI and reports every language's remaining headroom.
+
+MCP app new-conversation handling loads when the app requests a conversation.
+New Session includes its completion handler in the route bundle, so submission
+does not pause for another chunk before sending the creation request.
+
+Session creation and message sends retain a dispatched result after Stop or view
+cancellation, so the owning flow can reconcile accepted work before settling or
+cleaning up its placement. Cancellation still stops unsent work and requests
+refused before dispatch.
+
 After a Gateway update, already-open tabs reload the current build when they encounter a missing old asset. Reloading is automatic when no unsaved-work guard blocks it; otherwise, save or discard the protected work and use the **Reload** banner. The Gateway and service worker keep only the current build's assets.
 
 Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker caches matching current-build public URLs for offline reuse.
@@ -96,6 +115,7 @@ the development proxy preserves the browser's Origin and does not provide
 authentication credentials.
 
 Vite serves the UI and its hot reload connection, and proxies Gateway requests.
+If the Gateway disconnects, the proxy retires that connection so the UI can reconnect without restarting Vite.
 The UI keeps credentials and saved settings scoped to the actual Gateway. An
 owner pairing handoff can be delivered on the dev page while retaining its
 original Gateway destination and fragment. To use another Gateway, restart

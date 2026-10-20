@@ -1,6 +1,10 @@
+import { createComponent, flush } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import type { ApplicationConfigCapability } from "../../app/config.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { disposeSidebarContextLifecycles } from "../../test-helpers/app-sidebar-context-lifecycle.ts";
+import { createContext, createSessions } from "../../test-helpers/app-sidebar.ts";
+import { createApplicationGateway } from "../../test-helpers/solid-application-context.tsx";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { createAgentViewTestProps } from "./agents-view.test-helpers.ts";
 import { Agents } from "./view.tsx";
@@ -92,27 +96,45 @@ it("keeps avatar editing usable when upload policy changes without remounting", 
   const container = document.createElement("div");
   document.body.append(container);
   const base = createAgentViewTestProps();
-  const withUploads = (enabled: boolean) => ({
-    ...base,
-    overview: {
-      ...base.overview,
-      applicationConfig: { current: { uploadsEnabled: enabled } } as ApplicationConfigCapability,
-    },
-  });
-  const mounted = mountSolid(Agents, withUploads(false), container);
+  const context = createContext(createApplicationGateway().gateway, createSessions("beta", []));
+  onTestFinished(disposeSidebarContextLifecycles);
+  const fetchConfig = vi.spyOn(globalThis, "fetch");
+  const setUploadsEnabled = async (enabled: boolean) => {
+    fetchConfig.mockResolvedValueOnce(Response.json({ uploadsEnabled: enabled }));
+    await context.config.refresh();
+    flush();
+  };
+  await setUploadsEnabled(false);
+  const mounted = mountSolid(
+    () =>
+      createComponent(ApplicationProvider, {
+        value: context,
+        get children() {
+          return createComponent(Agents, base);
+        },
+      }),
+    {},
+    container,
+  );
   try {
-    mounted.update(withUploads(true));
-    await page.getByRole("button", { name: "Edit avatar", exact: true }).click();
+    const editAvatar = page.getByRole("button", { name: "Edit avatar", exact: true });
+    const avatarButton = editAvatar.element();
+    await expect.element(editAvatar).toBeDisabled();
+    await setUploadsEnabled(true);
+    await editAvatar.click();
     const popover = container.querySelector<HTMLElement>(".agent-identity-editor__popover");
     expect(popover?.matches(":popover-open")).toBe(true);
 
-    mounted.update(withUploads(false));
+    await setUploadsEnabled(false);
+    await expect.element(editAvatar).toBeDisabled();
     expect(popover?.matches(":popover-open")).toBe(false);
 
-    mounted.update(withUploads(true));
-    await page.getByRole("button", { name: "Edit avatar", exact: true }).click();
+    await setUploadsEnabled(true);
+    expect(editAvatar.element()).toBe(avatarButton);
+    await editAvatar.click();
     expect(popover?.matches(":popover-open")).toBe(true);
   } finally {
+    fetchConfig.mockRestore();
     mounted.dispose();
     container.remove();
   }

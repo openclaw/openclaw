@@ -1,4 +1,4 @@
-import { createEffect, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import type {
   ControlUiSettingsContext,
   ControlUiSettingsView,
@@ -171,10 +171,7 @@ export function ControlUiSettingsPresentation(props: {
         }
       });
   };
-  // The imperative plugin view receives live host props; transport owners also
-  // notify synchronously so a batched identity change retires old authority and a
-  // batched disconnect/reconnect still advances the view's transport epoch.
-  createEffect(props.readSnapshot, sync);
+  // Owner notifications retire authority synchronously and publish committed presentation facts.
   onSettled(() => {
     const stop = props.subscribe(sync);
     sync();

@@ -313,7 +313,7 @@ async function changeScheduledTaskEnabledState(params: {
   if (result.code !== 0) {
     const detail = (result.stderr || result.stdout).trim() || "unknown error";
     const changeError = new Error(`schtasks ${action.slice(1).toLowerCase()} failed: ${detail}`);
-    if (/access is denied|0x80070005/iu.test(detail)) {
+    if (/access is denied|toegang geweigerd|0x80070005/iu.test(detail)) {
       throw Object.assign(changeError, { code: "EACCES" });
     }
     if (!params.enabled && params.restoreOnFailure !== false) {

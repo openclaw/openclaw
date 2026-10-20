@@ -1,12 +1,4 @@
-import {
-  createComponent,
-  createEffect,
-  createSignal,
-  createStore,
-  For,
-  onSettled,
-  Show,
-} from "solid-js";
+import { createComponent, createSignal, createStore, For, onSettled, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
@@ -14,7 +6,7 @@ import { projectGatewayEventLog } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import { defineSolidBridge } from "../../lib/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { canReadSystemInfo, SYSTEM_INFO_POLL_INTERVAL_MS } from "../../lib/system-info.ts";
 import "../../styles/debug-data.css";
 import { DebugOverlaySectionLoading } from "./debug-overlay-loading-view.tsx";
@@ -27,7 +19,13 @@ import {
 
 type SectionState = { status: "loading" | "unavailable" } | { status: "ready"; value: unknown };
 
-function Content(source: ApplicationGateway, props: { minimized: boolean }) {
+const pollingSynchronizers = new WeakMap<HTMLElement, () => void>();
+
+function Content(
+  source: ApplicationGateway,
+  props: { minimized: boolean },
+  host: SolidBridgeElement<Props>,
+) {
   const lifecycle = createGatewayConnectionLifecycle(source.snapshot);
   const [visible, setVisible] = createSignal(document.visibilityState !== "hidden");
   const [sections, setSections] = createStore<Record<string, SectionState>>({});
@@ -65,7 +63,7 @@ function Content(source: ApplicationGateway, props: { minimized: boolean }) {
     });
   };
 
-  function refresh(minimized = props.minimized) {
+  function refresh(minimized = host.minimized) {
     const scope = lifecycle.capture();
     if (!scope || document.visibilityState === "hidden") {
       return;
@@ -116,7 +114,10 @@ function Content(source: ApplicationGateway, props: { minimized: boolean }) {
         });
     }
   }
-  const visibilityChanged = () => setVisible(document.visibilityState !== "hidden");
+  const visibilityChanged = () => {
+    setVisible(document.visibilityState !== "hidden");
+    syncPolling(host.minimized);
+  };
   function syncPolling(minimized: boolean, initial = false) {
     const snapshot = source.snapshot;
     const changed = lifecycle.transition(snapshot);
@@ -144,20 +145,19 @@ function Content(source: ApplicationGateway, props: { minimized: boolean }) {
       }
     }
   }
-  // Synchronize the Gateway diagnostics polling timer with panel/document visibility.
-  createEffect(
-    () => ({ minimized: props.minimized, visible: visible() }),
-    // Start after the previous keyed content has released shared requests.
-    (current, previous) => syncPolling(current.minimized, previous === undefined),
-  );
   const eventLog = projectGatewayEventLog(source);
   const eventRevision = () =>
     !props.minimized && visible() ? eventLog.read().revision : undefined;
   onSettled(() => {
     // Gateway receipts abort retired diagnostics and synchronously revoke unauthorized status polling.
-    const stopGateway = source.subscribe(() => syncPolling(props.minimized));
+    const synchronize = () => syncPolling(host.minimized);
+    const stopGateway = source.subscribe(synchronize);
     const stopVisibility = listen(document, "visibilitychange", visibilityChanged);
+    pollingSynchronizers.set(host, synchronize);
+    // The previous gateway's keyed content has released its shared diagnostics first.
+    syncPolling(host.minimized, true);
     return () => {
+      pollingSynchronizers.delete(host);
       stopPolling();
       abortRequests();
       stopGateway();
@@ -235,16 +235,22 @@ type Props = { context: ApplicationContext | undefined; minimized: boolean };
 
 export const DebugOverlayContent = defineSolidBridge<Props>(
   "openclaw-debug-overlay-content",
-  (props) => {
+  (props, host) => {
     // A bridge's provider ancestry is fixed for this renderer lifetime.
     const inherited = useOptionalApplication();
     return (
       <Show when={(props.context ?? inherited)?.gateway} keyed>
-        {(gateway) => Content(gateway, props)}
+        {(gateway) => Content(gateway, props, host)}
       </Show>
     );
   },
   {
+    propertyChanged: (host, key) => {
+      if (key === "minimized") {
+        // A batched context replacement must retire the previous diagnostics before polling.
+        onSettled(() => pollingSynchronizers.get(host)?.());
+      }
+    },
     properties: {
       context: { default: undefined, attribute: false },
       minimized: { default: false, type: Boolean },

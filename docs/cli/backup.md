@@ -865,6 +865,8 @@ processes before manually removing their reported scratch directories.
 Published archives and package rollback backups are outside this cleanup.
 Retired scratch is renamed to `openclaw-backup-retired-*` before deletion so a
 later pass can finish partial cleanup even after the lifetime token is gone.
+On Windows, the retirement destination is left absent until a guarded
+no-clobber move, so cleanup does not try to replace an existing directory.
 
 ## Related
 

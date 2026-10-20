@@ -302,6 +302,13 @@ suite.define(() => {
         );
         await expect.poll(async () => (await gateway.getRequests("update.run")).length).toBe(1);
         expect(pageErrors).toEqual([]);
+      } catch (error) {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: error instanceof Error ? error : new Error(String(error)),
+          label: `native-update-${outcome}`,
+          pageErrors,
+        });
+        throw error;
       } finally {
         await context.close();
       }

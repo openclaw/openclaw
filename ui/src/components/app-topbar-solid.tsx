@@ -2,7 +2,9 @@ import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
+import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../app/navigation-surface.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
+import { createRouteElementRef } from "../app/route-element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { GatewayStatusProps } from "./gateway-status.ts";
@@ -26,6 +28,7 @@ defineSolidBridge<Props>(
   "openclaw-app-topbar",
   (props, host) => {
     host.style.display = "contents";
+    const drawerRef = createRouteElementRef(NAV_DRAWER_TOGGLE_REGISTRATION);
     const drawerLabel = () => (props.navDrawerOpen ? t("nav.collapse") : t("nav.expand"));
     return (
       <header class="topbar">
@@ -33,6 +36,7 @@ defineSolidBridge<Props>(
           <openclaw-tooltip prop:content={drawerLabel()}>
             <button
               type="button"
+              ref={drawerRef}
               class="topbar-icon-btn topbar-nav-toggle"
               onClick={(event) => props.onToggleDrawer?.(event.currentTarget)}
               aria-label={drawerLabel()}

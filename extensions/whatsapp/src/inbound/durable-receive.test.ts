@@ -1,4 +1,3 @@
-// WhatsApp durable ingress drain adapter: completion, retry, and lane serialization.
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -10,26 +9,24 @@ import {
   deserializeWhatsAppDurableInboundMessage,
   serializeWhatsAppDurableInboundMessage,
 } from "./durable-payload.js";
-import { createWhatsAppIngressMonitor } from "./durable-receive.js";
+import { createWhatsAppIngressMonitor, type WhatsAppIngressAdmission } from "./durable-receive.js";
 import { resolveWhatsAppIngressLifecycle } from "./ingress-lifecycle.js";
 import { createWhatsAppInboundMessageDebouncer } from "./message-debounce.js";
 import { createTestWebInboundMessage } from "./test-message.test-helper.js";
 
-type WhatsAppDurableInboundPayload = {
+type WhatsAppDurableInboundPayload = Omit<WhatsAppIngressAdmission, "message"> & {
   message: ReturnType<typeof serializeWhatsAppDurableInboundMessage>;
-  upsertType?: string;
-  skipStaleAppend?: boolean;
-  skipRecentOutboundEcho?: boolean;
-  receivedAt: number;
-  receiveOrder?: number;
 };
 
 const REMOTE_JID = "1@s.whatsapp.net";
 
-async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
+async function withQueue<T>(
+  fn: (queue: ReturnType<typeof createQueue>) => Promise<T>,
+  now?: () => number,
+): Promise<T> {
   const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-whatsapp-durable-"));
   try {
-    return await fn(stateDir);
+    return await fn(createQueue(stateDir, now));
   } finally {
     await fs.rm(stateDir, { recursive: true, force: true });
   }
@@ -62,13 +59,39 @@ function createQueue(stateDir: string, now?: () => number) {
   });
 }
 
+function createMonitor(
+  queue: ReturnType<typeof createQueue>,
+  options: Omit<Parameters<typeof createWhatsAppIngressMonitor>[0], "queue" | "pollIntervalMs">,
+) {
+  return createWhatsAppIngressMonitor({ queue, pollIntervalMs: 10, ...options });
+}
+
+function getTransportId(inbound: { message: WAMessage }) {
+  const id = inbound.message.key.id;
+  if (!id) {
+    throw new Error("expected transport id");
+  }
+  return id;
+}
+
+async function drainToIds(queue: ReturnType<typeof createQueue>) {
+  const dispatched: string[] = [];
+  const monitor = createMonitor(queue, {
+    dispatch: async (inbound) => {
+      dispatched.push(getTransportId(inbound));
+      return { kind: "completed" };
+    },
+  });
+  monitor.start();
+  await monitor.waitForIdle();
+  await monitor.stop();
+  return dispatched;
+}
+
 describe("createWhatsAppIngressMonitor", () => {
   it("rejects messages without a native id as a permanent ingress failure", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createQueue(stateDir);
-      const monitor = createWhatsAppIngressMonitor({
-        queue,
-        pollIntervalMs: 10,
+    await withQueue(async (queue) => {
+      const monitor = createMonitor(queue, {
         dispatch: async () => ({ kind: "completed" }),
       });
       monitor.start();
@@ -88,14 +111,11 @@ describe("createWhatsAppIngressMonitor", () => {
   });
 
   it("releases claims when dispatch throws before adoption", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createQueue(stateDir);
+    await withQueue(async (queue) => {
       const id = eventId("msg-1");
       await queue.enqueue(id, payload("msg-1"), { laneKey: REMOTE_JID });
 
-      const monitor = createWhatsAppIngressMonitor({
-        queue,
-        pollIntervalMs: 10,
+      const monitor = createMonitor(queue, {
         dispatch: async () => {
           throw new Error("downstream callback rejected");
         },
@@ -113,8 +133,7 @@ describe("createWhatsAppIngressMonitor", () => {
   });
 
   it("delivers same-lane debounce candidates while retaining each claim until adoption", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createQueue(stateDir);
+    await withQueue(async (queue) => {
       const firstId = eventId("msg-4a");
       const secondId = eventId("msg-4b");
       await queue.enqueue(firstId, payload("msg-4a"), {
@@ -128,14 +147,9 @@ describe("createWhatsAppIngressMonitor", () => {
 
       const dispatched: string[] = [];
       const adoptions: Array<() => void | Promise<void>> = [];
-      const monitor = createWhatsAppIngressMonitor({
-        queue,
-        pollIntervalMs: 10,
+      const monitor = createMonitor(queue, {
         dispatch: async (inbound, lifecycle) => {
-          const id = inbound.message.key.id;
-          if (!id) {
-            throw new Error("expected transport id");
-          }
+          const id = getTransportId(inbound);
           dispatched.push(id);
           adoptions.push(lifecycle.onAdopted);
           return { kind: "deferred" as const };
@@ -176,12 +190,7 @@ describe("createWhatsAppIngressMonitor", () => {
   });
 
   it("combines durable same-chat messages in timestamp and receive order before settling claims", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createChannelIngressQueueForTests<WhatsAppDurableInboundPayload>({
-        channelId: "whatsapp",
-        accountId: "acct",
-        stateDir,
-      });
+    await withQueue(async (queue) => {
       const bodies: string[] = [];
       const markRead = vi.fn(async () => {});
       const onError = vi.fn();
@@ -195,14 +204,9 @@ describe("createWhatsAppIngressMonitor", () => {
         onPendingWorkChanged: () => {},
         onError,
       });
-      const monitor = createWhatsAppIngressMonitor({
-        queue,
-        pollIntervalMs: 10,
+      const monitor = createMonitor(queue, {
         dispatch: async (inbound, lifecycle) => {
-          const id = inbound.message.key.id;
-          if (!id) {
-            throw new Error("expected transport id");
-          }
+          const id = getTransportId(inbound);
           await debouncer.enqueue({
             ...createTestWebInboundMessage({
               event: { id, timestamp: Number(inbound.message.messageTimestamp) },
@@ -256,40 +260,25 @@ describe("createWhatsAppIngressMonitor", () => {
   });
 
   it("dispatches accepted pending records older than the legacy 30-day TTL", async () => {
-    await withTempState(async (stateDir) => {
-      const thirtyOneDaysAgo = Date.now() - 31 * 24 * 60 * 60 * 1_000;
-      const queue = createQueue(stateDir, () => thirtyOneDaysAgo);
-      await queue.enqueue(eventId("msg-old"), payload("msg-old"), {
-        laneKey: REMOTE_JID,
-        receivedAt: thirtyOneDaysAgo,
-      });
+    const thirtyOneDaysAgo = Date.now() - 31 * 24 * 60 * 60 * 1_000;
+    await withQueue(
+      async (queue) => {
+        await queue.enqueue(eventId("msg-old"), payload("msg-old"), {
+          laneKey: REMOTE_JID,
+          receivedAt: thirtyOneDaysAgo,
+        });
 
-      const dispatched: string[] = [];
-      const monitor = createWhatsAppIngressMonitor({
-        queue,
-        pollIntervalMs: 10,
-        dispatch: async (admission) => {
-          const id = admission.message.key.id;
-          if (!id) {
-            throw new Error("expected transport id");
-          }
-          dispatched.push(id);
-          return { kind: "completed" };
-        },
-      });
+        const dispatched = await drainToIds(queue);
 
-      monitor.start();
-      await monitor.waitForIdle();
-      await monitor.stop();
-
-      expect(dispatched).toEqual(["msg-old"]);
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
-    });
+        expect(dispatched).toEqual(["msg-old"]);
+        expect(await queue.listPending({ limit: "all" })).toEqual([]);
+      },
+      () => thirtyOneDaysAgo,
+    );
   });
 
   it("dispatches every accepted pending record past the legacy 450-entry cap", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createQueue(stateDir);
+    await withQueue(async (queue) => {
       const transportIds = Array.from(
         { length: 451 },
         (_unused, index) => `msg-${String(index).padStart(3, "0")}`,
@@ -301,23 +290,7 @@ describe("createWhatsAppIngressMonitor", () => {
         });
       }
 
-      const dispatched: string[] = [];
-      const monitor = createWhatsAppIngressMonitor({
-        queue,
-        pollIntervalMs: 10,
-        dispatch: async (admission) => {
-          const id = admission.message.key.id;
-          if (!id) {
-            throw new Error("expected transport id");
-          }
-          dispatched.push(id);
-          return { kind: "completed" };
-        },
-      });
-
-      monitor.start();
-      await monitor.waitForIdle();
-      await monitor.stop();
+      const dispatched = await drainToIds(queue);
 
       expect(dispatched.toSorted()).toEqual(transportIds.toSorted());
       expect(await queue.listPending({ limit: "all" })).toEqual([]);

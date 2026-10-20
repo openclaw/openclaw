@@ -108,6 +108,8 @@ if (args[0] === 'api' && args[1] === 'user') {
   ...(fs.existsSync(overrides) ? JSON.parse(fs.readFileSync(overrides,'utf8')) : {})}));
 } else if (args.some(a => a.startsWith('repos/fixture/repo/collaborators/'))) {
  console.log('{"permission":"write"}');
+} else if (args.some(a => a.startsWith('repos/fixture/repo/pulls/42/files?'))) {
+ console.log(JSON.stringify([${JSON.stringify(product)}.map(filename => ({filename,status:'modified',additions:1,deletions:0}))]));
 } else { console.error('Unexpected fixture GitHub request: '+JSON.stringify(args)); process.exit(99); }
 `,
     { mode: 0o755 },

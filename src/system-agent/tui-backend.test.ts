@@ -1,8 +1,11 @@
 // OpenClaw TUI backend tests cover rescue status integration with the TUI backend.
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
+import * as configModule from "../config/config.js";
+import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -30,11 +33,11 @@ vi.mock("./verified-inference.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("./verified-inference.js")>();
   return {
     ...original,
-    resolveSystemAgentVerifiedInferenceState: vi.fn(async (binding, deps) => {
+    resolveSystemAgentVerifiedInferenceState: vi.fn(async (binding) => {
       const config = verifiedInferenceMocks.preparedBindings.get(binding);
       return config
         ? { config, route: binding.execution }
-        : await original.resolveSystemAgentVerifiedInferenceState(binding, deps);
+        : await original.resolveSystemAgentVerifiedInferenceState(binding);
     }),
   };
 });
@@ -77,16 +80,19 @@ const verifiedConfig = {
 } satisfies OpenClawConfig;
 
 function configSnapshot(config: OpenClawConfig) {
-  return {
+  return createConfigFileSnapshot({
     exists: true,
     valid: true,
     path: "/tmp/openclaw.json",
     hash: "h",
-    config,
+    raw: null,
+    parsed: config,
     runtimeConfig: config,
     sourceConfig: config,
     issues: [],
-  };
+    warnings: [],
+    legacyIssues: [],
+  });
 }
 
 let sharedVerifiedFixture: Awaited<
@@ -109,12 +115,13 @@ async function createVerifiedTuiOptions(
   if (!useRealVerification) {
     verifiedInferenceMocks.preparedBindings.set(fixture.binding, config);
   }
+  const reader = vi
+    .spyOn(configModule, "readConfigFileSnapshot")
+    .mockResolvedValue(configSnapshot(config));
+  onTestFinished(() => reader.mockRestore());
   return {
     verifiedInference: fixture.binding,
-    deps: {
-      readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
-      ...deps,
-    },
+    deps,
   };
 }
 
@@ -204,7 +211,7 @@ describe("runSystemAgentTui", () => {
 
     expect(runTuiCalls).toBe(1);
     expect(resolveVerifiedState).toHaveBeenCalledOnce();
-    expect(resolveVerifiedState).toHaveBeenCalledWith(verified.verifiedInference, verified.deps);
+    expect(resolveVerifiedState).toHaveBeenCalledWith(verified.verifiedInference);
     const [resolveOrder] = resolveVerifiedState.mock.invocationCallOrder;
     const [runTuiOrder] = runTui.mock.invocationCallOrder;
     if (resolveOrder === undefined || runTuiOrder === undefined) {
@@ -537,7 +544,23 @@ describe("runSystemAgentTui", () => {
       const events: string[] = [];
       const runtime = createRuntime();
       runtime.log = (...args) => events.push(`log:${args.join(" ")}`);
-      const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+      let verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+      if (handoff.target === "gateway") {
+        const configFixture = await createInferenceConfigFixture(verifiedConfig);
+        const snapshot = configFixture.snapshot;
+        const fixture = await createSystemAgentVerifiedInferenceTestFixture(
+          snapshot.runtimeConfig ?? snapshot.config,
+          snapshot,
+        );
+        verified = {
+          verifiedInference: fixture.binding,
+          deps: { loadOverview: async () => overview },
+        };
+        const reader = vi
+          .spyOn(configModule, "readConfigFileSnapshot")
+          .mockImplementation(configFixture.read);
+        onTestFinished(() => reader.mockRestore());
+      }
       await runSystemAgentTui(
         {
           ...verified,

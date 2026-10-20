@@ -182,6 +182,9 @@ async function captureFinalStatus(
       await waitForControlUiGatewayReady(page);
       const card = page.locator('[data-provider-id="openai"]');
       await card.waitFor({ state: "visible" });
+      // The ordinary turn already proved automatic quota recovery. Initial catalog
+      // publication is best effort; Refresh explicitly asks for its settled status.
+      await page.locator(".model-providers__refresh-button").click();
       const badge = card.locator(".model-providers__head .settings-status");
       let previousStatus: string | undefined;
       await expect

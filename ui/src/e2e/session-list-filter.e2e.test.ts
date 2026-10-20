@@ -60,6 +60,7 @@ async function waitForList(gateway: Gateway, previousCount: number) {
 const allAgentsQuery = {
   configuredAgentsOnly: true,
   excludeDock: true,
+  ifRowsRevision: "",
   includeGlobal: true,
   includeUnknown: false,
   limit: 50,
@@ -174,8 +175,10 @@ suite.define(() => {
 
     const startupAndPageRequests = await gateway.getRequests("sessions.list");
     expect(startupAndPageRequests[0]?.params).toEqual({
-      ...allAgentsQuery,
       agentId: "main",
+      configuredAgentsOnly: true,
+      excludeDock: true,
+      includeGlobal: true,
       includeDerivedTitles: true,
       includeLastMessage: true,
       includeUnknown: true,

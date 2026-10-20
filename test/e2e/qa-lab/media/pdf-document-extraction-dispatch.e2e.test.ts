@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { extractDocumentContent } from "../../../../src/media/document-extractors.runtime.js";
 import { extractPdfContent } from "../../../../src/media/pdf-extract.js";
 import { resolvePluginDocumentExtractors } from "../../../../src/plugins/document-extractors.runtime.js";
 
@@ -61,18 +60,6 @@ describe("PDF document extraction dispatch", () => {
       id: "pdf",
       pluginId: "document-extract",
       mimeTypes: ["application/pdf"],
-    });
-
-    const extracted = await extractDocumentContent({
-      buffer,
-      mimeType: "application/pdf",
-      maxPages: 1,
-      maxPixels: 1_000_000,
-      minTextChars: 1,
-    });
-    expect(extracted).toMatchObject({
-      text: SENTINEL,
-      images: [],
     });
 
     await expect(

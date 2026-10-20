@@ -383,7 +383,11 @@ export function applyServerUiPrefs(
   // scopes forces a full reconcile. Boot keeps the shortcut (mirror is current).
   const scopeChanged = sync.lastReconciledScope !== null && scope !== sync.lastReconciledScope;
   const profilePrefs = resolveProfileAppearancePrefs(gatewayScope, hooks.profileId);
-  const readiness = resolveProfilePreferenceReadiness(gatewayScope, hooks.profileId, scopeChanged);
+  const profileReady = !hooks.profileId || profilePrefs !== null;
+  const readiness = {
+    appearanceReady: profileReady || scopeChanged,
+    navigationReady: profileReady,
+  };
   const backgroundReady = Boolean(hooks.profileId && profilePrefs !== null);
   const shadowPrefs =
     scope === sync.pendingScope
@@ -440,11 +444,7 @@ export function applyServerUiPrefs(
     loadLocalNavigationPreferences(gatewayScope, hooks.profileId),
     retainedLocalKeys,
   );
-  if (
-    !navigationIdentityChanged &&
-    !scopeChanged &&
-    JSON.stringify(prefs) === JSON.stringify(lastSeen)
-  ) {
+  if (!navigationIdentityChanged && JSON.stringify(prefs) === JSON.stringify(lastSeen)) {
     publishConfirmedPrefs(sync, scope, prefs);
     finishReconciliation();
     return false;
@@ -501,19 +501,6 @@ export async function refreshProfileAppearancePrefs(options: {
   }
   sync.lastReconciledConfigObject = null;
   return applyServerUiPrefs(options.configObject, { ...options, scope, navigationConfirmed: true });
-}
-
-function resolveProfilePreferenceReadiness(
-  scope: string,
-  profileId: string | null | undefined,
-  scopeChanged: boolean,
-): Required<ServerUiPrefReadiness> {
-  const prefs = resolveProfileAppearancePrefs(scope, profileId);
-  const profileReady = !profileId || prefs !== null;
-  return {
-    appearanceReady: profileReady || scopeChanged,
-    navigationReady: profileReady,
-  };
 }
 
 export async function loadProfileAppearancePrefs(

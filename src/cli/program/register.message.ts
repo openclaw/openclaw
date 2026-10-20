@@ -1,15 +1,40 @@
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { Option, type Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { CHANNEL_MESSAGE_ACTION_NAMES } from "../../channels/plugins/types.public.js";
+import { parseAccountSelector } from "../../commands/channels/account-selector.js";
+import { parseChannelSelector } from "../../commands/channels/channel-selector.js";
+import type { messageCommand } from "../../commands/message.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import { danger, setVerbose } from "../../globals.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   CHANNEL_TARGET_DESCRIPTION,
   CHANNEL_TARGETS_DESCRIPTION,
 } from "../../infra/outbound/channel-target.js";
+import { resolveMessageActionOutcome } from "../../infra/outbound/message-action-contracts.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { withActivatedPluginIds } from "../../plugins/activation-context.js";
+import {
+  resolveConfiguredChannelPluginIds,
+  resolveDiscoverableScopedChannelPluginIds,
+} from "../../plugins/channel-plugin-ids.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { defaultRuntime } from "../../runtime.js";
+import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../../utils/absolute-deadline.js";
+import { runCommandWithRuntime } from "../cli-utils.js";
+import { measureCliCommandStartup } from "../command-startup-timing.js";
 import { formatHelpExamples } from "../help-format.js";
+import { resolveMessageSecretScope } from "../message-secret-scope.js";
+import { requestExitAfterOneShotOutput } from "../one-shot-exit.js";
 import type { ProgramContext } from "./context.js";
 import { collectOption } from "./helpers.js";
-import { createMessageCliHelpers } from "./message/helpers.js";
-import { registerMessageThreadCommands } from "./message/register.thread.js";
 import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
 const requiredOptions = {
@@ -19,6 +44,77 @@ const requiredOptions = {
   eventName: ["--event-name <name>", "Event name"],
   startTime: ["--start-time <iso>", "Event start time"],
 } as const;
+
+const GATEWAY_STOP_TIMEOUT_MS = 2500;
+const STRICT_POSITIVE_INTEGER_OPTIONS = new Map([
+  ["pollDurationHours", "--poll-duration-hours"],
+  ["pollDurationSeconds", "--poll-duration-seconds"],
+  ["limit", "--limit"],
+  ["autoArchiveMin", "--auto-archive-min"],
+]);
+const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([
+  ["durationMin", "--duration-min"],
+  ["deleteDays", "--delete-days"],
+]);
+
+function validateMessageNumericOptions(opts: Record<string, unknown>): void {
+  for (const [options, parse, kind] of [
+    [STRICT_POSITIVE_INTEGER_OPTIONS, parseStrictPositiveInteger, "positive"],
+    [STRICT_NON_NEGATIVE_INTEGER_OPTIONS, parseStrictNonNegativeInteger, "non-negative"],
+  ] as const) {
+    for (const [key, flag] of options) {
+      if (opts[key] !== undefined && parse(opts[key]) === undefined) {
+        throw new Error(`${flag} must be a ${kind} integer.`);
+      }
+    }
+  }
+}
+
+async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
+  const { createHookRunner } = await import("../../plugins/hooks.js");
+  const runner = createHookRunner(registry, { logger: createSubsystemLogger("plugins") });
+  const result = await awaitWithinDeadline(
+    () =>
+      withPluginRuntimeRegistryScope(registry, () =>
+        runner.runGatewayStop({ reason: "cli message action complete" }, {}),
+      ),
+    Date.now() + GATEWAY_STOP_TIMEOUT_MS,
+  );
+  if (result === ABSOLUTE_DEADLINE_EXPIRED) {
+    defaultRuntime.error(
+      danger(`gateway_stop hook exceeded ${GATEWAY_STOP_TIMEOUT_MS}ms; continuing`),
+    );
+  }
+}
+
+function isGatewayOwnedMessageAction(action: string, scopedChannel: string | undefined): boolean {
+  const messageAction = CHANNEL_MESSAGE_ACTION_NAMES.find((name) => name === action);
+  if (!messageAction || !scopedChannel) {
+    return false;
+  }
+  const plugin = getChannelPlugin(scopedChannel);
+  const executionMode = plugin?.actions?.resolveExecutionMode?.({
+    action: messageAction,
+  });
+  return executionMode === "gateway";
+}
+
+function resolveThreadCreateRequest(opts: Record<string, unknown>) {
+  const { channel } = resolveMessageSecretScope(opts);
+  if (channel) {
+    const request = getChannelPlugin(channel)?.actions?.resolveCliActionRequest?.({
+      action: "thread-create",
+      args: opts,
+    });
+    if (request) {
+      return request;
+    }
+  }
+  return {
+    action: "thread-create" as const,
+    args: opts,
+  };
+}
 
 export function registerMessageCommands(program: Command, ctx: ProgramContext) {
   const message = program
@@ -48,7 +144,112 @@ ${formatHelpExamples([
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/message")}`,
     );
 
-  const helpers = createMessageCliHelpers(ctx.messageChannelOptions);
+  const helpers = {
+    withMessageBase: (command: Command, target?: "required") => {
+      if (target === "required") {
+        command.requiredOption("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION);
+      }
+      return command
+        .option(
+          "--channel <channel>",
+          `Channel: ${ctx.messageChannelOptions}`,
+          parseChannelSelector,
+        )
+        .option("--account <id>", "Channel account id (accountId)", parseAccountSelector)
+        .option("--json", "Output result as JSON", false)
+        .option("--dry-run", "Print payload and skip sending", false)
+        .option("--verbose", "Verbose logging", false);
+    },
+
+    runMessageAction: async (action: string, opts: Record<string, unknown>) => {
+      setVerbose(Boolean(opts.verbose));
+      let failed = false;
+      let result: Awaited<ReturnType<typeof messageCommand>> | undefined;
+      let pluginRegistry: PluginRegistry | undefined;
+      try {
+        await runCommandWithRuntime(
+          defaultRuntime,
+          async () => {
+            validateMessageNumericOptions(opts);
+            if (action === "poll" && opts.pollAnonymous === true && opts.pollPublic === true) {
+              throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
+            }
+            const { channel: scopedChannel } = resolveMessageSecretScope({
+              channel: opts.channel,
+              target: opts.target,
+              targets: opts.targets,
+            });
+            // Gateway-owned actions need no local plugin runtime; previews and broadcasts do.
+            const preloadPlugins =
+              opts.dryRun === true ||
+              action === "broadcast" ||
+              !isGatewayOwnedMessageAction(action, scopedChannel);
+            await measureCliCommandStartup("config-ready", async () => {
+              const { ensureConfigReady } = await import("./config-guard.js");
+              await ensureConfigReady({
+                runtime: defaultRuntime,
+                commandPath: ["message", action],
+                suppressDoctorStdout: opts.json === true,
+                validateConfigOnly: !preloadPlugins,
+                measure: (stage, run) => measureCliCommandStartup(stage, run),
+              });
+            });
+            if (preloadPlugins) {
+              const config = await captureRuntimeConfigAsyncReader()();
+              const pluginIds = scopedChannel
+                ? resolveDiscoverableScopedChannelPluginIds({
+                    config,
+                    activationSourceConfig: config,
+                    channelIds: [scopedChannel],
+                    env: process.env,
+                  })
+                : resolveConfiguredChannelPluginIds({
+                    config,
+                    activationSourceConfig: config,
+                    env: process.env,
+                  });
+              const activatedConfig = withActivatedPluginIds({ config, pluginIds }) ?? config;
+              const { loadPluginRegistryHandle } = await import("../../plugins/loader.js");
+              pluginRegistry = loadPluginRegistryHandle({
+                config: activatedConfig,
+                activationSourceConfig: activatedConfig,
+                onlyPluginIds: pluginIds,
+                throwOnLoadError: true,
+              });
+            }
+            const [{ messageCommand }, { createDefaultDeps }] = await Promise.all([
+              import("../../commands/message.js"),
+              import("../deps.js"),
+            ]);
+            const deps = createDefaultDeps();
+            const { account, ...rest } = opts;
+            result = await withPluginRuntimeRegistryScope(pluginRegistry, () =>
+              messageCommand(
+                {
+                  ...rest,
+                  accountId: typeof account === "string" ? account : rest.accountId,
+                  action,
+                },
+                deps,
+                defaultRuntime,
+              ),
+            );
+          },
+          (err) => {
+            failed = true;
+            defaultRuntime.error(danger(formatErrorMessage(err)));
+          },
+        );
+      } finally {
+        // Finalize only this command's registry, including JSON/expected errors that rethrow.
+        if (pluginRegistry && action !== "read") {
+          await runPluginStopHooks(pluginRegistry);
+        }
+      }
+      failed ||= result !== undefined && !resolveMessageActionOutcome(result).ok;
+      requestExitAfterOneShotOutput(defaultRuntime, failed ? 1 : 0);
+    },
+  };
   helpers
     .withMessageBase(
       message
@@ -206,7 +407,51 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
     .option("--author-ids <id>", "Author id (repeat)", collectOption, [])
     .option("--limit <n>", "Result limit")
     .action((opts) => helpers.runMessageAction("search", opts));
-  registerMessageThreadCommands(message, helpers);
+  const thread = message.command("thread").description("Thread actions");
+
+  helpers
+    .withMessageBase(
+      thread
+        .command("create")
+        .description("Create a thread")
+        .requiredOption("--thread-name <name>", "Thread name"),
+      "required",
+    )
+    .option("--message-id <id>", "Message id (optional)")
+    .option("-m, --message <text>", "Initial thread message text")
+    .option("--auto-archive-min <n>", "Thread auto-archive minutes")
+    .action(async (opts) => {
+      const request = resolveThreadCreateRequest(opts);
+      await helpers.runMessageAction(request.action, request.args);
+    });
+
+  helpers
+    .withMessageBase(
+      thread
+        .command("list")
+        .description("List threads")
+        .requiredOption("--guild-id <id>", "Guild id"),
+    )
+    .option("--channel-id <id>", "Channel id")
+    .option("--include-archived", "Include archived threads", false)
+    .option("--before <id>", "Read/search before id")
+    .option("--limit <n>", "Result limit")
+    .action((opts) => helpers.runMessageAction("thread-list", opts));
+
+  helpers
+    .withMessageBase(
+      thread
+        .command("reply")
+        .description("Reply in a thread")
+        .requiredOption("-m, --message <text>", "Message body"),
+      "required",
+    )
+    .option(
+      "--media <path-or-url>",
+      "Attach media (image/audio/video/document). Accepts local paths or URLs.",
+    )
+    .option("--reply-to <id>", "Reply-to message id")
+    .action((opts) => helpers.runMessageAction("thread-reply", opts));
   const emoji = message.command("emoji").description("Emoji actions");
 
   helpers

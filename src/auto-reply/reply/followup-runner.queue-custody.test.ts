@@ -22,21 +22,21 @@ import { enqueueFollowupRun, scheduleFollowupDrain, type FollowupRun } from "./q
 import { createQueueTestRun, installQueueRuntimeErrorSilencer } from "./queue.test-helpers.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { clearFollowupQueue } from "./queue/state.js";
-import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createTypingController } from "./typing.js";
 
 const state = vi.hoisted(() => ({
-  admit: vi.fn(),
+  admit: vi.fn<(params: { queued: FollowupRun }) => Promise<ReturnType<typeof admitted>>>(),
   execute: vi.fn(),
   config: vi.fn(async (config: unknown) => config),
 }));
 vi.mock("./reply-agent-turn-preparation.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./reply-agent-turn-preparation.js")>()),
-  prepareReplyAgentTurn: (...args: unknown[]) => state.admit(...args),
+  prepareReplyAgentTurn: state.admit,
 }));
 vi.mock("./followup-turn-execution.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./followup-turn-execution.js")>()),
-  executeFollowupTurn: (...args: unknown[]) => state.execute(...args),
+  executeFollowupTurn: state.execute,
 }));
 vi.mock("./agent-runner-result-accounting.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-result-accounting.js")>()),
@@ -49,11 +49,24 @@ vi.mock("./followup-delivery.js", async (importOriginal) => ({
 }));
 vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
-  resolveQueuedReplyExecutionConfig: (config: unknown) => state.config(config),
+  resolveQueuedReplyExecutionConfig: state.config,
   resolveQueuedReplyRuntimeConfig: (config: unknown) => config,
 }));
 installQueueRuntimeErrorSilencer();
 afterEach(() => vi.clearAllMocks());
+
+function admitted(queued: FollowupRun, operation: ReplyOperation, runId: string) {
+  const turn: AdmittedFollowupTurn = {
+    runId,
+    queued,
+    operation,
+    config: queued.run.config,
+    session: { kind: "detached", current: () => undefined, publish() {} },
+    sendPolicy: "allow",
+    preflightCompactionApplied: false,
+  };
+  return { kind: "admitted" as const, turn };
+}
 
 it("acquires fresh required placement for a queued successor after its predecessor releases", async () => {
   const queued = createQueueTestRun({ prompt: "queued required-placement successor" });
@@ -100,18 +113,7 @@ it("acquires fresh required placement for a queued successor after its predecess
       mailboxClaim: queued.controllerInput!.claim!,
     });
     await admitFollowupRunLifecycle(queued);
-    return {
-      kind: "admitted",
-      turn: {
-        runId: "required-placement-successor",
-        queued,
-        operation: successor,
-        config: queued.run.config,
-        session: { kind: "detached", current: () => undefined, publish() {} },
-        sendPolicy: "allow",
-        preflightCompactionApplied: false,
-      },
-    };
+    return admitted(queued, successor, "required-placement-successor");
   });
   state.execute.mockImplementation(async () => {
     markReplyOperationExecutionStarted(successor!);
@@ -198,11 +200,6 @@ it.each([
   const executedPrompts: string[] = [];
   const failure = new Error("closed preparation or committed effect failure");
   const typing = createTypingController({});
-  const defaults: FollowupRunnerParams = {
-    typing,
-    typingMode: "never",
-    defaultModel: "gpt-test",
-  };
   for (const prompt of phase === "adopted preparation" ? ["first", "second"] : ["first"]) {
     const source = createQueueTestRun({ prompt });
     source.run.sessionKey = key;
@@ -215,48 +212,31 @@ it.each([
     sources.push(source);
     enqueueFollowupRun(key, source, { mode: "collect", debounceMs: 0 }, "none", undefined, false);
   }
-  state.admit.mockImplementation(
-    async ({
-      queued,
-    }: {
-      queued: FollowupRun;
-    }): Promise<{ kind: "admitted"; turn: AdmittedFollowupTurn }> => {
-      const claim = queued.controllerClaim ?? queued.controllerInput!.claim!;
-      attempts.push(queued.controllerInput!.instance);
-      const operation = createReplyOperation({
-        sessionKey: key,
-        sessionId: queued.run.sessionId,
-        resetTriggered: false,
-        mailboxClaim: claim,
-      });
-      operations.push(operation);
-      if (phase !== "preparation" || attempts.length > 1) {
-        await admitFollowupRunLifecycle(queued);
+  state.admit.mockImplementation(async ({ queued }) => {
+    const claim = queued.controllerClaim ?? queued.controllerInput!.claim!;
+    attempts.push(queued.controllerInput!.instance);
+    const operation = createReplyOperation({
+      sessionKey: key,
+      sessionId: queued.run.sessionId,
+      resetTriggered: false,
+      mailboxClaim: claim,
+    });
+    operations.push(operation);
+    if (phase !== "preparation" || attempts.length > 1) {
+      await admitFollowupRunLifecycle(queued);
+    }
+    if (!failedExecution && attempts.length === 1) {
+      if (phase === "adopted preparation") {
+        olderCancel.abort();
+        adoptedCancellation.push(queued.abortSignal?.aborted);
       }
-      if (!failedExecution && attempts.length === 1) {
-        if (phase === "adopted preparation") {
-          olderCancel.abort();
-          adoptedCancellation.push(queued.abortSignal?.aborted);
-        }
-        const releaseExecution = operation.retainExecution();
-        void raw.promise.then(releaseExecution);
-        operation.complete();
-        throw failure;
-      }
-      return {
-        kind: "admitted",
-        turn: {
-          runId: "retry-proof",
-          queued,
-          operation,
-          config: queued.run.config,
-          session: { kind: "detached", current: () => undefined, publish() {} },
-          sendPolicy: "allow",
-          preflightCompactionApplied: false,
-        },
-      };
-    },
-  );
+      const releaseExecution = operation.retainExecution();
+      void raw.promise.then(releaseExecution);
+      operation.complete();
+      throw failure;
+    }
+    return admitted(queued, operation, "retry-proof");
+  });
   state.execute.mockImplementation(async ({ turn }: { turn: AdmittedFollowupTurn }) => {
     if (phase !== "indeterminate execution") {
       markReplyOperationExecutionStarted(turn.operation);
@@ -275,7 +255,7 @@ it.each([
       progress: { drain: async () => {} },
     };
   });
-  const runner = createFollowupRunner(defaults);
+  const runner = createFollowupRunner({ typing, typingMode: "never", defaultModel: "gpt-test" });
   try {
     scheduleFollowupDrain(key, async (queued) => {
       try {
@@ -291,8 +271,7 @@ it.each([
       settled = true;
     });
     await Promise.resolve();
-    expect(claim.released).toBe(false);
-    expect(settled).toBe(false);
+    expect({ released: claim.released, settled }).toEqual({ released: false, settled: false });
     expect(attempts).toHaveLength(1);
     raw.resolve();
     await Promise.all(sources.map((source) => source.controllerInput!.settlement.promise));

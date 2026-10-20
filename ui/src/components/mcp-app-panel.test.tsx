@@ -11,7 +11,7 @@ import {
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { McpAppOpenDetail } from "./mcp-app-launch.ts";
 import { registerMcpAppUnmountTarget } from "./mcp-app-unmount.ts";
-import type { McpAppViewProps } from "./mcp-app-view-owner.ts";
+import type { McpAppViewProps } from "./mcp-app-view-types.ts";
 import { McpAppPanel } from "./solid/mcp-app-panel.tsx";
 
 const viewLoad = vi.hoisted(() => ({

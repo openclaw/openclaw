@@ -1,4 +1,3 @@
-/** Normalizes and detects slash commands through their canonical aliases. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

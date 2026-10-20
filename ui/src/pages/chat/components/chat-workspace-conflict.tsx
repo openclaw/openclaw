@@ -49,7 +49,7 @@ export function WorkspaceConflictNotice(props: {
   return (
     <Show when={props.conflict}>
       {(conflict) => {
-        const count = createMemo(() => workspaceConflictCount(conflict()));
+        const count = () => workspaceConflictCount(conflict());
         const visible = createMemo(() => visibleWorkspaceConflictPaths(conflict()));
         const commands = createMemo(() => workspaceConflictGitCommands(conflict()));
         return (
@@ -176,11 +176,13 @@ export function WorkspaceConflictTranscriptMessage(props: {
   conflict: WorkspaceResultConflict;
   messageKey: string;
   entryId?: string;
+  ref?: (element: HTMLDivElement) => void;
 }) {
-  const count = createMemo(() => workspaceConflictCount(props.conflict));
+  const count = () => workspaceConflictCount(props.conflict);
   const visible = createMemo(() => visibleWorkspaceConflictPaths(props.conflict));
   return (
     <div
+      ref={props.ref}
       class="chat-bubble chat-bubble--workspace-conflict"
       data-message-id={props.messageKey}
       data-entry-id={props.entryId || undefined}

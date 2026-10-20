@@ -7,6 +7,7 @@ import { resolveBuildInfo } from "../write-build-info.ts";
 import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createManagedHandoffBuildConfigs } from "./managed-handoff-build-config.mts";
 import { createPublicSessionCardAssetsPlugin } from "./public-session-card-assets.mts";
+import { createPublicSessionLocalesPlugin } from "./public-session-locales.mts";
 import {
   getStandaloneRuntimeProcessOutputOptions,
   sharedRuntimeProcessBuildEntries,
@@ -123,6 +124,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     const schemaPlugin = createStateSchemaInlinePlugin(root);
     return [
       createPublicSessionCardAssetsPlugin(root, recordInput),
+      createPublicSessionLocalesPlugin(root, recordInput),
       createSqliteSchemaAssetsPlugin(root, recordInput),
       {
         ...schemaPlugin,
@@ -166,7 +168,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     ] satisfies NonNullable<Parameters<typeof build>[0]>["plugins"];
   };
   const commonPlugins = createInputPlugins("");
-  const maintenanceModuleBoundaries = new Map([
+  const fixtureModuleBoundaries = new Map([
     [path.join(root, "src/daemon/service.ts"), "triage-maintenance/service.js"],
     [
       path.join(root, "src/daemon/service-process-membership.ts"),
@@ -176,6 +178,11 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     [
       path.join(root, "src/cli/update-cli/update-command-service-drain.ts"),
       "cli/update-cli/update-command-service-drain.js",
+    ],
+    // Doctor fixtures disable passive observation without replacing discovery or repair.
+    [
+      path.join(root, "src/infra/owned-directory-observation.ts"),
+      "infra/owned-directory-observation.js",
     ],
   ]);
   const config: NonNullable<Parameters<typeof build>[0]> = {
@@ -207,7 +214,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
               kind: "include",
               expr: {
                 kind: "importerId",
-                pattern: /[\\/]src[\\/]cli[\\/]program[\\/]message[\\/]helpers\.ts$/,
+                pattern: /[\\/]src[\\/]cli[\\/]program[\\/]register\.message\.ts$/,
                 params: { cleanUrl: false },
               },
             },
@@ -216,7 +223,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
             // Preserve the broadcast fixture's exact native command substitution.
             if (
               importer &&
-              path.normalize(importer) === path.join(root, "src/cli/program/message/helpers.ts") &&
+              path.normalize(importer) === path.join(root, "src/cli/program/register.message.ts") &&
               id.startsWith(".") &&
               path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts") ===
                 path.join(root, "src/commands/message.ts")
@@ -231,7 +238,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
         },
       },
       {
-        name: "openclaw:maintenance-service-boundary",
+        name: "openclaw:fixture-module-boundary",
         resolveId: {
           // Keep normalization aliases: the target component can come from either operand.
           filter: [
@@ -243,13 +250,13 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
                   {
                     kind: "id",
                     pattern:
-                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance|owned-directory-observation)\.[jt]s/,
                     params: { cleanUrl: false },
                   },
                   {
                     kind: "importerId",
                     pattern:
-                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance)\.[jt]s/,
+                      /(?:service(?:-process-membership|-drain)?|systemd-maintenance|owned-directory-observation)\.[jt]s/,
                     params: { cleanUrl: false },
                   },
                 ],
@@ -261,7 +268,7 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
               return null;
             }
             const source = path.resolve(path.dirname(importer), id).replace(/\.js$/u, ".ts");
-            const boundary = maintenanceModuleBoundaries.get(source);
+            const boundary = fixtureModuleBoundaries.get(source);
             return boundary
               ? {
                   id: pathToFileURL(path.join(outDir, boundary)).href,

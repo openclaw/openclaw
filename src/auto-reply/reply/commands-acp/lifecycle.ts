@@ -1,4 +1,3 @@
-// Implements ACP lifecycle commands for start, stop, reset, and resume.
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";

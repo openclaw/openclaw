@@ -133,5 +133,17 @@ describe("canReactToSession", () => {
     expect(canReactToSession(current, session, { ...options, catalog: true })).toBe(false);
     expect(canReactToSession(current, session, { ...options, archived: true })).toBe(false);
     expect(canReactToSession(current, undefined, options)).toBe(false);
+    expect(
+      canReactToSession({ ...current, phase: "reconnecting" }, session, {
+        ...options,
+        allowDeferred: true,
+      }),
+    ).toBe(true);
+    expect(
+      canReactToSession({ ...current, phase: "stopped" }, session, {
+        ...options,
+        allowDeferred: true,
+      }),
+    ).toBe(false);
   });
 });

@@ -351,7 +351,14 @@ export function readSessionTranscriptAnchorFactsInDatabase(
     }
     return readAnchors();
   };
-  return database.db.isTransaction
+  const singleStatement =
+    selection.entryIds.length === 0 &&
+    ((selection.contextValidation?.through !== undefined &&
+      selection.contextValidation.admission === undefined &&
+      Object.keys(selection).every((key) => key === "entryIds" || key === "contextValidation")) ||
+      (selection.includeWatermark === true &&
+        Object.keys(selection).every((key) => key === "entryIds" || key === "includeWatermark")));
+  return database.db.isTransaction || singleStatement
     ? read()
     : runSqliteReadSnapshotSync(database.db, read, {
         databaseLabel: database.path,

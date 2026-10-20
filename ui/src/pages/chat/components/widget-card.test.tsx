@@ -603,11 +603,15 @@ describe("widget-card", () => {
 describe("widget-card presentation", () => {
   it("releases placement observation while a retained widget is hidden", () => {
     const observers: ResizeObserverStub[] = [];
-    class ResizeObserverStub {
+    class ResizeObserverStub implements ResizeObserver {
       observe = vi.fn();
+      unobserve = vi.fn();
       disconnect = vi.fn();
-      constructor() {
+      constructor(private readonly callback: ResizeObserverCallback) {
         observers.push(this);
+      }
+      deliver() {
+        this.callback([], this);
       }
     }
     vi.stubGlobal("ResizeObserver", ResizeObserverStub);
@@ -618,13 +622,14 @@ describe("widget-card presentation", () => {
     });
     const cancel = vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation(() => {});
     const [presented, setPresented] = createSignal(true);
+    const [options, setOptions] = createSignal({ rawText: "Widget details" });
     const root = mountSolid(() => (
       <ContentPresentation value={presented}>
         <div class="chat-thread">
           <ToolPreview
             preview={{ ...canvasPreview, url: "about:blank", sandbox: "strict" }}
             surface="chat_message"
-            options={{ rawText: "Widget details" }}
+            options={options()}
           />
         </div>
       </ContentPresentation>
@@ -636,20 +641,41 @@ describe("widget-card presentation", () => {
       vi.unstubAllGlobals();
     });
     flush();
-    frames.shift()?.(0);
     expect(observers).toHaveLength(1);
     expect(observers[0]?.observe).toHaveBeenCalledTimes(2);
     const frame = root.container.querySelector("iframe");
+    const thread = root.container.querySelector<HTMLElement>(".chat-thread")!;
+    const preview = root.container.querySelector<HTMLElement>(".chat-tool-card__preview")!;
+    vi.spyOn(thread, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 100, 100));
+    Object.defineProperty(thread, "clientWidth", { value: 100 });
+    const geometry = vi
+      .spyOn(preview, "getBoundingClientRect")
+      .mockReturnValue(new DOMRect(0, 0, 90, 100));
+    observers[0]?.deliver();
+    expect(preview.hasAttribute("data-widget-actions-above")).toBe(false);
+    frames.shift()?.(0);
+    expect(preview.hasAttribute("data-widget-actions-above")).toBe(true);
 
+    setOptions({ rawText: "Updated widget details" });
+    flush();
+    expect(observers).toHaveLength(1);
+    expect(observers[0]?.disconnect).not.toHaveBeenCalled();
+
+    geometry.mockReturnValue(new DOMRect(0, 0, 50, 100));
+    observers[0]?.deliver();
     setPresented(false);
     flush();
+    frames.shift()?.(0);
+    expect(preview.hasAttribute("data-widget-actions-above")).toBe(true);
     expect(observers[0]?.disconnect).toHaveBeenCalledOnce();
     expect(root.container.querySelector("iframe")).toBe(frame);
 
     setPresented(true);
     flush();
+    observers[1]?.deliver();
     frames.shift()?.(0);
     expect(observers).toHaveLength(2);
+    expect(preview.hasAttribute("data-widget-actions-above")).toBe(false);
     expect(root.container.querySelector("iframe")).toBe(frame);
   });
 

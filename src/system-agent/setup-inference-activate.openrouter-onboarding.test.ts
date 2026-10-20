@@ -5,6 +5,7 @@ import * as cliCredentials from "../agents/cli-credentials.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import * as configIO from "../config/config.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
 import * as probes from "./probes.js";
@@ -21,8 +22,8 @@ const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 let temp: TempHomeEnv;
 let configPath: string;
 
-const readSnapshot = () =>
-  readConfigFileSnapshot({ observe: false, pluginValidation: "core-only" });
+const nativeReadSnapshot = readConfigFileSnapshot;
+const readSnapshot = () => nativeReadSnapshot({ observe: false, pluginValidation: "core-only" });
 
 async function routeFor(primary: string, provider: string): Promise<string> {
   const config = {
@@ -194,6 +195,7 @@ it.each([
       },
     }));
     vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
+    vi.spyOn(configIO, "readConfigFileSnapshot").mockImplementation(readSnapshot);
     const result = await activateSetupInference({
       kind: "existing-model",
       modelRef: discovered?.modelRef,
@@ -204,9 +206,6 @@ it.each([
         exit() {
           throw new Error("Unexpected exit");
         },
-      },
-      deps: {
-        readConfigFileSnapshot: readSnapshot,
       },
     });
     if (!result.ok) {

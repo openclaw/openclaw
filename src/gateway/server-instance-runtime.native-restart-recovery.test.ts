@@ -29,6 +29,7 @@ import {
   clearGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -75,6 +76,7 @@ describe("cold restart recovery of native operator input", () => {
   it.each([
     "native source",
     "native steering",
+    "peer follow-up",
     "requester continuation after cohort settlement",
     "Control UI source",
     "unowned delegated source",
@@ -99,6 +101,22 @@ describe("cold restart recovery of native operator input", () => {
         "mismatched lifecycle",
       ].includes(scenario);
       const sourceUnavailable = sourceMissing || sourceMismatch;
+      const inputProvenance: InputProvenance | undefined =
+        scenario === "peer follow-up"
+          ? {
+              kind: "inter_session",
+              sourceTool: "sessions_send",
+              sourceChannel: "webchat",
+              sourceSessionKey: "agent:main:dashboard:peer",
+            }
+          : scenario === "requester continuation after cohort settlement"
+            ? {
+                kind: "inter_session",
+                sourceTool: "subagent_settle",
+                sourceChannel: "internal",
+                sourceSessionKey: "agent:main:subagent:completed-child",
+              }
+            : undefined;
       const config = {
         agents: { defaults: { model: "openai/gpt-4.1" } },
         tools: { allow: [AUTOMATIONS_TOOL_NAME] },
@@ -157,6 +175,11 @@ describe("cold restart recovery of native operator input", () => {
             ? { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT }
             : { id: GATEWAY_CLIENT_IDS.MACOS_APP, mode: GATEWAY_CLIENT_MODES.UI },
         localOperator: scenario !== "Control UI source",
+        inputProvenance,
+        requesterOrigin:
+          scenario === "peer follow-up"
+            ? { sessionKey: "agent:main:dashboard:peer", operatorProfileId: owner.id }
+            : undefined,
         sourceRunId:
           scenario === "requester continuation after cohort settlement"
             ? "announce:requester-settle:main:parent:completed-child:yield-1"
@@ -206,16 +229,7 @@ describe("cold restart recovery of native operator input", () => {
           role: "user",
           content: "Finish the synthetic task",
           timestamp: 1,
-          ...(scenario === "requester continuation after cohort settlement"
-            ? {
-                provenance: {
-                  kind: "inter_session",
-                  sourceTool: "subagent_settle",
-                  sourceChannel: "internal",
-                  sourceSessionKey: "agent:main:subagent:completed-child",
-                },
-              }
-            : {}),
+          ...(inputProvenance ? { provenance: inputProvenance } : {}),
           ...(scenario === "detached cron input"
             ? { provenance: { kind: "internal_system", sourceTool: "cron" } }
             : {}),

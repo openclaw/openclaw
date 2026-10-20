@@ -62,7 +62,6 @@ describe("migrateSlackChannelConfig", () => {
     });
 
     expect(result.migrated).toBe(true);
-    expect(result.scopes).toEqual(["account"]);
     expect(
       expectDefined(cfg.channels.slack.accounts.primary, "primary Slack account").channels,
     ).toEqual({

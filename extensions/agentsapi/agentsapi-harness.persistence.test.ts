@@ -20,13 +20,11 @@ import { AgentsApiClient, type AgentsApiInputFile } from "./agentsapi-client.js"
 import { registerNativeLifecycleTests } from "./agentsapi-harness.lifecycle.test-helpers.js";
 import { registerMigrationTests } from "./agentsapi-harness.migration.test-helpers.js";
 import {
-  connectedEnvironment,
   createAttempt,
-  executorFixture,
+  externalSessionFixture,
   registerHarness,
   mockClient,
   reopenState,
-  requireExecutorHarness,
 } from "./agentsapi-harness.persistence.test-helpers.js";
 import { createHostedSession, createTurn } from "./agentsapi.test-support.js";
 
@@ -82,7 +80,6 @@ beforeEach(() => {
       run: async (prompt, persistInput, onSubmitted) => {
         await persistInput();
         await options.client.message(options.sessionId, prompt, options.signal);
-        await options.connectEnvironment?.("executor-environment");
         onSubmitted();
         options.onSettled?.();
         return { turn, cancelled: false, terminatedByTool: false };
@@ -615,297 +612,52 @@ it.each([true])("reports Gateway sandbox placement with images: %s", async (with
   });
 });
 
-it("retains the executor binding after uncertain startup and waits for readiness before resuming it", async () => {
-  await withOpenClawTestState({ label: "agentsapi-executor-recovery" }, async (state) => {
-    const fixture = await executorFixture(state);
-    let harness = fixture.createHarness();
-    let savedBeforeStartup: AgentsApiBinding | undefined;
-    fixture.controller.ensure.mockImplementationOnce(async () => {
-      const stored = await fixture.openStore().lookup(fixture.params.sessionId);
-      savedBeforeStartup = stored && {
-        sessionId: stored.sessionId,
-        configFingerprint: stored.configFingerprint,
-        executorControllerPluginId: stored.executorControllerPluginId,
-        executor: stored.executor,
+it.each(["owned", "owner-only", "ownerless"] as const)(
+  "retains a retired %s controller binding across run, reset, deletion, and context reset",
+  async (kind) => {
+    await withOpenClawTestState({ label: "agentsapi-retired-controller" }, async (state) => {
+      const fixture = await externalSessionFixture(state);
+      const saved = {
+        sessionId: fixture.nativeSession.id,
+        configFingerprint: "saved-config",
+        ...(kind !== "ownerless" ? { executorControllerPluginId: "original-controller" } : {}),
+        ...(kind !== "owner-only"
+          ? {
+              executor: {
+                sessionKey: fixture.params.sessionKey,
+                agentId: "main",
+                nativeSessionId: fixture.nativeSession.id,
+                environmentId: "executor-environment",
+                remoteUrl: "wss://executor.example.test/session",
+                workspaceDirectory: "/executor/project",
+              },
+            }
+          : {}),
       };
-      throw new Error("Executor startup was not acknowledged");
-    });
-    try {
-      expect(await harness.runAttempt(fixture.params)).toMatchObject({
-        terminal: {
-          kind: "failed",
-          error: expect.objectContaining({ message: "Executor startup was not acknowledged" }),
-        },
-      });
-      expect(savedBeforeStartup).toMatchObject({
-        sessionId: "native-executor-session",
-        executorControllerPluginId: "fixture-executor",
-        executor: {
-          sessionKey: fixture.params.sessionKey,
-          agentId: "main",
-          nativeSessionId: "native-executor-session",
-          environmentId: "executor-environment",
-          remoteUrl: "wss://executor.example.test/session",
-          workspaceDirectory: "/executor/project",
-        },
-      });
-      expect(fixture.create.mock.calls[0]?.[3]?.environment).toEqual({
-        type: "self_hosted",
-        workspace_directory: "/executor/project",
-      });
-      expect(fixture.message).toHaveBeenCalledTimes(1);
-      await harness.dispose();
+      const openRawStore = () => fixture.openStore<Record<string, unknown>>();
+      await openRawStore().register(fixture.params.sessionId, saved);
       await reopenState();
-      expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(
-        savedBeforeStartup,
-      );
-
-      harness = fixture.createHarness();
-      const readinessRequested = Promise.withResolvers<void>();
-      const readiness =
-        Promise.withResolvers<Awaited<ReturnType<AgentsApiClient["environment"]>>>();
-      fixture.environment.mockImplementationOnce(async () => {
-        readinessRequested.resolve();
-        return await readiness.promise;
-      });
-      const resumed = harness.runAttempt({ ...fixture.params, runId: "recovered-executor-run" });
-      try {
-        await Promise.race([
-          readinessRequested.promise,
-          resumed.then(() => {
-            throw new Error("The attempt finished without waiting for executor readiness");
-          }),
-        ]);
-        expect(fixture.message).toHaveBeenCalledTimes(2);
-      } finally {
-        readiness.resolve(connectedEnvironment());
-      }
-      expect(await resumed).toMatchObject({ terminal: { kind: "ok" } });
-      expect(fixture.create).toHaveBeenCalledTimes(1);
-      expect(fixture.controller.ensure.mock.calls.map(([binding]) => binding)).toEqual([
-        savedBeforeStartup?.executor,
-        savedBeforeStartup?.executor,
-      ]);
-      expect(fixture.message).toHaveBeenLastCalledWith(
-        "native-executor-session",
-        expect.stringContaining(fixture.params.prompt),
-        expect.any(AbortSignal),
-      );
-    } finally {
-      await harness.dispose();
-    }
-  });
-});
-
-it("can reset a retained executor after a restarted harness rejects a configuration change", async () => {
-  await withOpenClawTestState({ label: "agentsapi-executor-config-reset" }, async (state) => {
-    const fixture = await executorFixture(state);
-    let harness = fixture.createHarness();
-    try {
-      expect(await harness.runAttempt(fixture.params)).toMatchObject({ terminal: { kind: "ok" } });
-      const saved = await fixture.openStore().lookup(fixture.params.sessionId);
-      await harness.dispose();
-      await reopenState();
-      vi.spyOn(fixture.runtime.config, "current").mockReturnValue({
-        plugins: { entries: { agentsapi: { config: { environment: "openai_hosted" } } } },
-      });
-      harness = fixture.createHarness();
-
-      const rejected = await harness.runAttempt({ ...fixture.params, runId: "changed-config-run" });
-      expect(rejected).toMatchObject({
-        terminal: {
-          kind: "failed",
-          error: expect.objectContaining({
-            message:
-              "Agents API executor controller changed; reset the OpenClaw session before continuing",
-          }),
-        },
-      });
-      expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(saved);
-
-      await harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" });
-      expect(fixture.controller.retire).toHaveBeenCalledExactlyOnceWith(
-        saved?.executor,
-        expect.objectContaining({
-          signal: expect.any(AbortSignal),
-          assertCurrent: expect.any(Function),
-        }),
-      );
-      // The released lease leaves either an empty tombstone or an expired row.
-      expect((await fixture.openStore().lookup(fixture.params.sessionId)) ?? {}).toEqual({});
-      expect(fixture.create).toHaveBeenCalledTimes(1);
-    } finally {
-      await harness.dispose();
-    }
-  });
-});
-
-it("cleans up with the stored controller after selecting a different registered owner", async () => {
-  await withOpenClawTestState({ label: "agentsapi-executor-original-owner" }, async (state) => {
-    const fixture = await executorFixture(state);
-    const other = {
-      ...fixture.controller,
-      ensure: vi.fn(async () => {}),
-      retire: vi.fn(async () => {}),
-    };
-    fixture.resolveController.mockImplementation((id) =>
-      id === "other-executor" ? other : fixture.controller,
-    );
-    const harness = fixture.createHarness();
-    try {
-      expect(await harness.runAttempt(fixture.params)).toMatchObject({ terminal: { kind: "ok" } });
-      const saved = await fixture.openStore().lookup(fixture.params.sessionId);
-      vi.spyOn(fixture.runtime.config, "current").mockReturnValue({
-        plugins: {
-          entries: {
-            agentsapi: {
-              config: { environment: "self_hosted", executorController: "other-executor" },
-            },
-          },
-        },
-      });
-      expect(
-        await harness.runAttempt({ ...fixture.params, runId: "controller-replacement-run" }),
-      ).toMatchObject({
-        terminal: {
-          kind: "failed",
-          error: expect.objectContaining({
-            message:
-              "Agents API executor controller changed; reset the OpenClaw session before continuing",
-          }),
-        },
-      });
-      await harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" });
-      expect(fixture.controller.retire).toHaveBeenCalledExactlyOnceWith(
-        saved?.executor,
-        expect.any(Object),
-      );
-      expect(other.ensure.mock.calls).toEqual([]);
-      expect(other.retire.mock.calls).toEqual([]);
-      // The released lease leaves either an empty tombstone or an expired row.
-      expect((await fixture.openStore().lookup(fixture.params.sessionId)) ?? {}).toEqual({});
-    } finally {
-      await harness.dispose();
-    }
-  });
-});
-
-it("retains earlier controlled bindings and explains the required upgrade cutover", async () => {
-  await withOpenClawTestState({ label: "agentsapi-executor-legacy-owner" }, async (state) => {
-    const fixture = await executorFixture(state);
-    let harness = fixture.createHarness();
-    try {
-      expect(await harness.runAttempt(fixture.params)).toMatchObject({ terminal: { kind: "ok" } });
-      const legacy = { ...(await fixture.openStore().lookup(fixture.params.sessionId))! };
-      delete legacy.executorControllerPluginId;
-      await fixture.openStore().register(fixture.params.sessionId, legacy);
-      await harness.dispose();
-      await reopenState();
-      harness = fixture.createHarness();
-      await expect(
-        harness.runAttempt({ ...fixture.params, runId: "ownerless-controller-run" }),
-      ).rejects.toThrow(
-        "Agents API executor binding predates plugin ownership; retire this session with the previous version before upgrading",
-      );
-      await expect(
-        harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" }),
-      ).rejects.toThrow(
-        "Agents API executor binding predates plugin ownership; retire this session with the previous version before upgrading",
-      );
-      expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(legacy);
-      expect(fixture.create).toHaveBeenCalledTimes(1);
-    } finally {
-      await harness.dispose();
-    }
-  });
-});
-
-registerNativeLifecycleTests(resolveProviderAuth);
-
-it("can reset an owned executor after Gateway restart when its controller is unavailable", async () => {
-  await withOpenClawTestState({ label: "agentsapi-executor-missing-controller" }, async (state) => {
-    const fixture = await executorFixture(state);
-    let harness = fixture.createHarness();
-    try {
-      expect(await harness.runAttempt(fixture.params)).toMatchObject({ terminal: { kind: "ok" } });
-      await harness.dispose();
-      await reopenState();
-      fixture.resolveController.mockImplementation(() => {
-        throw new Error(
-          'Agent executor controller plugin "fixture-executor" is missing, disabled, or unavailable',
-        );
-      });
-      const saved = await fixture.openStore().lookup(fixture.params.sessionId);
-      fixture.events.length = 0;
-      fixture.session.mockResolvedValue({ ...fixture.nativeSession, status: "in_progress" });
-      vi.mocked(fixture.runtime.agent.resolveAgentDir).mockReturnValue("/gateway/agents/main");
-      vi.mocked(fixture.runtime.agent.resolveAgentWorkspaceDir).mockReturnValue(
-        "/gateway/workspace",
-      );
-      harness = requireExecutorHarness(fixture.runtime);
-      await harness.reset({ sessionId: fixture.params.sessionId, reason: "reset" });
-      expect(resolveProviderAuth).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: "openai",
-          agentDir: "/gateway/agents/main",
-          workspaceDir: "/gateway/workspace",
-          signal: expect.any(AbortSignal),
-        }),
-      );
-      expect(fixture.runtime.agent.resolveAgentDir).toHaveBeenCalledWith(
-        expect.any(Object),
-        saved?.executor?.agentId,
-      );
-      expect(fixture.events).toEqual(["cancel"]);
-      expect(fixture.cancel).toHaveBeenCalledWith(saved?.sessionId, expect.any(AbortSignal));
-      expect((await fixture.openStore().lookup(fixture.params.sessionId)) ?? {}).toEqual({});
-      expect(fixture.message).toHaveBeenCalledTimes(1);
-    } finally {
-      await harness.dispose();
-    }
-  });
-});
-
-it.each([true])(
-  "retires an executor before session deletion and preserves rollback recovery (rollback: %s)",
-  async (rollback) => {
-    await withOpenClawTestState({ label: "agentsapi-executor-delete" }, async (state) => {
-      const fixture = await executorFixture(state);
       const harness = fixture.createHarness();
+      const target = { ...fixture.params.sessionTarget, assertCurrent: () => {} };
+      const commit = vi.fn(async () => {});
       try {
-        expect(await harness.runAttempt(fixture.params)).toMatchObject({
-          terminal: { kind: "ok" },
-        });
-        const saved = await fixture.openStore().lookup(fixture.params.sessionId);
-        fixture.events.length = 0;
-        fixture.session.mockResolvedValue({ ...fixture.nativeSession, status: "in_progress" });
-
-        await harness.withSessionDeletion(
-          { ...fixture.params.sessionTarget, assertCurrent: () => {} },
-          async (settle) => {
-            expect(fixture.events).toEqual(["cancel", "retire"]);
-            await settle(rollback ? "rollback" : "commit");
-            fixture.events.push(rollback ? "rollback" : "commit");
-          },
-        );
-
-        expect(fixture.events).toEqual(
-          rollback ? ["cancel", "retire", "rollback"] : ["cancel", "retire", "commit"],
-        );
-        expect(await fixture.openStore().lookup(fixture.params.sessionId)).toEqual(
-          rollback ? saved : undefined,
-        );
-        if (rollback) {
-          await harness.withSessionDeletion(
-            { ...fixture.params.sessionTarget, assertCurrent: () => {} },
-            async (settle) => settle(),
+        for (const operation of [
+          () => harness.runAttempt(fixture.params),
+          () => harness.reset({ ...target, reason: "reset" }),
+          () => harness.withSessionDeletion(target, commit),
+          () => harness.withSessionContextReset(target, commit),
+        ]) {
+          await expect(operation()).rejects.toThrow(
+            "Retire this session with the previous OpenClaw version and original controller plugin before upgrading. The saved binding has been retained.",
           );
-          expect(fixture.controller.retire.mock.calls.map(([binding]) => binding)).toEqual([
-            saved?.executor,
-            saved?.executor,
-          ]);
-          expect(await fixture.openStore().lookup(fixture.params.sessionId)).toBeUndefined();
+          expect(await openRawStore().lookup(fixture.params.sessionId)).toEqual(saved);
         }
+        expect(commit).not.toHaveBeenCalled();
+        expect(fixture.create).not.toHaveBeenCalled();
+        expect(fixture.session).not.toHaveBeenCalled();
+        expect(fixture.update).not.toHaveBeenCalled();
+        expect(fixture.message).not.toHaveBeenCalled();
+        expect(fixture.cancel).not.toHaveBeenCalled();
       } finally {
         await harness.dispose();
       }
@@ -913,27 +665,11 @@ it.each([true])(
   },
 );
 
-it("ignores a stale connection action on a healthy retained session", async () => {
-  await withOpenClawTestState({ label: "agentsapi-executor-healthy-turn" }, async (state) => {
-    const fixture = await executorFixture(state);
-    const harness = fixture.createHarness();
-    try {
-      expect(await harness.runAttempt(fixture.params)).toMatchObject({ terminal: { kind: "ok" } });
-      expect(
-        await harness.runAttempt({ ...fixture.params, runId: "healthy-following-turn" }),
-      ).toMatchObject({ terminal: { kind: "ok" } });
-      expect(fixture.controller.ensure).toHaveBeenCalledTimes(1);
-      expect(fixture.message).toHaveBeenCalledTimes(2);
-      expect(fixture.create).toHaveBeenCalledTimes(1);
-    } finally {
-      await harness.dispose();
-    }
-  });
-});
+registerNativeLifecycleTests(resolveProviderAuth);
 
-it("preserves executor binding when delete cancel settlement fails and permits retry", async () => {
+it("preserves external session binding when delete cancel settlement fails and permits retry", async () => {
   await withOpenClawTestState({ label: "agentsapi-executor-settlement-failure" }, async (state) => {
-    const fixture = await executorFixture(state);
+    const fixture = await externalSessionFixture(state);
     const harness = fixture.createHarness();
     try {
       await harness.runAttempt(fixture.params);
@@ -952,7 +688,7 @@ it("preserves executor binding when delete cancel settlement fails and permits r
       expect(fixture.events).toEqual([]);
       await cleanup();
       expect(resolveProviderAuth).toHaveBeenCalledTimes(1);
-      expect(fixture.events).toEqual(["cancel", "retire"]);
+      expect(fixture.events).toEqual(["cancel"]);
       expect((await fixture.openStore().lookup(fixture.params.sessionId)) ?? {}).toEqual({});
     } finally {
       await harness.dispose();
@@ -961,10 +697,10 @@ it("preserves executor binding when delete cancel settlement fails and permits r
 });
 
 it.each(["authority revoked", "oauth credential"] as const)(
-  "preserves restarted executor binding on %s before native cleanup",
+  "preserves restarted external session binding on %s before native cleanup",
   async (failureMode) => {
     await withOpenClawTestState({ label: "agentsapi-executor-restart-auth" }, async (state) => {
-      const fixture = await executorFixture(state);
+      const fixture = await externalSessionFixture(state);
       let harness = fixture.createHarness();
       try {
         await harness.runAttempt(fixture.params);
@@ -1009,7 +745,7 @@ it.each(["authority revoked", "oauth credential"] as const)(
         expect(fixture.events).toEqual([]);
         current = true;
         await cleanup();
-        expect(fixture.events).toEqual(["cancel", "retire"]);
+        expect(fixture.events).toEqual(["cancel"]);
         expect(await fixture.openStore().lookup(fixture.params.sessionId)).toBeUndefined();
       } finally {
         await harness.dispose();

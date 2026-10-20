@@ -1,10 +1,8 @@
-import fs from "node:fs";
 import path from "node:path";
 import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
   decodeSessionArchiveBytes,
-  readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
@@ -449,10 +447,7 @@ function archiveSourceMatches(
   }
 }
 
-function migrateTranscriptArchive(
-  filePath: string,
-  options: { beforeReplace?: () => void } = {},
-): boolean {
+function migrateTranscriptArchive(filePath: string): boolean {
   const source = readRegularFileSync({ filePath });
   const compressed = filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX);
   const content = decodeSessionArchiveBytes(source.buffer, compressed);
@@ -462,7 +457,6 @@ function migrateTranscriptArchive(
   }
   const codec = compressed ? "zstd" : "identity";
   const encoded = encodeArchiveContent(transformed.content, codec, filePath);
-  options.beforeReplace?.();
   replaceFileAtomicSync({
     filePath,
     content: encoded,
@@ -470,19 +464,12 @@ function migrateTranscriptArchive(
     syncParentDir: true,
     syncTempFile: true,
     tempPrefix: `${path.basename(filePath)}${ARCHIVE_TEMP_MARKER}`,
-    beforeRename: ({ tempPath }) => {
+    beforeRename: () => {
       if (!archiveSourceMatches(filePath, source)) {
         throw new Error(`${filePath} changed before atomic media migration replacement`);
       }
-      const staged = decodeSessionArchiveBytes(fs.readFileSync(tempPath), compressed);
-      if (staged !== transformed.content) {
-        throw new Error(`${filePath} failed codec readback before replacement`);
-      }
     },
   });
-  if (readSessionArchiveContentSync(filePath) !== transformed.content) {
-    throw new Error(`${filePath} failed codec readback after replacement`);
-  }
   return true;
 }
 
@@ -493,9 +480,6 @@ export async function migrateLegacyMediaPersistence(
     preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
     integrityCheck?: "quick" | "full";
     onPreparedRepairTargets?: (targets: readonly AgentDatabaseMigrationTarget[]) => void;
-    hooks?: {
-      beforeArchiveReplace?: (archivePath: string) => void;
-    };
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<MigrationMessages> {
@@ -676,13 +660,7 @@ export async function migrateLegacyMediaPersistence(
             }
             try {
               maintenance.renew?.();
-              if (
-                migrateTranscriptArchive(archive, {
-                  beforeReplace: params.hooks?.beforeArchiveReplace
-                    ? () => params.hooks?.beforeArchiveReplace?.(archive)
-                    : undefined,
-                })
-              ) {
+              if (migrateTranscriptArchive(archive)) {
                 changes.push(`Migrated archived transcript media in ${archive}.`);
               }
             } catch (error) {

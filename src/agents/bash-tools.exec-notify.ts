@@ -36,6 +36,7 @@ import {
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
 import { readToolAllowlistIntersection } from "./tool-policy-shared.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 const recovering = new Set<string>();
@@ -327,7 +328,9 @@ export function prepareExecExitNotification(
   if (!owner) {
     return undefined;
   }
-  return captureSessionEventTarget(owner, targetKey).then(
+  return captureSessionEventTarget(owner, targetKey, {
+    operatorAuthority: getGatewayToolCallerIdentity()?.operatorAuthority,
+  }).then(
     (target) => {
       if (isCronRunSessionKey(targetKey)) {
         const runs = listAgentRunsForSession({

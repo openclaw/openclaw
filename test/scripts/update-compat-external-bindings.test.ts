@@ -51,6 +51,8 @@ it.each([
 });
 
 it.each([
+  { file: "managed-handoff-runtime.mjs", independent: true },
+  { file: "package-update-activation-recovery.mjs", independent: true },
   { file: "state/openclaw-state-read-value-abcdefgh.mjs", independent: true },
   { file: "infra/sqlite-readonly-value-abcdefgh.mjs", independent: true },
   { file: "plugins/plugin-generation-preparation.worker.js", independent: true },

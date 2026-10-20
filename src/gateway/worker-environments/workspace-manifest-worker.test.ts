@@ -128,7 +128,6 @@ it("does not create or return an implicit hash memo for an uncached capture", as
   expect(result.hashes).toEqual([]);
   expect(result.metrics).toEqual({
     contentHashCount: 0,
-    contentHashDurationMs: 0,
     memoHitCount: 0,
   });
 });
@@ -152,7 +151,7 @@ it("captures eligible files outside the Gateway thread and returns the canonical
     return await lstat(...args);
   });
   const memo = new Map<string, string>();
-  const metrics = { contentHashCount: 0, contentHashDurationMs: 0, memoHitCount: 0 };
+  const metrics = { contentHashCount: 0, memoHitCount: 0 };
   const capture = () =>
     withWorkspaceHashMemo(memo, () => captureWorkspaceManifest(selection), metrics);
   const first = await capture();

@@ -13,10 +13,10 @@ import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-wid
 import { formatUiError } from "../lib/format-error.ts";
 import { isAwaitingGatewayFailure, isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
+import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import { WidgetSandboxHost, WIDGET_LOAD_NOTICE_MS } from "../lib/widget-sandbox-host.ts";
@@ -62,6 +62,7 @@ function createCanvasWidget(
   props: CanvasWidgetViewProps,
   element: HTMLElement,
   context: ApplicationContext,
+  notify: () => void,
 ) {
   const loader = createCanvasWidgetViewLoader(context.sessions);
   // Document identity and private-port authority stay synchronous; the view reads a projection.
@@ -97,8 +98,6 @@ function createCanvasWidget(
   let retryTimer: number | undefined;
   let slowTimer: number | undefined;
   let retryDelayMs = 1_000;
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
   Object.defineProperties(element, {
     documentHtml: {
       configurable: true,
@@ -546,10 +545,6 @@ function createCanvasWidget(
     setFrame: (frame: HTMLIFrameElement) => {
       frameElement = frame;
     },
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
   };
 }
 
@@ -560,8 +555,10 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
     host.style.minHeight = "";
     const context = useApplication();
     const gateway = projectGateway(context.gateway);
-    const widget = createCanvasWidget(host, host, context);
-    const projection = projectOwner(widget, (owner) => owner.state);
+    const { owner: widget, view: projection } = projectCallbackOwner(
+      (notify) => createCanvasWidget(host, host, context, notify),
+      (owner) => owner.state,
+    );
     const scriptProperty = Object.getOwnPropertyDescriptor(host, "allowScripts")!;
     // Even a false→true change within one commit must revoke the old private port.
     Object.defineProperty(host, "allowScripts", {

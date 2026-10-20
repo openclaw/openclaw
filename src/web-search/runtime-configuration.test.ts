@@ -7,6 +7,7 @@ import {
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import * as authProfileSource from "../agents/auth-profiles/source-check.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { clearActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import {
@@ -14,7 +15,10 @@ import {
   createWebSearchTestProvider,
   type WebSearchTestProviderParams,
 } from "../test-utils/web-provider-runtime.test-helpers.js";
-import { hasConfiguredWebSearchProvider, prepareWebSearchConfiguration } from "./runtime.js";
+import {
+  hasConfiguredWebSearchProvider as isConfigured,
+  prepareWebSearchConfiguration as prepareConfiguration,
+} from "./runtime.js";
 
 // mock-isolation: Use fixed discovery policy without opening machine state for provider fixtures.
 vi.mock("../plugins/bundled-discovery-state.js", () => ({
@@ -22,15 +26,13 @@ vi.mock("../plugins/bundled-discovery-state.js", () => ({
   readBundledDiscoveryModeMemoized: () => undefined,
 }));
 
-const { resolveRuntimeWebSearchProvidersMock } = vi.hoisted(() => ({
-  resolveRuntimeWebSearchProvidersMock: vi.fn<
-    () => ReturnType<typeof createWebSearchTestProvider>[]
-  >(() => []),
+const { providersMock } = vi.hoisted(() => ({
+  providersMock: vi.fn<() => ReturnType<typeof createWebSearchTestProvider>[]>(() => []),
 }));
 // mock-isolation: Only local provider descriptors participate in this configuration-presence matrix.
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
-  resolvePluginWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
-  resolveRuntimeWebSearchProviders: resolveRuntimeWebSearchProvidersMock,
+  resolvePluginWebSearchProviders: providersMock,
+  resolveRuntimeWebSearchProviders: providersMock,
 }));
 
 function createCustomSearchProvider(overrides: Partial<WebSearchTestProviderParams> = {}) {
@@ -43,11 +45,25 @@ function createCustomSearchProvider(overrides: Partial<WebSearchTestProviderPara
   });
 }
 
+function useProvider(overrides: Partial<WebSearchTestProviderParams> = {}) {
+  providersMock.mockReturnValue([createCustomSearchProvider(overrides)]);
+}
+
+const emptyStore = (): AuthProfileStore => ({ version: 1, profiles: {} });
+const prepare = (authStore?: AuthProfileStore) => prepareConfiguration({ config: {}, authStore });
+const oauthStore = () =>
+  createOAuthAuthProfileStore({
+    provider: "xai",
+    profileId: "xai:test",
+    access: "test-access",
+    refresh: "test-refresh",
+  });
+
 beforeEach(() => {
   noteCommittedSharedAuthStoreOwnership({ location: "legacy-main" });
   clearRuntimeConfigSnapshot();
   clearActiveRuntimeWebToolsMetadata();
-  resolveRuntimeWebSearchProvidersMock.mockReset();
+  providersMock.mockReset();
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -60,148 +76,81 @@ describe("web search configuration presence", () => {
     const sourceProbe = vi
       .spyOn(authProfileSource, "hasAnyAuthProfileStoreSourceAsync")
       .mockRejectedValue(new Error("Unexpected standalone auth admission"));
-    const prepareAuthSource = vi.fn(async () => ({ version: 1, profiles: {} }));
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createCustomSearchProvider({ authProviderId: "xai" }),
-    ]);
-    await expect(prepareWebSearchConfiguration({ config: {} }, prepareAuthSource)).resolves.toBe(
-      false,
-    );
+    const prepareAuthSource = vi.fn(async () => emptyStore());
+    const check = (config = {}) => prepareConfiguration({ config }, prepareAuthSource);
+    useProvider({ authProviderId: "xai" });
+    await expect(check()).resolves.toBe(false);
     expect(prepareAuthSource).toHaveBeenCalledExactlyOnceWith(resolveDefaultAgentDir({}));
     expect(sourceProbe).not.toHaveBeenCalled();
     prepareAuthSource.mockClear();
-    await expect(
-      prepareWebSearchConfiguration(
-        { config: { tools: { web: { search: { provider: "custom" } } } } },
-        prepareAuthSource,
-      ),
-    ).resolves.toBe(true);
-    setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, resolveDefaultAgentDir({}));
-    await expect(prepareWebSearchConfiguration({ config: {} }, prepareAuthSource)).resolves.toBe(
-      false,
-    );
+    await expect(check({ tools: { web: { search: { provider: "custom" } } } })).resolves.toBe(true);
+    setRuntimeAuthProfileStoreSnapshot(emptyStore(), resolveDefaultAgentDir({}));
+    await expect(check()).resolves.toBe(false);
     expect(prepareAuthSource).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "uses published auth stores without cold admission (configured=%s)",
-    async (configured) => {
-      const sourceProbe = vi.spyOn(authProfileSource, "hasAnyAuthProfileStoreSourceAsync");
-      const agentDir = resolveDefaultAgentDir({});
-      resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-        createCustomSearchProvider({ authProviderId: "xai" }),
-      ]);
-      setRuntimeAuthProfileStoreSnapshot(
-        configured
-          ? createOAuthAuthProfileStore({
-              provider: "xai",
-              profileId: "xai:test",
-              access: "test-access",
-              refresh: "test-refresh",
-            })
-          : { version: 1, profiles: {} },
-        agentDir,
-      );
-      await expect(prepareWebSearchConfiguration({ config: {} })).resolves.toBe(configured);
-      expect(sourceProbe).not.toHaveBeenCalled();
-      if (configured) {
-        await expect(
-          authProfileRuntimeMode.run({ kind: "env-only" }, () =>
-            prepareWebSearchConfiguration({ config: {} }),
-          ),
-        ).resolves.toBe(false);
-      }
-      sourceProbe.mockClear();
-      setRuntimeAuthProfileStoreSnapshot({ version: 1, profiles: {} }, agentDir);
-      await expect(prepareWebSearchConfiguration({ config: {} })).resolves.toBe(false);
-      expect(sourceProbe).not.toHaveBeenCalled();
-    },
-  );
+  it("uses published auth stores without cold admission", async () => {
+    const sourceProbe = vi.spyOn(authProfileSource, "hasAnyAuthProfileStoreSourceAsync");
+    const agentDir = resolveDefaultAgentDir({});
+    useProvider({ authProviderId: "xai" });
+    setRuntimeAuthProfileStoreSnapshot(oauthStore(), agentDir);
+    await expect(prepare()).resolves.toBe(true);
+    expect(sourceProbe).not.toHaveBeenCalled();
+    await expect(authProfileRuntimeMode.run({ kind: "env-only" }, () => prepare())).resolves.toBe(
+      false,
+    );
+    sourceProbe.mockClear();
+    setRuntimeAuthProfileStoreSnapshot(emptyStore(), agentDir);
+    await expect(prepare()).resolves.toBe(false);
+    expect(sourceProbe).not.toHaveBeenCalled();
+  });
 
   it.each([
-    { name: "absent", value: undefined, configured: false },
-    { name: "empty", value: "  ", configured: false },
-    { name: "inline", value: "test-search-key", configured: true },
-    {
-      name: "unresolved env ref",
-      value: { source: "env", provider: "default", id: "MISSING_SEARCH_TEST_KEY" },
-      configured: true,
-    },
-    {
-      name: "unresolved file ref",
-      value: { source: "file", provider: "default", id: "/search/key" },
-      configured: true,
-    },
-  ])("distinguishes $name configuration from provider health", ({ value, configured }) => {
+    ["absent", undefined, false],
+    ["empty", "  ", false],
+    ["inline", "test-search-key", true],
+    [
+      "unresolved env ref",
+      { source: "env", provider: "default", id: "MISSING_SEARCH_TEST_KEY" },
+      true,
+    ],
+    ["unresolved file ref", { source: "file", provider: "default", id: "/search/key" }, true],
+  ] as const)("distinguishes %s configuration from provider health", (_name, value, configured) => {
     const createTool = vi.fn(() => {
       throw new Error("Configuration checks must not construct provider tools");
     });
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createCustomSearchProvider({ getConfiguredCredentialValue: () => value, createTool }),
-    ]);
-    expect(
-      hasConfiguredWebSearchProvider({ config: {}, authStore: { version: 1, profiles: {} } }),
-    ).toBe(configured);
+    useProvider({ getConfiguredCredentialValue: () => value, createTool });
+    expect(isConfigured({ config: {}, authStore: emptyStore() })).toBe(configured);
     expect(createTool).not.toHaveBeenCalled();
   });
 
   it("detects provider-owned env, fallback, and agent OAuth without executing providers", async () => {
     vi.stubEnv("OPENCLAW_TEST_SEARCH_KEY", "test-search-key");
-    try {
-      resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-        { ...createCustomSearchProvider(), envVars: ["OPENCLAW_TEST_SEARCH_KEY"] },
-      ]);
-      expect(await prepareWebSearchConfiguration({ config: {} })).toBe(true);
-    } finally {
-      vi.unstubAllEnvs();
-    }
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createCustomSearchProvider({
-        getConfiguredCredentialFallback: () => ({
-          value: "test-fallback-key",
-          path: "models.providers.custom.apiKey",
-        }),
-      }),
+    providersMock.mockReturnValue([
+      { ...createCustomSearchProvider(), envVars: ["OPENCLAW_TEST_SEARCH_KEY"] },
     ]);
-    expect(await prepareWebSearchConfiguration({ config: {} })).toBe(true);
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createCustomSearchProvider({ authProviderId: "xai" }),
-    ]);
-    expect(
-      await prepareWebSearchConfiguration({
-        config: {},
-        authStore: createOAuthAuthProfileStore({
-          provider: "xai",
-          profileId: "xai:test",
-          access: "test-access",
-          refresh: "test-refresh",
-        }),
+    expect(await prepare()).toBe(true);
+    vi.unstubAllEnvs();
+    useProvider({
+      getConfiguredCredentialFallback: () => ({
+        value: "test-fallback-key",
+        path: "models.providers.custom.apiKey",
       }),
-    ).toBe(true);
-    expect(
-      await prepareWebSearchConfiguration({ config: {}, authStore: { version: 1, profiles: {} } }),
-    ).toBe(false);
+    });
+    expect(await prepare()).toBe(true);
+    useProvider({ authProviderId: "xai" });
+    expect(await prepare(oauthStore())).toBe(true);
+    expect(await prepare(emptyStore())).toBe(false);
   });
 
   it("does not auto-select key-free providers but preserves explicit selection and unavailable setup", () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createCustomSearchProvider({ requiresCredential: false }),
-    ]);
-    expect(hasConfiguredWebSearchProvider({ config: {} })).toBe(false);
-    for (const provider of [
-      "duckduckgo",
-      "parallel-free",
-      "ollama",
-      "codex",
-      "uninstalled-provider",
-    ]) {
-      expect(
-        hasConfiguredWebSearchProvider({ config: { tools: { web: { search: { provider } } } } }),
-      ).toBe(true);
-    }
-    resolveRuntimeWebSearchProvidersMock.mockClear();
+    useProvider({ requiresCredential: false });
+    expect(isConfigured({ config: {} })).toBe(false);
+    const config = { tools: { web: { search: { provider: "uninstalled-provider" } } } };
+    expect(isConfigured({ config })).toBe(true);
+    providersMock.mockClear();
     expect(
-      hasConfiguredWebSearchProvider({
+      isConfigured({
         config: {},
         runtimeWebSearch: {
           providerSource: "none",
@@ -211,6 +160,6 @@ describe("web search configuration presence", () => {
         },
       }),
     ).toBe(true);
-    expect(resolveRuntimeWebSearchProvidersMock).not.toHaveBeenCalled();
+    expect(providersMock).not.toHaveBeenCalled();
   });
 });

@@ -375,6 +375,9 @@ function decodeSqliteWorkerReplyError(
   if (error.name === "SqliteWorkerAdmissionTimeoutError" && error.code === "admission-timeout") {
     return new SqliteWorkerAdmissionTimeoutError();
   }
+  if (error.name === "SqliteWorkerError" && error.code === "outcome-unknown") {
+    return new SqliteWorkerError(error.message, "outcome-unknown");
+  }
   const failure = Object.assign(new Error(error.message), {
     name: error.name,
     ...(error.code === undefined ? {} : { code: error.code }),
@@ -574,6 +577,7 @@ export function failSqliteWorkerSlot(
   const error = toErrorObject(reason, "SQLite worker failed");
   slot.custody.retire();
   slot.failed = new SqliteWorkerError(error.message, "unavailable");
+  slot.failed.cause = error;
   for (const actor of slot.actors) {
     if (!actor.backendClosed) {
       notifyListeners(actor.nativeLostObservers ?? [], slot.failed);

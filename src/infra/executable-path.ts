@@ -31,7 +31,7 @@ export function resolveExecutablePathCandidate(
   if (path.isAbsolute(expanded)) {
     return path.resolve(expanded);
   }
-  const base = options?.cwd && options.cwd.trim() ? options.cwd.trim() : process.cwd();
+  const base = options?.cwd && options.cwd.trim() ? options.cwd : process.cwd();
   return path.resolve(base, expanded);
 }
 
@@ -138,7 +138,7 @@ export function resolveExecutableFromPathEnv(
   env?: NodeJS.ProcessEnv,
   options?: { includeExtensionless?: boolean; cwd?: string; useCache?: boolean },
 ): string | undefined {
-  const cwd = options?.cwd?.trim() ? path.resolve(options.cwd.trim()) : undefined;
+  const cwd = options?.cwd?.trim() ? path.resolve(options.cwd) : undefined;
   const useCache = options?.useCache !== false;
   const cacheKey = executablePathCacheKey(
     executable,

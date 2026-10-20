@@ -3,6 +3,7 @@ import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { createDeferredCore } from "../shared/deferred.js";
 import { oauthErrorHtml, renderOAuthPage } from "../shared/oauth-page.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
+import { closeHttpServers } from "./http-server-lifecycle.js";
 import { OAUTH_PAGE_CSP } from "./oauth-page-csp.js";
 
 type OAuthLoopbackCallbackResult =
@@ -125,22 +126,6 @@ function prepareResponse(
   response.setHeader("Access-Control-Max-Age", "600");
 }
 
-async function closeServers(servers: readonly Server[]): Promise<void> {
-  await Promise.all(
-    servers.map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          if (!server.listening) {
-            resolve();
-            return;
-          }
-          server.close(() => resolve());
-          server.closeAllConnections?.();
-        }),
-    ),
-  );
-}
-
 /** Binds the authoritative loopback redirect before returning, then waits separately. */
 export async function startOAuthLoopbackCallbackServer(params: {
   redirectUrl: string | URL;
@@ -203,7 +188,8 @@ export async function startOAuthLoopbackCallbackServer(params: {
   let closePromise: Promise<void> | undefined;
   const callback = createDeferredCore<OAuthLoopbackCallbackResult>();
   void callback.promise.catch(() => undefined);
-  const close = () => (binding ? Promise.resolve() : (closePromise ??= closeServers(servers)));
+  const close = () =>
+    binding ? Promise.resolve() : (closePromise ??= closeHttpServers(servers, { force: true }));
   const cleanup = () => {
     if (timeout) {
       clearTimeout(timeout);
@@ -375,7 +361,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
   } catch (error) {
     binding = false;
     cleanup();
-    await closeServers(servers);
+    await closeHttpServers(servers, { force: true });
     throw error;
   }
   binding = false;

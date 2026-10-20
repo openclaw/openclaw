@@ -18,7 +18,6 @@ import {
   setTestEnvValue,
   withEnvAsync,
 } from "../../test-utils/env.js";
-import { getFreePort } from "../../test-utils/ports.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { VERSION } from "../../version.js";
@@ -32,6 +31,7 @@ import {
   gatewayRunReadFailures,
   type RuntimeDotEnvLoadResult,
 } from "./run-config.test-support.js";
+import { registerGatewayLockFailureTests } from "./run-lock-failure.test-support.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -189,7 +189,7 @@ vi.mock("../../config/paths.js", async (importOriginal) => ({
   normalizeStateDirEnv: mocks.normalizeStateDirEnv,
   pinRuntimePaths: mocks.pinRuntimePaths,
   resolveConfigPath: () => "/tmp/openclaw-test-missing-config.json",
-  resolveStateDir: () => "/tmp",
+  resolveStateDir: (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_STATE_DIR ?? "/tmp",
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
 
@@ -308,8 +308,9 @@ vi.mock("../../gateway/ws-logging.js", () => ({
 // mock-isolation: Keep verbose-mode changes local to the CLI fixture.
 vi.mock("../../globals.js", () => ({ setVerbose: (_enabled: boolean) => undefined }));
 
-vi.mock("../../infra/ports-inspect.js", () => ({
-  inspectPortUsage: async () => ({ status: "free" }),
+vi.mock("../../infra/ports-inspect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/ports-inspect.js")>()),
+  inspectPortUsage: vi.fn(async () => ({ status: "free" })),
 }));
 
 vi.mock("../../infra/ports-format.js", () => ({ formatPortDiagnostics: () => [] }));
@@ -1156,28 +1157,13 @@ describe("gateway run option collisions", () => {
     }
   });
 
-  it("skips failure bundles but exits nonzero for unconfirmed gateway lock conflicts", async () => {
-    const port = await getFreePort();
-    configState.snapshot = {
-      config: { gateway: { port } },
-      exists: false,
-      sourceConfig: {},
-      valid: true,
-    };
-    const err = Object.assign(new Error(`gateway already running on port ${port}`), {
-      name: "GatewayLockError",
-    });
-    startGatewayServer.mockRejectedValueOnce(err);
-
-    await withEnvAsync(withoutSupervisorEnv, async () => {
-      await expectExit(1);
-    });
-
-    expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
-    expect(startGatewayServer).toHaveBeenCalledWith(port, expect.any(Object));
-    expect(runtimeErrors.join("\n")).toContain(`gateway already running on port ${port}`);
-    expect(runtimeErrors.join("\n")).toContain("gateway stop");
-    expect(triageAfterFailure).not.toHaveBeenCalled();
+  registerGatewayLockFailureTests({
+    ...mocks,
+    expectExit,
+    configState,
+    withoutSupervisorEnv,
+    runtimeErrors,
+    writeDiagnosticStabilityBundleForFailureSync,
   });
 
   it("exits 78 and parks launchd for a repairable shared-state schema", async () => {

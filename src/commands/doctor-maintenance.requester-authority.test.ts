@@ -11,8 +11,8 @@ import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withLegacyMigrationStateLock } from "../infra/state-migrations.lock.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
-import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-database-generations.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
 import {
   createManagedUpdateRequesterAuthority,
   UpdateRequesterRevokedError,
@@ -44,6 +44,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 afterEach(() => vi.restoreAllMocks());
 const workers = createSqliteReadOnlyWorkerScope();
 afterAll(() => workers.close());
+
+async function expectNoSidecars(database: string) {
+  for (const suffix of ["-wal", "-shm"]) {
+    await expect(fs.stat(database + suffix)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+}
 
 it.each(["configured-owner", "profile"] as const)(
   "keeps %s requester authority live through maintenance and revocation",
@@ -118,18 +124,14 @@ it.each(["configured-owner", "profile"] as const)(
         };
         assertCurrent();
         await closeOpenClawStateDatabaseAsync();
+        // Keep the initial liveness control outside the maintenance admission budget.
+        authorityWorkerLaunches.clear();
         const maintenance = await beginDoctorMaintenance({
           root: null,
           options: { repair: true, nonInteractive: true },
           runtime: { log() {}, error() {}, exit() {} },
           assertCurrent,
-          beforeStateMutation: async () => {
-            for (const suffix of ["-wal", "-shm"]) {
-              await expect(fs.stat(databasePath + suffix)).rejects.toMatchObject({
-                code: "ENOENT",
-              });
-            }
-          },
+          beforeStateMutation: () => expectNoSidecars(databasePath),
         });
         expect(maintenance).toBeDefined();
         const admissionWorkerLaunches = authorityWorkerLaunches.size;
@@ -140,11 +142,7 @@ it.each(["configured-owner", "profile"] as const)(
           }
           await maintenance!.run(async () => {
             expect(foreignRequester.isCurrent()).toBe(true);
-            for (const suffix of ["-wal", "-shm"]) {
-              await expect(fs.stat(foreignDatabase + suffix)).rejects.toMatchObject({
-                code: "ENOENT",
-              });
-            }
+            await expectNoSidecars(foreignDatabase);
             const migration = await withLegacyMigrationStateLock({
               stateDir: state.stateDir,
               env: state.env,
