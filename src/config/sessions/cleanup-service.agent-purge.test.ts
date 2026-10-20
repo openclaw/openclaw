@@ -3,7 +3,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getLogger } from "../../logging/logger.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import type { OpenClawConfig } from "../types.openclaw.js";
 import { purgeAgentSessionStoreEntries } from "./cleanup-service.js";
 import {
   loadSessionEntry,
@@ -23,7 +22,7 @@ afterEach(async () => {
 });
 const store = (name: string) => {
   const storePath = state.statePath(name);
-  return { storePath, cfg: { session: { store: storePath } } satisfies OpenClawConfig };
+  return { storePath, cfg: { session: { store: storePath } } };
 };
 
 it.each(["fixed selector", "retired schema owner"])(
@@ -33,7 +32,7 @@ it.each(["fixed selector", "retired schema owner"])(
     const cfg = {
       agents: { ownership: "explicit", entries: { main: {}, ops: {} } },
       session: { store: storePath },
-    } satisfies OpenClawConfig;
+    } satisfies Parameters<typeof purgeAgentSessionStoreEntries>[0];
     await state.writeConfig(cfg);
     if (kind === "retired schema owner") {
       openOpenClawAgentDatabase({ agentId: "retired", path: storePath });

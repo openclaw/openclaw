@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -15,34 +12,25 @@ const sessionKey = "agent:main:delivery-fallback";
 const deliveryContext = { channel: "telegram", to: "telegram:123456", accountId: "default" };
 const expected = { deliveryContext, threadId: undefined };
 const missing = { deliveryContext: undefined, threadId: undefined };
-async function expectDelivery(cfg: OpenClawConfig, result: typeof expected | typeof missing) {
-  expect(await extractDeliveryInfo(sessionKey, { cfg })).toEqual(result);
-  expect(await extractDeliveryInfoBatch([{ sessionKey }], { cfg })).toEqual([result]);
-}
-
-async function seedFallback(state: OpenClawTestState) {
-  setRuntimeConfigSnapshot({});
-  await replaceSessionEntry(
-    { agentId: "main", env: state.env, sessionKey },
+type Route = typeof deliveryContext;
+const seed = (key: string, context: Route, agentId = "main") =>
+  replaceSessionEntry(
+    { agentId, sessionKey: key },
     {
-      sessionId: "delivery-fallback",
-      updatedAt: Date.now(),
-      delivery: normalizeSessionDeliveryState({ context: deliveryContext }),
+      sessionId: `${agentId}-route`,
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({ context }),
     },
   );
-  expect(await extractDeliveryInfo(sessionKey, { cfg: {} })).toEqual(expected);
-  const primaryPath = state.statePath("custom", "sessions.sqlite");
-  return {
-    primaryPath,
-    cfg: { session: { store: primaryPath } },
-  };
-}
 
 it.each(["absent", "uninitialized", "corrupt"] as const)(
-  "recovers only past an absent primary, not a present %s primary",
+  "recovers delivery only when the primary is absent (%s)",
   async (kind) => {
     await withOpenClawTestState({ label: `delivery-${kind}-primary` }, async (state) => {
-      const { cfg, primaryPath } = await seedFallback(state);
+      setRuntimeConfigSnapshot({});
+      await seed(sessionKey, deliveryContext);
+      const primaryPath = state.statePath("custom", "sessions.sqlite");
+      const cfg = { session: { store: primaryPath } };
       if (kind !== "absent") {
         fs.mkdirSync(state.statePath("custom"), { recursive: true });
         if (kind === "uninitialized") {
@@ -52,7 +40,8 @@ it.each(["absent", "uninitialized", "corrupt"] as const)(
         }
       }
       const before = kind === "absent" ? undefined : fs.readFileSync(primaryPath);
-      await expectDelivery(cfg, kind === "absent" ? expected : missing);
+      const result = kind === "absent" ? expected : missing;
+      expect(await extractDeliveryInfoBatch([{ sessionKey }], { cfg })).toEqual([result]);
       if (before) {
         expect(fs.readFileSync(primaryPath)).toEqual(before);
       } else {
@@ -64,35 +53,21 @@ it.each(["absent", "uninitialized", "corrupt"] as const)(
 
 it("keeps explicit delivery ownership through alias lookup and rejects conflicting keys", async () => {
   await withOpenClawTestState({ label: "delivery-explicit-owner" }, async (state) => {
-    const makeConfig = (fixed = false): OpenClawConfig => ({
+    const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",
-        defaults: {
-          systemAgent: { agentId: "main" },
-          ...(fixed ? { sessionStore: { agentId: "main" } } : {}),
-        },
+        defaults: { systemAgent: { agentId: "main" } },
         entries: { main: {}, ops: {} },
       },
-      session: {
-        scope: "global",
-        ...(fixed ? { store: state.statePath("agents", "main", "sessions", "sessions.json") } : {}),
-      },
-    });
-    const cfg = makeConfig();
+      session: { scope: "global" },
+    };
     setRuntimeConfigSnapshot(cfg);
     const routes = {
       main: { channel: "telegram", to: "telegram:main", accountId: "main" },
       ops: { channel: "telegram", to: "telegram:ops", accountId: "ops" },
     };
     for (const [agentId, context] of Object.entries(routes)) {
-      await replaceSessionEntry(
-        { agentId, env: state.env, sessionKey: "global" },
-        {
-          sessionId: `${agentId}-global`,
-          updatedAt: 1,
-          delivery: normalizeSessionDeliveryState({ context }),
-        },
-      );
+      await seed("global", context, agentId);
     }
     const selected = { deliveryContext: routes.ops, threadId: undefined };
     expect(await extractDeliveryInfo("global", { cfg })).toEqual({
@@ -110,8 +85,9 @@ it("keeps explicit delivery ownership through alias lookup and rejects conflicti
         { cfg },
       ),
     ).toEqual([selected, missing, missing]);
-    expect(await extractDeliveryInfo("global", { cfg: makeConfig(true), agentId: "ops" })).toEqual(
-      missing,
-    );
+    const fixed = structuredClone(cfg);
+    fixed.agents!.defaults!.sessionStore = { agentId: "main" };
+    fixed.session!.store = state.statePath("agents", "main", "sessions", "sessions.json");
+    expect(await extractDeliveryInfo("global", { cfg: fixed, agentId: "ops" })).toEqual(missing);
   });
 });

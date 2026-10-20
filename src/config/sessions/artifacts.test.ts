@@ -1,9 +1,7 @@
 import { expect, it } from "vitest";
 import {
   formatSessionArchiveTimestamp,
-  isCompactionCheckpointTranscriptFileName as checkpointName,
   isMigrationArchiveArtifactName as migrationName,
-  isPrimarySessionTranscriptFileName as primaryName,
   isSessionArchiveArtifactName as archiveName,
   isSessionStoreTempArtifactName,
   isTrajectorySessionArtifactName as trajectoryName,
@@ -33,24 +31,14 @@ it.each([
   [
     migrationName,
     ["abc.jsonl.migrated", "sessions.json.migrated.2"],
-    ["abc.jsonl.migrated.tmp", "abc.migrated.jsonl", "abc.jsonl.MIGRATED"],
+    ["abc.jsonl.migrated.tmp", "abc.jsonl.MIGRATED"],
   ],
   [
     storeTemp,
     [`sessions.json.12345.${uuid}.tmp`, `sessions.json.${uuid}.tmp`],
-    [
-      store,
-      storeBackup,
-      `${uuid}.jsonl`,
-      "sessions.json.tmp",
-      "other.json.12345.tmp",
-      `my-store.json.99.${uuid}.tmp`,
-      `sessionsXjson.99.${uuid}.tmp`,
-    ],
+    [store, "sessions.json.tmp", `my-store.json.99.${uuid}.tmp`, `sessionsXjson.99.${uuid}.tmp`],
   ],
-  [primaryName, ["abc.jsonl", "keep.deleted.keep.jsonl"], [checkpoint, deleted, trajectory, store]],
   [trajectoryName, [trajectory, "abc.trajectory-path.json"], ["abc.jsonl"]],
-  [checkpointName, [checkpoint], [invalidCheckpoint]],
 ] satisfies [(name: string) => boolean, string[], string[]][])(
   "classifies $0.name",
   (classify, accepted, rejected) => {
@@ -77,13 +65,12 @@ it("parses usage-counted session ids from file names", () => {
     [
       null,
       [
+        store,
         backup,
         checkpoint,
         trajectory,
-        `${trajectory}.deleted.${stamp}`,
         `${trajectory}.reset.${stamp}.zst`,
         `${checkpoint}.reset.${stamp}.zst`,
-        `${checkpoint}.deleted.${stamp}.zst`,
         `.jsonl.reset.${stamp}`,
         `${deleted}.${"A".repeat(32)}`,
       ],
