@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as updateCheck from "../../infra/update-check.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import * as shared from "./shared.js";
 import { updateStatusCommand } from "./status.js";
 
 const runtime = vi.hoisted(() => ({
@@ -24,13 +25,6 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: async () => null }),
-}));
-vi.mock("../../infra/update-check.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/update-check.js")>()),
-}));
-vi.mock("./shared.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./shared.js")>()),
-  resolveUpdateRoot: async () => "/fixture/openclaw",
 }));
 
 afterEach(() => {
@@ -63,13 +57,10 @@ it("reports fresh native release preferences without changing the source checkou
   await git(root, "checkout", "--detach", sha);
   // Refresh a moved annotated tag privately; the installed tag stays unchanged.
   await git(source, "tag", "-f", "-a", "v2026.9.1", sha, "-m", "corrected release");
-  const shared = await import("./shared.js");
   vi.spyOn(shared, "resolveUpdateRoot").mockResolvedValue(root);
-  const actual = await vi.importActual<typeof import("../../infra/update-check.js")>(
-    "../../infra/update-check.js",
-  );
+  const checkUpdateStatus = updateCheck.checkUpdateStatus;
   vi.spyOn(updateCheck, "checkUpdateStatus").mockImplementation((options) =>
-    actual.checkUpdateStatus({ ...options, includeRegistry: false }),
+    checkUpdateStatus({ ...options, includeRegistry: false }),
   );
   const configPath = path.join(base, "openclaw.json");
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
@@ -125,6 +116,5 @@ it("reports fresh native release preferences without changing the source checkou
   await fs.writeFile(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
   vi.mocked(shared.resolveUpdateRoot).mockResolvedValue(packageRoot);
   const packaged = await read({ update: { channel: "stable" } });
-  expect(packaged).toHaveProperty("update.installKind", "package");
-  expect(packaged).toHaveProperty("update.git", undefined);
+  expect(packaged).toMatchObject({ update: { installKind: "package", git: undefined } });
 });
