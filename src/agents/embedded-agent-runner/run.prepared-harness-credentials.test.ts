@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
@@ -48,7 +49,7 @@ it.each([true, false, undefined])(
   "resolves prepared harness credentials with authHeader=%s (undefined: implicit auth)",
   async (authHeader) => {
     const explicit = authHeader !== undefined;
-    const config = explicit
+    const config: OpenClawConfig | undefined = explicit
       ? {
           models: {
             providers: {
@@ -57,7 +58,17 @@ it.each([true, false, undefined])(
                 baseUrl: "https://api.openai.com/v1",
                 apiKey: "synthetic-configured-key",
                 authHeader,
-                models: [],
+                models: [
+                  {
+                    id: "gpt-5.6-luna",
+                    name: "Luna",
+                    reasoning: true,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128_000,
+                    maxTokens: 4096,
+                  },
+                ],
               },
             },
           },

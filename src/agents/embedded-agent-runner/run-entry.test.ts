@@ -52,13 +52,13 @@ function runEntry({
 
 type CandidateResult = Awaited<ReturnType<FallbackRunnerParams["run"]>>;
 function usePrimaryFallback(
-  inspect?: (params: FallbackRunnerParams, result: CandidateResult) => void,
+  inspect?: (params: FallbackRunnerParams, result: CandidateResult) => void | Promise<void>,
   outcome: "completed" | "exhausted" = "completed",
 ) {
   state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
     const { provider, model } = params;
     const result = await params.run(provider, model, initialAttemptOptions(params));
-    inspect?.(params, result);
+    await inspect?.(params, result);
     return { outcome, result, provider, model, attempts: [] };
   });
 }
@@ -319,8 +319,8 @@ describe("runEmbeddedAgentEntry", () => {
     "settles an empty result after %s without reusing a replaced result's classification",
     async (settlement) => {
       const committed = settlement === "committed side effect";
-      usePrimaryFallback((params, result) => {
-        expect(classify(params, result)).toBe(committed ? undefined : null);
+      usePrimaryFallback(async (params, result) => {
+        expect(await classify(params, result)).toBe(committed ? undefined : null);
       });
       const run = await runEntry({
         selection: { cfg: {}, provider: "provider", model: "model" },
@@ -378,9 +378,11 @@ describe("runEmbeddedAgentEntry", () => {
       },
     ],
   ] as const)("does not finalize a %s candidate", async (_label, status, meta) => {
-    usePrimaryFallback((params, result) => {
+    usePrimaryFallback(async (params, result) => {
       if ("modelFallbackStopReason" in meta) {
-        expect(classify(params, result)).toEqual({ stopReason: meta.modelFallbackStopReason });
+        expect(await classify(params, result)).toEqual({
+          stopReason: meta.modelFallbackStopReason,
+        });
       }
     });
     const innerFailure = {
@@ -423,8 +425,8 @@ describe("runEmbeddedAgentEntry", () => {
   });
 
   it("retains non-visible follow-up results for terminal delivery", async () => {
-    usePrimaryFallback((params, result) => {
-      expect(classify(params, result, 1)).toMatchObject({
+    usePrimaryFallback(async (params, result) => {
+      expect(await classify(params, result, 1)).toMatchObject({
         code: "empty_result",
         preserveResultOnExhaustion: true,
         preserveResultPriority: -1,

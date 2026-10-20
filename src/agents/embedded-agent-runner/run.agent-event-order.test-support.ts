@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
@@ -18,7 +18,7 @@ import { wrapStreamFnWithDiagnosticModelCallEvents } from "./run/attempt.model-d
 
 it.each(["completion", "abort"] as const)(
   "serializes provider waits across model calls and ordinary run events (%s)",
-  async (termination, { onTestFinished }) => {
+  async (termination) => {
     const runEmbeddedAgent = await loadSharedRunIntegrationHarness();
     resetSharedRunIntegrationHarnessMocks();
     const session = await createSharedRunIntegrationSession();

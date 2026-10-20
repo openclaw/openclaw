@@ -432,6 +432,15 @@ describe("buildDashboardSessionTitleSource", () => {
     );
   });
 
+  it("titles a control command turn from its text attachment", () => {
+    expect(
+      buildDashboardSessionTitleSource({
+        message: "/status",
+        attachments: [textAttachment("Pasted incident report")],
+      }),
+    ).toBe("Pasted incident report");
+  });
+
   it.each([
     ["malformed base64", { mimeType: "text/plain", content: "%%%" }],
     [
