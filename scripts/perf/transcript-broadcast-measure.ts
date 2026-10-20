@@ -773,6 +773,7 @@ const mock = createServer((req, res) => {
               values["stress-tools"]
                 ? {
                     title: "Read the synthetic fixture and verify its worktree",
+                    awaitResults: true,
                     code:
                       `json(await read({ path: ${JSON.stringify(toolPath)} }));\n` +
                       `const shell = await exec({ command: "pwd", workdir: ${JSON.stringify(stressWorktree)} });\n` +
