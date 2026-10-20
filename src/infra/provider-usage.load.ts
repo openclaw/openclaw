@@ -40,7 +40,7 @@ type UsageSummaryOptions = {
 };
 
 /** Preserves dispatcher support when provider usage wraps Node's ambient fetch. */
-export function createProviderUsageFetchFn(
+function createProviderUsageFetchFn(
   fetchFn: typeof fetch,
   signal: AbortSignal,
   useRuntimeDispatcherFallback: boolean,
