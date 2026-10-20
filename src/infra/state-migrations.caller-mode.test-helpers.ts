@@ -81,29 +81,18 @@ export function expectBlockedTailInPlanOrder(params: {
   const blockerIndex = plan.steps.findIndex((step) => step.id === blockerId);
   expect(blockerIndex).toBeGreaterThanOrEqual(0);
   expect(
-    receipts.slice(blockerIndex + 1).map((receipt) => ({
-      id: receipt.id,
-      outcome: receipt.outcome,
-      refusalCode: receipt.refusal?.code,
-    })),
+    receipts
+      .slice(blockerIndex + 1)
+      .map(({ id, outcome, refusal }) => [id, outcome, refusal?.code]),
   ).toEqual(
-    plan.steps.slice(blockerIndex + 1).map((step) => ({
-      id: step.id,
-      outcome: "refused",
-      refusalCode: "blocked-by-prior-refusal",
-    })),
+    plan.steps.slice(blockerIndex + 1).map(({ id }) => [id, "refused", "blocked-by-prior-refusal"]),
   );
 }
 
-function stableStepDescriptor({
-  id,
-  phase,
-  source,
-  target,
-  requiredness,
-  reversibility,
-}: LegacyStateMigrationPlan["steps"][number] | LegacyStateMigrationStepReceipt) {
-  return { id, phase, source, target, requiredness, reversibility };
+function stableStepDescriptor(
+  step: LegacyStateMigrationPlan["steps"][number] | LegacyStateMigrationStepReceipt,
+) {
+  return [step.id, step.phase, step.source, step.target, step.requiredness, step.reversibility];
 }
 
 export function expectPlanReceiptDescriptorsToMatch(params: {
@@ -117,9 +106,6 @@ export function expectPlanReceiptDescriptorsToMatch(params: {
 export function createCallerModeSnapshot(
   fixture: Pick<LegacyStateMigrationPlan["snapshot"], "homeDir" | "configPath" | "stateDir">,
 ): LegacyStateMigrationPlan["snapshot"] {
-  return {
-    homeDir: fixture.homeDir,
-    configPath: fixture.configPath,
-    stateDir: fixture.stateDir,
-  };
+  const { homeDir, configPath, stateDir } = fixture;
+  return { homeDir, configPath, stateDir };
 }

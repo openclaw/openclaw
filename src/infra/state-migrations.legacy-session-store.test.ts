@@ -1,4 +1,3 @@
-import type { MakeDirectoryOptions, Mode, PathLike } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -10,6 +9,7 @@ import {
 } from "./state-migrations.legacy-session-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 const MAIN_KEY = "agent:main:main";
 const legacyEntry = {
   sessionId: " session-1 ",
@@ -48,25 +48,15 @@ it("stages prompt blobs after a recreated session directory", async () => {
   const prompt = `<available_skills>\n${"recreated dir prompt\n".repeat(200)}</available_skills>`;
   const realMkdir = fs.mkdir.bind(fs);
   let mkdirs = 0;
-  const spy = vi
-    .spyOn(fs, "mkdir")
-    .mockImplementation(async (dir: PathLike, options?: MakeDirectoryOptions | Mode | null) => {
-      if (
-        typeof dir === "string" &&
-        path.resolve(dir) === path.resolve(storeDir) &&
-        ++mkdirs === 2
-      ) {
-        await fs.rm(storeDir, { force: true, recursive: true });
-      }
-      return await realMkdir(dir, options ?? undefined);
-    });
-  try {
-    await saveStore(
-      mainStore({ skillsSnapshot: { prompt, skills: [{ name: "demo" }], version: 1 } }),
-    );
-  } finally {
-    spy.mockRestore();
-  }
+  vi.spyOn(fs, "mkdir").mockImplementation(async (dir, options) => {
+    if (typeof dir === "string" && path.resolve(dir) === path.resolve(storeDir) && ++mkdirs === 2) {
+      await fs.rm(storeDir, { force: true, recursive: true });
+    }
+    return await realMkdir(dir, options ?? undefined);
+  });
+  await saveStore(
+    mainStore({ skillsSnapshot: { prompt, skills: [{ name: "demo" }], version: 1 } }),
+  );
   expect(mkdirs).toBeGreaterThanOrEqual(2);
   expect(loadLegacySessionStore(storePath)[MAIN_KEY]?.skillsSnapshot?.prompt).toBe(prompt);
 });

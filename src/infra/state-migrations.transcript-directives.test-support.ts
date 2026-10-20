@@ -1,3 +1,4 @@
+import type { SQLInputValue } from "node:sqlite";
 import {
   readSqliteTranscriptPayload,
   sqliteTranscriptPayloadColumns,
@@ -15,25 +16,15 @@ export function messageEvent(params: {
   role: "assistant" | "toolResult" | "user";
   timestamp: number;
 }): FixtureEvent {
-  const zeroUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  const { id, parentId, ...message } = params;
   return {
     type: "message",
-    id: params.id,
-    parentId: params.parentId ?? null,
+    id,
+    parentId: parentId ?? null,
     timestamp: params.timestamp,
     message: {
-      role: params.role,
-      content: params.content,
-      timestamp: params.timestamp,
-      ...(params.role === "assistant"
-        ? {
-            api: "messages",
-            provider: "anthropic",
-            model: "sonnet-4.6",
-            usage: { ...zeroUsage, totalTokens: 0, cost: { ...zeroUsage, total: 0 } },
-            stopReason: "stop",
-          }
-        : {}),
+      ...message,
+      ...(message.role === "assistant" ? { provider: "anthropic", model: "sonnet-4.6" } : {}),
     },
   };
 }
@@ -48,49 +39,40 @@ export function insertSession(
     legacy?: boolean;
   },
 ): void {
-  const sessionKey = `agent:main:${params.sessionId}`;
-  database
-    .prepare(
-      `INSERT INTO session_nodes(session_key,current_session_id,entry_json,updated_at)
-       VALUES(?,?,?,?)`,
-    )
-    .run(sessionKey, params.sessionId, "{}", 1);
-  database
-    .prepare(
-      `INSERT INTO session_windows(session_id,session_key,created_at,updated_at,transcript_updated_at)
-       VALUES(?,?,?,?,?)`,
-    )
-    .run(params.sessionId, sessionKey, 1, 1, 1);
-  database
-    .prepare(
-      `INSERT INTO transcript_rewrite_watermarks(session_id,generation,updated_at)
-       VALUES(?,?,?)`,
-    )
-    .run(params.sessionId, params.generation, 1);
+  const { sessionId, generation } = params;
+  const sessionKey = `agent:main:${sessionId}`;
+  const insert = (table: string, row: Record<string, SQLInputValue>) => {
+    const columns = Object.keys(row).join(",");
+    const placeholders = Object.keys(row)
+      .map(() => "?")
+      .join(",");
+    database
+      .prepare(`INSERT INTO ${table}(${columns}) VALUES(${placeholders})`)
+      .run(...Object.values(row));
+  };
+  insert("session_nodes", {
+    session_key: sessionKey,
+    current_session_id: sessionId,
+    entry_json: "{}",
+    updated_at: 1,
+  });
+  insert("session_windows", {
+    session_id: sessionId,
+    session_key: sessionKey,
+    created_at: 1,
+    updated_at: 1,
+    transcript_updated_at: 1,
+  });
+  insert("transcript_rewrite_watermarks", { session_id: sessionId, generation, updated_at: 1 });
   for (const [seq, event] of params.events.entries()) {
-    const eventJson = JSON.stringify(event);
-    if (params.legacy) {
-      database
-        .prepare(
-          `INSERT INTO transcript_events(session_id,seq,event_json,created_at)
-         VALUES(?,?,?,?)`,
-        )
-        .run(params.sessionId, seq, eventJson, Number(event.timestamp ?? 1));
-    } else {
-      database
-        .prepare(`INSERT INTO transcript_events
-        (session_id,seq,event_json,created_at,navigation_type,navigation_custom_type,
-         navigation_display,message_role,navigation_last_type,navigation_last_custom_type,navigation_valid)
-        VALUES ($sessionId,$seq,$eventJson,$createdAt,$navigation_type,$navigation_custom_type,
-          $navigation_display,$message_role,$navigation_last_type,$navigation_last_custom_type,$navigation_valid)`)
-        .run({
-          sessionId: params.sessionId,
-          seq,
-          eventJson,
-          createdAt: Number(event.timestamp ?? 1),
-          ...deriveTranscriptPredicateFields(eventJson),
-        });
-    }
+    const event_json = JSON.stringify(event);
+    insert("transcript_events", {
+      session_id: sessionId,
+      seq,
+      event_json,
+      created_at: Number(event.timestamp ?? 1),
+      ...(params.legacy ? {} : deriveTranscriptPredicateFields(event_json)),
+    });
   }
   if (params.reconcile !== false) {
     reconcileSessionTranscriptIndexInTransaction(database, params.sessionId);
