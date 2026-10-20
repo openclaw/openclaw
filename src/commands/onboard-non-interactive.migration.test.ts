@@ -22,6 +22,10 @@ const provider = vi.hoisted(() => ({
   apply: vi.fn(),
 }));
 
+function withSummary<T extends Pick<MigrationPlan, "items">>(plan: T) {
+  return { ...plan, summary: summarizeMigrationItems(plan.items) };
+}
+
 function configPath(): string {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (!stateDir) {
@@ -38,7 +42,6 @@ vi.mock("../config/io.js", () => ({
       valid: true,
       config: config ?? {},
       sourceConfig: config ?? {},
-      raw: config ? `${JSON.stringify(config)}\n` : null,
       hash: config ? "test-config-hash" : undefined,
     };
   },
@@ -71,9 +74,7 @@ import { runNonInteractiveSetup } from "./onboard-non-interactive.js";
 afterEach(() => {
   vi.unstubAllEnvs();
   configStore.clear();
-  ensureWorkspaceAndSessions.mockClear();
-  provider.plan.mockReset();
-  provider.apply.mockReset();
+  [ensureWorkspaceAndSessions, provider.plan, provider.apply].forEach((mock) => mock.mockReset());
 });
 
 it("stages, promotes, and acknowledges an explicit import", async () => {
@@ -85,12 +86,8 @@ it("stages, promotes, and acknowledges an explicit import", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
   provider.plan.mockImplementation(async (ctx): Promise<MigrationPlan> => {
-    const configuredWorkspace = ctx.config.agents?.defaults?.workspace;
-    expect(configuredWorkspace).toBe(workspace);
-    if (!configuredWorkspace) {
-      throw new Error("missing configured workspace");
-    }
-    const target = path.join(configuredWorkspace, "AGENTS.md");
+    expect(ctx.config.agents?.defaults?.workspace).toBe(workspace);
+    const target = path.join(workspace, "AGENTS.md");
     const items: MigrationPlan["items"] = [
       {
         id: "workspace:AGENTS.md",
@@ -101,13 +98,7 @@ it("stages, promotes, and acknowledges an explicit import", async () => {
         target,
       },
     ];
-    return {
-      providerId: "hermes",
-      source,
-      target: path.dirname(target),
-      items,
-      summary: summarizeMigrationItems(items),
-    };
+    return withSummary({ providerId: "hermes", source, target: workspace, items });
   });
   provider.apply.mockImplementation(async (ctx, plan): Promise<MigrationApplyResult> => {
     const item = plan?.items[0];
@@ -117,29 +108,20 @@ it("stages, promotes, and acknowledges an explicit import", async () => {
     await fs.mkdir(path.dirname(item.target), { recursive: true });
     await fs.copyFile(item.source, item.target);
     const items = [{ ...item, status: "migrated" as const }];
-    return {
-      ...plan,
-      items,
-      summary: summarizeMigrationItems(items),
-      reportDir: ctx.reportDir,
-    };
+    return withSummary({ ...plan, items, reportDir: ctx.reportDir });
   });
 
   await runNonInteractiveSetup(
     {
       nonInteractive: true,
-      mode: "local",
       workspace,
-      authChoice: "skip",
-      skipHealth: true,
       importFrom: "hermes",
       importSource: source,
     },
     createThrowingTestRuntime(),
   );
 
-  expect(provider.plan).toHaveBeenCalledOnce();
-  expect(provider.plan).toHaveBeenCalledWith(
+  expect(provider.plan).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ source, includeSecrets: false, overwrite: false }),
   );
   expect(provider.apply).toHaveBeenCalledOnce();

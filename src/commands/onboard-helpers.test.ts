@@ -5,7 +5,6 @@ import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/con
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openUrl } from "../infra/browser-open.js";
-import type { SpawnResult } from "../process/exec-result.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
@@ -31,19 +30,16 @@ const probeAuth = { token: undefined, password: undefined };
 const mocks = vi.hoisted(() => ({
   removeAgentSessions: vi.fn(async () => {}),
   movePathToTrash: vi.fn(async (targetPath: string) => `${targetPath}.trashed`),
-  runCommandWithTimeout: vi.fn<
-    (
-      argv: string[],
-      options?: { timeoutMs?: number; windowsVerbatimArguments?: boolean },
-    ) => Promise<SpawnResult>
-  >(async () => ({
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-  })),
+  runCommandWithTimeout: vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(
+    async () => ({
+      stdout: "",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    }),
+  ),
   pickPrimaryTailnetIPv4: vi.fn<() => string | undefined>(() => undefined),
   resolveAdvertisedLanHostCore: vi.fn<() => Promise<string | null>>(async () => null),
   probeGateway: vi.fn(),
@@ -109,14 +105,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-
-function requireFirstRunCommandCall() {
-  const [call] = mocks.runCommandWithTimeout.mock.calls;
-  if (!call) {
-    throw new Error("expected browser open command call");
-  }
-  return call;
-}
 
 function expectedTrashSourcePath(targetPath: string): string {
   return path.join(fs.realpathSync(path.dirname(targetPath)), path.basename(targetPath));
@@ -281,11 +269,10 @@ describe("openUrl", () => {
       const ok = await openUrl(url);
       expect(ok).toBe(true);
 
-      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
-      const [argv, options] = requireFirstRunCommandCall();
-      expect(argv).toEqual([rundll32, "url.dll,FileProtocolHandler", url]);
-      expect(options?.timeoutMs).toBe(5_000);
-      expect(options?.windowsVerbatimArguments).toBeUndefined();
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
+        [rundll32, "url.dll,FileProtocolHandler", url],
+        { timeoutMs: 5_000 },
+      );
     });
   });
 
@@ -302,26 +289,17 @@ describe("openUrl", () => {
   });
 });
 
-describe("formatControlUiSshHint", () => {
-  it.each([
-    {
-      label: "plain HTTP base path",
-      tlsEnabled: false,
-      basePath: "/control",
-      expectedUrl: "http://localhost:18789/control/",
-    },
-    {
-      label: "HTTPS root",
-      tlsEnabled: true,
-      basePath: undefined,
-      expectedUrl: "https://localhost:18789/",
-    },
-  ])("uses the Gateway transport for $label", ({ tlsEnabled, basePath, expectedUrl }) => {
-    const hint = formatControlUiSshHint({ port: 18789, basePath, tlsEnabled });
-
-    expect(hint).toContain(`Then open:\n${expectedUrl}`);
-  });
-});
+it.each([
+  [false, "/control", "http://localhost:18789/control/"],
+  [true, undefined, "https://localhost:18789/"],
+] as const)(
+  "formats the SSH hint with TLS=%s and base path %s",
+  (tlsEnabled, basePath, expectedUrl) => {
+    expect(formatControlUiSshHint({ port: 18789, basePath, tlsEnabled })).toContain(
+      `Then open:\n${expectedUrl}`,
+    );
+  },
+);
 
 describe("waitForGatewayReachable", () => {
   it("cancels the pending retry timer when readiness is abandoned", async () => {
@@ -362,45 +340,29 @@ describe("waitForGatewayReachable", () => {
   });
 });
 
-describe("summarizeExistingConfig", () => {
-  it("collapses gateway fields into a friendly remote summary", () => {
-    expect(
-      summarizeExistingConfig({
-        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
-        gateway: {
-          mode: "remote",
-          port: 18789,
-          bind: "lan",
-          remote: { url: "ws://192.168.0.202:18789" },
-        },
-      }),
-    ).toBe("Model: openai/gpt-5.4\nGateway: remote via LAN at ws://192.168.0.202:18789");
-  });
-
-  it("does not show a stale remote URL as active for local gateway mode", () => {
-    expect(
-      summarizeExistingConfig({
-        gateway: {
-          mode: "local",
-          port: 18789,
-          bind: "loopback",
-          remote: { url: "ws://192.168.0.202:18789" },
-        },
-      }),
-    ).toBe("Gateway: local via loopback on :18789");
-  });
-
-  it("surfaces missing remote URL instead of falling back to port for remote mode", () => {
-    expect(
-      summarizeExistingConfig({
-        gateway: {
-          mode: "remote",
-          port: 18789,
-          bind: "lan",
-        },
-      }),
-    ).toBe("Gateway: remote via LAN (missing remote URL)");
-  });
+it.each([
+  [
+    "remote",
+    "lan",
+    "ws://192.168.0.202:18789",
+    "openai/gpt-5.4",
+    "Model: openai/gpt-5.4\nGateway: remote via LAN at ws://192.168.0.202:18789",
+  ],
+  [
+    "local",
+    "loopback",
+    "ws://192.168.0.202:18789",
+    undefined,
+    "Gateway: local via loopback on :18789",
+  ],
+  ["remote", "lan", undefined, undefined, "Gateway: remote via LAN (missing remote URL)"],
+] as const)("summarizes %s via %s with remote URL %s", (mode, bind, url, model, expected) => {
+  expect(
+    summarizeExistingConfig({
+      agents: { defaults: { model: model ? { primary: model } : undefined } },
+      gateway: { mode, bind, port: 18789, remote: url ? { url } : undefined },
+    }),
+  ).toBe(expected);
 });
 
 describe("resolveControlUiLinks", () => {
@@ -437,35 +399,19 @@ describe("resolveControlUiLinks", () => {
   });
 });
 
-describe("normalizeGatewayTokenInput", () => {
-  it("trims string input", () => {
-    expect(normalizeGatewayTokenInput("  token  ")).toBe("token");
-  });
-
-  it('rejects literal string coercion artifacts ("undefined"/"null")', () => {
-    expect(normalizeGatewayTokenInput("undefined")).toBe("");
-    expect(normalizeGatewayTokenInput("null")).toBe("");
-  });
+it.each([
+  [["  token  "], "token"],
+  [["undefined", "null"], ""],
+] as const)("normalizes token inputs %j", (inputs, expected) => {
+  inputs.forEach((input) => expect(normalizeGatewayTokenInput(input)).toBe(expected));
 });
 
-describe("validateGatewayPasswordInput", () => {
-  it("requires a non-empty password", () => {
-    expect(validateGatewayPasswordInput("")).toBe("Required");
-    expect(validateGatewayPasswordInput("   ")).toBe("Required");
-  });
-
-  it("rejects literal string coercion artifacts", () => {
-    expect(validateGatewayPasswordInput("undefined")).toBe(
-      'Cannot be the literal string "undefined" or "null"',
-    );
-    expect(validateGatewayPasswordInput("null")).toBe(
-      'Cannot be the literal string "undefined" or "null"',
-    );
-  });
-
-  it("accepts a normal password", () => {
-    expect(validateGatewayPasswordInput(" secret ")).toBeUndefined();
-  });
+it.each([
+  [["", "   "], "Required"],
+  [["undefined", "null"], 'Cannot be the literal string "undefined" or "null"'],
+  [[" secret "], undefined],
+] as const)("validates password inputs %j", (inputs, expected) => {
+  inputs.forEach((input) => expect(validateGatewayPasswordInput(input)).toBe(expected));
 });
 
 describe("probeGatewayReachable", () => {
@@ -505,40 +451,25 @@ describe("probeGatewayReachable", () => {
     expect(await probeGatewayConfiguredModel(localProbe)).toEqual({ kind: "unreachable", detail });
   });
 
-  it("forwards a configured TLS fingerprint to the gateway probe", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({ ok: true, configSnapshot: null });
-
-    await expect(
-      probeGatewayReachable({
+  it.each([
+    ["TLS fingerprint", { tlsFingerprint: "sha256:11:22:33:44" }, 1500],
+    ["preauth handshake budget", { preauthHandshakeTimeoutMs: 30_000 }, 30_000],
+  ] as const)(
+    "forwards the configured %s to the Gateway probe",
+    async (_name, options, timeoutMs) => {
+      mocks.probeGateway.mockResolvedValueOnce({ ok: true, configSnapshot: null });
+      await expect(probeGatewayReachable({ url: remoteUrl, ...options })).resolves.toEqual({
+        ok: true,
+      });
+      expect(mocks.probeGateway).toHaveBeenCalledWith({
         url: remoteUrl,
-        tlsFingerprint: "sha256:11:22:33:44",
-      }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(mocks.probeGateway).toHaveBeenCalledWith({
-      url: remoteUrl,
-      timeoutMs: 1500,
-      auth: probeAuth,
-      tlsFingerprint: "sha256:11:22:33:44",
-      detailLevel: "none",
-    });
-  });
-
-  it("lets a configured preauth handshake timeout widen the default probe budget", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({ ok: true, configSnapshot: null });
-
-    await expect(
-      probeGatewayReachable({ url: remoteUrl, preauthHandshakeTimeoutMs: 30_000 }),
-    ).resolves.toEqual({ ok: true });
-
-    expect(mocks.probeGateway).toHaveBeenCalledWith({
-      url: remoteUrl,
-      timeoutMs: 30_000,
-      auth: probeAuth,
-      preauthHandshakeTimeoutMs: 30_000,
-      detailLevel: "none",
-    });
-  });
+        timeoutMs,
+        auth: probeAuth,
+        ...options,
+        detailLevel: "none",
+      });
+    },
+  );
 
   it("classifies configured and missing default-agent models from config-only probes", async () => {
     mocks.probeGateway
@@ -571,59 +502,50 @@ describe("probeGatewayReachable", () => {
     );
   });
 
-  it("keeps typed pre-Hello Gateway auth failures on the reachable path", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      error: "device pairing required",
-      connectErrorDetails: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
-      gatewayReached: true,
-    });
-
-    await expect(probeGatewayConfiguredModel(localProbe)).resolves.toEqual({
-      kind: "reachable-unverified",
-      detail: "device pairing required",
-    });
-  });
-
-  it("does not trust an unrecognized connect error code as Gateway evidence", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: false,
-      error: "foreign protocol error",
-      connectErrorDetails: { code: "NOT_AN_OPENCLAW_CONNECT_ERROR" },
-    });
-
-    await expect(probeGatewayConfiguredModel(localProbe)).resolves.toEqual({
-      kind: "unreachable",
-      detail: "foreign protocol error",
-    });
-  });
-
-  it("does not trust a config-shaped response without Gateway handshake evidence", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: true,
-      error: null,
-      server: { version: "foreign-server", connId: null },
-      configSnapshot: {
-        valid: true,
-        config: { agents: { defaults: { model: "openai/foreign-model" } } },
+  it.each([
+    [
+      "typed pairing failure",
+      {
+        ok: false,
+        gatewayReached: true,
+        error: "device pairing required",
+        connectErrorDetails: { code: ConnectErrorDetailCodes.PAIRING_REQUIRED },
       },
-    });
-
-    await expect(probeGatewayConfiguredModel(localProbe)).resolves.toEqual({
-      kind: "unreachable",
-    });
-  });
-
-  it("treats an invalid config snapshot as reachable but unverified", async () => {
-    mocks.probeGateway.mockResolvedValueOnce({
-      ok: true,
-      gatewayReached: true,
-      configSnapshot: { valid: false },
-    });
-
-    await expect(probeGatewayConfiguredModel(localProbe)).resolves.toEqual({
-      kind: "reachable-unverified",
-      detail: "Gateway returned an invalid config snapshot",
-    });
+      { kind: "reachable-unverified", detail: "device pairing required" },
+    ],
+    [
+      "unrecognized connect error",
+      {
+        ok: false,
+        error: "foreign protocol error",
+        connectErrorDetails: { code: "NOT_AN_OPENCLAW_CONNECT_ERROR" },
+      },
+      { kind: "unreachable", detail: "foreign protocol error" },
+    ],
+    [
+      "config without handshake evidence",
+      {
+        ok: true,
+        error: null,
+        server: { version: "foreign-server", connId: null },
+        configSnapshot: {
+          valid: true,
+          config: { agents: { defaults: { model: "openai/foreign-model" } } },
+        },
+      },
+      { kind: "unreachable" },
+    ],
+    [
+      "invalid config",
+      {
+        ok: true,
+        gatewayReached: true,
+        configSnapshot: { valid: false },
+      },
+      { kind: "reachable-unverified", detail: "Gateway returned an invalid config snapshot" },
+    ],
+  ])("classifies %s", async (_name, result, expected) => {
+    mocks.probeGateway.mockResolvedValueOnce(result);
+    await expect(probeGatewayConfiguredModel(localProbe)).resolves.toEqual(expected);
   });
 });

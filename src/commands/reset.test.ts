@@ -61,20 +61,13 @@ describe("resetCommand", () => {
     expect(resolveCleanupPlanForRemoval).toHaveBeenCalledOnce();
   });
 
-  it("recommends creating a backup before state-destructive reset scopes", async () => {
-    await run("config+creds+sessions", true);
-
-    expect(cleanupCommandLogMessages(runtime)).toContainEqual(
-      expect.stringContaining("openclaw backup create"),
-    );
-  });
-
-  it("does not recommend backup for config-only reset", async () => {
-    await run("config", true);
-
-    expect(cleanupCommandLogMessages(runtime)).not.toContainEqual(
-      expect.stringContaining("openclaw backup create"),
-    );
+  it.each([
+    ["config+creds+sessions", true],
+    ["config", false],
+  ] as const)("recommends backup for %s: %s", async (scope, expected) => {
+    await run(scope, true);
+    const logs = cleanupCommandLogMessages(runtime);
+    expect(logs.some((message) => message.includes("openclaw backup create"))).toBe(expected);
   });
 
   it("removes workspace rows when full state removal fails", async () => {
