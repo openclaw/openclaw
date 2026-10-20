@@ -182,7 +182,9 @@ export function createMeetingDurableTranscriptBridge<
               );
             } catch (error) {
               // The runner refuses new work synchronously once the plugin stops admitting it.
-              tick = Promise.reject(error);
+              reportCaptureError(session.id, error);
+              active.polling = false;
+              return;
             }
             void tick
               .catch((error: unknown) => reportCaptureError(session.id, error))
