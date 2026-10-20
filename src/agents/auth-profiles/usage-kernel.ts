@@ -97,7 +97,7 @@ export function recordAuthProfileUsageInDatabase(
   if (stateChanged) {
     writeAuthProfileJsonCell(database, "state", databaseKind, statePayload);
   }
-  receipt.result = { previous, next, now };
+  receipt.result = next;
   receipt.publication.stateChanged = stateChanged;
   receipt.publication.selectionChanged = selectionChanged;
   return receipt;
