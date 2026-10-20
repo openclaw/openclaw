@@ -25,20 +25,15 @@ vi.mock(s3ModulePath, async (importOriginal) => ({
   },
 }));
 
-it.each([false, true])(
+it.for([false, true])(
   "fences multipart publication when authority is lost (cleanup fails: %s)",
-  async (cleanupFails) => {
-    const marker = JSON.stringify({
-      version: 1,
-      locationId: "11111111-1111-4111-8111-111111111111",
-      createdAt: 0,
-      encryption: "none",
-    });
+  async (cleanupFails, { onTestFinished }) => {
+    const locationId = "11111111-1111-4111-8111-111111111111";
+    const marker = JSON.stringify({ version: 1, locationId, createdAt: 0, encryption: "none" });
     const markerBytes = Buffer.byteLength(marker);
     const commands: string[] = [];
     const activeUploads = new Set<string>();
-    send.mockImplementation(async (command) => {
-      const name = command.constructor.name;
+    send.mockImplementation(async ({ constructor: { name }, input }) => {
       commands.push(name);
       if (name === "HeadObjectCommand") {
         return { ETag: '"marker"', ContentLength: markerBytes };
@@ -63,7 +58,7 @@ it.each([false, true])(
         if (cleanupFails) {
           throw new Error("synthetic-private-cleanup-detail");
         }
-        activeUploads.delete(command.input.UploadId ?? "");
+        activeUploads.delete(input.UploadId ?? "");
       }
       return {};
     });
@@ -87,36 +82,33 @@ it.each([false, true])(
         ]),
       },
     });
+    onTestFinished(() => location.close());
     let owner = "installation-a";
     async function* archive() {
       yield Buffer.alloc(64 * 1024 * 1024);
       owner = "installation-b";
     }
-    try {
-      const failure = await location
-        .putObject("backup.tar.gz", archive(), {
-          precondition: async () => {
-            if (owner !== "installation-a") {
-              throw new Error("Backup namespace belongs to another OpenClaw installation.");
-            }
-          },
-        })
-        .catch((error: unknown) => error);
-      expect(failure).toBeInstanceOf(Error);
-      expect(String(failure)).toContain("belongs to another OpenClaw installation");
-      if (cleanupFails) {
-        expect(String(failure)).toContain(
-          "Multipart cleanup also failed; remove incomplete uploads in bucket test-bucket.",
-        );
-      }
-      expect(String(failure)).not.toContain("synthetic-private-cleanup-detail");
-      expect(commands).toContain("UploadPartCommand");
-      expect(commands).toContain("AbortMultipartUploadCommand");
-      expect(commands).not.toContain("CompleteMultipartUploadCommand");
-      expect(commands).not.toContain("PutObjectCommand");
-      expect(activeUploads.size).toBe(cleanupFails ? 1 : 0);
-    } finally {
-      await location.close();
+    const failure = await location
+      .putObject("backup.tar.gz", archive(), {
+        precondition: async () => {
+          if (owner !== "installation-a") {
+            throw new Error("Backup namespace belongs to another OpenClaw installation.");
+          }
+        },
+      })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toContain("belongs to another OpenClaw installation");
+    if (cleanupFails) {
+      expect(String(failure)).toContain(
+        "Multipart cleanup also failed; remove incomplete uploads in bucket test-bucket.",
+      );
     }
+    expect(String(failure)).not.toContain("synthetic-private-cleanup-detail");
+    expect(commands).toContain("UploadPartCommand");
+    expect(commands).toContain("AbortMultipartUploadCommand");
+    expect(commands).not.toContain("CompleteMultipartUploadCommand");
+    expect(commands).not.toContain("PutObjectCommand");
+    expect(activeUploads.size).toBe(cleanupFails ? 1 : 0);
   },
 );

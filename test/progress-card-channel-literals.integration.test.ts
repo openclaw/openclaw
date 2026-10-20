@@ -29,10 +29,8 @@ const cases = [
   literal("A &lt;b&gt;B&lt;/b&gt; C", "A <b>B</b> C", "A &lt;b&gt;B&lt;/b&gt; C"),
 ];
 
-async function runRegisteredCard(
-  markdown: string,
-  pushPlanProgress: ReturnType<typeof createChannelProgressDraftCompositor>["pushPlanProgress"],
-) {
+type PushPlan = ReturnType<typeof createChannelProgressDraftCompositor>["pushPlanProgress"];
+async function runRegisteredCard(markdown: string, pushPlanProgress: PushPlan) {
   gatewayCall.mockResolvedValue({
     card: { sessionKey: "agent:main:literal-test", revision: 1, updatedAt: 1, markdown },
   });
@@ -46,30 +44,20 @@ async function runRegisteredCard(
     sessionPersistence: "detached",
     onAgentEvent: async (event) => {
       if (event.stream === "plan") {
-        await pushPlanProgress(normalizeAgentPlanSteps(event.data.steps), {
-          explanation:
-            typeof event.data.explanation === "string" ? event.data.explanation : undefined,
-          explanationFormat: event.data.explanationFormat === "plain" ? "plain" : undefined,
+        const { steps, explanation, explanationFormat } = event.data;
+        await pushPlanProgress(normalizeAgentPlanSteps(steps), {
+          explanation: typeof explanation === "string" ? explanation : undefined,
+          explanationFormat: explanationFormat === "plain" ? "plain" : undefined,
         });
       }
     },
   });
+  const toolEvent = { toolName: tool.name, toolCallId: "card-1" };
   try {
-    emit({
-      type: "tool_execution_start",
-      toolName: tool.name,
-      toolCallId: "card-1",
-      args: { markdown },
-    });
+    emit({ type: "tool_execution_start", ...toolEvent, args: { markdown } });
     await subscription.waitForPendingEvents();
     const result = await tool.execute("card-1", { markdown });
-    emit({
-      type: "tool_execution_end",
-      toolName: tool.name,
-      toolCallId: "card-1",
-      result,
-      isError: false,
-    });
+    emit({ type: "tool_execution_end", ...toolEvent, result, isError: false });
     await subscription.waitForPendingEvents();
     expect(gatewayCall).toHaveBeenCalledWith(
       "progressCard.put",
@@ -80,9 +68,9 @@ async function runRegisteredCard(
   }
 }
 
-it.each(cases)(
+it.for(cases)(
   "keeps Discord code and decoded text literal: $markdown",
-  async ({ markdown, text }) => {
+  async ({ markdown, text }, { onTestFinished }) => {
     const messages: string[] = [];
     const rest = new RequestClient("test-token", {
       queueRequests: false,
@@ -111,62 +99,50 @@ it.each(cases)(
       replyReference: { peek: () => undefined },
       log: () => {},
     });
-    try {
-      await runRegisteredCard(markdown, controller.pushPlanProgress);
-      await controller.flush();
-      expect(messages).toHaveLength(1);
-      const rendered = markdownToIR(messages[0] ?? "", { autolink: true, linkify: true });
-      const { text: plain, styles, links } = rendered;
-      expect({ text: plain.trim(), styles, links }).toEqual({ text, styles: [], links: [] });
-      expect(messages[0]).not.toContain("https://");
-    } finally {
-      await controller.cleanup();
-    }
+    onTestFinished(() => controller.cleanup());
+    await runRegisteredCard(markdown, controller.pushPlanProgress);
+    await controller.flush();
+    expect(messages).toHaveLength(1);
+    const rendered = markdownToIR(messages[0] ?? "", { autolink: true, linkify: true });
+    const { text: plain, styles, links } = rendered;
+    expect({ text: plain.trim(), styles, links }).toEqual({ text, styles: [], links: [] });
+    expect(messages[0]).not.toContain("https://");
   },
 );
 
-it.each(
+it.for(
   cases.flatMap(({ markdown, text, html }) =>
     [false, true].map((richMessages) => ({ markdown, text, html, richMessages })),
   ),
 )(
   "keeps Telegram notes literal with headline styling (rich=$richMessages): $markdown",
-  async ({ markdown, text, html, richMessages }) => {
+  async ({ markdown, text, html, richMessages }, { onTestFinished }) => {
     const previews: ReturnType<typeof renderTelegramProgressDraftPreview>[] = [];
+    const options = { richMessages, toolProgress: true, maxLines: 8, maxLineChars: 240 };
     const progress = createChannelProgressDraftCompositor({
       entry: { streaming: { mode: "progress", progress: { label: false } } },
       mode: "progress",
       active: true,
       seed: "literal-test",
       update: (_text, { snapshot }) => {
-        previews.push(
-          renderTelegramProgressDraftPreview(snapshot, {
-            richMessages,
-            toolProgress: true,
-            maxLines: 8,
-            maxLineChars: 240,
-          }),
-        );
+        previews.push(renderTelegramProgressDraftPreview(snapshot, options));
         return true;
       },
     });
-    try {
-      await runRegisteredCard(markdown, progress.pushPlanProgress.bind(progress));
-      expect(previews).toHaveLength(1);
-      const preview = previews[0];
-      if (richMessages) {
-        expect(preview?.text).toBe(text);
-        expect(preview?.richMessage).toEqual({
-          blocks: [{ type: "paragraph", text: { type: "bold", text } }],
-          skip_entity_detection: true,
-        });
-      } else {
-        expect(preview?.text).toBe(`<b>${html}</b>`);
-        expect(telegramHtmlToPlainTextFallback(preview?.text ?? "")).toBe(text);
-        expect(preview?.text).not.toContain("href=");
-      }
-    } finally {
-      progress.cancel();
+    onTestFinished(() => progress.cancel());
+    await runRegisteredCard(markdown, progress.pushPlanProgress.bind(progress));
+    expect(previews).toHaveLength(1);
+    const preview = previews[0];
+    if (richMessages) {
+      expect(preview?.text).toBe(text);
+      expect(preview?.richMessage).toEqual({
+        blocks: [{ type: "paragraph", text: { type: "bold", text } }],
+        skip_entity_detection: true,
+      });
+    } else {
+      expect(preview?.text).toBe(`<b>${html}</b>`);
+      expect(telegramHtmlToPlainTextFallback(preview?.text ?? "")).toBe(text);
+      expect(preview?.text).not.toContain("href=");
     }
   },
 );
