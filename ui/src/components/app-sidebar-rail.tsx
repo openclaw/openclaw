@@ -77,6 +77,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
     <nav
       class="sidebar-rail"
       aria-label={t("nav.pages")}
+      data-tooltip-placement="right"
       onMouseDown={beginNativeWindowDragFromTopInset}
     >
       {renderSidebarAgentCard(host)}
