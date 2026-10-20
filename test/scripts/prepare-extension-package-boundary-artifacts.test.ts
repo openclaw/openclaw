@@ -125,34 +125,35 @@ function waitForReady(
 // and the terminal compiler workload. Retry executes the real native compiler.
 function createPreparationCli(workload = "", preparationCheckpoint = "") {
   const root = fs.realpathSync.native(createTempDir("openclaw-preparation-cli-"));
-  const write = (relative: string, content: string) => {
+  const write = (relative: string, content: string | object) => {
     const target = path.join(root, relative);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, content);
+    fs.writeFileSync(target, typeof content === "string" ? content : JSON.stringify(content));
+  };
+  const wrapScript = (name: string, content: string) => {
+    fs.renameSync(
+      path.join(root, `scripts/${name}.mts`),
+      path.join(root, `scripts/${name}.actual.mts`),
+    );
+    write(`scripts/${name}.mts`, content);
   };
   fs.mkdirSync(path.join(root, ".git"));
   write("package.json", '{"name":"openclaw","type":"module"}');
   write("pnpm-workspace.yaml", "packages: []\n");
   write("src/plugin-sdk/qa-channel-protocol.ts", "export const value = 1;\n");
-  write(
-    "tsconfig.json",
-    JSON.stringify({
-      compilerOptions: {
-        target: "es2023",
-        module: "nodenext",
-        lib: ["es5"],
-        types: [],
-        skipLibCheck: true,
-      },
-    }),
-  );
-  write(
-    "packages/plugin-sdk/tsconfig.json",
-    JSON.stringify({
-      extends: "../../tsconfig.json",
-      include: ["../../src/plugin-sdk/**/*.ts"],
-    }),
-  );
+  write("tsconfig.json", {
+    compilerOptions: {
+      target: "es2023",
+      module: "nodenext",
+      lib: ["es5"],
+      types: [],
+      skipLibCheck: true,
+    },
+  });
+  write("packages/plugin-sdk/tsconfig.json", {
+    extends: "../../tsconfig.json",
+    include: ["../../src/plugin-sdk/**/*.ts"],
+  });
   installDistArtifactScripts(
     root,
     [
@@ -164,12 +165,8 @@ function createPreparationCli(workload = "", preparationCheckpoint = "") {
     { dependencies: ["tsx", "@openclaw/fs-safe", "@openclaw/proc-safe"] },
   );
   write("src/shared/deferred.ts", fs.readFileSync("src/shared/deferred.ts", "utf8"));
-  fs.renameSync(
-    path.join(root, "scripts/generate-kysely-types.mts"),
-    path.join(root, "scripts/generate-kysely-types.actual.mts"),
-  );
-  write(
-    "scripts/generate-kysely-types.mts",
+  wrapScript(
+    "generate-kysely-types",
     `
 import fs from "node:fs";
 import net from "node:net";
@@ -182,12 +179,8 @@ export async function ensureKyselyTypes(...args) {
 }
 `,
   );
-  fs.renameSync(
-    path.join(root, "scripts/compile-extension-boundary.mts"),
-    path.join(root, "scripts/compile-extension-boundary.actual.mts"),
-  );
-  write(
-    "scripts/compile-extension-boundary.mts",
+  wrapScript(
+    "compile-extension-boundary",
     `
 import fs from "node:fs";
 import { spawn } from "node:child_process";
@@ -218,12 +211,11 @@ process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runManag
       stdio: ["ignore", "pipe", "pipe"],
     });
     let output = "";
-    child.stdout.on("data", (chunk) => {
-      output += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      output += chunk;
-    });
+    for (const stream of [child.stdout, child.stderr]) {
+      stream.on("data", (chunk) => {
+        output += chunk;
+      });
+    }
     const closed = fixture.track(once(child, "close"));
     processes.push({ child, closed });
     return { child, closed, output: () => output };
@@ -270,52 +262,6 @@ describe("prepare-extension-package-boundary-artifacts", () => {
     expect(output).toBe("[boundary] first line\n[boundary] second line\n[boundary] third");
   });
 
-  it.runIf(process.platform !== "win32")(
-    "force-kills aborted sibling step process groups",
-    ({ signal }) =>
-      fixture.run(async () => {
-        const rootDir = createTempDir("openclaw-boundary-abort-group-");
-        const descendantPidPath = path.join(rootDir, "descendant.pid");
-        const failPath = path.join(rootDir, "fail");
-        const ready = observeFixtureLine("ready");
-        let descendantPid = 0;
-        const parentScript = spawnDescendant(
-          stubbornDescendant(descendantPidPath),
-          "spawn",
-          "process.on('SIGTERM', () => process.exit(0));",
-        );
-
-        const command = runNodeStepsInParallel([
-          failOnFile(failPath),
-          {
-            label: "abort-group-prep",
-            args: ["--eval", parentScript],
-            abortKillGraceMs: 100,
-            timeoutMs: 60_000,
-            onStdoutLine: ready.onStdoutLine,
-          },
-        ]);
-        const outcome = command.catch((error: unknown) => error);
-        const expectedFailure = fixture.track(
-          expect(command).rejects.toThrow("delayed-fail failed with exit code 2"),
-        );
-        try {
-          await waitForReady(ready.promise, outcome, descendantPidPath, signal);
-          descendantPid = readPid(descendantPidPath);
-          fs.writeFileSync(failPath, "fail");
-
-          await withinTest(expectedFailure, signal);
-          expect(isProcessAlive(descendantPid)).toBe(false);
-        } finally {
-          await fixture.verifyCleanup(async () => {
-            fs.writeFileSync(failPath, "fail");
-            await outcome;
-            await rescueDescendant(descendantPidPath, signal, descendantPid);
-          });
-        }
-      }),
-  );
-
   it
     .runIf(process.platform !== "win32")
     .for(["normal", "observation failure", "cancellation", "cleanup write failure"])(
@@ -325,8 +271,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       const signal = AbortSignal.any([contextSignal, controller.signal]);
       const observationFailure = new Error("drain observation failed");
       const originalNow = Date.now;
-      // Only the injected fixture-write failure owns a separate namespace.
-      // Real step claims and their cleanup failures still belong to the outer fixture.
+      // Isolate the injected write failure; real cleanup claims stay with the outer fixture.
       const retainedOwner =
         mode === "cleanup write failure"
           ? createVitestResourceOwner(createTempDir("boundary-cleanup-owner-"))
@@ -393,8 +338,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         try {
           await waitForReady(ready.promise, outcome, readyPath, signal);
           descendantPid = readPid(readyPath);
-          // Hold the supervisor's grace clock, not the real child's cleanup timer.
-          // Separate force-kill tests cover expiry; this case proves graceful drain.
+          // Freeze the supervisor's grace clock, not the child's real cleanup timer.
           clock.mockReturnValue(Date.now());
           fs.writeFileSync(failPath, "fail");
           if (mode !== "normal") {
@@ -409,18 +353,15 @@ describe("prepare-extension-package-boundary-artifacts", () => {
             }
           }
           if (mode !== "cleanup write failure") {
-            // The managed outcome joins the group after the leaf writes its drain marker.
             await withinTest(outcome, signal);
             expect(fs.readFileSync(drainedPath, "utf8")).toBe("drained");
           }
         } finally {
-          // Cleanup needs the supervisor's real deadline, including when a gate
-          // write fails or the test is canceled before observing child drainage.
+          // Unwind the grace clock even when observation or the cleanup write fails.
           clock.mockRestore();
           signal.removeEventListener("abort", abort);
           if (mode !== "normal") {
-            // Diagnose the frozen-clock unwind before rescuing the real child.
-            // The repaired finalizer must need no help on this next event-loop turn.
+            // Observe restoration before the next turn can rescue a still-frozen clock.
             rescue = new Promise<void>((resolve) => {
               setImmediate(() => {
                 requiredRescue = Date.now !== originalNow;
@@ -443,7 +384,7 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         }
       });
       const error = await driver.catch((failure: unknown) => failure);
-      // The diagnostic rescue never substitutes for an actual command/group join.
+      // Rescue observation cannot substitute for the actual group join.
       await rescue;
       await outcome;
       expect(isProcessAlive(descendantPid)).toBe(false);
@@ -465,7 +406,6 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       } else {
         expect(error).toBe(observationFailure);
       }
-      expect(command).toBeDefined();
       await expect(command).rejects.toThrow("delayed-fail failed with exit code 2");
       expect(requiredRescue, JSON.stringify({ heldAtRescue, joined })).toBe(false);
     },
@@ -482,55 +422,84 @@ describe("prepare-extension-package-boundary-artifacts", () => {
       ).resolves.toBeUndefined();
     }));
 
-  it.runIf(process.platform !== "win32").for(["spawn", "execFileSync"])(
-    "joins timed-out prep groups launched with %s",
-    (launch, { signal }) =>
-      fixture.run(async () => {
-        const rootDir = createTempDir("openclaw-boundary-timeout-group-");
-        const descendantPidPath = path.join(rootDir, "descendant.pid");
-        const ready = observeFixtureLine("ready");
-        let descendantPid = 0;
-        const nativeSetTimeout = globalThis.setTimeout;
-        let triggerStepTimeout: (() => void) | undefined;
-        const setTimeoutSpy = vi
-          .spyOn(globalThis, "setTimeout")
-          .mockImplementation((callback, timeout, ...args) => {
-            if (timeout === 2_000 && !triggerStepTimeout) {
-              triggerStepTimeout = () => callback(...args);
-              return nativeSetTimeout(() => undefined, 60_000);
-            }
-            return nativeSetTimeout(callback, timeout, ...args);
-          });
-        const parentScript = spawnDescendant(stubbornDescendant(descendantPidPath), launch);
-
-        const abortController = new AbortController();
-        const command = runNodeStep("hung-group-prep", ["--eval", parentScript], 2_000, {
-          abortController,
-          onStdoutLine: ready.onStdoutLine,
-        });
-        const expectedFailure = fixture.track(
-          expect(command).rejects.toThrow("hung-group-prep timed out after 2000ms"),
-        );
-        const outcome = command.catch((error: unknown) => error);
-        try {
-          // The leaf publishes readiness after installing its signal handler. The
-          // synchronous case matches the native CLI's fallback when execve is absent.
-          await waitForReady(ready.promise, outcome, descendantPidPath, signal);
-          descendantPid = readPid(descendantPidPath);
+  it.runIf(process.platform !== "win32").for([
+    { reason: "sibling", launch: "spawn" },
+    { reason: "timeout", launch: "spawn" },
+    { reason: "timeout", launch: "execFileSync" },
+  ])("joins stubborn prep descendants: %j", ({ reason, launch }, { signal }) =>
+    fixture.run(async () => {
+      const rootDir = createTempDir("openclaw-boundary-timeout-group-");
+      const descendantPidPath = path.join(rootDir, "descendant.pid");
+      const failPath = path.join(rootDir, "fail");
+      const ready = observeFixtureLine("ready");
+      let descendantPid = 0;
+      const nativeSetTimeout = globalThis.setTimeout;
+      let triggerStepTimeout: (() => void) | undefined;
+      const setTimeoutSpy =
+        reason === "timeout"
+          ? vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, timeout, ...args) => {
+              if (timeout === 2_000 && !triggerStepTimeout) {
+                triggerStepTimeout = () => callback(...args);
+                return nativeSetTimeout(() => undefined, 60_000);
+              }
+              return nativeSetTimeout(callback, timeout, ...args);
+            })
+          : undefined;
+      const parentScript = spawnDescendant(
+        stubbornDescendant(descendantPidPath),
+        launch,
+        reason === "sibling" ? "process.on('SIGTERM', () => process.exit(0));" : "",
+      );
+      const abortController = new AbortController();
+      const command =
+        reason === "sibling"
+          ? runNodeStepsInParallel([
+              failOnFile(failPath),
+              {
+                label: "abort-group-prep",
+                args: ["--eval", parentScript],
+                abortKillGraceMs: 100,
+                timeoutMs: 60_000,
+                onStdoutLine: ready.onStdoutLine,
+              },
+            ])
+          : runNodeStep("hung-group-prep", ["--eval", parentScript], 2_000, {
+              abortController,
+              onStdoutLine: ready.onStdoutLine,
+            });
+      const expectedFailure = fixture.track(
+        expect(command).rejects.toThrow(
+          reason === "sibling"
+            ? "delayed-fail failed with exit code 2"
+            : "hung-group-prep timed out after 2000ms",
+        ),
+      );
+      const outcome = command.catch((error: unknown) => error);
+      try {
+        // Readiness follows handler installation, including synchronous native-CLI fallback.
+        await waitForReady(ready.promise, outcome, descendantPidPath, signal);
+        descendantPid = readPid(descendantPidPath);
+        if (reason === "sibling") {
+          fs.writeFileSync(failPath, "fail");
+        } else {
           expect(triggerStepTimeout).toBeDefined();
           triggerStepTimeout?.();
-
-          await withinTest(expectedFailure, signal);
-          expect(isProcessAlive(descendantPid)).toBe(false);
-        } finally {
-          await fixture.verifyCleanup(async () => {
-            abortController.abort();
-            await outcome;
-            setTimeoutSpy.mockRestore();
-            await rescueDescendant(descendantPidPath, signal, descendantPid);
-          });
         }
-      }),
+
+        await withinTest(expectedFailure, signal);
+        expect(isProcessAlive(descendantPid)).toBe(false);
+      } finally {
+        await fixture.verifyCleanup(async () => {
+          abortController.abort();
+          if (reason === "sibling") {
+            fs.writeFileSync(failPath, "fail");
+          }
+          await outcome;
+          setTimeoutSpy?.mockRestore();
+          await rescueDescendant(descendantPidPath, signal, descendantPid);
+        });
+      }
+    }),
   );
 
   it.runIf(process.platform !== "win32").for(["SIGINT", "SIGTERM"] as const)(
@@ -883,25 +852,20 @@ child.once("message", () => process.exit(${exitCode}));
   it("sizes serial CI declaration compilers to the constrained runner", () => {
     const gib = 1024 ** 3;
     const host = { logicalCpuCount: 4, totalMemoryBytes: 15 * gib, memoryCapacityBytes: 15 * gib };
-    const pick = (env: NodeJS.ProcessEnv) => {
-      const { GOMAXPROCS, GOGC, GOMEMLIMIT } = env;
-      return { GOMAXPROCS, GOGC, GOMEMLIMIT };
-    };
-
-    expect(pick(resolveDeclarationCompilerEnv({ CI: "true" }, host))).toEqual({
+    const expected = {
       GOMAXPROCS: "4",
       GOGC: "100",
       GOMEMLIMIT: "11520MiB",
-    });
-    expect(pick(resolveDeclarationCompilerEnv({ CI: "true", GOMAXPROCS: "3" }, host))).toEqual({
+    };
+    expect(resolveDeclarationCompilerEnv({ CI: "true" }, host)).toMatchObject(expected);
+    expect(resolveDeclarationCompilerEnv({ CI: "true", GOMAXPROCS: "3" }, host)).toMatchObject({
+      ...expected,
       GOMAXPROCS: "3",
-      GOGC: "100",
-      GOMEMLIMIT: "11520MiB",
     });
     // Unknown cgroup ownership keeps the conservative constrained-runner limits.
     expect(
-      pick(resolveDeclarationCompilerEnv({ CI: "true" }, { ...host, memoryCapacityBytes: null })),
-    ).toEqual({ GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" });
+      resolveDeclarationCompilerEnv({ CI: "true" }, { ...host, memoryCapacityBytes: null }),
+    ).toMatchObject({ GOMAXPROCS: "2", GOGC: "30", GOMEMLIMIT: "3GiB" });
   });
 
   it("gives cold root shim generation macOS runner headroom", () => {

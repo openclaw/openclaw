@@ -34,6 +34,7 @@ import {
   validatePrepublishPluginRegistryArtifact,
 } from "../../scripts/prepublish-plugin-registry-artifact.mjs";
 import { resolveExtendedStablePackage } from "../../src/infra/update-check.ts";
+import { listenLoopback, respondJson } from "../helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeCombinedBuildFixture } from "./prepublish-plugin-registry-build.fixture.js";
 
@@ -57,6 +58,12 @@ const fixtureCommitArgs = [
   "test: seed release source",
 ];
 const execFileAsync = promisify(execFile);
+const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+const registryPackage = (name: string, version = VERSION, tarballPath = "/tmp/package.tgz") => ({
+  name,
+  version,
+  tarballPath,
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -68,6 +75,12 @@ function writeJson(file: string, value: unknown) {
 
 function sha256(file: string): string {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
+
+function artifactEntry(root: string, artifactDir: string, name: string, tarball: string) {
+  const tarballPath = path.join(artifactDir, tarball);
+  writeFixtureTarball(root, tarballPath, name);
+  return { name, version: VERSION, tarball, sha256: sha256(tarballPath) };
 }
 
 function writeFixtureTarball(root: string, tarballPath: string, name: string, version = VERSION) {
@@ -90,21 +103,13 @@ function fixture(packageName = PACKAGE_NAME) {
   const artifactDir = path.join(root, "artifact");
   mkdirSync(artifactDir);
   const tarballPath = path.join(artifactDir, TARBALL);
-  writeFixtureTarball(root, tarballPath, packageName);
   const manifestPath = path.join(artifactDir, PREPUBLISH_PLUGIN_REGISTRY_MANIFEST);
   const manifest = {
     schema: "openclaw.prepublish-plugin-registry/v1",
     schemaVersion: 1,
     sourceSha: SOURCE_SHA,
     candidateVersion: VERSION,
-    packages: [
-      {
-        name: packageName,
-        version: VERSION,
-        tarball: TARBALL,
-        sha256: sha256(tarballPath),
-      },
-    ],
+    packages: [artifactEntry(root, artifactDir, packageName, TARBALL)],
   };
   const writeManifest = () => writeJson(manifestPath, manifest);
   writeManifest();
@@ -130,18 +135,27 @@ function firstPackage(paths: ReturnType<typeof fixture>) {
 }
 
 function addCompanionPackage(paths: ReturnType<typeof fixture>) {
-  const name = "@openclaw/feishu";
-  const tarball = "openclaw-feishu-2026.8.1-beta.1.tgz";
   const archiveRoot = path.join(path.dirname(paths.artifactDir), "feishu-package");
-  const tarballPath = path.join(paths.artifactDir, tarball);
-  writeFixtureTarball(archiveRoot, tarballPath, name);
-  paths.manifest.packages.push({
-    name,
-    version: VERSION,
-    tarball,
-    sha256: sha256(tarballPath),
-  });
+  paths.manifest.packages.push(
+    artifactEntry(
+      archiveRoot,
+      paths.artifactDir,
+      "@openclaw/feishu",
+      "openclaw-feishu-2026.8.1-beta.1.tgz",
+    ),
+  );
   paths.writeManifest();
+}
+
+function crossOsTuple(paths: ReturnType<typeof fixture>) {
+  const { expectedCandidateVersion, expectedManifestSha256, expectedSourceSha, ...rest } =
+    immutableTuple(paths);
+  return {
+    ...rest,
+    candidateVersion: expectedCandidateVersion,
+    manifestSha256: expectedManifestSha256,
+    sourceSha: expectedSourceSha,
+  };
 }
 
 function cliFixture(packageNames = [PACKAGE_NAME], combinedBuild = false) {
@@ -425,13 +439,8 @@ describe("prepublish plugin registry artifact", () => {
     addCompanionPackage(paths);
 
     expect(
-      resolveCrossOsPackageSet({
-        artifactDir: paths.artifactDir,
-        candidateVersion: VERSION,
-        manifestSha256: sha256(paths.manifestPath),
-        requiredPackages: ["@openclaw/feishu"],
-        sourceSha: SOURCE_SHA,
-      }).companions,
+      resolveCrossOsPackageSet({ ...crossOsTuple(paths), requiredPackages: ["@openclaw/feishu"] })
+        .companions,
     ).toEqual([
       {
         name: "@openclaw/feishu",
@@ -441,22 +450,14 @@ describe("prepublish plugin registry artifact", () => {
   });
 
   it("publishes the candidate root under the extended-stable registry tag", () => {
+    const tagged = (version: string) =>
+      resolveCrossOsRegistryDistTags([registryPackage("openclaw", version)]);
+    expect(tagged("2026.8.34")).toBe("extended-stable=2026.8.34");
+    expect(tagged("2026.9.1")).toBeUndefined();
+    const codex = registryPackage("@openclaw/codex", "2026.9.1", "/tmp/codex.tgz");
     expect(
-      resolveCrossOsRegistryDistTags([
-        { name: "openclaw", version: "2026.8.34", tarballPath: "/tmp/openclaw.tgz" },
-      ]),
-    ).toBe("extended-stable=2026.8.34");
-    expect(
-      resolveCrossOsRegistryDistTags([
-        { name: "openclaw", version: "2026.9.1", tarballPath: "/tmp/openclaw.tgz" },
-      ]),
-    ).toBeUndefined();
-    expect(
-      omitCrossOsCandidateRootPackage([
-        { name: "@openclaw/codex", version: "2026.9.1", tarballPath: "/tmp/codex.tgz" },
-        { name: "openclaw", version: "2026.9.1", tarballPath: "/tmp/openclaw.tgz" },
-      ]),
-    ).toEqual([{ name: "@openclaw/codex", version: "2026.9.1", tarballPath: "/tmp/codex.tgz" }]);
+      omitCrossOsCandidateRootPackage([codex, registryPackage("openclaw", "2026.9.1")]),
+    ).toEqual([codex]);
   });
 
   it("keeps the shipped updater and npm install on the local extended-stable candidate", async () => {
@@ -473,27 +474,19 @@ describe("prepublish plugin registry artifact", () => {
         response.writeHead(404).end();
         return;
       }
-      const upstreamUrl = `http://127.0.0.1:${(upstream.address() as { port: number }).port}`;
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(
-        JSON.stringify({
-          name: "openclaw",
-          "dist-tags": { latest: publishedVersion },
-          versions: {
-            [publishedVersion]: {
-              name: "openclaw",
-              version: publishedVersion,
-              dist: { tarball: `${upstreamUrl}/openclaw/-/openclaw-${publishedVersion}.tgz` },
-            },
+      respondJson(response, {
+        name: "openclaw",
+        "dist-tags": { latest: publishedVersion },
+        versions: {
+          [publishedVersion]: {
+            name: "openclaw",
+            version: publishedVersion,
+            dist: { tarball: `${upstreamUrl}/openclaw/-/openclaw-${publishedVersion}.tgz` },
           },
-        }),
-      );
+        },
+      });
     });
-    await new Promise<void>((resolveListen, rejectListen) => {
-      upstream.once("error", rejectListen);
-      upstream.listen(0, "127.0.0.1", resolveListen);
-    });
-    const upstreamUrl = `http://127.0.0.1:${(upstream.address() as { port: number }).port}`;
+    const upstreamUrl = await listenLoopback(upstream);
     let registry: Awaited<ReturnType<typeof startCrossOsPackageRegistry>>;
     try {
       const packages = bindCrossOsCandidateRootPackage([], {
@@ -550,11 +543,9 @@ describe("prepublish plugin registry artifact", () => {
         installPrefix,
         "openclaw",
       ]);
-      expect(
-        JSON.parse(
-          readFileSync(path.join(installPrefix, "node_modules/openclaw/package.json"), "utf8"),
-        ).version,
-      ).toBe(candidateVersion);
+      expect(readJson(path.join(installPrefix, "node_modules/openclaw/package.json")).version).toBe(
+        candidateVersion,
+      );
       expect(upstreamRequests).not.toContain("/openclaw/extended-stable");
       expect(upstreamRequests).not.toContain(`/openclaw/${candidateVersion}`);
     } finally {
@@ -570,13 +561,7 @@ describe("prepublish plugin registry artifact", () => {
 
   it("rejects mismatched cross-OS companion registry identities", () => {
     const paths = fixture();
-    const common = {
-      artifactDir: paths.artifactDir,
-      candidateVersion: VERSION,
-      manifestSha256: sha256(paths.manifestPath),
-      requiredPackages: [PACKAGE_NAME],
-      sourceSha: SOURCE_SHA,
-    };
+    const common = crossOsTuple(paths);
 
     expect(() => resolveCrossOsPackageSet({ ...common, sourceSha: "b".repeat(40) })).toThrow(
       "source SHA differs",

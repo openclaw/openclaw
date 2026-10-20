@@ -35,9 +35,17 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const personaFiles = ["SOUL.md", "IDENTITY.md", "USER.md"];
+const baseFile = CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO];
+type Tool = {
+  name: string;
+  deferLoading?: boolean;
+  inputSchema?: unknown;
+  tools?: Tool[];
+};
+const readText = (...parts: string[]) => fs.readFileSync(path.join(...parts), "utf8");
 
 function readCommittedSnapshot(fileName: string): string {
-  return fs.readFileSync(path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, fileName), "utf8");
+  return readText(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, fileName);
 }
 
 function renderedPromptSection(content: string, heading: string, nextHeading: string): string {
@@ -60,6 +68,11 @@ let pluginLoaderCallsBefore: number;
 let pluginLoaderCallsAfter: number;
 let poisonedStateRoot: string | undefined;
 const stateDirEnv = snapshotStateDirEnv();
+function generatedContent(fileName: string) {
+  const file = generated.find((entry) => path.basename(entry.path) === fileName);
+  expect(file, `missing generated snapshot: ${fileName}`).toBeDefined();
+  return file!.content;
+}
 
 describe("happy path prompt snapshots", () => {
   beforeAll(async () => {
@@ -103,15 +116,11 @@ describe("happy path prompt snapshots", () => {
 
     for (const { name, replacements } of scenarios) {
       const fileName = `codex-dynamic-tools.${name}.json`;
-      const expected = generated.find((file) => path.basename(file.path) === fileName);
-      expect(expected, `missing complete generated tool catalog for ${name}`).toBeDefined();
+      const expected = generatedContent(fileName);
 
       const committed = JSON.parse(readCommittedSnapshot(fileName)) as
-        | unknown[]
-        | {
-            base: string;
-            replace: Record<string, { name: string; inputSchema?: unknown; tools?: unknown[] }>;
-          };
+        | Tool[]
+        | { base: string; replace: Record<string, Tool> };
       if (Array.isArray(committed)) {
         expect(replacements).toEqual([]);
       } else {
@@ -124,35 +133,25 @@ describe("happy path prompt snapshots", () => {
       }
 
       const materialized = await materializeCodexDynamicToolSnapshot(name);
-      expect(JSON.parse(materialized)).toEqual(JSON.parse(expected!.content));
+      expect(JSON.parse(materialized)).toEqual(JSON.parse(expected));
 
       if (name === "telegram-direct") {
-        const specs = JSON.parse(expected!.content) as Array<{
-          type: "function" | "namespace";
-          name: string;
-          deferLoading?: boolean;
-          tools?: Array<{ name: string; deferLoading?: boolean }>;
-        }>;
+        const specs = JSON.parse(expected) as Array<Tool & { type: "function" | "namespace" }>;
         const directFunctions = specs.filter((spec) => spec.type === "function");
         const searchableNamespace = specs.find(
           (spec) => spec.type === "namespace" && spec.name === "openclaw",
         );
-        expect(directFunctions).toEqual(
-          expect.arrayContaining([expect.objectContaining({ name: "sessions_spawn" })]),
-        );
-        expect(directFunctions.find((spec) => spec.name === "sessions_spawn")).not.toHaveProperty(
-          "deferLoading",
-        );
-        expect(searchableNamespace?.tools).toEqual(
-          expect.arrayContaining(
-            ["session_status", "web_fetch", "web_search"].map((toolName) =>
+        const spawn = directFunctions.find((spec) => spec.name === "sessions_spawn");
+        expect(spawn).toMatchObject({ name: "sessions_spawn" });
+        expect(spawn).not.toHaveProperty("deferLoading");
+        for (const toolName of ["session_status", "web_fetch", "web_search"]) {
+          expect(searchableNamespace?.tools).toEqual(
+            expect.arrayContaining([
               expect.objectContaining({ name: toolName, deferLoading: true }),
-            ),
-          ),
-        );
-        expect(directFunctions.map((spec) => spec.name)).not.toEqual(
-          expect.arrayContaining(["session_status", "web_fetch", "web_search"]),
-        );
+            ]),
+          );
+          expect(directFunctions.find((spec) => spec.name === toolName)).toBeUndefined();
+        }
       }
     }
   });
@@ -169,9 +168,7 @@ describe("happy path prompt snapshots", () => {
     );
     const scenario = "discord-group";
     const fileName = CODEX_PROMPT_SNAPSHOT_FILES[scenario];
-    const base = readCommittedSnapshot(
-      CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO],
-    );
+    const base = readCommittedSnapshot(baseFile);
     const delta = readCommittedSnapshot(`${fileName}.diff`);
     const corruptions = [
       `${delta}\ntrailing text\n`,
@@ -227,11 +224,7 @@ describe("happy path prompt snapshots", () => {
   });
 
   it("renders every additional-context value with its native role before the current input", () => {
-    const telegram = generated.find(
-      (file) =>
-        path.basename(file.path) ===
-        CODEX_PROMPT_SNAPSHOT_FILES[CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO],
-    )!.content;
+    const telegram = generatedContent(baseFile);
     const turn = renderedJson<{
       additionalContext: Record<string, { kind: "application" | "untrusted"; value: string }>;
     }>(telegram, "## Turn Start Params", "## Reconstructed Model-Bound Prompt Layers");
@@ -301,9 +294,7 @@ describe("happy path prompt snapshots", () => {
         "### Tools: Dynamic Tool Catalog",
       );
       for (const nativeHistory of [shared, collaboration, input]) {
-        for (const name of personaFiles) {
-          expect(nativeHistory).not.toContain(`<${name} contents will be here>`);
-        }
+        expect(nativeHistory).not.toMatch(/<(?:SOUL|IDENTITY|USER)\.md contents will be here>/);
       }
       expect(collaboration).not.toContain("HEARTBEAT.md");
       expect(snapshot).not.toContain("Heartbeat = useful proactive progress");
@@ -399,14 +390,10 @@ describe("happy path prompt snapshots", () => {
     ]);
 
     expect(result.status).toBe("written");
-    expect(
-      fs.readFileSync(path.join(outputDir, "gpt-6-astra.pragmatic.instructions.md"), "utf8"),
-    ).toBe("System\nUse terse engineering judgement.\nEnd\n");
-    expect(
-      JSON.parse(
-        fs.readFileSync(path.join(outputDir, "gpt-6-astra.pragmatic.source.json"), "utf8"),
-      ),
-    ).toEqual({
+    expect(readText(outputDir, "gpt-6-astra.pragmatic.instructions.md")).toBe(
+      "System\nUse terse engineering judgement.\nEnd\n",
+    );
+    expect(JSON.parse(readText(outputDir, "gpt-6-astra.pragmatic.source.json"))).toEqual({
       model: "gpt-6-astra",
       personality: "pragmatic",
       source: {

@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import {
-  planProofVideoRender,
-  type ProofVideoCue,
-  type ProofVideoCues,
-} from "../../scripts/lib/proof-video-render.ts";
+import { planProofVideoRender, type ProofVideoCue } from "../../scripts/lib/proof-video-render.ts";
 
-const document = (cues: ProofVideoCue[]): ProofVideoCues => ({
-  version: 1,
-  video: "raw.webm",
-  viewport: { width: 1280, height: 800 },
-  scale: 2,
-  captionHeight: 120,
-  cues,
-});
+const render = (cues: ProofVideoCue[]) =>
+  planProofVideoRender(
+    {
+      version: 1,
+      video: "raw.webm",
+      viewport: { width: 1280, height: 800 },
+      scale: 2,
+      captionHeight: 120,
+      cues,
+    },
+    { durationSeconds: 12, fps: 25 },
+  );
 const caption = {
   kind: "caption",
   start: 3,
@@ -28,8 +28,6 @@ const zoom = {
   ease: 2,
   rect: { x: 1100, y: 680, width: 100, height: 80 },
 } as const;
-const options = { durationSeconds: 12, fps: 25 };
-const render = (cues: ProofVideoCue[]) => planProofVideoRender(document(cues), options);
 
 describe("planProofVideoRender", () => {
   it("keeps annotations attached through zoom and speed changes while captions stay in the viewport", () => {

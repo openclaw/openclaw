@@ -166,23 +166,17 @@ describePosix("qualified pre-dispatch merge recovery", () => {
     const replacement = f.replacePreparedHead();
     pendingGates(f, replacement);
     const ready = f.state();
-    for (const fault of ["pending", "failed", "existing-auto", "behind"]) {
-      const next = { ...ready, pr: { ...ready.pr }, requiredCheckName: "openclaw/ci-gate" };
-      if (fault === "pending") {
-        next.gates = "pending";
-      }
-      if (fault === "failed") {
-        next.gates = "fail";
-      }
-      if (fault === "existing-auto") {
-        next.pr.autoMergeRequest = { mergeMethod: "SQUASH" };
-      }
-      if (fault === "behind") {
-        next.pr.mergeStateStatus = "BEHIND";
-      }
-      f.save(next);
+    const faults: Array<Parameters<typeof configureMerge>[1]> = [
+      { gates: "pending" },
+      { gates: "fail" },
+      { pr: { autoMergeRequest: { mergeMethod: "SQUASH" } } },
+      { pr: { mergeStateStatus: "BEHIND" } },
+    ];
+    for (const fault of faults) {
+      f.save(ready);
+      configureMerge(f, { requiredCheckName: "openclaw/ci-gate", ...fault });
       const run = proof.runRecovery(replacement);
-      expect(run.status, `${fault}: ${run.output}`).toBe(1);
+      expect(run.status, `${JSON.stringify(fault)}: ${run.output}`).toBe(1);
       expect(f.state().mutations).toBe(0);
       expect(f.git(["rev-parse", outcomeRef])).toBe(proof.outcome);
       expect(existsSync(f.worktree)).toBe(true);
