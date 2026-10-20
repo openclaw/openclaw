@@ -257,6 +257,67 @@ it.each([
   expect(cleanupOrder).toEqual(["owner:stop", "owner:delete:RECOVERY"]);
 });
 
+it("checks deleted-device status before releasing its disposable recovery runtime", async () => {
+  const cleanupOrder: string[] = [];
+  const owner = {
+    ...createDisposableOwner("owner", cleanupOrder),
+    listOwnDevices: vi.fn(async () => []),
+  };
+  const dispose = vi.fn(async () => {
+    cleanupOrder.push("cli:dispose");
+  });
+  mocks.createMatrixQaClient.mockReturnValue({
+    registerWithToken: async () => account("owner", "OWNER"),
+    createPrivateRoom: async () => "!owner:matrix-qa.test",
+  });
+  mocks.createMatrixQaE2eeScenarioClient.mockResolvedValue(owner);
+  mocks.loginMatrixQaRecoveryDevice.mockResolvedValue({
+    accessToken: "recovery-token",
+    deviceId: "RECOVERY",
+    userId: "@owner:matrix-qa.test",
+  });
+  mocks.createMatrixQaRecoveryCliRuntime.mockResolvedValue({ dispose });
+  mocks.runMatrixQaCliJson
+    .mockReset()
+    .mockResolvedValueOnce({
+      payload: { success: true, backup: { matchesDecryptionKey: true } },
+      result: { exitCode: 0 },
+    })
+    .mockResolvedValueOnce({ payload: { error: "M_UNKNOWN_TOKEN" }, result: { exitCode: 1 } })
+    .mockResolvedValueOnce({ payload: { serverDeviceKnown: false }, result: { exitCode: 0 } });
+
+  const result = await runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario(
+    createMatrixQaE2eeTestContext({ gatewayRuntimeEnv: {} }),
+  );
+
+  expect(result.artifacts).toMatchObject({
+    defaultStatusError: "M_UNKNOWN_TOKEN",
+    defaultStatusExitCode: 1,
+    deletedDeviceId: "RECOVERY",
+    serverDeviceKnown: false,
+    statusExitCode: 0,
+  });
+  expect(mocks.runMatrixQaCliJson.mock.calls.slice(1).map(([call]) => call.args)).toEqual([
+    ["matrix", "verify", "status", "--account", "deleted-device", "--json"],
+    [
+      "matrix",
+      "verify",
+      "status",
+      "--account",
+      "deleted-device",
+      "--allow-degraded-local-state",
+      "--json",
+    ],
+  ]);
+  expect(cleanupOrder).toEqual([
+    "owner:delete:RECOVERY",
+    "owner:stop",
+    "cli:dispose",
+    "owner:stop",
+    "owner:delete:RECOVERY",
+  ]);
+});
+
 it("uses disposable source and target owners without reading observer credentials", async () => {
   const cleanupOrder: string[] = [];
   const sourceOwner = createDisposableOwner("source", cleanupOrder, true);

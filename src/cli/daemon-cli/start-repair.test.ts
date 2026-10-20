@@ -186,7 +186,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
           programArguments: ["/usr/bin/node", "/fixture/openclaw.mjs", "gateway"],
           environment: { HOME: "/home/openclaw" },
         }),
-        issues: [{ code: "port-mismatch", message: "old port" }],
+        issues: [{ message: "old port" }],
         json: true,
         stdout: process.stdout,
       }),
@@ -233,7 +233,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       const params = {
         service,
         state,
-        issues: [{ code: "missing-program" as const, message: "missing" }],
+        issues: [{ message: "missing" }],
         json: true,
         stdout: process.stdout,
       };
@@ -306,7 +306,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
     await repairLoadedGatewayServiceForStart({
       service,
       state,
-      issues: [{ code: "port-mismatch", message: "old port" }],
+      issues: [{ message: "old port" }],
       json: true,
       stdout: process.stdout,
     });
@@ -360,7 +360,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       const repair = repairLoadedGatewayServiceForStart({
         service,
         state,
-        issues: [{ code: "port-mismatch", message: "old port" }],
+        issues: [{ message: "old port" }],
         json: true,
         stdout: process.stdout,
       });
@@ -416,7 +416,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
             repairLoadedGatewayServiceForStart({
               service,
               state,
-              issues: [{ code: "missing-program", message: "missing program" }],
+              issues: [{ message: "missing program" }],
               json: true,
               stdout: process.stdout,
             }),
@@ -486,7 +486,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       const repairParams = {
         service,
         state,
-        issues: [{ code: "port-mismatch" as const, message: "old port" }],
+        issues: [{ message: "old port" }],
         json: true,
         stdout: process.stdout,
       };
@@ -524,7 +524,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       repairLoadedGatewayServiceForStart({
         service,
         state,
-        issues: [{ code: "missing-program", message: "missing program" }],
+        issues: [{ message: "missing program" }],
         json: true,
         stdout: process.stdout,
       }),
@@ -548,7 +548,7 @@ describe("repairLoadedGatewayServiceForStart", () => {
       const params = {
         service,
         state,
-        issues: [{ code: "port-mismatch" as const, message: "old port" }],
+        issues: [{ message: "old port" }],
         json: true,
         stdout: process.stdout,
       };

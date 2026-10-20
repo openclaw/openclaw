@@ -41,12 +41,12 @@ function payloadFor(config: OpenClawConfig = {}, surface: "gateway" | "cli" = "g
   return buildTelemetryPayload(config, { surface });
 }
 
-function checkUpdate(config: OpenClawConfig = {}, nowMs = NOW, fetchImpl = globalThis.fetch) {
-  return checkTelemetryUpdate(() => config, {
-    surface: "gateway",
-    fetchImpl,
-    nowMs,
-  });
+function checkUpdate(config: OpenClawConfig = {}, nowMs = NOW, fetchImpl?: typeof fetch) {
+  vi.spyOn(Date, "now").mockReturnValue(nowMs);
+  if (fetchImpl) {
+    vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
+  }
+  return checkTelemetryUpdate(() => config);
 }
 
 function providerConfig(baseUrl: string, apiKey?: string) {
@@ -117,6 +117,8 @@ describe("anonymous telemetry", () => {
         OPENCLAW_NIX_MODE: undefined,
         OPENCLAW_NO_AUTO_UPDATE: undefined,
         OPENCLAW_TELEMETRY_ENDPOINT: undefined,
+        VITEST: undefined,
+        NODE_ENV: undefined,
       },
     });
     installPluginRegistry(
@@ -482,10 +484,9 @@ describe("anonymous telemetry", () => {
     expect(mockHttp.requests()).toHaveLength(1);
   });
 
-  it("never accesses the network in a test environment without an injected fetch", async () => {
-    await expect(
-      checkTelemetryUpdate(() => ({}), { surface: "gateway", nowMs: NOW }),
-    ).resolves.toBeNull();
+  it("never accesses the network in a test environment", async () => {
+    setTestEnvValue("VITEST", "true");
+    await expect(checkTelemetryUpdate(() => ({}))).resolves.toBeNull();
 
     expect(mockHttp.requests()).toHaveLength(0);
   });

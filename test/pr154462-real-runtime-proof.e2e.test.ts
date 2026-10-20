@@ -274,7 +274,7 @@ it(
       };
       const refreshCatalog = async (rich: boolean) => {
         const requestsBefore = catalogRequests.length;
-        const committed = createDeferred();
+        const committed = createDeferred<boolean>();
         const checkReady = () => {
           const catalog = currentCatalog();
           const model = catalog?.entries.find(
@@ -286,13 +286,13 @@ it(
             model?.reasoning === rich &&
             model.input?.includes("image") === rich;
           if (ready) {
-            committed.resolve();
+            committed.resolve(true);
           }
           return ready;
         };
         const unsubscribe = registerPreparedModelRuntimePublicationListener((event) => {
           if (event.phase === "catalog-failed") {
-            committed.reject(event.error);
+            committed.resolve(false);
           } else if (event.phase === "catalog-published") {
             checkReady();
           }
@@ -310,7 +310,7 @@ it(
                 throw new Error("Catalog refresh settled without the requested provider inventory");
               }
             }),
-            committed.promise,
+            committed.promise.then((published) => expect(published).toBe(true)),
           ]);
         } finally {
           unsubscribe();

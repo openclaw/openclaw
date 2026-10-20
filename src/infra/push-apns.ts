@@ -69,10 +69,7 @@ type ApnsRelayPushResponse = {
 // catch path can fail closed on overflow instead of swallowing it into the malformed-JSON
 // (treat-as-empty-body) fallback that would otherwise report a successful send.
 class ApnsRelayResponseTooLargeError extends Error {
-  constructor(
-    readonly size: number,
-    readonly maxBytes: number,
-  ) {
+  constructor(size: number, maxBytes: number) {
     super(`APNs relay response exceeded ${maxBytes} bytes (${size} bytes received)`);
     this.name = "ApnsRelayResponseTooLargeError";
   }

@@ -565,6 +565,10 @@ export async function prepareAgentRunDispatch(
     // The transport request ends at acceptance; execution retains this exact caller.
     capturedOperator = await retainGatewayOperatorRun({
       ...params,
+      // Native children own their accepted work beyond the requester's recovery turn.
+      ...(params.client?.internal?.agentRunTracking === "native_subagent"
+        ? { independentContinuation: true }
+        : {}),
       entry: activeRunAbort.entry,
       abortSession: params.resolvedSessionKey
         ? {

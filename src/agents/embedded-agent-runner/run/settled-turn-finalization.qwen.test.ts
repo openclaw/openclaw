@@ -3,7 +3,7 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { resolveSettledToolTerminalContinuationInstruction } from "./incomplete-turn-recovery.js";
+import { resolveSettledToolTerminalContinuation } from "./incomplete-turn-recovery.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 function fixture(stopReason: "stop" | "length" = "stop", text?: string) {
@@ -30,7 +30,7 @@ function fixture(stopReason: "stop" | "length" = "stop", text?: string) {
     currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
   });
   const request = () =>
-    resolveSettledToolTerminalContinuationInstruction({
+    resolveSettledToolTerminalContinuation({
       attempt,
       provider: "qwen-local",
       modelId: "qwen3:4b",
@@ -47,17 +47,19 @@ function fixture(stopReason: "stop" | "length" = "stop", text?: string) {
 describe("settled-turn recovery for non-visible model output", () => {
   it.each(["stop", "length"] as const)("finalizes a signed reasoning-only %s", (stop) => {
     const { request } = fixture(stop);
-    expect(request()).toContain("Tools are unavailable in this step");
+    expect(request()?.instruction).toContain("Tools are unavailable in this step");
   });
 
   it("does not count bare truncated tool-call markup as an answer", () => {
-    expect(fixture("length", "<tool_call>").request()).toContain("Tools are unavailable");
+    expect(fixture("length", "<tool_call>").request()?.instruction).toContain(
+      "Tools are unavailable",
+    );
   });
 
   it("uses the completed response when projection removes the current snapshot slot", () => {
     const { attempt, request } = fixture();
     attempt.currentAttemptAssistant = undefined;
-    expect(request()).toContain("Tools are unavailable");
+    expect(request()?.instruction).toContain("Tools are unavailable");
   });
 
   it("preserves a meaningful length-stop partial answer for truncation delivery", () => {

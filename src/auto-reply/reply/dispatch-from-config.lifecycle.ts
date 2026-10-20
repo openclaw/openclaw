@@ -602,7 +602,6 @@ export function createDispatchReplyOperationCoordinator(
     params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
   let agentRunTerminalOutcome: "completed" | "failed" | undefined;
-  let agentRunId = params.replyOptions?.runId;
   const markObservedReplyDelivery = async () => {
     if (observedReplyDelivery) {
       return;
@@ -630,8 +629,6 @@ export function createDispatchReplyOperationCoordinator(
         : {}),
       ...observeAgentRunStart(params.replyOptions, (start) => {
         agentRunTerminalOutcome = "completed";
-        // Execution may generate its ID in copied options; finalization needs the observed run.
-        agentRunId = start.runId;
         params.messageAuditTerminal?.observeRunId(start.runId);
       }),
       onAgentRunTerminalOutcome: (outcome) => {
@@ -725,7 +722,6 @@ export function createDispatchReplyOperationCoordinator(
     turnLedger,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
-    getAgentRunId: () => agentRunId,
     getAgentRunTerminalOutcome: () => agentRunTerminalOutcome,
     getDispatchAbortOperation: () => dispatchAbortOperation,
     getDispatchAbortSignal,

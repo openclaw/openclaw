@@ -91,49 +91,29 @@ export function transitionReplyOperation(
         ? { state: { ...state, phase: event.phase }, effects: ["activity"] }
         : unchanged;
     case "maintenance-wait":
+    case "lane-wait": {
+      const maintenance = event.type === "maintenance-wait";
+      const previous = maintenance ? "phaseBeforeMaintenanceWait" : "phaseBeforeGlobalLaneWait";
+      const phase = maintenance ? "waiting_for_deferred_maintenance" : "waiting_for_global_lane";
       return active && (state.phase === "queued" || state.phase === "running")
         ? {
-            state: {
-              ...state,
-              phaseBeforeMaintenanceWait: state.phase,
-              phase: "waiting_for_deferred_maintenance",
-            },
+            state: { ...state, [previous]: state.phase, phase },
             effects: [event.type],
           }
         : unchanged;
+    }
     case "maintenance-ready":
-      return active && state.phase === "waiting_for_deferred_maintenance"
+    case "lane-ready": {
+      const maintenance = event.type === "maintenance-ready";
+      const previous = maintenance ? "phaseBeforeMaintenanceWait" : "phaseBeforeGlobalLaneWait";
+      const phase = maintenance ? "waiting_for_deferred_maintenance" : "waiting_for_global_lane";
+      return active && state.phase === phase
         ? {
-            state: {
-              ...state,
-              phase: state.phaseBeforeMaintenanceWait ?? "queued",
-              phaseBeforeMaintenanceWait: undefined,
-            },
+            state: { ...state, phase: state[previous] ?? "queued", [previous]: undefined },
             effects: [event.type],
           }
         : unchanged;
-    case "lane-wait":
-      return active && (state.phase === "queued" || state.phase === "running")
-        ? {
-            state: {
-              ...state,
-              phaseBeforeGlobalLaneWait: state.phase,
-              phase: "waiting_for_global_lane",
-            },
-            effects: [event.type],
-          }
-        : unchanged;
-    case "lane-ready":
-      return active && state.phase === "waiting_for_global_lane"
-        ? {
-            state: {
-              ...state,
-              phase: state.phaseBeforeGlobalLaneWait ?? "queued",
-              phaseBeforeGlobalLaneWait: undefined,
-            },
-            effects: [event.type],
-          }
-        : unchanged;
+    }
   }
   return event satisfies never;
 }

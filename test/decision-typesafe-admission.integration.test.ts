@@ -206,7 +206,6 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
               admittedRequests,
               allowedRequests: requests - admittedRequests,
               admitted: admitted.status,
-              admittedReason: admitted.reason,
               clientReadyMs,
               elapsedMs: performance.now() - started,
               nextTurn: skipped.status,
@@ -319,10 +318,6 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
                   result: {
                     shouldPruneTools: false,
                     status: "unavailable",
-                    reason:
-                      change === "provider-config" || change === "secrets"
-                        ? "retiring"
-                        : "disabled",
                   },
                 });
               }

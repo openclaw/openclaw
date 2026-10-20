@@ -15,7 +15,10 @@ import { runPostgresTransactionSync } from "./postgres-sync/transaction.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type { PostgresSqlConnection } from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
-import { readSqliteDatabaseAdmissionFact } from "./sqlite-database-admission-record.js";
+import {
+  readSqliteDatabaseAdmissionFact,
+  type SqliteDatabaseFactKey,
+} from "./sqlite-database-admission-record.js";
 import {
   beginSqliteDatabaseAdmissionOperation,
   discardSqliteDatabaseTransactionAdmissions,
@@ -721,6 +724,34 @@ it("path revocation invalidates scoped receipts and admission facts with a live 
 
 const key = { name: "test.engine-admission", read: (value: unknown) => value };
 const schemaKey = { ...key, name: "test.engine-schema-admission", schemaDependent: true };
+
+it("carries typed owner facts through publication, replacement and worker cloning", () => {
+  const location = path.join(tempDirs.make("sqlite-admission-typed-"), "proof.sqlite");
+  const database = createDatabase(location);
+  const typedKey: SqliteDatabaseFactKey<{ engine: string; version: number }> = {
+    name: "test.typed-engine-fact",
+  };
+  try {
+    publishSqliteDatabaseAdmission(database, typedKey, { engine: "sqlite", version: 1 });
+    expect(getSqliteDatabaseAdmission(database, typedKey)).toEqual({
+      engine: "sqlite",
+      version: 1,
+    });
+    publishSqliteDatabaseAdmission(database, typedKey, { engine: "sqlite", version: 2 });
+    expect(getOrLoadSqliteDatabaseAdmissionForPath(location, typedKey, () => undefined)).toEqual({
+      engine: "sqlite",
+      version: 2,
+    });
+    const transferred = structuredClone(recordsFor(location)[0]!.facts.get(typedKey.name)!);
+    expect(readSqliteDatabaseAdmissionFact(transferred, typedKey)).toEqual({
+      engine: "sqlite",
+      version: 2,
+    });
+  } finally {
+    database.close();
+    retireSqliteDatabaseAdmissionForPath(location);
+  }
+});
 
 it.each(["committed", "native", "sqlite-transaction", "postgres-transaction"] as const)(
   "decodes admission values once at publication (%s)",

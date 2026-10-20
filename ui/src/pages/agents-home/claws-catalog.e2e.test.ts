@@ -32,6 +32,16 @@ const workflowOperator = {
   downloads: 12,
   updatedAtMs: 1_000,
 };
+const communityResearch = {
+  ...workflowOperator,
+  packageName: "@maker/release-scout",
+  displayName: "Release Scout",
+  summary: "Compares public releases with sourced migration guidance.",
+  channel: "community",
+  official: false,
+  ownerHandle: "maker",
+  downloads: 20,
+};
 const soulExcerpt =
   "Purpose. Turn approved workflows into clear outcomes while keeping the owner informed. ".repeat(
     12,
@@ -147,6 +157,46 @@ describe.skipIf(!browserAvailable)("Claws Add in Agents", () => {
       },
     });
   }
+
+  it("shows curated Featured first and requests category results without an Official filter", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { width: 1440, height: 900 },
+    });
+    const page = await context.newPage();
+    const gateway = await fixture(page);
+    const proofDir = capture ? createControlUiE2eArtifactDir("claws-featured-categories") : null;
+    try {
+      await page.goto(`${server.baseUrl}agents`);
+      await page.locator("[data-claws-featured] [data-claws-entry]").first().waitFor();
+      expect(await page.getByRole("heading", { name: "Featured" }).count()).toBe(1);
+      expect(await gateway.getRequests("claws.catalog.search")).toEqual(
+        expect.arrayContaining([expect.objectContaining({ params: { featured: true } })]),
+      );
+      if (proofDir) {
+        await page.screenshot({ path: `${proofDir}/featured.png`, animations: "disabled" });
+      }
+
+      await gateway.setMethodResponse("claws.catalog.search", {
+        entries: [communityResearch, { ...workflowOperator, downloads: 1 }],
+      });
+      await page.getByRole("button", { name: "Research", exact: true }).click();
+      await gateway.waitForRequest("claws.catalog.search", { match: { category: "research" } });
+      await page.locator("[data-claws-results] [data-claws-entry]").first().waitFor();
+      expect(await page.locator("[data-claws-featured]").count()).toBe(0);
+      const categoryCards = page.locator("[data-claws-results] [data-claws-entry]");
+      expect(await categoryCards.count()).toBe(2);
+      expect(await categoryCards.first().textContent()).toContain("Release Scout");
+      expect(await categoryCards.nth(1).textContent()).toContain("Workflow Operator");
+      if (proofDir) {
+        await categoryCards.first().scrollIntoViewIfNeeded();
+        await page.screenshot({ path: `${proofDir}/research.png`, animations: "disabled" });
+      }
+    } finally {
+      await context.close();
+    }
+  });
 
   it.each(viewports)("aligns agent cards with Claws at $name width", async (viewport) => {
     const context = await browser.newContext({

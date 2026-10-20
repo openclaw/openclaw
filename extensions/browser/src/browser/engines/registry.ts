@@ -29,10 +29,7 @@ const chromiumEngine: BrowserEngineAdapter = {
       supportsVisualActions: true,
       supportsUploads: true,
       supportsDialogs: true,
-      supportsStorage: true,
-      supportsScreencast: profile.driver !== "existing-session",
       supportsConsole: true,
-      supportsMultipleTabs: true,
       supportsNativeSnapshots: true,
       requiresCompleteTargetEnumeration: profile.driver === "extension",
       mode: usesChromeMcp
@@ -52,7 +49,6 @@ const chromiumEngine: BrowserEngineAdapter = {
       usesChromeMcp,
       usesPersistentPlaywright: usesExtension || isRemote,
       supportsPerTabWs: localManaged,
-      supportsJsonTabEndpoints: localManaged,
       supportsReset: localManaged,
       supportsManagedTabLimit: localManaged,
     };

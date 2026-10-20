@@ -234,7 +234,7 @@ export class GatewayBoardProvider implements BoardProvider {
     force: boolean,
   ): Promise<BoardWidgetAppViewState> {
     if (this.disposed || !this.connected) {
-      return { status: "stale", error: "Dashboard MCP App view unavailable" };
+      return { status: "stale" };
     }
     const widget = this.snapshotSignal.value.widgets.find(
       (candidate) =>
@@ -243,7 +243,7 @@ export class GatewayBoardProvider implements BoardProvider {
         candidate.contentKind === "mcp-app",
     );
     if (!widget) {
-      return { status: "stale", error: "Dashboard MCP App widget unavailable" };
+      return { status: "stale" };
     }
     const client = this.client;
     const clientGeneration = this.clientGeneration;
@@ -264,7 +264,7 @@ export class GatewayBoardProvider implements BoardProvider {
       client !== this.client ||
       clientGeneration !== this.clientGeneration
     ) {
-      return { status: "stale", error: "Dashboard MCP App view unavailable" };
+      return { status: "stale" };
     }
     return result;
   }

@@ -323,66 +323,6 @@ export function hasConfiguredSecretInputValue(
   return normalizeSecretStringValue(value).length > 0 || coerceSecretRef(value, defaults) !== null;
 }
 
-function collectTopLevelChannelFieldAssignments(params: {
-  channelKey: string;
-  channel: Record<string, unknown>;
-  fieldPath: string;
-  value: unknown;
-  expected: "string" | "string-or-object";
-  surface: ChannelAccountSurface;
-  defaults: SecretDefaults | undefined;
-  context: ResolverContext;
-  activeWithoutAccounts: boolean;
-  inheritedAccountActive: ChannelAccountPredicate;
-  inactiveReason: string;
-  apply: (value: unknown) => void;
-}): void {
-  const owners = params.surface.hasExplicitAccounts
-    ? params.surface.accounts.filter(params.inheritedAccountActive)
-    : params.activeWithoutAccounts
-      ? [{ accountId: "default", account: {}, enabled: true }]
-      : [];
-  if (owners.length === 0) {
-    collectSecretInputAssignment({
-      value: params.value,
-      path: params.fieldPath,
-      expected: params.expected,
-      defaults: params.defaults,
-      context: params.context,
-      active: false,
-      inactiveReason: params.inactiveReason,
-      apply: params.apply,
-    });
-    return;
-  }
-  // One inherited ref can own several accounts. Duplicate only the assignment metadata so a
-  // failed shared credential degrades every consumer without collapsing unrelated accounts.
-  const { accounts: _accounts, ...channelDefaults } = params.channel;
-  const inheritedContract = {
-    channel: channelDefaults,
-    consumers: owners
-      .map(({ accountId, account }) => ({ accountId: normalizeAccountId(accountId), account }))
-      .toSorted((left, right) => left.accountId.localeCompare(right.accountId)),
-  };
-  for (const { accountId, account } of owners) {
-    collectSecretInputAssignment({
-      value: params.value,
-      path: params.fieldPath,
-      expected: params.expected,
-      defaults: params.defaults,
-      context: params.context,
-      owner: createChannelAccountSecretOwner(
-        params.channelKey,
-        accountId,
-        params.channel,
-        account,
-        inheritedContract,
-      ),
-      apply: params.apply,
-    });
-  }
-}
-
 /** Collects root/account channel field SecretRef assignments for one credential path. */
 export function collectSimpleChannelFieldAssignments(params: {
   channelKey: string;
@@ -461,22 +401,60 @@ function collectChannelFieldAssignments(
   };
   const topLevel = targetFor(params.channel);
   if (topLevel) {
-    collectTopLevelChannelFieldAssignments({
-      channelKey: params.channelKey,
-      channel: params.channel,
-      value: topLevel[params.field],
-      fieldPath: `channels.${params.channelKey}.${fieldPath}`,
-      expected: "string",
-      surface: params.surface,
-      defaults: params.defaults,
-      context: params.context,
-      activeWithoutAccounts: params.topLevelActiveWithoutAccounts,
-      inheritedAccountActive: params.topLevelInheritedAccountActive,
-      inactiveReason: params.topInactiveReason,
-      apply: (value) => {
-        topLevel[params.field] = value;
-      },
-    });
+    const { channelKey, channel } = params;
+    const value = topLevel[params.field];
+    const topLevelFieldPath = `channels.${params.channelKey}.${fieldPath}`;
+    const { surface, defaults, context } = params;
+    const activeWithoutAccounts = params.topLevelActiveWithoutAccounts;
+    const inheritedAccountActive = params.topLevelInheritedAccountActive;
+    const inactiveReason = params.topInactiveReason;
+    const apply = (resolvedValue: unknown) => {
+      topLevel[params.field] = resolvedValue;
+    };
+    const owners = surface.hasExplicitAccounts
+      ? surface.accounts.filter(inheritedAccountActive)
+      : activeWithoutAccounts
+        ? [{ accountId: "default", account: {}, enabled: true }]
+        : [];
+    if (owners.length === 0) {
+      collectSecretInputAssignment({
+        value,
+        path: topLevelFieldPath,
+        expected: "string",
+        defaults,
+        context,
+        active: false,
+        inactiveReason,
+        apply,
+      });
+    } else {
+      // One inherited ref can own several accounts. Duplicate only the assignment metadata so a
+      // failed shared credential degrades every consumer without collapsing unrelated accounts.
+      const { accounts: _accounts, ...channelDefaults } = channel;
+      const inheritedContract = {
+        channel: channelDefaults,
+        consumers: owners
+          .map(({ accountId, account }) => ({ accountId: normalizeAccountId(accountId), account }))
+          .toSorted((left, right) => left.accountId.localeCompare(right.accountId)),
+      };
+      for (const { accountId, account } of owners) {
+        collectSecretInputAssignment({
+          value,
+          path: topLevelFieldPath,
+          expected: "string",
+          defaults,
+          context,
+          owner: createChannelAccountSecretOwner(
+            channelKey,
+            accountId,
+            channel,
+            account,
+            inheritedContract,
+          ),
+          apply,
+        });
+      }
+    }
   }
   if (!params.surface.hasExplicitAccounts) {
     return;

@@ -266,8 +266,11 @@ vi.mock("./models-config.providers.implicit.js", () => ({
   prepareImplicitProviderStaticCatalog: mocks.prepareStaticCatalog,
 }));
 
+// mock-isolation: static catalog fixtures supply registrations without evaluating plugin runtimes.
 vi.mock("./runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: mocks.loadAgentRuntimePluginRegistryHandle,
+  loadAgentRuntimePluginRegistryHandleAsync: async (...args: unknown[]) =>
+    mocks.loadAgentRuntimePluginRegistryHandle(...args),
 }));
 
 vi.mock("./embedded-agent-runner/model.static-catalog.js", async (importOriginal) => ({

@@ -15,6 +15,15 @@ const request = {
   id: "tbx_example",
   createdAt: "2026-10-01T11:55:00Z",
 };
+const planAdmission = (overrides: Partial<Parameters<typeof planTestboxAdmission>[0]> = {}) =>
+  planTestboxAdmission({ ...request, ...overrides }, now);
+
+function runModule(source: string, env: NodeJS.ProcessEnv) {
+  return spawnSync(process.execPath, ["--input-type=module", "--eval", source], {
+    encoding: "utf8",
+    env,
+  });
+}
 
 describe("Testbox spending admission", () => {
   it("shares one bounded pool across profiles without changing a lease's slot", () => {
@@ -32,16 +41,11 @@ describe("Testbox spending admission", () => {
   });
 
   it("defaults routine proof to 16-class and requires the high-memory profile for 32-class", () => {
-    expect(planTestboxAdmission(request, now).runner).toBe("blacksmith-16vcpu-ubuntu-2404");
-    expect(() =>
-      planTestboxAdmission({ ...request, runner: "blacksmith-32vcpu-ubuntu-2404" }, now),
-    ).toThrow(/not allowed/);
+    expect(planAdmission().runner).toBe("blacksmith-16vcpu-ubuntu-2404");
+    expect(() => planAdmission({ runner: "blacksmith-32vcpu-ubuntu-2404" })).toThrow(/not allowed/);
     const groups = new Set<string>();
     for (let index = 0; index < 128; index++) {
-      const plan = planTestboxAdmission(
-        { ...request, profile: "check-memory", id: `tbx_memory_${index}` },
-        now,
-      );
+      const plan = planAdmission({ profile: "check-memory", id: `tbx_memory_${index}` });
       expect(plan.runner).toBe("blacksmith-32vcpu-ubuntu-2404");
       expect(plan.group).toMatch(/^openclaw-testbox-budget-v1-[0-3]$/);
       groups.add(plan.group);
@@ -53,64 +57,50 @@ describe("Testbox spending admission", () => {
     ["check-focused", "blacksmith-4vcpu-ubuntu-2404", 60],
     ["check-routine", "blacksmith-8vcpu-ubuntu-2404", 120],
   ])("bounds opt-in %s proof without changing the default", (profile, runner, ceiling) => {
-    const plan = planTestboxAdmission({ ...request, profile }, now);
+    const plan = planAdmission({ profile });
     expect(plan.runner).toBe(runner);
     expect(plan.minutes).toBe(60);
-    expect(plan.group).toBe(planTestboxAdmission(request, now).group);
-    expect(planTestboxAdmission({ ...request, profile, minutes: ceiling }, now).minutes).toBe(
-      ceiling,
+    expect(plan.group).toBe(planAdmission().group);
+    expect(planAdmission({ profile, minutes: ceiling }).minutes).toBe(ceiling);
+    expect(() => planAdmission({ profile, minutes: ceiling + 1 })).toThrow(/runtime/);
+    expect(() => planAdmission({ profile, runner: "blacksmith-32vcpu-ubuntu-2404" })).toThrow(
+      /not allowed/,
     );
-    expect(() => planTestboxAdmission({ ...request, profile, minutes: ceiling + 1 }, now)).toThrow(
-      /runtime/,
-    );
-    expect(() =>
-      planTestboxAdmission({ ...request, profile, runner: "blacksmith-32vcpu-ubuntu-2404" }, now),
-    ).toThrow(/not allowed/);
   });
 
   it.each([0, -1, 241, 1.5, "invalid"])("rejects an unbounded runtime: %s", (minutes) => {
-    expect(() => planTestboxAdmission({ ...request, minutes }, now)).toThrow(/runtime/);
+    expect(() => planAdmission({ minutes })).toThrow(/runtime/);
   });
 
   it("defaults routine proof to one hour and preserves explicit long-proof requests", () => {
     const workflow = parse(readFileSync(".github/workflows/ci-check-testbox.yml", "utf8"));
     const dispatchDefault = workflow.on.workflow_dispatch.inputs.timeout_minutes.default;
-    expect(planTestboxAdmission({ ...request, minutes: dispatchDefault }, now).minutes).toBe(60);
-    expect(planTestboxAdmission(request, now).minutes).toBe(60);
-    expect(planTestboxAdmission({ ...request, minutes: "" }, now).minutes).toBe(60);
-    expect(planTestboxAdmission({ ...request, minutes: 30 }, now).minutes).toBe(30);
-    expect(planTestboxAdmission({ ...request, profile: "check-memory" }, now).minutes).toBe(240);
-    expect(planTestboxAdmission({ ...request, minutes: 240 }, now).minutes).toBe(240);
-    expect(() => planTestboxAdmission({ ...request, profile: "build", minutes: 36 }, now)).toThrow(
-      /1 to 35/,
-    );
-    expect(() => planTestboxAdmission({ ...request, profile: "arm", minutes: 121 }, now)).toThrow(
-      /1 to 120/,
-    );
+    expect(planAdmission({ minutes: dispatchDefault }).minutes).toBe(60);
+    expect(planAdmission().minutes).toBe(60);
+    expect(planAdmission({ minutes: "" }).minutes).toBe(60);
+    expect(planAdmission({ minutes: 30 }).minutes).toBe(30);
+    expect(planAdmission({ profile: "check-memory" }).minutes).toBe(240);
+    expect(planAdmission({ minutes: 240 }).minutes).toBe(240);
+    expect(() => planAdmission({ profile: "build", minutes: 36 })).toThrow(/1 to 35/);
+    expect(() => planAdmission({ profile: "arm", minutes: 121 })).toThrow(/1 to 120/);
   });
 
   it("allows approved Windows sizes and refuses arbitrary dispatch labels", () => {
     for (const size of [8, 16]) {
       const runner = `blacksmith-${size}vcpu-windows-2025`;
-      expect(planTestboxAdmission({ ...request, profile: "windows", runner }, now).runner).toBe(
-        runner,
-      );
+      expect(planAdmission({ profile: "windows", runner }).runner).toBe(runner);
     }
     for (const runner of ["self-hosted", "blacksmith-32vcpu-windows-2025"]) {
-      expect(() => planTestboxAdmission({ ...request, profile: "windows", runner }, now)).toThrow(
-        /not allowed/,
-      );
+      expect(() => planAdmission({ profile: "windows", runner })).toThrow(/not allowed/);
     }
   });
 
   it("expires abandoned queue entries before hydration, including the deadline itself", () => {
-    const plan = planTestboxAdmission(request, now);
+    const plan = planAdmission();
     expect(() => assertFreshTestboxAdmission(plan.expires_at, plan.expires_at - 1)).not.toThrow();
     expect(() => assertFreshTestboxAdmission(plan.expires_at, plan.expires_at)).toThrow(/expired/);
     expect(() => planTestboxAdmission(request, plan.expires_at)).toThrow(/expired/);
-    expect(() => planTestboxAdmission({ ...request, createdAt: "unknown" }, now)).toThrow(
-      /invalid/,
-    );
+    expect(() => planAdmission({ createdAt: "unknown" })).toThrow(/invalid/);
   });
 
   it.each(["check-focused", "check-routine", "check", "check-memory", "arm", "build", "windows"])(
@@ -133,12 +123,8 @@ describe("Testbox spending admission", () => {
 
   it("configures idle time after an admitted checkout crosses the queue deadline", () => {
     const script = resolve("scripts/ci-testbox-budget.mjs");
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        `
+    const result = runModule(
+      `
           import assert from "node:assert/strict";
           import fs from "node:fs";
           import { syncBuiltinESMExports } from "node:module";
@@ -155,8 +141,7 @@ describe("Testbox spending admission", () => {
           process.argv = [process.execPath, ${JSON.stringify(script)}, "configure"];
           await import(pathToFileURL(process.argv[1]).href);
         `,
-      ],
-      { encoding: "utf8", env: { TESTBOX_EXPIRES_AT: "1" } },
+      { TESTBOX_EXPIRES_AT: "1" },
     );
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("idle setting updated");
@@ -201,7 +186,7 @@ describe("Testbox spending admission", () => {
     const expiry = job.steps.find(
       (step: { name: string }) => step.name === "Reject expired Testbox admission",
     );
-    const plan = planTestboxAdmission({ ...request, profile }, now);
+    const plan = planAdmission({ profile });
     const created = Date.parse(request.createdAt);
     for (const minutes of [35, 59, 60]) {
       const result = spawnSync(
@@ -251,12 +236,8 @@ describe("Testbox admission GitHub response", () => {
   }) {
     const script = resolve("scripts/ci-testbox-budget.mjs");
     const fixture = { status, body, headers, streamError, secret, now };
-    const result = spawnSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        `
+    const result = runModule(
+      `
       import assert from "node:assert/strict";
       import fs from "node:fs";
       import { syncBuiltinESMExports } from "node:module";
@@ -295,18 +276,14 @@ describe("Testbox admission GitHub response", () => {
       process.argv = [process.execPath, ${JSON.stringify(script)}, "admit"];
       await import(pathToFileURL(process.argv[1]).href);
     `,
-      ],
       {
-        encoding: "utf8",
-        env: {
-          GITHUB_API_URL: "https://api.github.com",
-          GITHUB_REPOSITORY: "example/project",
-          GITHUB_RUN_ID: "123",
-          GH_TOKEN: secret,
-          GITHUB_OUTPUT: "admission-output",
-          TESTBOX_PROFILE: "check",
-          TESTBOX_ID: "tbx_example",
-        },
+        GITHUB_API_URL: "https://api.github.com",
+        GITHUB_REPOSITORY: "example/project",
+        GITHUB_RUN_ID: "123",
+        GH_TOKEN: secret,
+        GITHUB_OUTPUT: "admission-output",
+        TESTBOX_PROFILE: "check",
+        TESTBOX_ID: "tbx_example",
       },
     );
     const receipt = JSON.parse(result.stdout.trim().split("\n").at(-1) ?? "null") as {

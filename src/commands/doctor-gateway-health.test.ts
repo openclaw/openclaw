@@ -148,6 +148,12 @@ describe("checkGatewayHealth", () => {
       expect.stringContaining("CLI and live Gateway use different"),
       "Gateway state directory mismatch",
     );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "the running Gateway still uses the paths it started with. A full restart is required: `openclaw gateway restart` (not a reload). Then rerun `openclaw doctor`.",
+      ),
+      "Gateway state directory mismatch",
+    );
     expect(readServiceCommand).not.toHaveBeenCalled();
   });
 

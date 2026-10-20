@@ -187,6 +187,11 @@ recall fully answers the question. It uses memory tools to retrieve missing fact
 when that context is absent or only answers part of the question. Partial, stale,
 or unavailable recall still requires disclosure.
 
+If `memory_search` reports that its storage scope closed, run
+`openclaw plugins reload memory-core`, or restart the Gateway, then retry.
+This is a storage lifecycle failure, not an embedding provider error. See
+[Plugin reload](/cli/plugins/uninstall-and-update#reload) for reload behavior.
+
 When session indexing is enabled, `memory_search` can also return session
 transcript hits. Their `sessions/...jsonl` paths are search references, not files
 that `memory_get` can read. Use `sessions_search` with distinctive text from the

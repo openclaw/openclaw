@@ -1,7 +1,6 @@
 // Prove Stop, deletion, and yield of kept children through real Gateway tools.
 import { X509Certificate } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   writeOpenAiResponsesSse,
@@ -26,6 +25,11 @@ import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import {
+  closeProvider,
+  listenProvider,
+  readProviderBody,
+} from "./gateway-provider-fixture.test-support.js";
 import {
   buildSubagentStopConfig,
   subagentStopProxyHeaders,
@@ -124,23 +128,15 @@ const spawnReceipts = (body: string) =>
     sessionKey: record.childSessionKey as string,
   }));
 
-async function readRequestBody(request: IncomingMessage): Promise<string> {
-  let body = "";
-  for await (const chunk of request) {
-    body += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-  }
-  return body;
-}
+type ModelHandler = (
+  body: string,
+  request: IncomingMessage,
+  response: ServerResponse,
+  sequence: number,
+) => Promise<boolean>;
 
 /** Serves one scripted parent plus its children; unscripted turns answer NO_REPLY. */
-async function startScriptedModel(
-  handle: (
-    body: string,
-    request: IncomingMessage,
-    response: ServerResponse,
-    sequence: number,
-  ) => Promise<boolean>,
-) {
+async function startScriptedModel(handle: ModelHandler) {
   let responseSequence = 0;
   const server = createServer((request, response) => {
     void serve(request, response).catch((error: unknown) => {
@@ -161,7 +157,7 @@ async function startScriptedModel(
       response.writeHead(404).end();
       return;
     }
-    const body = await readRequestBody(request);
+    const body = await readProviderBody(request);
     responseSequence += 1;
     if (!(await handle(body, request, response, responseSequence))) {
       writeOpenAiResponsesText(response, {
@@ -171,19 +167,9 @@ async function startScriptedModel(
       });
     }
   }
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as AddressInfo;
   return {
-    url: `http://127.0.0.1:${address.port}/v1`,
-    close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    },
+    url: await listenProvider(server),
+    close: () => closeProvider(server),
   };
 }
 
@@ -205,24 +191,26 @@ async function holdUntilStopped(
   });
 }
 
-/** Requester continuations answer visibly so delivery records a visible final. */
-function writeVisibleReply(response: ServerResponse, text: string, sequence: number) {
-  writeOpenAiResponsesText(response, {
-    text,
-    messageId: `requester_delivery_${sequence}`,
-    responseId: `requester_delivery_response_${sequence}`,
-  });
-  return true;
-}
-
-function writeToolCall(
-  response: ServerResponse,
-  name: string,
-  args: Record<string, unknown>,
-  sequence: number,
-) {
-  writeOpenAiResponsesSse(response, toolCallEvents(name, args, sequence));
-  return true;
+function modelActions(response: ServerResponse, sequence: number) {
+  const tool = (name: string, args: Record<string, unknown>) => {
+    writeOpenAiResponsesSse(response, toolCallEvents(name, args, sequence));
+    return true;
+  };
+  return {
+    tool,
+    spawn: (task: string, extras: Record<string, unknown> = {}) =>
+      tool("sessions_spawn", { task, context: "isolated", cleanup: "keep", ...extras }),
+    pause: () => tool("sessions_yield", { waitFor: "message" }),
+    // Requester continuations answer visibly so delivery records a visible final.
+    reply: (text: string, id?: string) => {
+      writeOpenAiResponsesText(response, {
+        text,
+        messageId: id ?? `requester_delivery_${sequence}`,
+        responseId: id ? `${id}_response` : `requester_delivery_response_${sequence}`,
+      });
+      return true;
+    },
+  };
 }
 
 function startStopFollowupModel(sourceState: "active" | "paused") {
@@ -243,21 +231,12 @@ function startStopFollowupModel(sourceState: "active" | "paused") {
     allowParentYield: () => allowParentYield.resolve(),
     deliveryCounts: () => ({ ...counts }),
     release: () => allowParentYield.resolve(),
-    handle: async (
-      body: string,
-      request: IncomingMessage,
-      response: ServerResponse,
-      sequence: number,
-    ) => {
+    handle: async (...[body, request, response, sequence]: Parameters<ModelHandler>) => {
+      const { tool, spawn, pause, reply } = modelActions(response, sequence);
       if (!body.includes(parentPrompt)) {
         // A follow-up to the kept child starts a distinct successor execution.
         if (body.includes(followupTask)) {
-          writeOpenAiResponsesText(response, {
-            text: successorResult,
-            messageId: "stop_followup_successor",
-            responseId: "stop_followup_successor_response",
-          });
-          return true;
+          return reply(successorResult, "stop_followup_successor");
         }
         if (!body.includes(stoppedTask)) {
           return false;
@@ -266,9 +245,7 @@ function startStopFollowupModel(sourceState: "active" | "paused") {
           await holdUntilStopped(request, response, () => firstChildStarted.resolve());
           return true;
         }
-        return body.includes("function_call_output")
-          ? false
-          : writeToolCall(response, "sessions_yield", { waitFor: "message" }, sequence);
+        return body.includes("function_call_output") ? false : pause();
       }
       // A stale notice or late result from the stopped source must never reach the requester.
       if (body.includes(stoppedResult) || body.includes(pauseNotice)) {
@@ -279,16 +256,11 @@ function startStopFollowupModel(sourceState: "active" | "paused") {
       if (body.includes(successorResult)) {
         counts.successorDeliveries += 1;
         completionDelivered.resolve();
-        return writeVisibleReply(response, "PARENT_RECEIVED_SUCCESSOR", sequence);
+        return reply("PARENT_RECEIVED_SUCCESSOR");
       }
       parentRequestCount += 1;
       if (parentRequestCount === 1) {
-        return writeToolCall(
-          response,
-          "sessions_spawn",
-          { task: stoppedTask, context: "isolated", cleanup: "keep", completionTarget: "parent" },
-          sequence,
-        );
+        return spawn(stoppedTask, { completionTarget: "parent" });
       }
       const [child] = spawnReceipts(body);
       if (!child) {
@@ -297,25 +269,19 @@ function startStopFollowupModel(sourceState: "active" | "paused") {
       sourceIdentified.resolve({ runId: child.runId });
       if (parentRequestCount === 2) {
         await allowParentStop.promise;
-        return writeToolCall(
-          response,
-          "sessions",
-          { action: "stop", sessionKey: child.sessionKey, runId: child.runId },
-          sequence,
-        );
+        return tool("sessions", {
+          action: "stop",
+          sessionKey: child.sessionKey,
+          runId: child.runId,
+        });
       }
       if (parentRequestCount === 3) {
-        return writeToolCall(
-          response,
-          "sessions_send",
-          {
-            sessionKey: child.sessionKey,
-            mode: "followup",
-            timeoutSeconds: 0,
-            message: followupTask,
-          },
-          sequence,
-        );
+        return tool("sessions_send", {
+          sessionKey: child.sessionKey,
+          mode: "followup",
+          timeoutSeconds: 0,
+          message: followupTask,
+        });
       }
       if (parentRequestCount === 4) {
         const [followup] = findRecords(
@@ -330,7 +296,7 @@ function startStopFollowupModel(sourceState: "active" | "paused") {
         }
         successorAccepted.resolve(followup.runId as string);
         await allowParentYield.promise;
-        return writeToolCall(response, "sessions_yield", { waitFor: "message" }, sequence);
+        return pause();
       }
       return false;
     },
@@ -346,12 +312,6 @@ function startRetiredSiblingModel(retirement: "delete" | "stop") {
   const siblingDelivered = createDeferred();
   const counts = { siblingDeliveries: 0, retiredDeliveries: 0 };
   let parentRequestCount = 0;
-  const childSpawn = (task: string) => ({
-    task,
-    context: "isolated",
-    cleanup: "keep",
-    ...(retirement === "stop" ? { completionTarget: "parent" } : {}),
-  });
   return {
     retiredChild: retiredChild.promise,
     retiredChildStarted: retiredChildStarted.promise,
@@ -360,20 +320,13 @@ function startRetiredSiblingModel(retirement: "delete" | "stop") {
     allowParentRetirement: () => allowParentRetirement.resolve(),
     deliveryCounts: () => ({ ...counts }),
     release: () => allowParentRetirement.resolve(),
-    handle: async (
-      body: string,
-      request: IncomingMessage,
-      response: ServerResponse,
-      sequence: number,
-    ) => {
+    handle: async (...[body, request, response, sequence]: Parameters<ModelHandler>) => {
+      const { tool, spawn, pause, reply } = modelActions(response, sequence);
+      const childSpawn = (task: string) =>
+        spawn(task, retirement === "stop" ? { completionTarget: "parent" } : {});
       if (!body.includes(parentPrompt)) {
         if (body.includes(siblingTask)) {
-          writeOpenAiResponsesText(response, {
-            text: siblingResult,
-            messageId: "retirement_sibling_result",
-            responseId: "retirement_sibling_result_response",
-          });
-          return true;
+          return reply(siblingResult, "retirement_sibling_result");
         }
         if (!body.includes(deletedTask) && !body.includes(stoppedTask)) {
           return false;
@@ -383,9 +336,7 @@ function startRetiredSiblingModel(retirement: "delete" | "stop") {
           return true;
         }
         retiredChildStarted.resolve();
-        return body.includes("function_call_output")
-          ? false
-          : writeToolCall(response, "sessions_yield", { waitFor: "message" }, sequence);
+        return body.includes("function_call_output") ? false : pause();
       }
       if (body.includes(pauseNotice) || body.includes(stoppedResult)) {
         counts.retiredDeliveries += 1;
@@ -394,16 +345,11 @@ function startRetiredSiblingModel(retirement: "delete" | "stop") {
       if (body.includes(siblingResult)) {
         counts.siblingDeliveries += 1;
         siblingDelivered.resolve();
-        return writeVisibleReply(response, "PARENT_RECEIVED_SIBLING", sequence);
+        return reply("PARENT_RECEIVED_SIBLING");
       }
       parentRequestCount += 1;
       if (parentRequestCount === 1) {
-        return writeToolCall(
-          response,
-          "sessions_spawn",
-          childSpawn(retirement === "stop" ? stoppedTask : deletedTask),
-          sequence,
-        );
+        return childSpawn(retirement === "stop" ? stoppedTask : deletedTask);
       }
       const children = spawnReceipts(body);
       if (parentRequestCount === 2) {
@@ -412,7 +358,7 @@ function startRetiredSiblingModel(retirement: "delete" | "stop") {
           throw new Error("Parent did not retain the retired-child spawn receipt");
         }
         retiredChild.resolve(child);
-        return writeToolCall(response, "sessions_spawn", childSpawn(siblingTask), sequence);
+        return childSpawn(siblingTask);
       }
       const retired = await retiredChild.promise;
       if (parentRequestCount === 3) {
@@ -423,17 +369,16 @@ function startRetiredSiblingModel(retirement: "delete" | "stop") {
         siblingChild.resolve(child);
         await allowParentRetirement.promise;
         return retirement === "stop"
-          ? writeToolCall(
-              response,
-              "sessions",
-              { action: "stop", sessionKey: retired.sessionKey, runId: retired.runId },
-              sequence,
-            )
-          : writeToolCall(response, "sessions_yield", { waitFor: "message" }, sequence);
+          ? tool("sessions", {
+              action: "stop",
+              sessionKey: retired.sessionKey,
+              runId: retired.runId,
+            })
+          : pause();
       }
       if (parentRequestCount === 4 && retirement === "stop") {
         // Yield immediately behind the Stop, while the stopped sibling still settles.
-        return writeToolCall(response, "sessions_yield", { waitFor: "message" }, sequence);
+        return pause();
       }
       return false;
     },
@@ -443,8 +388,14 @@ function startRetiredSiblingModel(retirement: "delete" | "stop") {
 const onlyChildTask = "Hold the only child of a yielded parent until it ends.";
 const resolvedCohortMarker = "ended without a result";
 
-/** A parent yields on its only child; the child holds, or pauses, until something ends it. */
-function startYieldedOnlyChildModel(child: "hold" | "pause") {
+const awaitedChildTask = "Hold the awaited child of a finished parent turn until it is stopped.";
+
+/** A parent either yields on its child or finishes while awaiting it. */
+function startSingleChildModel(
+  task: string,
+  parentYields: boolean,
+  child: "hold" | "pause" = "hold",
+) {
   const spawnedChild = createDeferred<{ runId: string; sessionKey: string }>();
   const childStarted = createDeferred();
   const continued = createDeferred();
@@ -455,14 +406,10 @@ function startYieldedOnlyChildModel(child: "hold" | "pause") {
     childStarted: childStarted.promise,
     continued: continued.promise,
     continuations: () => [...continuations],
-    handle: async (
-      body: string,
-      request: IncomingMessage,
-      response: ServerResponse,
-      sequence: number,
-    ) => {
+    handle: async (...[body, request, response, sequence]: Parameters<ModelHandler>) => {
+      const { spawn, pause, reply } = modelActions(response, sequence);
       if (!body.includes(parentPrompt)) {
-        if (!body.includes(onlyChildTask)) {
+        if (!body.includes(task)) {
           return false;
         }
         if (child === "hold") {
@@ -470,34 +417,29 @@ function startYieldedOnlyChildModel(child: "hold" | "pause") {
           return true;
         }
         childStarted.resolve();
-        return body.includes("function_call_output")
-          ? false
-          : writeToolCall(response, "sessions_yield", { waitFor: "message" }, sequence);
+        return body.includes("function_call_output") ? false : pause();
       }
       if (body.includes(stoppedResult)) {
         throw new Error("A stopped child result reached its requester");
       }
-      if (body.includes(resolvedCohortMarker)) {
+      if (parentYields ? body.includes(resolvedCohortMarker) : parentRequestCount >= 2) {
         continuations.push(body);
         continued.resolve();
-        return writeVisibleReply(response, "PARENT_RECEIVED_RESOLVED_COHORT", sequence);
+        return reply(
+          parentYields ? "PARENT_RECEIVED_RESOLVED_COHORT" : "PARENT_RECEIVED_STOPPED_CHILD",
+        );
       }
       parentRequestCount += 1;
       if (parentRequestCount === 1) {
-        return writeToolCall(
-          response,
-          "sessions_spawn",
-          { task: onlyChildTask, context: "isolated", cleanup: "keep" },
-          sequence,
-        );
+        return spawn(task);
       }
       if (parentRequestCount === 2) {
         const [spawned] = spawnReceipts(body);
         if (!spawned) {
-          throw new Error("Parent did not retain the only-child spawn receipt");
+          throw new Error("Parent did not retain the child spawn receipt");
         }
         spawnedChild.resolve(spawned);
-        return writeToolCall(response, "sessions_yield", { waitFor: "message" }, sequence);
+        return parentYields ? pause() : reply("PARENT_AWAITS_CHILD");
       }
       return false;
     },
@@ -519,12 +461,8 @@ function startYieldedPairModel() {
     children: spawnedChildren.promise,
     childrenStarted: Promise.all(childrenStarted.map((started) => started.promise)),
     continuations: () => [...continuations],
-    handle: async (
-      body: string,
-      request: IncomingMessage,
-      response: ServerResponse,
-      sequence: number,
-    ) => {
+    handle: async (...[body, request, response, sequence]: Parameters<ModelHandler>) => {
+      const { spawn, pause, reply } = modelActions(response, sequence);
       if (!body.includes(parentPrompt)) {
         const index = yieldedPairTasks.findIndex((task) => body.includes(task));
         if (index < 0) {
@@ -538,12 +476,7 @@ function startYieldedPairModel() {
       }
       parentRequestCount += 1;
       if (parentRequestCount <= yieldedPairTasks.length) {
-        return writeToolCall(
-          response,
-          "sessions_spawn",
-          { task: yieldedPairTasks[parentRequestCount - 1], context: "isolated", cleanup: "keep" },
-          sequence,
-        );
+        return spawn(yieldedPairTasks[parentRequestCount - 1]!);
       }
       if (parentRequestCount === yieldedPairTasks.length + 1) {
         const spawned = spawnReceipts(body);
@@ -551,66 +484,11 @@ function startYieldedPairModel() {
           throw new Error("Parent did not retain both spawn receipts");
         }
         spawnedChildren.resolve(spawned);
-        return writeToolCall(response, "sessions_yield", { waitFor: "message" }, sequence);
+        return pause();
       }
       // Every later parent request is a continuation the stopped children started.
       continuations.push(body);
-      return writeVisibleReply(response, "PARENT_RECEIVED_STOPPED_PAIR", sequence);
-    },
-  };
-}
-
-const awaitedChildTask = "Hold the awaited child of a finished parent turn until it is stopped.";
-
-/** A parent spawns one awaited child and ends its turn without yielding; the child holds. */
-function startAwaitedChildModel() {
-  const spawnedChild = createDeferred<{ runId: string; sessionKey: string }>();
-  const childStarted = createDeferred();
-  const notified = createDeferred();
-  const notices: string[] = [];
-  let parentRequestCount = 0;
-  return {
-    child: spawnedChild.promise,
-    childStarted: childStarted.promise,
-    notified: notified.promise,
-    notices: () => [...notices],
-    handle: async (
-      body: string,
-      request: IncomingMessage,
-      response: ServerResponse,
-      sequence: number,
-    ) => {
-      if (!body.includes(parentPrompt)) {
-        if (!body.includes(awaitedChildTask)) {
-          return false;
-        }
-        await holdUntilStopped(request, response, () => childStarted.resolve());
-        return true;
-      }
-      if (body.includes(stoppedResult)) {
-        throw new Error("A stopped child result reached its requester");
-      }
-      parentRequestCount += 1;
-      if (parentRequestCount === 1) {
-        return writeToolCall(
-          response,
-          "sessions_spawn",
-          { task: awaitedChildTask, context: "isolated", cleanup: "keep" },
-          sequence,
-        );
-      }
-      if (parentRequestCount === 2) {
-        const [spawned] = spawnReceipts(body);
-        if (!spawned) {
-          throw new Error("Parent did not retain the awaited-child spawn receipt");
-        }
-        spawnedChild.resolve(spawned);
-        return writeVisibleReply(response, "PARENT_AWAITS_CHILD", sequence);
-      }
-      // Every later parent request is a turn the stopped child's outcome started.
-      notices.push(body);
-      notified.resolve();
-      return writeVisibleReply(response, "PARENT_RECEIVED_STOPPED_CHILD", sequence);
+      return reply("PARENT_RECEIVED_STOPPED_PAIR");
     },
   };
 }
@@ -670,12 +548,16 @@ async function startParentTurn(
   );
 }
 
-/** Resolves once the published registry row satisfies the predicate. */
-async function waitForRun(runId: string, matches: (row: SubagentRunRecord) => boolean) {
+/** Wait on registry publication, optionally accepting removal of the row. */
+async function waitForRun(
+  runId: string,
+  matches: (row: SubagentRunRecord) => boolean,
+  acceptRemoval = false,
+) {
   const reached = createDeferred();
   const observe = () => {
     const row = getSubagentRunByRunId(runId);
-    if (row && matches(row)) {
+    if (row ? matches(row) : acceptRemoval) {
       reached.resolve();
     }
   };
@@ -688,22 +570,35 @@ async function waitForRun(runId: string, matches: (row: SubagentRunRecord) => bo
   }
 }
 
-/** Resolves once the row is gone or satisfies the predicate. */
-async function waitForRunOrRemoval(runId: string, matches: (row: SubagentRunRecord) => boolean) {
-  const reached = createDeferred();
-  const observe = () => {
-    const row = getSubagentRunByRunId(runId);
-    if (!row || matches(row)) {
-      reached.resolve();
-    }
+const waitForRunOrRemoval = (runId: string, matches: (row: SubagentRunRecord) => boolean) =>
+  waitForRun(runId, matches, true);
+
+type ProofClient = Awaited<ReturnType<typeof startProofGateway>>["client"];
+const waitForAgent = (client: ProofClient, runId: string) =>
+  expect(client.request("agent.wait", { runId, timeoutMs: 30_000 })).resolves.toMatchObject({
+    status: "ok",
+  });
+const abortChild = (client: ProofClient, child: { runId: string; sessionKey: string }) =>
+  expect(
+    client.request("sessions.abort", { key: child.sessionKey, runId: child.runId }),
+  ).resolves.toMatchObject({ ok: true, status: "aborted" });
+const deleteChild = (client: ProofClient, key: string) =>
+  expect(client.request("sessions.delete", { key })).resolves.toMatchObject({
+    ok: true,
+    deleted: true,
+  });
+
+async function startProof(script: { handle: ModelHandler; release?: () => void }, label: string) {
+  const model = await startScriptedModel(script.handle);
+  const gateway = await startProofGateway(model.url, label);
+  return {
+    client: gateway.client,
+    close: async () => {
+      script.release?.();
+      await gateway.close();
+      await model.close();
+    },
   };
-  const stop = subscribeSubagentRunChanges("persistence", observe);
-  try {
-    observe();
-    await reached.promise;
-  } finally {
-    stop();
-  }
 }
 
 /** Controller inputs that a run still owes its requester, by stable reservation identity. */
@@ -723,8 +618,7 @@ it.each(["active", "paused"] as const)(
   "delivers exactly one kept-child successor after exact-run Stop of an %s source",
   async (sourceState) => {
     const script = startStopFollowupModel(sourceState);
-    const model = await startScriptedModel(script.handle);
-    const gateway = await startProofGateway(model.url, `subagent-stop-followup-${sourceState}`);
+    const gateway = await startProof(script, `subagent-stop-followup-${sourceState}`);
     const parentRunId = `subagent-stop-followup-parent-${sourceState}`;
     try {
       await startParentTurn(gateway.client, parentRunId);
@@ -736,22 +630,16 @@ it.each(["active", "paused"] as const)(
       }
       script.allowParentStop();
       const successorRunId = await script.successorAccepted;
-      await expect(
-        gateway.client.request("agent.wait", { runId: successorRunId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await waitForAgent(gateway.client, successorRunId);
       script.allowParentYield();
-      await expect(
-        gateway.client.request("agent.wait", { runId: parentRunId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await waitForAgent(gateway.client, parentRunId);
       await waitForRun(successorRunId, (row) => row.delivery?.status === "delivered");
       await script.completionDelivered;
       expect(script.deliveryCounts()).toEqual({ successorDeliveries: 1, stoppedDeliveries: 0 });
       expect(owedControllerInputs(source.runId), "the stopped source owes nothing").toEqual([]);
       expect(owedControllerInputs(successorRunId), "the successor delivered once").toEqual([]);
     } finally {
-      script.release();
       await gateway.close();
-      await model.close();
     }
   },
 );
@@ -760,8 +648,7 @@ it.each(["delete", "stop"] as const)(
   "retires a %s child without blocking its completed sibling or the parent yield",
   async (retirement) => {
     const script = startRetiredSiblingModel(retirement);
-    const model = await startScriptedModel(script.handle);
-    const gateway = await startProofGateway(model.url, `subagent-retired-${retirement}`);
+    const gateway = await startProof(script, `subagent-retired-${retirement}`);
     const parentRunId = `subagent-retired-${retirement}-parent`;
     try {
       await startParentTurn(gateway.client, parentRunId);
@@ -771,28 +658,20 @@ it.each(["delete", "stop"] as const)(
         await waitForRun(retired.runId, (row) => row.pauseReason === "sessions_yield");
       }
       const sibling = await script.siblingChild;
-      await expect(
-        gateway.client.request("agent.wait", { runId: sibling.runId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await waitForAgent(gateway.client, sibling.runId);
       if (retirement === "delete") {
-        await expect(
-          gateway.client.request("sessions.delete", { key: retired.sessionKey }),
-        ).resolves.toMatchObject({ ok: true, deleted: true });
+        await deleteChild(gateway.client, retired.sessionKey);
         expect(owedControllerInputs(retired.runId), "deletion retires its inputs").toEqual([]);
       }
       script.allowParentRetirement();
-      await expect(
-        gateway.client.request("agent.wait", { runId: parentRunId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await waitForAgent(gateway.client, parentRunId);
       await waitForRun(sibling.runId, (row) => row.delivery?.status === "delivered");
       await script.siblingDelivered;
       expect(script.deliveryCounts()).toEqual({ siblingDeliveries: 1, retiredDeliveries: 0 });
       expect(owedControllerInputs(retired.runId), "the retired child owes nothing").toEqual([]);
       expect(owedControllerInputs(sibling.runId), "the sibling delivered once").toEqual([]);
     } finally {
-      script.release();
       await gateway.close();
-      await model.close();
     }
   },
 );
@@ -807,19 +686,20 @@ it.each([
   async ({ ending, continuations }) => {
     // Stop reaches a dormant child through its registry row. Stop of an active child is
     // confirmed when its controller operation settles, with no reconciliation delay.
-    const script = startYieldedOnlyChildModel(ending === "child stop" ? "pause" : "hold");
-    const model = await startScriptedModel(script.handle);
+    const script = startSingleChildModel(
+      onlyChildTask,
+      true,
+      ending === "child stop" ? "pause" : "hold",
+    );
     const label = `subagent-only-child-${ending.replaceAll(" ", "-")}`;
-    const gateway = await startProofGateway(model.url, label);
+    const gateway = await startProof(script, label);
     const parentRunId = `${label}-parent`;
     const parentSessionKey = `agent:main:${parentRunId}`;
     try {
       await startParentTurn(gateway.client, parentRunId);
       const child = await script.child;
       await script.childStarted;
-      await expect(
-        gateway.client.request("agent.wait", { runId: parentRunId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await waitForAgent(gateway.client, parentRunId);
       await waitForRun(
         child.runId,
         (row) =>
@@ -827,13 +707,9 @@ it.each([
           (ending !== "child stop" || row.pauseReason === "sessions_yield"),
       );
       if (ending === "child stop" || ending === "active child stop") {
-        await expect(
-          gateway.client.request("sessions.abort", { key: child.sessionKey, runId: child.runId }),
-        ).resolves.toMatchObject({ ok: true, status: "aborted" });
+        await abortChild(gateway.client, child);
       } else if (ending === "child delete") {
-        await expect(
-          gateway.client.request("sessions.delete", { key: child.sessionKey }),
-        ).resolves.toMatchObject({ ok: true, deleted: true });
+        await deleteChild(gateway.client, child.sessionKey);
       } else {
         await gateway.client.request("sessions.abort", { key: parentSessionKey });
       }
@@ -854,7 +730,6 @@ it.each([
       expect(owedControllerInputs(child.runId), "the resolved cohort owes nothing").toEqual([]);
     } finally {
       await gateway.close();
-      await model.close();
     }
   },
 );
@@ -865,28 +740,23 @@ it.each([
 ] as const)(
   "tells a parent $notices time(s) when the user stops the $stopped of an awaited child",
   async ({ stopped, notices: expectedNotices }) => {
-    const script = startAwaitedChildModel();
-    const model = await startScriptedModel(script.handle);
-    const gateway = await startProofGateway(model.url, `subagent-awaited-${stopped}-stop`);
+    const script = startSingleChildModel(awaitedChildTask, false);
+    const gateway = await startProof(script, `subagent-awaited-${stopped}-stop`);
     const parentRunId = `subagent-awaited-${stopped}-stop-parent`;
     const parentSessionKey = `agent:main:${parentRunId}`;
     try {
       await startParentTurn(gateway.client, parentRunId);
       const child = await script.child;
       await script.childStarted;
-      await expect(
-        gateway.client.request("agent.wait", { runId: parentRunId, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await waitForAgent(gateway.client, parentRunId);
       expect(getSubagentRunByRunId(child.runId)?.requesterSettleWake?.requesterYieldBatch).not.toBe(
         true,
       );
       const outputPolls = vi.mocked(announceOutput.readLatestSubagentOutputWithRetry);
       outputPolls.mockClear();
       if (stopped === "child") {
-        await expect(
-          gateway.client.request("sessions.abort", { key: child.sessionKey, runId: child.runId }),
-        ).resolves.toMatchObject({ ok: true, status: "aborted" });
-        await script.notified;
+        await abortChild(gateway.client, child);
+        await script.continued;
         // A killed child has no further output: its notice is sent without polling for any.
         expect(outputPolls).not.toHaveBeenCalled();
       } else {
@@ -914,7 +784,7 @@ it.each([
           row.requesterSettleWake === undefined,
       );
       expect(owedControllerInputs(child.runId), "the stopped child owes nothing").toEqual([]);
-      const notices = script.notices();
+      const notices = script.continuations();
       expect(notices).toHaveLength(expectedNotices);
       for (const notice of notices) {
         expect(notice).toContain(
@@ -924,15 +794,13 @@ it.each([
       }
     } finally {
       await gateway.close();
-      await model.close();
     }
   },
 );
 
 it("confirms a stopped child's kill without losing either of two overlapping confirmations", async () => {
   const script = startYieldedPairModel();
-  const model = await startScriptedModel(script.handle);
-  const gateway = await startProofGateway(model.url, "subagent-yielded-pair-parent-stop");
+  const gateway = await startProof(script, "subagent-yielded-pair-parent-stop");
   const parentRunId = "subagent-yielded-pair-parent-stop-parent";
   const parentSessionKey = `agent:main:${parentRunId}`;
   const confirmations = vi.mocked(sweepKill.reconcileProvisionalSubagentKill);
@@ -947,9 +815,7 @@ it("confirms a stopped child's kill without losing either of two overlapping con
     await startParentTurn(gateway.client, parentRunId);
     const children = await script.children;
     await script.childrenStarted;
-    await expect(
-      gateway.client.request("agent.wait", { runId: parentRunId, timeoutMs: 30_000 }),
-    ).resolves.toMatchObject({ status: "ok" });
+    await waitForAgent(gateway.client, parentRunId);
     for (const child of children) {
       await waitForRun(child.runId, (row) => row.requesterSettleWake?.requesterYieldBatch === true);
     }
@@ -1013,6 +879,5 @@ it("confirms a stopped child's kill without losing either of two overlapping con
     confirmations.mockImplementation(actualConfirm);
     reads.mockImplementation(actualRead);
     await gateway.close();
-    await model.close();
   }
 });

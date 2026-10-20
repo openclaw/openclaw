@@ -1,59 +1,45 @@
-// Mantis Web UI Chat Proof Workflow tests cover mantis web ui chat proof workflow behavior.
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
-const WORKFLOW = ".github/workflows/mantis-web-ui-chat-proof.yml";
-const SHARED_RESOLVE_WORKFLOW = ".github/workflows/mantis-resolve-request.yml";
-
-type WorkflowStep = {
-  id?: string;
-  if?: string;
-  env?: Record<string, string>;
-  name?: string;
-  run?: string;
-  uses?: string;
-  with?: Record<string, string>;
-};
-
-type WorkflowJob = {
-  outputs?: Record<string, string>;
-  permissions?: Record<string, string>;
+type WorkflowStep = Partial<Record<"id" | "if" | "name" | "run", string>> &
+  Partial<Record<"env" | "with", Record<string, string>>>;
+type WorkflowJob = Partial<Record<"outputs" | "permissions" | "with", Record<string, string>>> & {
   steps?: WorkflowStep[];
-  with?: Record<string, string>;
 };
 
-type Workflow = {
-  jobs?: Record<string, WorkflowJob>;
-};
-
-function resolveRequestScript(): string {
-  const workflow = parse(readFileSync(SHARED_RESOLVE_WORKFLOW, "utf8")) as Workflow;
-  const steps = workflow.jobs?.resolve?.steps ?? [];
-  const step = steps.find((candidate) => candidate.name === "Resolve refs and target PR");
-  if (!step?.with?.script) {
-    throw new Error("Missing shared Resolve refs and target PR script");
-  }
-  return step.with.script;
+function readWorkflow(file: string) {
+  return parse(readFileSync(`.github/workflows/${file}.yml`, "utf8")) as {
+    jobs?: Record<string, WorkflowJob>;
+  };
 }
-
 function workflowJob(name: string): WorkflowJob {
-  const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
-  const job = workflow.jobs?.[name];
-  if (!job) {
-    throw new Error(`Missing ${name} job`);
+  return expectDefined(
+    readWorkflow("mantis-web-ui-chat-proof").jobs?.[name],
+    `Missing ${name} job`,
+  );
+}
+function containsAll(actual: string | undefined, expected: string[]) {
+  for (const text of expected) {
+    expect(actual).toContain(text);
   }
-  return job;
 }
 
 async function resolveCandidateRef(body: string, pullRequestHead: string) {
-  const request = workflowJob("resolve_request").with;
-  if (!request) {
-    throw new Error("Missing shared resolver inputs");
-  }
+  const request = expectDefined(
+    workflowJob("resolve_request").with,
+    "Missing shared resolver inputs",
+  );
   const outputs = new Map<string, string>();
-  await runInNewContext(`(async () => {\n${resolveRequestScript()}\n})()`, {
+  const script = expectDefined(
+    readWorkflow("mantis-resolve-request").jobs?.resolve?.steps?.find(
+      (step) => step.name === "Resolve refs and target PR",
+    )?.with?.script,
+    "Missing shared Resolve refs and target PR script",
+  );
+  await runInNewContext(`(async () => {\n${script}\n})()`, {
     context: {
       eventName: "issue_comment",
       repo: { owner: "openclaw", repo: "openclaw" },
@@ -117,19 +103,16 @@ describe("Mantis Web UI chat proof workflow", () => {
     const rootOutput = "${{ steps.prepare_evidence.outputs.output_dir }}";
 
     expect(allocate?.run).toContain('mktemp -d "$output_parent/run.XXXXXX"');
-    expect(capture?.run).toContain(`root="${rootOutput}"`);
-    expect(capture?.run).toContain('OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR="$root"');
-    expect(capture?.run).toContain('OPENCLAW_UI_E2E_ARTIFACT_DIR="$root"');
-    // Older candidates need the allocator imported by both overlaid harness files.
-    expect(capture?.run).toContain(
+    containsAll(capture?.run, [
+      `root="${rootOutput}"`,
+      'OPENCLAW_MANTIS_WEB_UI_CHAT_OUTPUT_DIR="$root"',
+      'OPENCLAW_UI_E2E_ARTIFACT_DIR="$root"',
+      // Older candidates need the allocator imported by both overlaid harness files.
       '"${GITHUB_WORKSPACE}/ui/src/test-helpers/control-ui-e2e-artifacts.ts"',
-    );
-    expect(capture?.run).toContain(
       '"$candidate_repo/ui/src/test-helpers/control-ui-e2e-artifacts.ts"',
-    );
+    ]);
     expect(report?.if).toContain("always()");
-    expect(report?.run).toContain(`root="${rootOutput}"`);
-    expect(report?.run).toContain('--output-dir "$root"');
+    containsAll(report?.run, [`root="${rootOutput}"`, '--output-dir "$root"']);
     expect(report?.env?.PROOF_STATUS).toBe(
       "${{ steps.run_mantis.outcome == 'success' && 'pass' || 'fail' }}",
     );

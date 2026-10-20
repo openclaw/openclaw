@@ -3,11 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
-import type { DiffReadTiming } from "../infra/diff-read-timing.js";
+import { unavailableDiffRevision, type DiffReadTiming } from "../infra/diff-read-timing.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
 import { GitCommandTimeoutError, requireGitCommandOutput } from "../infra/git-exec.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
 import {
+  findGitRoot,
   readGitHead,
   readGitMetadataDirectories,
   readGitMetadataPrefix,
@@ -42,7 +43,7 @@ export async function readCheckoutGitRevision(
   timing?: DiffReadTiming,
 ): Promise<string | null> {
   if (!canReadGitFilesystemRefs()) {
-    return null;
+    return unavailableDiffRevision(timing, "no-revision-environment");
   }
   try {
     if (scope === "diff") {
@@ -125,8 +126,8 @@ export async function readCheckoutGitRevision(
           : [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
       }),
     ]);
-  } catch {
-    return null;
+  } catch (error) {
+    return unavailableDiffRevision(timing, undefined, error);
   }
 }
 
@@ -200,7 +201,7 @@ async function readGitInstallationFiles(
 
 /** Git owns ignored paths and index refreshes; observe only its changed-file inventory. */
 async function readCheckoutDiffRevision(
-  root: string,
+  cwd: string,
   previousPaths: string[] = [],
   summaryOnly = false,
   timing?: DiffReadTiming,
@@ -215,16 +216,20 @@ async function readCheckoutDiffRevision(
     )
     .digest("hex");
   // Reused workers may have an older environment; Windows path translation retains native reads.
-  if (
-    environment !== gitFilesystemEnvironmentRevision() ||
-    process.platform === "win32" ||
-    fs.realpathSync(root) !== root
-  ) {
-    return null;
+  if (environment !== gitFilesystemEnvironmentRevision()) {
+    return unavailableDiffRevision(timing, "no-revision-environment");
+  }
+  if (process.platform === "win32") {
+    return unavailableDiffRevision(timing, "no-revision-platform");
+  }
+  // Diff collection accepts nested/aliased cwd paths; validate the same physical checkout.
+  const root = findGitRoot(fs.realpathSync(cwd));
+  if (!root) {
+    return unavailableDiffRevision(timing, "no-revision-metadata");
   }
   const directories = readGitMetadataDirectories(root);
   if (!directories) {
-    return null;
+    return unavailableDiffRevision(timing, "no-revision-metadata");
   }
   const { gitDir, commonDir } = directories;
   const hash = createHash("sha256").update(environment);
@@ -244,6 +249,7 @@ async function readCheckoutDiffRevision(
   const observe = (file: string, allowSymlink = false, target = hash, identityOnly = false) => {
     const stat = readStat(file);
     if (stat?.isSymbolicLink() && !allowSymlink) {
+      unavailableDiffRevision(timing, "no-revision-symlink");
       throw new Error("Indirect Git metadata requires a fresh diff");
     }
     target.update(
@@ -304,7 +310,7 @@ async function readCheckoutDiffRevision(
   const xdg = process.env.XDG_CONFIG_HOME ?? nodePath.join(home, ".config");
   const installation = await readGitInstallationFiles(root, environment);
   if (!installation) {
-    return null;
+    return unavailableDiffRevision(timing, "no-revision-git-installation");
   }
   hash.update(installation.revision);
   const configFiles = [
@@ -317,7 +323,7 @@ async function readCheckoutDiffRevision(
   ];
   for (const file of configFiles) {
     if (!nodePath.isAbsolute(file)) {
-      return null;
+      return unavailableDiffRevision(timing, "no-revision-config");
     }
     if (file === os.devNull) {
       continue;
@@ -331,7 +337,7 @@ async function readCheckoutDiffRevision(
           readGitMetadataPrefix(file, 65_536),
         ))
     ) {
-      return null;
+      return unavailableDiffRevision(timing, "no-revision-config");
     }
   }
   for (const file of ["attributes", "ignore"]) {
@@ -342,7 +348,7 @@ async function readCheckoutDiffRevision(
   }
   for (const directory of new Set([gitDir, commonDir])) {
     if (observe(nodePath.join(directory, "reftable"))) {
-      return null;
+      return unavailableDiffRevision(timing, "no-revision-reftable");
     }
     for (const file of ["commondir", "packed-refs", "shallow"]) {
       observe(nodePath.join(directory, file));
@@ -354,7 +360,7 @@ async function readCheckoutDiffRevision(
   // Object IDs are immutable; directory stamps capture newly hydrated loose objects/packs.
   const objects = nodePath.join(commonDir, "objects");
   if (observe(nodePath.join(objects, "info/alternates"))) {
-    return null;
+    return unavailableDiffRevision(timing, "no-revision-alternates");
   }
   if (observe(objects)?.isDirectory()) {
     for (const child of entries(objects)
@@ -374,7 +380,7 @@ async function readCheckoutDiffRevision(
         for (const entry of entries(parent)) {
           if (entry.name === ".git") {
             if (parent !== root) {
-              return null;
+              return unavailableDiffRevision(timing, "no-revision-nested-repository");
             }
             continue;
           }
@@ -394,8 +400,9 @@ async function readCheckoutDiffRevision(
         observe(file, true, stamp);
       }
       return stamp.digest("hex");
-    } catch {
-      return null; // Optional memo admission must not disable the semantic revision.
+    } catch (error) {
+      // Optional memo admission must not disable the semantic revision.
+      return unavailableDiffRevision(timing, undefined, error);
     }
   })();
   remaining = semanticBudget;
@@ -430,7 +437,7 @@ async function readCheckoutDiffRevision(
     oversized();
   }
   if (status.code !== 0 || status.termination !== "exit" || status.stdout.includes("\uFFFD")) {
-    return null;
+    return unavailableDiffRevision(timing, "no-revision-status");
   }
   const head = createHash("sha256");
   const index = createHash("sha256");
@@ -449,8 +456,11 @@ async function readCheckoutDiffRevision(
     } else {
       // Porcelain v2 preserves index object/mode identity without index stat-cache bytes.
       const entry = /^1 (..) (....) (\d+) (\d+) (\d+) ([a-f0-9]+) ([a-f0-9]+) (.*)$/su.exec(record);
-      if (!entry || entry[2] !== "N...") {
-        return null; // Conflicts and dirty nested repositories retain fresh Git reads.
+      if (!entry) {
+        return unavailableDiffRevision(timing, "no-revision-unmerged");
+      }
+      if (entry[2] !== "N...") {
+        return unavailableDiffRevision(timing, "no-revision-submodule");
       }
       file = entry[8]!;
       if (entry[1]![0] !== ".") {
@@ -460,7 +470,7 @@ async function readCheckoutDiffRevision(
     }
     paths.add(file);
     if (observe(nodePath.join(root, file), true, worktreeMtime)?.isDirectory()) {
-      return null;
+      return unavailableDiffRevision(timing, "no-revision-nested-repository");
     }
   }
   // Clean committed previews still depend on file type and hardlink eligibility.

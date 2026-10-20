@@ -2,18 +2,16 @@ import type { PostgresSqlConnection } from "../sql-connection.js";
 import {
   getSqliteDatabaseAdmission,
   publishSqliteDatabaseAdmission,
-  type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
 } from "../sqlite-database-admission.js";
 import { DatabaseSearchCapabilityUnavailableError } from "./capability-unavailable.js";
 import type { SearchSchema } from "./contract.js";
 
 export const pgSearchName = (name: string) => `"${name.replaceAll('"', '""')}"`;
 export const searchConfig = "openclaw_simple_unaccent";
-const key: SqliteDatabaseAdmissionKey<string[]> = {
+const key: SqliteDatabaseFactKey<string[]> = {
   name: "database.postgres.search",
   schemaDependent: true,
-  read: (value) =>
-    Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined,
 };
 
 /** Called only by store admission; query paths consume these retained facts. */

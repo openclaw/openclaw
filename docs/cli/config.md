@@ -198,6 +198,8 @@ machine-output spelling and keeps stdout reserved for the schema document.
 
 Schema refusals from `config set`, `config patch`, and `config unset` explain the affected setting and confirm that no settings were saved. Correct the reported value or use `openclaw config schema` to inspect supported settings, then retry. These refusals still exit with status 1. Explicit validation reports settings that need correction without changing the file; `config validate --json` retains its `valid: false`, `error`, and `issues` fields for scripts.
 
+Known retired core settings are reported before loading plugin migration diagnostics. Both `config get` and `config validate` include the `openclaw doctor --fix` repair hint. JSON errors keep their existing `error.message` and add the guidance in `repairHint`. Doctor still inspects all applicable core and plugin migrations when applying repairs.
+
 Config read failures name the file being read and preserve the underlying error. Resolve the reported file-access or runtime problem, then retry; a read failure alone does not mean the settings need repair.
 
 Human validation diagnostics quote literal record keys, such as `agents.defaults.models["provider/model.v1"].alias`, instead of displaying the dot inside a key as nested traversal. Numeric array positions use brackets, such as `agents.entries.main.skills[0]`. The `issues[].path` field in `config validate --json` keeps its existing dot-joined representation.

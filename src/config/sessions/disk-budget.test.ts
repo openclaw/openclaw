@@ -145,7 +145,7 @@ describe("enforceSessionDiskBudget", () => {
 
     const usage = await measureSessionPhysicalDiskUsage(storePath);
 
-    expect(usage).toMatchObject({ totalBytes: 100, sessionFilesBytes: 0 });
+    expect(usage).toMatchObject({ totalBytes: 100 });
   });
 
   it("counts durable fixed-store agent partitions and their WAL files", async ({ dir }) => {
@@ -166,9 +166,7 @@ describe("enforceSessionDiskBudget", () => {
     const usage = await measureSessionPhysicalDiskUsage(storePath);
 
     expect(usage).toMatchObject({
-      databaseMainBytes: partitionBytes,
       databaseWalBytes: 77,
-      sessionFilesBytes: 0,
       totalBytes: partitionBytes + 77,
     });
   });

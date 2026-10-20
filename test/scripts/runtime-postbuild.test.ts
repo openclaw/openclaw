@@ -173,7 +173,8 @@ describe("runtime postbuild static assets", () => {
       outputs: string[];
       sources: string[];
       packageOutputs: string[];
-    }>(`
+    }>(
+      `
       const assets = await import("./scripts/lib/static-extension-assets.mts");
       const discovered = assets.discoverStaticExtensionAssets();
       const packageAssets = assets.discoverStaticExtensionAssets({ includeExternalPlugins: true });
@@ -182,7 +183,9 @@ describe("runtime postbuild static assets", () => {
         sources: assets.listStaticExtensionAssetSources(),
         packageOutputs: packageAssets.map(({ dest }) => dest),
       };
-    `);
+    `,
+      { allowedExistsSyncPaths: [path.join(MODULE_ROOT, ".git")] },
+    );
 
     expect(payload.outputs).toEqual([
       "dist/extensions/apple-fm/assets/AppleFoundationModels.swift",

@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -582,9 +583,10 @@ describe("Buzz gateway lifecycle", () => {
   it("preserves the activation floor on reconnect without trusting sender time", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const invalidateDirectoryCache = vi.fn();
-    const { stop } = startTestGateway({ invalidateDirectoryCache });
+    const { stop, abortController } = startTestGateway({ invalidateDirectoryCache });
 
     await vi.waitFor(() => expect(gatewayMocks.startBuzzBus).toHaveBeenCalledOnce());
+    const initialAbortListeners = getEventListeners(abortController.signal, "abort").length;
     const createdAt = Math.floor(Date.now() / 1000) + 24 * 60 * 60;
     await gatewayMocks.onMessage?.(
       {
@@ -613,7 +615,9 @@ describe("Buzz gateway lifecycle", () => {
     expect(secondSince).toBeLessThanOrEqual(reconnectStartedAt);
     expect(secondSince).toBeLessThan(createdAt);
 
+    const reconnectedAbortListeners = getEventListeners(abortController.signal, "abort").length;
     await stop();
+    expect(reconnectedAbortListeners).toBe(initialAbortListeners);
   });
 });
 

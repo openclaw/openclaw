@@ -204,6 +204,7 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
     const read = requestedAgent.agentId
       ? await retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
           requireMaterialized: true,
+          projection: ["skillsSnapshot"],
           entryMatches: (previous, current) =>
             !hasSessionReadAccessChanged(previous, current) &&
             sessionFileWorkspaceMatches(previous, current),

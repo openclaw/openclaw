@@ -371,7 +371,7 @@ describe.each([
     });
   });
   it.each([true, false])(
-    "refreshes only runtime-owned fallback config without a source snapshot (runtimeOwned=%s)",
+    "keeps fallback config stable for one request and refreshes the next (runtimeOwned=%s)",
     async (runtimeOwned) => {
       const primary = createFixture("refresh-primary", true);
       const fallback = createFixture("refresh-fallback");
@@ -391,22 +391,24 @@ describe.each([
         const pending = settle(primary.run({ cfg, timeoutMs: undefined }));
         try {
           await waitForHook(primary.state.synthesizeStarted.promise, pending);
-          setRuntimeConfigSnapshot({
+          const nextConfig: OpenClawConfig = {
             ...cfg,
             plugins: {
               ...cfg.plugins,
               entries: { [fallback.id]: { config: { voiceId: "after-refresh" } } },
             },
-          });
+          };
+          setRuntimeConfigSnapshot(nextConfig);
           primary.state.synthesizeResume.resolve();
           const result = await pending;
           expect(result.error).toBeUndefined();
           expect(result.value?.success).toBe(true);
           expect(result.value?.attemptedProviders).toEqual([primary.id, fallback.id]);
-          expect(result.value?.providerVoice).toBe(
-            runtimeOwned ? "after-refresh" : "before-refresh",
-          );
+          expect(result.value?.providerVoice).toBe("before-refresh");
           expect(result.value?.audioBuffer).toEqual(pcm);
+          const next = await primary.run({ cfg: nextConfig, timeoutMs: undefined });
+          expect(next.success).toBe(true);
+          expect(next.providerVoice).toBe("after-refresh");
           expectDisposed([primary, fallback]);
         } finally {
           primary.resume();

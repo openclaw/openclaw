@@ -26,7 +26,11 @@ import {
   looksLikeExplicitPathToken,
   pathLooksMutableForShellPayloadSync,
 } from "./system-run-mutable-file-policy.js";
-import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
+import {
+  normalizeNonEmptyString,
+  normalizeStringArray,
+  readNonBlankString,
+} from "./system-run-normalize.js";
 import { hasPosixShellStartupEnvironment } from "./system-run-shell-file-operand.js";
 import { analyzeWindowsShellCommand } from "./windows-shell-command.js";
 
@@ -76,7 +80,7 @@ export function buildSystemRunApprovalBinding(params: {
   return {
     binding: {
       argv: normalizeStringArray(params.argv),
-      cwd: normalizeNonEmptyString(params.cwd),
+      cwd: readNonBlankString(params.cwd) ?? null,
       agentId: normalizeNonEmptyString(params.agentId),
       sessionKey: normalizeNonEmptyString(params.sessionKey),
       envHash: envBinding.envHash,

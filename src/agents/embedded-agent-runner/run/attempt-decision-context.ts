@@ -24,8 +24,7 @@ type Exchange = {
   assistant: string;
   toolResults?: { returned: number; errors: number };
 };
-export type DecisionContextFacts = {
-  exchangeCount: number;
+type DecisionContextFacts = {
   contextChars: number;
   olderContextOmitted: boolean;
   toolPayloadsOmitted: boolean;
@@ -39,13 +38,6 @@ export type DecisionContext =
     }
   | {
       status: "skipped";
-      reason:
-        | "empty-request"
-        | "context-too-large"
-        | "missing-exchange"
-        | "excluded-context"
-        | "pending-tool-work";
-      facts: DecisionContextFacts;
     };
 
 function hasMedia(message: AgentMessage): boolean {
@@ -103,27 +95,23 @@ export function prepareDecisionContext(params: {
   currentInputExcluded?: boolean;
 }): DecisionContext {
   const facts: DecisionContextFacts = {
-    exchangeCount: 0,
     contextChars: 0,
     olderContextOmitted: false,
     toolPayloadsOmitted: false,
   };
-  const skip = (
-    reason: Extract<DecisionContext, { status: "skipped" }>["reason"],
-  ): DecisionContext => ({ status: "skipped", reason, facts });
   if (params.currentInputExcluded) {
-    return skip("excluded-context");
+    return { status: "skipped" };
   }
   if (params.latestRequest.length > MAX_DECISION_CONTEXT_CHARS) {
-    return skip("context-too-large");
+    return { status: "skipped" };
   }
   if (detectImageReferences(params.latestRequest).length > 0) {
-    return skip("excluded-context");
+    return { status: "skipped" };
   }
   const latestRequest = stripUserEnvelopeForDisplay(params.latestRequest).trim();
   facts.contextChars = latestRequest.length;
   if (!latestRequest) {
-    return skip("empty-request");
+    return { status: "skipped" };
   }
   const recentConversation: Exchange[] = [];
   const pending: AgentMessage[] = [];
@@ -203,18 +191,15 @@ export function prepareDecisionContext(params: {
     }
     const unpaired = unmatchedResult || pendingCalls.size > 0;
     const size = (user?.length ?? 0) + assistant.length;
-    const problem = unpaired
-      ? "pending-tool-work"
-      : excluded
-        ? "excluded-context"
-        : !assistant || !terminal
-          ? "missing-exchange"
-          : facts.contextChars + size > MAX_DECISION_CONTEXT_CHARS
-            ? "context-too-large"
-            : undefined;
-    if (problem) {
+    if (
+      unpaired ||
+      excluded ||
+      !assistant ||
+      !terminal ||
+      facts.contextChars + size > MAX_DECISION_CONTEXT_CHARS
+    ) {
       if (recentConversation.length === 0) {
-        return skip(problem);
+        return { status: "skipped" };
       }
       facts.olderContextOmitted = true;
       break;
@@ -226,7 +211,6 @@ export function prepareDecisionContext(params: {
     };
     recentConversation.unshift(exchange);
     facts.contextChars += size;
-    facts.exchangeCount = recentConversation.length;
     facts.toolPayloadsOmitted ||= returned > 0;
     pending.length = 0;
     if (recentConversation.length === MAX_EXCHANGES) {
@@ -236,7 +220,7 @@ export function prepareDecisionContext(params: {
   }
   if (pending.length || (lower > 0 && recentConversation.length === 0)) {
     if (recentConversation.length === 0) {
-      return skip("missing-exchange");
+      return { status: "skipped" };
     }
     facts.olderContextOmitted = true;
   }

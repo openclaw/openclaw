@@ -312,7 +312,10 @@ describe("scoped SQLite read-only children", () => {
       );
     });
     resumed.resolve();
-    await expect(late).rejects.toThrow("scope closed");
+    await expect(late).rejects.toMatchObject({
+      message: "SQLite read-only worker scope closed",
+      code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED",
+    });
     expect(spawn).not.toHaveBeenCalled();
     expect(execFile).not.toHaveBeenCalled();
   });

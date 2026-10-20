@@ -52,7 +52,6 @@ export function resolveChannelDisplayState(key: string, props: ChannelsProps) {
     configured,
     running,
     connected,
-    defaultAccount,
     status,
   };
 }
