@@ -139,6 +139,10 @@ namespace separate cache entries. Session setup runs when a backend connects,
 and an idle connection lost by the server is replaced at the next open. Workers
 close their cached connections on shutdown.
 
+Usage reports retain their reader in the existing history worker between requests.
+Each report still uses a fresh read snapshot; database maintenance and worker
+shutdown close the retained connection before releasing custody.
+
 ## Requirements
 
 ### Provision a database and runtime role
