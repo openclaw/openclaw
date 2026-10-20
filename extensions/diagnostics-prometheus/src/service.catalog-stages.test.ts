@@ -244,3 +244,48 @@ it("bounds diff histograms to two methods, six stages and two cache outcomes in 
     metrics.stop();
   }
 });
+
+it("bounds diff miss reasons without exporting revision keys or caller supplied labels", () => {
+  const metrics = createMetricsHarness();
+  const event = {
+    type: "diagnostic.phase.completed" as const,
+    name: "sessions.diff",
+    startedAt: 0,
+    durationMs: 1,
+    details: { outcome: "cache-miss", missReason: "cold", revision: "private-revision" },
+  };
+  try {
+    for (const name of ["sessions.diff", "checkout.diff"]) {
+      for (const missReason of [
+        "cold",
+        "evicted",
+        "pending",
+        "no-revision",
+        "oversized",
+        "revision-changed-head",
+        "revision-changed-index",
+        "revision-changed-untracked-set",
+        "revision-changed-worktree-mtime",
+        "revision-changed-metadata",
+      ]) {
+        metrics.record({ ...event, name, details: { ...event.details, missReason } }, trusted);
+      }
+    }
+    const rendered = metrics.render();
+    const counters = rendered
+      .split("\n")
+      .filter((line) => line.startsWith("openclaw_diff_cache_misses_total{"));
+    expect(counters).toHaveLength(20);
+    expect(counters.every((line) => line.endsWith(" 1"))).toBe(true);
+    expect(rendered).not.toContain("private");
+    metrics.record(event, untrusted);
+    metrics.record({ ...event, name: "sessions.diff.private" }, trusted);
+    metrics.record({ ...event, details: { ...event.details, outcome: "cache-hit" } }, trusted);
+    for (const missReason of ["private-revision", "revision-changed-/private/path", 1, true]) {
+      metrics.record({ ...event, details: { ...event.details, missReason } }, trusted);
+    }
+    expect(metrics.render()).toBe(rendered);
+  } finally {
+    metrics.stop();
+  }
+});

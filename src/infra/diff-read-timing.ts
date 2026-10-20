@@ -11,9 +11,23 @@ const DIFF_READ_STAGES = [
 ] as const;
 type DiffReadStage = (typeof DIFF_READ_STAGES)[number];
 
+export type DiffReadCacheMissReason =
+  | "cold"
+  | "evicted"
+  | "pending"
+  | "no-revision"
+  | "oversized"
+  | "revision-changed-head"
+  | "revision-changed-index"
+  | "revision-changed-untracked-set"
+  | "revision-changed-worktree-mtime"
+  | "revision-changed-metadata";
+
 export type DiffReadTiming = {
   durations: Partial<Record<DiffReadStage, number>>;
   outcome?: "cache-hit" | "cache-miss";
+  missReason?: DiffReadCacheMissReason;
+  revisionUnavailableReason?: "oversized";
 };
 
 export function addDiffReadDurations(target: DiffReadTiming, source: DiffReadTiming) {
@@ -48,7 +62,11 @@ export function startDiffReadTiming(
           name: operation,
           startedAt: performance.timeOrigin + started,
           durationMs: ended - started,
-          details: { ...this.durations, outcome: this.outcome },
+          details: {
+            ...this.durations,
+            outcome: this.outcome,
+            ...(this.missReason ? { missReason: this.missReason } : {}),
+          },
         });
       } catch {
         // Telemetry cannot replace the response or original error.

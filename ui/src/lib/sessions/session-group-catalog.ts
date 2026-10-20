@@ -15,7 +15,7 @@ import type {
   SessionGroupDefaultsStatus,
   SessionGroupMutationResult,
   SessionState,
-} from "./session-capability.ts";
+} from "./session-types.ts";
 
 type SessionGroupCatalogHost = {
   connection: SessionConnectionOwner;

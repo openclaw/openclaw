@@ -672,7 +672,11 @@ text and a 256×128 synthetic noise PNG, executes three real `read` tools with
 16 KiB text results, receives one synthetic output-limit stop,
 and completes the resulting transcript continuation. The driver requires one
 completed tool batch, output-limit response, and recovered response per child,
-and verifies inline images reach all three provider requests. These are
+and verifies inline images reach all three provider requests. Each provider
+response includes a distinct deterministic 16 KiB synthetic reasoning signature;
+the driver verifies that tool and recovery continuations replay the exact completed
+signature and omit the reasoning-only output-limit signature, as required by the
+replay owner. These are
 direct child-session `agent` calls, not model-driven `sessions_spawn` calls.
 Post-GC Gateway heap samples follow every completed cohort, and the optional
 final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
@@ -690,7 +694,8 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
 ```
 
 This runs paced cohorts after five minutes of warmup, with one real `read` tool
-and a streamed completion per turn. Diagnostics and the Prometheus plugin are
+and a streamed completion per turn, including the same synthetic reasoning
+signature and replay check as `attempt-retention`. Diagnostics and the Prometheus plugin are
 enabled. Session generations reset every twenty cohorts (including warmup) to
 bound intentional live transcript growth; `--reset-every-rounds 0` keeps history
 instead. The report records resets and completed cohorts. It does not exercise
@@ -992,11 +997,12 @@ maintenance, repack, garbage collection, or change repository configuration.
 node --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
   --state-dir /path/to/new-rpc-fixture --boundary rpc --seed
 node --import ./scripts/tsx.mjs scripts/perf/checkout-diff-measure.ts \
-  --state-dir /path/to/new-rpc-fixture --boundary rpc --port 41473 \
+  --state-dir /path/to/new-rpc-fixture --boundary rpc --summary --port 41473 \
   --tabs 3 --background 8 --maintenance 2 --agents 2 --mutate --observe-git-queues --duration-ms 30000 --poll-ms 250 \
   --start-at <epoch-ms> --output /path/to/rpc-result.json
 ```
 
+RPC mode returns full diffs by default; add `--summary` to exercise summary polls.
 Each tab polls the same session, so queued duplicate polls exercise the existing
 read owner. `--mutate` writes a tracked file before every polling round; every
 response must include the exact current added-line count, which varies by round.
@@ -1034,7 +1040,7 @@ at a time under the host's preparation CPU allocation. This bounds content bytes
 but inode metadata still consumes disk space: record actual fixture size and do
 not expand the workload on a production-shared volume without checking capacity.
 
-Measure unchanged summary polls with `--tabs 3 --background 0 --maintenance 0
+Measure unchanged summary polls with `--summary --tabs 3 --background 0 --maintenance 0
 --agents 0 --poll-ms 250 --duration-ms 30000`. The report separates warmed samples
 from startup and records `sessions.diff` and `checkout.diff` phase diagnostics by
 cache outcome when those are available. Stage milliseconds are overlapping owner
@@ -1050,6 +1056,29 @@ fixtures and loopback ports, matching options and start times. Retain per-pair
 differences and outside CPU load; do not compare unrelated absolute runs. Two
 large synthetic worktrees model file/index size and concurrent polling, not the
 production fleet's full filesystem working set or cold disk behavior.
+
+Add `--churn-ms 1000` to simulate an agent saving identical tracked `unchanged.txt`
+content and running `git status` on the polled checkout, while build output is
+created and removed below the ignored directory. This refreshes index stat data
+without changing the visible diff. Every unchanged RPC response must match its
+warmup hash. After measurement, the script makes a real tracked edit and checks
+that every tab receives the new line count, then restores that file. Summary
+fallbacks may intentionally retain a result for 10 seconds when no revision is
+available. The report separates first-poll visibility (`editFirstPollVisible`)
+from eventual visibility (`editVisibilityMs`), polling for up to 12 seconds.
+It saves the report before asserting eventual visibility. The report
+includes churn counts/timings, cache outcomes, and `editControlVerified`; phase
+samples retain diagnostic miss reasons when the revision supports them.
+
+For cache-reuse changes, compare both the 267,000-file fixture and a small
+fixture with `--summary --tabs 3 --background 0 --maintenance 0 --agents 0 --poll-ms 250
+--churn-ms 1000 --duration-ms 30000`. Run full-diff comparisons separately by
+omitting `--summary`: oversized summaries retain their existing 10-second
+fallback, while full diffs require fresh validation. Require unchanged response
+hashes, a passing edit control, and fewer diff collections with a higher cache
+hit rate on the repaired path, without a material paired latency regression.
+Native Git status used to validate a revision still counts as Git work; cache
+hits do not imply zero subprocesses.
 
 For a second scenario with independent revision checks, add
 `--poll-state-dir <other seeded fixture>` on each side. Both isolated Gateways

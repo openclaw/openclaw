@@ -39,7 +39,6 @@ import {
   mapActivationResult,
   type ModelSetupActivationState,
 } from "./state.ts";
-import type { ModelSetupViewProps } from "./view-types.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
 
 export type ModelSetupPageProps = {
@@ -586,20 +585,22 @@ export function createModelSetup(
     }
   }
 
-  function viewProps(): ModelSetupViewProps {
+  const view = () => {
+    i18nRevision();
+    projection.read();
     const snapshot = context.gateway.snapshot;
     const canAdmin = hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
     const gatewayTooOld =
       snapshot.phase === "connected" &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
     return {
-      onManualInput: (element) => {
+      onManualInput: (element: HTMLInputElement) => {
         manualInput = element;
       },
-      onFeedback: (element) => {
+      onFeedback: (element: HTMLDivElement) => {
         feedback = element;
       },
-      onWizardDialog: (element) => {
+      onWizardDialog: (element: import("../../components/modal-dialog.ts").OpenClawModalDialog) => {
         wizardDialog = element;
       },
       detecting: state.detectionRequest !== null,
@@ -634,7 +635,7 @@ export function createModelSetup(
       cancellationNotice: state.cancellationNotice,
       activationUnresolved: firstRun.unresolved,
       onUseCurrentModel: firstRun.canUseCurrentModel
-        ? () => void firstRun.useCurrentModel()
+        ? (): void => void firstRun.useCurrentModel()
         : undefined,
       actionsDisabled: actionsDisabled(),
       manualProviderId: state.manualProviderId,
@@ -643,7 +644,9 @@ export function createModelSetup(
       moreSignInOpen: state.moreSignInOpen,
       nativeSessionCatalogsEnabled: state.nativeSessionCatalogsEnabled,
       nativeModels,
-      onNativeSessionCatalogsChange: (enabled) => (state.nativeSessionCatalogsEnabled = enabled),
+      onNativeSessionCatalogsChange: (enabled: boolean) => {
+        state.nativeSessionCatalogsEnabled = enabled;
+      },
       firstRun: props.routeData?.firstRun === true,
       iconUrls: state.iconUrls,
       onDetect: () => {
@@ -651,13 +654,13 @@ export function createModelSetup(
           void detect();
         }
       },
-      onVerify: () => void firstRun.verify(),
-      onActivateCandidate: (candidate) =>
+      onVerify: (): void => void firstRun.verify(),
+      onActivateCandidate: (candidate: SystemAgentSetupDetectResult["candidates"][number]): void =>
         void activate(
           candidateActivation(candidate),
           activationTargetId(candidate.kind, candidate.modelRef),
         ),
-      onStartAuth: (option) => {
+      onStartAuth: (option: NonNullable<SystemAgentSetupDetectResult["authOptions"]>[number]) => {
         wizard.prepareSignIn(option.kind, option.label);
         pendingPrepareOption = null;
         state.wizardMode = "auth";
@@ -675,14 +678,16 @@ export function createModelSetup(
         state.wizardMode = "prepare";
         void runWizardMutation(() => wizard.start(option.id, "openclaw.setup.prepare.start"));
       },
-      onManualProviderChange: (providerId) => selectManualProvider(providerId),
-      onManualApiKeyChange: (apiKey) => {
+      onManualProviderChange: (providerId: string) => selectManualProvider(providerId),
+      onManualApiKeyChange: (apiKey: string) => {
         state.manualApiKey = apiKey;
         state.manualError = null;
       },
       onManualConnect: () => connectManual(),
-      onMoreSignInToggle: (open) => (state.moreSignInOpen = open),
-      onIconError: (iconUrl) => iconLoader.invalidate(iconUrl),
+      onMoreSignInToggle: (open: boolean) => {
+        state.moreSignInOpen = open;
+      },
+      onIconError: (iconUrl: string) => iconLoader.invalidate(iconUrl),
       onOpenChat: () => (props.embedded ? props.onClose?.() : firstRun.continueSetup()),
       onOpenSetupAssistant: () => firstRun.continueSetup("utility"),
       onSuccessClose: () => {
@@ -693,18 +698,14 @@ export function createModelSetup(
         state.activationState = { phase: "idle" };
         void detect();
       },
-      onWizardValueChange: (value) => (state.wizardDraft = { ...state.wizardDraft, value }),
-      onWizardAnswer: (value, includeValue) =>
+      onWizardValueChange: (value: unknown) => {
+        state.wizardDraft = { ...state.wizardDraft, value };
+      },
+      onWizardAnswer: (value: unknown, includeValue?: boolean): void =>
         void runWizardMutation(() => wizard.answer(value, includeValue)),
-      onWizardCancel: () => void cancelWizard(),
+      onWizardCancel: (): void => void cancelWizard(),
       onWizardClose: () => closeWizard(),
     };
-  }
-
-  const view = () => {
-    i18nRevision();
-    projection.read();
-    return viewProps();
   };
   createEffect(
     () => [props.routeData, agentSelection()],

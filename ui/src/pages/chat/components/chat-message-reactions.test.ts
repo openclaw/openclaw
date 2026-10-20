@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 /* @vitest-environment jsdom */
-import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
@@ -56,13 +55,11 @@ function show(
   );
   return {
     onReact,
-    pickers: [
-      ...host.querySelectorAll<SolidBridgeElement<object>>("openclaw-message-reaction-picker"),
-    ],
+    pickers: [...host.querySelectorAll<HTMLElement>("openclaw-message-reaction-picker")],
   };
 }
 
-function pickerButton(picker: SolidBridgeElement<object>, label: string) {
+function pickerButton(picker: HTMLElement, label: string) {
   // Compare emoji labels directly; JSDOM selectors do not reliably match non-BMP values.
   return [...picker.querySelectorAll<HTMLButtonElement>("button")].find(
     (button) => button.getAttribute("aria-label") === label,
@@ -72,7 +69,7 @@ function pickerButton(picker: SolidBridgeElement<object>, label: string) {
 async function customEntry() {
   const { pickers, onReact } = show();
   const root = pickers[0]!;
-  await root.updateComplete;
+  flush();
   root.querySelector<HTMLButtonElement>(".trigger")!.click();
   root.querySelector<HTMLButtonElement>(".more")!.click();
   flush();
@@ -127,7 +124,7 @@ describe("transcript message reactions", () => {
     crowd.click();
     expect(onReact).toHaveBeenCalledWith("message-1", "🎉", false);
     const picker = pickers[0]!;
-    await picker.updateComplete;
+    flush();
     expect(picker.querySelector(".palette")).toBeNull();
     picker.querySelector<HTMLButtonElement>(".trigger")!.click();
     const pressed = pickerButton(picker, "👍")!;

@@ -118,18 +118,6 @@ export function createQuickstartNotePrompter(runtime: RuntimeEnv): WizardPrompte
   };
 }
 
-function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
-  if (config.wizard?.securityAcknowledgedAt) {
-    return config;
-  }
-  // Conversational consent: the onboarding welcome shows the security note and
-  // the user approved the plan, which is the acknowledgement we persist.
-  return {
-    ...config,
-    wizard: { ...config.wizard, securityAcknowledgedAt: new Date().toISOString() },
-  };
-}
-
 export async function applySystemAgentSetup(
   params: SystemAgentSetupApplyParams,
   hooks?: SystemAgentSetupApplyHooks,
@@ -148,7 +136,7 @@ export async function applySystemAgentSetup(
   const hasExpectedConfigHash = Object.hasOwn(params, "expectedConfigHash");
   const beforePersistentApply = hooks?.beforePersistentApply;
   const [
-    { readSetupConfigFileSnapshot, resolveQuickstartGatewayDefaults },
+    { applySecurityAcknowledgement, readSetupConfigFileSnapshot, resolveQuickstartGatewayDefaults },
     onboardHelpers,
     { applyLocalSetupWorkspaceConfig, resolveOnboardingWorkspaceConflict },
     { transformConfigWithPendingPluginInstalls },
@@ -353,6 +341,7 @@ export async function applySystemAgentSetup(
       allowWorkspaceChange: allowWorkspaceWrite,
       preserveWorkspace,
     });
+    // The onboarding welcome shows the security note; approving the plan acknowledges it.
     candidate = applySecurityAcknowledgement(candidate);
     const gateway = await configureGatewayForSetup({
       flow: "quickstart",

@@ -275,14 +275,23 @@ background work finishes; subsequent searches see the updated content. Restart
 the Gateway after restoring watch capacity to enable native watching again.
 
 Incremental indexing, stale-source cleanup, and cache pruning wait asynchronously when
-another SQLite writer is active. Cache pruning removes the oldest entries in
-bounded batches, yielding between batches while preserving the existing cache cap.
+another SQLite writer is active. Cache pruning removes entries in bounded
+batches, in the order described below, yielding between batches while preserving
+the existing cache cap.
 
 Full reindexes build a replacement in a temporary database and publish the
 memory tables atomically. Concurrent searches and status reads keep using the
 published index; a failed rebuild leaves that index intact. The embedding cache
 is bounded before publication, not after copying excess entries into the
-shared database.
+shared database. When new entries would take the cache past its row cap, or it
+is already over the cap, it removes exactly as many entries as before, but first
+takes entries for the active embedding provider that no published chunk
+references and that were written before the oldest published chunk, oldest
+first. A full reindex rewrites every chunk, so these entries predate the index
+that dropped them. Incremental syncs keep unchanged chunks, so the oldest
+published chunk can be much older and fewer entries qualify. Newer unreferenced
+entries, such as a retry's or another sync's unpublished vectors, keep plain
+oldest-first order. At or below the cap nothing is removed.
 
 Other agent state, including sessions and transcripts in the same database,
 is retained. Use the [memory index command](/cli/memory#memory-index) for
