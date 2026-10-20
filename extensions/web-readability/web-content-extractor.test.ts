@@ -46,6 +46,24 @@ describe("web readability extractor", () => {
     expect(extracted.title).toBe("Example Article");
   });
 
+  it("preserves block boundaries in text mode for minified HTML", async () => {
+    const minified = SAMPLE_HTML.replace(
+      '<p><a href="../next">Continue reading</a></p>',
+      '<ul><li>alpha</li><li>beta</li></ul><p><a href="../next">Continue reading</a></p>',
+    )
+      .replace(/>\s+</g, "><")
+      .trim();
+
+    const extracted = await extractArticle(minified, "text");
+
+    expect(extracted.text).toContain(
+      "Main content starts here with enough words to satisfy readability.\nSecond paragraph for a bit more signal.",
+    );
+    expect(extracted.text).toContain("alpha\nbeta");
+    expect(extracted.text).not.toContain("readability.Second paragraph");
+    expect(extracted.text).not.toContain("alphabeta");
+  });
+
   it("excludes double-escaped script prose in text mode", async () => {
     const extracted =
       await extractArticle(`<!doctype html><html><head><title>Cloud Costs</title></head><body><article>
