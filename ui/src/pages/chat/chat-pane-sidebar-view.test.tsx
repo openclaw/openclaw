@@ -1,31 +1,12 @@
 /* @vitest-environment jsdom */
 
-import type { JSX } from "@solidjs/web";
-import { createSignal, Show, type Setter } from "solid-js";
+import { Show } from "solid-js";
 import { expect, it } from "vitest";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../lib/presentation.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
-import { SidebarFixture } from "./chat-pane-sidebar-fixture.test-support.tsx";
+import { mountState, SidebarFixture } from "./chat-pane-sidebar-fixture.test-support.tsx";
 import { fitSidebarLayout, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
-
-function mountState<T>(initial: T, View: (props: { value: T }) => JSX.Element) {
-  let set!: Setter<T>;
-  const mounted = mountSolid(() => {
-    const [state, update] = createSignal(initial);
-    set = update;
-    return <View value={state()} />;
-  });
-  flush();
-  return {
-    ...mounted,
-    update: (value: T) => {
-      set(() => value);
-      flush();
-    },
-  };
-}
 
 it("retains loading panel contents when fitting a new layout snapshot", () => {
   const layout = openSlot({ columns: [] }, "workspace");

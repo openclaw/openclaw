@@ -22,13 +22,8 @@ it.each(["current", "replacement", "same-client reconnect", "failed readback", "
     const readbackFails = outcome === "failed readback";
     const key = "agent:main:settings";
     const entry = { sessionId: "acknowledged-session", updatedAt: 2, thinkingLevel: "high" };
-    const materialized: GatewaySessionRow = { key, agentId: "main", kind: "direct", ...entry };
-    const receipt = {
-      ok: true,
-      key,
-      path: "",
-      entry,
-    } satisfies SessionsPatchResult;
+    const row: GatewaySessionRow = { key, agentId: "main", kind: "direct", ...entry };
+    const receipt = { ok: true, key, path: "", entry } satisfies SessionsPatchResult;
     const rows: GatewaySessionRow[] = [];
     const firstReply = createDeferred<SessionsPatchResult>();
     const latestReply = createDeferred<SessionsPatchResult>();
@@ -75,7 +70,7 @@ it.each(["current", "replacement", "same-client reconnect", "failed readback", "
         firstReply.reject(new Error("Synthetic superseded first rejection"));
       } else {
         if (outcome !== "failed readback") {
-          rows.push(materialized);
+          rows.push(row);
         }
         firstReply.resolve(receipt);
       }
@@ -89,7 +84,7 @@ it.each(["current", "replacement", "same-client reconnect", "failed readback", "
         expect(patch.mock.calls[1]?.[1]).toMatchObject({
           key,
           thinkingLevel: "low",
-          expectedSessionId: materialized.sessionId,
+          expectedSessionId: row.sessionId,
         });
       }
       if (outcome === "failed readback") {
@@ -111,13 +106,10 @@ it.each(["current", "replacement", "same-client reconnect", "failed readback", "
         return;
       }
       if (outcome !== "unbound") {
-        expect(selected()).toMatchObject({
-          sessionId: materialized.sessionId,
-          thinkingLevel: "low",
-        });
+        expect(selected()).toMatchObject({ sessionId: row.sessionId, thinkingLevel: "low" });
       }
       if (outcome === "replacement") {
-        rows[0] = { ...materialized, sessionId: "replacement-session", updatedAt: 3 };
+        rows[0] = { ...row, sessionId: "replacement-session", updatedAt: 3 };
         await mounted.sessions.refresh({ agentId: "main", force: true });
       } else if (outcome === "same-client reconnect") {
         const snapshot = mounted.context.gateway.snapshot;
@@ -134,10 +126,7 @@ it.each(["current", "replacement", "same-client reconnect", "failed readback", "
       );
       expect(state.lastError).toBe(state.chatError);
       if (outcome === "current") {
-        expect(selected()).toMatchObject({
-          sessionId: materialized.sessionId,
-          thinkingLevel: "high",
-        });
+        expect(selected()).toMatchObject({ sessionId: row.sessionId, thinkingLevel: "high" });
       }
     } finally {
       firstReply.resolve(receipt);

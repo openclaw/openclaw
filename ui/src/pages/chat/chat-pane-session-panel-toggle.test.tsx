@@ -1,4 +1,4 @@
-import { createRoot, createSignal } from "solid-js";
+import { createRoot } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import "./components/chat-sidebar-region.runtime.tsx";
 import "../../components/browser/browser-panel.ts";
@@ -18,16 +18,12 @@ import {
   rememberSessionPanelToggle,
   type SessionPanelToggleSlot,
 } from "../../components/session-panel-toggle-buffer.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush as flushSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
   createChatPaneSessionPanelToggles,
   type PendingSessionPanelToggle,
 } from "./chat-pane-session-panel-toggle.ts";
-import { sidebarCallbacks } from "./chat-pane-sidebar-fixture.test-support.tsx";
-import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
-import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
+import { mountState, SidebarFixture } from "./chat-pane-sidebar-fixture.test-support.tsx";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
@@ -274,13 +270,13 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
   const url = "http://127.0.0.1:18789/assets/example.html";
   const gateway = createBrowserClient(async (request) => {
-    if (request.path === "/tabs" && request.query?.profile !== "managed") {
-      return { running: true, tabs: [] };
-    }
     if (request.path === "/tabs") {
       return {
         running: true,
-        tabs: [{ tabId: "t1", targetId: "target-1", title: "Local preview", url }],
+        tabs:
+          request.query?.profile === "managed"
+            ? [{ tabId: "t1", targetId: "target-1", title: "Local preview", url }]
+            : [],
       };
     }
     if (request.path === "/screenshot") {
@@ -293,11 +289,17 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   });
   const commit = createDeferred();
   const pane = document.createElement("div");
+  const state = pageState(pane);
+  state.sessionKey = "agent:main:local-preview";
   let pendingUpdate: Promise<void> | undefined;
   let sidebarRegion: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
   let browserPanel: HTMLElement | undefined;
-  const state = pageState(pane);
-  state.sessionKey = "agent:main:local-preview";
+  const readSnapshot = () => ({
+    layout: state.sidebarLayout,
+    sessionKey: state.sessionKey,
+    refresh: !pending.requests.has("browser"),
+  });
+  let view: ReturnType<typeof mountState<ReturnType<typeof readSnapshot>>> | undefined;
   const { pending } = bindToggles(
     () => ({
       sidebarRegion,
@@ -308,21 +310,17 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
     }),
     (layout) => {
       state.sidebarLayout = layout;
-      scheduleCommit();
+      pendingUpdate ??= commit.promise.then(() => {
+        view!.update(readSnapshot());
+        pendingUpdate = undefined;
+      });
     },
   );
-
-  const readSnapshot = () => ({
-    layout: state.sidebarLayout,
-    sessionKey: state.sessionKey,
-    refresh: !pending.requests.has("browser"),
-  });
-  const [snapshot, setSnapshot] = createSignal(readSnapshot());
-  let view: ReturnType<typeof mountSolid> | undefined;
-  function draw() {
-    setSnapshot(readSnapshot());
-    view ??= mountSolid(
-      () => {
+  document.body.append(pane);
+  try {
+    view = mountState(
+      readSnapshot(),
+      (props) => {
         const definitions = sidebarPanelDefinitions();
         for (const definition of definitions) {
           definition.available = definition.slot === "browser";
@@ -335,49 +333,32 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
                 prop:embedded={true}
                 prop:available={true}
                 prop:client={gateway.client}
-                prop:sessionKey={snapshot().sessionKey}
-                prop:presented={isSidebarSlotVisible(snapshot().layout, "browser")}
-                prop:refreshOnPresentation={snapshot().refresh}
+                prop:sessionKey={props.value.sessionKey}
+                prop:presented={isSidebarSlotVisible(props.value.layout, "browser")}
+                prop:refreshOnPresentation={props.value.refresh}
               />
             );
           }
         }
         return (
-          <SidebarRegionView
-            {...renderSidebarRegion({
-              presentationId: "delayed-browser-card",
-              onRegionViewRef: (element) => {
-                sidebarRegion = element;
-                return () => {
-                  if (sidebarRegion === element) {
-                    sidebarRegion = null;
-                  }
-                };
-              },
-              availableWidth: 1400,
-              callbacks: sidebarCallbacks(),
-              layout: snapshot().layout,
-              narrow: false,
-              panelDefinitions: definitions,
-              primary: <main>Conversation</main>,
-            })}
+          <SidebarFixture
+            presentationId="delayed-browser-card"
+            onRegionViewRef={(element) => {
+              sidebarRegion = element;
+              return () => {
+                if (sidebarRegion === element) {
+                  sidebarRegion = null;
+                }
+              };
+            }}
+            layout={props.value.layout}
+            panelDefinitions={definitions}
+            primary={<main>Conversation</main>}
           />
         );
       },
       { container: pane },
     );
-    flushSolid();
-  }
-  function scheduleCommit() {
-    // Expose the new commit promise before the browser card can mount.
-    pendingUpdate ??= commit.promise.then(() => {
-      draw();
-      pendingUpdate = undefined;
-    });
-  }
-  document.body.append(pane);
-  try {
-    draw();
     window.dispatchEvent(
       new CustomEvent("openclaw:browser-toggle", {
         detail: {

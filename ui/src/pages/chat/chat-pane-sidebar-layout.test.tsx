@@ -1,14 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { Show, createSignal, type Setter } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { Show } from "solid-js";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import { SidebarFixture, sidebarCallbacks } from "./chat-pane-sidebar-fixture.test-support.tsx";
+import {
+  mountState,
+  SidebarFixture,
+  sidebarCallbacks,
+} from "./chat-pane-sidebar-fixture.test-support.tsx";
 import {
   resolveSidebarLayoutForBoard,
   sidebarRegionCallbacks,
@@ -36,18 +39,9 @@ function board(face: ResolvedBoardView["face"] = "dashboard") {
   } as ResolvedBoardView;
 }
 
-const containers: HTMLElement[] = [];
-
-function createContainer() {
-  const container = document.body.appendChild(document.createElement("div"));
-  containers.push(container);
-  return container;
-}
-
 function DetailContent() {
   return (
     <aside data-detail>
-      Details
       <input type="checkbox" />
       <textarea aria-label="Side panel input" />
     </aside>
@@ -77,6 +71,7 @@ function callbackFixture(layout: SidebarLayout, stored = layout) {
 }
 
 type LayoutState = { layout: SidebarLayout; narrow: boolean; availableWidth: number };
+type LayoutOptions = { container?: HTMLElement; presentationId?: string; width?: number };
 function definitions(slots = ["detail", "terminal", "workspace"]) {
   return sidebarPanelDefinitions().map((definition) =>
     Object.assign(definition, {
@@ -86,119 +81,84 @@ function definitions(slots = ["detail", "terminal", "workspace"]) {
   );
 }
 
-async function layoutFixture(
-  layout: SidebarLayout,
-  options: {
-    container?: HTMLElement;
-    presentationId?: string;
-    width?: number;
-  } = {},
-) {
-  const container = options.container ?? createContainer();
-  let update!: Setter<LayoutState>;
-  let current!: () => LayoutState;
-  mountSolid(
-    () => {
-      const [state, setState] = createSignal<LayoutState>({
-        layout,
-        narrow: false,
-        availableWidth: options.width ?? 1400,
-      });
-      current = state;
-      update = setState;
+async function layoutFixture(layout: SidebarLayout, options: LayoutOptions = {}) {
+  const mounted = mountState<LayoutState>(
+    { layout, narrow: false, availableWidth: options.width ?? 1400 },
+    (props) => {
       const panels = definitions();
       return (
         <SidebarFixture
           presentationId={options.presentationId ?? "sidebar-layout-fixture"}
-          availableWidth={state().availableWidth}
-          layout={state().layout}
-          narrow={state().narrow}
+          availableWidth={props.value.availableWidth}
+          layout={props.value.layout}
+          narrow={props.value.narrow}
           panelDefinitions={panels}
           callbacks={{
             ...sidebarCallbacks(),
             closeSlot: (slot) =>
-              setState((value) => ({ ...value, layout: closeSlot(value.layout, slot) })),
+              mounted.modify((value) => ({ ...value, layout: closeSlot(value.layout, slot) })),
           }}
           primary={
             <main data-primary>
-              Primary
               <textarea />
             </main>
           }
         />
       );
     },
-    { container },
+    options.container ? { container: options.container } : undefined,
   );
-  const draw = async (
-    next: SidebarLayout,
-    narrow = false,
-    availableWidth = narrow ? 620 : 1400,
-  ) => {
-    update({ layout: next, narrow, availableWidth });
-    flush();
+  const { container } = mounted;
+  const draw = async (next: SidebarLayout, narrow = false, width = narrow ? 620 : 1400) => {
+    mounted.update({ layout: next, narrow, availableWidth: width });
     await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
   };
   await draw(layout, false, options.width ?? 1400);
-  return { container, draw, layout: () => current().layout };
+  return { container, draw, layout: () => mounted.read().layout };
 }
-
-afterEach(() => {
-  for (const container of containers.splice(0)) {
-    container.remove();
-  }
-});
 
 describe("chat pane sidebar layout", () => {
   it.each(["surviving opener", "removed opener", "outside focus"] as const)(
     "restores side-panel focus with a %s",
     async (scenario) => {
       const layout = openSlot({ columns: [] }, "detail");
-      let update!: Setter<{ locked: boolean; showOpener: boolean; open: boolean }>;
-      const { container } = mountSolid(() => {
-        const [state, setState] = createSignal({ locked: false, showOpener: true, open: true });
-        update = setState;
-        return (
-          <>
-            <button data-outside>Outside</button>
-            <SidebarFixture
-              presentationId="focus-return"
-              layout={setSidebarOpen(layout, state().open)}
-              sideFocusLocked={state().locked}
-              sideFocusManaged={true}
-              primary={<main>Conversation</main>}
-              panelDefinitions={definitions(["detail"])}
-              header={
-                <>
-                  <Show when={state().showOpener}>
-                    <button data-opener>Open panel</button>
-                  </Show>
-                  <button>Actions</button>
-                </>
-              }
-            />
-          </>
-        );
-      });
-      containers.push(container);
+      const mounted = mountState({ locked: false, showOpener: true, open: true }, (props) => (
+        <>
+          <button data-outside>Outside</button>
+          <SidebarFixture
+            presentationId="focus-return"
+            layout={setSidebarOpen(layout, props.value.open)}
+            sideFocusLocked={props.value.locked}
+            sideFocusManaged={true}
+            primary={<main>Conversation</main>}
+            panelDefinitions={definitions(["detail"])}
+            header={
+              <>
+                <Show when={props.value.showOpener}>
+                  <button data-opener>Open panel</button>
+                </Show>
+                <button>Actions</button>
+              </>
+            }
+          />
+        </>
+      ));
+      const { container } = mounted;
       const region = container.querySelector("openclaw-chat-sidebar-region")!;
       await region.updateComplete;
       const opener = container.querySelector<HTMLButtonElement>("[data-opener]")!;
       opener.focus();
-      update((state) => ({ ...state, locked: true }));
-      flush();
+      mounted.modify((state) => ({ ...state, locked: true }));
       await region.updateComplete;
       container.querySelector<HTMLInputElement>("[data-detail] input")!.focus();
       if (scenario !== "surviving opener") {
-        update((state) => ({ ...state, showOpener: false }));
-        flush();
+        mounted.modify((state) => ({ ...state, showOpener: false }));
       }
       const outside = container.querySelector<HTMLButtonElement>("[data-outside]")!;
       if (scenario === "outside focus") {
         outside.focus();
       }
-      update((state) => ({ ...state, locked: false, open: false }));
-      flush();
+      mounted.modify((state) => ({ ...state, locked: false, open: false }));
       await region.updateComplete;
       expect(document.activeElement).toBe(
         scenario === "surviving opener"
@@ -213,7 +173,7 @@ describe("chat pane sidebar layout", () => {
   it("keeps native content and the parent layout writable when the DOM provider changes", async () => {
     // SAFETY: the region transports application context; this fixture's panel reads no capabilities.
     const container = createApplicationContextProvider({} as ApplicationContext);
-    containers.push(container);
+    onTestFinished(() => container.remove());
     document.body.append(container);
     const layout = openSlot({ columns: [] }, "detail");
     const { draw } = await layoutFixture(layout, { container });
@@ -223,7 +183,6 @@ describe("chat pane sidebar layout", () => {
     const checkbox = detail.querySelector("input")!;
     checkbox.checked = true;
 
-    // Native JSX content stays with its parent Solid owner when the DOM provider changes.
     container.setContext({} as ApplicationContext);
     await region.updateComplete;
     expect(container.querySelector("[data-detail]")).toBe(detail);

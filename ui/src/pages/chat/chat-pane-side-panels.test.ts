@@ -13,18 +13,12 @@ afterEach(() => vi.unstubAllGlobals());
 function createPane() {
   vi.stubGlobal("localStorage", createStorageMock());
   const fixture = createRefreshChatPane();
-  const parent: GatewaySessionRow = {
-    key: "agent:main:parent",
-    sessionId: "parent-session",
-    kind: "direct",
-  };
+  const parent: GatewaySessionRow = { key: "agent:main:parent", sessionId: "p", kind: "direct" };
   const child: GatewaySessionRow = {
+    ...parent,
     key: "agent:main:subagent:child",
     sessionId: "child-session",
-    kind: "direct",
     spawnedBy: parent.key,
-    status: "running",
-    hasActiveRun: true,
   };
   const roster = { rows: [] as GatewaySessionRow[], hydrated: true, pendingChildRead: false };
   Reflect.set(fixture.pane.swarm, "hydrator", roster);
@@ -47,13 +41,10 @@ it.each([undefined, "processes"] as const)(
     }
     pane.render();
     const layout = state.sidebarLayout;
-
     roster.rows = [child];
     run(true);
     expect(state.sidebarLayout).toEqual(layout);
-    if (selected) {
-      expect(isSidebarSlotVisible(state.sidebarLayout, selected)).toBe(true);
-    }
+    expect(isSidebarSlotVisible(state.sidebarLayout, "processes")).toBe(selected === "processes");
 
     delete parent.sessionId;
     pane.render();
