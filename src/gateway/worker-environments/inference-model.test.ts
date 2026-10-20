@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareSimpleCompletionModel } from "../../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -58,128 +58,113 @@ const approve = (
     ...overrides,
   });
 
-describe("worker prompt credential-owned transcript policy", () => {
-  it("forwards current required worker authority through real model preparation", async () => {
-    const required = requiredConfig();
-    const runtime = setup(sessionEntry, { config: required });
-    const reached = new Error("admitted selected-model resolver reached");
-    const resolver = vi.fn(async () => {
-      throw reached;
-    });
-    runtime.prepareModel.mockImplementation((input, assertCurrent) =>
-      prepareSimpleCompletionModel({ ...input, modelResolver: resolver }, assertCurrent),
-    );
-    await using lease = await acquire(runtime, required);
-    const assertCurrent = vi.fn();
-    await expect(
-      approve(lease.snapshot, {
-        modelRef: request().modelRef,
-        assertCurrent,
-      }),
-    ).rejects.toBe(reached);
-    expect(resolver).toHaveBeenCalledOnce();
-    expect(runtime.prepareModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        workerInferenceAuthority: { assertCurrent },
-      }),
-    );
-  });
-
-  it.each(["wrong session", "revoked selection"] as const)(
-    "rejects required worker %s before provider preparation",
-    async (state) => {
-      const required = requiredConfig();
-      const runtime = setup(sessionEntry, { config: required });
-      const selected = createDeferred();
-      let current = true;
-      if (state === "revoked selection") {
-        runtime.resolveAuthSelection.mockImplementation(async () => {
-          await selected.promise;
-          return undefined;
-        });
-      }
-      await using lease = await acquire(runtime, required);
-      const pending = approve(lease.snapshot, {
-        target: {
-          ...target(),
-          sessionEntry:
-            state === "wrong session" ? { ...sessionEntry, sessionId: "other" } : sessionEntry,
-        },
-        modelRef: request().modelRef,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("worker claim revoked");
-          }
-        },
-      });
-      if (state === "wrong session") {
-        expect(await pending).toBeUndefined();
-      } else {
-        current = false;
-        selected.resolve();
-        await expect(pending).rejects.toThrow("worker claim revoked");
-      }
-      expect(runtime.prepareModel).not.toHaveBeenCalled();
-    },
+it("forwards current required worker authority through real model preparation", async () => {
+  const required = requiredConfig();
+  const runtime = setup(sessionEntry, { config: required });
+  const reached = new Error("admitted selected-model resolver reached");
+  const resolver = vi.fn(() => Promise.reject(reached));
+  runtime.prepareModel.mockImplementation((input, assertCurrent) =>
+    prepareSimpleCompletionModel({ ...input, modelResolver: resolver }, assertCurrent),
   );
-
-  it("approves a worker-local configured model without resolving Gateway credentials", async () => {
-    const runtime = setup(sessionEntry, {
-      config: { ...structuredClone(configured), cloudWorkers: { requiredProfile: "required" } },
-      configuredRuntimeModel: model,
-    });
-    await using lease = await acquire(runtime, configured);
-    const approved = await prepareWorkerTurnModel({
-      target: params(request(), vi.fn()).sessionTarget,
-      modelRef,
-      runtimeSnapshot: lease.snapshot,
-      inferencePlacement: "worker",
-      turn: { config: lease.snapshot.config, workspaceDir: WORKSPACE },
-      assertCurrent: () => undefined,
-    });
-    assert(approved && !("error" in approved));
-    expect(approved.model).toBe(model);
-    expect(runtime.resolveAuthSelection).not.toHaveBeenCalled();
-    expect(runtime.prepareModel).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "uses the resolved credential rather than config auth hints (OAuth=%s)",
-    async (oauth) => {
-      const metadataSnapshot = createEmptyPluginMetadataSnapshot(WORKSPACE);
-      const runtime = setup(sessionEntry, {
-        config: structuredClone(configured),
-        metadataSnapshot: {
-          ...metadataSnapshot,
-          owners: {
-            ...metadataSnapshot.owners,
-            providerEndpoints: [
-              { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
-            ],
-          },
-        },
-      });
-      runtime.prepareModel.mockResolvedValue({
-        model,
-        auth: {
-          apiKey: oauth ? ["sk", "ant", "oat01", "fixture"].join("-") : "synthetic-api-key",
-          mode: "api-key",
-          source: "synthetic worker policy fixture",
-          profileId: PROFILE,
-        },
-      });
-      await using lease = await acquire(runtime, configured);
-      const approved = await approve(lease.snapshot);
-      assert(approved && !("error" in approved));
-      expect(approved.transcriptPolicy.inHistorySystemUpdates).toBe(!oauth);
-      expect(runtime.resolveAuthSelection).toHaveBeenCalledOnce();
-      expect(runtime.prepareModel).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: model.provider,
-          modelId: model.id,
-          profileId: PROFILE,
-        }),
-      );
-    },
+  await using lease = await acquire(runtime, required);
+  const assertCurrent = vi.fn();
+  await expect(
+    approve(lease.snapshot, {
+      modelRef: request().modelRef,
+      assertCurrent,
+    }),
+  ).rejects.toBe(reached);
+  expect(resolver).toHaveBeenCalledOnce();
+  expect(runtime.prepareModel).toHaveBeenCalledWith(
+    expect.objectContaining({ workerInferenceAuthority: { assertCurrent } }),
   );
 });
+
+it.each(["wrong session", "revoked selection"] as const)(
+  "rejects required worker %s before provider preparation",
+  async (state) => {
+    const required = requiredConfig();
+    const runtime = setup(sessionEntry, { config: required });
+    const selected = createDeferred();
+    let current = true;
+    if (state === "revoked selection") {
+      runtime.resolveAuthSelection.mockImplementation(async () => {
+        await selected.promise;
+        return undefined;
+      });
+    }
+    await using lease = await acquire(runtime, required);
+    const pending = approve(lease.snapshot, {
+      target: {
+        ...target(),
+        sessionEntry:
+          state === "wrong session" ? { ...sessionEntry, sessionId: "other" } : sessionEntry,
+      },
+      modelRef: request().modelRef,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("worker claim revoked");
+        }
+      },
+    });
+    if (state === "wrong session") {
+      expect(await pending).toBeUndefined();
+    } else {
+      current = false;
+      selected.resolve();
+      await expect(pending).rejects.toThrow("worker claim revoked");
+    }
+    expect(runtime.prepareModel).not.toHaveBeenCalled();
+  },
+);
+
+it("approves a worker-local configured model without resolving Gateway credentials", async () => {
+  const runtime = setup(sessionEntry, {
+    config: { ...structuredClone(configured), cloudWorkers: { requiredProfile: "required" } },
+    configuredRuntimeModel: model,
+  });
+  await using lease = await acquire(runtime, configured);
+  const approved = await prepareWorkerTurnModel({
+    target: params(request(), vi.fn()).sessionTarget,
+    modelRef,
+    runtimeSnapshot: lease.snapshot,
+    inferencePlacement: "worker",
+    turn: { config: lease.snapshot.config, workspaceDir: WORKSPACE },
+    assertCurrent: () => undefined,
+  });
+  assert(approved && !("error" in approved));
+  expect(approved.model).toBe(model);
+  expect(runtime.resolveAuthSelection).not.toHaveBeenCalled();
+  expect(runtime.prepareModel).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "uses the resolved credential rather than config auth hints (OAuth=%s)",
+  async (oauth) => {
+    const metadataSnapshot = createEmptyPluginMetadataSnapshot(WORKSPACE);
+    metadataSnapshot.owners.providerEndpoints = [
+      { endpointClass: "anthropic-public", hosts: ["api.anthropic.com"] },
+    ];
+    const runtime = setup(sessionEntry, {
+      config: structuredClone(configured),
+      metadataSnapshot,
+    });
+    runtime.prepareModel.mockResolvedValue({
+      model,
+      auth: {
+        apiKey: oauth ? ["sk", "ant", "oat01", "fixture"].join("-") : "synthetic-api-key",
+        mode: "api-key",
+        source: "synthetic worker policy fixture",
+        profileId: PROFILE,
+      },
+    });
+    await using lease = await acquire(runtime, configured);
+    const approved = await approve(lease.snapshot);
+    assert(approved && !("error" in approved));
+    expect(approved.transcriptPolicy.inHistorySystemUpdates).toBe(!oauth);
+    expect(runtime.resolveAuthSelection).toHaveBeenCalledOnce();
+    expect(runtime.prepareModel).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: model.provider, modelId: model.id, profileId: PROFILE }),
+    );
+  },
+);
