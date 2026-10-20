@@ -1,4 +1,3 @@
-// Memory Wiki tests cover tool plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -32,28 +31,16 @@ describe("memory-wiki tools", () => {
   async function createApplyFixture() {
     const { rootDir, config } = await harness.createVault({ initialize: true });
     const pagePath = path.join(rootDir, "entities", "alpha.md");
-    const original = [
-      "---",
-      "pageType: entity",
-      "id: entity.alpha",
-      "title: Alpha",
-      "status: active",
-      "updatedAt: 2026-01-01T00:00:00.000Z",
-      "---",
-      "",
-      "# Alpha",
-      "",
-      "Keep this human note.",
-      "",
-    ].join("\n");
+    const original =
+      "---\npageType: entity\nid: entity.alpha\ntitle: Alpha\nstatus: active\nupdatedAt: 2026-01-01T00:00:00.000Z\n---\n\n# Alpha\n\nKeep this human note.\n";
     await fs.writeFile(pagePath, original, "utf8");
     return { tool: createWikiApplyTool(config), pagePath, original };
   }
 
-  it.each(["update_metadata"])("applies supported metadata operation %s", async (op) => {
+  it("applies supported metadata operation update_metadata", async () => {
     const { tool, pagePath } = await createApplyFixture();
     const result = await tool.execute("valid-operation", {
-      op,
+      op: "update_metadata",
       lookup: "entity.alpha",
       status: "review",
     });
@@ -64,38 +51,25 @@ describe("memory-wiki tools", () => {
     expect(page.body).toContain("Keep this human note.");
   });
 
-  it.each([999])(
-    "keeps wiki pages unchanged for out-of-range claim confidence %s",
-    async (confidence) => {
-      const { tool, pagePath, original } = await createApplyFixture();
+  it("keeps wiki pages unchanged for out-of-range claim confidence", async () => {
+    const { tool, pagePath, original } = await createApplyFixture();
 
-      await expect(
-        tool.execute("invalid-claim-confidence", {
-          op: "update_metadata",
-          lookup: "entity.alpha",
-          claims: [{ text: "Alpha fact", confidence }],
-        }),
-      ).rejects.toThrow(
-        `claims[0].confidence must be a number between 0 and 1; received ${confidence}.`,
-      );
-      await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(original);
-    },
-  );
+    await expect(
+      tool.execute("invalid-claim-confidence", {
+        op: "update_metadata",
+        lookup: "entity.alpha",
+        claims: [{ text: "Alpha fact", confidence: 999 }],
+      }),
+    ).rejects.toThrow("claims[0].confidence must be a number between 0 and 1; received 999.");
+    await expect(fs.readFile(pagePath, "utf8")).resolves.toBe(original);
+  });
 
   it("returns tool-safe relative report paths from wiki_lint", async () => {
     const { rootDir, config } = await harness.createVault({ initialize: true });
     await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, "syntheses", "bad.md"),
-      [
-        "---",
-        "id: synth-bad",
-        "pageType: synthesis",
-        "title: Bad Page",
-        "---",
-        "",
-        "This links to [[Missing Page]].",
-      ].join("\n"),
+      "---\nid: synth-bad\npageType: synthesis\ntitle: Bad Page\n---\n\nThis links to [[Missing Page]].",
       "utf8",
     );
 

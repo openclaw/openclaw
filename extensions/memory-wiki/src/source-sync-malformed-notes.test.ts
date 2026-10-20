@@ -34,14 +34,22 @@ function createImportedSourceState(pagePath: string, group: MemoryWikiImportedSo
   };
 }
 
-describe("memory wiki source sync malformed human Notes", () => {
-  beforeEach(() => {
-    resetPluginStateStoreForTests();
-  });
+function sourcePage(group: MemoryWikiImportedSourceGroup, content: string, notes: string) {
+  const title = group === "bridge" ? "Memory Bridge (test)" : "Unsafe Local Import: test";
+  return `# ${title}\n## Content\n\`\`\`\n${content}\n\`\`\`\n## Notes\n${notes}\n`;
+}
 
-  afterEach(async () => {
-    resetPluginStateStoreForTests();
-  });
+function prune(
+  vaultRoot: string,
+  group: MemoryWikiImportedSourceGroup,
+  state: Parameters<typeof pruneImportedSourceEntries>[0]["state"],
+) {
+  return pruneImportedSourceEntries({ vaultRoot, group, activeKeys: new Set(), state });
+}
+
+describe("memory wiki source sync malformed human Notes", () => {
+  beforeEach(() => resetPluginStateStoreForTests());
+  afterEach(() => resetPluginStateStoreForTests());
 
   it.each([
     { group: "bridge" as const, missingMarker: "opening" as const },
@@ -55,13 +63,7 @@ describe("memory wiki source sync malformed human Notes", () => {
       const pagePath = `sources/${group}-missing-${missingMarker}.md`;
       const pageAbsPath = path.join(vaultRoot, pagePath);
       await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
-      const pageContent = [
-        group === "bridge" ? "# Memory Bridge (test)" : "# Unsafe Local Import: test",
-        "## Content",
-        "```",
-        "generated content",
-        "```",
-        "## Notes",
+      const notes = [
         ...(missingMarker === "opening" || missingMarker === "both"
           ? []
           : ["<!-- openclaw:human:start -->"]),
@@ -69,8 +71,8 @@ describe("memory wiki source sync malformed human Notes", () => {
         ...(missingMarker === "closing" || missingMarker === "both"
           ? []
           : ["<!-- openclaw:human:end -->"]),
-        "",
       ].join("\n");
+      const pageContent = sourcePage(group, "generated content", notes);
       await fs.writeFile(pageAbsPath, pageContent, "utf8");
 
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
@@ -88,14 +90,7 @@ describe("memory wiki source sync malformed human Notes", () => {
           ? "<!-- openclaw:human:start -->"
           : "<!-- openclaw:human:end -->";
 
-      await expect(
-        pruneImportedSourceEntries({
-          vaultRoot,
-          group,
-          activeKeys: new Set(),
-          state,
-        }),
-      ).rejects.toThrow(expectedMissingMarker);
+      await expect(prune(vaultRoot, group, state)).rejects.toThrow(expectedMissingMarker);
 
       expect(state.entries["sync-key"]).toEqual(updatedEntry);
       await expect(readMemoryWikiSourceSyncState(vaultRoot, store)).resolves.toEqual(initialState);
@@ -118,29 +113,16 @@ describe("memory wiki source sync malformed human Notes", () => {
     await fs.mkdir(path.dirname(pageAbsPath), { recursive: true });
     await fs.writeFile(
       pageAbsPath,
-      [
-        "# Memory Bridge (test)",
-        "## Content",
-        "```",
+      sourcePage(
+        "bridge",
         "x".repeat(16 * 1024 * 1024),
-        "```",
-        "## Notes",
-        "<!-- openclaw:human:start -->",
-        "oversized annotations must survive malformed markers",
-        "",
-      ].join("\n"),
+        "<!-- openclaw:human:start -->\noversized annotations must survive malformed markers",
+      ),
       "utf8",
     );
     const state = createImportedSourceState(pagePath, "bridge");
 
-    await expect(
-      pruneImportedSourceEntries({
-        vaultRoot,
-        group: "bridge",
-        activeKeys: new Set(),
-        state,
-      }),
-    ).rejects.toThrow("<!-- openclaw:human:end -->");
+    await expect(prune(vaultRoot, "bridge", state)).rejects.toThrow("<!-- openclaw:human:end -->");
 
     expect(state.entries["sync-key"]).toBeDefined();
     await expect(fs.stat(pageAbsPath)).resolves.toSatisfy((stat) => stat.isFile());

@@ -1,43 +1,33 @@
-// Memory Wiki tests cover unsafe local plugin behavior.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 import { syncMemoryWikiUnsafeLocalSources } from "./unsafe-local.js";
 
-const { createVault } = createMemoryWikiTestHarness();
+const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
 describe("syncMemoryWikiUnsafeLocalSources", () => {
-  let fixtureRoot = "";
-  let caseId = 0;
-
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-unsafe-suite-"));
-  });
-
-  afterAll(async () => {
-    if (!fixtureRoot) {
-      return;
-    }
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  });
-
   afterEach(() => {
     __setFsSafeTestHooksForTest();
     vi.restoreAllMocks();
   });
 
-  function nextCaseRoot(name: string): string {
-    return path.join(fixtureRoot, `case-${caseId++}-${name}`);
-  }
-
   async function createPrivateDir(name: string): Promise<string> {
-    const privateDir = nextCaseRoot(name);
+    const privateDir = path.join(await createTempDir("memory-wiki-unsafe-"), name);
     await fs.mkdir(privateDir, { recursive: true });
     return privateDir;
+  }
+
+  function createUnsafeVault(name: string, paths: string[]) {
+    return createVault({
+      prefix: `memory-wiki-${name}-`,
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: { allowPrivateMemoryCoreAccess: true, paths },
+      },
+    });
   }
 
   it("imports explicit private paths and preserves unsafe-local provenance", async () => {
@@ -50,24 +40,20 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     const directPath = path.join(privateDir, "events.log");
     await fs.writeFile(directPath, "private log\n", "utf8");
 
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("vault"),
-      config: {
-        vaultMode: "unsafe-local",
-        unsafeLocal: {
-          allowPrivateMemoryCoreAccess: true,
-          paths: [path.join(privateDir, "nested"), directPath],
-        },
-      },
-    });
+    const { rootDir: vaultDir, config } = await createUnsafeVault("vault", [
+      path.join(privateDir, "nested"),
+      directPath,
+    ]);
 
     const first = await syncMemoryWikiUnsafeLocalSources(config);
 
-    expect(first.artifactCount).toBe(3);
-    expect(first.importedCount).toBe(3);
-    expect(first.updatedCount).toBe(0);
-    expect(first.skippedCount).toBe(0);
-    expect(first.removedCount).toBe(0);
+    expect(first).toMatchObject({
+      artifactCount: 3,
+      importedCount: 3,
+      updatedCount: 0,
+      skippedCount: 0,
+      removedCount: 0,
+    });
 
     const page = await fs.readFile(path.join(vaultDir, first.pagePaths[0] ?? ""), "utf8");
     expect(page).toContain("sourceType: memory-unsafe-local");
@@ -89,10 +75,12 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     });
     const second = await syncMemoryWikiUnsafeLocalSources(config);
 
-    expect(second.importedCount).toBe(0);
-    expect(second.updatedCount).toBe(0);
-    expect(second.skippedCount).toBe(3);
-    expect(second.removedCount).toBe(0);
+    expect(second).toMatchObject({
+      importedCount: 0,
+      updatedCount: 0,
+      skippedCount: 3,
+      removedCount: 0,
+    });
     expect(
       readFile.mock.calls.some(
         ([filePath]) => typeof filePath === "string" && filePath.startsWith(vaultDir),
@@ -112,16 +100,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     const secretPath = path.join(privateDir, "secret.md");
     await fs.writeFile(secretPath, "# private\n", "utf8");
 
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("prune-vault"),
-      config: {
-        vaultMode: "unsafe-local",
-        unsafeLocal: {
-          allowPrivateMemoryCoreAccess: true,
-          paths: [privateDir],
-        },
-      },
-    });
+    const { rootDir: vaultDir, config } = await createUnsafeVault("prune-vault", [privateDir]);
 
     const first = await syncMemoryWikiUnsafeLocalSources(config);
     const firstPagePath = first.pagePaths[0] ?? "";
@@ -140,8 +119,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await fs.rm(secretPath);
     const second = await syncMemoryWikiUnsafeLocalSources(config);
 
-    expect(second.artifactCount).toBe(0);
-    expect(second.removedCount).toBe(1);
+    expect(second).toMatchObject({ artifactCount: 0, removedCount: 1 });
     await expect(fs.stat(firstPageAbsPath)).rejects.toHaveProperty("code", "ENOENT");
     const salvageDir = path.join(vaultDir, ".salvage");
     await expect(
@@ -157,16 +135,10 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await fs.writeFile(unavailableSource, "# keep me\n", "utf8");
     await fs.writeFile(availableSource, "# delete me\n", "utf8");
 
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("unavailable-vault"),
-      config: {
-        vaultMode: "unsafe-local",
-        unsafeLocal: {
-          allowPrivateMemoryCoreAccess: true,
-          paths: [unavailableDir, availableDir],
-        },
-      },
-    });
+    const { rootDir: vaultDir, config } = await createUnsafeVault("unavailable-vault", [
+      unavailableDir,
+      availableDir,
+    ]);
 
     const first = await syncMemoryWikiUnsafeLocalSources(config);
     const pageContents = await Promise.all(
@@ -193,8 +165,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await fs.rm(availableSource);
     const duringOutage = await syncMemoryWikiUnsafeLocalSources(config);
 
-    expect(duringOutage.artifactCount).toBe(0);
-    expect(duringOutage.removedCount).toBe(1);
+    expect(duringOutage).toMatchObject({ artifactCount: 0, removedCount: 1 });
     await expect(
       fs.readFile(path.join(vaultDir, unavailablePage!.pagePath), "utf8"),
     ).resolves.toContain("remember this");
@@ -206,8 +177,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await fs.rename(offlinePath, unavailableDir);
     const afterRecovery = await syncMemoryWikiUnsafeLocalSources(config);
 
-    expect(afterRecovery.skippedCount).toBe(1);
-    expect(afterRecovery.removedCount).toBe(0);
+    expect(afterRecovery).toMatchObject({ skippedCount: 1, removedCount: 0 });
     await expect(
       fs.readFile(path.join(vaultDir, unavailablePage!.pagePath), "utf8"),
     ).resolves.toContain("remember this");
@@ -223,16 +193,9 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await Promise.all(
       sourcePaths.map((sourcePath) => fs.writeFile(sourcePath, `# ${path.basename(sourcePath)}\n`)),
     );
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("copied-vault-target"),
-      config: {
-        vaultMode: "unsafe-local",
-        unsafeLocal: {
-          allowPrivateMemoryCoreAccess: true,
-          paths: [privateDir],
-        },
-      },
-    });
+    const { rootDir: vaultDir, config } = await createUnsafeVault("copied-vault-target", [
+      privateDir,
+    ]);
 
     const first = await syncMemoryWikiUnsafeLocalSources(config);
     const generatedPage = first.pagePaths.find((pagePath) => pagePath.includes("legitimate-md"));
@@ -243,9 +206,11 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
 
     const second = await syncMemoryWikiUnsafeLocalSources(config);
 
-    expect(second.artifactCount).toBe(sourcePaths.length);
-    expect(second.importedCount).toBe(0);
-    expect(second.skippedCount).toBe(sourcePaths.length);
+    expect(second).toMatchObject({
+      artifactCount: sourcePaths.length,
+      importedCount: 0,
+      skippedCount: sourcePaths.length,
+    });
     expect(second.pagePaths).toHaveLength(sourcePaths.length);
   });
 
@@ -253,16 +218,9 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     const privateDir = await createPrivateDir("canonical-vault");
     const sourcePath = path.join(privateDir, "legitimate.md");
     await fs.writeFile(sourcePath, "# legitimate\n", "utf8");
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("canonical-vault-target"),
-      config: {
-        vaultMode: "unsafe-local",
-        unsafeLocal: {
-          allowPrivateMemoryCoreAccess: true,
-          paths: [sourcePath],
-        },
-      },
-    });
+    const { rootDir: vaultDir, config } = await createUnsafeVault("canonical-vault-target", [
+      sourcePath,
+    ]);
     const first = await syncMemoryWikiUnsafeLocalSources(config);
     const generatedPage = path.join(vaultDir, first.pagePaths[0] ?? "");
     const configWithVaultPage = {
@@ -275,9 +233,7 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
 
     const second = await syncMemoryWikiUnsafeLocalSources(configWithVaultPage);
 
-    expect(second.artifactCount).toBe(1);
-    expect(second.importedCount).toBe(0);
-    expect(second.skippedCount).toBe(1);
+    expect(second).toMatchObject({ artifactCount: 1, importedCount: 0, skippedCount: 1 });
     expect(second.pagePaths).toHaveLength(1);
   });
 
@@ -288,16 +244,9 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     await fs.mkdir(nestedDir, { recursive: true });
     await fs.writeFile(secretPath, "# very private\n", "utf8");
 
-    const { rootDir: vaultDir, config } = await createVault({
-      rootDir: nextCaseRoot("long-unsafe-vault"),
-      config: {
-        vaultMode: "unsafe-local",
-        unsafeLocal: {
-          allowPrivateMemoryCoreAccess: true,
-          paths: [privateDir],
-        },
-      },
-    });
+    const { rootDir: vaultDir, config } = await createUnsafeVault("long-unsafe-vault", [
+      privateDir,
+    ]);
 
     const result = await syncMemoryWikiUnsafeLocalSources(config);
     const pagePath = result.pagePaths[0] ?? "";
