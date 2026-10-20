@@ -17,15 +17,11 @@ it("packs the complete source runtime without native binaries or test fixtures",
     npmArgs: ["pack", "--dry-run", "--json", "--ignore-scripts"],
   });
   const result = spawnSync(command, args, { ...options, cwd: packageDir, encoding: "utf8" });
-  expect(result.error).toBeUndefined();
-  expect(result.status, result.stderr).toBe(0);
-  const [packed] = resolveNpmJsonEntries(JSON.parse(result.stdout)) as Array<{
-    files: Array<{ path: string }>;
-  }>;
-  const files = packed!.files.map((file) => file.path);
-  expect(
-    files.filter((file) => /(?:\.test\.ts$|\.dylib$|^native\/|^helper\/)/u.test(file)),
-  ).toEqual([]);
+  expect([result.error, result.status], result.stderr).toEqual([undefined, 0]);
+  const packs = resolveNpmJsonEntries(JSON.parse(result.stdout)) as { files: { path: string }[] }[];
+  const files = packs[0]!.files.map((file) => file.path);
+  const excluded = /(?:\.test\.ts$|\.dylib$|^native\/|^helper\/)/u;
+  expect(files.filter((file) => excluded.test(file))).toEqual([]);
   const staged = tempDirs.make("openclaw-facetime-source-package-");
   for (const file of files) {
     const target = join(staged, file);
@@ -40,23 +36,18 @@ it("packs the complete source runtime without native binaries or test fixtures",
     format: "esm",
     outdir: join(staged, "compiled"),
     write: false,
-    logLevel: "silent",
   });
 });
 
 it("declares an installed-native Apple Silicon plugin at the current host contract", () => {
-  const pkg = readManifest("package.json");
-  const plugin = readManifest("openclaw.plugin.json");
-  const { openclaw } = pkg;
-  // Release sync advances the host ranges together, but preserves minHostVersion.
-  const hostVersion = pkg.version;
+  const [pkg, plugin] = ["package.json", "openclaw.plugin.json"].map(readManifest);
+  const props = plugin.configSchema.properties;
+  const { version: hostVersion, openclaw } = pkg;
   expect(hostVersion).toMatch(/^\d{4}\.\d{1,2}\.\d{1,2}(?:-beta\.\d+)?$/u);
+  expect(pkg).toMatchObject({ license: "MIT", os: ["darwin"], cpu: ["arm64"] });
   for (const [actual, expected] of [
     [openclaw.extensions, ["./index.ts"]],
     [openclaw.runtimeExtensions, undefined],
-    [pkg.license, "MIT"],
-    [pkg.os, ["darwin"]],
-    [pkg.cpu, ["arm64"]],
     [pkg.devDependencies.openclaw, "workspace:*"],
     [pkg.private, undefined],
     [pkg.peerDependencies.openclaw, `>=${hostVersion}`],
@@ -67,12 +58,9 @@ it("declares an installed-native Apple Silicon plugin at the current host contra
     [plugin.skills, ["./skills"]],
     [plugin.contracts.tools, ["facetime_call"]],
     [plugin.doctorContract, { configRepair: true }],
-    [plugin.configSchema.properties.helperPort, undefined],
-    [plugin.configSchema.properties.helperHost, undefined],
-    [
-      plugin.configSchema.properties.realtime.properties.toolPolicy.enum,
-      ["safe-read-only", "owner", "none"],
-    ],
+    [props.helperPort, undefined],
+    [props.helperHost, undefined],
+    [props.realtime.properties.toolPolicy.enum, ["safe-read-only", "owner", "none"]],
   ]) {
     expect(actual).toEqual(expected);
   }
@@ -86,14 +74,9 @@ it("declares an installed-native Apple Silicon plugin at the current host contra
   for (const file of ["scripts/build-capture.sh", "scripts/build-helper-macabi.sh"]) {
     expect(pkg.files).not.toContain(file);
   }
-  expect(pkg.files).toEqual(
-    expect.arrayContaining([
-      "scripts/stage-helper.sh",
-      "scripts/verify-native-helper.sh",
-      "doctor-contract-api.ts",
-      "LICENSE",
-      "THIRD_PARTY_NOTICES.md",
-      "skills/facetime/SKILL.md",
-    ]),
-  );
+  const required = [
+    "scripts/stage-helper.sh scripts/verify-native-helper.sh doctor-contract-api.ts",
+    "LICENSE THIRD_PARTY_NOTICES.md skills/facetime/SKILL.md",
+  ].flatMap((group) => group.split(" "));
+  expect(pkg.files).toEqual(expect.arrayContaining(required));
 });

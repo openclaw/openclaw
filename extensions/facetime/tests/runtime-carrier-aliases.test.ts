@@ -43,13 +43,9 @@ it("falls back to a retained carrier alias when the current helper owner disappe
   const { talk, runtime, send } = await activateCarrierAliases();
   await send();
   expect(talk.activate).toHaveBeenCalledTimes(3);
-
   await expect(runtime.hangup()).resolves.toEqual({ callUUID: "call-1" });
 
-  expect(mocks.helper.safetyMute.mock.calls.map(([callUUID]) => callUUID)).toEqual([
-    "call-1",
-    "replacement-call",
-  ]);
+  expect(mocks.helper.safetyMute.mock.calls).toEqual([["call-1"], ["replacement-call"]]);
   expect(mocks.helper.leaveCall).toHaveBeenCalledWith("replacement-call");
   expect((await runtime.status()).calls).toEqual([]);
   await runtime.stop();
@@ -74,10 +70,11 @@ it("keeps the latest pending carrier after a cancellation reply without identity
   mocks.helper.cancelOutgoingCall.mockResolvedValue(pendingDialCancellationResult());
   mocks.helper.cancelOutgoingCall.mockImplementationOnce(() => reply.promise);
   const runtime = await createRuntime(state);
+  const onMessage = mocks.helperParams?.onMessage;
   const cancellation = runtime.hangup();
   try {
     await vi.waitFor(() => expect(mocks.helper.cancelOutgoingCall).toHaveBeenCalledOnce());
-    await mocks.helperParams?.onMessage(
+    await onMessage?.(
       {
         event: "ft-outbound-call-identified",
         data: { dial_id: "approved-dial", call_uuid: "replacement-call" },
@@ -99,9 +96,7 @@ it("keeps the latest pending carrier after a cancellation reply without identity
   } finally {
     reply.resolve(pendingDialCancellationResult());
     await cancellation;
-    await mocks.helperParams?.onMessage(
-      endedCall("replacement-call", { dial_id: "approved-dial" }),
-    );
+    await onMessage?.(endedCall("replacement-call", { dial_id: "approved-dial" }));
     await runtime.stop();
   }
 });
