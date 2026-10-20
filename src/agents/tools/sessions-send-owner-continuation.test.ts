@@ -426,6 +426,7 @@ describe("plain peer retained result", () => {
             runId,
             replyMode: "peer",
             targetSession: { sessionId: "accepted-worker" },
+            replyAdmission: Object.assign(() => {}, { assertCurrent: async () => {} }),
             callGateway: async () => {
               throw new Error("Gateway requester authority changed");
             },

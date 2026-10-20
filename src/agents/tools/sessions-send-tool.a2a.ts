@@ -51,7 +51,7 @@ export async function runSessionsSendA2AFlow(params: {
     reply: Pick<Parameters<typeof runAgentStep>[0], "message" | "extraSystemPrompt">,
   ) => Promise<void>;
   /** Host-bound reader for this accepted run's retained full answer. */
-  readAcceptedReply?: () => string | undefined;
+  readAcceptedReply?: () => string | undefined | Promise<string | undefined>;
 }) {
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   const child = params.replyMode === "one-way";

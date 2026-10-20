@@ -8,6 +8,15 @@ import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import type { CommunicationEndpoint } from "../../sessions/communication-admission.js";
 
+/** A host-held return route minted only after the original request was accepted. */
+export type SessionSendReplyAdmission = ((
+  source: CommunicationEndpoint,
+  target: CommunicationEndpoint,
+) => void) & {
+  /** Revalidate the captured endpoints without reconsidering withdrawn send policy. */
+  assertCurrent?: (assertDeliveryCurrent: () => void) => Promise<void>;
+};
+
 export async function matchesSessionCommunicationParent(
   parent: CommunicationEndpoint,
   expectedId: string | undefined,
@@ -72,4 +81,20 @@ export async function readSessionCommunicationEndpoint(params: {
     storePath: loaded.readSource?.path ?? loaded.storePath,
     entry: loaded.store[loaded.canonicalKey],
   };
+}
+
+/** Revalidate an accepted return route through current endpoint storage owners. */
+export async function assertSessionSendReplyAdmissionCurrent(
+  config: OpenClawConfig,
+  source: CommunicationEndpoint,
+  target: CommunicationEndpoint,
+  admission: (source: CommunicationEndpoint, target: CommunicationEndpoint) => void,
+  assertCurrent: () => void,
+): Promise<void> {
+  const [currentSource, currentTarget] = await Promise.all([
+    readSessionCommunicationEndpoint({ config, endpoint: source, assertCurrent }),
+    readSessionCommunicationEndpoint({ config, endpoint: target, assertCurrent }),
+  ]);
+  assertCurrent();
+  admission(currentSource, currentTarget);
 }

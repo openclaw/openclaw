@@ -10,6 +10,7 @@ import type { GatewaySessionStoreTargetWithStore } from "../../gateway/session-u
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
@@ -57,14 +58,34 @@ export function startSessionsSendReplyFlow(
     sessionKey: params.targetSessionKey,
     sessionId: params.targetSession.sessionId,
   };
+  const { completion } = params;
   const readAcceptedReply =
     admittedContext && acceptedRun
-      ? () =>
-          resolveContext() === admittedContext
-            ? readAcceptedAgentRunReplyText(admittedContext, acceptedRun)
-            : undefined
+      ? async () => {
+          try {
+            const assertDeliveryCurrent = () => {
+              if (resolveContext() !== admittedContext) {
+                throw new Error("Accepted reply Gateway changed.");
+              }
+              completion?.assertCurrent();
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority?.assertCurrent();
+            };
+            assertDeliveryCurrent();
+            if (params.replyAdmission) {
+              if (!params.replyAdmission.assertCurrent) {
+                return undefined;
+              }
+              await params.replyAdmission.assertCurrent(assertDeliveryCurrent);
+            } else if (!completion) {
+              return undefined;
+            }
+            assertDeliveryCurrent();
+            return readAcceptedAgentRunReplyText(admittedContext, acceptedRun);
+          } catch {
+            return undefined;
+          }
+        }
       : undefined;
-  const { completion } = params;
   const continueOwned = async <T>(run: () => Promise<T>) =>
     completion ? completion.request.custody.run(run) : runWithGatewayToolContinuationContext(run);
   const run = async () => {

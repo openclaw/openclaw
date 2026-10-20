@@ -45,6 +45,8 @@ import {
   resolveSessionToolAccess,
 } from "./sessions-access.js";
 import {
+  type SessionSendReplyAdmission,
+  assertSessionSendReplyAdmissionCurrent,
   matchesSessionCommunicationParent,
   readSessionCommunicationEndpoint,
 } from "./sessions-send-communication-endpoint.js";
@@ -52,11 +54,7 @@ import {
 /** A current permission decision rejected delivery, rather than an unavailable dependency. */
 export class SessionCommunicationDeniedError extends Error {}
 
-/** A host-held return route minted only after the original request was accepted. */
-export type SessionSendReplyAdmission = (
-  source: CommunicationEndpoint,
-  target: CommunicationEndpoint,
-) => void;
+export type { SessionSendReplyAdmission } from "./sessions-send-communication-endpoint.js";
 
 /** One prepared peer operation; identity bounds never choose its completion route. */
 export async function prepareSessionsSendCommunication(params: {
@@ -693,7 +691,7 @@ export async function prepareSessionsSendCommunication(params: {
         const peer = identity(target[0]!);
         // This route outlives the sender tool; the continuation separately checks
         // live operator authority. It grants no unrelated peer send or history access.
-        return (replySource, replyTarget) => {
+        const acceptedReply: SessionSendReplyAdmission = (replySource, replyTarget) => {
           if (
             identity(replySource) !== peer ||
             identity(replyTarget) !== requester ||
@@ -703,6 +701,17 @@ export async function prepareSessionsSendCommunication(params: {
             throw new Error("Requested reply no longer names its accepted session incarnations.");
           }
         };
+        const acceptedSource = target[0]!;
+        const acceptedTarget = source[0]!;
+        acceptedReply.assertCurrent = (assertDeliveryCurrent) =>
+          assertSessionSendReplyAdmissionCurrent(
+            config,
+            acceptedSource,
+            acceptedTarget,
+            acceptedReply,
+            assertDeliveryCurrent,
+          );
+        return acceptedReply;
       },
       targetSession: target[0]!.entry
         ? {
