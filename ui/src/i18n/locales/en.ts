@@ -2250,7 +2250,6 @@ export const en: TranslationMap & {
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
     startupStatus: {
-      retrying: "Retrying… {attempt}/{maxAttempts}",
       preparingWorkspace: "Preparing workspace…",
       namingWorktree: "Naming worktree…",
       creatingWorktree: "Creating worktree…",

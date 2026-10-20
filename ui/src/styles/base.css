@@ -85,7 +85,7 @@
   --inbox-attention: #e5243b;
   --inbox-attention-foreground: #ffffff;
 
-  /* Lobster mascot icon (icons-tools.ts). Dark surfaces swallowed the shipped
+  /* Lobster mascot icon (icon-data-tools.ts). Dark surfaces swallowed the shipped
      #ff4d4d→#991b1b gradient, so dark mode lifts both stops; light mode
      restores the original artwork below. */
   --lobster-icon-body: #ff6d5a;
