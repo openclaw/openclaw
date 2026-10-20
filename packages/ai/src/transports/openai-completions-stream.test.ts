@@ -381,6 +381,107 @@ async function runChunks(chunks: readonly unknown[], model = makeCompletionsMode
 }
 
 describe("openai completions stream", () => {
+  it.each([false, true])(
+    "withholds split tool scaffolding before native calls (direct=%s)",
+    async (direct) => {
+      const { output, events, run } = streamFixture();
+      await run(
+        [
+          ...["Working.\n", "<", "tool_"].map((content) => makeCompletionsChunk({ content })),
+          makeCompletionsChunk(toolDelta('{"path":', "read", "call-read", 0)),
+          makeCompletionsChunk(toolDelta('"README.md"}', undefined, "call-read", 0), "tool_calls"),
+        ],
+        direct ? { mode: "direct", beforeContentBlock: () => {} } : undefined,
+      );
+      expect(
+        events
+          .filter((event) => event.type === "text_delta")
+          .map((event) => event.delta)
+          .join(""),
+      ).toBe("Working.\n");
+      expect(collectVisibleText(output)).toBe("Working.\n");
+      expect(output.content).toContainEqual(
+        expectedToolCall("call-read", "read", { path: "README.md" }),
+      );
+    },
+  );
+
+  it.each([
+    "Use <tool_",
+    "a < b",
+    "<table>",
+    "<tool_box>",
+    "```xml\n<tool_",
+    "~~~xml\n<tool_",
+    "    <tool_",
+  ])("preserves literal text before a native call: %j", async (text) => {
+    const { output, run } = streamFixture();
+    await run([
+      ...Array.from(text, (content) => makeCompletionsChunk({ content })),
+      makeCompletionsChunk(toolDelta("{}", "read", "call-read", 0), "tool_calls"),
+    ]);
+    expect(collectVisibleText(output)).toBe(text);
+  });
+
+  it.each(["error", "abort", "missing-finish"] as const)(
+    "retains an unconfirmed literal on %s",
+    async (failure) => {
+      const { output, runStream } = streamFixture();
+      const controller = new AbortController();
+      async function* chunks() {
+        yield makeCompletionsChunk({ content: "<tool_" });
+        if (failure === "error") {
+          throw new Error("provider disconnected");
+        }
+        if (failure === "abort") {
+          controller.abort();
+        }
+      }
+      await expect(
+        runStream(chunks(), {
+          mode: "direct",
+          beforeContentBlock: () => {},
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow();
+      expect(collectVisibleText(output)).toBe("<tool_");
+    },
+  );
+
+  it("starts a new marker boundary after native reasoning", async () => {
+    const { output, run } = streamFixture();
+    await run([
+      makeCompletionsChunk({ content: "Prose" }),
+      makeCompletionsChunk({ reasoning_content: "Thinking" }),
+      makeCompletionsChunk({ content: "<tool_" }),
+      makeCompletionsChunk(toolDelta("{}", "read", "call-read", 0), "tool_calls"),
+    ]);
+    expect(collectVisibleText(output)).toBe("Prose");
+  });
+
+  it("preserves code in a reused direct text block between tool argument fragments", async () => {
+    const { output, run } = streamFixture();
+    await run(
+      [
+        makeCompletionsChunk({ content: "```xml\n" }),
+        makeCompletionsChunk(toolDelta("{", "read", "call-read", 0)),
+        makeCompletionsChunk({ content: "<tool_" }),
+        makeCompletionsChunk(toolDelta("}", undefined, "call-read", 0), "tool_calls"),
+      ],
+      { mode: "direct", beforeContentBlock: () => {} },
+    );
+    expect(collectVisibleText(output)).toBe("```xml\n<tool_");
+  });
+
+  it.each(["<", "<tool_", "<tool_call>\n"])(
+    "restores a terminal literal without a tool: %j",
+    async (text) => {
+      const fixture = streamFixture();
+      await fixture.text(Array.from(text));
+      expect(collectVisibleText(fixture.output)).toBe(text);
+    },
+  );
+
   it.each(["reasoning before text", "reasoning after text"] as const)(
     "handles %s usage chunks",
     async (kind) => {
