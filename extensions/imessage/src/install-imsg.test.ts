@@ -14,6 +14,7 @@ vi.mock("openclaw/plugin-sdk/setup-tools", async (importOriginal) => {
   return { ...actual, resolveBrewExecutable: resolveBrewExecutableMock };
 });
 
+// mock-isolation: Installer fixtures record Homebrew commands without executing host processes.
 vi.mock("openclaw/plugin-sdk/run-command", () => ({
   runPluginCommandWithTimeout: runCommandMock,
 }));

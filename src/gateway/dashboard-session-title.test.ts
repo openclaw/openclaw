@@ -11,7 +11,9 @@ const mocks = vi.hoisted(() => ({
   load: vi.fn(),
 }));
 
+// mock-isolation: Title routing uses fixture model choices without reading provider configuration.
 vi.mock("../agents/utility-model.js", () => ({ resolveUtilityModelRefForAgent: mocks.utility }));
+// mock-isolation: Controlled label results exercise title lifecycle without live model requests.
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: mocks.generate,
 }));

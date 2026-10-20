@@ -45,6 +45,7 @@ function createTimeoutHistoryWithNoReply() {
   ];
 }
 
+// mock-isolation: Timeout fixtures supply Gateway history and delivery replies without a live Gateway.
 vi.mock("../../../gateway/call.js", createGatewayCallModuleMock);
 vi.mock("../../../sessions/session-controller.queries.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../sessions/session-controller.queries.js")>()),
@@ -125,6 +126,7 @@ vi.mock("./subagent-announce.runtime.js", async (importOriginal) => ({
   readSubagentSessionEntry: (_storePath: string, sessionKey: string) => sessionStore[sessionKey],
   resolveSessionStorePathCore: () => "/tmp/sessions-main.json",
 }));
+// mock-isolation: Timeout scenarios use synthetic requester state instead of the live subagent registry.
 vi.mock("../registry/subagent-registry-read.js", () => ({
   countPendingDescendantRuns: () => 0,
   getLatestSubagentRunByChildSessionKey: () => undefined,

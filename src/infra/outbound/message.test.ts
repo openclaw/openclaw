@@ -16,6 +16,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
   listChannelPlugins: () => [],
 }));
 
+// mock-isolation: Outbound routing uses synthetic agent identity and workspace without operator state.
 vi.mock("../../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
   resolveSessionAgentId: ({ sessionKey }: { sessionKey?: string }) => {
