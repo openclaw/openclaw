@@ -1,4 +1,3 @@
-// Frontmatter tests cover skill metadata parsing and validation.
 import { describe, expect, it } from "vitest";
 import {
   parseSkillFrontmatter,
@@ -6,29 +5,31 @@ import {
   resolveSkillInvocationPolicy,
 } from "./frontmatter.js";
 
-describe("parseSkillFrontmatter", () => {
-  it("rejects unresolved aliases under explicit YAML keys", () => {
-    expect(() =>
-      parseSkillFrontmatter(`---
+it("rejects unresolved aliases under explicit YAML keys", () => {
+  expect(() =>
+    parseSkillFrontmatter(`---
 name: sample-skill
 description: Working skill
 ? metadata
 : *missing
 ---`),
-    ).toThrow(/invalid frontmatter.*YAML_EXCEPTION: Unresolved alias/);
-  });
+  ).toThrow(/invalid frontmatter.*YAML_EXCEPTION: Unresolved alias/);
 });
 
 describe("resolveSkillManifestMetadata install validation", () => {
-  function resolveInstall(frontmatter: Record<string, string>) {
-    return resolveSkillManifestMetadata(frontmatter)?.install;
+  function resolveInstall(...install: unknown[]) {
+    return resolveSkillManifestMetadata({ metadata: JSON.stringify({ openclaw: { install } }) })
+      ?.install;
   }
 
   it("accepts safe install specs", () => {
-    const install = resolveInstall({
-      metadata:
-        '{"openclaw":{"install":[{"kind":"brew","formula":"python@3.12"},{"kind":"node","package":"@scope/pkg@1.2.3"},{"kind":"go","module":"example.com/tool/cmd@v1.2.3"},{"kind":"uv","package":"uvicorn[standard]==0.31.0"},{"kind":"download","url":"https://example.com/tool.tar.gz"}]}}',
-    });
+    const install = resolveInstall(
+      { kind: "brew", formula: "python@3.12" },
+      { kind: "node", package: "@scope/pkg@1.2.3" },
+      { kind: "go", module: "example.com/tool/cmd@v1.2.3" },
+      { kind: "uv", package: "uvicorn[standard]==0.31.0" },
+      { kind: "download", url: "https://example.com/tool.tar.gz" },
+    );
     expect(install).toEqual([
       { kind: "brew", formula: "python@3.12" },
       { kind: "node", package: "@scope/pkg@1.2.3" },
@@ -38,48 +39,21 @@ describe("resolveSkillManifestMetadata install validation", () => {
     ]);
   });
 
-  it("drops unsafe brew formula values", () => {
-    const install = resolveInstall({
-      metadata: '{"openclaw":{"install":[{"kind":"brew","formula":"wget --HEAD"}]}}',
-    });
-    expect(install).toBeUndefined();
-  });
-
-  it("drops unsafe npm package specs for node installers", () => {
-    const install = resolveInstall({
-      metadata: '{"openclaw":{"install":[{"kind":"node","package":"file:../malicious"}]}}',
-    });
-    expect(install).toBeUndefined();
-  });
-
-  it("drops unsafe go module specs", () => {
-    const install = resolveInstall({
-      metadata: '{"openclaw":{"install":[{"kind":"go","module":"https://evil.example/mod"}]}}',
-    });
-    expect(install).toBeUndefined();
-  });
-
-  it("drops unsafe download urls", () => {
-    const install = resolveInstall({
-      metadata: '{"openclaw":{"install":[{"kind":"download","url":"file:///tmp/payload.tgz"}]}}',
-    });
-    expect(install).toBeUndefined();
+  it.each([
+    { kind: "brew", formula: "wget --HEAD" },
+    { kind: "node", package: "file:../malicious" },
+    { kind: "go", module: "https://evil.example/mod" },
+    { kind: "download", url: "file:///tmp/payload.tgz" },
+  ])("drops unsafe $kind install specs", (spec) => {
+    expect(resolveInstall(spec)).toBeUndefined();
   });
 
   it("normalizes a download installer's optional SHA-256 digest", () => {
     const sha256 = "a".repeat(64);
     const install = resolveInstall({
-      metadata: JSON.stringify({
-        openclaw: {
-          install: [
-            {
-              kind: "download",
-              url: "https://example.com/runtime.tar.bz2",
-              sha256: ` ${sha256.toUpperCase()} `,
-            },
-          ],
-        },
-      }),
+      kind: "download",
+      url: "https://example.com/runtime.tar.bz2",
+      sha256: ` ${sha256.toUpperCase()} `,
     });
 
     expect(install).toEqual([
@@ -91,11 +65,9 @@ describe("resolveSkillManifestMetadata install validation", () => {
     "drops a download installer declaring an invalid SHA-256 digest (%j)",
     (sha256) => {
       const install = resolveInstall({
-        metadata: JSON.stringify({
-          openclaw: {
-            install: [{ kind: "download", url: "https://example.com/runtime.tar.bz2", sha256 }],
-          },
-        }),
+        kind: "download",
+        url: "https://example.com/runtime.tar.bz2",
+        sha256,
       });
 
       expect(install).toBeUndefined();
@@ -135,19 +107,8 @@ user-invocable: true
     expect(resolveSkillInvocationPolicy(frontmatter).userInvocable).toBe(true);
     expect(metadata).toEqual({
       homepage: "https://link.com/agents",
-      requires: {
-        bins: ["link-cli"],
-        anyBins: [],
-        env: [],
-        config: [],
-      },
-      install: [
-        {
-          kind: "node",
-          package: "@stripe/link-cli",
-          bins: ["link-cli"],
-        },
-      ],
+      requires: { bins: ["link-cli"], anyBins: [], env: [], config: [] },
+      install: [{ kind: "node", package: "@stripe/link-cli", bins: ["link-cli"] }],
     });
   });
 });
