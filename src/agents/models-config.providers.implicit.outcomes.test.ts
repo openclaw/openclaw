@@ -4,7 +4,6 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import type { ModelProviderConfig } from "../config/types.models.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { ProviderPlugin } from "../plugins/types.js";
@@ -17,47 +16,41 @@ vi.mock("../plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => fixture.providers,
 }));
 
-const catalog = (name: string, id = "shared"): ModelProviderConfig => ({
+const catalog = (name: string, id = "shared") => ({
   baseUrl: "https://catalog.example.invalid/v1",
   models: [modelDefinition(id, { name, reasoning: false, contextWindow: 32768, maxTokens: 4096 })],
 });
+type Catalog = NonNullable<ProviderPlugin["catalog"]>;
+const plugin = (
+  id: string,
+  order: Catalog["order"],
+  run: Catalog["run"],
+  fields: Partial<ProviderPlugin> = {},
+): ProviderPlugin => ({ id, label: id, auth: [], ...fields, catalog: { order, run } });
+const discovery = () => ({ config: {}, authStore: { version: 1 as const, profiles: {} } });
 
 it("keeps canonical outcome authority when only its alias is selected", async () => {
   await withOpenClawTestState({ label: "implicit-catalog-outcomes" }, async (state) => {
-    const failure: ProviderCatalogOutcome = {
-      provider: "canonical",
-      profileId: "canonical:account",
-      status: "unavailable",
-    };
+    const failure: ProviderCatalogOutcome = { provider: "canonical", status: "unavailable" };
     fixture.providers = [
-      {
-        id: "canonical",
-        label: "canonical",
-        auth: [],
-        pluginId: "catalog-owner",
-        aliases: ["alias"],
-        hookAliases: ["sibling"],
-        catalog: {
-          order: "profile",
-          run: async (ctx) => {
-            expect(ctx.providerIds).toEqual(["alias"]);
-            return {
-              provider: { ...catalog("learned", "learned"), api: "openai-completions" },
-              outcomes: [
-                failure,
-                { provider: "sibling", profileId: "sibling:account", status: "auth-rejected" },
-              ],
-            };
-          },
+      plugin(
+        "canonical",
+        "profile",
+        async (ctx) => {
+          expect(ctx.providerIds).toEqual(["alias"]);
+          return {
+            provider: { ...catalog("learned", "learned"), api: "openai-completions" },
+            outcomes: [failure, { provider: "sibling", status: "auth-rejected" }],
+          };
         },
-      },
+        { pluginId: "catalog-owner", aliases: ["alias"], hookAliases: ["sibling"] },
+      ),
     ];
     const outcomes: ProviderCatalogOutcome[] = [];
     const providers = await resolveImplicitProviders({
       agentDir: state.agentDir(),
       env: state.env,
-      config: {},
-      authStore: { version: 1, profiles: {} },
+      ...discovery(),
       pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
         plugins: [
           {
@@ -75,9 +68,7 @@ it("keeps canonical outcome authority when only its alias is selected", async ()
   });
 });
 
-it("bounds concurrent discovery and preserves merge order when catalogs finish out of order", async ({
-  signal,
-}) => {
+it("preserves merge order across bounded concurrent catalogs", async ({ signal }) => {
   await withOpenClawTestState({ label: "concurrent-catalogs" }, async (state) => {
     vi.useFakeTimers();
     const entered = createDeferred();
@@ -88,50 +79,35 @@ it("bounds concurrent discovery and preserves merge order when catalogs finish o
     const started: number[] = [];
     let active = 0;
     let peak = 0;
-    let lateStarted = false;
-    fixture.providers = delays.map((delay, index) => ({
-      id: `provider-${index}`,
-      label: `provider-${index}`,
-      auth: [],
-      catalog: {
-        order: "simple",
-        run: async () => {
-          started.push(index);
-          peak = Math.max(peak, ++active);
-          entered.resolve();
-          await new Promise((resolve) => {
-            setTimeout(resolve, delay);
-          });
-          active--;
-          finished.push(index);
-          return {
-            providers: {
-              within: catalog(`provider-${index}`),
-              between: catalog(`provider-${index}`),
-            },
-            outcomes: [{ provider: "within", profileId: String(index), status: "ready" }],
-          };
-        },
-      },
-    }));
-    fixture.providers.push({
-      id: "late",
-      label: "late",
-      auth: [],
-      catalog: {
-        order: "late",
-        run: async () => {
-          lateStarted = true;
-          expect(active).toBe(0);
-          return { providers: { between: catalog("late") } };
-        },
-      },
-    });
+    fixture.providers = delays.map((delay, index) =>
+      plugin(`provider-${index}`, "simple", async () => {
+        started.push(index);
+        peak = Math.max(peak, ++active);
+        entered.resolve();
+        await new Promise((resolve) => {
+          setTimeout(resolve, delay);
+        });
+        active--;
+        finished.push(index);
+        return {
+          providers: {
+            within: catalog(`provider-${index}`),
+            between: catalog(`provider-${index}`),
+          },
+          outcomes: [{ provider: "within", profileId: String(index), status: "ready" }],
+        };
+      }),
+    );
+    fixture.providers.push(
+      plugin("late", "late", async () => {
+        expect(active).toBe(0);
+        return { providers: { between: catalog("late") } };
+      }),
+    );
     const operation = resolveImplicitProviders({
       agentDir: state.agentDir(),
       env: state.env,
-      config: {},
-      authStore: { version: 1, profiles: {} },
+      ...discovery(),
       pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
       onProviderCatalogOutcome: (outcome) => outcomes.push(outcome),
     });
@@ -150,7 +126,6 @@ it("bounds concurrent discovery and preserves merge order when catalogs finish o
         within: { models: [{ name: "provider-0" }] },
         between: { models: [{ name: "late" }] },
       });
-      expect(lateStarted).toBe(true);
     } finally {
       await vi.advanceTimersByTimeAsync(discoveryDurationMs);
       vi.useRealTimers();

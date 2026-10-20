@@ -41,8 +41,7 @@ describe("model suppression", () => {
     setCurrentPluginMetadataSnapshot(snapshotB, { config });
     mocks.buildManifestBuiltInModelSuppressionResolver.mockImplementation(() => {
       const snapshot = getCurrentPluginMetadataSnapshot({ config, env: process.env });
-      return () =>
-        snapshot === snapshotA ? { suppress: true, errorMessage: "generation A" } : undefined;
+      return () => (snapshot === snapshotA ? { suppress: true } : undefined);
     });
     const holdA = createDeferred();
     const aReady = createDeferred();
@@ -66,10 +65,7 @@ describe("model suppression", () => {
   });
 
   it("reuses the manifest owner for repeated model decisions", () => {
-    const resolver = vi
-      .fn()
-      .mockReturnValueOnce({ suppress: true, errorMessage: "manifest suppression" })
-      .mockReturnValueOnce(undefined);
+    const resolver = vi.fn().mockReturnValueOnce({ suppress: true }).mockReturnValueOnce(undefined);
     const config = {};
     mocks.buildManifestBuiltInModelSuppressionResolver.mockReturnValueOnce(resolver);
 
@@ -77,10 +73,8 @@ describe("model suppression", () => {
 
     expect(shouldSuppress({ provider: "bedrock", id: "Claude-3" })).toBe(true);
     expect(shouldSuppress({ provider: "aws-bedrock", id: "claude-4" })).toBe(false);
-    expect(mocks.buildManifestBuiltInModelSuppressionResolver).toHaveBeenCalledOnce();
-    expect(mocks.buildManifestBuiltInModelSuppressionResolver).toHaveBeenCalledWith({
-      config,
-      env: process.env,
-    });
+    expect(mocks.buildManifestBuiltInModelSuppressionResolver.mock.calls).toEqual([
+      [{ config, env: process.env }],
+    ]);
   });
 });
