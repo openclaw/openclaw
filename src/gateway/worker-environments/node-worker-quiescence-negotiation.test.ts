@@ -4,8 +4,8 @@ import {
   parseNodeWorkerWorkspaceExecInput,
   type NodeWorkerWorkspaceExecInput,
 } from "../../worker/node-workspace-protocol.js";
-import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import {
+  createManager,
   environment,
   startRequest,
   transport,
@@ -75,16 +75,9 @@ it.each([
       }),
     };
   });
-  const transfer = workspaceTransfer();
-  transfer.prepareRepository = vi.fn(async () => {});
-  const manager = createNodeWorkerTunnelManager({
-    gatewayDeviceId: "gateway-device-1",
-    getEnvironment: () => record,
-    listEnvironments: () => [record],
+  const manager = createManager(record, {
     getTransport: () => nodeTransport,
-    launchNodeWorker: vi.fn(),
-    validateWorkerTurn: () => true,
-    workspaceTransfer: transfer,
+    workspaceTransfer: workspaceTransfer({ prepareRepository: vi.fn(async () => {}) }),
   });
   manager.bindWorkspaceBindingResolver(async () => ({
     source: {
@@ -96,6 +89,12 @@ it.each([
     remoteWorkspaceDir: "/node/workspace",
   }));
   const handle = await manager.start(startRequest());
+  const run = (overrides: Partial<Parameters<typeof handle.runWorkspaceCommand>[0]> = {}) =>
+    handle.runWorkspaceCommand({
+      argv: ["node", "-e", "0"],
+      transportRetry: "never",
+      ...overrides,
+    });
   upgradeOnRead = mode === "upgrade-during-acquire";
   if (mode.startsWith("native-abandoned")) {
     await expect(handle.quiesceWorkspace("/node/workspace")).rejects.toThrow(
@@ -107,32 +106,31 @@ it.each([
     if (mode === "native-abandoned-release-fails") {
       supported = false;
       const before = requests.length;
-      await expect(
-        handle.runWorkspaceCommand({ argv: ["node", "-e", "0"], transportRetry: "never" }),
-      ).rejects.toThrow("quiescence support changed");
+      await expect(run()).rejects.toThrow("quiescence support changed");
       expect(requests).toHaveLength(before);
       supported = true;
-      await handle.runWorkspaceCommand({
+      await run({
         argv: requests[0]!.argv,
-        transportRetry: "never",
         quiescence: { action: "release", nonce: requests[0]!.quiescence!.nonce },
       });
     }
     supported = false;
-    await handle.runWorkspaceCommand({ argv: ["node", "-e", "0"], transportRetry: "never" });
+    await run();
     expect(requests.at(-1)).not.toHaveProperty("nativeProcessOwner");
     supported = true;
     requests.length = 0;
   }
   const lease = await handle.quiesceWorkspace("/node/workspace");
   try {
-    await handle.runWorkspaceCommand({ argv: ["node", "-e", "0"], transportRetry: "never" });
+    await run();
     await lease.assertActive();
-    expect(requests[0]?.quiescence?.action).toBe(native ? "acquire" : undefined);
-    expect(requests[0]).not.toHaveProperty("nativeProcessOwner");
+    expect([requests[0]?.quiescence?.action, requests[2]?.quiescence?.action]).toEqual(
+      native ? ["acquire", "renew"] : [undefined, undefined],
+    );
     expect(requests[1]?.nativeProcessOwner).toBe(mode === "legacy" ? undefined : true);
-    expect(requests[2]?.quiescence?.action).toBe(native ? "renew" : undefined);
-    expect(requests[2]).not.toHaveProperty("nativeProcessOwner");
+    for (const input of [requests[0], requests[2]]) {
+      expect(input).not.toHaveProperty("nativeProcessOwner");
+    }
     if (!native) {
       expect(requests[0]?.argv.slice(0, 2)).toEqual(["node", "-e"]);
       expect(requests[2]?.argv).toContain(legacyNonce);
@@ -140,15 +138,15 @@ it.each([
     if (native) {
       supported = false;
       const before = requests.length;
-      await expect(
-        handle.runWorkspaceCommand({ argv: ["node", "-e", "0"], transportRetry: "idempotent" }),
-      ).rejects.toThrow("quiescence support changed");
+      await expect(run({ transportRetry: "idempotent" })).rejects.toThrow(
+        "quiescence support changed",
+      );
       await expect(lease.assertActive()).rejects.toThrow("quiescence support changed");
       expect(requests).toHaveLength(before);
       supported = true;
       await lease.resume();
       supported = false;
-      await handle.runWorkspaceCommand({ argv: ["node", "-e", "0"], transportRetry: "never" });
+      await run();
       expect(requests.at(-1)).not.toHaveProperty("nativeProcessOwner");
     }
   } finally {
