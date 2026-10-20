@@ -1,7 +1,6 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
-import { openAIRealtimeHost } from "./realtime-host.js";
-import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
+import { createGatewayBridge } from "./realtime-quicksilver-gateway.test-support.js";
 import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 import {
   createCallResponse,
@@ -27,44 +26,31 @@ function createBridge(params: {
     sendAudio: vi.fn(),
     close: vi.fn(),
   }));
-  const bridge = new OpenAIQuicksilverGatewayBridge(
-    {
-      providerConfig: {},
-      model: "gpt-live-test",
-      voice: "marin",
-      audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onError: params.onError,
-      onTranscript: params.onTranscript,
-      runAgentConsult: params.runAgentConsult,
-      handleDelegationInput: params.handleDelegationInput,
-      logger: { debug: vi.fn(), warn: vi.fn() },
-      resolveAuth: vi.fn(async () => ({
-        type: "api-key" as const,
-        token: "platform-key",
-      })),
-      createPeer,
-      fetchImpl,
-      mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
-        socket = new FakeSocket();
-        const send = socket.send.bind(socket);
-        socket.send = (payload) => {
-          send(payload);
-          if ((JSON.parse(payload) as { type?: string }).type === "session.update") {
-            queueMicrotask(() =>
-              emitSideband(socket!, {
-                type: "session.started",
-                session: { expires_at: Math.floor(Date.now() / 1000) + 60 },
-              }),
-            );
-          }
-        };
-        return socket;
-      }),
-    },
-    openAIRealtimeHost,
-  );
+  const bridge = createGatewayBridge({
+    model: "gpt-live-test",
+    voice: "marin",
+    audioFormat: { encoding: "pcm16", sampleRateHz: 24_000, channels: 1 },
+    ...params,
+    resolveAuth: async () => ({ type: "api-key", token: "platform-key" }),
+    createPeer,
+    fetchImpl,
+    mediaSocketFactory: fakeQuicksilverMediaSocket(() => {
+      socket = new FakeSocket();
+      const send = socket.send.bind(socket);
+      socket.send = (payload) => {
+        send(payload);
+        if ((JSON.parse(payload) as { type?: string }).type === "session.update") {
+          queueMicrotask(() =>
+            emitSideband(socket!, {
+              type: "session.started",
+              session: { expires_at: Math.floor(Date.now() / 1000) + 60 },
+            }),
+          );
+        }
+      };
+      return socket;
+    }),
+  });
   return {
     bridge,
     createPeer,
@@ -81,12 +67,7 @@ function createBridge(params: {
 function emitDelegation(socket: FakeSocket, id: string, text: string): void {
   emitSideband(socket, {
     type: "delegation.created",
-    item: {
-      type: "delegation",
-      target: "client",
-      id,
-      content: [{ type: "input_text", text }],
-    },
+    item: { type: "delegation", target: "client", id, content: [{ type: "input_text", text }] },
   });
 }
 
@@ -109,9 +90,7 @@ describe("OpenAI Quicksilver gateway bridge lifecycle", () => {
       });
 
       expect(onError).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          message: "OpenAI GPT-Live provider error",
-        }),
+        expect.objectContaining({ message: "OpenAI GPT-Live provider error" }),
       );
       expect(onTranscript).toHaveBeenCalledWith("assistant", "Recovered", true);
       expect(harness.bridge.isConnected()).toBe(true);

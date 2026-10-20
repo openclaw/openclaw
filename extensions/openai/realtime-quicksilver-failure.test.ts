@@ -85,21 +85,18 @@ describe("public GPT-Live active failure ownership", () => {
       const connecting = session.connect();
       await vi.waitFor(() => expect(sockets[0]?.sent.length).toBe(1));
       const socket = sockets[0]!;
+      const transcript = (side: "input" | "output", delta: string, start_ms: number) =>
+        emitSideband(socket, {
+          type: `session.${side}_transcript.delta`,
+          delta,
+          start_ms,
+          end_ms: start_ms + 100,
+        });
       emitSideband(socket, { type: "session.started", session: {} });
       await connecting;
-      emitSideband(socket, {
-        type: "session.input_transcript.delta",
-        delta: "Question",
-        start_ms: 0,
-        end_ms: 100,
-      });
+      transcript("input", "Question", 0);
       if (observer !== "throw-transcript") {
-        emitSideband(socket, {
-          type: "session.output_transcript.delta",
-          delta: "Answer",
-          start_ms: 100,
-          end_ms: 200,
-        });
+        transcript("output", "Answer", 100);
       }
       const trigger = () => {
         if (failure === "transport") {
@@ -124,12 +121,7 @@ describe("public GPT-Live active failure ownership", () => {
       const terminal = trace.findIndex((entry) => !entry.startsWith("final:"));
       expect(terminal).toBe(snapshots.length);
       expect(socket.closed).toBe(true);
-      emitSideband(socket, {
-        type: "session.input_transcript.delta",
-        delta: "stale",
-        start_ms: 200,
-        end_ms: 300,
-      });
+      transcript("input", "stale", 200);
       expect(snapshots).not.toContain("user:stale");
       if (observer === "close") {
         expect(completions.every((completion) => completion instanceof Promise)).toBe(true);
