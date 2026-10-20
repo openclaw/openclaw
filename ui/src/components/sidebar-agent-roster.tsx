@@ -164,7 +164,7 @@ export function SidebarAgentRoster(props: RosterProps) {
           case "pin": {
             const id = card().id;
             togglePinnedAgent(context.navigation, id);
-            // Pinning replaces the menu trigger; keep keyboard focus on its agent.
+            // Pinning moves the row into the menu-less gallery; keep keyboard focus on its agent.
             onSettled(() => agentLinks.get(id)?.focus());
             break;
           }
@@ -185,7 +185,7 @@ export function SidebarAgentRoster(props: RosterProps) {
       items={[
         {
           id: "pin",
-          label: t(pinnedIds().has(card().id) ? "nav.unpin" : "nav.pin"),
+          label: t("nav.pin"),
           class: "sidebar-customize-menu__item",
           icon: <Icon name="pin" />,
         },
@@ -285,7 +285,6 @@ export function SidebarAgentRoster(props: RosterProps) {
                             </span>
                           </span>
                         </openclaw-tooltip>
-                        {agentMenu(card)}
                       </div>
                     );
                   }}
