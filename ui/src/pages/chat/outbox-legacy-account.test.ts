@@ -55,6 +55,7 @@ function seedUnowned(host: ReturnType<typeof fixture>["host"], account?: string)
     recovery: {},
     sessions: {
       [storedChatOutboxScopeKey({ sessionKey: host.sessionKey })]: {
+        draft: "legacy draft",
         queue: [legacy],
         updatedAt: 1,
       },
@@ -73,6 +74,10 @@ it.each(["recovery", "direct"])(
       const source = seedUnowned(host);
       await resume(host);
       expect(outboxes(host)).toEqual([]);
+      expect(loadChatComposerState(host, host.sessionKey).snapshot).toBeNull();
+      expect(recovery(host).entries).toMatchObject([
+        { session: { draft: "legacy draft", queue: [{ id: "legacy" }] } },
+      ]);
       expect(sessionStorage.getItem(source.key)).toBe(source.raw);
     }
     const [entry] = recovery(host).entries;
@@ -134,16 +139,4 @@ it("never projects or drains unowned rows from an account-qualified bucket", asy
   expect(outboxes(host)).toEqual([]);
   expect(requestCalls(host.request, "chat.send")).toEqual([]);
   expect(sessionStorage.getItem(source.key)).toBe(source.raw);
-});
-
-it("does not publish stale admission as the replacement account's input", () => {
-  const { host, switchAccount } = fixture();
-  const captured = capture(host, host.sessionKey);
-  switchAccount();
-  const owner = chatOutboxOwner(host);
-  expect(owner.admit(host, captured, { id: "late", text: "A input", createdAt: 1 })).toBe(
-    "storage-failed",
-  );
-  expect(host.chatQueue).toEqual([]);
-  expect(owner.allItems(host)).toEqual([]);
 });

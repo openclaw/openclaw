@@ -1,13 +1,18 @@
 import { createRouter } from "@openclaw/uirouter";
 import { expect, onTestFinished, vi } from "vitest";
 import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayEventListener } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
-import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult as sessionRouteListResult,
+} from "../../lib/sessions/session-capability.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
+export { sessionRouteListResult };
 
 export function loadSessionRoute(
   context: Parameters<typeof loadChatRoute>[0],
@@ -37,16 +42,6 @@ export function createSessionRouteRow(
     displayName: "Default mode with rare surprises",
     sessionId: "fedcba98-7654-3210-fedc-ba9876543210",
     ...overrides,
-  };
-}
-
-export function sessionRouteListResult(sessions: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 1,
-    path: "sessions.json",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
   };
 }
 
@@ -87,14 +82,10 @@ export function createSessionRouteContext(
         hello: null,
         sessionKey: "agent:roboclaw:main",
       },
-      subscribe: (listener: Parameters<ApplicationContext["gateway"]["subscribe"]>[0]) => {
-        gatewayListeners.add(listener);
-        return () => gatewayListeners.delete(listener);
-      },
-      subscribeEvents: (listener: GatewayEventListener) => {
-        eventListeners.add(listener);
-        return () => eventListeners.delete(listener);
-      },
+      subscribe: (listener: Parameters<ApplicationContext["gateway"]["subscribe"]>[0]) =>
+        registerListener(gatewayListeners, listener),
+      subscribeEvents: (listener: GatewayEventListener) =>
+        registerListener(eventListeners, listener),
     },
     agents: { state: { agentsList: { mainKey: "main" } } },
     agentSelection: { state: { selectedId: "roboclaw" } },

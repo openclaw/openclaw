@@ -1,13 +1,9 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as durableStore from "../../lib/chat/composer-draft-store.runtime.ts";
-import { readChatOutboxRecovery } from "../../lib/chat/outbox-recovery.ts";
-import {
-  captureChatOutboxAdmission as capture,
-  storageTargetForGateway,
-  storedChatOutboxScopeKey,
-} from "../../lib/chat/outbox-store.ts";
+import { captureChatOutboxAdmission as capture } from "../../lib/chat/outbox-store.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   ChatComposerPersistence,
   admitStoredChatComposerQueueItemResult as admit,
@@ -51,34 +47,6 @@ it("never exposes or overwrites another account's text draft and queue", () => {
     queue: [{ id: "alice" }],
   });
 });
-it("holds legacy unowned text for review instead of assigning it to the next login", () => {
-  const host = state();
-  sessionStorage.setItem(
-    storageTargetForGateway(host.settings.gatewayUrl).key,
-    JSON.stringify({
-      version: 4,
-      gatewayOwner: host.settings.gatewayUrl,
-      recovery: {},
-      sessions: {
-        [storedChatOutboxScopeKey({ sessionKey: host.sessionKey })]: {
-          draft: "legacy draft",
-          queue: [{ id: "legacy", text: "legacy queue", createdAt: 1 }],
-          updatedAt: 1,
-        },
-      },
-    }),
-  );
-  expect(snapshot(host)).toBeNull();
-  expect(readChatOutboxRecovery(host).entries).toMatchObject([
-    {
-      session: {
-        draft: "legacy draft",
-        queue: [{ id: "legacy" }],
-      },
-    },
-  ]);
-});
-
 it("restores account text and attachment drafts before any connection", async () => {
   expect(persistChatComposerState(state())).toBe(true);
   const host = {
@@ -120,6 +88,10 @@ it("keeps offline queue under its captured account through recovery and account 
   host.client.recoveryScopeReady = true;
   expect(snapshot(host)).toBeNull();
   expect(admit(host, captured, item("late", "old account", 2))).toBe("storage-failed");
+  const owner = chatOutboxOwner(host);
+  expect(owner.admit(host, captured, item("late", "old account", 2))).toBe("storage-failed");
+  expect(host.chatQueue).toEqual([]);
+  expect(owner.allItems(host)).toEqual([]);
   expect(snapshot(state())?.queue.map((queued) => queued.id)).toEqual(["offline"]);
 });
 

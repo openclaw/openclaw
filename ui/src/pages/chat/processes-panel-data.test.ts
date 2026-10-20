@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   SessionProcessSummary,
   SessionsProcessesListResult,
@@ -13,25 +13,23 @@ import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { ProcessesPanelData } from "./processes-panel-data.ts";
 
 const key = "agent:main:parent";
-function process(instanceId = "first"): SessionProcessSummary {
-  return {
-    processId: "build",
-    instanceId,
-    name: "npm run build",
-    status: "running",
-    startedAt: 1,
-    tail: "Compiling",
-    truncated: false,
-    canStop: true,
-  };
-}
+beforeEach(() => vi.useFakeTimers());
+const process = (instanceId = "first"): SessionProcessSummary => ({
+  processId: "build",
+  instanceId,
+  name: "npm run build",
+  status: "running",
+  startedAt: 1,
+  tail: "Compiling",
+  truncated: false,
+  canStop: true,
+});
 function page(row = process()): SessionsProcessesListResult {
   return { sessionId: "parent-session", processes: [row], truncated: false };
 }
 function fixture(read: (method: string, params: unknown) => unknown) {
   const request = vi.fn(read);
-  const client = createTestGatewayClient(request);
-  const connection = createGatewayHarness(client);
+  const connection = createGatewayHarness(createTestGatewayClient(request));
   connection.publish({
     hello: gatewayHelloForMethods(["sessions.processes.list", "sessions.processes.stop"]),
   });
@@ -70,7 +68,6 @@ function fixture(read: (method: string, params: unknown) => unknown) {
 
 describe("process panel observation ownership", () => {
   it("refreshes on owned process changes, retaining one change during an in-flight read", async () => {
-    vi.useFakeTimers();
     const stale = createDeferred<SessionsProcessesListResult>();
     let current = process();
     const f = fixture(() => (current.instanceId === "pending" ? stale.promise : page(current)));
@@ -95,7 +92,6 @@ describe("process panel observation ownership", () => {
   });
 
   it("shares a live observation across visible panels and releases it with the last panel", async () => {
-    vi.useFakeTimers();
     const first = createDeferred<SessionsProcessesListResult>();
     const f = fixture(() => first.promise);
     f.open();
@@ -123,7 +119,6 @@ describe("process panel observation ownership", () => {
   });
 
   it("retires shared output while the document is hidden and catches up once on return", async () => {
-    vi.useFakeTimers();
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     onTestFinished(() => visibility.mockRestore());
     const f = fixture(() => page());
@@ -143,7 +138,6 @@ describe("process panel observation ownership", () => {
   });
 
   it("keeps different sessions, agents and connections independent", async () => {
-    vi.useFakeTimers();
     const f = fixture(() => page());
     f.open("global");
     f.addPanel("global", "other");
@@ -180,7 +174,6 @@ describe("process panel observation ownership", () => {
   );
 
   it("refreshes placement changes and rejects Stop callbacks for the previous process", async () => {
-    vi.useFakeTimers();
     let current = process();
     const f = fixture((method) =>
       method === "sessions.processes.list" ? page(current) : { requested: true },
@@ -216,7 +209,6 @@ describe("process panel observation ownership", () => {
   });
 
   it("clears private output on access loss and waits for explicit retry", async () => {
-    vi.useFakeTimers();
     let denied = false;
     const f = fixture(() => {
       if (denied) {
