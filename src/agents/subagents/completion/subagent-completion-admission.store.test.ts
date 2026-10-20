@@ -459,16 +459,16 @@ it("settles a requester cohort after concurrently admitted children complete", a
         expect(currentCompletionRun(input)).toMatchObject({
           execution: { status: "terminal", outcome: { status: "ok" } },
           delivery: { status: "delivered" },
-          requesterSettleWake: undefined,
         });
+        expect(currentCompletionRun(input).requesterSettleWake).toBeUndefined();
         expect(currentCompletionRun(input).completion?.resultText).toBeUndefined();
         expect(stored.get(input.subagent.runId)).toMatchObject({
           execution: { status: "terminal", outcome: { status: "ok" } },
           completion: { resultText: `child result ${index}` },
           delivery: { status: "delivered" },
-          requesterSettleWake: undefined,
           ...(index === 0 ? { label: "after batch settlement" } : {}),
         });
+        expect(stored.get(input.subagent.runId)?.requesterSettleWake).toBeUndefined();
       }
     } finally {
       release.resolve();

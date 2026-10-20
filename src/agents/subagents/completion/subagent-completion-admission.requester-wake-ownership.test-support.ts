@@ -76,15 +76,20 @@ export function registerRequesterWakeOwnershipTests(options: {
         publication: "published",
       });
 
-      expect(stored(input)).toEqual(
-        requesterTurnRunId
-          ? expect.objectContaining({
-              ...owner,
-              requesterSettleWake: undefined,
-              browserCleanupDispatchedAt: undefined,
-            })
-          : undefined,
-      );
+      const retained = stored(input);
+      if (requesterTurnRunId) {
+        expect(retained).toMatchObject({
+          childSessionKey: "global",
+          childAgentId: "main",
+          requesterTurnRunId,
+          retireAfterRequesterTurn: true,
+        });
+        expect(retained?.requesterSettleWake).toBeUndefined();
+        expect(retained?.browserCleanupDispatchedAt).toBeUndefined();
+        expect(retained?.cleanupCompletedAt).toBeUndefined();
+      } else {
+        expect(retained).toBeUndefined();
+      }
     },
   );
 }

@@ -37,8 +37,11 @@ ${FULL_ASSISTANT_CONTENT_FILLER_LINE.repeat(75)}
 
 All health checks passed and the rollout is complete.`;
 
-function withPage(run: Parameters<typeof suite.withPage>[1], options: BrowserContextOptions = {}) {
-  return suite.withPage(
+async function withPage(
+  run: Parameters<typeof suite.withPage>[1],
+  options: BrowserContextOptions = {},
+) {
+  await suite.withPage(
     {
       colorScheme: "dark",
       locale: "en-US",

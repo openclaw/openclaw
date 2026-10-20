@@ -11,7 +11,6 @@ import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-const { objectContaining: partial, arrayContaining: includes } = expect;
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.restoreAllMocks();
@@ -48,13 +47,16 @@ it.each(["recovered", "unreadable", "retained", "settlement-failed"] as const)(
     inspect.mockRejectedValueOnce(original);
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
-    const failure: unknown = await withUpdateCommandTerminalResult(
+    let failure: unknown;
+    await withUpdateCommandTerminalResult(
       (registerRun) => {
         registerRun(run);
         return withUpdateCommandRecoveryUnwind(
           { json: true, run },
           { triageTarget: { root, env } },
-          () => Promise.reject(original),
+          async () => {
+            throw original;
+          },
         ).catch((error: unknown) => {
           if (outcome === "settlement-failed") {
             throw new AggregateError([error], "Update executor cleanup failed", { cause: error });
@@ -63,15 +65,23 @@ it.each(["recovered", "unreadable", "retained", "settlement-failed"] as const)(
         });
       },
       { json: true },
-    ).catch((error: unknown) => error);
+    ).catch((error: unknown) => {
+      failure = error;
+    });
 
     const reported =
       outcome === "settlement-failed" && failure instanceof AggregateError
         ? failure.cause
         : failure;
-    const failureFacts = [partial({ message: original.message })];
     expect(reported).toMatchObject({
-      result: { status: "error", steps: [{ failureFacts }] },
+      result: {
+        status: "error",
+        steps: [
+          expect.objectContaining({
+            failureFacts: [expect.objectContaining({ message: original.message })],
+          }),
+        ],
+      },
     });
     const recorded = getUpdateRun(run.runId, { env });
     if (outcome === "recovered") {
@@ -79,12 +89,17 @@ it.each(["recovered", "unreadable", "retained", "settlement-failed"] as const)(
         status: "failed",
         reason: "update-failed",
         origin: { nextAction: expect.stringContaining("openclaw triage") },
-        steps: includes([partial({ step: "requested", status: "failed", failureFacts })]),
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            step: "requested",
+            status: "failed",
+            failureFacts: [expect.objectContaining({ message: original.message })],
+          }),
+        ]),
       });
       expect(recorded?.origin.nextAction).toContain("Retry the same update command");
-      expect(output).toHaveBeenCalledExactlyOnceWith(
-        partial({ status: "error", runId: run.runId }),
-      );
+      expect(output).toHaveBeenCalledOnce();
+      expect(output.mock.calls[0]?.[0]).toMatchObject({ status: "error", runId: run.runId });
     } else {
       expect(recorded?.status).toBe("running");
       expect(output).not.toHaveBeenCalled();

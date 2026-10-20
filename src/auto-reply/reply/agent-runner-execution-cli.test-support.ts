@@ -25,6 +25,7 @@ export async function setupCliExecutionTest(model: string) {
   return {
     state,
     mockEvents(
+      this: void,
       events: Array<[string, Record<string, unknown>]>,
       payloads: ReplyPayload[],
       meta = {},
@@ -43,6 +44,7 @@ export async function setupCliExecutionTest(model: string) {
       return run;
     },
     async execute(
+      this: void,
       opts: GetReplyOptions,
       runOverrides: Partial<ReturnType<typeof createFollowupRun>["run"]> = {},
       turnOverrides: Partial<

@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -19,11 +20,10 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 const receiverUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.includeDelegated);
-const read = (file: string) => fs.readFileSync(file, "utf8");
 
-it.each(["healthy", "original-owner-replaced", "include-parent-replaced"] as const)(
+it.for(["healthy", "original-owner-replaced", "include-parent-replaced"] as const)(
   "delegated candidate include effect retains original owner and directory: %s",
-  async (fault) => {
+  async (fault, { onTestFailed }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const control = state.path("control");
       const root = state.path("install");
@@ -39,7 +39,7 @@ it.each(["healthy", "original-owner-replaced", "include-parent-replaced"] as con
       const fragment = path.join(fragmentDir, "channel.json");
       const original = '{"channel":"stable"}\n';
       fs.writeFileSync(fragment, original);
-      const rootRaw = read(state.configPath);
+      const rootRaw = fs.readFileSync(state.configPath, "utf8");
       const proceed = state.path("proceed");
       const ready = createDeferred<{
         pid: number;
@@ -48,31 +48,94 @@ it.each(["healthy", "original-owner-replaced", "include-parent-replaced"] as con
         candidate: string;
       }>();
       let stdout = "";
+      const runId = randomUUID();
       let boundPid: number | undefined;
-      const work = withUpdateCommandExecutor(randomUUID(), async (owner) => {
-        const fence = await owner.enter(root);
-        const pending = withUpdateCommandExecutorChild(fence, root, async (grant, bindChild) => {
-          return runUtf8CommandWithTimeout(
-            [process.execPath, ...resolveRuntimeWorkerArgv(receiverUrl)],
-            {
-              input: JSON.stringify({ grant, proceed }),
-              env: state.env,
-              beforeInput: (pid) => {
-                boundPid = pid;
-                bindChild(pid);
-              },
-              timeoutMs: 30_000,
-              killProcessTree: true,
-              requireProcessTreeExtinction: true,
-              onOutputChunk: (chunk) => {
-                stdout += String(chunk);
-                const line = stdout.split("\n").find((value) => value.startsWith('{"ready":true'));
-                if (line) {
-                  ready.resolve(JSON.parse(line));
+      const startedAt = performance.now();
+      const timingsMs: Record<string, number> = { admissionStarted: 0 };
+      const mark = (phase: string) => {
+        timingsMs[phase] ??= performance.now() - startedAt;
+      };
+      let commandResult: Awaited<ReturnType<typeof runUtf8CommandWithTimeout>> | undefined;
+      let commandError: unknown;
+      let outcome:
+        | { value: Awaited<ReturnType<typeof runUtf8CommandWithTimeout>> }
+        | { error: unknown }
+        | undefined = undefined;
+      onTestFailed(() => {
+        console.error(
+          JSON.stringify({
+            fault,
+            boundPid,
+            parentPid: process.pid,
+            candidate: receiverUrl.href,
+            timingsMs,
+            command: commandResult
+              ? {
+                  code: commandResult.code,
+                  signal: commandResult.signal,
+                  termination: commandResult.termination,
+                  timedOut:
+                    commandResult.termination === "timeout" ||
+                    commandResult.termination === "no-output-timeout",
+                  killed: commandResult.killed,
+                  cleanup: commandResult.cleanup,
+                  stderr: commandResult.stderr,
                 }
+              : undefined,
+            commandError: commandError === undefined ? undefined : formatErrorMessage(commandError),
+            error:
+              outcome !== undefined && "error" in outcome
+                ? formatErrorMessage(outcome.error)
+                : undefined,
+            stdout,
+          }),
+        );
+      });
+      const work = withUpdateCommandExecutor(runId, async (owner) => {
+        const fence = await owner.enter(root);
+        mark("executorAdmitted");
+        const pending = withUpdateCommandExecutorChild(fence, root, async (grant, bindChild) => {
+          mark("childLaunchRequested");
+          try {
+            const result = await runUtf8CommandWithTimeout(
+              [process.execPath, ...resolveRuntimeWorkerArgv(receiverUrl)],
+              {
+                input: JSON.stringify({ grant, proceed }),
+                env: state.env,
+                beforeInput: (pid) => {
+                  mark("childSpawnObserved");
+                  boundPid = pid;
+                  bindChild(pid);
+                  mark("childBound");
+                },
+                timeoutMs: 30_000,
+                killProcessTree: true,
+                requireProcessTreeExtinction: true,
+                onOutputChunk: (chunk) => {
+                  stdout += String(chunk);
+                  const lines = stdout.split("\n");
+                  const line = lines.find((value) => value.startsWith('{"ready":true'));
+                  if (line) {
+                    const binding = JSON.parse(line);
+                    mark("readyReceived");
+                    ready.resolve(binding);
+                  }
+                  if (
+                    lines.slice(0, -1).some((value) => value.startsWith('{"result":"published"'))
+                  ) {
+                    mark("writeReturned");
+                  }
+                },
               },
-            },
-          );
+            );
+            commandResult = result;
+            mark("commandReturned");
+            return result;
+          } catch (error) {
+            commandError = error;
+            mark("commandRejected");
+            throw error;
+          }
         });
         try {
           const binding = await Promise.race([
@@ -81,19 +144,21 @@ it.each(["healthy", "original-owner-replaced", "include-parent-replaced"] as con
               throw new Error(result.stderr || stdout || "child exited before include preparation");
             }),
           ]);
-          expect(binding).toMatchObject({
-            pid: boundPid,
-            parentPid: process.pid,
-            candidate: receiverUrl.href,
-          });
+          expect(binding.pid).toBe(boundPid);
           expect(binding.pid).not.toBe(process.pid);
+          expect(binding.parentPid).toBe(process.pid);
+          expect(binding.candidate).toBe(receiverUrl.href);
           expect(binding.parentOwner.length).toBeGreaterThan(0);
           if (fault === "original-owner-replaced") {
-            using db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
-            db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
-              "replacement",
-              root,
-            );
+            const db = new DatabaseSync(path.join(control, "managed-update-handoffs.sqlite"));
+            try {
+              db.prepare("UPDATE managed_update_handoffs SET owner=? WHERE install_root=?").run(
+                "replacement",
+                root,
+              );
+            } finally {
+              db.close();
+            }
           }
           if (fault === "include-parent-replaced") {
             fs.renameSync(fragmentDir, `${fragmentDir}-old`);
@@ -101,27 +166,32 @@ it.each(["healthy", "original-owner-replaced", "include-parent-replaced"] as con
             fs.writeFileSync(fragment, original);
           }
         } finally {
+          mark("releaseStarted");
           fs.writeFileSync(proceed, "go");
+          mark("released");
         }
         return await pending;
       });
-      const outcome = await work.then(
+      outcome = await work.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
+      mark("completed");
       if (fault === "healthy") {
-        expect(outcome, stdout).toMatchObject({ value: { code: 0 } });
-        expect(JSON.parse(read(fragment))).toMatchObject({ channel: "beta" });
-        expect(read(`${fragment}.bak`)).toBe(original);
+        expect("value" in outcome && outcome.value.code === 0, stdout).toBe(true);
+        expect(JSON.parse(fs.readFileSync(fragment, "utf8")).channel).toBe("beta");
+        expect(fs.readFileSync(`${fragment}.bak`, "utf8")).toBe(original);
       } else {
         expect(stdout).toContain('"result":"refused"');
-        expect(read(fragment)).toBe(original);
+        expect(fs.readFileSync(fragment, "utf8")).toBe(original);
         expect(fs.existsSync(`${fragment}.bak`)).toBe(false);
         if (fault === "include-parent-replaced") {
-          expect(read(path.join(`${fragmentDir}-old`, "channel.json"))).toBe(original);
+          expect(fs.readFileSync(path.join(`${fragmentDir}-old`, "channel.json"), "utf8")).toBe(
+            original,
+          );
         }
       }
-      expect(read(state.configPath)).toBe(rootRaw);
+      expect(fs.readFileSync(state.configPath, "utf8")).toBe(rootRaw);
     });
   },
 );

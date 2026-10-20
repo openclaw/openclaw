@@ -79,7 +79,7 @@ it.each([
   ({ platform, lowercase, direct }) => {
     withMockedPlatform(platform, () => {
       const home = path.resolve("service-profile-fixture");
-      const identity = direct
+      const identity: Record<string, string> = direct
         ? {}
         : {
             OPENCLAW_LAUNCHD_LABEL: "caller-agent",

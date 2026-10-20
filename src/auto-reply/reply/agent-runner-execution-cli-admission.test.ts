@@ -14,7 +14,7 @@ import {
   installSessionPlacementAdmissionProvider,
   type SessionPlacementAdmissionProvider,
 } from "../../agents/session-placement-admission.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -426,8 +426,9 @@ it("carries the admitted session permission and placement into the CLI grant", a
   };
   Object.freeze(admittedSessionEntry);
   state.runCliAgentMock.mockImplementationOnce(async (run: RunCliAgentParams) => {
-    assert(run.sessionEntry, "Missing admitted CLI entry");
-    run.sessionEntry.activeWriterRunId = "cli-writer";
+    const candidateEntry: InternalSessionEntry | undefined = run.sessionEntry;
+    assert(candidateEntry, "Missing admitted CLI entry");
+    candidateEntry.activeWriterRunId = "cli-writer";
     expect(run).toMatchObject({
       sessionEntry: { ...admittedSessionEntry, activeWriterRunId: "cli-writer" },
       cliSessionId: "new-native-session",

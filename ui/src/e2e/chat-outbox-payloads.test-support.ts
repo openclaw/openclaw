@@ -31,18 +31,24 @@ export async function readOutboxQueue(page: Page): Promise<ChatQueueItem[]> {
 
 export async function countOutboxPayloads(page: Page): Promise<number> {
   return page.evaluate(async () => {
-    const result = <T>(request: IDBRequest<T>) =>
-      new Promise<T>((resolve, reject) => {
+    const database = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("openclaw-control-ui");
+      request.onsuccess = () => resolve(request.result);
+      request.addEventListener("error", () =>
+        reject(request.error ?? new Error("IndexedDB request failed")),
+      );
+    });
+    try {
+      return await new Promise<number>((resolve, reject) => {
+        const request = database
+          .transaction("outboxPayloads")
+          .objectStore("outboxPayloads")
+          .count();
         request.onsuccess = () => resolve(request.result);
         request.addEventListener("error", () =>
           reject(request.error ?? new Error("IndexedDB request failed")),
         );
       });
-    const database = await result(indexedDB.open("openclaw-control-ui"));
-    try {
-      return await result(
-        database.transaction("outboxPayloads").objectStore("outboxPayloads").count(),
-      );
     } finally {
       database.close();
     }
@@ -50,7 +56,9 @@ export async function countOutboxPayloads(page: Page): Promise<number> {
 }
 
 export async function readOutboxPayloadBytes(page: Page, key: string): Promise<string[] | null> {
-  return (await readOutboxPayloadAttachments(page, key))?.map(({ base64 }) => base64) ?? null;
+  return (
+    (await readOutboxPayloadAttachments(page, key))?.map((attachment) => attachment.base64) ?? null
+  );
 }
 
 export async function stageOutboxAttachment(page: Page, message: string) {
@@ -79,14 +87,21 @@ export async function outboxChatUrl(
 /** Pause native Blob decoding in the next document until reconnect has parked the source. */
 export async function holdOutboxPreviewReads(page: Page): Promise<() => Promise<number>> {
   await page.addInitScript(() => {
-    const readAsDataURL = FileReader.prototype.readAsDataURL;
+    const NativeFileReader = FileReader;
     const pending: Array<() => void> = [];
-    FileReader.prototype.readAsDataURL = function (this: FileReader, blob: Blob): void {
-      pending.push(() => readAsDataURL.call(this, blob));
+    let released = false;
+    globalThis.FileReader = class extends NativeFileReader {
+      override readAsDataURL(blob: Blob): void {
+        if (released) {
+          super.readAsDataURL(blob);
+        } else {
+          pending.push(() => super.readAsDataURL(blob));
+        }
+      }
     };
     Object.assign(window, {
       releaseOutboxPreviewRead() {
-        FileReader.prototype.readAsDataURL = readAsDataURL;
+        released = true;
         const reads = pending.splice(0);
         reads.forEach((resume) => resume());
         return reads.length;

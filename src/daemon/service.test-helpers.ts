@@ -1,20 +1,24 @@
+/** Test helpers for exercising generic daemon service orchestration. */
 import os from "node:os";
 import { vi } from "vitest";
 import type { GatewayService } from "./service.js";
 
 export function pathLikeToString(pathname: unknown): string {
+  if (typeof pathname === "string") {
+    return pathname;
+  }
   if (pathname instanceof URL) {
     return pathname.pathname;
   }
-  return typeof pathname === "string"
-    ? pathname
-    : pathname instanceof Uint8Array
-      ? Buffer.from(pathname).toString("utf8")
-      : "";
+  if (pathname instanceof Uint8Array) {
+    return Buffer.from(pathname).toString("utf8");
+  }
+  return "";
 }
 
 // Keep OS-account fixtures out of the SDK-exposed spy barrel: node:os mock factories
 // import that barrel, so importing node:os there would deadlock test collection.
+/** Keep service policy real while giving isolated HOME scopes an OS account identity. */
 export function mockSystemAccountHome(): void {
   const account = os.userInfo();
   // Native OS home APIs read the parent environment in Node worker threads.
@@ -35,20 +39,19 @@ export type SystemdManagerSnapshotFixture = {
   loadState?: string;
 };
 
-const properties = (...entries: Array<[string, unknown]>) =>
-  entries.map(([type, data]) => JSON.stringify({ type, data })).join("\n");
-
 export function buildSystemdManagerPropertyOutput(snapshot: SystemdManagerSnapshotFixture): string {
-  return properties(
-    [
-      "a(sasbttttuii)",
-      [[snapshot.programArguments[0], snapshot.programArguments, false, 0, 0, 0, 0, 0, 0, 0]],
-    ],
-    ["s", snapshot.workingDirectory ?? ""],
-    ["as", snapshot.environment ?? []],
-    ["a(sb)", snapshot.environmentFiles ?? []],
-    ["as", snapshot.unsetEnvironment ?? []],
-  );
+  return [
+    {
+      type: "a(sasbttttuii)",
+      data: [[snapshot.programArguments[0], snapshot.programArguments, false, 0, 0, 0, 0, 0, 0, 0]],
+    },
+    { type: "s", data: snapshot.workingDirectory ?? "" },
+    { type: "as", data: snapshot.environment ?? [] },
+    { type: "a(sb)", data: snapshot.environmentFiles ?? [] },
+    { type: "as", data: snapshot.unsetEnvironment ?? [] },
+  ]
+    .map((property) => JSON.stringify(property))
+    .join("\n");
 }
 
 export function buildSystemdUnitPropertyOutput(
@@ -56,18 +59,19 @@ export function buildSystemdUnitPropertyOutput(
     fragmentPath: string;
   },
 ): string {
-  return properties(
-    ["s", params.fragmentPath],
-    ["as", params.dropInPaths ?? []],
-    ["b", params.needDaemonReload ?? false],
-    ["s", params.loadState ?? "loaded"],
-    ["s", "enabled"],
-    ["s", "active"],
-    ["b", true],
-    ["b", false],
-  );
+  return [
+    JSON.stringify({ type: "s", data: params.fragmentPath }),
+    JSON.stringify({ type: "as", data: params.dropInPaths ?? [] }),
+    JSON.stringify({ type: "b", data: params.needDaemonReload ?? false }),
+    JSON.stringify({ type: "s", data: params.loadState ?? "loaded" }),
+    JSON.stringify({ type: "s", data: "enabled" }),
+    JSON.stringify({ type: "s", data: "active" }),
+    JSON.stringify({ type: "b", data: true }),
+    JSON.stringify({ type: "b", data: false }),
+  ].join("\n");
 }
 
+/** Creates a mock gateway service implementation for daemon service tests. */
 export function createMockGatewayService(overrides: Partial<GatewayService> = {}): GatewayService {
   return {
     label: "LaunchAgent",
@@ -96,19 +100,31 @@ export const managerlessPreflightCases = [
       portSource: "env" as const,
     })),
   ),
-  ...(
-    [
-      { condition: "installed" },
-      { condition: "node absent" },
-      { condition: "node installed" },
-      { condition: "global definition" },
-      { condition: "unreadable" },
-      { condition: "manager" },
-      { condition: "busy port", portUsage: "busy", portSource: "env" },
-      { condition: "configured busy port", portUsage: "busy", portSource: "config" },
-      { condition: "unknown port", portUsage: "unknown", portSource: "env" },
-    ] as const
-  ).map((entry) =>
-    Object.assign({ updateInstallKind: "package" as const, shouldRestart: true }, entry),
-  ),
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "installed" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "node absent" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "node installed" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "global definition" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "unreadable" },
+  { updateInstallKind: "package" as const, shouldRestart: true, condition: "manager" },
+  {
+    updateInstallKind: "package" as const,
+    shouldRestart: true,
+    condition: "busy port",
+    portUsage: "busy" as const,
+    portSource: "env" as const,
+  },
+  {
+    updateInstallKind: "package" as const,
+    shouldRestart: true,
+    condition: "configured busy port",
+    portUsage: "busy" as const,
+    portSource: "config" as const,
+  },
+  {
+    updateInstallKind: "package" as const,
+    shouldRestart: true,
+    condition: "unknown port",
+    portUsage: "unknown" as const,
+    portSource: "env" as const,
+  },
 ];

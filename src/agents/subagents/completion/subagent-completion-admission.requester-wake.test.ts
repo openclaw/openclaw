@@ -171,15 +171,15 @@ describe("persisted subagent requester wakes", () => {
     expect(restored.execution).toEqual(before.execution);
     expect(restored.completion).toEqual(before.completion);
     expect(restored).toMatchObject({
-      requesterSettleWake: undefined,
       delivery: {
         status: "failed",
         disposition: "permanent_failure",
         lastError: "The original operator no longer has access",
-        queueId: undefined,
       },
       suppressCompletionDelivery: true,
     });
+    expect(restored.requesterSettleWake).toBeUndefined();
+    expect(restored.delivery?.queueId).toBeUndefined();
     expect(systemEvents(db.value)).toEqual([]);
   });
 
@@ -480,18 +480,14 @@ describe("persisted subagent requester wakes", () => {
     });
     await driver.run();
     expect(currentRun(input).delivery).not.toBe(receipt);
-    expect(currentRun(input).delivery).toMatchObject({
-      status: "delivered",
-      payload: undefined,
-      attemptCount: undefined,
-    });
+    expect(currentRun(input).delivery?.status).toBe("delivered");
+    expect(currentRun(input).delivery?.payload).toBeUndefined();
+    expect(currentRun(input).delivery?.attemptCount).toBeUndefined();
     expect(receipt).toEqual(before);
     expect(currentRun(input).requesterSettleWake).toBeUndefined();
     db.value = await reopenOwners();
-    expect(subagentRuns.get(input.subagent.runId)?.delivery).toMatchObject({
-      status: "delivered",
-      payload: undefined,
-    });
+    expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("delivered");
+    expect(subagentRuns.get(input.subagent.runId)?.delivery?.payload).toBeUndefined();
   });
 
   it.each([

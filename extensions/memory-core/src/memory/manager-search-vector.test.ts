@@ -175,7 +175,7 @@ describe("searchVector sqlite-vec KNN", () => {
                    observe_embedding(id, embedding) AS embedding FROM observed_chunks;
         `);
 
-        const results = await searchVectorFixture(db, { limit: rowids.length });
+        const results = await search(db, { limit: rowids.length });
         expect(scanned).toEqual(ids);
         expect(results.map((result) => result.id)).toEqual([
           ids[winnerIndex],
@@ -208,7 +208,7 @@ describe("searchVector sqlite-vec KNN", () => {
 
     expect(results.map((row) => row.id)).toEqual(["canonical", "alias"]);
     insertFallbackChunk(db, "hidden", [1, 0], "/cache/default.gguf", "sessions");
-    const candidateQuery = {
+    const candidateQuery: Omit<Parameters<typeof searchChunksByEmbedding>[0], "candidateIds"> = {
       db,
       providerModel: "canonical-model",
       providerModelAliases: ["/cache/default.gguf"],
