@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import { vi } from "vitest";
 import type {
   WorkerTranscriptCommitParams,
   WorkerTranscriptMessage,
@@ -40,13 +39,18 @@ export function createInterruptedCommitter(
   store: WorkerTranscriptCommitStore,
   message: string,
 ) {
+  let interruptCompletion = true;
   return createWorkerTranscriptCommitter({
     getConfig,
     store: {
       ...store,
-      complete: vi.fn(store.complete).mockImplementationOnce(() => {
-        throw new Error(message);
-      }),
+      complete: (input, assertCurrent) => {
+        if (interruptCompletion) {
+          interruptCompletion = false;
+          throw new Error(message);
+        }
+        return store.complete(input, assertCurrent);
+      },
     },
   });
 }

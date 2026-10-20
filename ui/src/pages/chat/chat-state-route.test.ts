@@ -2,19 +2,25 @@ import { expect, it, vi } from "vitest";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 
-type IdentityFields = "sessionKey" | "assistantAgentId" | "agentsList" | "hello";
-type LookupState = Pick<ChatPageHost, IdentityFields | "sessionsResult" | "sessionsResultAgentId">;
+type LookupState = Pick<
+  ChatPageHost,
+  | "sessionKey"
+  | "assistantAgentId"
+  | "agentsList"
+  | "hello"
+  | "sessionsResult"
+  | "sessionsResultAgentId"
+>;
+
 type SessionRow = NonNullable<LookupState["sessionsResult"]>["sessions"][number];
 
-function lookup(sessions: SessionRow[], overrides: Partial<LookupState> = {}): ChatPageHost {
-  const defaults = { modelProvider: null, model: null, contextTokens: null };
-  const sessionsResult = { ts: 0, path: "", count: sessions.length, defaults, sessions };
+function createLookupState(overrides: Partial<LookupState> = {}): ChatPageHost {
   const state: LookupState = {
     sessionKey: "agent:main:current",
     assistantAgentId: "main",
     agentsList: null,
     hello: null,
-    sessionsResult,
+    sessionsResult: null,
     sessionsResultAgentId: "main",
     ...overrides,
   };
@@ -26,18 +32,29 @@ it("reuses rows for interleaved panes without rescanning a shared session result
   const readKey = vi.fn(() => "agent:main:unselected");
   const other: SessionRow = { key: "agent:main:other", kind: "direct" };
   const selected: SessionRow = { key: "agent:main:current", kind: "direct" };
-  const state = lookup([
-    {
-      kind: "direct",
-      get key() {
-        return readKey();
-      },
+  const state = createLookupState({
+    sessionsResult: {
+      ts: 0,
+      path: "",
+      count: 3,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [
+        {
+          kind: "direct",
+          get key() {
+            return readKey();
+          },
+        },
+        other,
+        selected,
+      ],
     },
-    other,
-    selected,
-  ]);
+  });
   expect(selectedChatSessionRow(state)).toBe(selected);
-  const otherPane = lookup([], { sessionKey: other.key, sessionsResult: state.sessionsResult });
+  const otherPane = createLookupState({
+    sessionKey: "agent:main:other",
+    sessionsResult: state.sessionsResult,
+  });
   expect(selectedChatSessionRow(otherPane)).toBe(other);
   const initialReads = readKey.mock.calls.length;
   for (let i = 0; i < 10; i++) {
@@ -48,7 +65,11 @@ it("reuses rows for interleaved panes without rescanning a shared session result
 
   state.sessionKey = "agent:main:other";
   expect(selectedChatSessionRow(state)?.key).toBe("agent:main:other");
-  const replacement: SessionRow = { ...other, displayName: "Fresh row" };
+  const replacement: SessionRow = {
+    key: "agent:main:other",
+    kind: "direct",
+    displayName: "Fresh row",
+  };
   state.sessionsResult = { ...state.sessionsResult!, sessions: [replacement] };
   expect(selectedChatSessionRow(state)).toBe(replacement);
 });
@@ -63,11 +84,18 @@ it("recomputes selected rows when routing defaults change in place", () => {
   const home: SessionRow = { key: "agent:main:home", kind: "direct" };
   const work: SessionRow = { key: "agent:work:home", kind: "direct" };
   const global: SessionRow = { key: "global", agentId: "work", kind: "global" };
-  const state = lookup([home, work, global], {
+  const state = createLookupState({
     sessionKey: "main",
     agentsList,
     assistantAgentId: "work",
     sessionsResultAgentId: "work",
+    sessionsResult: {
+      ts: 0,
+      path: "",
+      count: 3,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [home, work, global],
+    },
   });
   expect(selectedChatSessionRow(state)).toBe(home);
   agentsList.defaultId = "work";

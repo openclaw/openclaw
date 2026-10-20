@@ -70,11 +70,10 @@ it("keeps the latest pending carrier after a cancellation reply without identity
   mocks.helper.cancelOutgoingCall.mockResolvedValue(pendingDialCancellationResult());
   mocks.helper.cancelOutgoingCall.mockImplementationOnce(() => reply.promise);
   const runtime = await createRuntime(state);
-  const onMessage = mocks.helperParams?.onMessage;
   const cancellation = runtime.hangup();
   try {
     await vi.waitFor(() => expect(mocks.helper.cancelOutgoingCall).toHaveBeenCalledOnce());
-    await onMessage?.(
+    await mocks.helperParams?.onMessage(
       {
         event: "ft-outbound-call-identified",
         data: { dial_id: "approved-dial", call_uuid: "replacement-call" },
@@ -96,7 +95,9 @@ it("keeps the latest pending carrier after a cancellation reply without identity
   } finally {
     reply.resolve(pendingDialCancellationResult());
     await cancellation;
-    await onMessage?.(endedCall("replacement-call", { dial_id: "approved-dial" }));
+    await mocks.helperParams?.onMessage(
+      endedCall("replacement-call", { dial_id: "approved-dial" }),
+    );
     await runtime.stop();
   }
 });
