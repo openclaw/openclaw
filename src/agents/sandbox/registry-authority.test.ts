@@ -78,24 +78,19 @@ it("retains local-workspace authority through browser transaction and commit gra
   using owner = await resolveLocalWorkspaceOwner(ownerParams);
   expect(owner).toBeDefined();
   const grants: SqliteWorkerAdmissionRequest["stage"][] = [];
-  const coldOpens: SqliteWorkerAdmissionRequest["stage"][] = [];
-  const openNative = nativeSqlite.openNodeSqliteDatabase;
-  vi.spyOn(nativeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
-    if (stage !== undefined) {
-      coldOpens.push(stage);
-    }
-    return openNative(...args);
-  });
+  const openNative = vi.spyOn(nativeSqlite, "openNodeSqliteDatabase");
   const createAdmission = workerStore.createSqliteWorkerWriteAdmission;
   vi.spyOn(workerStore, "createSqliteWorkerWriteAdmission").mockImplementation(
     (assertCurrent, nativeLocations) =>
       createAdmission((request) => {
         stage = request.stage;
+        const opens = openNative.mock.calls.length;
         try {
           assertCurrent(request);
           grants.push(stage);
         } finally {
           stage = undefined;
+          expect(openNative.mock.calls).toHaveLength(opens);
         }
       }, nativeLocations),
   );
@@ -112,7 +107,6 @@ it("retains local-workspace authority through browser transaction and commit gra
   // Session authority is worker-prepared; this upsert uses the registry's worker owner.
   await updateBrowserRegistry(entry, owner!.assertCurrent);
   expect(grants).toEqual(["transaction", "commit"]);
-  expect(coldOpens).toEqual([]);
   expect((await readBrowserRegistry()).entries).toEqual([entry]);
 
   for (const revokedStage of ["transaction", "commit"] as const) {
@@ -122,7 +116,6 @@ it("retains local-workspace authority through browser transaction and commit gra
     ).rejects.toBe(refusal);
     expect((await readBrowserRegistry()).entries).toEqual([entry]);
   }
-  expect(coldOpens).toEqual([]);
   revokeAt = undefined;
   await replaceSessionEntry(sessionTarget, {
     ...session,

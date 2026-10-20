@@ -1,22 +1,15 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import {
-  createSandboxBrowserConfig,
-  createSandboxPruneConfig,
-  createSandboxSshConfig,
-} from "../../plugin-sdk/test-helpers/sandbox-fixtures.js";
+import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   prepareSandboxDependencyTemplate,
   resolveSandboxDependencyTemplateIdentity,
 } from "./dependency-template.js";
-import { createSandboxTestContext } from "./test-fixtures.js";
-import type { SandboxConfig } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   exec: vi.fn(),
   ensure: vi.fn(),
   retire: vi.fn(),
   registry: vi.fn(),
-  current: vi.fn(),
 }));
 vi.mock("./container-engine.js", () => ({
   DOCKER_SANDBOX_ENGINE: { id: "docker", command: "docker", displayName: "Docker" },
@@ -30,38 +23,22 @@ vi.mock("./podman-runtime.js", () => ({
   bindPodmanSandboxEngine: vi.fn(),
 }));
 vi.mock("./registry.js", () => ({
-  assertSandboxRegistryEntryCurrent: mocks.current,
+  assertSandboxRegistryEntryCurrent: vi.fn(),
   readRegistry: mocks.registry,
 }));
 
 const directory = "/owned/template";
 const image = `sha256:${"a".repeat(64)}`;
 const containerId = "b".repeat(64);
-const cfg: SandboxConfig = {
-  mode: "all",
-  backend: "docker",
-  scope: "session",
-  workspaceAccess: "rw",
-  workspaceRoot: "/owned",
-  dockerTmpfsSource: "default",
-  docker: createSandboxTestContext({
-    dockerOverrides: {
-      image: "fixture:mutable",
-      network: "bridge",
-      env: { REGISTRY_PASSWORD: "private-fixture" },
-      binds: ["/private:/private"],
-      setupCommand: "private-setup",
-    },
-  }).docker,
-  ssh: createSandboxSshConfig("/workspace", { updateHostKeys: false }),
-  browser: createSandboxBrowserConfig({
-    image: "unused",
-    containerPrefix: "unused",
-    network: "none",
-  }),
-  tools: {},
-  prune: createSandboxPruneConfig(),
-};
+const cfg = resolveSandboxConfigForAgent();
+Object.assign(cfg.docker, {
+  image: "fixture:mutable",
+  network: "bridge",
+  user: "1000:1000",
+  env: { REGISTRY_PASSWORD: "private-fixture" },
+  binds: ["/private:/private"],
+  setupCommand: "private-setup",
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -110,12 +87,11 @@ it("installs the pinned guest image without session credentials or writable Git 
     image,
     workdir: "/workspace",
     network: "bridge",
-    env: { CI: "1" },
     binds: undefined,
     setupCommand: undefined,
   });
-  expect(admitted.cfg.docker.env).not.toHaveProperty("REGISTRY_PASSWORD");
   expect(admitted.agentWorkspaceDir).toBe(directory);
+  expect(admitted.cfg.docker.env).toEqual({ CI: "1" });
   expect(admitted.readOnlyResourceMounts).toEqual([
     { hostPath: "/owned/template/.git", containerPath: "/workspace/.git" },
   ]);
