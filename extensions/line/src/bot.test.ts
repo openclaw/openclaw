@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { LineConfig } from "./types.js";
 
 type DeliverFn = (
   events: readonly webhook.Event[],
@@ -32,22 +33,20 @@ vi.mock("./bot-handlers.js", () => ({
 
 const { createLineBot } = await import("./bot.js");
 
-const MB = 1024 * 1024;
-
-function configWith(mediaMaxMb?: number): OpenClawConfig {
+function configWith(line: LineConfig = {}, historyLimit?: number): OpenClawConfig {
   return {
+    ...(historyLimit === undefined ? {} : { messages: { groupChat: { historyLimit } } }),
     channels: {
       line: {
         enabled: true,
         channelAccessToken: "test-token",
         channelSecret: "test-secret",
-        ...(mediaMaxMb === undefined ? {} : { mediaMaxMb }),
+        ...line,
       },
     },
   } as OpenClawConfig;
 }
 
-// Exercise the spool-to-handler boundary rather than the private cap calculation.
 function createDelivery(config: OpenClawConfig, accountId?: string) {
   let deliver: DeliverFn | undefined;
   createLineWebhookSpoolMock.mockImplementation((spoolOptions: { deliver: DeliverFn }) => {
@@ -76,10 +75,6 @@ function createDelivery(config: OpenClawConfig, accountId?: string) {
   };
 }
 
-async function resolveMediaMaxBytes(mediaMaxMb?: number) {
-  return (await createDelivery(configWith(mediaMaxMb))()).mediaMaxBytes;
-}
-
 beforeEach(() => {
   vi.clearAllMocks();
   clearRuntimeConfigSnapshot();
@@ -88,19 +83,14 @@ afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("createLineBot media cap", () => {
   it.each([
-    { mediaMaxMb: 0, label: "zero" },
-    { mediaMaxMb: -5, label: "negative" },
-  ])("treats a $label mediaMaxMb as unset instead of a 0-byte cap", async ({ mediaMaxMb }) => {
-    // A non-positive cap would otherwise reject every non-empty inbound download.
-    await expect(resolveMediaMaxBytes(mediaMaxMb)).resolves.toBe(10 * MB);
-  });
-
-  it("keeps the default when mediaMaxMb is unset", async () => {
-    await expect(resolveMediaMaxBytes()).resolves.toBe(10 * MB);
-  });
-
-  it("still caps at a configured positive mediaMaxMb", async () => {
-    await expect(resolveMediaMaxBytes(2)).resolves.toBe(2 * MB);
+    { mediaMaxMb: 0, expected: 10 },
+    { mediaMaxMb: -5, expected: 10 },
+    { mediaMaxMb: undefined, expected: 10 },
+    { mediaMaxMb: 2, expected: 2 },
+  ])("resolves mediaMaxMb=$mediaMaxMb to $expected MB", async ({ mediaMaxMb, expected }) => {
+    expect((await createDelivery(configWith({ mediaMaxMb }))()).mediaMaxBytes).toBe(
+      expected * 1024 * 1024,
+    );
   });
 });
 
@@ -110,79 +100,60 @@ describe("createLineBot pending history cap", () => {
     { root: 20, account: undefined, expected: 20 },
     { root: undefined, account: undefined, expected: 7 },
     { root: 20, account: 0, expected: 0 },
-  ])("resolves account $account then root $root before the global fallback", async (testCase) => {
-    const context = await createDelivery(
-      {
-        messages: { groupChat: { historyLimit: 7 } },
-        channels: {
-          line: {
-            ...configWith().channels?.line,
-            ...(testCase.root === undefined ? {} : { historyLimit: testCase.root }),
-            accounts: {
-              work: testCase.account === undefined ? {} : { historyLimit: testCase.account },
-            },
+  ])(
+    "resolves account $account then root $root before the global fallback",
+    async ({ root, account, expected }) => {
+      const context = await createDelivery(
+        configWith(
+          {
+            ...(root === undefined ? {} : { historyLimit: root }),
+            accounts: { work: account === undefined ? {} : { historyLimit: account } },
           },
-        },
-      } as unknown as OpenClawConfig,
-      "work",
-    )();
-    expect(context.historyLimit).toBe(testCase.expected);
-  });
-});
-
-function configWithHistoryLimit(historyLimit: number, accountLimit?: number): OpenClawConfig {
-  return {
-    channels: {
-      line: {
-        ...configWith().channels?.line,
-        ...(accountLimit === undefined ? {} : { historyLimit: accountLimit }),
-      },
+          7,
+        ),
+        "work",
+      )();
+      expect(context.historyLimit).toBe(expected);
     },
-    messages: { groupChat: { historyLimit } },
-  } as OpenClawConfig;
-}
+  );
+});
 
 describe("the config a delivered LINE event is handled with", () => {
   it("follows a reload for a monitor the Gateway started from the process config", async () => {
-    const startupConfig = configWithHistoryLimit(10);
-    setRuntimeConfigSnapshot(startupConfig, configWithHistoryLimit(10));
+    const startupConfig = configWith({}, 10);
+    setRuntimeConfigSnapshot(startupConfig, configWith({}, 10));
     const deliver = createDelivery(startupConfig);
-    const reloaded = configWithHistoryLimit(75);
-    setRuntimeConfigSnapshot(reloaded, configWithHistoryLimit(75));
+    const reloaded = configWith({}, 75);
+    setRuntimeConfigSnapshot(reloaded, configWith({}, 75));
     const handled = await deliver();
     expect(handled.cfg).toBe(reloaded);
     expect(handled.historyLimit).toBe(75);
   });
 
-  // A distinct supplied config is scoped, including when the source snapshot is absent.
-  it.each([true, false])(
-    "keeps its own config when the process snapshot has source=%s",
-    async (withSource) => {
-      const ownConfig = configWithHistoryLimit(10);
-      const startupRuntime = configWithHistoryLimit(33);
-      setRuntimeConfigSnapshot(startupRuntime, ...(withSource ? [startupRuntime] : []));
+  it.each(["with source", "without source", "absent"])(
+    "keeps its own config when the startup process snapshot is %s",
+    async (snapshot) => {
+      const ownConfig = configWith({}, 10);
+      const startupRuntime = configWith({}, 33);
+      if (snapshot !== "absent") {
+        setRuntimeConfigSnapshot(
+          startupRuntime,
+          ...(snapshot === "with source" ? [startupRuntime] : []),
+        );
+      }
       const deliver = createDelivery(ownConfig);
-      setRuntimeConfigSnapshot(configWithHistoryLimit(75), configWithHistoryLimit(75));
+      setRuntimeConfigSnapshot(configWith({}, 75), configWith({}, 75));
       const handled = await deliver();
       expect(handled.cfg).toBe(ownConfig);
       expect(handled.historyLimit).toBe(10);
     },
   );
 
-  it("keeps a supplied config when the process snapshot appears after startup", async () => {
-    const ownConfig = configWithHistoryLimit(10);
-    const deliver = createDelivery(ownConfig);
-    setRuntimeConfigSnapshot(configWithHistoryLimit(75), configWithHistoryLimit(75));
-    const handled = await deliver();
-    expect(handled.cfg).toBe(ownConfig);
-    expect(handled.historyLimit).toBe(10);
-  });
-
   it("keeps the account's own history limit ahead of the reloaded shared default", async () => {
-    const startupConfig = configWithHistoryLimit(10, 5);
+    const startupConfig = configWith({ historyLimit: 5 }, 10);
     setRuntimeConfigSnapshot(startupConfig, startupConfig);
     const deliver = createDelivery(startupConfig);
-    setRuntimeConfigSnapshot(configWithHistoryLimit(75), configWithHistoryLimit(75));
+    setRuntimeConfigSnapshot(configWith({}, 75), configWith({}, 75));
     expect((await deliver()).historyLimit).toBe(5);
   });
 });
