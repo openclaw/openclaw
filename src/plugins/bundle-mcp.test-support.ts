@@ -44,12 +44,9 @@ export async function writeClaudeBundleManifest(params: {
   manifest: Record<string, unknown>;
 }) {
   const pluginRoot = resolveBundlePluginRoot(params.homeDir, params.pluginId);
-  await fs.mkdir(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
-  await fs.writeFile(
-    path.join(pluginRoot, ".claude-plugin", "plugin.json"),
-    `${JSON.stringify(params.manifest, null, 2)}\n`,
-    "utf-8",
-  );
+  await writeBundleTextFiles(pluginRoot, {
+    ".claude-plugin/plugin.json": `${JSON.stringify(params.manifest, null, 2)}\n`,
+  });
   return pluginRoot;
 }
 
@@ -58,32 +55,19 @@ export function createEnabledPluginEntries(pluginIds: readonly string[]) {
 }
 
 export async function createBundleProbePlugin(homeDir: string) {
-  const pluginRoot = resolveBundlePluginRoot(homeDir, "bundle-probe");
-  const serverPath = path.join(pluginRoot, "servers", "probe.mjs");
-  await fs.mkdir(path.dirname(serverPath), { recursive: true });
-  await fs.writeFile(serverPath, "export {};\n", "utf-8");
-  await writeClaudeBundleManifest({
+  const pluginRoot = await writeClaudeBundleManifest({
     homeDir,
     pluginId: "bundle-probe",
     manifest: { name: "bundle-probe" },
   });
-  await fs.writeFile(
-    path.join(pluginRoot, ".mcp.json"),
-    `${JSON.stringify(
-      {
-        mcpServers: {
-          bundleProbe: {
-            command: "node",
-            args: ["./servers/probe.mjs"],
-          },
-        },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf-8",
-  );
-  return { pluginRoot, serverPath };
+  const config = {
+    mcpServers: { bundleProbe: { command: "node", args: ["./servers/probe.mjs"] } },
+  };
+  await writeBundleTextFiles(pluginRoot, {
+    "servers/probe.mjs": "export {};\n",
+    ".mcp.json": `${JSON.stringify(config, null, 2)}\n`,
+  });
+  return { pluginRoot, serverPath: path.join(pluginRoot, "servers", "probe.mjs") };
 }
 
 export async function withBundleHomeEnv<T>(

@@ -32,6 +32,8 @@ import {
   withActivatedPluginIds,
 } from "./activation-context.js";
 
+const workspaceDir = "/tmp/openclaw-activation-workspace";
+const configWithAllow = (...allow: string[]): OpenClawConfig => ({ plugins: { allow } });
 afterEach(() => {
   clearPluginMetadataLifecycleCaches();
   applyPluginAutoEnableMock.mockClear();
@@ -48,33 +50,26 @@ describe("withActivatedPluginIds", () => {
       },
     };
     const projected = withActivatedPluginIds({ config, pluginIds: ["owner"] });
-    expect(projected?.plugins?.enabled).toBe(false);
-    expect(projected?.plugins?.entries?.owner?.enabled).toBe(false);
-    expect(config.plugins.enabled).toBe(false);
-    expect(config.plugins.entries.owner.enabled).toBe(false);
+    const disabled = { enabled: false, entries: { owner: { enabled: false } } };
+    expect(projected?.plugins).toMatchObject(disabled);
+    expect(config.plugins).toMatchObject(disabled);
   });
 
   it("keeps omitted plugin ids outside restrictive allowlists", () => {
+    const config = {
+      plugins: {
+        allow: ["memory-core"],
+        deny: ["blocked"],
+        entries: { disabled: { enabled: false } },
+      },
+    };
     expect(
-      withActivatedPluginIds({
-        config: {
-          plugins: {
-            allow: ["memory-core"],
-            deny: ["blocked"],
-            entries: {
-              disabled: { enabled: false },
-            },
-          },
-        },
-        pluginIds: ["openai", "blocked", "disabled"],
-      }),
+      withActivatedPluginIds({ config, pluginIds: ["openai", "blocked", "disabled"] }),
     ).toEqual({
       plugins: {
         allow: ["memory-core"],
         deny: ["blocked"],
-        entries: {
-          disabled: { enabled: false },
-        },
+        entries: { disabled: { enabled: false } },
       },
     });
   });
@@ -83,67 +78,49 @@ describe("withActivatedPluginIds", () => {
 describe("plugin activation inputs", () => {
   it("passes the current manifest registry into activation auto-enable", () => {
     const manifestRegistry = makeRegistry([{ id: "openai", channels: [], providers: ["openai"] }]);
-    const workspaceDir = "/tmp/openclaw-activation-workspace";
+    const context = { config: {}, workspaceDir };
     setCurrentPluginMetadataSnapshot(
-      createPluginMetadataSnapshot({
-        config: {},
-        manifestRegistry,
-        workspaceDir,
-      }),
-      {
-        config: {},
-        workspaceDir,
-      },
+      createPluginMetadataSnapshot({ ...context, manifestRegistry }),
+      context,
     );
 
     resolveBundledCompatActivationInputs({
-      rawConfig: { plugins: { allow: ["openai"] } },
-      workspaceDir,
       applyAutoEnable: true,
+      rawConfig: configWithAllow("openai"),
+      workspaceDir,
       resolveBundledPluginIds: () => [],
     });
 
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
-      config: { plugins: { allow: ["openai"] } },
+      config: configWithAllow("openai"),
       env: process.env,
       manifestRegistry,
     });
   });
 
   it("uses the caller's exact metadata generation across lifecycle replacement", () => {
-    const firstManifestRegistry = makeRegistry([
-      { id: "first", channels: [], providers: ["first"] },
-    ]);
-    const secondManifestRegistry = makeRegistry([
-      { id: "second", channels: [], providers: ["second"] },
-    ]);
-    const firstDiscovery = { plugins: [], diagnostics: [] } as unknown as PluginDiscoveryResult;
-    const secondDiscovery = { plugins: [], diagnostics: [] } as unknown as PluginDiscoveryResult;
-
-    for (const [manifestRegistry, discovery] of [
-      [firstManifestRegistry, firstDiscovery],
-      [secondManifestRegistry, secondDiscovery],
-    ] as const) {
+    const generations = ["first", "second"].map((id) => ({
+      config: configWithAllow(id),
+      manifestRegistry: makeRegistry([{ id, channels: [], providers: [id] }]),
+      discovery: { candidates: [], diagnostics: [] } satisfies PluginDiscoveryResult,
+    }));
+    for (const { config, manifestRegistry, discovery } of generations) {
       resolveBundledCompatActivationInputs({
-        rawConfig: { plugins: { allow: [manifestRegistry.plugins[0]!.id] } },
+        applyAutoEnable: true,
+        rawConfig: config,
         manifestRegistry,
         discovery,
-        applyAutoEnable: true,
         resolveBundledPluginIds: () => [],
       });
     }
 
-    expect(applyPluginAutoEnableMock).toHaveBeenNthCalledWith(1, {
-      config: { plugins: { allow: ["first"] } },
-      env: process.env,
-      manifestRegistry: firstManifestRegistry,
-      discovery: firstDiscovery,
-    });
-    expect(applyPluginAutoEnableMock).toHaveBeenNthCalledWith(2, {
-      config: { plugins: { allow: ["second"] } },
-      env: process.env,
-      manifestRegistry: secondManifestRegistry,
-      discovery: secondDiscovery,
+    generations.forEach(({ manifestRegistry, discovery }, index) => {
+      expect(applyPluginAutoEnableMock).toHaveBeenNthCalledWith(index + 1, {
+        config: configWithAllow(index === 0 ? "first" : "second"),
+        manifestRegistry,
+        discovery,
+        env: process.env,
+      });
     });
   });
 
@@ -167,17 +144,17 @@ describe("plugin activation inputs", () => {
     withBundledPluginEnablementCompatMock.mockReturnValueOnce(compatConfig);
 
     const activation = resolveBundledCompatActivationInputs({
+      applyAutoEnable: true,
       rawConfig,
       env: process.env,
-      workspaceDir: "/tmp/openclaw-activation-workspace",
+      workspaceDir,
       onlyPluginIds: ["anthropic"],
-      applyAutoEnable: true,
       resolveBundledPluginIds,
     });
 
     expect(resolveBundledPluginIds).toHaveBeenCalledWith({
       config: autoEnabledConfig,
-      workspaceDir: "/tmp/openclaw-activation-workspace",
+      workspaceDir,
       env: process.env,
       onlyPluginIds: ["anthropic"],
     });

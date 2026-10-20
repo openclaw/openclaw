@@ -14,6 +14,7 @@ vi.mock("./bundled-dir.js", () => ({
 
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { listBundledPackageChannelMetadata } from "./bundled-package-channel-metadata.js";
+import type { PluginPackageChannel } from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 const tempDirs: string[] = [];
@@ -36,41 +37,42 @@ function useBundledPluginsDir(extensionsRoot: string): void {
   vi.mocked(resolveBundledPluginsDir).mockReturnValue(extensionsRoot);
 }
 
+function writePackage(packagePath: string, channel: PluginPackageChannel) {
+  writeJsonFile(packagePath, { name: "@openclaw/matrix", openclaw: { channel } });
+}
+
+function fixture(channel: PluginPackageChannel) {
+  const extensionsRoot = path.join(makeTempRepoRoot(tempDirs, "bpcm-"), "dist", "extensions");
+  const pluginRoot = path.join(extensionsRoot, "matrix");
+  const packagePath = path.join(pluginRoot, "package.json");
+  writePackage(packagePath, channel);
+  writeJsonFile(path.join(pluginRoot, "openclaw.plugin.json"), {
+    id: "matrix",
+    configSchema: { type: "object" },
+    channels: ["matrix"],
+  });
+  fs.writeFileSync(path.join(pluginRoot, "index.js"), "export default {};\n", "utf8");
+  useBundledPluginsDir(extensionsRoot);
+  return packagePath;
+}
+
+const readMatrix = () =>
+  listBundledPackageChannelMetadata().find((channel) => channel.id === "matrix");
+
 describe("bundled package channel metadata", () => {
   it("reads doctor capabilities from the resolved bundled plugin dir", () => {
-    const root = makeTempRepoRoot(tempDirs, "bpcm-");
-    const extensionsRoot = path.join(root, "dist", "extensions");
-    writeJsonFile(path.join(extensionsRoot, "matrix", "package.json"), {
-      name: "@openclaw/matrix",
-      openclaw: {
-        channel: {
-          id: "matrix",
-          label: "Matrix",
-          docsPath: "/channels/matrix",
-          doctorCapabilities: {
-            dmAllowFromMode: "nestedOnly",
-            groupModel: "sender",
-            groupAllowFromFallbackToAllowFrom: false,
-            warnOnEmptyGroupSenderAllowlist: true,
-          },
-        },
+    fixture({
+      id: "matrix",
+      label: "Matrix",
+      docsPath: "/channels/matrix",
+      doctorCapabilities: {
+        dmAllowFromMode: "nestedOnly",
+        groupModel: "sender",
+        groupAllowFromFallbackToAllowFrom: false,
+        warnOnEmptyGroupSenderAllowlist: true,
       },
     });
-    writeJsonFile(path.join(extensionsRoot, "matrix", "openclaw.plugin.json"), {
-      id: "matrix",
-      configSchema: { type: "object" },
-      channels: ["matrix"],
-    });
-    fs.writeFileSync(
-      path.join(extensionsRoot, "matrix", "index.js"),
-      "export default {};\n",
-      "utf8",
-    );
-    useBundledPluginsDir(extensionsRoot);
-
-    const matrix = listBundledPackageChannelMetadata().find((channel) => channel.id === "matrix");
-
-    expect(matrix?.doctorCapabilities).toEqual({
+    expect(readMatrix()?.doctorCapabilities).toEqual({
       dmAllowFromMode: "nestedOnly",
       groupModel: "sender",
       groupAllowFromFallbackToAllowFrom: false,
@@ -79,48 +81,11 @@ describe("bundled package channel metadata", () => {
   });
 
   it("reflects package channel metadata edits after the metadata lifecycle is cleared", () => {
-    const root = makeTempRepoRoot(tempDirs, "bpcm-fresh-");
-    const extensionsRoot = path.join(root, "dist", "extensions");
-    const packagePath = path.join(extensionsRoot, "matrix", "package.json");
-    useBundledPluginsDir(extensionsRoot);
-
-    writeJsonFile(packagePath, {
-      name: "@openclaw/matrix",
-      openclaw: {
-        channel: {
-          id: "matrix",
-          label: "Before",
-        },
-      },
-    });
-    writeJsonFile(path.join(extensionsRoot, "matrix", "openclaw.plugin.json"), {
-      id: "matrix",
-      configSchema: { type: "object" },
-      channels: ["matrix"],
-    });
-    fs.writeFileSync(
-      path.join(extensionsRoot, "matrix", "index.js"),
-      "export default {};\n",
-      "utf8",
-    );
-    expect(
-      listBundledPackageChannelMetadata().find((channel) => channel.id === "matrix")?.label,
-    ).toBe("Before");
-
-    writeJsonFile(packagePath, {
-      name: "@openclaw/matrix",
-      openclaw: {
-        channel: {
-          id: "matrix",
-          label: "After",
-        },
-      },
-    });
-
+    const packagePath = fixture({ id: "matrix", label: "Before" });
+    expect(readMatrix()?.label).toBe("Before");
+    writePackage(packagePath, { id: "matrix", label: "After" });
     clearPluginMetadataLifecycleCaches();
-    expect(
-      listBundledPackageChannelMetadata().find((channel) => channel.id === "matrix")?.label,
-    ).toBe("After");
+    expect(readMatrix()?.label).toBe("After");
   });
 });
 

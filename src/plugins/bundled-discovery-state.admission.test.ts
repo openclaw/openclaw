@@ -42,62 +42,42 @@ beforeEach(() => {
   clearBundledDiscoveryModeMemo();
 });
 
-afterEach(() => {
-  clearBundledDiscoveryModeMemo();
-});
+afterEach(clearBundledDiscoveryModeMemo);
 
+const prepare = () => prepareBundledDiscoveryMode(env);
+const memoized = () => readBundledDiscoveryModeMemoized(env);
 const readers = [
-  {
-    name: "direct preparation snapshot",
-    reject: reads.snapshot,
-    read: () => prepareBundledDiscoveryMode(env),
-  },
-  {
-    name: "memoized discovery snapshot",
-    reject: reads.snapshot,
-    read: () => readBundledDiscoveryModeMemoized(env),
-  },
-  {
-    name: "asynchronous discovery snapshot row",
-    reject: reads.metadata,
-    read: () => prepareBundledDiscoveryMode(env),
-  },
-  {
-    name: "synchronous discovery row",
-    reject: reads.mode,
-    read: () => readBundledDiscoveryMode({ env }),
-  },
-  {
-    name: "artifact-preserving memoized discovery row",
-    reject: reads.mode,
-    read: () => readBundledDiscoveryModeMemoized(env, { artifactPreservingReadOnly: true }),
-  },
-  {
-    name: "memoized prepared row callback",
-    reject: reads.mode,
-    read: () => {
+  ["preparation snapshot", reads.snapshot, prepare],
+  ["memoized snapshot", reads.snapshot, memoized],
+  ["async snapshot row", reads.metadata, prepare],
+  ["sync row", reads.mode, () => readBundledDiscoveryMode({ env })],
+  [
+    "artifact-preserving row",
+    reads.mode,
+    () => readBundledDiscoveryModeMemoized(env, { artifactPreservingReadOnly: true }),
+  ],
+  [
+    "prepared row callback",
+    reads.mode,
+    () => {
       reads.snapshot.mockReturnValue(undefined);
       return readBundledDiscoveryModeMemoized(env, {}, reads.mode);
     },
-  },
-  {
-    name: "metadata adapter read operation",
-    reject: reads.metadata,
-    read: () => readPluginMetadataStateRow("bundled-discovery", { env }),
-  },
-];
-
-function invalidatedRead() {
-  // Error codes preserve the owner's identity across source/require module graphs.
-  return Object.assign(new Error("Selected discovery read scope is closed"), {
-    code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
-  });
-}
+  ],
+  [
+    "metadata adapter",
+    reads.metadata,
+    () => readPluginMetadataStateRow("bundled-discovery", { env }),
+  ],
+] as const;
 
 it.each(readers)(
-  "retains typed invalidation and ordinary errors from $name",
-  async ({ reject, read }) => {
-    const cause = invalidatedRead();
+  "retains typed invalidation and ordinary errors from %s",
+  async (_name, reject, read) => {
+    // Codes preserve the owner's identity across source/require module graphs.
+    const cause = Object.assign(new Error("Selected discovery read scope is closed"), {
+      code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+    });
     reject.mockImplementation(() => {
       throw cause;
     });
