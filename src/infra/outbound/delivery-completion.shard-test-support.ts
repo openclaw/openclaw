@@ -10,7 +10,11 @@ import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
-import { installDeliveryQueueTmpDirHooks } from "./delivery-queue.test-helpers.js";
+import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
+import {
+  createRecoveryLog,
+  installDeliveryQueueTmpDirHooks,
+} from "./delivery-queue.test-helpers.js";
 
 export function registerMatrix(outbound: ChannelOutboundAdapter = matrixOutboundForQueueTest) {
   setActivePluginRegistry(
@@ -45,19 +49,28 @@ export function installRecoveryHooks(register = true, stubState = true) {
       vi.unstubAllEnvs();
     }
   });
-  return { ...fixtures, deliver: (...args: Parameters<typeof deliver>) => deliver(...args) };
+  return {
+    ...fixtures,
+    deliver: (...args: Parameters<typeof deliver>) => deliver(...args),
+    recover: (run: DeliverFn) =>
+      recoverPendingDeliveries({
+        cfg: {},
+        stateDir: fixtures.tmpDir(),
+        log: createRecoveryLog(),
+        deliver: run,
+      }),
+  };
 }
 
 export async function seedRecoverySession(
   tmpDir: string,
-  name: string,
-  sourceRunId: string,
-  recoveryRunId: string,
+  sourceRunId = "source",
+  recoveryRunId = "run",
   extra: Partial<SessionEntry> = {},
 ) {
   const scope = {
     agentId: "main",
-    sessionKey: `agent:main:dashboard:${name}`,
+    sessionKey: "agent:main:dashboard:requester",
     storePath: path.join(tmpDir, "sessions.json"),
   };
   const context = { channel: "matrix", to: "!original:example" };

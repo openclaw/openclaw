@@ -12,7 +12,6 @@ const mocks = vi.hoisted(() => ({
   ack: vi.fn(),
   release: vi.fn(),
   terminal: vi.fn(),
-  warn: vi.fn(),
 }));
 vi.mock("./deliver-core.js", () => ({ deliverOutboundPayloadsCore: mocks.core }));
 vi.mock("./delivery-queue-ack.js", () => ({
@@ -33,7 +32,7 @@ vi.mock("./outbound-audit.js", () => ({
   failedOutboundAuditTerminals: vi.fn(),
 }));
 vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: mocks.warn }),
+  createSubsystemLogger: () => ({ warn: vi.fn() }),
 }));
 
 function startDelivery() {
@@ -65,20 +64,12 @@ function startDelivery() {
     entered.resolve();
     return await core.promise;
   });
-  const delivery = (async () => {
-    try {
-      return await deliverOutboundPayloadsWithQueueCleanup(params, "queued-1", 1, "claim-1", lease);
-    } finally {
-      await lease.stop();
-    }
-  })();
-  const outcome = delivery.then(
-    (results) => ({ results, error: undefined }),
-    (error: unknown) => {
+  const outcome = deliverOutboundPayloadsWithQueueCleanup(params, "queued-1", 1, "claim-1", lease)
+    .finally(() => lease.stop())
+    .catch((error: unknown) => {
       entered.reject(error);
-      return { results: undefined, error };
-    },
-  );
+      return error;
+    });
   return { controller, core, entered, stopped, stopEntered, lease, owner, outcome };
 }
 
@@ -90,7 +81,7 @@ describe("queued delivery lifecycle joins", () => {
     mocks.ack.mockResolvedValue(undefined);
   });
 
-  it("settles the adapter and queue before joining lease stop on cancellation", async () => {
+  it.each([false, true])("settles custody before lease stop (rejects: %s)", async (rejectStop) => {
     const run = startDelivery();
     await run.entered.promise;
     run.controller.abort();
@@ -103,21 +94,14 @@ describe("queued delivery lifecycle joins", () => {
     expect(run.owner.custody).toBe("released");
     expect(mocks.ack).toHaveBeenCalledOnce();
     expect(mocks.release).not.toHaveBeenCalled();
-    run.stopped.resolve();
-    expect((await run.outcome).error).toMatchObject({ queueCustody: "released" });
-    expect(mocks.terminal).toHaveBeenCalledOnce();
-    expect(mocks.retire).not.toHaveBeenCalled();
-  });
-
-  it("reports a rejected lease stop without retrying settled queue cleanup", async () => {
-    const run = startDelivery();
-    await run.entered.promise;
-    run.controller.abort();
-    run.core.reject(run.controller.signal.reason);
-    await run.stopEntered.promise;
-    const failure = new Error("lease stop failed");
-    run.stopped.reject(failure);
-    expect((await run.outcome).error).toBe(failure);
+    if (rejectStop) {
+      const failure = new Error("lease stop failed");
+      run.stopped.reject(failure);
+      expect(await run.outcome).toBe(failure);
+    } else {
+      run.stopped.resolve();
+      expect(await run.outcome).toMatchObject({ queueCustody: "released" });
+    }
     expect(run.owner.custody).toBe("released");
     expect(run.lease.stop).toHaveBeenCalledOnce();
     expect(mocks.retire).not.toHaveBeenCalled();

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   boundedCronCompletionRetention,
   drainMatrixReconnect,
@@ -51,12 +51,11 @@ describe("outbound recovery shutdown", () => {
       shouldContinue: () => shouldContinue,
     });
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         secondPreparedPromise,
-        drain.then(() => {
-          throw new Error("Recovery drain completed before the second attempt prepared");
-        }),
-      ]);
+        drain,
+        "Recovery drain completed before the second attempt prepared",
+      );
 
       shouldContinue = false;
       releaseSecond();

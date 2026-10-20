@@ -1,7 +1,8 @@
+import assert from "node:assert/strict";
 import { describe, expect, it, vi } from "vitest";
 import { chunkText } from "../../auto-reply/chunk.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
-import { getRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
+import { getRestartRecoveryTerminalDeliveryEvidence as terminalEvidence } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
 import { matrixOutboundForQueueTest } from "./deliver.queue-integration.test-support.js";
@@ -11,9 +12,8 @@ import {
   registerMatrix,
   seedRecoverySession,
 } from "./delivery-completion.shard-test-support.js";
-import { recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import { enqueueDeliveryOnce } from "./delivery-queue-storage.js";
-import { createRecoveryLog, loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
+import { loadPendingDeliveries } from "./delivery-queue.test-helpers.js";
 
 describe("final receipt physical fanout", () => {
   const fixtures = installRecoveryHooks(false);
@@ -37,12 +37,7 @@ describe("final receipt physical fanout", () => {
     "requires every physical send in one logical final ($mode, $transport, $disposition)",
     async ({ mode, transport, disposition }) => {
       const tmpDir = fixtures.tmpDir();
-      const { scope, context, entry } = await seedRecoverySession(
-        tmpDir,
-        "physical-fanout",
-        "source",
-        "run",
-      );
+      const { scope, context, entry } = await seedRecoverySession(tmpDir);
       // One logical final. Real core planning splits text or media into two sends.
       const payloads = [
         {
@@ -54,20 +49,18 @@ describe("final receipt physical fanout", () => {
       ];
       await markFinal(scope, entry, payloads, context);
       const completion = resolvePendingFinalDeliveryCompletion(payloads);
-      if (!completion) {
-        throw new Error("missing final custody");
-      }
+      assert(completion, "missing final custody");
       let physicalSends = 0;
       const send = vi.fn(async () => {
         const index = physicalSends++;
         const invalid = disposition.endsWith(index === 0 ? "first" : "last");
-        return invalid
-          ? {
-              channel: "matrix",
-              messageId: "",
-              ...(disposition.startsWith("suppressed") ? { outcome: "not_sent" as const } : {}),
-            }
-          : { channel: "matrix", messageId: index === 0 ? "first-id" : "second-id" };
+        return {
+          channel: "matrix",
+          messageId: invalid ? "" : index === 0 ? "first-id" : "second-id",
+          ...(invalid && disposition.startsWith("suppressed")
+            ? { outcome: "not_sent" as const }
+            : {}),
+        };
       });
       registerMatrix({
         ...matrixOutboundForQueueTest,
@@ -92,13 +85,7 @@ describe("final receipt physical fanout", () => {
             await params.onDeliveryResult?.(result);
           },
         });
-      const recover = () =>
-        recoverPendingDeliveries({
-          cfg: {},
-          stateDir: tmpDir,
-          log: createRecoveryLog(),
-          deliver: runDelivery,
-        });
+      const recover = () => fixtures.recover(runDelivery);
       const params = {
         cfg: {},
         ...context,
@@ -113,10 +100,7 @@ describe("final receipt physical fanout", () => {
         await enqueueDeliveryOnce(params, completion.deliveryId, tmpDir);
         await recover();
       }
-      const evidence = getRestartRecoveryTerminalDeliveryEvidence(
-        loadSessionEntry(scope),
-        "source",
-      );
+      const evidence = terminalEvidence(loadSessionEntry(scope), "source");
       if (disposition === "complete") {
         expect(evidence).toMatchObject({
           deliveryStatus: { status: "sent", resultCount: 2 },

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -33,24 +34,34 @@ describe("outbound acknowledgement worker", () => {
     vi.unstubAllEnvs();
   });
 
-  it("settles a generation-bound owner without host data SQL after cold reopen", async () => {
+  async function claimedDelivery(
+    extra: Partial<Parameters<typeof enqueueDelivery>[0]> = {},
+    stableId?: string,
+  ) {
     const stateDir = fixtures.tmpDir();
-    const id = await enqueueDelivery(
-      {
-        channel: "matrix",
-        to: "!synthetic:example",
-        payloads: [{ text: "settled" }],
-        sessionGeneration: {
-          agentId: "main",
-          storePath: path.join(stateDir, "agent.sqlite"),
-          sessionKey: "agent:main:test",
-          sessionId: "test",
-          lifecycleRevision: null,
-        },
+    const params = {
+      channel: "matrix",
+      to: "!synthetic:example",
+      payloads: [{ text: "retained" }],
+      ...extra,
+    };
+    const id = stableId ?? (await enqueueDelivery(params, stateDir));
+    if (stableId) {
+      await enqueueDeliveryOnce(params, stableId, stateDir);
+    }
+    return { stateDir, id, claimId: await claimDeliveryPlatformSendAttempt(id, stateDir) };
+  }
+
+  it("settles a generation-bound owner without host data SQL after cold reopen", async () => {
+    const { stateDir, id, claimId } = await claimedDelivery({
+      sessionGeneration: {
+        agentId: "main",
+        storePath: path.join(fixtures.tmpDir(), "agent.sqlite"),
+        sessionKey: "agent:main:test",
+        sessionId: "test",
+        lifecycleRevision: null,
       },
-      stateDir,
-    );
-    const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+    });
     expect(claimId).toEqual(expect.any(String));
     await closeOpenClawStateDatabaseAsync();
     const context = captureDeliveryQueueStateContext(stateDir);
@@ -71,12 +82,7 @@ describe("outbound acknowledgement worker", () => {
   });
 
   it("preserves an explicit undefined owner check across worker transfer", async () => {
-    const stateDir = fixtures.tmpDir();
-    const id = await enqueueDelivery(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "retained" }] },
-      stateDir,
-    );
-    const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
+    const { stateDir, id, claimId } = await claimedDelivery();
     const options = { expectedPlatformSendAttemptId: undefined };
     await expect(ackDelivery(id, stateDir, options)).rejects.toThrow(
       `Delivery platform claim was lost: ${id}`,
@@ -90,20 +96,11 @@ describe("outbound acknowledgement worker", () => {
     await expect(ackDelivery(id, stateDir)).resolves.toBeUndefined();
   });
   it("captures ACK facts before admission and settles an expired exact owner before media cleanup", async () => {
-    const stateDir = fixtures.tmpDir();
-    const id = "captured-expired-ack";
-    const artifact = await createQueueMedia(stateDir, "000000000001", "synthetic audio");
-    await enqueueDeliveryOnce(
-      {
-        channel: "matrix",
-        to: "!synthetic:example",
-        payloads: [{ mediaUrl: artifact }],
-        completionRetention: "permanent",
-      },
-      id,
-      stateDir,
+    const artifact = await createQueueMedia(fixtures.tmpDir(), "000000000001", "synthetic audio");
+    const { stateDir, id, claimId } = await claimedDelivery(
+      { payloads: [{ mediaUrl: artifact }], completionRetention: "permanent" },
+      "captured-expired-ack",
     );
-    const claimId = await claimDeliveryPlatformSendAttempt(id, stateDir);
     const entry = await loadPendingDelivery(id, stateDir);
     if (!claimId || !entry) {
       throw new Error("Expected a claimed queue entry");
@@ -131,12 +128,7 @@ describe("outbound acknowledgement worker", () => {
     const otherState = path.join(stateDir, "other-state");
     vi.stubEnv("OPENCLAW_STATE_DIR", otherState);
     try {
-      await Promise.race([
-        reply.posted,
-        ack.then(() => {
-          throw new Error("ACK settled before worker dispatch");
-        }),
-      ]);
+      await awaitGateBeforeSettlement(reply.posted, ack, "ACK settled before worker dispatch");
       await setImmediate();
       expect(settled).toBe(false);
       const entryJson = JSON.stringify({ ...entry, availableAt: Date.now() - 1 });
@@ -154,12 +146,7 @@ describe("outbound acknowledgement worker", () => {
       );
       db.exec("COMMIT");
       expect(
-        await Promise.race([
-          reply.held,
-          ack.then(() => {
-            throw new Error("ACK settled without its reply");
-          }),
-        ]),
+        await awaitGateBeforeSettlement(reply.held, ack, "ACK settled without its reply"),
       ).toEqual([artifact]);
       expect(settled).toBe(false);
       await expect(fs.readFile(artifact, "utf8")).resolves.toBe("synthetic audio");

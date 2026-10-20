@@ -53,61 +53,59 @@ function deliver(
   });
 }
 
+function progressResult(position: string) {
+  return { channel: "line", messageId: "push", meta: { position } };
+}
+
 describe("delivery result reconciliation", () => {
-  it("consumes progress once across aggregate receipts and identity-only final results", async () => {
-    const first = { channel: "line", messageId: "push", meta: { position: "first" } };
+  it.each([true, false])("reconciles aggregate receipts (formatted: %s)", async (formatted) => {
+    const first = progressResult("first"),
+      second = progressResult("second"),
+      last = progressResult("last");
     const otherChannel = { channel: "matrix", messageId: "push" };
-    const second = { channel: "line", messageId: "push", meta: { position: "second" } };
-    const last = { channel: "line", messageId: "push", meta: { position: "last" } };
-    const progress = [first, otherChannel, second, last];
+    const progress = formatted ? [first, otherChannel, second, last] : [first, second, last];
     const aggregate = {
       channel: "line",
       messageId: "push",
-      receipt: createMessageReceiptFromOutboundResults({ results: [first, second] }),
+      receipt: createMessageReceiptFromOutboundResults({
+        results: formatted ? [first, second] : [second, last],
+      }),
     };
     const identityOnly = { channel: "line", messageId: "push", meta: { finalized: true } };
     const unreported = { channel: "line", messageId: "new" };
     const onDeliveryResult = vi.fn();
-    installHandler((params) => ({
-      sendText: async () => {
-        throw new Error("Expected formatted transport");
-      },
-      sendFormattedText: async () => {
+    installHandler((params) => {
+      const send = async () => {
         for (const result of progress) {
           await params.onDeliveryResult?.(result);
         }
-        return [aggregate, identityOnly, unreported];
-      },
-    }));
-    const results = await deliver({ onDeliveryResult });
-
-    expect(results).toEqual([aggregate, otherChannel, identityOnly, unreported]);
-    expect(onDeliveryResult.mock.calls.map(([result]) => result)).toEqual([
-      ...progress,
-      unreported,
-    ]);
-  });
-
-  it("attaches a scalar aggregate to the latest matching progress without erasing earlier sends", async () => {
-    const first = { channel: "line", messageId: "push", meta: { position: "first" } };
-    const second = { channel: "line", messageId: "push", meta: { position: "second" } };
-    const last = { channel: "line", messageId: "push", meta: { position: "last" } };
-    const aggregate = {
-      channel: "line",
-      messageId: "push",
-      receipt: createMessageReceiptFromOutboundResults({ results: [second, last] }),
-    };
-    installHandler((params) => ({
-      sendText: async () => {
-        for (const result of [first, second, last]) {
-          await params.onDeliveryResult?.(result);
-        }
         return aggregate;
-      },
-    }));
-    const results = await deliver();
+      };
+      return formatted
+        ? {
+            sendText: async () => {
+              throw new Error("Expected formatted transport");
+            },
+            sendFormattedText: async () => {
+              await send();
+              return [aggregate, identityOnly, unreported];
+            },
+          }
+        : {
+            sendText: send,
+          };
+    });
+    const results = await deliver(formatted ? { onDeliveryResult } : {});
 
-    expect(results).toEqual([first, aggregate]);
+    expect(results).toEqual(
+      formatted ? [aggregate, otherChannel, identityOnly, unreported] : [first, aggregate],
+    );
+    if (formatted) {
+      expect(onDeliveryResult.mock.calls.map(([result]) => result)).toEqual([
+        ...progress,
+        unreported,
+      ]);
+    }
   });
 
   it("retains immutable placement across reconciliation, aliases and payload reset", async () => {
@@ -148,24 +146,19 @@ describe("delivery result reconciliation", () => {
         }
       },
     });
-    const first = placements[0]!;
     expect(results).toEqual([final, next]);
     expect(results[0]).toBe(final);
     expect(onDeliveryResult.mock.calls.map(([result]) => result)).toEqual([progress, next]);
-    expect(first).toEqual({
-      channels: ["matrix"],
-      targets: ["reported-room"],
-      threads: ["reported-thread"],
-      invalid: false,
-    });
-    expect(Object.isFrozen(first.channels)).toBe(true);
-    expect(Object.isFrozen(first.targets)).toBe(true);
-    expect(placements[1]).toEqual({
-      channels: ["matrix"],
-      targets: ["next-room"],
-      threads: [],
-      invalid: false,
-    });
-    expect(results).toHaveLength(2);
+    expect(placements).toEqual([
+      {
+        channels: ["matrix"],
+        targets: ["reported-room"],
+        threads: ["reported-thread"],
+        invalid: false,
+      },
+      { channels: ["matrix"], targets: ["next-room"], threads: [], invalid: false },
+    ]);
+    expect(Object.isFrozen(placements[0]!.channels)).toBe(true);
+    expect(Object.isFrozen(placements[0]!.targets)).toBe(true);
   });
 });
