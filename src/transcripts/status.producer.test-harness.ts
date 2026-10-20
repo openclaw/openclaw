@@ -62,12 +62,12 @@ export function useTranscriptStatusFixture() {
   return function fixture(
     config: OpenClawConfig = { transcripts: { autoStart: [transcriptStatusRoom] } },
   ) {
+    const stateDir = tempDirs.make("transcript-status-producer-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     setCurrentPluginMetadataSnapshot(
       createPluginMetadataSnapshot({ config, manifestRegistry: { plugins: [], diagnostics: [] } }),
       { config },
     );
-    const stateDir = tempDirs.make("transcript-status-producer-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const store = new TranscriptsStore(path.join(stateDir, "transcripts"), {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
