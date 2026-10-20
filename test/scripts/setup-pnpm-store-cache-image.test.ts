@@ -23,7 +23,7 @@ function expectNoSeed(
 
 describe("pnpm image archive consumer", () => {
   it.for([
-    { platform: "win32", version: "12.11.1" },
+    { platform: "win32", version: "12.12.1" },
     { platform: "linux", version: "12.3.4" },
   ] as const)(
     "seeds $platform jobs from verified $version archives into private Corepack state",
@@ -64,7 +64,7 @@ describe("pnpm image archive consumer", () => {
   );
 
   it.for([
-    { platform: "win32", version: "12.11.1", name: "pnpm-12.11.1.tgz" },
+    { platform: "win32", version: "12.12.1", name: "pnpm-12.12.1.tgz" },
     { platform: "linux", version: "12.3.4", name: "pnpm-12.3.4.tgz" },
     { platform: "linux", version: "12.3.4", name: "exe.linux-x64-12.3.4.tgz" },
   ] as const)(

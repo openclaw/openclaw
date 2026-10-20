@@ -503,11 +503,11 @@ function projectMessageIdentities(db: EngineConnection, input: MessageAuditEvent
   };
 }
 
-function bindAuditEvent(db: EngineConnection, input: AuditEventInput) {
+function bindAuditEvent(db: EngineConnection, input: AuditEventInput, eventId: string) {
   const message =
     input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? projectMessageIdentities(db, input) : undefined;
   return {
-    event_id: randomUUID(),
+    event_id: eventId,
     source_id: input.sourceId,
     source_sequence: input.sourceSequence,
     schema_version: AUDIT_EVENT_SCHEMA_VERSION,
@@ -626,6 +626,7 @@ function pruneAfterInsert(db: EngineConnection, now: number, at: number, sequenc
 export function recordAuditEventInDatabase(
   input: AuditEventInput,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
+  eventId: string = randomUUID(),
 ): AuditEventRecord | undefined {
   const executionToken =
     input.kind === "message" && input.direction === "outbound"
@@ -650,7 +651,7 @@ export function recordAuditEventInDatabase(
       expiry >= currentTime &&
       Number.isSafeInteger(retention.nextSequence)
     ) {
-      const values = bindAuditEvent(db, input);
+      const values = bindAuditEvent(db, input, eventId);
       // This is the only runtime inserter. Validate the complete result before
       // autocommit; even a duplicate source consumes an AUTOINCREMENT sequence.
       const record = rowToAuditEvent({ ...values, sequence: retention.nextSequence });
@@ -667,10 +668,11 @@ export function recordAuditEventInDatabase(
     }
     return runOpenClawStateWriteTransaction(() => {
       // Read losslessly so Node's rowid decoding cannot preempt the safe-integer guard.
-      const values = bindAuditEvent(db, input);
+      const values = bindAuditEvent(db, input, eventId);
       const queries = getAuditEventQueries(db);
       const insert = queries.insert(values);
       if (insert === undefined) {
+        // Terminal bindings commit with the event, so a replay settles both rows.
         auditEventRetention.delete(db);
         return undefined;
       }

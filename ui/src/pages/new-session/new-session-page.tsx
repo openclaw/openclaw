@@ -22,9 +22,10 @@ import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { ComposerDictationStatus } from "../chat/components/chat-voice-activity.tsx";
+import { DirectDictationView } from "../chat/components/direct-dictation-view.tsx";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
-import { NewSessionDictationView } from "./composer-dictation-view.tsx";
+import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import { NewSessionComposer } from "./composer.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
 import { isWorktreeNameValid } from "./create-params.ts";
@@ -147,10 +148,11 @@ function DraftBlock(props: {
     <ComposerDictationStatus readDictation={() => props.page().dictation.dictation} />
   );
   const voiceControl = (
-    <NewSessionDictationView
+    <DirectDictationView
       control={props.page().dictation}
       ownerKey={props.page().routeOwnerKey()}
       inputDeviceId={props.page().context?.theme.settings.realtimeTalkInputDeviceId}
+      idleLabel={t("newSession.dictate")}
       renderRevision={props.revision()}
     />
   );
@@ -299,25 +301,17 @@ function renderPageContent(host: PageHost) {
   }));
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
+  const Draft = () => (
+    <NewSessionComposerTextareaContext value={owner.submission.composerTextarea}>
+      <DraftBlock page={page} revision={revision} options={options} />
+    </NewSessionComposerTextareaContext>
+  );
   // Bind gateway facts before publishing the first reconciled draft snapshot.
   owner.connect();
   onCleanup(() => owner.disconnect());
   onSettled(() => {
-    const context = owner.context;
-    const notify = owner.changed;
-    const stops = context
-      ? [
-          context.theme,
-          context.agents,
-          context.agentIdentity,
-          context.sessions,
-          context.placementStartup,
-          context.runtimeConfig,
-          context.config,
-        ].map((source) => source.subscribe(notify))
-      : [];
     const document = host.ownerDocument;
-    stops.push(
+    const stops = [
       installChatComposerPickerDismissal(document),
       listen(
         document,
@@ -331,8 +325,7 @@ function renderPageContent(host: PageHost) {
         true,
       ),
       listen(document.defaultView!, "beforeunload", owner.flushDraft),
-    );
-    notify();
+    ];
     return () => stops.forEach((stop) => stop());
   });
   const visibilityControl = {
@@ -428,11 +421,11 @@ function renderPageContent(host: PageHost) {
                       <DraftAgentSelect page={page} />
                     ) : undefined
                   }
-                  composer={<DraftBlock page={page} revision={revision} options={options} />}
+                  composer={<Draft />}
                 />
               }
             >
-              <DraftBlock page={page} revision={revision} options={options} />
+              <Draft />
             </Show>
           )}
           onOpenImage={owner.setImageLightbox}

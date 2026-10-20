@@ -36,7 +36,6 @@ const {
   }),
   commitBackgroundResultToSessionMock: vi.fn().mockResolvedValue({
     ok: true,
-    messageId: "current-completion-message",
   }),
   hasUnsettledCronDescendantsMock: vi.fn().mockResolvedValue(false),
   listDescendantRunsForRequesterMock: vi.fn().mockResolvedValue([]),
@@ -287,7 +286,6 @@ describe("dispatchCronDelivery", () => {
     });
     commitBackgroundResultToSessionMock.mockResolvedValue({
       ok: true,
-      messageId: "current-completion-message",
     });
     loadCronSessionEntryLatestMock.mockReturnValue({
       sessionId: "test-session-id",

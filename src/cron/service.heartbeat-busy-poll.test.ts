@@ -7,10 +7,11 @@ import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool
 import type { OpenClawConfig } from "../config/config.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "../infra/heartbeat-events.js";
 import {
-  runHeartbeatOnce,
-  startHeartbeatRunner,
-  type HeartbeatDeps,
-} from "../infra/heartbeat-runner.js";
+  bindHeartbeatReply,
+  bindHeartbeatSend,
+  type HeartbeatReplyFn,
+} from "../infra/heartbeat-runner.boundary-test-support.js";
+import { runHeartbeatOnce, startHeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "../infra/heartbeat-runner.test-harness.js";
 import {
   seedMainSessionStore,
@@ -106,6 +107,8 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
       await resources.cron?.waitForIdle();
       await vi.waitFor(() => expect(getActiveCronJobCount()).toBe(0));
       await scheduler.stop();
+      // Join watchdog recovery imports before retiring the fixture's module graph.
+      await vi.dynamicImportSettled();
     } finally {
       dispose();
       await closeOpenClawAgentDatabasesAsync();
@@ -158,20 +161,16 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
     lastTo: "12345",
     sessionId: "busy-session",
   });
-  const reply = vi.fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>().mockResolvedValue(
+  const reply = vi.fn<HeartbeatReplyFn>().mockResolvedValue(
     createHeartbeatToolResponsePayload({
       outcome: "progress",
       notify: false,
       summary: "Monitor completed",
     }),
   );
-  const deps: HeartbeatDeps = {
-    getReplyFromConfig: reply,
-    telegram: vi.fn().mockResolvedValue({ messageId: "m1", chatId: "12345" }),
-  };
-  const runOnce = vi.fn<typeof runHeartbeatOnce>((opts) =>
-    runHeartbeatOnce({ ...opts, deps: { ...opts.deps, ...deps } }),
-  );
+  bindHeartbeatReply(reply);
+  bindHeartbeatSend("telegram", vi.fn().mockResolvedValue({ messageId: "m1", chatId: "12345" }));
+  const runOnce = vi.fn<typeof runHeartbeatOnce>(runHeartbeatOnce);
   resources.runner = startHeartbeatRunner({ cfg, runOnce });
   const events: CronEvent[] = [];
   const finished = () => events.filter((event) => event.action === "finished");

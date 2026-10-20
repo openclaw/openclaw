@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -93,8 +94,15 @@ it.each(["clean", "unclean"])(
           ).toMatchObject({ ok: true });
         }
         expect(
-          sourceBackend.execute({ type: "vector.ensure", input: { dimensions: 3, state } }),
+          sourceBackend.execute({ type: "vector.ensure", input: { dimensions: 2, state } }),
         ).toMatchObject({ ok: true });
+        const resized = sourceBackend.execute({
+          type: "vector.ensure",
+          input: { dimensions: 3, state },
+        });
+        assert.ok(resized && typeof resized === "object" && "ok" in resized && resized.ok);
+        assert.ok(resized.searchSchema);
+        expect(resized.searchSchema.vector).toContain("FLOAT[3]");
         source.exec(`
           INSERT INTO memory_index_sources (path, source, hash, mtime, size)
             VALUES ('memory/reindexed.md', 'memory', 'new', 1, 1);
@@ -112,7 +120,7 @@ it.each(["clean", "unclean"])(
               sourceIdentity: readMemoryShadowIdentity(sourcePath),
               metaKey: "memory_index_meta_v1",
               expectedRevision: readMemoryDatabaseRevision(requireNativeSqliteDatabase(target.db)),
-              sourceHasVectors: true,
+              sourceSchema: resized.searchSchema,
               vectorIndexComplete: true,
               state,
             },

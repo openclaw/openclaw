@@ -19,9 +19,10 @@ import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execu
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
-import { parseCliOutput } from "../cli-output.js";
+import { formatCliOutputError, parseCliOutput } from "../cli-output.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "../embedded-agent-runner/run/lane-runtime.js";
-import type { FailoverError } from "../failover-error.js";
+import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { classifyFailoverReason } from "../failover/classify.js";
 import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
@@ -41,7 +42,6 @@ import {
   createCliTimeoutError,
   resolveCliNoOutputTimeoutDecision,
 } from "./no-output-timeout-policy.js";
-import { createCliOutputFailoverError } from "./output-error.js";
 import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
@@ -96,6 +96,38 @@ export async function executeCliProcess(params: {
     ...failoverContext,
     runId: runParams.runId,
     classifyErrorCode: context.backendResolved.classifyErrorCode,
+  };
+  const createOutputFailoverError = (output: CliOutput): FailoverError | undefined => {
+    if (!output.errorText) {
+      return undefined;
+    }
+    const message = formatCliOutputError(output, {
+      runId: outputErrorContext.runId,
+      sessionId: outputErrorContext.sessionId,
+    });
+    const terminalFailure = output.terminalFailure?.reason;
+    // Record terminal facts before provider hooks can throw or reclassify them;
+    // losing a max-turn stop here could replay tools in another model attempt.
+    const reason = terminalFailure
+      ? terminalFailure === "synthetic_no_response"
+        ? "format"
+        : "unknown"
+      : (classifyFailoverReason(message, { provider: outputErrorContext.provider }) ?? "unknown");
+    const code = terminalFailure
+      ? `cli_${terminalFailure}`
+      : reason === "context_overflow"
+        ? "cli_context_overflow"
+        : outputErrorContext.classifyErrorCode?.(output.errorText);
+    return new FailoverError(message, {
+      reason,
+      provider: outputErrorContext.provider,
+      model: outputErrorContext.model,
+      sessionId: outputErrorContext.sessionId,
+      lane: outputErrorContext.lane,
+      status: resolveFailoverStatus(reason),
+      code,
+      rawError: output.errorText,
+    });
   };
   // buildCliArgs emits this option only for an actual checkpointed resume.
   const resumeAtArg =
@@ -284,10 +316,10 @@ export async function executeCliProcess(params: {
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
         activeToolCount: params.events.activeParsedToolCount,
         compactionActive: params.events.hasActiveCompaction,
-        onCompactionActiveChange: params.events.onCompactionActiveChange,
+        setOnCompactionActiveChange: params.events.setOnCompactionActiveChange,
         getActiveLoopbackAskUserDeadline: params.toolTracking.getActiveLoopbackAskUserDeadline,
-        onActiveLoopbackAskUserDeadlineChange:
-          params.toolTracking.onActiveLoopbackAskUserDeadlineChange,
+        setOnActiveLoopbackAskUserDeadlineChange:
+          params.toolTracking.setOnActiveLoopbackAskUserDeadlineChange,
         onNoOutputTimeout: (error) => {
           pluginTimeout.error = error;
         },
@@ -482,10 +514,7 @@ export async function executeCliProcess(params: {
   // A completed terminal record is authoritative even if the CLI hangs
   // afterward. Reclassifying it as a timeout could replay completed tools.
   if (parsedStructuredOutput?.terminalFailure) {
-    const terminalError = createCliOutputFailoverError({
-      output: parsedStructuredOutput,
-      ...outputErrorContext,
-    });
+    const terminalError = createOutputFailoverError(parsedStructuredOutput);
     if (terminalError) {
       throw terminalError;
     }
@@ -604,10 +633,7 @@ export async function executeCliProcess(params: {
     };
   }
   const parsed = parsedStructuredOutput ?? parseOutput();
-  const parsedError = createCliOutputFailoverError({
-    output: parsed,
-    ...outputErrorContext,
-  });
+  const parsedError = createOutputFailoverError(parsed);
   if (parsedError) {
     throw parsedError;
   }

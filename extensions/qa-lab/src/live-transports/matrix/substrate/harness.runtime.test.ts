@@ -91,10 +91,8 @@ const awake = async () => {};
 function recordingProxy(targetBaseUrl: string, setTargetBaseUrl = vi.fn()) {
   return {
     baseUrl: targetBaseUrl,
-    buildManifest: vi.fn(),
     installFaultRule: vi.fn(() => ({ hits: () => [], remove: vi.fn() })),
     records: () => [],
-    setScenarioId: vi.fn(),
     setTargetBaseUrl,
     stop: vi.fn(awake),
   };
@@ -222,7 +220,6 @@ describe("matrix harness runtime", () => {
         sleepImpl: vi.fn(awake),
         startRecordingProxyImpl: vi.fn(async ({ targetBaseUrl }) => ({
           ...recordingProxy(targetBaseUrl, setTargetBaseUrl),
-          createExchangeContext: vi.fn(),
           onExchange: vi.fn(),
         })),
       },
@@ -323,9 +320,7 @@ describe("matrix harness runtime", () => {
       ({ result }) => {
         expect(result.baseUrl).toBe(container);
         expect(fetchCalls).toEqual(
-          [host, host, container, host, container, container].map(
-            (url) => `${url}_matrix/client/versions`,
-          ),
+          [host, host, container, host, container].map((url) => `${url}_matrix/client/versions`),
         );
       },
     );

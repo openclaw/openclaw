@@ -225,14 +225,9 @@ export function ensureGatewayOwnerProfile(
   const displayName = normalizeInitialDisplayName(initialDisplayName);
   ensureUserProfilesSchema(options);
   const { db: reader } = openOpenClawStateDatabase(options);
-  const found = runSqliteReadSnapshotSync(reader, () => {
-    const { existing, identified } = readGatewayOwnerProfileForEnsure(reader);
-    return existing && identified && (!displayName || existing.display_name?.trim())
-      ? existing
-      : undefined;
-  });
-  if (found) {
-    return toUserProfile(found);
+  const { existing, identified } = readGatewayOwnerProfileForEnsure(reader);
+  if (existing && identified && (!displayName || existing.display_name?.trim())) {
+    return toUserProfile(existing);
   }
   return runUserProfileWriteTransaction(
     ({ db }) => toUserProfile(ensureGatewayOwnerProfileRow(db, displayName, options.mutation)),

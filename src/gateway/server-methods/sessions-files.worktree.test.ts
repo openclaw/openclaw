@@ -90,9 +90,13 @@ describe("sessions.files for managed-worktree sessions", () => {
         );
       };
       try {
-        await expect(dispatch("sessions.files.get", "preview.html")).rejects.toThrow(
-          "Session workspace changed during file read",
-        );
+        const response = await dispatch("sessions.files.get", "preview.html");
+        expect(hooks.duringSettlement).toBeUndefined();
+        expect(response).toHaveBeenCalledOnce();
+        expect(response.mock.calls[0]?.[0]).toBe(false);
+        expect(response.mock.calls[0]?.[2]).toMatchObject({
+          message: "Session workspace changed during file access",
+        });
       } finally {
         hooks.duringSettlement = undefined;
       }

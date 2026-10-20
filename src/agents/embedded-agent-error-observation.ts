@@ -93,13 +93,14 @@ function buildObservationFingerprint(params: {
 
 export function buildApiErrorObservationFields(
   rawError?: string,
-  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner },
+  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner; code?: string },
 ): {
   rawErrorPreview?: string;
   rawErrorHash?: string;
   rawErrorFingerprint?: string;
   httpCode?: string;
   providerRuntimeFailureKind?: ProviderRuntimeFailureKind;
+  providerErrorCode?: string;
   providerErrorType?: string;
   providerErrorMessagePreview?: string;
   requestIdHash?: string;
@@ -141,6 +142,7 @@ export function buildApiErrorObservationFields(
         },
         { providerPlugin: opts?.providerOwner ?? null },
       ),
+      providerErrorCode: redactObservationText(opts?.code ?? parsed?.code),
       providerErrorType: redactObservationText(parsed?.type),
       providerErrorMessagePreview: truncateForObservation(
         redactedProviderMessage,

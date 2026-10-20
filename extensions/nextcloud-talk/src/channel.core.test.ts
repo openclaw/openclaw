@@ -1,10 +1,6 @@
 // Nextcloud Talk tests cover channel.core plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  nextcloudTalkConfigAdapter,
-  nextcloudTalkPairingTextAdapter,
-  nextcloudTalkSecurityAdapter,
-} from "./channel.adapters.js";
+import { nextcloudTalkPlugin } from "./channel.js";
 import { NextcloudTalkChannelConfigSchema } from "./config-schema.js";
 import type { CoreConfig } from "./types.js";
 
@@ -100,7 +96,7 @@ describe("nextcloud talk channel core", () => {
   });
 
   it("normalizes trimmed DM allowlist prefixes to lowercase ids", () => {
-    const resolveDmPolicy = nextcloudTalkSecurityAdapter.resolveDmPolicy;
+    const resolveDmPolicy = nextcloudTalkPlugin.security?.resolveDmPolicy;
     if (!resolveDmPolicy) {
       throw new Error("resolveDmPolicy unavailable");
     }
@@ -118,7 +114,7 @@ describe("nextcloud talk channel core", () => {
 
     const result = resolveDmPolicy({
       cfg,
-      account: nextcloudTalkConfigAdapter.resolveAccount(cfg, "default"),
+      account: nextcloudTalkPlugin.config.resolveAccount(cfg, "default"),
     });
     if (!result) {
       throw new Error("nextcloud-talk resolveDmPolicy returned null");
@@ -127,7 +123,7 @@ describe("nextcloud talk channel core", () => {
     expect(result.policy).toBe("allowlist");
     expect(result.allowFrom).toEqual(["  nc:User-Id  "]);
     expect(result.normalizeEntry?.("  nc:User-Id  ")).toBe("user-id");
-    expect(nextcloudTalkPairingTextAdapter.normalizeAllowEntry("  nextcloud-talk:User-Id  ")).toBe(
+    expect(nextcloudTalkPlugin.pairing?.normalizeAllowEntry?.("  nextcloud-talk:User-Id  ")).toBe(
       "user-id",
     );
   });

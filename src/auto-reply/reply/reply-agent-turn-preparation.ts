@@ -109,7 +109,6 @@ type PrepareReplyAgentTurnParams<TConfigured> = {
   providedReplyOperation?: ReplyOperation;
   rotationEvidence?: ReturnType<typeof createReplyTurnRotationEvidence>;
   claimSource?: () => Promise<SessionControllerMailboxClaim | undefined>;
-  onBeforeClaimWait?: () => void;
   onOperationOwned?: (operation: ReplyOperation) => boolean | void;
   configure?: (config: OpenClawConfig) => Promise<TConfigured> | TConfigured;
   signalRunStart?: () => Promise<void>;
@@ -155,7 +154,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
     if (claimQueuedFirst) {
       mailboxClaim = await claimSessionControllerInput(params.queued);
     }
-    params.onBeforeClaimWait?.();
     if (!claimQueuedFirst && !params.providedReplyOperation) {
       mailboxClaim = await params.claimSource?.();
     }

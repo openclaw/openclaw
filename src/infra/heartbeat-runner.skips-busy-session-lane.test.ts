@@ -26,7 +26,11 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { getAgentEventLifecycleGeneration } from "./agent-events.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
-import { type HeartbeatDeps, runHeartbeatOnce } from "./heartbeat-runner.js";
+import {
+  bindHeartbeatReply,
+  observeHeartbeatSend,
+} from "./heartbeat-runner.boundary-test-support.js";
+import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import {
   type HeartbeatReplySpy,
   seedHeartbeatScratchForTest,
@@ -67,9 +71,10 @@ beforeEach(() => {
 });
 afterEach(() => resetHeartbeatEventsForTest());
 
-type RunOverrides = Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps">;
+type RunOverrides = Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg">;
 type SessionSeed = Partial<Parameters<typeof seedMainSessionStore>[2]>;
 function createCase({ storePath, replySpy }: { storePath: string; replySpy: HeartbeatReplySpy }) {
+  bindHeartbeatReply(replySpy);
   const cfg: OpenClawConfig = {
     session: { store: storePath },
     agents: {
@@ -88,15 +93,10 @@ function createCase({ storePath, replySpy }: { storePath: string; replySpy: Hear
         lastTo: "123",
         ...entry,
       }),
-    run: (overrides: RunOverrides = {}, deps: Partial<HeartbeatDeps> = {}) =>
+    run: (overrides: RunOverrides = {}) =>
       runHeartbeatOnce({
         cfg,
         ...overrides,
-        deps: {
-          nowMs: () => Date.now(),
-          getReplyFromConfig: replySpy,
-          ...deps,
-        },
       }),
   };
 }
@@ -319,8 +319,8 @@ describe("heartbeat runner skips when target session is busy", () => {
           return { text: "Background work finished." };
         },
       );
-      const telegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" });
-      expect(await run({}, { telegram })).toEqual({ status: "skipped", reason: "preempted" });
+      const telegram = observeHeartbeatSend("telegram");
+      expect(await run()).toEqual({ status: "skipped", reason: "preempted" });
       expect(preempt).toHaveBeenCalledOnce();
       expect(telegram).not.toHaveBeenCalled();
     }),
@@ -497,8 +497,8 @@ describe("heartbeat runner skips when target session is busy", () => {
         },
       });
       replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-      const telegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "default" });
-      expect((await run({}, { telegram })).status).toBe("ran");
+      const telegram = observeHeartbeatSend("telegram");
+      expect((await run()).status).toBe("ran");
       expect(replySpy).toHaveBeenCalledOnce();
       expect(replySpy.mock.calls[0]?.[1]).toMatchObject({ isHeartbeat: true });
       expect(telegram).not.toHaveBeenCalled();

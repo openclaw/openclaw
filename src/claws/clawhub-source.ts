@@ -159,7 +159,23 @@ function projectOfficialEntries(packages: unknown[]): ClawHubClawCatalogEntry[] 
   return packages.filter(isOfficialClawListItem).map(projectCatalogEntry);
 }
 
-function readExactClawArtifact(value: unknown, coordinate: ClawHubCoordinate) {
+function readExactClawArtifact(
+  response: Awaited<ReturnType<typeof fetchClawHubPackageArtifact>>,
+  coordinate: ClawHubCoordinate,
+) {
+  const artifactVersion =
+    typeof response.version === "string" ? response.version : response.version?.version;
+  if (
+    response.package?.name !== coordinate.packageName ||
+    response.package.family !== "claw" ||
+    artifactVersion !== coordinate.version
+  ) {
+    throw new ClawHubSourceError(
+      "clawhub_identity_mismatch",
+      "ClawHub artifact identity does not match the selected release.",
+    );
+  }
+  const value: unknown = response.artifact;
   if (!isJsonObject(value)) {
     throw new ClawHubSourceError(
       "clawhub_artifact_unavailable",
@@ -344,21 +360,7 @@ async function readClawHubClawContents(
     ...params,
     name: params.packageName,
   });
-  const artifactVersion =
-    typeof artifactResponse.version === "string"
-      ? artifactResponse.version
-      : artifactResponse.version?.version;
-  if (
-    artifactResponse.package?.name !== params.packageName ||
-    artifactResponse.package.family !== "claw" ||
-    artifactVersion !== params.version
-  ) {
-    throw new ClawHubSourceError(
-      "clawhub_identity_mismatch",
-      "ClawHub artifact identity does not match the selected release.",
-    );
-  }
-  const expected = readExactClawArtifact(artifactResponse.artifact, params);
+  const expected = readExactClawArtifact(artifactResponse, params);
   const download = await downloadClawHubPackageArchive({
     name: params.packageName,
     version: params.version,
@@ -366,7 +368,6 @@ async function readClawHubClawContents(
     ...(params.baseUrl ? { baseUrl: params.baseUrl } : {}),
     ...(params.token ? { token: params.token } : {}),
     timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
-    ...(params.fetchImpl ? { fetchImpl: params.fetchImpl } : {}),
   });
   try {
     if (
@@ -509,19 +510,7 @@ export async function withResolvedClawHubSource<T>(
   const detail = await fetchClawHubPackageDetail({ ...params, name: packageName });
   requireOfficialClawPackage(detail, packageName);
   const artifact = await fetchClawHubPackageArtifact({ ...params, name: packageName, version });
-  const artifactVersion =
-    typeof artifact.version === "string" ? artifact.version : artifact.version?.version;
-  if (
-    artifact.package?.name !== packageName ||
-    artifact.package.family !== "claw" ||
-    artifactVersion !== version
-  ) {
-    throw new ClawHubSourceError(
-      "clawhub_identity_mismatch",
-      "ClawHub artifact identity does not match the selected release.",
-    );
-  }
-  const resolvedArtifact = readExactClawArtifact(artifact.artifact, params.coordinate);
+  const resolvedArtifact = readExactClawArtifact(artifact, params.coordinate);
   const expectedSha256 = resolvedArtifact.sha256;
   const trust = await checkClawHubPackageTrust({
     subject: { kind: "claw", packageName },
@@ -536,7 +525,6 @@ export async function withResolvedClawHubSource<T>(
     baseUrl: params.baseUrl,
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
   if (!trust.ok) {
     throw new ClawHubSourceError(trust.code ?? "clawhub_trust_failed", trust.error, trust.warning);
@@ -563,7 +551,6 @@ export async function withResolvedClawHubSource<T>(
     baseUrl: params.baseUrl,
     token: params.token,
     timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
-    fetchImpl: params.fetchImpl,
   });
   try {
     if (

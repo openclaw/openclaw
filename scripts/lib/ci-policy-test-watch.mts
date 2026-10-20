@@ -596,7 +596,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "extensions/minimax/index.ts",
       "extensions/minimax/oauth.runtime.ts",
       "extensions/minimax/oauth.ts",
-      "extensions/minimax/provider-registration.ts",
     ],
   },
   {

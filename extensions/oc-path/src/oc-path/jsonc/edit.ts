@@ -73,10 +73,10 @@ function applyJsoncEdit(
 
   const nextRaw = applyEdits(ast.raw, edits);
   const reparsed = parseJsonc(nextRaw);
-  if (reparsed.ast.root === null) {
+  if (reparsed.root === null) {
     throw new OcPathEditError("unresolved");
   }
-  return reparsed.ast;
+  return reparsed;
 }
 
 function guardSentinel(value: JsoncValue, guardPath: string): void {

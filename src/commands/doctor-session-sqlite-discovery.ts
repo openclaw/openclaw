@@ -39,6 +39,7 @@ import {
   canonicalMigrationFilePath,
   assertSafeSessionSqliteMigrationDirectory,
   type SessionSqliteMigrationMove,
+  type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   readLegacyPrimaryTranscriptIdentity,
@@ -83,6 +84,7 @@ export function collectHistoricalArchiveSources(params: {
   const result: HistoricalArchiveSources = new Map();
   const inventory = collectRecoveryInventory(params);
   const claims = new Map<string, RecoveryArtifactReference[][]>();
+  const completedArchives = new Map<SessionSqliteMigrationTargetManifest, Set<string>>();
   for (const refs of inventory.references.values()) {
     if (refs.some((ref) => !ref.trusted || ref.consumedByRestore)) {
       continue;
@@ -126,18 +128,26 @@ export function collectHistoricalArchiveSources(params: {
         identity.size,
         identity.sha256,
       ]);
-      claims.set(key, [...(claims.get(key) ?? []), refs]);
+      const group = claims.get(key) ?? [];
+      group.push(refs);
+      claims.set(key, group);
     }
     if (refs.some((ref) => ref.move.artifact?.disposal.state !== "retained")) {
       continue;
     }
     // An acknowledged import stays acknowledged after explicit user deletion. Never resurrect it.
     if (
-      refs.some(
-        ({ target, move }) =>
-          move.artifact?.reason === HISTORICAL_IMPORT_REASON &&
-          target.completedMoves.some((completed) => completed.archivePath === move.archivePath),
-      )
+      refs.some(({ target, move }) => {
+        if (move.artifact?.reason !== HISTORICAL_IMPORT_REASON) {
+          return false;
+        }
+        let paths = completedArchives.get(target);
+        if (!paths) {
+          paths = new Set(target.completedMoves.map((completed) => completed.archivePath));
+          completedArchives.set(target, paths);
+        }
+        return paths.has(move.archivePath);
+      })
     ) {
       continue;
     }

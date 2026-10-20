@@ -89,7 +89,6 @@ describe("chat pane board loading states", () => {
       const view = container.querySelector("openclaw-board-view")!;
       await view.updateComplete;
       const skeleton = container.querySelector("openclaw-panel-loading-skeleton");
-      await skeleton?.updateComplete;
       expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("board");
       expect(skeleton?.getAttribute("role")).toBe("status");
       expect(container.textContent?.trim()).toBe("");

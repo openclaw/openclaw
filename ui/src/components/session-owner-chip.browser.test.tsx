@@ -1,3 +1,4 @@
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { BUILTIN_THEME_IDS } from "../../../packages/gateway-protocol/src/theme-ids.ts";
@@ -6,8 +7,8 @@ import { resolveTheme, syncThemePaletteStylesheet, type ThemeName } from "../app
 import { TYPEFACES, resolveTypefaces, syncTypefaceStylesheets } from "../app/typography.ts";
 import { runningRow } from "../test-helpers/app-sidebar-session-narration.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { SessionOwnerChip } from "./solid/session-owner-chip.tsx";
 import { renderSessionLeadingState } from "./solid/session-presentation.tsx";
-import "./solid/session-owner-chip.tsx";
 
 const participants = [{ identity: { type: "profile" as const, id: "profile-bob" }, label: "Bob" }];
 const ada = { type: "human" as const, id: "profile-ada", label: "Ada" };
@@ -170,10 +171,8 @@ afterEach(() => {
   }
 });
 
-async function readyAvatars(chip: HTMLElementTagNameMap["openclaw-session-owner-chip"]) {
-  await chip.updateComplete;
-  const avatars = [...chip.querySelectorAll("openclaw-viewer-avatar")];
-  await Promise.all(avatars.map((avatar) => avatar.updateComplete));
+async function readyAvatars(chip: HTMLElement) {
+  flush();
   await expect
     .poll(() =>
       [...chip.querySelectorAll<HTMLElement>(".viewer-avatar")].map((a) => a.dataset.avatarState),
@@ -202,6 +201,9 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
     async ({ theme, mode, ownerCount, presence, pinned }) => {
       await applyTheme(theme, mode);
       const { sidebar, row, indicator } = sidebarFixture(pinned);
+      const [ownerViewing, setOwnerViewing] = createSignal<boolean | undefined>(
+        presence === "away" ? false : undefined,
+      );
       mountSolid(
         () =>
           renderSessionLeadingState({
@@ -216,13 +218,15 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
             },
             ownerActor: { ...ada, identity },
             attribution: "owned",
-            ownerViewing: presence === "away" ? false : undefined,
+            get ownerViewing() {
+              return ownerViewing();
+            },
           }).leadingIndicator,
         { container: indicator },
       );
       // Contrast is measured at each interaction endpoint, outside its transition.
       row.style.transition = "none";
-      const chip = sidebar.querySelector("openclaw-session-owner-chip")!;
+      const chip = sidebar.querySelector<HTMLElement>("openclaw-session-owner-chip")!;
       await readyAvatars(chip);
       const stack = chip.querySelector<HTMLElement>(".session-owner-stack")!;
       const primary = chip.querySelector<HTMLElement>(".session-owner-stack__front")!;
@@ -334,8 +338,8 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
         ).toBeGreaterThanOrEqual(4.5);
       }
       if (theme === "claw" && presence === "away" && ownerCount === 3) {
-        chip.viewingNow = true;
-        await chip.updateComplete;
+        setOwnerViewing(true);
+        flush();
         await expect
           .poll(() => [primary, peer].map(appearance))
           .toEqual([0, 1].map(() => ({ opacity: "1", filter: "none" })));
@@ -358,12 +362,15 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
     "centers a single $size initial in $mode with profile=$profile",
     async ({ mode, size, profile }) => {
       await applyTheme("claw", mode);
-      const chip = document.createElement("openclaw-session-owner-chip");
-      chip.owner = profile ? { ...ada, identity } : ada;
-      chip.participants = participants;
-      chip.participantCount = 0;
-      chip.size = size;
-      document.body.append(chip);
+      const view = mountSolid(() => (
+        <SessionOwnerChip
+          owner={profile ? { ...ada, identity } : ada}
+          participants={participants}
+          participantCount={0}
+          size={size}
+        />
+      ));
+      const chip = view.container.querySelector<HTMLElement>("openclaw-session-owner-chip")!;
       await readyAvatars(chip);
       const owner = chip.querySelector<HTMLElement>(".session-owner-chip")!;
       if (size === "row") {

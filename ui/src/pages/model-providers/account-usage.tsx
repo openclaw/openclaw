@@ -7,7 +7,6 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -22,7 +21,10 @@ export type ModelAccountUsageElement = SolidBridgeElement<
   ModelAccountUsageProps,
   ModelAccountUsageMethods
 >;
-const inputChanges = new WeakMap<ModelAccountUsageElement, () => void>();
+const usageActions = new WeakMap<
+  ModelAccountUsageElement,
+  { inputChanged(): void; refresh(): void }
+>();
 
 declare global {
   interface HTMLElementTagNameMap {
@@ -69,31 +71,32 @@ function AccountUsage(props: ModelAccountUsageProps, host: ModelAccountUsageElem
   }
 
   onSettled(() => {
-    inputChanges.set(host, () => {
-      request.cancel();
-      if (!queued) {
-        queued = true;
-        // Native scope properties arrive separately during one render.
-        queueMicrotask(() => {
-          if (queued) {
-            refresh();
-          }
-        });
-      }
+    usageActions.set(host, {
+      refresh,
+      inputChanged() {
+        request.cancel();
+        if (!queued) {
+          queued = true;
+          // Native scope properties arrive separately during one render.
+          queueMicrotask(() => {
+            if (queued) {
+              refresh();
+            }
+          });
+        }
+      },
     });
-    const stop = listen(host, "model-account-usage-refresh", refresh);
     refresh();
     return () => {
-      inputChanges.delete(host);
+      usageActions.delete(host);
       queued = false;
-      stop();
       request.cancel();
     };
   });
-  const summary = createMemo(() => {
+  const summary = () => {
     const current = state();
     return current.phase === "complete" ? current.summary : undefined;
-  });
+  };
   const error = createMemo(() => {
     const current = state();
     return current.phase === "error" ? formatUiError(current.error) : undefined;
@@ -147,16 +150,14 @@ defineSolidBridge<ModelAccountUsageProps, ModelAccountUsageMethods>(
   "openclaw-model-account-usage",
   (props, host) => AccountUsage(props, host),
   {
-    propertyChanged: (host) => inputChanges.get(host)?.(),
+    propertyChanged: (host) => usageActions.get(host)?.inputChanged(),
     properties: {
       client: { default: null, attribute: false },
       agentId: { default: "" },
       profileId: { default: "" },
     },
     methods: {
-      refreshUsage: (host) => {
-        host.dispatchEvent(new Event("model-account-usage-refresh"));
-      },
+      refreshUsage: (host) => usageActions.get(host)?.refresh(),
     },
   },
 );

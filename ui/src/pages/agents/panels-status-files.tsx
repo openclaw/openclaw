@@ -1,10 +1,5 @@
 import { createMemo, For } from "solid-js";
-import type {
-  ChannelAccountSnapshot,
-  ChannelsStatusSnapshot,
-  CronJob,
-  CronStatus,
-} from "../../api/types.ts";
+import type { ChannelAccountSnapshot, ChannelsStatusSnapshot } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
 import {
@@ -18,6 +13,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import type { AgentContext } from "../../lib/agents/display.ts";
 import type { AgentsPanel } from "../../lib/agents/index.ts";
 import { resolveChannelExtras as resolveChannelExtrasFromConfig } from "../../lib/channels/index.ts";
+import type { CronState } from "../../lib/cron/types.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import {
   formatCronPayload,
@@ -26,6 +22,7 @@ import {
   formatNextRun,
 } from "../../lib/presenter.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentPanelAction } from "./panel-ui.tsx";
 import { renderAgentContextSection } from "./panels-overview.tsx";
 
@@ -84,19 +81,19 @@ function summarizeChannelAccounts(accounts: ChannelAccountSnapshot[]) {
   };
 }
 
-export function AgentChannels(params: {
-  context: AgentContext;
-  configForm: Record<string, unknown> | null;
-  snapshot: ChannelsStatusSnapshot | null;
-  loading: boolean;
-  error: string | null;
-  lastSuccess: number | null;
-  onRefresh: () => void;
-  onSelectPanel: (panel: AgentsPanel) => void;
-}) {
-  const entries = createMemo(() => resolveChannelEntries(params.snapshot));
+export function AgentChannels(
+  params: AgentsPageView["channels"] & {
+    context: AgentContext;
+    configForm: Record<string, unknown> | null;
+    readState: AgentsPageView["readChannels"];
+    onSelectPanel: (panel: AgentsPanel) => void;
+  },
+) {
+  const entries = createMemo(() => resolveChannelEntries(params.readState().channelsSnapshot));
   const lastSuccessLabel = createMemo(() =>
-    params.lastSuccess ? formatRelativeTimestamp(params.lastSuccess) : t("common.never"),
+    params.readState().channelsLastSuccess
+      ? formatRelativeTimestamp(params.readState().channelsLastSuccess)
+      : t("common.never"),
   );
   return (
     <>
@@ -105,8 +102,10 @@ export function AgentChannels(params: {
         t("agents.context.configurationSubtitle"),
         params.onSelectPanel,
       )}
-      {params.error ? <div class="callout danger">{params.error}</div> : undefined}
-      {!params.snapshot ? (
+      {params.readState().channelsError ? (
+        <div class="callout danger">{params.readState().channelsError}</div>
+      ) : undefined}
+      {!params.readState().channelsSnapshot ? (
         <div class="callout info">{t("agents.channels.loadHint")}</div>
       ) : undefined}
       <SettingsSection
@@ -119,8 +118,10 @@ export function AgentChannels(params: {
         }
         actions={
           <AgentPanelAction
-            label={params.loading ? t("common.refreshing") : t("common.refresh")}
-            disabled={params.loading}
+            label={
+              params.readState().channelsLoading ? t("common.refreshing") : t("common.refresh")
+            }
+            disabled={params.readState().channelsLoading}
             onClick={params.onRefresh}
           />
         }
@@ -184,24 +185,15 @@ export function AgentChannels(params: {
   );
 }
 
-export function AgentCron(params: {
-  basePath: string;
-  context: AgentContext;
-  jobs: CronJob[];
-  jobsTotal: number;
-  jobsHasMore: boolean;
-  jobsLoadingMore: boolean;
-  status: CronStatus | null;
-  scopedTotal: number | null;
-  scopedNextWakeAtMs: number | null;
-  loading: boolean;
-  error: string | null;
-  canRunNow: boolean;
-  onRefresh: () => void;
-  onLoadMore: () => void;
-  onRunNow: (jobId: string) => void;
-  onSelectPanel: (panel: AgentsPanel) => void;
-}) {
+export function AgentCron(
+  params: AgentsPageView["cron"] & {
+    basePath: string;
+    context: AgentContext;
+    readState: () => CronState;
+    canRunNow: boolean;
+    onSelectPanel: (panel: AgentsPanel) => void;
+  },
+) {
   return (
     <>
       {renderAgentContextSection(
@@ -209,14 +201,16 @@ export function AgentCron(params: {
         t("agents.context.schedulingSubtitle"),
         params.onSelectPanel,
       )}
-      {params.error ? <div class="callout danger">{params.error}</div> : undefined}
+      {params.readState().cronError ? (
+        <div class="callout danger">{params.readState().cronError}</div>
+      ) : undefined}
       <SettingsSection
         title={t("agents.cronPanel.schedulerTitle")}
         description={t("agents.cronPanel.schedulerSubtitle")}
         actions={
           <AgentPanelAction
-            label={params.loading ? t("common.refreshing") : t("common.refresh")}
-            disabled={params.loading}
+            label={params.readState().cronLoading ? t("common.refreshing") : t("common.refresh")}
+            disabled={params.readState().cronLoading}
             onClick={params.onRefresh}
           />
         }
@@ -226,16 +220,20 @@ export function AgentCron(params: {
             [
               [
                 t("common.enabled"),
-                params.status
-                  ? params.status.enabled
+                params.readState().cronStatus
+                  ? params.readState().cronStatus?.enabled
                     ? t("common.yes")
                     : t("common.no")
                   : t("common.na"),
               ],
-              [t("agents.cronPanel.jobs"), params.scopedTotal ?? t("common.na")],
+              [t("agents.cronPanel.jobs"), params.readState().cronScopedTotal ?? t("common.na")],
               [
                 t("agents.cronPanel.nextWake"),
-                formatNextRun(params.status?.enabled === false ? null : params.scopedNextWakeAtMs),
+                formatNextRun(
+                  params.readState().cronStatus?.enabled === false
+                    ? null
+                    : params.readState().cronScopedNextWakeAtMs,
+                ),
               ],
             ] as const
           }
@@ -249,11 +247,11 @@ export function AgentCron(params: {
         title={t("agents.cronPanel.agentJobsTitle")}
         description={t("agents.cronPanel.agentJobsSubtitle")}
       >
-        {params.jobs.length === 0 ? (
+        {params.readState().cronJobs.length === 0 ? (
           <SettingsEmpty message={t("agents.cronPanel.noJobs")} />
         ) : (
           <>
-            <For each={params.jobs} keyed={(job) => job.id}>
+            <For each={params.readState().cronJobs} keyed={(job) => job.id}>
               {(job) => {
                 const description = createMemo(() =>
                   [
@@ -295,11 +293,11 @@ export function AgentCron(params: {
               }}
             </For>
             <CronJobsPagination
-              jobsShown={params.jobs.length}
-              jobsTotal={params.jobsTotal}
-              hasMore={params.jobsHasMore}
-              loading={params.loading}
-              loadingMore={params.jobsLoadingMore}
+              jobsShown={params.readState().cronJobs.length}
+              jobsTotal={params.readState().cronJobsTotal}
+              hasMore={params.readState().cronJobsHasMore}
+              loading={params.readState().cronLoading}
+              loadingMore={params.readState().cronJobsLoadingMore}
               onLoadMore={params.onLoadMore}
             />
           </>

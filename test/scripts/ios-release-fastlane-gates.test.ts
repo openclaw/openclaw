@@ -1381,6 +1381,14 @@ end
     expect(captureJob).not.toContain("OPENCLAW_SNAPSHOT_SKIP_WATCH");
     expect(captureJob).not.toContain("run_ios_fastlane ios watch_screenshot");
     expect(captureJob).toContain("run: pnpm ios:screenshots");
+    const runtimeProvision = "xcodebuild -downloadPlatform watchOS -buildVersion 27.0";
+    expect(captureJob).toContain(runtimeProvision);
+    expect(captureJob.indexOf("*select_xcode_step")).toBeLessThan(
+      captureJob.indexOf(runtimeProvision),
+    );
+    expect(captureJob.indexOf(runtimeProvision)).toBeLessThan(
+      captureJob.indexOf("run: pnpm ios:screenshots"),
+    );
     expect(captureJob).toContain("id: package_screenshot_evidence");
     expect(captureJob).not.toContain("--family");
     expect(

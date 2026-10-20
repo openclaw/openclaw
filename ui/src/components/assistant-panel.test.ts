@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import type { SystemAgentChatHistoryResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { AssistantDock } from "../app/assistant-dock.ts";
@@ -28,27 +29,40 @@ import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-t
 import "./assistant-panel-solid.tsx";
 import "./assistant-panel-content.ts";
 
-vi.mock("./home-session.runtime.ts", () => {
-  if (!customElements.get("openclaw-home-session")) {
-    customElements.define("openclaw-home-session", class extends HTMLElement {});
-  }
-  return {};
-});
+type HomeProps = Parameters<typeof import("./home-session-solid.tsx").HomeSession>[0];
+type TestHome = HTMLElement & HomeProps;
+
+// mock-isolation: The parent panel owns orchestration; Home is an opaque renderer.
+vi.mock("./home-session-solid.tsx", () => ({
+  HomeSession(props: HomeProps) {
+    const host = document.createElement("openclaw-home-session");
+    for (const key of ["sessionKey", "agentId", "workContext"] as const) {
+      Object.defineProperty(host, key, { get: () => props[key] });
+    }
+    return host;
+  },
+}));
 
 type TestAssistantPanel = HTMLElementTagNameMap["openclaw-assistant-panel"];
 
 async function mountPanel({
   global,
+  history,
   ...options
-}: Partial<TestAssistantPanel> & { global?: boolean } = {}) {
-  const request = vi.fn().mockResolvedValue({
-    sessionId: "panel-session",
-    reply: "Ready.",
-    action: "none",
-  });
+}: Partial<TestAssistantPanel> & {
+  global?: boolean;
+  history?: SystemAgentChatHistoryResult;
+} = {}) {
+  const reply = { sessionId: "panel-session", reply: "Ready.", action: "none" };
+  const request = vi.fn().mockResolvedValue(reply);
+  if (history) {
+    request.mockImplementation(async (method: string) =>
+      method === "openclaw.chat.history" ? history : reply,
+    );
+  }
   const { context: baseContext, setGatewaySnapshot } = createContext(
     request,
-    ["openclaw.chat", "chat.history", "chat.send"],
+    ["openclaw.chat", "chat.history", "chat.send", ...(history ? ["openclaw.chat.history"] : [])],
     {
       agentsList: {
         defaultId: "main",
@@ -89,7 +103,7 @@ async function click(panel: TestAssistantPanel, selector: string) {
   await panel.updateComplete;
 }
 function home(panel: ParentNode) {
-  return panel.querySelector("openclaw-home-session");
+  return panel.querySelector<TestHome>("openclaw-home-session");
 }
 async function toggle(panel: TestAssistantPanel, event: string, detail?: object) {
   window.dispatchEvent(new CustomEvent(event, { detail }));
@@ -133,10 +147,6 @@ async function restoreHomePanel() {
 function researchAgents(workspace: string) {
   return [{ id: "main" }, { id: "research", workspace }];
 }
-function message(id: number, role: "assistant" | "user", text: string) {
-  return { id, role, text, at: id, question: null, step: null };
-}
-
 describe("assistant panel", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -634,11 +644,18 @@ describe("assistant panel", () => {
   );
 
   it("minimizes the existing onboarding conversation when available", async () => {
-    const { context, panel, request, store, dom } = await mountPanel();
-    store.connect(context, "onboarding");
-    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     const userText = "Continue setup";
-    store.messages = [message(1, "assistant", "Set up your system"), message(2, "user", userText)];
+    const { context, panel, request, store, dom } = await mountPanel({
+      history: {
+        turns: [
+          { role: "assistant", text: "Set up your system", at: 1 },
+          { role: "user", text: userText, at: 2 },
+        ],
+      },
+    });
+    store.connect(context, "onboarding");
+    const chatRequests = () => request.mock.calls.filter(([method]) => method === "openclaw.chat");
+    await vi.waitFor(() => expect(chatRequests()).toHaveLength(1));
     await update(panel, {
       custodianAvailable: true,
       custodianSuppressed: false,
@@ -651,7 +668,7 @@ describe("assistant panel", () => {
     await surface?.updateComplete;
     expect(panel.assistantPanelOpen).toBe(true);
     expect(store.activeVariant).toBe("onboarding");
-    expect(request).toHaveBeenCalledOnce();
+    expect(chatRequests()).toHaveLength(1);
     expect(panel.textContent).toContain(userText);
     expect(reserveRight()).toBe("440px");
     await click(panel, ".assistant-panel-actions .assistant-panel-icon:last-child");

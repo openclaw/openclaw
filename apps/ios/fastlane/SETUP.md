@@ -4,7 +4,7 @@ Install the pinned Ruby bundle:
 
 ```bash
 cd apps/ios
-# Install Ruby 3.4.11 with mise or another .ruby-version-aware manager.
+# Install Ruby 4.0.7 with mise or another .ruby-version-aware manager.
 ruby --version
 gem install bundler -v 4.0.22
 bundle _4.0.22_ install

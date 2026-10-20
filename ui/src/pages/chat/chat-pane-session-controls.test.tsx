@@ -6,6 +6,7 @@ import type {
   ChatAccountSelection,
   UsersListModelAccountsResult,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
@@ -760,7 +761,11 @@ describe("chat pane model controls", () => {
           queueMode: "steer",
           idempotencyKey: steer.sendRunId,
         }),
-        { timeoutMs: 30_000 },
+        {
+          timeoutMs: GATEWAY_STARTUP_ADMISSION_WAIT_MS,
+          signal: expect.any(AbortSignal),
+          retainSentResultOnAbort: true,
+        },
       ),
     );
     expect(state.chatSending).toBe(true);

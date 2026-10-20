@@ -11,7 +11,7 @@ import {
 import { loadChatHistory } from "./chat-history.ts";
 import { projectChatReasoning } from "./chat-reasoning.ts";
 import { buildCachedChatItems, getChatItemsGeneration } from "./chat-thread.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatInto } from "./chat-view.test-helpers.ts";
 import { projectTranscriptChain } from "./components/chat-transcript-message-index.ts";
 import {

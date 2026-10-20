@@ -3,6 +3,7 @@ import type { HttpInstance, HttpRequestOptions } from "@larksuiteoapi/node-sdk";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { buildFeishuAgentBody } from "./bot-agent-body.js";
+import { FeishuConfigSchema } from "./config-schema.js";
 import {
   editMessageFeishu,
   getMessageFeishu,
@@ -100,7 +101,7 @@ beforeEach(() => {
   mockResolveFeishuAccount.mockReturnValue({
     accountId: "default",
     configured: true,
-    config: {},
+    config: FeishuConfigSchema.parse({}),
   });
   mockCreateFeishuClient.mockReturnValue({
     im: {

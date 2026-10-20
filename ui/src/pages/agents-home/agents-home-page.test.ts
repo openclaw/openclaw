@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal } from "solid-js";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayEventListener } from "../../api/gateway.ts";
 import type {
@@ -42,8 +42,7 @@ const roster: AgentsListResult = {
   ],
 };
 
-function createPage(initiallyActive = true) {
-  const [active, setActive] = createSignal(initiallyActive);
+function createPage() {
   let sessions: GatewaySessionRow[] = [
     {
       key: "agent:harbor:team-room",
@@ -151,15 +150,7 @@ function createPage(initiallyActive = true) {
   const baselineEventListeners = eventListeners.size;
   const provider = createSolidApplicationContextProvider(context);
   const mountPage = () =>
-    mountSolid(
-      () =>
-        createComponent(AgentsHomePage, {
-          get active() {
-            return active();
-          },
-        }),
-      { wrapper: provider.wrapper },
-    );
+    mountSolid(() => createComponent(AgentsHomePage, {}), { wrapper: provider.wrapper });
   const view = mountPage();
   disposers.push(() => {
     agents.dispose();
@@ -171,7 +162,6 @@ function createPage(initiallyActive = true) {
     mountPage,
     rosterListenerCount: () => eventListeners.size - baselineEventListeners,
     request,
-    setActive,
     navigate,
     updateSessions: (next: GatewaySessionRow[]) => {
       sessions = next;
@@ -214,21 +204,6 @@ describe("AgentsHomePage", () => {
     expect(create?.title).toContain("reconnect");
     create?.click();
     expect(navigate).not.toHaveBeenCalled();
-  });
-
-  it("waits until an initially inactive page is shown before loading its roster", async () => {
-    const { page, request, setActive } = createPage(false);
-    await waitForSolid(() => expect(page.querySelector(".agents-home")).not.toBeNull());
-    expect(request).not.toHaveBeenCalled();
-    expect(page.querySelectorAll(".agents-home__card")).toHaveLength(0);
-
-    setActive(true);
-    await waitForSolid(() => expect(page.querySelectorAll(".agents-home__card")).toHaveLength(2));
-    expect(request).toHaveBeenCalledWith("agents.list", { includeSessionPlacement: true });
-    expect(request).toHaveBeenCalledWith(
-      "sessions.list",
-      expect.objectContaining({ includeLastMessage: true, archived: "all" }),
-    );
   });
 
   it("shows the configured roster, prioritizes work across sessions, and opens the canonical main chat", async () => {

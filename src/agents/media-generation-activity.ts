@@ -10,6 +10,7 @@ export type MediaGenerationOperation = {
   runId?: string;
   taskKind: string;
   sourceId?: string;
+  requestKey?: string;
   requesterSessionKey: string;
   requesterAgentId?: string;
   task?: string;
@@ -170,6 +171,7 @@ export function updateMediaGenerationOperation(
   update: Partial<
     Pick<
       MediaGenerationOperation,
+      | "requestKey"
       | "status"
       | "endedAt"
       | "lastEventAt"

@@ -1,13 +1,4 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  getOwner,
-  onCleanup,
-  onSettled,
-  runWithOwner,
-  Show,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import {
@@ -44,7 +35,6 @@ import { notifyRenderLifecycleForTest } from "./render-lifecycle.ts";
 
 /** One Solid owner publishes, mounts, and retires the synchronous pane runtime. */
 export function createChatPaneView(runtime: ChatPaneRuntime) {
-  const viewOwner = getOwner();
   for (const owner of [
     runtime.tasks,
     runtime.publication,
@@ -108,10 +98,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   };
 
   onSettled(() => {
-    if (!runtime.isConnected) {
-      // Startup creates projections that belong to this retained view, outside the settled callback.
-      runWithOwner(viewOwner, () => runtime.start());
-    }
     setReady(true);
   });
   onCleanup(() => {
@@ -144,6 +130,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
   }
 
   function MountedPane() {
+    if (!runtime.isConnected) {
+      // The ready gate defers connection until settlement; its projections belong to this view.
+      runtime.start();
+    }
     const context = runtime.context;
     const parentSession = projectOwner(runtime.parentSession, (owner) => owner.read(), Object.is);
     const repository = createMemo(() => {
@@ -159,9 +149,9 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     const gateway = projectGateway(context.gateway);
     const theme = projectTheme(context.theme);
     // Startup attaches one host for this mounted pane's lifetime.
-    const state = runtime.readState();
+    const state = runtime.state;
     const realtime = createMemo(() => {
-      const owner = runtime.realtimeTalk;
+      const owner = runtime.state?.realtimeTalk;
       return owner && projectOwner(owner, (source) => source.snapshot);
     });
     // Ordinary keystrokes stay in the composer; command intent changes the pane's submit gate.
@@ -275,7 +265,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     );
     const providerReview: ChatProviderReviewOwner = createChatProviderReview({
       source: () => frame().providerReviewSource,
-      readState: () => runtime.readState(),
+      readState: () => runtime.state,
     });
     // Commit transcript geometry and control the browser timer after Solid publishes the frame.
     createEffect(

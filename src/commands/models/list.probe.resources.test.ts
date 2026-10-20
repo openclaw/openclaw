@@ -1,4 +1,4 @@
-import { EventEmitter, once } from "node:events";
+import { once } from "node:events";
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -16,6 +16,8 @@ import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { ZERO_USAGE_FIXTURE } from "../../agents/test-helpers/usage-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as embeddedStateLock from "../../infra/embedded-state-lock.js";
+import { captureNativeSignalBridge } from "../../infra/embedded-state-lock.test-support.js";
 import { getPluginInstance } from "../../plugins/plugin-instance-scope.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { PluginRegistryInspectionResources } from "../../plugins/registry-inspection-resources.js";
@@ -28,6 +30,8 @@ import { writeConfigMachineState } from "../../state/config-machine-state-write.
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
 
+const createNativeBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
+const acquireNativeStateLock = embeddedStateLock.acquireEmbeddedStateLock;
 const complete = vi.hoisted(() => vi.fn());
 // mock-isolation: Keep real runtime admission and credential custody but never call a provider.
 vi.mock("../../agents/simple-completion-execution.js", () => ({
@@ -294,31 +298,36 @@ it.each([
 
 it("releases direct state ownership before propagating a rejected no-tail operation", async () => {
   const state = await createOpenClawTestState({ label: "probe-no-tail-failure" });
-  const signals = new EventEmitter();
+  const signals = captureNativeSignalBridge(createNativeBridge);
+  vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
+    signals.create,
+  );
   const lockDir = state.path("locks");
+  const options = {
+    allowInTests: true,
+    env: state.env,
+    lockDir,
+    readProcessStartTime: () => 123456,
+    timeoutMs: 100,
+  };
+  vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
+    acquireNativeStateLock({ ...params, options }),
+  );
   const original = new Error("synthetic direct probe failure");
   try {
     await expect(
-      withAuthProbeStateOwnership(
-        {
-          mode: "exclusive",
-          process: signals,
-          gatewayLockOptions: {
-            allowInTests: true,
-            env: state.env,
-            lockDir,
-            readProcessStartTime: () => 123456,
-            timeoutMs: 100,
-          },
-        },
-        async () => {
-          throw original;
-        },
-      ),
+      withAuthProbeStateOwnership({ mode: "exclusive" }, async () => {
+        throw original;
+      }),
     ).rejects.toBe(original);
     expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);
-    expect(signals.eventNames()).toEqual([]);
+    expect([signals.listenerCount("SIGINT"), signals.listenerCount("SIGTERM")]).toEqual([0, 0]);
   } finally {
-    await state.cleanup();
+    try {
+      signals.dispose();
+    } finally {
+      vi.restoreAllMocks();
+      await state.cleanup();
+    }
   }
 });

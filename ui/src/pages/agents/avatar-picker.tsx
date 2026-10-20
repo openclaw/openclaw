@@ -199,7 +199,11 @@ export function AvatarPicker(props: AvatarPickerProps) {
                   onClick={() => void selectPreset(palette.id)}
                 >
                   <div
-                    class={`avatar-picker__sprite lobster-pet lobster-pet--palette-${palette.id}`}
+                    class={[
+                      "avatar-picker__sprite",
+                      "lobster-pet",
+                      `lobster-pet--palette-${palette.id}`,
+                    ]}
                     style={lobsterLookStyle(canonicalLobsterLook(palette))}
                   >
                     <LobsterSvg look={canonicalLobsterLook(palette)} standalone />

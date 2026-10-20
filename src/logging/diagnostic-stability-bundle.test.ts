@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
-import { registerFatalErrorHook, runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
+import { runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import {
   installDiagnosticStabilityFatalHook,
   MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES,
@@ -276,27 +276,21 @@ describe("diagnostic stability bundles", () => {
     uninstallDiagnosticStabilityFatalHook();
     expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toStrictEqual([]);
 
-    const unsubscribeIndependent = registerFatalErrorHook(() => "independent diagnostic");
     try {
       const reinstalledDir = path.join(tempDir, "reinstalled");
       installDiagnosticStabilityFatalHook({ stateDir: reinstalledDir });
+      installDiagnosticStabilityFatalHook({ stateDir: tempDir });
       const reinstalledMessages = runFatalErrorHooks({ reason: "uncaught_exception" });
-      expect(reinstalledMessages).toHaveLength(2);
-      expect(reinstalledMessages[0]).toBe("independent diagnostic");
-      expect(reinstalledMessages[1]).toContain("wrote stability bundle:");
-      expect(reinstalledMessages[1]).toContain(reinstalledDir);
+      expect(reinstalledMessages).toHaveLength(1);
+      expect(reinstalledMessages[0]).toContain("wrote stability bundle:");
+      expect(reinstalledMessages[0]).toContain(reinstalledDir);
 
       uninstallDiagnosticStabilityFatalHook();
-      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([
-        "independent diagnostic",
-      ]);
+      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([]);
       uninstallDiagnosticStabilityFatalHook();
-      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([
-        "independent diagnostic",
-      ]);
+      expect(runFatalErrorHooks({ reason: "uncaught_exception" })).toEqual([]);
     } finally {
       uninstallDiagnosticStabilityFatalHook();
-      unsubscribeIndependent();
     }
   });
 

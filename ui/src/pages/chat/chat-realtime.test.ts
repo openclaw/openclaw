@@ -185,15 +185,7 @@ it.each([false, true])(
       Array.from({ length: useSystemDefault ? 2 : 1 }, () => ["talk.config", {}]),
     );
     replacement.callbacks.onTalkEvent?.({
-      id: "ready",
       type: "session.ready",
-      sessionId: "voice-2",
-      seq: 1,
-      timestamp: new Date().toISOString(),
-      mode: "realtime",
-      transport: "webrtc",
-      brain: "agent-consult",
-      payload: undefined,
     });
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(

@@ -49,13 +49,7 @@ export function createBoardMcpAppLifecycle(host: LifecycleHost) {
     nearVisible: visibility.nearVisible,
   });
   // Later activity publishes with visibility from synchronize(), never independently.
-  const initialActive = untrack(host.active);
-  const [snapshot, setSnapshot] = createSignal<ReturnType<typeof read>>({
-    state,
-    loading,
-    active: initialActive,
-    nearVisible: visibility.nearVisible,
-  });
+  const [snapshot, setSnapshot] = createSignal(untrack(read));
   const publish = () => {
     if (host.connected()) {
       setSnapshot(read());

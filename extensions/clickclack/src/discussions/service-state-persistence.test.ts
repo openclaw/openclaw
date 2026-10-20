@@ -23,6 +23,7 @@ import {
   type ClickClackDiscussionBinding,
 } from "./binding-store.js";
 import { getClickClackDiscussionInstallationId } from "./installation.js";
+import { captureDiscussionRegistration } from "./register.test-support.js";
 import {
   markClickClackDiscussionChannelIdentityRevoked,
   markClickClackDiscussionChannelRevoked,
@@ -30,10 +31,6 @@ import {
 import { resolveClickClackDiscussionRoute } from "./routing.js";
 import { discussionChannel, createHarness } from "./service-test-support.js";
 import { ClickClackDiscussionService } from "./service.js";
-import {
-  enforceClickClackDiscussionToolTarget,
-  isClickClackDiscussionSessionTarget,
-} from "./tool-policy.js";
 
 const sessionKey = "agent:main:persistence";
 describe("ClickClack discussion state persistence", () => {
@@ -246,12 +243,12 @@ it("denies bound messages and session tools after the plugin-state owner publish
   );
   const routeInput = routeParams(f.runtime, binding);
   const active = await activeRoute(routeInput);
+  const registration = captureDiscussionRegistration(f.runtime);
   const send = () =>
-    enforceClickClackDiscussionToolTarget({
-      runtime: f.runtime,
-      context: { toolName: "sessions_send", sessionKey: active.sessionKey },
-      event: { toolName: "sessions_send", params: { sessionKey, message: "synthetic message" } },
-    });
+    registration.run(
+      { toolName: "sessions_send", params: { sessionKey, message: "synthetic message" } },
+      { toolName: "sessions_send", sessionKey: active.sessionKey },
+    );
   await expect(send()).resolves.toBeUndefined();
 
   await markClickClackDiscussionChannelIdentityRevoked(routeInput);
@@ -342,20 +339,16 @@ it("denies synchronous session targets while a binding write is pending or has u
   const bindings = f.runtime.state.openKeyedStoreV2<ClickClackDiscussionBinding>(bindingOptions);
   const binding = requireBinding(await bindings.lookup(sessionKey));
   const route = await activeRoute(routeParams(f.runtime, binding));
-  const target = () =>
-    isClickClackDiscussionSessionTarget({
-      runtime: f.runtime,
-      requesterSessionKey: route.sessionKey,
-      targetSessionKey: sessionKey,
-    });
-  expect(target()?.sessionKey).toBe(sessionKey);
+  const registration = captureDiscussionRegistration(f.runtime);
+  const target = () => registration.target(route.sessionKey, sessionKey);
+  expect(target()?.expectedSessionId).toBe(binding.sessionId);
   const writing = bindings.register(sessionKey, binding);
   try {
     expect(target()).toBeUndefined();
   } finally {
     await writing;
   }
-  expect(target()?.sessionKey).toBe(sessionKey);
+  expect(target()?.expectedSessionId).toBe(binding.sessionId);
 
   const native = f.runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>(bindingOptions);
   const database = openOpenClawStateDatabase({ env: f.env });
@@ -388,6 +381,7 @@ it("rejects stale discussion indexes after native binding replacement and remova
   const bindings = getClickClackDiscussionBindingStore(f.runtime);
   const initialBinding = requireBinding(bindings.get(initialSessionKey));
   const native = f.runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>(bindingOptions);
+  const registration = captureDiscussionRegistration(f.runtime);
   for (const mutation of ["replace", "delete", "clear"] as const) {
     native.clear();
     const key = `agent:main:reverse-index-${mutation}`;
@@ -397,11 +391,10 @@ it("rejects stale discussion indexes after native binding replacement and remova
     const routeInput = routeParams(f.runtime, previous);
     const previousRoute = await activeRoute(routeInput);
     const checkToolTarget = (sideSessionKey: string) =>
-      enforceClickClackDiscussionToolTarget({
-        runtime: f.runtime,
-        context: { toolName: "sessions_history", sessionKey: sideSessionKey },
-        event: { toolName: "sessions_history", params: { sessionKey: key } },
-      });
+      registration.run(
+        { toolName: "sessions_history", params: { sessionKey: key } },
+        { toolName: "sessions_history", sessionKey: sideSessionKey },
+      );
     expect(await checkToolTarget(previousRoute.sessionKey)).toBeUndefined();
 
     if (mutation === "delete") {

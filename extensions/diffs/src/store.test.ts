@@ -3,15 +3,17 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawPluginHttpRouteHandler } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginBlobStoreWithReceipts } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDiffsHttpHandler } from "./http.js";
 import { DiffArtifactStore } from "./store.js";
 import {
   createDiffStoreHarness,
   ensureCuratedViewerRuntimeForTests,
   expireDiffArtifactForTest,
+  registerDiffsHttpRouteForTest,
 } from "./test-helpers.js";
 import type { DiffArtifactBlobMetadata } from "./types.js";
 
@@ -293,15 +295,33 @@ describe("DiffArtifactStore", () => {
   });
 });
 
-describe("createDiffsHttpHandler", () => {
+describe("registered Diffs viewer route", () => {
   const missingViewerPath = "/plugins/diffs/view/not-a-real-id/not-a-real-token";
   setupStore();
 
   function client(
-    access: ReturnType<Parameters<typeof createDiffsHttpHandler>[0]["resolveAccessConfig"]> = {},
+    access: Pick<
+      NonNullable<OpenClawConfig["gateway"]>,
+      "trustedProxies" | "allowRealIpFallback"
+    > & {
+      allowRemoteViewer?: boolean;
+    } = {},
     remoteAddress = "127.0.0.1",
   ) {
-    const handler = createDiffsHttpHandler({ store, resolveAccessConfig: () => access });
+    const handler = registerDiffsHttpRouteForTest({
+      stateDir: path.join(path.dirname(rootDir), "state"),
+      config: {
+        gateway: {
+          trustedProxies: access.trustedProxies,
+          allowRealIpFallback: access.allowRealIpFallback,
+        },
+        plugins: {
+          entries: {
+            diffs: { config: { security: { allowRemoteViewer: access.allowRemoteViewer } } },
+          },
+        },
+      },
+    });
     return (url: string, headers?: Record<string, string>) =>
       get(handler, {
         method: "GET",
@@ -406,7 +426,7 @@ describe("createDiffsHttpHandler", () => {
   });
 });
 
-async function get(handler: ReturnType<typeof createDiffsHttpHandler>, request: IncomingMessage) {
+async function get(handler: OpenClawPluginHttpRouteHandler, request: IncomingMessage) {
   const res = createMockServerResponse();
   expect(await handler(request, res)).toBe(true);
   return res;

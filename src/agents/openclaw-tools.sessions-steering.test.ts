@@ -61,9 +61,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 const requesterKey = "agent:re-portal:main";
-function sendTool(testConfig: OpenClawConfig) {
+function sendTool(testConfig: OpenClawConfig, callerKey = requesterKey) {
   return createSessionsSendTool({
-    agentSessionKey: requesterKey,
+    agentSessionKey: callerKey,
     agentChannel: "telegram",
     callGateway: callGatewayMock,
     config: testConfig,
@@ -158,18 +158,33 @@ it.each(["missing", "different", "different account"] as const)(
 );
 
 it.each([
-  [undefined, false, false, false],
-  ["steer", true, false, true],
-  ["steer", false, true, false],
+  [undefined, false, false, false, false],
+  ["steer", true, false, true, false],
+  ["steer", false, true, false, false],
+  [undefined, false, false, false, true],
 ] as const)(
-  "persists steering provenance: mode=%s alternateStore=%s hiddenRun=%s refreshedDisplay=%s",
-  async (mode, alternateStore, hiddenRun, refreshedDisplay) => {
+  "persists steering provenance: mode=%s alternateStore=%s hiddenRun=%s refreshedDisplay=%s ownChild=%s",
+  async (mode, alternateStore, hiddenRun, refreshedDisplay, ownChild) => {
     const runId = "hidden-sessions-send-steering-run";
-    const sessionKey =
-      mode === "steer"
+    const sessionKey = ownChild
+      ? "agent:leasing-ops:subagent:active-child"
+      : mode === "steer"
         ? "agent:leasing-ops:dashboard:active-target"
         : "agent:leasing-ops:cron:monthly-utility:run:run-fast";
+    const callerKey = ownChild ? "agent:leasing-ops:main" : requesterKey;
     const { dir, scope, testConfig } = await steeringFixture(sessionKey, alternateStore);
+    if (ownChild) {
+      await upsertSessionEntryCore(
+        { ...scope, sessionKey: callerKey },
+        { sessionId: "parent-session", updatedAt: Date.now() },
+      );
+      await upsertSessionEntryCore(scope, {
+        sessionId: scope.sessionId,
+        updatedAt: Date.now(),
+        spawnedBy: callerKey,
+        spawnDepth: 1,
+      });
+    }
     const sessionManager = SessionManager.open(scope, dir);
     guardSessionManager(sessionManager);
     const { session } = await createTestSession({ sessionManager });
@@ -217,7 +232,7 @@ it.each([
           abort: () => {},
         },
         sessionKey,
-        requesterKey,
+        callerKey,
         testConfig,
         scope.storePath,
       );
@@ -234,12 +249,12 @@ it.each([
         return {};
       });
 
-      const tool = sendTool(testConfig);
+      const tool = sendTool(testConfig, callerKey);
 
-      if (mode === "steer") {
+      if (mode === "steer" || ownChild) {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       }
-      const caller = createSessionsSendTestCaller(requesterKey);
+      const caller = createSessionsSendTestCaller(callerKey);
       if (refreshedDisplay) {
         caller.requesterOrigin = {
           ...caller.requesterOrigin,
@@ -255,15 +270,18 @@ it.each([
           timeoutSeconds: 0,
         }),
       );
+      let acknowledged = false;
+      void send.then(() => {
+        acknowledged = true;
+      });
       pending.push(send);
       await Promise.race([queued.promise, send, prompt]);
       expect(session.pendingMessageCount).toBe(1);
-      if (mode === "steer") {
-        // The active response is still held: an admission-only send must not
-        // withdraw guidance when the unrelated reply-wait deadline expires.
+      if (mode === "steer" || ownChild) {
+        // A reply-wait deadline cannot turn volatile steering into a durable ACK.
         await vi.advanceTimersByTimeAsync(30_000);
         vi.useRealTimers();
-        expect((await send).details).toMatchObject({ status: "accepted" });
+        expect(acknowledged).toBe(false);
         expect(session.pendingMessageCount).toBe(1);
         expect(userEntries(scope, dir)).toHaveLength(1);
       }
@@ -277,7 +295,6 @@ it.each([
         delivery: { status: "skipped" },
       });
       expect(queueMessage).toHaveBeenCalledOnce();
-      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(mode !== "steer");
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();
       const entries = userEntries(scope, dir);
       expect(entries).toHaveLength(2);
@@ -286,7 +303,7 @@ it.each([
         expect.objectContaining({
           provenance: {
             kind: "inter_session",
-            sourceSessionKey: requesterKey,
+            sourceSessionKey: callerKey,
             sourceChannel: "telegram",
             sourceTool: "sessions_send",
           },
@@ -296,12 +313,17 @@ it.each([
         false,
       );
       await waitForSessionParticipantRecording(scope);
-      expect(listSessionParticipantsReadOnly(scope).get(sessionKey)).toEqual([
-        expect.objectContaining({
-          identity: { type: "agent", id: "re-portal" },
-          contributionCount: 1,
-        }),
-      ]);
+      const participants = listSessionParticipantsReadOnly(scope).get(sessionKey);
+      if (ownChild) {
+        expect(participants).toBeUndefined();
+      } else {
+        expect(participants).toEqual([
+          expect.objectContaining({
+            identity: { type: "agent", id: "re-portal" },
+            contributionCount: 1,
+          }),
+        ]);
+      }
     } finally {
       vi.useRealTimers();
       // Release even a late provider callback, then join work before fixture teardown.

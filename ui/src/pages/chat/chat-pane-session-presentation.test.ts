@@ -13,7 +13,6 @@ import {
   createTestChatPane,
   nativeHistoryMessage,
 } from "./chat-pane.test-support.ts";
-import { projectChatSessionPresentation } from "./chat-session-presentation-projection.ts";
 import { createPageState } from "./chat-state-page.ts";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -78,7 +77,6 @@ function fixture() {
   publish(publication);
   const rendered = vi.fn();
   const view = mountSolid(() => {
-    projectChatSessionPresentation(pane.state, pane.pane.context);
     createEffect(() => [pane.state.sessionsResult], rendered);
     return null;
   });

@@ -58,6 +58,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
+import { prepareAgentWaitForTurn } from "./agent-turn/agent-wait.js";
 import { isPublicSessionShareActive } from "./control-ui-public-session-read.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
@@ -314,6 +315,12 @@ describe("X publication production-owner composition", () => {
       ],
     });
     gateway.resolveGatewayContext = () => gateway;
+    // Registry completion must observe the real child, not the direct fixture's empty wait result.
+    vi.mocked(
+      expectDefined(gateway.recoveryRuntime, "Gateway recovery fixture").waitForAgent,
+    ).mockImplementation(
+      async (params) => (await prepareAgentWaitForTurn(gateway, params).wait()).result,
+    );
     gateway.readPreparedGatewayModelCatalog = async () => {
       const catalog = await gateway.loadGatewayModelCatalogSnapshot();
       return { entries: catalog.entries, routeVariants: catalog.routeVariants };

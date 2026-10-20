@@ -9,6 +9,9 @@ read_when:
 These sections cover repairing the Gateway service, its remote and Control UI
 prerequisites, and the credentials it starts with.
 
+Doctor's Gateway health checks and heartbeat schedule planning reuse existing
+identities without creating a device identity, including during `--fix`.
+
 ## Gateway service recovery
 
 Run `openclaw gateway status --deep` to inspect the installed service and its

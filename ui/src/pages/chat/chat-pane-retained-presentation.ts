@@ -504,6 +504,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
 
   protected override presentedChanged(presented: boolean): void {
     if (!presented) {
+      this.retireHeaderSessionMutations();
       this.dashboardPresentationActivation = undefined;
       this.retainedProgressCard = undefined;
       this.syncSessionCompanionPresentation(false);
@@ -525,7 +526,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       const state = this.state;
       if (state) {
         this.unreadPatchGuard.beginActivation(state.sessionKey);
-        void refreshChatMetadata(state, { automatic: true });
+        void refreshChatMetadata(state);
         void this.refreshTaskSuggestions({ automatic: true });
       }
       const deferredHydrationActive = this.resumeDeferredSessionHydration();

@@ -1,9 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, onTestFinished, vi } from "vitest";
-import type { ChatDetails } from "./chat-details.tsx";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import { mountChatPaneHeader } from "./chat-pane-header.test-support.ts";
-import "./chat-details.tsx";
 
 it("retains Details directly in the header while pane props change", () => {
   const setRef = vi.fn();
@@ -12,16 +11,18 @@ it("retains Details directly in the header while pane props change", () => {
   const mounted = mountChatPaneHeader([], { detailsControl });
   onTestFinished(mounted.unmount);
   const selector = ".chat-pane__header-trailing > openclaw-chat-details";
-  const details = mounted.container.querySelector<ChatDetails>(selector);
+  const details = mounted.container.querySelector<HTMLElement>(selector);
   expect(details).not.toBeNull();
-  expect(setRef).toHaveBeenCalledWith(details);
-  expect(details?.elements).toBe(elements);
+  expect(setRef).toHaveBeenCalledWith({ open: expect.any(Function) });
+  expect(elements.frame.querySelector(".chat-details")).not.toBeNull();
 
   mounted.update({ detailsControl: { ...detailsControl, mobile: true } });
   expect(mounted.container.querySelector(selector)).toBe(details);
-  expect(details?.mobile).toBe(true);
+  flush();
+  expect(details?.hasAttribute("mobile")).toBe(true);
 
   mounted.update({ detailsControl: undefined });
   expect(mounted.container.querySelector(selector)).toBeNull();
   expect(setRef).toHaveBeenLastCalledWith(undefined);
+  expect(elements.frame.querySelector(".chat-details")).toBeNull();
 });

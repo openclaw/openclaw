@@ -299,9 +299,33 @@ describe("connection retry transport refresh", () => {
       const history = [
         { role: "user" as const, content: "Original recorded request.", timestamp: 1 },
       ];
-      const observations: EmbeddedRunAttemptParams[] = [];
+      type AttemptObservation = Pick<
+        EmbeddedRunAttemptParams,
+        | "provider"
+        | "modelId"
+        | "resolvedApiKey"
+        | "model"
+        | "admittedRunContext"
+        | "config"
+        | "sessionTarget"
+        | "continuation"
+      >;
+      const observations: AttemptObservation[] = [];
       attempt.mockImplementation(async (params) => {
-        observations.push(params);
+        // Run disposal clears continuation payloads; record their dispatch-time facts.
+        observations.push({
+          provider: params.provider,
+          modelId: params.modelId,
+          resolvedApiKey: params.resolvedApiKey,
+          model: params.model,
+          admittedRunContext: params.admittedRunContext,
+          config: params.config,
+          sessionTarget: params.sessionTarget,
+          continuation: params.continuation && {
+            prompt: params.continuation.prompt,
+            messages: [...params.continuation.messages],
+          },
+        });
         if (observations.length === 1) {
           expect(params).toMatchObject({
             model: { baseUrl: before, headers: { "X-Local-Route": "old-route" } },

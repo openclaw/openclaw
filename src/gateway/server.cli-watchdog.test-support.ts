@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect } from "vitest";
+import { expect, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
@@ -82,7 +82,51 @@ confirmStopped();
 
 export function createWatchdogClock() {
   let now = 0;
-  const timers = new Map<() => void, { at: number; callback: () => void }>();
+  let depth = 0;
+  let nativeDepth = 0;
+  const nativeNow = Date.now;
+  const nativeSetTimeout = globalThis.setTimeout;
+  const nativeClearTimeout = globalThis.clearTimeout;
+  const timers = new Map<
+    Parameters<typeof clearTimeout>[0],
+    { at: number; callback: () => void }
+  >();
+  const run = <T>(work: () => T): T => {
+    if (depth > 0) {
+      return work();
+    }
+    depth++;
+    const nowSpy = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => (nativeDepth > 0 ? nativeNow() : now));
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delayMs, ...args) => {
+        if (nativeDepth > 0) {
+          return nativeSetTimeout(callback, delayMs, ...args);
+        }
+        // Use a genuine, already-cleared handle without leaving a native timer running.
+        const handle = nativeSetTimeout(() => {}, 0);
+        nativeClearTimeout(handle);
+        timers.set(handle, { at: now + (delayMs ?? 0), callback: () => callback(...args) });
+        return handle;
+      });
+    const clearSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation((handle) => {
+      if (nativeDepth > 0) {
+        nativeClearTimeout(handle);
+      } else {
+        timers.delete(handle);
+      }
+    });
+    try {
+      return work();
+    } finally {
+      clearSpy.mockRestore();
+      timeoutSpy.mockRestore();
+      nowSpy.mockRestore();
+      depth--;
+    }
+  };
   const advance = (ms: number) => {
     const target = now + ms;
     for (;;) {
@@ -90,21 +134,23 @@ export function createWatchdogClock() {
       if (!next || next[1].at > target) {
         break;
       }
-      const [cancel, timer] = next;
+      const [handle, timer] = next;
       now = Math.max(now, timer.at);
-      timers.delete(cancel);
-      timer.callback();
+      timers.delete(handle);
+      run(timer.callback);
     }
     now = target;
   };
   return {
     now: () => now,
-    setTimeout: (callback: () => void, delayMs: number) => {
-      const cancel = () => {
-        timers.delete(cancel);
-      };
-      timers.set(cancel, { at: now + delayMs, callback });
-      return cancel;
+    run,
+    native: <T>(work: () => T): T => {
+      nativeDepth++;
+      try {
+        return work();
+      } finally {
+        nativeDepth--;
+      }
     },
     // A suspended event loop observes elapsed time before it can dispatch overdue timers.
     jump: (ms: number) => {

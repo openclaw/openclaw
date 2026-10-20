@@ -4,7 +4,6 @@ import {
   type PersistedSidebarRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import {
   readSessionDragData,
   readSidebarSectionDragData,
@@ -18,6 +17,8 @@ import {
   categoryClearReturnsToGroups,
   type SidebarSessionsGrouping,
 } from "../lib/sessions/grouping.ts";
+import { isSessionDisplayMetadataPatch } from "../lib/sessions/patch.ts";
+import type { runSessionNavigationAction } from "../lib/sessions/session-menu-navigation.ts";
 import {
   loadStoredCollapsedSessionSections,
   storeSidebarSessionStatusFilter,
@@ -40,6 +41,18 @@ import type { SessionOrganizerDependencies } from "./session-organizer-types.ts"
 export type { SessionOrganizerDependencies } from "./session-organizer-types.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
+type SidebarSessionAction = Exclude<
+  SessionMenuAction,
+  {
+    kind:
+      | "open-pr"
+      | Parameters<typeof runSessionNavigationAction>[0]
+      | "open-in"
+      | "move-session"
+      | "plugin";
+  }
+>;
+
 export class SessionOrganizer {
   readonly sectionHeaders = new Map<string, HTMLElement>();
   collapsedSessionSections = loadStoredCollapsedSessionSections();
@@ -76,8 +89,9 @@ export class SessionOrganizer {
       operations: SessionOrganizerOperations,
       scope: SidebarSessionMutationScope,
     ) => Promise<unknown>,
+    allowDeferred = false,
   ): Promise<void> {
-    const scope = this.deps.sessionData.beginSessionMutation();
+    const scope = this.deps.sessionData.beginSessionMutation(allowDeferred);
     if (scope) {
       const operations = await this.loadOperations(scope);
       if (operations) {
@@ -91,7 +105,7 @@ export class SessionOrganizer {
     patch: SidebarSessionPatch,
     options: { sessionScope?: boolean } = {},
   ): Promise<SidebarSessionMutationResult> => {
-    const scope = this.deps.sessionData.beginSessionMutation();
+    const scope = this.deps.sessionData.beginSessionMutation(isSessionDisplayMetadataPatch(patch));
     if (!scope) {
       return "stale";
     }
@@ -102,14 +116,67 @@ export class SessionOrganizer {
     return operations.patchSession(this.deps, session, patch, scope, options);
   };
 
-  snoozeSessionWithUndo(
+  async runSessionAction(
     session: SidebarRecentSession,
-    snoozedUntil: number,
-    rememberCustom = false,
-  ): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.snoozeSessionWithUndo(this.deps, session, { snoozedUntil, rememberCustom }, scope),
-    );
+    action: SidebarSessionAction,
+  ): Promise<unknown> {
+    switch (action.kind) {
+      case "toggle-pin":
+        return this.setPersonalSessionPin(session.key, !this.isPersonalSessionPin(session.key));
+      case "toggle-unread":
+        return session.subagentSummary?.unreadHiddenRuns?.length
+          ? this.runBatchSessionAction(action, [session], true)
+          : this.patchSession(session, { unread: !session.unread }, { sessionScope: true });
+      case "set-color":
+        return this.patchSession(session, { color: action.color });
+      case "set-icon":
+        return this.patchSession(session, { icon: action.icon });
+      case "set-communication":
+        return this.patchSession(session, { communication: action.communication });
+      case "reset-appearance":
+        return this.patchSession(session, { icon: null, color: null });
+      case "toggle-involving-me": {
+        const hidden = !session.hiddenFromInvolvingMe;
+        return this.runOperation((operations, scope) =>
+          operations.setSessionInvolvement(this.deps, session, hidden, scope),
+        );
+      }
+      case "move-to-top-level":
+        return this.promoteSession(session);
+      case "move-to-group":
+        if (action.category === null || session.category !== action.category) {
+          return this.assignSessionCategory(session, action.category);
+        }
+        return undefined;
+      case "new-group":
+        return this.createSessionGroup([session]);
+      case "wake":
+        return this.patchSession(session, { snoozedUntil: null }, { sessionScope: true });
+      case "toggle-archived":
+        return session.archived
+          ? this.patchSession(session, { archived: false }, { sessionScope: true })
+          : this.archiveSessionWithUndo(session);
+      default:
+        return this.runOperation((operations, scope) => {
+          switch (action.kind) {
+            case "rename":
+              return operations.renameSession(this.deps, session, scope);
+            case "assign-owner":
+              return operations.assignSessionOwner(this.deps, session, action.owner, scope);
+            case "fork":
+              return operations.forkSession(this.deps, session, scope);
+            case "snooze":
+              return operations.snoozeSessionWithUndo(this.deps, session, action, scope);
+            case "stop-cloud-worker":
+              return operations.stopCloudWorker(this.deps, session, scope);
+            case "delete":
+              // Only the sidebar offers the delete-confirm opt-out.
+              return operations.deleteSession(this.deps, session, scope, { offerSkip: true });
+            default:
+              return action satisfies never;
+          }
+        }, action.kind === "rename");
+    }
   }
 
   archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
@@ -139,41 +206,6 @@ export class SessionOrganizer {
     }
     await this.runOperation((operations, scope) =>
       operations.runBatchSessionAction(this.deps, action, rows, allUnread, scope),
-    );
-  }
-
-  forkSession(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.forkSession(this.deps, session, scope),
-    );
-  }
-
-  stopCloudWorker(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.stopCloudWorker(this.deps, session, scope),
-    );
-  }
-
-  setSessionInvolvement(session: SidebarRecentSession, hidden: boolean): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.setSessionInvolvement(this.deps, session, hidden, scope),
-    );
-  }
-
-  assignSessionOwner(
-    session: SidebarRecentSession,
-    owner: Pick<SessionOwnerOption, "type" | "id">,
-  ): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.assignSessionOwner(this.deps, session, owner, scope),
-    );
-  }
-
-  deleteSession(session: SidebarRecentSession): Promise<void> {
-    // Sidebar is the surface the delete-confirm setting names, so it is the one
-    // caller allowed to offer the opt-out.
-    return this.runOperation((operations, scope) =>
-      operations.deleteSession(this.deps, session, scope, { offerSkip: true }),
     );
   }
 
@@ -441,12 +473,6 @@ export class SessionOrganizer {
     }
   }
 
-  renameSession(session: SidebarRecentSession): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.renameSession(this.deps, session, scope),
-    );
-  }
-
   async createSessionGroup(sessions: readonly SidebarRecentSession[] = []): Promise<void> {
     const scope = this.deps.sessionData.beginSessionMutation();
     if (!scope) {
@@ -527,13 +553,10 @@ export class SessionOrganizer {
     );
   }
 
-  assignSessionCategory(
-    session: SidebarRecentSession,
-    category: string | null,
-    patch: { pinned?: boolean } = {},
-  ): Promise<void> {
-    return this.runOperation((operations, scope) =>
-      operations.assignSessionCategory(this.deps, session, category, scope, patch),
+  assignSessionCategory(session: SidebarRecentSession, category: string | null): Promise<void> {
+    return this.runOperation(
+      (operations, scope) => operations.assignSessionCategory(this.deps, session, category, scope),
+      true,
     );
   }
 

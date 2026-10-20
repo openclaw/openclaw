@@ -1,4 +1,3 @@
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { z } from "zod";
 import type { SourceRuntime, SourceStatus } from "../types.js";
@@ -14,18 +13,13 @@ export async function readApiResponse(
   headers: HeadersInit,
   runtime: SourceRuntime,
   status: SourceStatus,
-  label: string,
 ): Promise<{ status: number; headers: Headers; data: unknown }> {
   const controller = new AbortController();
-  const signal = runtime.signal
-    ? AbortSignal.any([runtime.signal, controller.signal])
-    : controller.signal;
   const timeout = setTimeout(() => controller.abort(), 30_000);
   let release: (() => Promise<void>) | undefined;
   try {
-    checkAbort(runtime.signal, label);
     status.stats.apiCalls = Number(status.stats.apiCalls) + 1;
-    const init: RequestInit = { headers, signal, redirect: "error" };
+    const init: RequestInit = { headers, signal: controller.signal, redirect: "error" };
     let response: Response;
     if (runtime.fetchImpl) {
       response = await runtime.fetchImpl(url, init);
@@ -33,7 +27,6 @@ export async function readApiResponse(
       const result = await fetchWithSsrFGuard({
         url: String(url),
         init,
-        signal: runtime.signal,
         timeoutMs: 30_000,
         requireHttps: true,
         maxRedirects: 0,
@@ -43,7 +36,6 @@ export async function readApiResponse(
       release = result.release;
     }
     const body = await response.text();
-    checkAbort(runtime.signal, label);
     let data: unknown;
     try {
       data = JSON.parse(body);
@@ -72,28 +64,6 @@ export function createResponseParser(createError: () => Error) {
     }
     return parsed.data;
   };
-}
-
-export function checkAbort(signal: AbortSignal | undefined, label: string): void {
-  if (signal?.aborted) {
-    // Abort reasons and transport errors may contain credentials supplied by callers.
-    throw new DOMException(label, "AbortError");
-  }
-}
-
-export async function wait(
-  ms: number,
-  signal: AbortSignal | undefined,
-  label: string,
-): Promise<void> {
-  checkAbort(signal, label);
-  try {
-    await sleepWithAbort(ms, signal);
-  } catch (error) {
-    checkAbort(signal, label);
-    throw error;
-  }
-  checkAbort(signal, label);
 }
 
 export function parseApiBase(raw: string, label: string): URL {

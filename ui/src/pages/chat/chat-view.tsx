@@ -179,7 +179,7 @@ function ChatComposerView(input: ChatViewInput) {
       asyncQuestions={input.frame.asyncQuestions}
       displayQueue={input.frame.displayQueue}
       footerContent={<ChatFooterContent {...input} />}
-      notices={<ChatComposerNoticesView {...input.props} />}
+      notices={<ChatComposerNoticesView {...input.props} presented={input.presented} />}
       onToggleRealtimeTalk={
         input.props.suggestionComposer ? undefined : input.props.onToggleRealtimeTalk
       }
@@ -203,7 +203,7 @@ function ChatComposerCompanion(input: ChatViewInput) {
     <div class="chat-footer__context">
       <ChatFooterContent {...input} />
       <div class="agent-chat__composer-notices">
-        <ChatComposerNoticesView {...input.props} />
+        <ChatComposerNoticesView {...input.props} presented={input.presented} />
       </div>
       <ComposerQuestionDock panel={questionPanel()} />
       <ComposerQueue

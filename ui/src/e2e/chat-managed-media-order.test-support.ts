@@ -164,18 +164,19 @@ export async function observeManagedMediaCapture(
       record(kind, parent ? [node, parent] : [node], stack);
     };
     // Call through unchanged; only the synthetic bubble's removals export sanitized stacks.
-    // oxlint-disable-next-line typescript/unbound-method -- Save the native method for exact restoration; call it with the original receiver below.
-    const nativeRemove = Element.prototype.remove;
+    const removeDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "remove")!;
+    const nativeRemove = Function.prototype.call.bind(removeDescriptor.value);
     const observedRemove = function (this: Element) {
       noteRemoval("remove", this, this.parentNode);
-      return nativeRemove.call(this);
+      nativeRemove(this);
     };
-    // oxlint-disable-next-line typescript/unbound-method -- Save the native method for exact restoration; Reflect.apply preserves the receiver below.
-    const nativeRemoveChild = Node.prototype.removeChild;
+    const removeChildDescriptor = Object.getOwnPropertyDescriptor(Node.prototype, "removeChild")!;
+    const nativeRemoveChild = Function.prototype.call.bind(removeChildDescriptor.value);
     const observedRemoveChild = function <T extends Node>(this: Node, child: T): T {
       noteRemoval("removeChild", child, this);
       // The native operation returns the exact supplied child; preserve its generic contract.
-      return Reflect.apply(nativeRemoveChild, this, [child]) as T;
+      nativeRemoveChild(this, child);
+      return child;
     };
     Element.prototype.remove = observedRemove;
     Node.prototype.removeChild = observedRemoveChild;
@@ -252,15 +253,15 @@ export async function observeManagedMediaCapture(
         observer.disconnect();
         abort.abort();
         if (Element.prototype.remove === observedRemove) {
-          Element.prototype.remove = nativeRemove;
+          Object.defineProperty(Element.prototype, "remove", removeDescriptor);
         }
         if (Node.prototype.removeChild === observedRemoveChild) {
-          Node.prototype.removeChild = nativeRemoveChild;
+          Object.defineProperty(Node.prototype, "removeChild", removeChildDescriptor);
         }
         sources.clear();
         return {
-          removeRestored: Element.prototype.remove === nativeRemove,
-          removeChildRestored: Node.prototype.removeChild === nativeRemoveChild,
+          removeRestored: Element.prototype.remove === removeDescriptor.value,
+          removeChildRestored: Node.prototype.removeChild === removeChildDescriptor.value,
           listenersAborted: abort.signal.aborted,
         };
       },

@@ -1,4 +1,9 @@
-import { ButtonStyle } from "discord-api-types/v10";
+import {
+  ButtonStyle,
+  ComponentType,
+  type APIActionRowComponent,
+  type APIButtonComponent,
+} from "discord-api-types/v10";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -11,11 +16,10 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import { decodeCustomIdComponent, encodeCustomIdComponent } from "../custom-id-codec.js";
-import {
-  Button,
-  Row,
-  type BaseComponentInteraction,
-  type ComponentData,
+import type {
+  BaseMessageInteractiveComponent,
+  BaseComponentInteraction,
+  ComponentData,
 } from "../internal/discord.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
@@ -118,51 +122,30 @@ type DiscordCommandArgButtonParams = {
   dispatchCommandInteraction: DispatchDiscordCommandInteraction;
 };
 
-function createDiscordCommandArgButton(
-  params: DiscordCommandArgButtonParams & {
-    label: string;
-    customId: string;
-    style?: ButtonStyle;
-  },
-): Button {
-  return new (class extends Button {
-    label = params.label;
-    customId = params.customId;
-    override style = params.style ?? ButtonStyle.Secondary;
-
-    override async run(interaction: BaseComponentInteraction, data: ComponentData) {
-      await handleDiscordCommandArgInteraction({ ...params, interaction, data });
-    }
-  })();
-}
-
-export function buildDiscordCommandArgMenu(
-  params: DiscordCommandArgButtonParams & {
-    command: ChatCommandDefinition;
-    menu: {
-      arg: CommandArgDefinition;
-      choices: Array<{ value: string; label: string }>;
-      title?: string;
-    };
-    userId: string;
-  },
-): { content: string; components: Row<Button>[] } {
-  const { command, menu, userId, ...buttonContext } = params;
+export function buildDiscordCommandArgMenu(params: {
+  command: ChatCommandDefinition;
+  menu: {
+    arg: CommandArgDefinition;
+    choices: Array<{ value: string; label: string }>;
+    title?: string;
+  };
+  userId: string;
+}): { content: string; components: APIActionRowComponent<APIButtonComponent>[] } {
+  const { command, menu, userId } = params;
   const commandLabel = command.nativeName ?? command.key;
   const rows = chunkItems(menu.choices, 4).map((choices) => {
-    const buttons = choices.map((choice) =>
-      createDiscordCommandArgButton({
-        label: choice.label,
-        customId: buildDiscordCommandArgCustomId({
-          command: commandLabel,
-          arg: menu.arg.name,
-          value: choice.value,
-          userId,
-        }),
-        ...buttonContext,
+    const buttons = choices.map((choice) => ({
+      type: ComponentType.Button as const,
+      label: choice.label,
+      custom_id: buildDiscordCommandArgCustomId({
+        command: commandLabel,
+        arg: menu.arg.name,
+        value: choice.value,
+        userId,
       }),
-    );
-    return new Row(buttons);
+      style: ButtonStyle.Secondary as const,
+    }));
+    return { type: ComponentType.ActionRow as const, components: buttons };
   });
   const content = formatCommandArgMenuTitle({ command, menu });
   return { content, components: rows };
@@ -170,11 +153,12 @@ export function buildDiscordCommandArgMenu(
 
 export function createDiscordCommandArgFallbackButton(
   params: DiscordCommandArgButtonParams,
-): Button {
-  return createDiscordCommandArgButton({
-    ...params,
-    label: "cmdarg",
+): BaseMessageInteractiveComponent {
+  return {
+    type: ComponentType.Button,
     customId: "cmdarg:seed=1",
-    style: ButtonStyle.Primary,
-  });
+    async run(interaction, data) {
+      await handleDiscordCommandArgInteraction({ ...params, interaction, data });
+    },
+  };
 }

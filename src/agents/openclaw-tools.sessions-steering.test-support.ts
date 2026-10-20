@@ -15,6 +15,7 @@ import {
   type EmbeddedAgentQueueHandle,
   type EmbeddedAgentQueueMessageOptions,
 } from "./embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "./harness/tool-authority.runtime.js";
 import { captureRequesterOrigin } from "./requester-origin.js";
 
@@ -32,6 +33,31 @@ export function createSessionsSendTestCaller(sessionKey = "agent:re-portal:main"
     sessionKey,
     requesterOrigin,
   };
+}
+
+export function createDurableSessionsSendTestRun(runId: string, afterCommit?: () => Promise<void>) {
+  const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(async (_text, options) => {
+    const recorder = options?.userTurnTranscriptRecorder;
+    if (!recorder || !(await recorder.persistApproved())) {
+      throw new Error("Steering fixture did not commit the admitted guidance");
+    }
+    await afterCommit?.();
+  });
+  const handle = createEmbeddedRunHandle({
+    runId,
+    queueMessage,
+    supportsTranscriptCommitWait: true,
+  });
+  handle.messageInjectionV2 = {
+    version: 2,
+    isAvailable: () => true,
+    queueMessage: async (text, options, assertCurrent) => {
+      assertCurrent();
+      await queueMessage(text, options);
+      options?.onQueueAccepted?.(true);
+    },
+  };
+  return { handle, queueMessage };
 }
 
 const activeOwners: Array<() => Promise<void>> = [];

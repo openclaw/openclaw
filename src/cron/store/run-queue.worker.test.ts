@@ -240,7 +240,7 @@ it("recovers a timed request without replaying active work or reconstructing a l
   });
   await legacy.request([manual]);
   const held = await legacy.drain();
-  expect(held).toEqual({ launches: [], skipped: [] });
+  expect(held).toEqual({ launches: [], preparing: [], skipped: [] });
   expect((await legacy.read()).jobs[0]?.state.queuedAtMs).toBe(now);
   await legacy.recover();
   expect((await legacy.read()).jobs[0]?.state.queuedAtMs).toBeUndefined();

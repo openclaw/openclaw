@@ -1,15 +1,38 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
+import type { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
-import { resolveStatusJsonOutput } from "./status-json-runtime.js";
+import { runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusCommandOverviewRows } from "./status-overview-rows.js";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import {
   createStatusCommandOverviewRowsParams,
   createStatusScanResultFixture,
 } from "./status.test-support.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const mocks = vi.hoisted(() => ({ describe: vi.fn() }));
+type StatusDatabaseJson = {
+  databaseEngines: Awaited<ReturnType<typeof resolveStatusDatabaseEngines>> & {
+    families: ReturnType<typeof describeDatabaseEngineSelection>;
+  };
+};
+const mocks = vi.hoisted(() => ({
+  describe: vi.fn(),
+  scanStatusJsonFast: vi.fn(),
+  writeRuntimeJson: vi.fn((_runtime: RuntimeEnv, _payload: StatusDatabaseJson) => {}),
+}));
+// mock-isolation: Fixed scan facts exercise projection without collecting a live Gateway.
+vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: mocks.scanStatusJsonFast }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  writeRuntimeJson: mocks.writeRuntimeJson,
+}));
+vi.mock("../infra/update-run-status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/update-run-status.js")>()),
+  readUpdateRunStatus: async () => ({}),
+}));
 
 // mock-isolation: These tests own status projection/target routing, not physical store inspection.
 vi.mock("../infra/database-engine/admitted-diagnostics.js", () => ({
@@ -60,11 +83,12 @@ describe("status database diagnostics", () => {
 
   it("projects the same physical store facts in text and JSON", async () => {
     const config = { database: { engine: "postgres" as const } };
-    const payload = await resolveStatusJsonOutput({
-      scan: createStatusScanResultFixture({ cfg: config }),
+    mocks.scanStatusJsonFast.mockResolvedValueOnce(createStatusScanResultFixture({ cfg: config }));
+    await runStatusJsonCommand({
+      runtime: createTestRuntime(),
       opts: createStatusGatewayProbeBudget(),
-      includeSecurityAudit: false,
     });
+    const payload = expectDefined(mocks.writeRuntimeJson.mock.lastCall, "status JSON output")[1];
     const params = createStatusCommandOverviewRowsParams();
     const surface = { ...params.surface, cfg: {}, databaseEngines: payload.databaseEngines };
     const rows = buildStatusCommandOverviewRows({ ...params, surface });

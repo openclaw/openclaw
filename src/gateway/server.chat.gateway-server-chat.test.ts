@@ -781,9 +781,11 @@ describe("gateway server chat", () => {
           });
           expect(res.ok).toBe(true);
           await withinTest(dispatchStarted.promise, signal);
-          markGatewayRestartDraining();
           rejectDispatch.resolve();
           await withinTest(persistenceEntered.promise, signal);
+          // Begin draining with the failure write already held. Restart cancels
+          // unclaimed inputs, which this dispatcher mock deliberately does not claim.
+          markGatewayRestartDraining();
           const restartInspectors = {
             getQueueSize: () => 0,
             getPendingReplies: () => 0,

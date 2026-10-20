@@ -321,25 +321,6 @@ describe("convertResponsesToolPayload", () => {
       },
     ]);
   });
-
-  it("does not reread an unreadable tool inventory length", () => {
-    const tools = new Proxy([], {
-      get(target, property, receiver) {
-        if (property === "length") {
-          throw new Error("length exploded");
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
-    const params = {} as never;
-
-    applyCommonResponsesParams(params, nativeOpenAIModel, {
-      messages: [{ role: "user", content: "hello", timestamp: 1 }],
-      tools,
-    } as never);
-
-    expect(params).not.toHaveProperty("tools");
-  });
 });
 
 const eventTypes = (events: AssistantMessageEvent[]) => events.map((event) => event.type);

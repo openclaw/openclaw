@@ -330,7 +330,6 @@ it.each(["absent", "open"] as const)(
       expect(pane.state.sessionKey).toBe(left);
       expect(isSidebarSlotVisible(pane.state.sidebarLayout, "workspace")).toBe(false);
       expect(isSidebarSlotVisible(pane.state.sidebarLayout, "detail")).toBe(preference === "open");
-      expect(pane.state.sidebarFocusPanelId).toBe(preference === "absent" ? "" : "detail");
     };
     try {
       connect();

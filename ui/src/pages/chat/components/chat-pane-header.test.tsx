@@ -607,10 +607,15 @@ describe("chat pane header", () => {
     ["Escape", false, 0, "cancel"],
     ["Enter", true, 0, null],
     ["Enter", false, 229, null],
+    ["Enter", false, 0, "blocked"],
   ] as const)(
-    "routes rename %s with isComposing=%s and keyCode=%i",
+    "routes offline rename %s with isComposing=%s and keyCode=%i: %s",
     (key, isComposing, keyCode, action) => {
-      const { container, props } = mountHeader({ editing: true, renameValue: "研究" });
+      const { container, props } = mountHeader({
+        editing: true,
+        actionsDisabled: true,
+        renameDisabledReason: action === "blocked" ? "Session access was revoked" : undefined,
+      });
       const input = container.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
       expect(input).toBeInstanceOf(HTMLInputElement);
       const event = new KeyboardEvent("keydown", {
@@ -621,9 +626,12 @@ describe("chat pane header", () => {
         keyCode,
       });
       input?.dispatchEvent(event);
+      if (key === "Enter" && action !== null) {
+        input?.dispatchEvent(new FocusEvent("blur"));
+      }
 
       expect(event.defaultPrevented).toBe(action !== null);
-      expect(props.onCommitRename).toHaveBeenCalledTimes(action === "commit" ? 1 : 0);
+      expect(props.onCommitRename).toHaveBeenCalledTimes(action === "commit" ? 2 : 0);
       expect(props.onCancelRename).toHaveBeenCalledTimes(action === "cancel" ? 1 : 0);
     },
   );

@@ -91,6 +91,7 @@ it.each([undefined, 0, 7])("preserves stored settings (%s)", async (maxRetries) 
   const globalSettings = {
     theme: "dark",
     defaultProvider: "openai",
+    defaultThinkingLevel: "low",
     shellPath: "/bin/sh",
     retry: {
       enabled: true,
@@ -108,41 +109,47 @@ it.each([undefined, 0, 7])("preserves stored settings (%s)", async (maxRetries) 
   await fs.writeFile(globalPath, globalBytes);
   await fs.writeFile(projectPath, projectBytes);
   const expectedProvider = { maxRetries, timeoutMs: 9_000, maxRetryDelayMs: 2_500 };
-  const assertPrepared = (theme: string) => {
+  const assertPrepared = (thinkingLevel: string) => {
     // Native preparation runs first, so embedded preparation must reuse its frozen inputs.
     expect(prepareAgentProviderRetryCount(params)).toBe(maxRetries);
     const prepared = prepare(params);
     expect(prepared.getProviderRetrySettings()).toEqual(expectedProvider);
-    expect([prepared.getTheme(), prepared.getDefaultProvider()]).toEqual([theme, "openai"]);
-    expect([prepared.getDefaultModel(), prepared.getShellPath()]).toEqual(["gpt-5", "/bin/sh"]);
-    expect([prepared.getHideThinkingBlock(), prepared.getRetryEnabled()]).toEqual([true, false]);
+    expect(prepared.getGlobalSettings()).toMatchObject({
+      theme: "dark",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5",
+      shellPath: "/bin/sh",
+      hideThinkingBlock: true,
+    });
+    expect(prepared.getDefaultThinkingLevel()).toBe(thinkingLevel);
+    expect(prepared.getRetryEnabled()).toBe(false);
     return prepared;
   };
-  const prepared = assertPrepared("dark");
-  prepared.setTheme("attempt-only");
+  const prepared = assertPrepared("low");
+  prepared.setDefaultThinkingLevel("high");
   prepared.setRetryEnabled(true);
   prepared.applyOverrides({ retry: { provider: { maxRetries: 99 } } });
   await prepared.flush();
   expect(await fs.readFile(globalPath, "utf8")).toBe(globalBytes);
   expect(await fs.readFile(projectPath, "utf8")).toBe(projectBytes);
-  assertPrepared("dark");
+  assertPrepared("low");
 
   const persistent = SettingsManager.create(params.cwd, params.agentDir);
-  persistent.setTheme("light");
+  persistent.setDefaultThinkingLevel("high");
   await persistent.flush();
   expect(JSON.parse(await fs.readFile(globalPath, "utf8"))).toEqual({
     ...globalSettings,
-    theme: "light",
+    defaultThinkingLevel: "high",
   });
   expect(await fs.readFile(projectPath, "utf8")).toBe(projectBytes);
   const reopened = SettingsManager.create(params.cwd, params.agentDir);
-  expect(reopened.getTheme()).toBe("light");
+  expect(reopened.getDefaultThinkingLevel()).toBe("high");
   expect(reopened.getProviderRetrySettings()).toEqual(expectedProvider);
-  expect(reopened.getGlobalSettings()).toEqual({ ...globalSettings, theme: "light" });
+  expect(reopened.getGlobalSettings()).toEqual({ ...globalSettings, defaultThinkingLevel: "high" });
   expect(reopened.getProjectSettings()).toEqual(projectSettings);
-  assertPrepared("dark");
+  assertPrepared("low");
   clearPreparedEmbeddedAgentSettings([params.sessionId]);
-  assertPrepared("light");
+  assertPrepared("high");
 });
 
 it.each([undefined, 0, 1, 4])("projects only the explicit count %s", async (maxRetries) => {
@@ -205,7 +212,9 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
       };
       expect(prepareAgentProviderRetryCount(input)).toBe(testCase.policy === "ignore" ? 1 : 0);
       const settingsManager = prepare(input);
-      expect(settingsManager.getShellCommandPrefix()).toBe(testCase.shellCommandPrefix);
+      expect(settingsManager.getGlobalSettings().shellCommandPrefix).toBe(
+        testCase.shellCommandPrefix,
+      );
       expect(settingsManager.getCompactionReserveTokens()).toBe(testCase.reserveTokens);
       expect(settingsManager.getCompactionKeepRecentTokens()).toBe(23_000);
       expect(settingsManager.getRetryEnabled()).toBe(false);
@@ -250,7 +259,7 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
         if (mode === "published") {
           setRuntimeConfigSnapshot(cfg);
         }
-        expect(prepare({ ...params, cfg }).getShellCommandPrefix()).toBe(prefix);
+        expect(prepare({ ...params, cfg }).getGlobalSettings().shellCommandPrefix).toBe(prefix);
       }
     } finally {
       if (mode === "published") {
@@ -285,7 +294,9 @@ describe("createPreparedEmbeddedAgentSettingsManager", () => {
 
     await writeJson(params.globalPath, { shellCommandPrefix: "refreshed global prefix" });
     clearPluginMetadataLifecycleCaches();
-    expect(prepare(replacement).getShellCommandPrefix()).toBe("refreshed global prefix");
+    expect(prepare(replacement).getGlobalSettings().shellCommandPrefix).toBe(
+      "refreshed global prefix",
+    );
   });
 
   it("keeps workspace and agent settings scoped when a session moves", async () => {

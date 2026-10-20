@@ -8,6 +8,7 @@ import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { callGateway } from "./call.js";
 import { registerChatAbortController } from "./chat-abort.js";
+import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 import {
@@ -86,6 +87,7 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
       expect(created.ok).toBe(true);
       const child = created.payload!.entry;
       const cleanupErrors: string[] = [];
+      const settlementWarnings = vi.spyOn(kernel.gatewayRequestContext.logGateway, "warn");
       const cleanupParams = {
         callGateway,
         gatewayBinding: {
@@ -119,6 +121,7 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
       let receivedWorkAbortedAtRecoveryMark: boolean | undefined;
       let abortedAfterRecoveryMark: boolean | undefined;
       let runtimeAvailableAtRecoveryMark: boolean | undefined;
+      let runtimeAvailableDuringFinalization: boolean | undefined;
       let entryFencedAtRecoveryMark: boolean | undefined;
       let recoveryMarked = false;
       let emergencyReleaseUsed = false;
@@ -142,6 +145,7 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
             onSettled: async (outcome) => {
               finalizerEntered.resolve();
               await finalizerRelease.promise;
+              runtimeAvailableDuringFinalization = kernel.gatewayInstanceRuntime.isAvailable();
               let cleanupCurrent = true;
               cleanupOutcomes.push(
                 await deleteSubagentSessionForCleanup({
@@ -213,11 +217,18 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
       try {
         // Give the caller an existing WS-equivalent owner; the admitted execution must retain it.
         request = kernel.connectionWork.track(() =>
-          kernel.gatewayInstanceRuntime.recovery.dispatchAgent({
-            message: "exercise the admitted command lifetime",
-            sessionKey: "main",
-            idempotencyKey: runId,
-          }),
+          dispatchGatewayMethodInProcess(
+            "agent",
+            {
+              message: "exercise the admitted command lifetime",
+              sessionKey: "main",
+              idempotencyKey: runId,
+            },
+            {
+              forceSyntheticClient: true,
+              resolveGatewayContext: kernel.gatewayRequestContext.resolveGatewayContext,
+            },
+          ),
         );
         expect(await request).toMatchObject({ status: "accepted", runId });
         await commandStarted.promise;
@@ -307,6 +318,12 @@ for (const mode of ["stop", "restart", "graceful"] as const) {
         expect(abortedAtRecoveryMark).toBe(false);
         expect(abortedAfterRecoveryMark).toBe(false);
         expect(runtimeAvailableAtRecoveryMark).toBe(true);
+        expect(
+          settlementWarnings.mock.calls.filter(([message]) =>
+            message.includes("failed to settle pending agent input"),
+          ),
+        ).toEqual([]);
+        expect(runtimeAvailableDuringFinalization).toBe(true);
         expect(entryFencedAtRecoveryMark).toBe(true);
         expect(recoveryMarked).toBe(mode !== "graceful");
         expect(kernel.gatewayInstanceRuntime.isAvailable()).toBe(false);

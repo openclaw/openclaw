@@ -71,6 +71,47 @@ afterEach(() => {
 });
 
 describe("xai x_search tool", () => {
+  it("reuses answers only for the resolved credential across tool instances", async () => {
+    const mockFetch = installXSearchFetch().mockImplementation(async (_url, init) =>
+      jsonResponse({
+        output_text:
+          new Headers(init?.headers).get("Authorization") === "Bearer fixture-key-a"
+            ? "Account A answer"
+            : "Account B answer",
+      }),
+    );
+    const tool = (apiKey: string) => {
+      const result = createXSearchTool({
+        config: {},
+        runtimeConfig: {},
+        auth: {
+          hasAuthForProvider: () => true,
+          resolveApiKeyForProvider: async () => apiKey,
+        },
+      });
+      if (!result) {
+        throw new Error("Expected configured X search tool");
+      }
+      return result;
+    };
+    const firstTool = tool("fixture-key-a");
+    const otherTool = tool("fixture-key-b");
+    const args = { query: "credential-scoped X search cache regression" };
+    const first = await firstTool.execute("account-a", args);
+    const other = await otherTool.execute("account-b", args);
+    const repeated = await firstTool.execute("account-a-repeat", args);
+
+    expect(first.details).toMatchObject({ content: expect.stringContaining("Account A answer") });
+    expect(other.details).toMatchObject({ content: expect.stringContaining("Account B answer") });
+    expect(repeated.details).toMatchObject({
+      cached: true,
+      content: expect.stringContaining("Account A answer"),
+    });
+    expect(
+      mockFetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+    ).toEqual(["Bearer fixture-key-a", "Bearer fixture-key-b"]);
+  });
+
   it("enables x_search from an xAI auth profile and uses it for requests", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({

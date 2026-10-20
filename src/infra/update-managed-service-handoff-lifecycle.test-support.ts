@@ -81,6 +81,8 @@ export type ManagedServiceManagerBoundaryResult = {
   state: Record<string, unknown>;
   sentinel: unknown;
   log: string;
+  stdout: string;
+  stderr: string;
   commandTimings: ManagedServiceCommandTiming[];
   recoveryDeadline?: { requestedMs: number; descendantPid?: number };
   triageDeadline?: { requestedMs: number; descendantPid: number };

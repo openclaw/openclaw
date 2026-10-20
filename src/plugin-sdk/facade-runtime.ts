@@ -1,4 +1,3 @@
-// Facade runtime helpers load plugin API facades from installed plugin packages.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";

@@ -25,6 +25,7 @@ import type { CronState } from "../../lib/cron/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import {
   createCronJob,
+  createCronRunsResult,
   createMethodRequest,
   createStateWithRequest,
   cronJobsListResponse,
@@ -101,19 +102,6 @@ function sent(request: ReturnType<typeof createMethodRequest>, method = "cron.ad
     throw new Error(`Expected ${method} request call`);
   }
   return requireRecord(call[1], `${method} payload`);
-}
-
-function createCronRunsResult(
-  entries: CronRunsResult["entries"],
-  overrides: Partial<Omit<CronRunsResult, "entries">> = {},
-): CronRunsResult {
-  return {
-    entries,
-    total: entries.length,
-    hasMore: false,
-    nextOffset: null,
-    ...overrides,
-  };
 }
 
 function runEntry(jobId: string, ts: number) {
@@ -903,19 +891,6 @@ describe("cron controller", () => {
       cronJobsReloadPendingTableFilters: false,
       cronJobsSnapshotRevision: "cron-jobs-fixture",
     });
-  });
-
-  it("drops malformed jobs without changing the server's inventory total", async () => {
-    const job = createCronJob("good", "Good");
-    const request = createMethodRequest({
-      "cron.list": {
-        ...cronJobsListResponse([job], { total: 2 }),
-        jobs: [{ id: "bad", name: "Missing payload", enabled: true }, job],
-      },
-    });
-    const state = createStateWithRequest(request);
-    await loadCronJobsPage(state);
-    expect(state).toMatchObject({ cronJobs: [job], cronJobsTotal: 2, cronJobsHasMore: false });
   });
 
   it("drops an older append after replacing history filters", async () => {

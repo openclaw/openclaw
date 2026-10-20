@@ -12,7 +12,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { pathExists, root as fsRoot } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
-import { readChunkWithIdleTimeout } from "../infra/http-response-body-timeout.js";
 import type { TimedInstallModeOptions } from "../infra/install-mode-options.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
@@ -675,16 +674,11 @@ function parseMarketplaceContentLength(raw: string): number {
 
 async function* marketplaceResponseChunks(
   body: ReadableStream<Uint8Array>,
-  timeoutMs: number,
 ): AsyncIterable<Uint8Array> {
   const reader = body.getReader();
   try {
     while (true) {
-      const { done, value } = await readChunkWithIdleTimeout(
-        reader,
-        timeoutMs,
-        ({ chunkTimeoutMs }) => new Error(`download timed out after ${chunkTimeoutMs}ms`),
-      );
+      const { done, value } = await reader.read();
       if (done) {
         return;
       }
@@ -758,15 +752,11 @@ async function downloadUrlToTempFile(
       const createdWorkspace = workspace;
       const targetPath = workspace.path(fileName);
       const destination = await fsRoot(workspace.dir);
-      await destination.create(
-        fileName,
-        marketplaceResponseChunks(response.body, downloadTimeoutMs),
-        {
-          maxBytes: MAX_MARKETPLACE_ARCHIVE_BYTES,
-          mode: 0o666 & ~process.umask(),
-          durable: false,
-        },
-      );
+      await destination.create(fileName, marketplaceResponseChunks(response.body), {
+        maxBytes: MAX_MARKETPLACE_ARCHIVE_BYTES,
+        mode: 0o666 & ~process.umask(),
+        durable: false,
+      });
       return {
         ok: true,
         path: targetPath,

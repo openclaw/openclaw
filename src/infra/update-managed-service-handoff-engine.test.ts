@@ -168,6 +168,7 @@ itUnix.for(["transfer", "cancel"] as const)(
 itUnix("restores a SQLite runtime that has no engine-aware sentinel method", async () => {
   // The installed recovery fixture intentionally has no new operation export.
   const result = await runManagedServiceManagerBoundary("systemd", {
+    ledger: true,
     controlDisconnect: "transferred",
     helperExitCode: 7,
     updaterNotification: "published",
@@ -177,7 +178,21 @@ itUnix("restores a SQLite runtime that has no engine-aware sentinel method", asy
       reason: "candidate-failed",
       recovery: { serviceRestartSafe: true, version: "1.0.0" },
     },
+    async prepareState({ env, recoveryModulePath, sourceRuntimeImport }) {
+      env.OPENCLAW_LOG_LEVEL = "debug";
+      env.OPENCLAW_TEST_CONSOLE = "1";
+      await fs.appendFile(
+        recoveryModulePath,
+        `
+        ${sourceRuntimeImport}
+        const { resolveSqliteInspectionBudget } = await import(${JSON.stringify(new URL("./sqlite-readonly-worker.ts", import.meta.url).href)});
+        resolveSqliteInspectionBudget("handoff fixture", "synthetic.sqlite", 1024);
+        `,
+      );
+    },
   });
+  expect(result.stdout.split("\n")[0]).toBe("OPENCLAW_UPDATE_HANDOFF_READY");
+  expect(result.stderr).toContain("SQLite handoff fixture for synthetic.sqlite");
   expect(result.state).toMatchObject({ restored: true });
   expect(result.sentinel).toMatchObject({ payload: { status: "error" } });
   expect(result.log).not.toContain("could not be recorded");

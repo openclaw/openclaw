@@ -1,4 +1,3 @@
-import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -15,6 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelSetupHooks, setupChannels } from "../flows/channel-setup.js";
 import { validateGatewayPortInput } from "../gateway/gateway-config-prompts.shared.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../gateway/probe-auth.js";
+import { canAccess } from "../infra/path-existence.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { formatWindowsGatewayFirewallGuidance } from "../infra/windows-gateway-firewall-diagnostics.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
@@ -440,16 +440,7 @@ export async function runConfigureWizard(opts: { sections?: WizardSection[] }) {
           nodePath.join(workspaceDir, name),
         );
         const hasExistingContent = (
-          await Promise.all(
-            indicators.map(async (candidate) => {
-              try {
-                await fsPromises.access(candidate);
-                return true;
-              } catch {
-                return false;
-              }
-            }),
-          )
+          await Promise.all(indicators.map((candidate) => canAccess(candidate)))
         ).some(Boolean);
         if (hasExistingContent) {
           note(

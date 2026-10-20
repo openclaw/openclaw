@@ -1,16 +1,13 @@
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { z } from "zod";
 import type { GithubSourceConfig, SourceRuntime, SourceStatus } from "../../types.js";
 import {
   ApiResponseReadError,
-  checkAbort,
   createResponseParser,
   parseApiBase,
   readApiResponse,
-  wait,
 } from "../http.js";
-
-export const ABORT_LABEL = "GitHub collection aborted";
 
 export class GithubSourceError extends Error {}
 
@@ -46,7 +43,6 @@ export class GithubClient {
   }
 
   warn(scope: string, error: unknown): void {
-    checkAbort(this.runtime.signal, ABORT_LABEL);
     const detail =
       error instanceof GithubSourceError
         ? error.message
@@ -60,7 +56,6 @@ export class GithubClient {
   }
 
   async attempt(scope: string, action: () => Promise<void>): Promise<void> {
-    checkAbort(this.runtime.signal, ABORT_LABEL);
     try {
       await action();
     } catch (error) {
@@ -84,7 +79,6 @@ export class GithubClient {
   async get(path: string): Promise<{ data: unknown; next?: string }> {
     const url = this.url(path);
     for (let failures = 0; ;) {
-      checkAbort(this.runtime.signal, ABORT_LABEL);
       let response: Awaited<ReturnType<typeof readApiResponse>>;
       let data: unknown;
       try {
@@ -97,14 +91,12 @@ export class GithubClient {
           },
           this.runtime,
           this.status,
-          ABORT_LABEL,
         );
         data = response.data;
         if (response.status >= 200 && response.status < 300 && data === undefined) {
           throw new GithubSourceError("Invalid JSON API response");
         }
       } catch (error) {
-        checkAbort(this.runtime.signal, ABORT_LABEL);
         if (error instanceof GithubSourceError) {
           throw error;
         }
@@ -116,7 +108,6 @@ export class GithubClient {
             : "Request failed; check API access and connectivity",
         );
       }
-      checkAbort(this.runtime.signal, ABORT_LABEL);
       const remaining = response.headers.get("x-ratelimit-remaining");
       if (remaining !== null && Number.isFinite(Number(remaining))) {
         this.status.stats.rateLimitRemaining = Number(remaining);
@@ -134,21 +125,19 @@ export class GithubClient {
             (errorBody.success &&
               /(?:secondary )?rate limit|abuse detection/i.test(errorBody.data.message))));
       if (limited) {
-        await wait(
+        await sleepWithAbort(
           Math.max(
             1000,
             (retryAfter ?? 0) * 1000,
             Number.isFinite(resetDelay) ? resetDelay : 0,
             retryAfter === undefined && remaining !== "0" ? 60_000 : 0,
           ),
-          this.runtime.signal,
-          ABORT_LABEL,
         );
         continue;
       }
       if (response.status >= 500 && failures < 3) {
         failures += 1;
-        await wait(1000 * 2 ** (failures - 1), this.runtime.signal, ABORT_LABEL);
+        await sleepWithAbort(1000 * 2 ** (failures - 1));
         continue;
       }
       if (response.status < 200 || response.status >= 300) {
@@ -181,7 +170,6 @@ export class GithubClient {
     let next: string | undefined = path;
     const seen = new Set<string>();
     while (next) {
-      checkAbort(this.runtime.signal, ABORT_LABEL);
       const canonical = this.url(next).href;
       if (seen.has(canonical)) {
         throw new GithubSourceError("API pagination did not advance");
@@ -189,7 +177,6 @@ export class GithubClient {
       seen.add(canonical);
       const page = await this.get(next);
       for (const item of parse(z.array(schema), page.data)) {
-        checkAbort(this.runtime.signal, ABORT_LABEL);
         yield item;
       }
       await afterPage?.();
