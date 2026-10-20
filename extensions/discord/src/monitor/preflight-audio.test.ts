@@ -50,40 +50,32 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     expect(result).toEqual({ hasTypedText: false, transcript: "hello from dm" });
   });
 
-  it("does not preflight typed direct-message audio", async () => {
-    const result = await preflight({
+  it.each([
+    {
+      name: "typed direct-message audio",
       content: "typed caption",
-      attachments: [
-        {
-          url: "https://cdn.discordapp.com/attachments/voice.ogg",
-          content_type: "audio/ogg",
-          filename: "voice.ogg",
-        },
-      ],
-    });
-
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-    expect(result).toEqual({
       hasTypedText: true,
-    });
-  });
-
-  it("does not preflight a duration-bearing image attachment as audio", async () => {
-    const result = await preflight({
-      attachments: [
-        {
-          url: "https://cdn.discordapp.com/attachments/photo.png",
-          content_type: "image/png",
-          filename: "photo.png",
-          duration_secs: 0.5,
-        },
-      ],
-    });
-
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-    expect(result).toEqual({
+      attachment: {
+        url: "https://cdn.discordapp.com/attachments/voice.ogg",
+        content_type: "audio/ogg",
+        filename: "voice.ogg",
+      },
+    },
+    {
+      name: "a duration-bearing image",
+      content: undefined,
       hasTypedText: false,
-    });
+      attachment: {
+        url: "https://cdn.discordapp.com/attachments/photo.png",
+        content_type: "image/png",
+        filename: "photo.png",
+        duration_secs: 0.5,
+      },
+    },
+  ])("does not preflight $name", async ({ content, attachment, hasTypedText }) => {
+    const result = await preflight({ content, attachments: [attachment] });
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ hasTypedText });
   });
 
   it("still preflights a waveform-bearing voice note with a definitive video MIME", async () => {

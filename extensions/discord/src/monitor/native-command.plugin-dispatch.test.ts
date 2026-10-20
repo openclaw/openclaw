@@ -823,32 +823,25 @@ describe("Discord native plugin command dispatch", () => {
     expect(interaction.deleteReply).not.toHaveBeenCalled();
   });
 
-  it("returns an explicit warning when a direct plugin command has no visible reply", async () => {
-    pluginHandler.mockResolvedValue({});
-    const dispatchSpy = dispatchReply.mockResolvedValue({} as never);
-    const command = await createMockPluginNativeCommand(cfg, cronCommand);
-
-    await command.run(interaction);
-
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expectSingleCallFirstArg(interaction.followUp, {
-      content: "⚠️ Command produced no visible reply.",
-    });
-    expect(interaction.reply).not.toHaveBeenCalled();
-  });
-
-  it("suppresses the warning when a direct plugin command suppresses replies", async () => {
-    pluginHandler.mockResolvedValue({ suppressReply: true });
-    const dispatchSpy = dispatchReply.mockResolvedValue({} as never);
-    const command = await createMockPluginNativeCommand(cfg, cronCommand);
-
-    await command.run(interaction);
-
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
-    expect(interaction.reply).not.toHaveBeenCalled();
-    expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
-  });
+  it.each([false, true])(
+    "handles an empty direct plugin reply (suppressed=%s)",
+    async (suppress) => {
+      pluginHandler.mockResolvedValue(suppress ? { suppressReply: true } : {});
+      const dispatchSpy = dispatchReply.mockResolvedValue({} as never);
+      const command = await createMockPluginNativeCommand(cfg, cronCommand);
+      await command.run(interaction);
+      expect(dispatchSpy).not.toHaveBeenCalled();
+      expect(interaction.reply).not.toHaveBeenCalled();
+      if (suppress) {
+        expectNoFollowUpContent(interaction, "⚠️ Command produced no visible reply.");
+        expect(interaction.deleteReply).toHaveBeenCalledTimes(1);
+      } else {
+        expectSingleCallFirstArg(interaction.followUp, {
+          content: "⚠️ Command produced no visible reply.",
+        });
+      }
+    },
+  );
 
   it("preserves fetched thread parent metadata when interaction omits parentId", async () => {
     const allowedChannel = { enabled: true, requireMention: false, users: ["user:owner"] };
