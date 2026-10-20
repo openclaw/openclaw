@@ -19,15 +19,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-import {
-  callGateway,
-  inspectPortUsage,
-  makeGatewayService,
-  monotonicClock,
-  resetRestartHealthMocks,
-  restoreRestartHealthMocks,
-  sleep,
-} from "../daemon-cli/restart-health.test-helpers.js";
+import * as restart from "../daemon-cli/restart-health.test-helpers.js";
 import {
   GatewayRestartHealthError,
   runUpdatedInstallGatewayCommand,
@@ -69,29 +61,44 @@ const resultWith = (overrides: Partial<UpdateRunResult> = {}): UpdateRunResult =
   ...overrides,
 });
 function useService(
-  runtime: Parameters<typeof makeGatewayService>[0] = { status: "running", pid: 8000 },
+  runtime: Parameters<typeof restart.makeGatewayService>[0] = { status: "running", pid: 8000 },
 ) {
-  const service = makeGatewayService(runtime);
+  const service = restart.makeGatewayService(runtime);
   vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
   return service;
 }
-function busyPort(commandLine?: string) {
-  inspectPortUsage.mockImplementation(async (port) => ({
+function busyPort(commandLine?: string, readyAtMs = 0) {
+  restart.inspectPortUsage.mockImplementation(async (port) => ({
     port,
-    status: "busy",
-    listeners: [{ pid: 8000, ...(commandLine ? { commandLine } : {}) }],
+    status: restart.monotonicClock.nowMs < readyAtMs ? "free" : "busy",
+    listeners:
+      restart.monotonicClock.nowMs < readyAtMs
+        ? []
+        : [{ pid: 8000, ...(commandLine ? { commandLine } : {}) }],
     hints: [],
   }));
+}
+function gatewayFixture(
+  identity: Parameters<typeof gatewayHealthResponse>[0] = {},
+  options: { platform?: NodeJS.Platform; commandLine?: string; readyAtMs?: number } = {},
+) {
+  mockProcessPlatform(options.platform ?? "linux");
+  const service = useService();
+  busyPort(options.commandLine, options.readyAtMs);
+  restart.callGateway.mockImplementation(gatewayHealthResponse(identity));
+  return service;
 }
 function verifyGateway(
   params: Omit<Parameters<typeof verifyUpdatedGateway>[0], "opts" | "serviceEnv"> &
     Partial<Pick<Parameters<typeof verifyUpdatedGateway>[0], "opts" | "serviceEnv">>,
 ) {
-  return verifyUpdatedGateway({
+  const verification = verifyUpdatedGateway({
     opts: { json: true },
     serviceEnv: { HOME: "/synthetic-home" },
     ...params,
   });
+  pendingVerification = verification;
+  return verification;
 }
 async function listen(handler: RequestListener = (_req, res) => res.writeHead(200).end()) {
   server = createServer(handler);
@@ -110,12 +117,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(recordUpdateRunVerification).mockReset();
   vi.mocked(recordUpdateRunStep).mockReset();
-  resetRestartHealthMocks();
+  restart.resetRestartHealthMocks();
 });
 afterEach(async () => {
   controller.abort();
   await pendingVerification?.catch(() => {});
-  restoreRestartHealthMocks();
+  restart.restoreRestartHealthMocks();
   server?.closeAllConnections();
   if (server?.listening) {
     const closed = once(server, "close");
@@ -125,27 +132,21 @@ afterEach(async () => {
 });
 
 describe("update readiness", () => {
-  it.each(
-    (["npm", "pnpm", "bun"] as const).flatMap((mode) =>
-      (
-        [
-          ["ready", "2026.9.8", "candidate"],
-          ["starting", undefined, undefined],
-          ["old-version", "2026.9.7", "candidate"],
-          ["old-build", "2026.9.8", "previous-build"],
-          ["missing-build", "2026.9.8", undefined],
-          ["retained-identity", "2026.9.7", "retained-build"],
-        ] as const
-      ).map(([state, version, buildId]) => ({ mode, state, version, buildId })),
-    ),
-  )(
-    "observes a package watcher restart without failing --no-restart ($mode, $state)",
-    async ({ mode, state, version, buildId }) => {
+  it.each([
+    ["npm", "ready", "2026.9.8", "candidate"],
+    ["pnpm", "ready", "2026.9.8", "candidate"],
+    ["bun", "ready", "2026.9.8", "candidate"],
+    ["npm", "starting", undefined, undefined],
+    ["npm", "old-version", "2026.9.7", "candidate"],
+    ["npm", "old-build", "2026.9.8", "previous-build"],
+    ["npm", "missing-build", "2026.9.8", undefined],
+    ["npm", "retained-identity", "2026.9.7", "retained-build"],
+  ] as const)(
+    "observes a package watcher restart without failing --no-restart (%s, %s)",
+    async (mode, state, version, buildId) => {
       const verified = state === "ready" || state === "retained-identity";
-      mockProcessPlatform("linux");
-      useService();
-      busyPort("openclaw-gateway");
-      callGateway.mockImplementation(
+      gatewayFixture({}, { commandLine: "openclaw-gateway" });
+      restart.callGateway.mockImplementation(
         state === "starting"
           ? async () => {
               throw new Error("gateway timeout after 3000ms");
@@ -207,11 +208,9 @@ describe("update readiness", () => {
   it.each(["transient-timeout", "mixed"])(
     "records collection and channel probe warnings after core verification (%s)",
     async (kind) => {
-      mockProcessPlatform("linux");
-      useService();
-      busyPort("openclaw-gateway");
+      gatewayFixture({}, { commandLine: "openclaw-gateway" });
       let probes = 0;
-      callGateway.mockImplementation((opts) =>
+      restart.callGateway.mockImplementation((opts) =>
         gatewayHealthResponse({
           server: { version: "2026.9.8", buildId: "candidate", bootId: "candidate-boot" },
           health: {
@@ -277,12 +276,12 @@ describe("update readiness", () => {
   it("observes foreground identity and HTTP once despite slow command inspection", async () => {
     const service = useService({ status: "stopped" });
     vi.mocked(service.readCommand).mockImplementation(async () => {
-      monotonicClock.nowMs += 3_300;
+      restart.monotonicClock.nowMs += 3_300;
       return null;
     });
     vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
     busyPort();
-    callGateway.mockImplementation((opts) => {
+    restart.callGateway.mockImplementation((opts) => {
       const responseMs = 5;
       if ((opts.timeoutMs ?? responseMs) < responseMs) {
         throw new Error("Gateway health response exceeded its remaining allowance");
@@ -310,13 +309,12 @@ describe("update readiness", () => {
       timeoutMs: 30_000,
       signal: controller.signal,
     });
-    pendingVerification = verification;
     expect(await verification).toMatchObject({ ok: true });
     expect(requests.toSorted()).toEqual(["/healthz", "/readyz"]);
-    expect(callGateway).toHaveBeenCalledTimes(2);
-    expect(sleep).not.toHaveBeenCalled();
-    expect(monotonicClock.nowMs).toBe(6_600);
-    for (const [params] of callGateway.mock.calls) {
+    expect(restart.callGateway).toHaveBeenCalledTimes(2);
+    expect(restart.sleep).not.toHaveBeenCalled();
+    expect(restart.monotonicClock.nowMs).toBe(6_600);
+    for (const [params] of restart.callGateway.mock.calls) {
       expect(params.timeoutMs).toBe(3_000);
     }
     expect(result).toMatchObject({ status: "error", reason: "doctor-failed" });
@@ -331,7 +329,7 @@ describe("update readiness", () => {
     const service = useService({ status: "stopped" });
     vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
     busyPort();
-    callGateway.mockImplementation(
+    restart.callGateway.mockImplementation(
       gatewayHealthResponse({ server: { version: "2026.9.5", bootId: "foreground-boot" } }),
     );
     const gatewayPort = await listen((req, res) => {
@@ -351,7 +349,6 @@ describe("update readiness", () => {
       timeoutMs,
       signal: controller.signal,
     });
-    pendingVerification = verification;
     await expect(verification).resolves.toMatchObject({ ok: false, summary: "readyz-unhealthy" });
     expect(Date.now() - startedAt).toBeLessThan(5_000);
     expect(result.verification).toMatchObject({ readyz: false, settled: false });
@@ -361,10 +358,10 @@ describe("update readiness", () => {
         expect.objectContaining({ check: "readyz", code: "readyz-unhealthy" }),
       ]),
     });
-    expect(sleep).not.toHaveBeenCalled();
+    expect(restart.sleep).not.toHaveBeenCalled();
     expect(result.steps[0]?.termination).toBeUndefined();
     expect(result.steps[0]?.advisory).toBeUndefined();
-    for (const [params] of callGateway.mock.calls) {
+    for (const [params] of restart.callGateway.mock.calls) {
       expect(params.timeoutMs).toBeLessThanOrEqual(3_000);
     }
   });
@@ -401,6 +398,10 @@ describe("update readiness", () => {
           : undefined;
       let outcome: unknown;
       let settled = false;
+      const settle = (value: unknown) => {
+        outcome = value;
+        settled = true;
+      };
       pendingVerification = verifyGateway({
         result,
         opts: { json: true, run: { runId: "stalled-readiness", env: {} } },
@@ -421,19 +422,10 @@ describe("update readiness", () => {
                 staleGatewayPids: [],
               }
             : undefined,
-      }).then(
-        (value) => {
-          outcome = value;
-          settled = true;
-        },
-        (error: unknown) => {
-          outcome = error;
-          settled = true;
-        },
-      );
+      }).then(settle, settle);
       try {
         await entered.promise;
-        monotonicClock.nowMs = 1_000;
+        restart.monotonicClock.nowMs = 1_000;
         await vi.advanceTimersByTimeAsync(1_000);
         expect(settled).toBe(true);
         expect(outcome).toMatchObject({ ok: false });
@@ -502,28 +494,19 @@ describe("update readiness", () => {
   it.each(["runtime", "port", "command"] as const)(
     "keeps recovery observation factual with inspection cleanup: %s",
     async (fault) => {
-      mockProcessPlatform("linux");
-      const service = useService();
-      busyPort();
-      callGateway.mockImplementation(
-        gatewayHealthResponse({
-          server: { version: "2026.9.5", buildId: "candidate-build", bootId: "recovery-boot" },
-        }),
-      );
+      const service = gatewayFixture({
+        server: { version: "2026.9.5", buildId: "candidate-build", bootId: "recovery-boot" },
+      });
       const gatewayPort = await listen();
       const cleanup = new AggregateError(
         [new CommandProcessCleanupError()],
         "inspection cleanup uncertain",
       );
-      if (fault === "runtime") {
-        vi.spyOn(service, "readRuntime").mockRejectedValue(cleanup);
-      }
-      if (fault === "command") {
-        vi.spyOn(service, "readCommand").mockRejectedValue(cleanup);
-      }
-      if (fault === "port") {
-        inspectPortUsage.mockRejectedValue(cleanup);
-      }
+      const probe =
+        fault === "port"
+          ? restart.inspectPortUsage
+          : vi.spyOn(service, fault === "runtime" ? "readRuntime" : "readCommand");
+      probe.mockRejectedValue(cleanup);
       const result = resultWith({
         status: "error",
         reason: "post-update-plugins",
@@ -537,7 +520,6 @@ describe("update readiness", () => {
         expectedBuildId: "candidate-build",
         signal: controller.signal,
       });
-      pendingVerification = verification;
       await expect(verification).rejects.toBe(cleanup);
       expect(result.verification).toBeUndefined();
       expect(result.steps).toEqual([]);
@@ -545,38 +527,17 @@ describe("update readiness", () => {
   );
 
   it.each([
-    {
-      startupAtMs: 1_500,
-      healthyAtMs: 1_500,
-      timeoutMs: 1_000,
-      verified: false,
-      minMs: 1_000,
-      maxMs: 1_500,
-    },
-    {
-      startupAtMs: 12_500,
-      healthyAtMs: 20_000,
-      timeoutMs: undefined,
-      verified: true,
-      minMs: 20_000,
-      maxMs: 21_500,
-    },
-  ])(
-    "keeps readiness within the startup allowance (startup=$startupAtMs)",
-    async ({ startupAtMs, healthyAtMs, timeoutMs, verified, minMs, maxMs }) => {
-      mockProcessPlatform("linux");
-      useService();
-      inspectPortUsage.mockImplementation(async (port) => ({
-        port,
-        status: monotonicClock.nowMs < startupAtMs ? "free" : "busy",
-        listeners: monotonicClock.nowMs < startupAtMs ? [] : [{ pid: 8000 }],
-        hints: [],
-      }));
-      callGateway.mockImplementation(async (opts) => {
+    [1_500, 1_500, 1_000, false, 1_000, 1_500],
+    [12_500, 20_000, undefined, true, 20_000, 21_500],
+  ] as const)(
+    "keeps readiness within the startup allowance (startup=%s)",
+    async (startupAtMs, healthyAtMs, timeoutMs, verified, minMs, maxMs) => {
+      gatewayFixture({}, { readyAtMs: startupAtMs });
+      restart.callGateway.mockImplementation(async (opts) => {
         const responseMs = 5;
         const remainingMs = opts.timeoutMs ?? responseMs;
-        monotonicClock.nowMs += Math.min(responseMs, remainingMs);
-        if (monotonicClock.nowMs < healthyAtMs) {
+        restart.monotonicClock.nowMs += Math.min(responseMs, remainingMs);
+        if (restart.monotonicClock.nowMs < healthyAtMs) {
           throw new Error("Gateway is still starting");
         }
         if (remainingMs < responseMs) {
@@ -600,11 +561,10 @@ describe("update readiness", () => {
         timeoutMs,
         signal: controller.signal,
       });
-      pendingVerification = verification;
       expect((await verification).ok).toBe(verified);
       expect(httpRequests).toBe(verified ? 2 : 0);
-      expect(monotonicClock.nowMs).toBeGreaterThanOrEqual(minMs);
-      expect(monotonicClock.nowMs).toBeLessThan(maxMs);
+      expect(restart.monotonicClock.nowMs).toBeGreaterThanOrEqual(minMs);
+      expect(restart.monotonicClock.nowMs).toBeLessThan(maxMs);
     },
   );
 
@@ -620,25 +580,17 @@ describe("update readiness", () => {
       const childTimeout = activation === "child readiness timeout";
       if (childTimeout) {
         vi.mocked(runUpdatedInstallGatewayCommand).mockImplementationOnce(async () => {
-          monotonicClock.nowMs = 60_000;
+          restart.monotonicClock.nowMs = 60_000;
           throw new GatewayRestartHealthError(
             "Gateway restart timed out after 60s waiting for health checks.",
           );
         });
       }
-      mockProcessPlatform("linux");
-      const service = makeGatewayService({ status: "running", pid: 8000 });
-      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
-      inspectPortUsage.mockImplementation(async (port) => ({
-        port,
-        status: monotonicClock.nowMs < 90_000 ? "free" : "busy",
-        listeners: monotonicClock.nowMs < 90_000 ? [] : [{ pid: 8000 }],
-        hints: [],
-      }));
-      callGateway.mockImplementation(
-        gatewayHealthResponse({
+      gatewayFixture(
+        {
           server: { version: "2026.9.4", buildId: "candidate-build", bootId: "slow-boot" },
-        }),
+        },
+        { readyAtMs: 90_000 },
       );
       const gatewayPort = await listen();
       const result = await maybeRestartService({
@@ -661,8 +613,8 @@ describe("update readiness", () => {
       expect(result, JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toBe(
         pending ? "readiness-pending" : "ok",
       );
-      expect(monotonicClock.nowMs).toBe(pending ? 60_000 : 90_000);
-      expect(callGateway).toHaveBeenCalledTimes(pending ? 0 : 2);
+      expect(restart.monotonicClock.nowMs).toBe(pending ? 60_000 : 90_000);
+      expect(restart.callGateway).toHaveBeenCalledTimes(pending ? 0 : 2);
       expect(runUpdatedInstallGatewayCommand).toHaveBeenCalledOnce();
     },
   );
@@ -670,21 +622,15 @@ describe("update readiness", () => {
   it("preserves Windows cold startup within the default update timeout", async () => {
     const readyAtMs = 44 * 60_000;
     const budgetMs = resolveGatewayStartupTiming("win32").deadlineMs;
-    mockProcessPlatform("win32");
-    useService();
-    inspectPortUsage.mockImplementation(async (port) => ({
-      port,
-      status: monotonicClock.nowMs < readyAtMs ? "free" : "busy",
-      listeners: monotonicClock.nowMs < readyAtMs ? [] : [{ pid: 8000 }],
-      hints: [],
-    }));
-    sleep.mockImplementation(async (delayMs) => {
-      // Advance the cold-loading interval without thousands of identical probes.
-      monotonicClock.nowMs += monotonicClock.nowMs === 0 ? Math.min(readyAtMs, budgetMs) : delayMs;
-    });
-    callGateway.mockImplementation(
-      gatewayHealthResponse({ server: { version: "2026.9.4", bootId: "windows-cold-boot" } }),
+    gatewayFixture(
+      { server: { version: "2026.9.4", bootId: "windows-cold-boot" } },
+      { platform: "win32", readyAtMs },
     );
+    restart.sleep.mockImplementation(async (delayMs) => {
+      // Advance the cold-loading interval without thousands of identical probes.
+      restart.monotonicClock.nowMs +=
+        restart.monotonicClock.nowMs === 0 ? Math.min(readyAtMs, budgetMs) : delayMs;
+    });
     const gatewayPort = await listen();
     const outcome = await maybeRestartService({
       shouldRestart: true,
@@ -704,7 +650,7 @@ describe("update readiness", () => {
       expect.objectContaining({ timeoutMs: budgetMs }),
       "restart",
     );
-    expect(monotonicClock.nowMs).toBe(Math.min(readyAtMs, budgetMs));
+    expect(restart.monotonicClock.nowMs).toBe(Math.min(readyAtMs, budgetMs));
   });
 
   it.each([
@@ -718,14 +664,13 @@ describe("update readiness", () => {
     async ({ transition, supplied }) => {
       // Keep the real health/hello interpretation and HTTP readiness loop.
       // Only the service manager/health RPC are synthetic; HTTP uses a local socket.
-      mockProcessPlatform("linux");
-      const service = useService();
+      const service = gatewayFixture({}, { commandLine: "openclaw-gateway" });
       service.isLoaded = vi.fn(async () => true);
-      busyPort("openclaw-gateway");
-      callGateway.mockImplementation((opts) =>
+      restart.callGateway.mockImplementation((opts) =>
         gatewayHealthResponse({
           server: { version: "2026.9.1", buildId: "candidate-build", bootId: "boot-a" },
-          ...(transition === "first-final-health-error" && callGateway.mock.calls.length === 2
+          ...(transition === "first-final-health-error" &&
+          restart.callGateway.mock.calls.length === 2
             ? { error: new Error("synthetic health failed") }
             : {}),
         })(opts),
@@ -767,16 +712,15 @@ describe("update readiness", () => {
         requireRunningService: true,
         onVerified,
       });
-      pendingVerification = verification;
       await Promise.race([
         reached.promise,
         verification.then(() => {
           throw new Error("Verifier returned before HTTP readiness");
         }),
       ]);
-      expect(callGateway).toHaveBeenCalledOnce();
+      expect(restart.callGateway).toHaveBeenCalledOnce();
       if (transition.endsWith("at-deadline")) {
-        monotonicClock.nowMs = 300_000;
+        restart.monotonicClock.nowMs = 300_000;
       }
       release.resolve();
       const result = await verification;
@@ -790,7 +734,7 @@ describe("update readiness", () => {
         expect(updateResult.steps[0]?.failureFacts).toContainEqual(
           expect.objectContaining({ code: "timeout" }),
         );
-        expect(callGateway).toHaveBeenCalledOnce();
+        expect(restart.callGateway).toHaveBeenCalledOnce();
       }
       if (transition === "readyz-error") {
         expect(result).toMatchObject({ ok: false, summary: "readyz-unhealthy" });

@@ -1,11 +1,6 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  getUpdateRun,
-  recordUpdateRunVerification,
-} from "../../infra/update-run-ledger.js";
+import * as runs from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.js";
@@ -48,7 +43,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => closeOpenClawStateDatabaseForTest());
 function createRun() {
   const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("update-verification-") };
-  return { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+  return { runId: runs.createUpdateRun({ trigger: "cli" }, { env }).runId, env };
 }
 
 it.each([undefined, "2026.9.2", "2026.9.4"])(
@@ -56,29 +51,24 @@ it.each([undefined, "2026.9.2", "2026.9.4"])(
   async (gatewayVersion) => {
     const run = createRun();
     const { env } = run;
-    recordUpdateRunVerification(
+    runs.recordUpdateRunVerification(
       run.runId,
       { runningVersion: "2026.9.2", runningBuildId: "previous-build", versionMatch: true },
       { env },
     );
     expect((await verifyObservation(run, { gatewayVersion })).ok).toBe(false);
-    const recorded = finishUpdateRun(
+    const recorded = runs.finishUpdateRun(
       run.runId,
-      {
-        status: "failed",
-        reason: "restart-unhealthy",
-        after: { version: "2026.9.4" },
-      },
+      { status: "failed", reason: "restart-unhealthy", after: { version: "2026.9.4" } },
       { env },
     );
-    if (!recorded) {
-      throw new Error("Missing finished update record");
-    }
-    expect(recorded.verification.runningVersion).toBe(gatewayVersion);
-    expect(recorded.verification.runningBuildId).toBeUndefined();
-    expect(recorded.verification.versionMatch).toBe(
-      gatewayVersion === undefined ? undefined : gatewayVersion === "2026.9.4",
-    );
+    assert(recorded, "Missing finished update record");
+    const { runningVersion, runningBuildId, versionMatch } = recorded.verification;
+    expect({ runningVersion, runningBuildId, versionMatch }).toEqual({
+      runningVersion: gatewayVersion,
+      runningBuildId: undefined,
+      versionMatch: gatewayVersion === undefined ? undefined : gatewayVersion === "2026.9.4",
+    });
     const report = renderUpdateRunReport(recorded).markdown;
     expect(report.includes("version mismatch")).toBe(gatewayVersion === "2026.9.2");
     expect(report).toContain("Gateway readiness was not verified; service status: running");
@@ -100,19 +90,13 @@ it("records HTTP-verified activation as success with an authentication warning",
     true,
   );
   expect(verified.ok).toBe(true);
-  const observed = getUpdateRun(run.runId, { env });
-  expect(observed?.verification).toMatchObject({
-    runningVersion: "2026.10.4",
-    versionMatch: true,
-    readyz: true,
-    settled: true,
+  const observed = runs.getUpdateRun(run.runId, { env });
+  expect(observed).toMatchObject({
+    verification: { runningVersion: "2026.10.4", versionMatch: true, readyz: true, settled: true },
   });
-  expect(observed?.steps.find((step) => step.step === "gateway verification")).toMatchObject({
-    status: "completed",
-  });
-  expect(
-    observed?.steps.find((step) => step.step === "warning:gateway verification"),
-  ).toMatchObject({
+  const step = (name: string) => observed?.steps.find((entry) => entry.step === name);
+  expect(step("gateway verification")).toMatchObject({ status: "completed" });
+  expect(step("warning:gateway verification")).toMatchObject({
     status: "completed",
     detail: expect.stringContaining("device identity required"),
   });

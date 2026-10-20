@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
@@ -6,15 +5,17 @@ import { expect, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
 import { encodePackageActivationLauncher } from "../../infra/package-update-activation-journal.js";
 import { preparePackageActivationJournal } from "../../infra/package-update-activation-prepare.js";
-import { packageActivationRuntimeForTest } from "../../infra/package-update-activation-runtime.test-support.js";
 import {
   readPackageActivationStatus,
   runPackageActivationRecovery,
 } from "../../infra/package-update-activation.js";
 import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
 import { createPublicationOwner } from "../../infra/package-update-publication-owner.js";
+import {
+  publicationActivation,
+  withPublicationFence,
+} from "../../infra/package-update-publication.test-support.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
-import { withUpdateCommandExecutor } from "./update-command-executor.js";
 
 export async function createInterruptedPackagePublication(
   fixtureRoot: string,
@@ -22,11 +23,13 @@ export async function createInterruptedPackagePublication(
 ) {
   const f = await createPackageSwapFixture(fixtureRoot);
   const stageRoot = f.params.stage.packageRoot;
-  const write = (file: string, value: string | object) =>
+  const write = (file: string, value: string | object) => {
+    fs.mkdirSync(path.dirname(path.join(stageRoot, file)), { recursive: true });
     fs.writeFileSync(
       path.join(stageRoot, file),
       typeof value === "string" ? value : JSON.stringify(value),
     );
+  };
   write("package.json", {
     name: "openclaw",
     version: "2.0.0",
@@ -41,31 +44,26 @@ export async function createInterruptedPackagePublication(
     bin: { openclaw: "openclaw.mjs" },
   });
   write("openclaw.mjs", 'import "./dist/index.js";\n');
+  write("README.md", "Synthetic package README\n");
+  write("LICENSE", "Synthetic package license\n");
+  write("dist/nested/index.js", "export {};\n");
+  write("dist/scoped/package.json", { type: "module" });
+  write("dist/build-info.json", { version: "2.0.0" });
   const stagedLauncher = path.join(f.params.stage.layout.binDir, "openclaw");
   fs.unlinkSync(stagedLauncher);
   fs.symlinkSync("../lib/node_modules/openclaw/openclaw.mjs", stagedLauncher);
-  write("README.md", "Synthetic package README\n");
-  write("LICENSE", "Synthetic package license\n");
   for (const dependency of ["dep-a", "@scope/dep-b", "dep-a/node_modules/dep-c"]) {
-    const directory = path.join(stageRoot, "node_modules", dependency);
-    fs.mkdirSync(directory, { recursive: true });
     write(`node_modules/${dependency}/package.json`, {
       name: path.basename(dependency),
       version: "1.0.0",
       type: "commonjs",
     });
   }
-  fs.mkdirSync(path.join(stageRoot, "dist/nested"));
-  write("dist/nested/index.js", "export {};\n");
-  fs.mkdirSync(path.join(stageRoot, "dist/scoped"));
-  write("dist/scoped/package.json", { type: "module" });
-  write("dist/build-info.json", { version: "2.0.0" });
   await writePackageDistInventory(stageRoot);
   const reader = createPackageIntegrityReader();
-  const prepared = await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-    const fence = await executor.enter(f.packageRoot);
+  const prepared = await withPublicationFence(f.packageRoot, async (fence) => {
     const preparation = await preparePackageActivationJournal({
-      options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+      options: publicationActivation(fence),
       liveRoot: f.packageRoot,
       stageRoot,
       launcherRoot: f.params.stage.layout.binDir,
@@ -78,15 +76,13 @@ export async function createInterruptedPackagePublication(
         },
       ],
     });
+    const { anchor, journal, initial } = preparation;
     if (phase === "prepared") {
       // An external install selected the candidate without advancing the journal.
-      fs.renameSync(f.packageRoot, path.join(preparation.anchor, "previous"));
-      fs.renameSync(path.join(preparation.anchor, "candidate"), f.packageRoot);
+      fs.renameSync(f.packageRoot, path.join(anchor, "previous"));
+      fs.renameSync(path.join(anchor, "candidate"), f.packageRoot);
       fs.unlinkSync(f.launcher);
-      fs.symlinkSync(
-        fs.readlinkSync(path.join(preparation.anchor, "launchers/openclaw")),
-        f.launcher,
-      );
+      fs.symlinkSync(fs.readlinkSync(path.join(anchor, "launchers/openclaw")), f.launcher);
       return preparation;
     }
     const rename = fsp.rename.bind(fsp);
@@ -102,12 +98,8 @@ export async function createInterruptedPackagePublication(
       }
     });
     try {
-      const publication = createPublicationOwner(
-        preparation.anchor,
-        preparation.journal,
-        fence.assertCurrent,
-        preparation.initial,
-      ).publish(false);
+      const owner = createPublicationOwner(anchor, journal, fence.assertCurrent, initial);
+      const publication = owner.publish(false);
       if (phase === "publishing") {
         await expect(publication).rejects.toThrow("external write during publication");
       } else {
@@ -118,18 +110,18 @@ export async function createInterruptedPackagePublication(
     }
     return preparation;
   });
-  const record = prepared.journal.read();
+  const { anchor, journal } = prepared;
+  const record = journal.read();
+  const operationId = record.descriptor.operationId;
   expect(record.phase).toBe(phase);
   if (phase === "publishing") {
-    await expect(
-      runPackageActivationRecovery(prepared.anchor, "repair", record.descriptor.operationId),
-    ).rejects.toThrow("Package publication object changed");
-    await expect(
-      runPackageActivationRecovery(prepared.anchor, "retire", record.descriptor.operationId),
-    ).rejects.toThrow("Package evidence cannot be retired (publishing)");
+    await expect(runPackageActivationRecovery(anchor, "repair", operationId)).rejects.toThrow(
+      "Package publication object changed",
+    );
+    await expect(runPackageActivationRecovery(anchor, "retire", operationId)).rejects.toThrow(
+      "Package evidence cannot be retired (publishing)",
+    );
   }
-  expect(
-    await readPackageActivationStatus(prepared.anchor, record.descriptor.operationId),
-  ).toMatchObject({ phase });
+  expect(await readPackageActivationStatus(anchor, operationId)).toMatchObject({ phase });
   return { ...f, ...prepared, record };
 }

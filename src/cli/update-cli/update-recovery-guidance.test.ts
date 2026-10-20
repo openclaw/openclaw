@@ -5,21 +5,14 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { isContainerEnvironment } from "../../infra/container-environment.js";
 import * as diskSpace from "../../infra/disk-space.js";
 import * as gatewayLock from "../../infra/gateway-lock.js";
-import {
-  createUpdateRun,
-  getUpdateRun,
-  recordUpdateRunStep,
-  recordUpdateRunVerification,
-} from "../../infra/update-run-ledger.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
+import * as ledger from "../../infra/update-run-ledger.js";
+import * as reports from "../../infra/update-run-report.js";
 import { createGitAdmissionFixture } from "../../infra/update-runner-git-admission.test-support.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
+import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { observeUpdateGatewayReadiness } from "./update-command-readiness.js";
 import { recordUpdateResultNextAction } from "./update-command-result.js";
 import * as serviceRecovery from "./update-command-service-recovery.js";
@@ -49,26 +42,23 @@ function createRun(options: { nextAction?: string; profile?: string } = {}) {
     OPENCLAW_PROFILE: options.profile,
   };
   return {
-    runId: createUpdateRun({ trigger: "cli", origin: { nextAction: options.nextAction } }, { env })
-      .runId,
+    runId: ledger.createUpdateRun(
+      { trigger: "cli", origin: { nextAction: options.nextAction } },
+      { env },
+    ).runId,
     env,
   };
 }
 
 function failure(overrides: Partial<UpdateRunResult> = {}): UpdateRunResult {
-  const failedStep = {
-    name: "package-stage",
-    command: "prepare staged npm install",
-    cwd: "/fixture",
-    durationMs: 0,
-    exitCode: 1,
+  const failedStep = step("package-stage", "prepare staged npm install", {
     stderrTail:
       overrides.reason === "global-install-permission-denied"
         ? permissionDetail
         : overrides.reason === "global-install-foreign-destination"
           ? foreignDetail
           : "EACCES: permission denied",
-  };
+  });
   return {
     status: "error",
     mode: "npm",
@@ -120,10 +110,10 @@ function expectReportedAction(
   run: ReturnType<typeof createRun>,
   output: { mock: { calls: unknown[][] } },
 ) {
-  const stored = getUpdateRun(run.runId, { env: run.env });
+  const stored = ledger.getUpdateRun(run.runId, { env: run.env });
   const action = stored?.origin.nextAction;
   expect(output.mock.calls[0]?.[0]).toMatchObject({ run: { origin: { nextAction: action } } });
-  expect(stored && renderUpdateRunReport(stored).markdown).toContain(action);
+  expect(stored && reports.renderUpdateRunReport(stored).markdown).toContain(action);
   return { stored, action };
 }
 
@@ -310,9 +300,7 @@ describe("update recovery reporting", () => {
         durationMs: 1,
         recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.2" },
         steps: [
-          {
-            name: "doctor process settlement",
-            command: "settle doctor process groups",
+          step("doctor process settlement", "settle doctor process groups", {
             cwd: settlement === "foreign" ? "/fixture/other-candidate" : root,
             durationMs: 1,
             exitCode: settlement === "unsettled" ? 1 : 0,
@@ -325,7 +313,7 @@ describe("update recovery reporting", () => {
                 }
               : {}),
             warnings: ["Optional maintenance remains deferred."],
-          },
+          }),
         ],
       };
       expect(serviceRecovery.refuseUnsettledDoctorRecovery(result, root, () => {})).toBe(true);
@@ -335,9 +323,9 @@ describe("update recovery reporting", () => {
         environment: { container: false, stateDir: "/fixture/state" },
       });
       expect(nextAction).toBeTruthy();
-      const input = updateRunReportInputFromResult(result, { origin: { nextAction } });
+      const input = reports.updateRunReportInputFromResult(result, { origin: { nextAction } });
       const saved = structuredClone(input);
-      const report = renderUpdateRunReport(input, {
+      const report = reports.renderUpdateRunReport(input, {
         currentHealth: { kind: "responding", version: "2026.9.2" },
       });
       expect(report.lines.join("\n")).toContain(nextAction);
@@ -384,7 +372,7 @@ describe("update recovery reporting", () => {
         purpose: "recovery",
       });
       await publish(run, result, { json: undefined });
-      const stored = getUpdateRun(run.runId, { env: run.env });
+      const stored = ledger.getUpdateRun(run.runId, { env: run.env });
       expect(stored?.status).toBe("failed");
       expect(stored?.reason).toBe("update-failed");
       expect(stored?.verification.recovery).toEqual(result.recovery);
@@ -474,7 +462,7 @@ describe("update recovery reporting", () => {
   it("uses raw recovery facts for immediate guidance without replacing history", () => {
     const run = createRun();
     const { env } = run;
-    recordUpdateRunVerification(
+    ledger.recordUpdateRunVerification(
       run.runId,
       {
         serviceRunning: true,
@@ -484,12 +472,12 @@ describe("update recovery reporting", () => {
       },
       { env },
     );
-    recordUpdateRunStep(
+    ledger.recordUpdateRunStep(
       run.runId,
       { step: "gateway verification", status: "failed", detail: "stale-unhealthy" },
       { env },
     );
-    const saved = getUpdateRun(run.runId, { env })?.verification;
+    const saved = ledger.getUpdateRun(run.runId, { env })?.verification;
     const latest = failure({
       reason: "global-install-permission-denied",
       recovery: { serviceRestartSafe: true, version: "2026.9.5", service: "healthy" },
@@ -506,7 +494,7 @@ describe("update recovery reporting", () => {
     expect(action).not.toContain("gateway is running");
     expect(action).not.toContain("Managed gateway remains stopped");
     expect(action).toContain("could not prove a runnable installation");
-    const recorded = getUpdateRun(run.runId, { env });
+    const recorded = ledger.getUpdateRun(run.runId, { env });
     expect(recorded?.verification).toEqual(saved);
     expect(recorded?.origin.nextAction).toBe(action);
   });
@@ -624,19 +612,11 @@ describe("update recovery reporting", () => {
           steps: [],
           durationMs: 0,
           postUpdate: {
-            plugins: {
+            plugins: createPostCorePluginUpdateResult({
               status: "ok",
               changed: true,
-              sync: {
-                changed: false,
-                switchedToBundled: [],
-                switchedToNpm: [],
-                warnings: [],
-                errors: [],
-              },
               npm: { changed: true, outcomes: [] },
-              integrityDrifts: [],
-            },
+            }),
           },
         },
         { restart: false, coreAlreadyCurrent },
