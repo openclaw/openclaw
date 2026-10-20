@@ -90,5 +90,5 @@ it("keeps scheduled turns with a real inline client on the normal widget surface
     }),
   );
   expect(tool).toMatchObject({ requiredClientCaps: ["inline-widgets"] });
-  expect(tool?.parameters.required).not.toContain("pin");
+  expect(tool?.parameters).not.toMatchObject({ required: expect.arrayContaining(["pin"]) });
 });

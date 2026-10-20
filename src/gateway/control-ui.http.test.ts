@@ -503,7 +503,7 @@ it("serves fresh media after an in-place rewrite preserves size and mtime", asyn
       headers: { authorization: "Bearer test-token", ...conditions },
     });
   const initial = await read("HEAD");
-  const etag = String(initial.headers.ETag ?? '"cached-version"');
+  const etag = typeof initial.headers.ETag === "string" ? initial.headers.ETag : '"cached-version"';
   const lastModified = modified.toUTCString();
   await fs.writeFile(filePath, replacement);
   await fs.utimes(filePath, modified, modified);

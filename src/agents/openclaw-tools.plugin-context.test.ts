@@ -8,11 +8,11 @@ import {
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
 
-vi.mock(
-  "../config/sessions/session-delivery-generation.js",
-  async () =>
-    (await import("../plugins/memory-audience.test-support.js")).fakeSessionGenerationModule,
-);
+vi.mock("../config/sessions/session-delivery-generation.js", async () => {
+  const { fakeSessionGenerationModule } =
+    await import("../plugins/memory-audience.test-support.js");
+  return fakeSessionGenerationModule;
+});
 
 function resolve(options: OpenClawPluginToolOptions) {
   return resolveOpenClawPluginToolInputs({

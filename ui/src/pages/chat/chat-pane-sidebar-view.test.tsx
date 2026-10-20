@@ -1,27 +1,51 @@
 /* @vitest-environment jsdom */
 
-import { Show } from "solid-js";
-import { expect, it } from "vitest";
+import { createSignal, Show } from "solid-js";
+import { afterEach, expect, it } from "vitest";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../lib/presentation.ts";
+import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
-import { mountState, SidebarFixture } from "./chat-pane-sidebar-fixture.test-support.tsx";
+import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
 import { fitSidebarLayout, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
+
+// The lazy region separately owns the successful right outlet's contents.
+afterEach(cleanupSolid);
 
 it("retains loading panel contents when fitting a new layout snapshot", () => {
   const layout = openSlot({ columns: [] }, "workspace");
-  const mounted = mountState(1400, (width) => (
-    <SidebarFixture
-      presentationId="loading-layout"
-      availableWidth={width.value}
-      layout={fitSidebarLayout(layout, width.value)!}
-      regionError={null}
-    />
-  ));
+  let resize: (width: number) => void = () => {};
+  const mounted = mountSolid(() => {
+    const [width, setWidth] = createSignal(1400);
+    resize = setWidth;
+    return (
+      <SidebarRegionView
+        presentationId="loading-layout"
+        panelIdPrefix="chat-panel-loading-layout"
+        availableWidth={width()}
+        narrow={false}
+        callbacks={{
+          activatePanel() {},
+          togglePanelExpanded() {},
+          closeSlot() {},
+          openSlot() {},
+          reorderPanel() {},
+          resizePanel() {},
+          setOpen() {},
+        }}
+        layout={fitSidebarLayout(layout, width())!}
+        panelDefinitions={sidebarPanelDefinitions()}
+        regionError={null}
+      />
+    );
+  });
+  flush();
   const panel = mounted.container.querySelector(".side-panel__panel")!;
   const placeholder = panel.querySelector("openclaw-panel-loading-skeleton")!;
   const contents = placeholder.querySelector(".rows")!;
-  mounted.update(700);
+  resize(700);
+  flush();
   expect(mounted.container.querySelector(".side-panel__panel")).toBe(panel);
   expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBe(placeholder);
   expect(placeholder.querySelector(".rows")).toBe(contents);
@@ -36,18 +60,38 @@ it("retains the primary input and the region-owned outlet while changing the lay
   const primary = document.createElement("textarea");
   primary.value = "Draft survives the side panel";
   const layout = openSlot({ columns: [] }, "workspace");
-  const mounted = mountState(true, (open) => (
-    <SidebarFixture
-      presentationId="native-layout"
-      layout={setSidebarOpen(layout, open.value)}
-      regionError={null}
-      primary={primary}
-    />
-  ));
+  let changeOpen: (open: boolean) => void = () => {};
+  const mounted = mountSolid(() => {
+    const [open, setOpen] = createSignal(true);
+    changeOpen = setOpen;
+    return (
+      <SidebarRegionView
+        presentationId="native-layout"
+        panelIdPrefix="chat-panel-native-layout"
+        availableWidth={1400}
+        narrow={false}
+        callbacks={{
+          activatePanel() {},
+          togglePanelExpanded() {},
+          closeSlot() {},
+          openSlot() {},
+          reorderPanel() {},
+          resizePanel() {},
+          setOpen() {},
+        }}
+        layout={setSidebarOpen(layout, open())}
+        panelDefinitions={sidebarPanelDefinitions()}
+        regionError={null}
+        primary={primary}
+      />
+    );
+  });
+  flush();
   const outlet = mounted.container.querySelector(".sidebar-region__right-runtime")!;
   const retainedPanel = document.createElement("iframe");
   outlet.append(retainedPanel);
-  mounted.update(false);
+  changeOpen(false);
+  flush();
   expect(mounted.container.querySelector("textarea")).toBe(primary);
   expect(primary.value).toBe("Draft survives the side panel");
   expect(mounted.container.querySelector(".sidebar-region__right-runtime")).toBe(outlet);
@@ -63,10 +107,14 @@ it("parks on owner events and reveals with the parent's next props", () => {
   const binding: PresentationBinding = { owner, isPresented: () => presented };
   const content = document.createElement("input");
   content.value = "Retained text";
-  const mounted = mountState(binding, (presentation) => {
-    const active = usePanePresentation(() => presentation.value);
+  let repaint: () => void = () => {};
+  const mounted = mountSolid(() => {
+    const [presentation, setPresentation] = createSignal(binding);
+    repaint = () => setPresentation({ ...binding });
+    const active = usePanePresentation(presentation);
     return <Show when={active()}>{content}</Show>;
   });
+  flush();
   expect(mounted.container.querySelector("input")).toBe(content);
   presented = false;
   owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
@@ -76,46 +124,81 @@ it("parks on owner events and reveals with the parent's next props", () => {
   owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
   flush();
   expect(mounted.container.querySelector("input")).toBeNull();
-  mounted.update({ ...binding });
+  repaint();
+  flush();
   expect(mounted.container.querySelector("input")).toBe(content);
   expect(content.value).toBe("Retained text");
 });
 
 it("releases region refs when the lazy host or its containing view unmounts", () => {
-  const refs: Record<"region" | "header" | "view", HTMLElement | null> = {
-    region: null,
-    header: null,
-    view: null,
-  };
-  const capture = (key: keyof typeof refs) => (element: HTMLElement) => {
-    refs[key] = element;
-    return () => {
-      if (refs[key] === element) {
-        refs[key] = null;
-      }
-    };
-  };
-  const mounted = mountState(false, (pending) => (
-    <SidebarFixture
-      presentationId="owned-region-refs"
-      layout={{ columns: [] }}
-      regionError={pending.value ? null : undefined}
-      onRegionElementRef={capture("region")}
-      onRegionViewRef={capture("view")}
-      onHeaderElementRef={capture("header")}
-    />
-  ));
-  const { region: shell, view: firstView, header } = refs;
+  let regionElement: HTMLElement | null = null;
+  let headerElement: HTMLElement | null = null;
+  let regionView: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
+  let loading: (value: boolean) => void = () => {};
+  const mounted = mountSolid(() => {
+    const [pending, setPending] = createSignal(false);
+    loading = setPending;
+    return (
+      <SidebarRegionView
+        presentationId="owned-region-refs"
+        panelIdPrefix="chat-owned-region-refs"
+        availableWidth={1400}
+        narrow={false}
+        layout={{ columns: [] }}
+        panelDefinitions={sidebarPanelDefinitions()}
+        callbacks={{
+          activatePanel() {},
+          togglePanelExpanded() {},
+          closeSlot() {},
+          openSlot() {},
+          reorderPanel() {},
+          resizePanel() {},
+          setOpen() {},
+        }}
+        regionError={pending() ? null : undefined}
+        onRegionElementRef={(element) => {
+          regionElement = element;
+          return () => {
+            if (regionElement === element) {
+              regionElement = null;
+            }
+          };
+        }}
+        onRegionViewRef={(element) => {
+          regionView = element;
+          return () => {
+            if (regionView === element) {
+              regionView = null;
+            }
+          };
+        }}
+        onHeaderElementRef={(element) => {
+          headerElement = element;
+          return () => {
+            headerElement = null;
+          };
+        }}
+      />
+    );
+  });
+  flush();
+  const shell = regionElement;
+  const firstView = regionView;
+  const header = headerElement;
   expect(shell).toBe(mounted.container.querySelector(".sidebar-region"));
   expect(header).toBe(mounted.container.querySelector(".sidebar-region__header"));
   expect(firstView).toBe(mounted.container.querySelector("openclaw-chat-sidebar-region"));
-  mounted.update(true);
-  expect(refs.view).toBeNull();
-  expect(refs.region).toBe(shell);
-  expect(refs.header).toBe(header);
-  mounted.update(false);
-  expect(refs.view).not.toBeNull();
-  expect(refs.view).not.toBe(firstView);
+  loading(true);
+  flush();
+  expect(regionView).toBeNull();
+  expect(regionElement).toBe(shell);
+  expect(headerElement).toBe(header);
+  loading(false);
+  flush();
+  expect(regionView).not.toBeNull();
+  expect(regionView).not.toBe(firstView);
   mounted.unmount();
-  expect(refs).toEqual({ region: null, header: null, view: null });
+  expect(regionView).toBeNull();
+  expect(regionElement).toBeNull();
+  expect(headerElement).toBeNull();
 });

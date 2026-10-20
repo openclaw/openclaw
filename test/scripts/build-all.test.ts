@@ -143,7 +143,7 @@ function pausedStep() {
   return {
     started: started.promise,
     finish: (status = 0) => finished.resolve({ status }),
-    run() {
+    run: () => {
       started.resolve();
       return finished.promise;
     },

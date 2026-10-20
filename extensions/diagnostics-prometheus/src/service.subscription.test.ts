@@ -4,182 +4,261 @@ import {
   waitForDiagnosticEventsDrained,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { onTrustedInternalDiagnosticEvent } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { expect, vi } from "vitest";
-import type { DiagnosticEventPayload } from "../api.js";
+import { expect, it, vi } from "vitest";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
-import {
-  metricsTest as it,
-  expectMetrics,
-  expectExcludes,
-  untrusted,
-} from "./service.test-helpers.js";
+import { createMetricsHarness, untrusted } from "./service.test-helpers.js";
 
-type WsEvent = Omit<Extract<DiagnosticEventPayload, { type: "gateway.ws.event" }>, "seq" | "ts">;
-function ws(event: string, fields: Partial<Omit<WsEvent, "type" | "event">> = {}): WsEvent {
-  return { type: "gateway.ws.event", event, count: 2, bytes: 256, ...fields };
-}
+it("exports trusted WebSocket event totals and the current operator socket count", () => {
+  const metrics = createMetricsHarness();
+  try {
+    metrics.record({ type: "gateway.ws.connections", operators: 2 });
+    metrics.record({ type: "gateway.ws.event", event: "chat", count: 2, bytes: 256 });
+    metrics.record({ type: "gateway.ws.event", event: "chat", count: 1, bytes: 128 });
+    metrics.record({ type: "gateway.ws.event", event: "other", count: 1, bytes: 64 });
+    metrics.record({ type: "gateway.ws.connections", operators: 0 });
+    for (const metadata of [untrusted, { trusted: false, internal: true }]) {
+      metrics.record(
+        { type: "gateway.ws.event", event: "private-untrusted", count: 99, bytes: 999 },
+        metadata,
+      );
+      metrics.record({ type: "gateway.ws.connections", operators: 99 }, metadata);
+    }
 
-it("updates the trusted operator socket gauge", ({ metrics }) => {
-  metrics.record({ type: "gateway.ws.connections", operators: 2 });
-  metrics.record({ type: "gateway.ws.connections", operators: 0 });
-  for (const metadata of [untrusted, { trusted: false, internal: true }]) {
-    metrics.record({ type: "gateway.ws.connections", operators: 99 }, metadata);
+    const rendered = metrics.render();
+    expect(rendered).toContain("# TYPE openclaw_gateway_ws_events_total counter\n");
+    expect(rendered).toContain("# TYPE openclaw_gateway_ws_event_bytes_total counter\n");
+    expect(rendered).toContain("# TYPE openclaw_gateway_ws_operator_connections gauge\n");
+    expect(rendered.split("\n").filter((line) => line.startsWith("openclaw_gateway_ws_"))).toEqual([
+      'openclaw_gateway_ws_event_bytes_total{event="chat"} 384',
+      'openclaw_gateway_ws_event_bytes_total{event="other"} 64',
+      'openclaw_gateway_ws_events_total{event="chat"} 3',
+      'openclaw_gateway_ws_events_total{event="other"} 1',
+      "openclaw_gateway_ws_operator_connections 0",
+    ]);
+  } finally {
+    metrics.stop();
   }
-  const rendered = metrics.render();
-  expect(rendered).toContain("# TYPE openclaw_gateway_ws_operator_connections gauge\n");
-  expect(rendered.split("\n").filter((line) => line.startsWith("openclaw_gateway_ws_"))).toEqual([
-    "openclaw_gateway_ws_operator_connections 0",
-  ]);
 });
 
-it("exports codec bytes separately and cumulative raw frame-size buckets", ({ metrics }) => {
-  const observation = ws("chat", {
+it("exports codec bytes separately and cumulative raw frame-size buckets", () => {
+  const metrics = createMetricsHarness();
+  const observation = {
+    type: "gateway.ws.event",
+    event: "chat",
     count: 3,
     bytes: 1_536,
     frameBytes: {
       "256": 0,
       "512": 2,
       "1024": 3,
+      "2048": 3,
+      "4096": 3,
+      "8192": 3,
+      "16384": 3,
+      "65536": 3,
       "+Inf": 3,
     },
-  });
-
-  metrics.record(observation);
-  metrics.record(ws("chat", { count: 0, bytes: 0, wireBytes: 600 }));
-  metrics.record(ws("chat", { count: 0, bytes: 0, frameBytes: { "512": 0 } }));
-  metrics.record(
-    ws("chat", { count: 1, bytes: 70_000, wireBytes: 700, frameBytes: { "+Inf": 1 } }),
-  );
-  metrics.record(ws("other", { count: 1, bytes: 64 }));
-  metrics.record({ ...observation, wireBytes: 999 }, untrusted);
-  const rendered = metrics.render();
-  expectMetrics(rendered)(`
-    # TYPE openclaw_gateway_ws_events_total counter
-    # TYPE openclaw_gateway_ws_event_bytes_total counter
-    openclaw_gateway_ws_events_total{event="chat"} 4
-    openclaw_gateway_ws_event_bytes_total{event="chat"} 71536
-    openclaw_gateway_ws_event_wire_bytes_total{event="chat"} 1300
-    openclaw_gateway_ws_events_total{event="other"} 1
-    openclaw_gateway_ws_event_bytes_total{event="other"} 64
-  `);
-  expectExcludes(
-    rendered,
-    'openclaw_gateway_ws_event_wire_bytes_total{event="other"}',
-    'openclaw_gateway_ws_event_frame_bytes{event="other"',
-  );
-  expectMetrics(rendered)(`
-    openclaw_gateway_ws_event_frame_bytes{event="chat",le="256"} 0
-    openclaw_gateway_ws_event_frame_bytes{event="chat",le="512"} 2
-    openclaw_gateway_ws_event_frame_bytes{event="chat",le="1024"} 3
-    openclaw_gateway_ws_event_frame_bytes{event="chat",le="+Inf"} 4
-  `);
+  } as const;
+  try {
+    metrics.record(observation);
+    metrics.record({ type: "gateway.ws.event", event: "chat", count: 0, bytes: 0, wireBytes: 600 });
+    metrics.record({
+      type: "gateway.ws.event",
+      event: "chat",
+      count: 0,
+      bytes: 0,
+      frameBytes: { "512": 0 },
+    });
+    metrics.record({
+      type: "gateway.ws.event",
+      event: "chat",
+      count: 1,
+      bytes: 70_000,
+      wireBytes: 700,
+      frameBytes: { "+Inf": 1 },
+    });
+    metrics.record({ type: "gateway.ws.event", event: "other", count: 1, bytes: 64 });
+    metrics.record({ ...observation, wireBytes: 999 }, untrusted);
+    const rendered = metrics.render();
+    expect(rendered).toContain('openclaw_gateway_ws_events_total{event="chat"} 4');
+    expect(rendered).toContain('openclaw_gateway_ws_event_bytes_total{event="chat"} 71536');
+    expect(rendered).toContain('openclaw_gateway_ws_event_wire_bytes_total{event="chat"} 1300');
+    expect(rendered).not.toContain('openclaw_gateway_ws_event_wire_bytes_total{event="other"}');
+    expect(rendered).not.toContain('openclaw_gateway_ws_event_frame_bytes{event="other"');
+    for (const [le, count] of [
+      ["256", 0],
+      ["512", 2],
+      ["1024", 3],
+      ["2048", 3],
+      ["4096", 3],
+      ["8192", 3],
+      ["16384", 3],
+      ["65536", 3],
+      ["+Inf", 4],
+    ]) {
+      expect(rendered).toContain(
+        `openclaw_gateway_ws_event_frame_bytes{event="chat",le="${le}"} ${count}`,
+      );
+    }
+  } finally {
+    metrics.stop();
+  }
 });
 
-it("attributes session traffic without changing aggregate labels", ({ metrics }) => {
-  for (const [event, reason] of [
-    ["sessions.changed", "agent.run.started"],
-    ["session.message", "assistant"],
-  ] as const) {
-    for (const delivery of ["subscribed", "roster"] as const) {
-      const observation = ws(event, { sessionEvent: { reason, delivery } });
+it("exports session traffic attribution while keeping aggregate event labels unchanged", () => {
+  const metrics = createMetricsHarness();
+  try {
+    for (const [event, reason] of [
+      ["sessions.changed", "agent.run.started"],
+      ["session.message", "assistant"],
+    ] as const) {
+      for (const delivery of ["subscribed", "roster"] as const) {
+        const observation = {
+          type: "gateway.ws.event",
+          event,
+          count: 2,
+          bytes: 256,
+          sessionEvent: { reason, delivery },
+        } as const;
+        metrics.record(observation);
+        metrics.record({ ...observation, count: 1, bytes: 128 });
+        metrics.record(observation, untrusted);
+      }
+    }
+    const rendered = metrics.render();
+    for (const [event, reason] of [
+      ["sessions.changed", "agent.run.started"],
+      ["session.message", "assistant"],
+    ]) {
+      expect(rendered).toContain(`openclaw_gateway_ws_events_total{event="${event}"} 6`);
+      expect(rendered).toContain(`openclaw_gateway_ws_event_bytes_total{event="${event}"} 768`);
+      for (const delivery of ["subscribed", "roster"]) {
+        const labels = `delivery="${delivery}",event="${event}",reason="${reason}"`;
+        expect(rendered).toContain(`openclaw_gateway_ws_session_event_frames_total{${labels}} 3`);
+        expect(rendered).toContain(`openclaw_gateway_ws_session_event_bytes_total{${labels}} 384`);
+      }
+    }
+  } finally {
+    metrics.stop();
+  }
+});
+
+it("exports presence frame counts and bytes by delivery mode", () => {
+  const metrics = createMetricsHarness();
+  try {
+    for (const presenceMode of ["delta", "reset", "legacy"] as const) {
+      const observation = {
+        type: "gateway.ws.event",
+        event: "presence",
+        count: 2,
+        bytes: 256,
+        presenceMode,
+      } as const;
       metrics.record(observation);
       metrics.record({ ...observation, count: 1, bytes: 128 });
       metrics.record(observation, untrusted);
     }
     const rendered = metrics.render();
-    expectMetrics(rendered)(`
-      openclaw_gateway_ws_events_total{event="${event}"} 6
-      openclaw_gateway_ws_event_bytes_total{event="${event}"} 768
-    `);
-    for (const delivery of ["subscribed", "roster"]) {
-      const labels = `delivery="${delivery}",event="${event}",reason="${reason}"`;
-      expectMetrics(rendered)(`
-        openclaw_gateway_ws_session_event_frames_total{${labels}} 3
-        openclaw_gateway_ws_session_event_bytes_total{${labels}} 384
-      `);
+    expect(rendered).toContain('openclaw_gateway_ws_events_total{event="presence"} 9');
+    expect(rendered).toContain('openclaw_gateway_ws_event_bytes_total{event="presence"} 1152');
+    for (const mode of ["delta", "reset", "legacy"]) {
+      expect(rendered).toContain(`openclaw_gateway_ws_presence_frames_total{mode="${mode}"} 3`);
+      expect(rendered).toContain(`openclaw_gateway_ws_presence_bytes_total{mode="${mode}"} 384`);
     }
+  } finally {
+    metrics.stop();
   }
 });
 
-it("exports presence frame counts and bytes by delivery mode", ({ metrics }) => {
-  for (const presenceMode of ["delta", "reset", "legacy"] as const) {
-    const observation = ws("presence", { presenceMode });
-    metrics.record(observation);
-    metrics.record({ ...observation, count: 1, bytes: 128 });
-    metrics.record(observation, untrusted);
-  }
-  const rendered = metrics.render();
-  expectMetrics(rendered)(`
-    openclaw_gateway_ws_events_total{event="presence"} 9
-    openclaw_gateway_ws_event_bytes_total{event="presence"} 1152
-  `);
-  for (const mode of ["delta", "reset", "legacy"]) {
-    expectMetrics(rendered)(`
-      openclaw_gateway_ws_presence_frames_total{mode="${mode}"} 3
-      openclaw_gateway_ws_presence_bytes_total{mode="${mode}"} 384
-    `);
-  }
-});
-
-it("exports trusted session retention gauges and clears them on retirement", ({ metrics }) => {
+it("exports trusted session retention gauges and clears them on retirement", () => {
+  const metrics = createMetricsHarness();
   const retentionLines = () =>
     metrics
       .render()
       .split("\n")
-      .filter((line) => /^openclaw_(sessions_list|session_event_rows)_retained_/.test(line));
-
-  metrics.record({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
-  metrics.record({ type: "sessions.event.retention", entries: 25_600, estimatedBytes: 24_985_600 });
-  for (const metadata of [untrusted, { trusted: false, internal: true }]) {
-    metrics.record(
-      { type: "sessions.list.retention", views: 99, refs: 999, estimatedBytes: 99_999 },
-      metadata,
-    );
-    metrics.record(
-      { type: "sessions.event.retention", entries: 99_999, estimatedBytes: 99_999 },
-      metadata,
-    );
+      .filter(
+        (line) =>
+          line.startsWith("openclaw_sessions_list_retained_") ||
+          line.startsWith("openclaw_session_event_rows_retained_"),
+      );
+  try {
+    metrics.record({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
+    metrics.record({
+      type: "sessions.event.retention",
+      entries: 25_600,
+      estimatedBytes: 24_985_600,
+    });
+    for (const metadata of [untrusted, { trusted: false, internal: true }]) {
+      metrics.record(
+        { type: "sessions.list.retention", views: 99, refs: 999, estimatedBytes: 99_999 },
+        metadata,
+      );
+      metrics.record(
+        { type: "sessions.event.retention", entries: 99_999, estimatedBytes: 99_999 },
+        metadata,
+      );
+    }
+    for (const suffix of ["views", "refs", "bytes"]) {
+      expect(metrics.render()).toContain(
+        `# TYPE openclaw_sessions_list_retained_${suffix} gauge\n`,
+      );
+    }
+    for (const suffix of ["entries", "bytes"]) {
+      expect(metrics.render()).toContain(
+        `# TYPE openclaw_session_event_rows_retained_${suffix} gauge\n`,
+      );
+    }
+    expect(retentionLines()).toEqual([
+      "openclaw_session_event_rows_retained_bytes 24985600",
+      "openclaw_session_event_rows_retained_entries 25600",
+      "openclaw_sessions_list_retained_bytes 3504",
+      "openclaw_sessions_list_retained_refs 17",
+      "openclaw_sessions_list_retained_views 3",
+    ]);
+    metrics.record({ type: "sessions.list.retention", views: 0, refs: 0, estimatedBytes: 0 });
+    metrics.record({ type: "sessions.event.retention", entries: 0, estimatedBytes: 0 });
+    expect(retentionLines()).toEqual([
+      "openclaw_session_event_rows_retained_bytes 0",
+      "openclaw_session_event_rows_retained_entries 0",
+      "openclaw_sessions_list_retained_bytes 0",
+      "openclaw_sessions_list_retained_refs 0",
+      "openclaw_sessions_list_retained_views 0",
+    ]);
+  } finally {
+    metrics.stop();
   }
-  for (const suffix of ["views", "refs", "bytes"]) {
-    expect(metrics.render()).toContain(`# TYPE openclaw_sessions_list_retained_${suffix} gauge\n`);
-  }
-  for (const suffix of ["entries", "bytes"]) {
-    expect(metrics.render()).toContain(
-      `# TYPE openclaw_session_event_rows_retained_${suffix} gauge\n`,
-    );
-  }
-  const retained = [
-    "openclaw_session_event_rows_retained_bytes 24985600",
-    "openclaw_session_event_rows_retained_entries 25600",
-    "openclaw_sessions_list_retained_bytes 3504",
-    "openclaw_sessions_list_retained_refs 17",
-    "openclaw_sessions_list_retained_views 3",
-  ];
-  expect(retentionLines()).toEqual(retained);
-  metrics.record({ type: "sessions.list.retention", views: 0, refs: 0, estimatedBytes: 0 });
-  metrics.record({ type: "sessions.event.retention", entries: 0, estimatedBytes: 0 });
-  expect(retentionLines()).toEqual(retained.map((line) => line.replace(/\d+$/, "0")));
 });
 
-it("counts retired wire baselines by cause without accepting untrusted resets", ({ metrics }) => {
-  for (const cause of ["close", "delivery-lost", "generation", "evicted", "projection"] as const) {
-    metrics.record({ type: "sessions.event.rows.reset", cause, count: 3 });
-    metrics.record({ type: "sessions.event.rows.reset", cause, count: 2 });
-    for (const metadata of [untrusted, { trusted: false, internal: true }]) {
-      metrics.record({ type: "sessions.event.rows.reset", cause, count: 99 }, metadata);
+it("counts retired wire baselines by cause without accepting untrusted resets", () => {
+  const metrics = createMetricsHarness();
+  try {
+    for (const cause of [
+      "close",
+      "delivery-lost",
+      "generation",
+      "evicted",
+      "projection",
+    ] as const) {
+      metrics.record({ type: "sessions.event.rows.reset", cause, count: 3 });
+      metrics.record({ type: "sessions.event.rows.reset", cause, count: 2 });
+      for (const metadata of [untrusted, { trusted: false, internal: true }]) {
+        metrics.record({ type: "sessions.event.rows.reset", cause, count: 99 }, metadata);
+      }
     }
+    const rendered = metrics.render();
+    expect(rendered).toContain("# TYPE openclaw_session_event_rows_reset_total counter\n");
+    expect(
+      rendered.split("\n").filter((line) => line.startsWith("openclaw_session_event_rows_reset_")),
+    ).toEqual([
+      'openclaw_session_event_rows_reset_total{cause="close"} 5',
+      'openclaw_session_event_rows_reset_total{cause="delivery-lost"} 5',
+      'openclaw_session_event_rows_reset_total{cause="evicted"} 5',
+      'openclaw_session_event_rows_reset_total{cause="generation"} 5',
+      'openclaw_session_event_rows_reset_total{cause="projection"} 5',
+    ]);
+  } finally {
+    metrics.stop();
   }
-  const rendered = metrics.render();
-  expect(rendered).toContain("# TYPE openclaw_session_event_rows_reset_total counter\n");
-  expect(
-    rendered.split("\n").filter((line) => line.startsWith("openclaw_session_event_rows_reset_")),
-  ).toEqual([
-    'openclaw_session_event_rows_reset_total{cause="close"} 5',
-    'openclaw_session_event_rows_reset_total{cause="delivery-lost"} 5',
-    'openclaw_session_event_rows_reset_total{cause="evicted"} 5',
-    'openclaw_session_event_rows_reset_total{cause="generation"} 5',
-    'openclaw_session_event_rows_reset_total{cause="projection"} 5',
-  ]);
 });
 
 it("records terminal metrics without reading logs or private diagnostic content", async () => {
@@ -201,7 +280,10 @@ it("records terminal metrics without reading logs or private diagnostic content"
     config: {},
     stateDir: "/tmp/openclaw-prometheus-test",
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
-    internalDiagnostics: { emit() {}, onEvent: onTrustedInternalDiagnosticEvent },
+    internalDiagnostics: {
+      emit() {},
+      onEvent: onTrustedInternalDiagnosticEvent,
+    },
   });
   try {
     emitLog();

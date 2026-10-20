@@ -11,6 +11,7 @@ import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { createRequest } from "./server-http.test-harness.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
+import type { GatewayRequestHandler } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
@@ -62,15 +63,16 @@ it("keeps public sign-in, durable roles and privileged dispatch independent of c
       );
     });
     let effects = 0;
+    const handler: GatewayRequestHandler = ({ respond }) => {
+      effects += 1;
+      respond(true, { completed: true });
+    };
     const methodRegistry = createGatewayMethodRegistry([
       {
         name: "test.issuer-effect",
         owner: { kind: "aux", area: "issuer-proof" },
         scope: "operator.admin",
-        handler: ({ respond }) => {
-          effects += 1;
-          respond(true, { completed: true });
-        },
+        handler,
       },
     ]);
     try {
@@ -103,6 +105,7 @@ it("keeps public sign-in, durable roles and privileged dispatch independent of c
             });
             expect(authResult).toMatchObject({ ok: true, method: "tailscale" });
             const logWsControl = createSubsystemLogger("test/issuer");
+            const warnings = vi.spyOn(logWsControl, "warn");
             const admission = await resolveGatewayConnectProfileAdmission({
               context: {
                 configSnapshot: cfg,
@@ -122,6 +125,9 @@ it("keeps public sign-in, durable roles and privileged dispatch independent of c
                 authResult,
               }),
             });
+            expect(admission.ok, warnings.mock.calls.map(([message]) => message).join("\n")).toBe(
+              true,
+            );
             if (!admission.ok || !admission.prepared) {
               throw new Error("Identity admission failed");
             }
@@ -134,7 +140,11 @@ it("keeps public sign-in, durable roles and privileged dispatch independent of c
             );
             expect(response.ok).toBe(allowed);
             expect(effects).toBe(1);
-            expect(client.authenticatedUserProfile.profileId === owner.id).toBe(allowed);
+            if (allowed) {
+              expect(client.authenticatedUserProfile.profileId).toBe(owner.id);
+            } else {
+              expect(client.authenticatedUserProfile.profileId).not.toBe(owner.id);
+            }
             req.destroy();
           }
         },

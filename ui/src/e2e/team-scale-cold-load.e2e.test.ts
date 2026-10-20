@@ -67,7 +67,11 @@ async function readStoredWarmState({
   const result = <T>(request: IDBRequest<T>) =>
     new Promise<T>((resolve, reject) => {
       request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener("error", () => reject(request.error), { once: true });
+      request.addEventListener(
+        "error",
+        () => reject(request.error ?? new Error("IndexedDB request failed")),
+        { once: true },
+      );
     });
   const database = await result(indexedDB.open("openclaw-chat-snapshots"));
   try {

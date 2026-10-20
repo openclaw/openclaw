@@ -1,11 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
-import type { DiagnosticEventPayload } from "../api.js";
+import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { describe, expect, it, vi } from "vitest";
+import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
 import {
-  metricsTest as test,
-  expectMetrics,
-  expectExcludes,
   baseEvent,
   createMetricsHarness,
   trusted,
@@ -23,223 +21,267 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   }),
 }));
 
-type TestEvent = Parameters<ReturnType<typeof createMetricsHarness>["record"]>[0];
-type RpcEvent = Extract<TestEvent, { type: "gateway.rpc" }>;
-type MetricCase = [string, TestEvent | TestEvent[], string, string[]?];
-const rpcDefaults = {
-  received: { phase: "received" },
-  response: { phase: "response", outcome: "ok", durationMs: 20 },
-  handler: { phase: "handler", outcome: "returned", durationMs: 20, admissionMs: 0 },
-  dispatch: { phase: "dispatch", outcome: "returned", durationMs: 20, response: "sent" },
-} as const;
-function rpc<P extends keyof typeof rpcDefaults>(
-  phase: P,
-  fields: Partial<Extract<RpcEvent, { phase: P }>> = {},
-) {
-  return {
-    type: "gateway.rpc" as const,
-    method: "sessions.history",
-    ...rpcDefaults[phase],
-    ...fields,
-  };
-}
-
 describe("diagnostics-prometheus service", () => {
-  test("counts list callers separately while preserving method-only RPC totals", ({ metrics }) => {
-    const recordList = (
-      method: string,
-      shape: (
-        source: "wire" | "internal",
-      ) => Pick<
-        Extract<RpcEvent, { phase: "received" }>,
-        "modelsList" | "sessionsList" | "cronList"
-      >,
-    ) => {
-      const event = rpc("received", { method, ...shape("wire") });
+  it("counts list callers separately while preserving method-only RPC totals", () => {
+    const metrics = createMetricsHarness();
+    try {
+      const event = {
+        type: "gateway.rpc",
+        method: "models.list",
+        phase: "received",
+        modelsList: {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          view: "configured",
+          scope: "agent",
+          refresh: false,
+          preparedOnly: true,
+        },
+      } as const;
       metrics.record(event);
       metrics.record(event);
       metrics.record(event, untrusted);
-      metrics.record(rpc("received", { method, ...shape("internal") }));
-    };
-    recordList("models.list", (source) => ({
-      modelsList: {
-        clientKind: "openclaw-control-ui",
-        source,
-        view: "configured",
-        scope: "agent",
-        refresh: false,
-        preparedOnly: true,
-      },
-    }));
-    recordList("sessions.list", (source) => ({
-      sessionsList: {
-        clientKind: "openclaw-control-ui",
-        source,
-        callerSource: "sidebar",
-        rowMode: "sidebar",
-        filter: "general",
-      },
-    }));
-    recordList("cron.list", (source) => ({
-      cronList: {
-        clientKind: "openclaw-control-ui",
-        source,
-        scope: "session",
-        compact: true,
-        page: "first",
-      },
-    }));
-    metrics.record({ type: "gateway.rpc", method: "health", phase: "received" });
-    const clients = ["control-ui", "macos", "ios", "android", "cli", "node", "plugin"] as const;
-    for (const clientKind of clients) {
-      metrics.record({ type: "gateway.rpc", method: "health", phase: "received", clientKind });
-    }
-    const rendered = metrics.render();
-    expectMetrics(rendered)(`
-      openclaw_gateway_rpc_requests_total{method="models.list"} 3
-      openclaw_gateway_rpc_requests_total{method="health"} 8
-    `);
-    const clientSamples = rendered
-      .split("\n")
-      .filter(
-        (line) =>
-          line.startsWith("openclaw_gateway_rpc_client_requests_total{") &&
-          line.includes('method="health"'),
-      );
-    expect(clientSamples).toHaveLength(8);
-    expectMetrics(clientSamples)(`
-      openclaw_gateway_rpc_client_requests_total{client_kind="other",method="health"} 1
-      openclaw_gateway_rpc_client_requests_total{client_kind="macos",method="health"} 1
-    `);
-    expectMetrics(rendered)(`
-      openclaw_gateway_rpc_requests_total{method="sessions.list"} 3
-      openclaw_gateway_rpc_requests_total{method="cron.list"} 3
-      openclaw_cron_list_requests_total{client_kind="openclaw-control-ui",compact="true",page="first",scope="session",source="wire"} 2
-      openclaw_cron_list_requests_total{client_kind="openclaw-control-ui",compact="true",page="first",scope="session",source="internal"} 1
-      openclaw_sessions_list_requests_total{caller_source="sidebar",client_kind="openclaw-control-ui",filter="general",row_mode="sidebar",source="wire"} 2
-      openclaw_sessions_list_requests_total{caller_source="sidebar",client_kind="openclaw-control-ui",filter="general",row_mode="sidebar",source="internal"} 1
-      openclaw_models_list_requests_total{client_kind="openclaw-control-ui",prepared_only="true",refresh="false",scope="agent",source="wire",view="configured"} 2
-      openclaw_models_list_requests_total{client_kind="openclaw-control-ui",prepared_only="true",refresh="false",scope="agent",source="internal",view="configured"} 1
-    `);
-    expect(
-      rendered
+      metrics.record({ ...event, modelsList: { ...event.modelsList, source: "internal" } });
+      const sessions = {
+        type: "gateway.rpc",
+        method: "sessions.list",
+        phase: "received",
+        sessionsList: {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          callerSource: "sidebar",
+          rowMode: "sidebar",
+          filter: "general",
+        },
+      } as const;
+      metrics.record(sessions);
+      metrics.record(sessions);
+      metrics.record(sessions, untrusted);
+      metrics.record({
+        ...sessions,
+        sessionsList: { ...sessions.sessionsList, source: "internal" },
+      });
+      const cron = {
+        type: "gateway.rpc",
+        method: "cron.list",
+        phase: "received",
+        cronList: {
+          clientKind: "openclaw-control-ui",
+          source: "wire",
+          scope: "session",
+          compact: true,
+          page: "first",
+        },
+      } as const;
+      metrics.record(cron);
+      metrics.record(cron);
+      metrics.record(cron, untrusted);
+      metrics.record({ ...cron, cronList: { ...cron.cronList, source: "internal" } });
+      metrics.record({ type: "gateway.rpc", method: "health", phase: "received" });
+      for (const clientKind of [
+        "control-ui",
+        "macos",
+        "ios",
+        "android",
+        "cli",
+        "node",
+        "plugin",
+      ] as const) {
+        metrics.record({ type: "gateway.rpc", method: "health", phase: "received", clientKind });
+      }
+      const rendered = metrics.render();
+      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="models.list"} 3\n');
+      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="health"} 8\n');
+      const clientSamples = rendered
         .split("\n")
-        .filter((line) => line.startsWith("openclaw_models_list_requests_total{")),
-    ).toHaveLength(2);
-  });
-
-  test("counts egress outcomes and catalog preparation independently", ({ metrics }) => {
-    for (const outcome of ["forwarded", "refused"] as const) {
-      for (const substituted of [false, true]) {
-        metrics.record({ type: "secret.egress", outcome, substituted });
-        metrics.record({ type: "secret.egress", outcome, substituted }, untrusted);
-        expect(metrics.render()).toContain(
-          `openclaw_secret_egress_requests_total{outcome="${outcome}",substituted="${substituted}"} 1\n`,
+        .filter(
+          (line) =>
+            line.startsWith("openclaw_gateway_rpc_client_requests_total{") &&
+            line.includes('method="health"'),
         );
-      }
-    }
-    const catalog = { type: "tool.catalog", source: "client", mode: "code-mode" } as const;
-    metrics.record({ ...catalog, toolCount: 10 });
-    metrics.record({ ...catalog, toolCount: 12 });
-    metrics.record({ ...catalog, toolCount: 99 }, untrusted);
-    expectMetrics(metrics.render())(`
-      openclaw_tool_catalog_total{mode="code-mode",source="client"} 2
-      openclaw_tool_catalog_tools_total{mode="code-mode",source="client"} 22
-    `);
-  });
-
-  test("extends run duration buckets without changing short histograms", ({ metrics }) => {
-    for (const durationMs of [30_000, 120_000, 900_000, 1_800_000, 3_600_000, 3_600_001]) {
-      const run = { runId: "long-run", provider: "test", model: "test-model", durationMs };
-      metrics.record({ ...run, type: "run.completed", outcome: "completed" });
-      metrics.record({
-        ...run,
-        type: "harness.run.completed",
-        harnessId: "test",
-        outcome: "completed",
-      });
-      metrics.record({
-        ...run,
-        type: "model.call.completed",
-        callId: "test-call",
-        observationUnit: "turn",
-      });
-      metrics.record({
-        type: "message.dispatch.completed",
-        source: "test",
-        durationMs,
-        outcome: "completed",
-      });
-      metrics.record({ type: "webhook.processed", channel: "telegram", durationMs });
-    }
-    const rendered = metrics.render();
-    for (const name of ["run", "harness_run", "model_call", "message_dispatch"]) {
-      const buckets = rendered
-        .split("\n")
-        .filter((line) => line.startsWith(`openclaw_${name}_duration_seconds_bucket{`))
-        .map((line) => [line.match(/le="([^"]+)"/)?.[1], Number(line.split(" ").at(-1))]);
-      expect(buckets).toEqual([
-        ...["0.005", "0.01", "0.025", "0.05", "0.1", "0.25", "0.5", "1", "2.5", "5", "10"].map(
-          (bound) => [bound, 0],
-        ),
-        ["30", 1],
-        ["60", 1],
-        ["120", 2],
-        ["300", 2],
-        ["600", 2],
-        ["900", 3],
-        ["1800", 4],
-        ["3600", 5],
-        ["+Inf", 6],
-      ]);
-    }
-    expect(rendered).toContain(
-      'openclaw_webhook_duration_seconds_bucket{channel="telegram",le="600",webhook="unknown"} 2\n',
-    );
-    expect(rendered).not.toMatch(
-      /openclaw_webhook_duration_seconds_bucket\{[^}]*le="(?:900|1800|3600)"/,
-    );
-  });
-
-  test("resolves RPC latency tails with bounded method-only scrape series", ({ metrics }) => {
-    for (const durationMs of [12, 24, 600, 1200, 2400, 4800, 9600, 24000, 30000, 600001]) {
-      metrics.record(rpc("response", { durationMs }));
-      metrics.record(rpc("handler", { durationMs, admissionMs: durationMs }));
-      metrics.record(rpc("dispatch", { durationMs, queueWaitMs: durationMs }));
-    }
-    const rendered = metrics.render();
-    for (const timing of ["first_response", "handler", "admission", "queue_wait"]) {
-      const name = `openclaw_gateway_rpc_${timing}_seconds`;
-      const lines = rendered.split("\n").filter((line) => line.startsWith(`${name}_`));
-      expect(lines).toHaveLength(44);
-      for (const [bound, count] of [
-        [0.01, 0],
-        [0.0125, 1],
-        [0.025, 2],
-        [0.6, 3],
-        [1.25, 4],
-        [2.5, 5],
-        [5, 6],
-        [10, 7],
-        [25, 8],
-        [30, 9],
-        [600, 9],
-        ["+Inf", 10],
-      ]) {
-        expect(lines).toContain(`${name}_bucket{le="${bound}",method="sessions.history"} ${count}`);
-      }
-      expect(lines).toContain(`${name}_count{method="sessions.history"} 10`);
-      const bounds = lines
-        .filter((line) => line.startsWith(`${name}_bucket`))
-        .map((line) => Number(line.match(/le="([^"]+)"/)?.[1]))
-        .filter((bound) => bound >= 0.01 && bound <= 30);
-      for (let index = 1; index < bounds.length; index += 1) {
-        expect(bounds[index]! / bounds[index - 1]!).toBeLessThanOrEqual(4 / 3 + 1e-12);
-      }
+      expect(clientSamples).toHaveLength(8);
+      expect(clientSamples).toContain(
+        'openclaw_gateway_rpc_client_requests_total{client_kind="other",method="health"} 1',
+      );
+      expect(clientSamples).toContain(
+        'openclaw_gateway_rpc_client_requests_total{client_kind="macos",method="health"} 1',
+      );
+      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="sessions.list"} 3\n');
+      expect(rendered).toContain('openclaw_gateway_rpc_requests_total{method="cron.list"} 3\n');
+      expect(rendered).toContain(
+        'openclaw_cron_list_requests_total{client_kind="openclaw-control-ui",compact="true",page="first",scope="session",source="wire"} 2\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_cron_list_requests_total{client_kind="openclaw-control-ui",compact="true",page="first",scope="session",source="internal"} 1\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_sessions_list_requests_total{caller_source="sidebar",client_kind="openclaw-control-ui",filter="general",row_mode="sidebar",source="wire"} 2\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_sessions_list_requests_total{caller_source="sidebar",client_kind="openclaw-control-ui",filter="general",row_mode="sidebar",source="internal"} 1\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_models_list_requests_total{client_kind="openclaw-control-ui",prepared_only="true",refresh="false",scope="agent",source="wire",view="configured"} 2\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_models_list_requests_total{client_kind="openclaw-control-ui",prepared_only="true",refresh="false",scope="agent",source="internal",view="configured"} 1\n',
+      );
+      expect(
+        rendered
+          .split("\n")
+          .filter((line) => line.startsWith("openclaw_models_list_requests_total{")),
+      ).toHaveLength(2);
+    } finally {
+      metrics.stop();
     }
   });
 
-  test("counts HTTP cancellations by source without accepting public events", ({ metrics }) => {
+  it("counts egress outcomes and catalog preparation independently of log records", () => {
+    const metrics = createMetricsHarness();
+    try {
+      for (const outcome of ["forwarded", "refused"] as const) {
+        for (const substituted of [false, true]) {
+          metrics.record({ type: "secret.egress", outcome, substituted });
+          metrics.record({ type: "secret.egress", outcome, substituted }, untrusted);
+          expect(metrics.render()).toContain(
+            `openclaw_secret_egress_requests_total{outcome="${outcome}",substituted="${substituted}"} 1\n`,
+          );
+        }
+      }
+      const catalog = { type: "tool.catalog", source: "client", mode: "code-mode" } as const;
+      metrics.record({ ...catalog, toolCount: 10 });
+      metrics.record({ ...catalog, toolCount: 12 });
+      metrics.record({ ...catalog, toolCount: 99 }, untrusted);
+      expect(metrics.render()).toContain(
+        'openclaw_tool_catalog_total{mode="code-mode",source="client"} 2\n',
+      );
+      expect(metrics.render()).toContain(
+        'openclaw_tool_catalog_tools_total{mode="code-mode",source="client"} 22\n',
+      );
+    } finally {
+      metrics.stop();
+    }
+  });
+
+  it("distinguishes long runs through one hour without changing shorter-duration histograms", () => {
+    const metrics = createMetricsHarness();
+    try {
+      for (const durationMs of [30_000, 120_000, 900_000, 1_800_000, 3_600_000, 3_600_001]) {
+        const run = { runId: "long-run", provider: "test", model: "test-model", durationMs };
+        metrics.record({ ...run, type: "run.completed", outcome: "completed" });
+        metrics.record({
+          ...run,
+          type: "harness.run.completed",
+          harnessId: "test",
+          outcome: "completed",
+        });
+        metrics.record({
+          ...run,
+          type: "model.call.completed",
+          callId: "test-call",
+          observationUnit: "turn",
+        });
+        metrics.record({
+          type: "message.dispatch.completed",
+          source: "test",
+          durationMs,
+          outcome: "completed",
+        });
+        metrics.record({ type: "webhook.processed", channel: "telegram", durationMs });
+      }
+      const rendered = metrics.render();
+      for (const name of ["run", "harness_run", "model_call", "message_dispatch"]) {
+        const buckets = rendered
+          .split("\n")
+          .filter((line) => line.startsWith(`openclaw_${name}_duration_seconds_bucket{`))
+          .map((line) => [line.match(/le="([^"]+)"/)?.[1], Number(line.split(" ").at(-1))]);
+        expect(buckets).toEqual([
+          ...["0.005", "0.01", "0.025", "0.05", "0.1", "0.25", "0.5", "1", "2.5", "5", "10"].map(
+            (bound) => [bound, 0],
+          ),
+          ["30", 1],
+          ["60", 1],
+          ["120", 2],
+          ["300", 2],
+          ["600", 2],
+          ["900", 3],
+          ["1800", 4],
+          ["3600", 5],
+          ["+Inf", 6],
+        ]);
+      }
+      expect(rendered).toContain(
+        'openclaw_webhook_duration_seconds_bucket{channel="telegram",le="600",webhook="unknown"} 2\n',
+      );
+      expect(rendered).not.toMatch(
+        /openclaw_webhook_duration_seconds_bucket\{[^}]*le="(?:900|1800|3600)"/,
+      );
+    } finally {
+      metrics.stop();
+    }
+  });
+
+  it("resolves RPC latency tails with bounded method-only scrape series", () => {
+    const metrics = createMetricsHarness();
+    const base = { type: "gateway.rpc" as const, method: "sessions.history" };
+    try {
+      for (const durationMs of [12, 24, 600, 1200, 2400, 4800, 9600, 24000, 30000, 600001]) {
+        metrics.record({ ...base, phase: "response", outcome: "ok", durationMs });
+        metrics.record({
+          ...base,
+          phase: "handler",
+          outcome: "returned",
+          durationMs,
+          admissionMs: durationMs,
+        });
+        metrics.record({
+          ...base,
+          phase: "dispatch",
+          outcome: "returned",
+          durationMs,
+          queueWaitMs: durationMs,
+          response: "sent",
+        });
+      }
+      const rendered = metrics.render();
+      for (const timing of ["first_response", "handler", "admission", "queue_wait"]) {
+        const name = `openclaw_gateway_rpc_${timing}_seconds`;
+        const lines = rendered.split("\n").filter((line) => line.startsWith(`${name}_`));
+        expect(lines).toHaveLength(44);
+        for (const [bound, count] of [
+          [0.01, 0],
+          [0.0125, 1],
+          [0.025, 2],
+          [0.6, 3],
+          [1.25, 4],
+          [2.5, 5],
+          [5, 6],
+          [10, 7],
+          [25, 8],
+          [30, 9],
+          [600, 9],
+          ["+Inf", 10],
+        ]) {
+          expect(lines).toContain(
+            `${name}_bucket{le="${bound}",method="sessions.history"} ${count}`,
+          );
+        }
+        expect(lines).toContain(`${name}_count{method="sessions.history"} 10`);
+        const bounds = lines
+          .filter((line) => line.startsWith(`${name}_bucket`))
+          .map((line) => Number(line.match(/le="([^"]+)"/)?.[1]))
+          .filter((bound) => bound >= 0.01 && bound <= 30);
+        for (let index = 1; index < bounds.length; index += 1) {
+          expect(bounds[index]! / bounds[index - 1]!).toBeLessThanOrEqual(4 / 3 + 1e-12);
+        }
+      }
+    } finally {
+      metrics.stop();
+    }
+  });
+
+  it("counts HTTP cancellations by source without accepting public events", () => {
+    const metrics = createMetricsHarness();
     for (const source of ["client", "client", "shutdown"] as const) {
       metrics.record(
         { type: "gateway.http.cancelled", source },
@@ -249,373 +291,567 @@ describe("diagnostics-prometheus service", () => {
     metrics.record({ type: "gateway.http.cancelled", source: "client" }, untrusted);
 
     const rendered = metrics.render();
-    expectMetrics(rendered)(`
-      # TYPE openclaw_gateway_http_cancelled_total counter
-      openclaw_gateway_http_cancelled_total{source="client"} 2
-      openclaw_gateway_http_cancelled_total{source="shutdown"} 1
-    `);
+    expect(rendered).toContain("# TYPE openclaw_gateway_http_cancelled_total counter");
+    expect(rendered).toContain('openclaw_gateway_http_cancelled_total{source="client"} 2\n');
+    expect(rendered).toContain('openclaw_gateway_http_cancelled_total{source="shutdown"} 1\n');
+    metrics.stop();
   });
 
-  test("bounds late-response bytes and signed heap changes", ({ metrics }) => {
-    metrics.record(rpc("response", { durationMs: 10, responseBytes: 1024, firstResponse: true }));
-    metrics.record(rpc("response", { responseBytes: 67108864, firstResponse: false }));
+  it("exports bounded byte histograms, including late frames and negative heap changes", () => {
+    const metrics = createMetricsHarness();
+    const base = { type: "gateway.rpc" as const, method: "sessions.history" };
+    metrics.record({
+      ...base,
+      phase: "response",
+      outcome: "ok",
+      durationMs: 10,
+      responseBytes: 1024,
+      firstResponse: true,
+    });
+    metrics.record({
+      ...base,
+      phase: "response",
+      outcome: "ok",
+      durationMs: 20,
+      responseBytes: 67108864,
+      firstResponse: false,
+    });
     for (const heapDeltaBytes of [-2048, 4096]) {
-      metrics.record(rpc("handler", { heapDeltaBytes }));
+      metrics.record({
+        ...base,
+        phase: "handler",
+        outcome: "returned",
+        durationMs: 20,
+        admissionMs: 0,
+        heapDeltaBytes,
+      });
     }
-    metrics.record(rpc("handler"));
-    metrics.record(rpc("response", { outcome: "unavailable" }));
+    metrics.record({
+      ...base,
+      phase: "handler",
+      outcome: "returned",
+      durationMs: 20,
+      admissionMs: 0,
+    });
+    metrics.record({ ...base, phase: "response", outcome: "unavailable", durationMs: 20 });
     metrics.record(
-      rpc("response", { method: "private-untrusted", responseBytes: 5000 }),
+      {
+        ...base,
+        method: "private-untrusted",
+        phase: "response",
+        outcome: "ok",
+        durationMs: 20,
+        responseBytes: 5000,
+      },
       untrusted,
     );
     const rendered = metrics.render();
-    expectMetrics(rendered)(`
-      openclaw_gateway_rpc_handler_heap_delta_exclusive_total{method="sessions.history"} 2
-      openclaw_gateway_rpc_handler_seconds_count{method="sessions.history"} 3
-    `);
+    expect(rendered).toContain(
+      'openclaw_gateway_rpc_handler_heap_delta_exclusive_total{method="sessions.history"} 2',
+    );
+    expect(rendered).toContain(
+      'openclaw_gateway_rpc_handler_seconds_count{method="sessions.history"} 3',
+    );
     for (const [metric, sum, buckets] of [
-      ["response", 67109888, { 1024: 1, 67108864: 2, "+Inf": 2 }],
-      ["handler_heap_delta", 2048, { "-1024": 1, 0: 1, 4096: 2, 67108864: 2, "+Inf": 2 }],
+      [
+        "response",
+        67109888,
+        [
+          [1024, 1],
+          [67108864, 2],
+          ["+Inf", 2],
+        ],
+      ],
+      [
+        "handler_heap_delta",
+        2048,
+        [
+          [-1024, 1],
+          [0, 1],
+          [4096, 2],
+          [67108864, 2],
+          ["+Inf", 2],
+        ],
+      ],
     ] as const) {
       const name = `openclaw_gateway_rpc_${metric}_bytes`;
-      expectMetrics(rendered)(`
-        # TYPE ${name} histogram
-        ${name}_sum{method="sessions.history"} ${sum}
-        ${name}_count{method="sessions.history"} 2
-      `);
-      for (const [le, count] of Object.entries(buckets)) {
+      expect(rendered).toContain(`# TYPE ${name} histogram`);
+      expect(rendered).toContain(`${name}_sum{method="sessions.history"} ${sum}`);
+      expect(rendered).toContain(`${name}_count{method="sessions.history"} 2`);
+      for (const [le, count] of buckets) {
         expect(rendered).toContain(`${name}_bucket{le="${le}",method="sessions.history"} ${count}`);
       }
     }
-    expectMetrics(rendered)(`
-      openclaw_gateway_rpc_first_response_seconds_count{method="sessions.history"} 1
-      openclaw_gateway_rpc_outcomes_total{outcome="ok",phase="response"} 1
-    `);
+    expect(rendered).toContain(
+      'openclaw_gateway_rpc_first_response_seconds_count{method="sessions.history"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_gateway_rpc_outcomes_total{outcome="ok",phase="response"} 1',
+    );
     expect(rendered).not.toContain("private-untrusted");
+    metrics.stop();
   });
 
-  it.each([
-    [
-      "records hook-blocked run metrics with safe blocker originator only",
-      {
-        type: "run.completed",
-        runId: "run-should-not-export",
-        sessionKey: "session-should-not-export",
-        provider: "openai",
-        model: "gpt-5.4",
-        channel: "slack",
-        trigger: "message",
-        durationMs: 250,
-        outcome: "blocked",
-        blockedBy: "policy-plugin",
-      },
-      `openclaw_run_completed_total{blocked_by="policy-plugin",channel="slack",model="gpt-5.4",outcome="blocked",provider="openai",trigger="message"} 1`,
-      ["run-should-not-export", "session-should-not-export", "matched secret prompt"],
-    ],
-    [
-      "separates request and turn model-call metrics by observation unit",
-      [
-        {
-          type: "model.call.completed",
-          runId: "run-1",
-          callId: "call-1",
-          provider: "openai",
-          model: "gpt-5.4",
-          api: "openai-responses",
-          transport: "http",
-          durationMs: 250,
-        },
-        {
-          type: "model.call.completed",
-          runId: "run-1",
-          callId: "call-2",
-          provider: "anthropic",
-          model: "claude-opus-4-7",
-          api: "claude-code",
-          transport: "stdio-live",
-          observationUnit: "turn",
-          durationMs: 2500,
-        },
-      ],
-      `openclaw_model_call_total{api="openai-responses",error_category="none",model="gpt-5.4",observation_unit="request",outcome="completed",provider="openai",transport="http"} 1
-openclaw_model_call_duration_seconds_sum{api="claude-code",error_category="none",model="claude-opus-4-7",observation_unit="turn",outcome="completed",provider="anthropic",transport="stdio-live"} 2.5`,
-    ],
-    [
-      "records sanitized async diagnostic queue drop summaries from core diagnostics",
-      {
-        type: "diagnostic.async_queue.dropped",
-        droppedEvents: 3,
-        droppedTrustedEvents: 1,
-        droppedUntrustedEvents: 2,
-        queueLength: 0,
-        maxQueueLength: 10_000,
-        drainBatchSize: 100,
-      },
-      `openclaw_diagnostic_async_queue_dropped_total{drop_class="total"} 3
-openclaw_diagnostic_async_queue_dropped_total{drop_class="trusted"} 1
-openclaw_diagnostic_async_queue_dropped_total{drop_class="untrusted"} 2
-openclaw_diagnostic_async_queue_length 0`,
-    ],
-    [
-      "records one metric for one signal-level exporter lifecycle fact",
-      {
-        type: "telemetry.exporter",
-        exporter: "diagnostics-otel",
-        signal: "logs",
-        status: "started",
-        reason: "configured",
-      },
-      `openclaw_telemetry_exporter_total{exporter="diagnostics-otel",reason="configured",signal="logs",status="started"} 1`,
-      [
-        'openclaw_telemetry_exporter_total{exporter="diagnostics-otel",reason="configured",signal="logs",status="started"} 2',
-      ],
-    ],
-    [
-      "redacts and bounds label values",
-      {
-        type: "tool.execution.error",
-        toolName: "shell\nbad",
-        durationMs: 25,
-        errorCategory: "Bearer sk-secret-token-value",
-      },
-      `openclaw_tool_execution_total{error_category="other",outcome="error",params_kind="unknown",tool="tool",tool_owner="none",tool_source="core"} 1`,
-      ["Bearer", "sk-secret"],
-    ],
-    [
-      "records operator-critical diagnostic signals missing from generic run metrics",
-      [
-        {
-          type: "tool.execution.blocked",
-          toolName: "browser",
-          toolSource: "mcp",
-          toolOwner: "browser-tools",
-          deniedReason: "tools.deny",
-          paramsSummary: { kind: "object" },
-        },
-        {
-          type: "model.failover",
-          lane: "session:Agent:qa:otel-trace-smoke",
-          fromProvider: "anthropic",
-          fromModel: "claude-opus-4-6",
-          toProvider: "openai",
-          toModel: "gpt-5.4",
-          reason: "overloaded",
-          suspended: true,
-        },
-        {
-          type: "session.stuck",
-          sessionId: "session-should-not-export",
-          sessionKey: "key-should-not-export",
-          state: "processing",
-          ageMs: 12_000,
-          classification: "stale_session_state",
-          reason: "startup-sweep",
-        },
-        {
-          type: "payload.large",
-          surface: "gateway.frame",
-          action: "rejected",
-          bytes: 2048,
-          limitBytes: 1024,
-          channel: "web",
-          pluginId: "agent:qa:otel-trace-smoke",
-          reason: "body-too-large",
-        },
-      ],
-      `openclaw_tool_execution_blocked_total{denied_reason="tools.deny",params_kind="object",tool="browser",tool_owner="browser-tools",tool_source="mcp"} 1
-openclaw_model_failover_total{from_model="claude-opus-4-6",from_provider="anthropic",lane="session",reason="overloaded",suspended="true",to_model="gpt-5.4",to_provider="openai"} 1
-openclaw_session_stuck_total{reason="startup-sweep",state="processing"} 1
-openclaw_session_stuck_age_seconds_sum{reason="startup-sweep",state="processing"} 12
-openclaw_payload_large_total{action="rejected",channel="web",plugin="none",reason="body-too-large",surface="gateway.frame"} 1
-openclaw_payload_large_bytes_sum{action="rejected",channel="web",plugin="none",reason="body-too-large",surface="gateway.frame"} 2048`,
-      ["session-should-not-export", "key-should-not-export", "Agent:qa:otel-trace-smoke"],
-    ],
-    [
-      "records webhook ingress and liveness warning metrics",
-      [
-        {
-          type: "webhook.received",
-          channel: "telegram",
-          updateType: "message",
-          chatId: "chat-should-not-export",
-        },
-        {
-          type: "webhook.processed",
-          channel: "telegram",
-          updateType: "message",
-          chatId: "chat-should-not-export",
-          durationMs: 250,
-        },
-        {
-          type: "webhook.error",
-          channel: "telegram",
-          updateType: "message",
-          chatId: "chat-should-not-export",
-          error: "Bearer sk-secret",
-        },
-        {
-          type: "diagnostic.liveness.warning",
-          reasons: ["event_loop_delay", "cpu"],
-          intervalMs: 30_000,
-          eventLoopDelayP99Ms: 250,
-          cpuCoreRatio: 1.4,
-          active: 2,
-          waiting: 1,
-          queued: 4,
-        },
-      ],
-      `openclaw_webhook_received_total{channel="telegram",webhook="message"} 1
-openclaw_webhook_error_total{channel="telegram",webhook="message"} 1
-openclaw_webhook_duration_seconds_sum{channel="telegram",webhook="message"} 0.25
-openclaw_liveness_warning_total{reason="event_loop_delay:cpu"} 1
-openclaw_liveness_sessions{state="active"} 2
-openclaw_liveness_event_loop_delay_p99_seconds_sum{reason="event_loop_delay:cpu"} 0.25
-openclaw_liveness_cpu_core_ratio_sum{reason="event_loop_delay:cpu"} 1.4`,
-      ["chat-should-not-export", "sk-secret"],
-    ],
-    [
-      "keeps only the bounded prefix from scoped queue lane labels",
-      { type: "queue.lane.enqueue", lane: "dreaming-narrative:session-main", queueSize: 2 },
-      `openclaw_queue_lane_size{lane="dreaming-narrative"} 2`,
-      ["session-main"],
-    ],
-    [
-      "records skill usage metrics without raw paths or session identifiers",
-      {
-        type: "skill.used",
-        agentId: "main",
-        runId: "run-should-not-export",
-        sessionKey: "session-should-not-export",
-        skillName: "tiny-llm-brainstorm",
-        skillSource: "workspace",
-        activation: "read",
-        toolName: "read",
-      },
-      `# TYPE openclaw_skill_used_total counter
-openclaw_skill_used_total{activation="read",agent="main",skill="tiny-llm-brainstorm",source="workspace"} 1`,
-      ["run-should-not-export", "session-should-not-export", "SKILL.md"],
-    ],
-    [
-      "bounds messaging labels without exporting raw chat identifiers",
-      [
-        {
-          type: "message.delivery.started",
-          channel: "matrix",
-          deliveryKind: "text",
-          sessionKey: "session-should-not-export",
-        },
-        {
-          type: "message.processed",
-          channel: "telegram/custom",
-          chatId: "chat-should-not-export",
-          messageId: "message-should-not-export",
-          outcome: "completed",
-          reason: "progress draft / message tool 123",
-          durationMs: 25,
-        },
-        {
-          type: "message.delivery.error",
-          channel: "discord/custom",
-          deliveryKind: "progress draft" as never,
-          durationMs: 50,
-          errorCategory: "TimeoutError",
-        },
-      ],
-      `openclaw_message_delivery_started_total{channel="matrix",delivery_kind="text"} 1
-openclaw_message_processed_total{channel="unknown",outcome="completed",reason="none"} 1
-openclaw_message_delivery_total{channel="unknown",delivery_kind="other",error_category="TimeoutError",outcome="error"} 1`,
-      [
-        "chat-should-not-export",
-        "message-should-not-export",
-        "session-should-not-export",
-        "progress draft",
-      ],
-    ],
-    [
-      "records inbound dispatch and session turn telemetry",
-      [
-        { type: "message.received", channel: "telegram", source: "webhook" },
-        { type: "message.dispatch.started", channel: "telegram", source: "webhook" },
-        {
-          type: "message.dispatch.completed",
-          channel: "telegram",
-          source: "webhook",
-          durationMs: 250,
-          outcome: "completed",
-        },
-        {
-          type: "message.dispatch.completed",
-          channel: "telegram/custom",
-          source: "webhook with secret sk-test",
-          durationMs: 300,
-          outcome: "completed",
-          reason: "progress draft / message tool 123",
-        },
-        {
-          type: "session.turn.created",
-          runId: "run-should-not-export",
-          agentId: "agent.default",
-          channel: "telegram",
-          trigger: "user",
-        },
-      ],
-      `openclaw_message_received_total{channel="telegram",source="webhook"} 1
-openclaw_message_dispatch_started_total{channel="telegram",source="webhook"} 1
-openclaw_message_dispatch_completed_total{channel="telegram",outcome="completed",reason="none",source="webhook"} 1
-openclaw_message_dispatch_duration_seconds_sum{channel="telegram",outcome="completed",reason="none",source="webhook"} 0.25
-openclaw_message_dispatch_completed_total{channel="unknown",outcome="completed",reason="none",source="unknown"} 1
-openclaw_message_dispatch_duration_seconds_sum{channel="unknown",outcome="completed",reason="none",source="unknown"} 0.3
-openclaw_session_turn_created_total{agent="agent.default",channel="telegram",trigger="user"} 1`,
-      ["run-should-not-export"],
-    ],
-    [
-      "records session recovery and talk metrics without exporting raw ids or content",
-      [
-        {
-          type: "session.recovery.completed",
-          sessionId: "session-should-not-export",
-          sessionKey: "key-should-not-export",
-          state: "processing",
-          ageMs: 12_000,
-          activeWorkKind: "tool_call",
-          status: "released",
-          action: "abort-active-run",
-        },
-        {
-          type: "talk.event",
-          sessionId: "talk-session-should-not-export",
-          turnId: "turn-should-not-export",
-          talkEventType: "input.audio.delta",
-          mode: "realtime",
-          transport: "gateway-relay",
-          brain: "agent-consult",
-          provider: "openai",
-          byteLength: 320,
-        },
-      ],
-      `openclaw_session_recovery_total{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 1
-openclaw_session_recovery_age_seconds_sum{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 12
-openclaw_talk_event_total{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 1
-openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 320`,
-      [
-        "session-should-not-export",
-        "key-should-not-export",
-        "talk-session-should-not-export",
-        "turn-should-not-export",
-      ],
-    ],
-  ] satisfies MetricCase[])("%s", (_name, events, samples, excluded) => {
+  it("records hook-blocked run metrics with safe blocker originator only", () => {
     const metrics = createMetricsHarness();
-    onTestFinished(metrics.stop);
-    for (const event of Array.isArray(events) ? events : [events]) {
+
+    metrics.record({
+      type: "run.completed",
+      runId: "run-should-not-export",
+      sessionKey: "session-should-not-export",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "slack",
+      trigger: "message",
+      durationMs: 250,
+      outcome: "blocked",
+      blockedBy: "policy-plugin",
+    });
+
+    const rendered = metrics.render();
+
+    expect(rendered).toContain(
+      'openclaw_run_completed_total{blocked_by="policy-plugin",channel="slack",model="gpt-5.4",outcome="blocked",provider="openai",trigger="message"} 1',
+    );
+    expect(rendered).not.toContain("run-should-not-export");
+    expect(rendered).not.toContain("session-should-not-export");
+    expect(rendered).not.toContain("matched secret prompt");
+  });
+
+  it("separates request and turn model-call metrics by observation unit", () => {
+    const metrics = createMetricsHarness();
+
+    metrics.record({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      api: "openai-responses",
+      transport: "http",
+      durationMs: 250,
+    });
+    metrics.record({
+      type: "model.call.completed",
+      runId: "run-1",
+      callId: "call-2",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      api: "claude-code",
+      transport: "stdio-live",
+      observationUnit: "turn",
+      durationMs: 2500,
+    });
+
+    const rendered = metrics.render();
+    expect(rendered).toContain(
+      'openclaw_model_call_total{api="openai-responses",error_category="none",model="gpt-5.4",observation_unit="request",outcome="completed",provider="openai",transport="http"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_model_call_duration_seconds_sum{api="claude-code",error_category="none",model="claude-opus-4-7",observation_unit="turn",outcome="completed",provider="anthropic",transport="stdio-live"} 2.5',
+    );
+  });
+
+  it("records sanitized async diagnostic queue drop summaries from core diagnostics", () => {
+    const metrics = createMetricsHarness();
+
+    metrics.record({
+      type: "diagnostic.async_queue.dropped",
+      droppedEvents: 3,
+      droppedTrustedEvents: 1,
+      droppedUntrustedEvents: 2,
+      queueLength: 0,
+      maxQueueLength: 10_000,
+      drainBatchSize: 100,
+    });
+
+    const rendered = metrics.render();
+
+    expect(rendered).toContain(
+      'openclaw_diagnostic_async_queue_dropped_total{drop_class="total"} 3',
+    );
+    expect(rendered).toContain(
+      'openclaw_diagnostic_async_queue_dropped_total{drop_class="trusted"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_diagnostic_async_queue_dropped_total{drop_class="untrusted"} 2',
+    );
+    expect(rendered).toContain("openclaw_diagnostic_async_queue_length 0");
+  });
+
+  it("records one metric for one signal-level exporter lifecycle fact", () => {
+    const metrics = createMetricsHarness();
+
+    metrics.record({
+      type: "telemetry.exporter",
+      exporter: "diagnostics-otel",
+      signal: "logs",
+      status: "started",
+      reason: "configured",
+    });
+
+    const rendered = metrics.render();
+    expect(rendered).toContain(
+      'openclaw_telemetry_exporter_total{exporter="diagnostics-otel",reason="configured",signal="logs",status="started"} 1',
+    );
+    expect(rendered).not.toContain(
+      'openclaw_telemetry_exporter_total{exporter="diagnostics-otel",reason="configured",signal="logs",status="started"} 2',
+    );
+  });
+
+  it("redacts and bounds label values", () => {
+    const metrics = createMetricsHarness();
+
+    metrics.record({
+      type: "tool.execution.error",
+      toolName: "shell\nbad",
+      durationMs: 25,
+      errorCategory: "Bearer sk-secret-token-value",
+    });
+
+    const rendered = metrics.render();
+
+    expect(rendered).toContain(
+      'openclaw_tool_execution_total{error_category="other",outcome="error",params_kind="unknown",tool="tool",tool_owner="none",tool_source="core"} 1',
+    );
+    expect(rendered).not.toContain("Bearer");
+    expect(rendered).not.toContain("sk-secret");
+  });
+
+  it("records operator-critical diagnostic signals missing from generic run metrics", () => {
+    const metrics = createMetricsHarness();
+
+    for (const event of [
+      {
+        ...baseEvent(),
+        type: "tool.execution.blocked",
+        toolName: "browser",
+        toolSource: "mcp",
+        toolOwner: "browser-tools",
+        deniedReason: "tools.deny",
+        reason: "matched browser",
+        paramsSummary: { kind: "object" },
+      },
+      {
+        ...baseEvent(),
+        type: "model.failover",
+        lane: "session:Agent:qa:otel-trace-smoke",
+        fromProvider: "anthropic",
+        fromModel: "claude-opus-4-6",
+        toProvider: "openai",
+        toModel: "gpt-5.4",
+        reason: "overloaded",
+        suspended: true,
+      },
+    ] satisfies DiagnosticEventPayload[]) {
       metrics.record(event);
     }
+    for (const event of [
+      {
+        ...baseEvent(),
+        type: "session.stuck",
+        sessionId: "session-should-not-export",
+        sessionKey: "key-should-not-export",
+        state: "processing",
+        ageMs: 12_000,
+        classification: "stale_session_state",
+        reason: "startup-sweep",
+      },
+      {
+        ...baseEvent(),
+        type: "payload.large",
+        surface: "gateway.frame",
+        action: "rejected",
+        bytes: 2048,
+        limitBytes: 1024,
+        channel: "web",
+        pluginId: "agent:qa:otel-trace-smoke",
+        reason: "body-too-large",
+      },
+    ] satisfies DiagnosticEventPayload[]) {
+      metrics.record(event);
+    }
+
     const rendered = metrics.render();
-    expectMetrics(rendered)(samples);
-    expectExcludes(rendered, ...(excluded ?? []));
+
+    expect(rendered).toContain(
+      'openclaw_tool_execution_blocked_total{denied_reason="tools.deny",params_kind="object",tool="browser",tool_owner="browser-tools",tool_source="mcp"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_model_failover_total{from_model="claude-opus-4-6",from_provider="anthropic",lane="session",reason="overloaded",suspended="true",to_model="gpt-5.4",to_provider="openai"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_stuck_total{reason="startup-sweep",state="processing"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_stuck_age_seconds_sum{reason="startup-sweep",state="processing"} 12',
+    );
+    expect(rendered).toContain(
+      'openclaw_payload_large_total{action="rejected",channel="web",plugin="none",reason="body-too-large",surface="gateway.frame"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_payload_large_bytes_sum{action="rejected",channel="web",plugin="none",reason="body-too-large",surface="gateway.frame"} 2048',
+    );
+    expect(rendered).not.toContain("session-should-not-export");
+    expect(rendered).not.toContain("key-should-not-export");
+    expect(rendered).not.toContain("Agent:qa:otel-trace-smoke");
   });
 
-  test("updates existing samples after RPC timings exhaust the series cap", ({ metrics }) => {
+  it("records webhook ingress and liveness warning metrics", () => {
+    const metrics = createMetricsHarness();
+
+    metrics.record({
+      type: "webhook.received",
+      channel: "telegram",
+      updateType: "message",
+      chatId: "chat-should-not-export",
+    });
+    metrics.record({
+      type: "webhook.processed",
+      channel: "telegram",
+      updateType: "message",
+      chatId: "chat-should-not-export",
+      durationMs: 250,
+    });
+    metrics.record({
+      type: "webhook.error",
+      channel: "telegram",
+      updateType: "message",
+      chatId: "chat-should-not-export",
+      error: "Bearer sk-secret",
+    });
+    metrics.record({
+      type: "diagnostic.liveness.warning",
+      reasons: ["event_loop_delay", "cpu"],
+      intervalMs: 30_000,
+      eventLoopDelayP99Ms: 250,
+      eventLoopDelayMaxMs: 900,
+      eventLoopUtilization: 0.95,
+      cpuCoreRatio: 1.4,
+      active: 2,
+      waiting: 1,
+      queued: 4,
+    });
+
+    const rendered = metrics.render();
+
+    expect(rendered).toContain(
+      'openclaw_webhook_received_total{channel="telegram",webhook="message"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_webhook_error_total{channel="telegram",webhook="message"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_webhook_duration_seconds_sum{channel="telegram",webhook="message"} 0.25',
+    );
+    expect(rendered).toContain('openclaw_liveness_warning_total{reason="event_loop_delay:cpu"} 1');
+    expect(rendered).toContain('openclaw_liveness_sessions{state="active"} 2');
+    expect(rendered).toContain(
+      'openclaw_liveness_event_loop_delay_p99_seconds_sum{reason="event_loop_delay:cpu"} 0.25',
+    );
+    expect(rendered).toContain(
+      'openclaw_liveness_cpu_core_ratio_sum{reason="event_loop_delay:cpu"} 1.4',
+    );
+    expect(rendered).not.toContain("chat-should-not-export");
+    expect(rendered).not.toContain("sk-secret");
+  });
+
+  it("keeps only the bounded prefix from scoped queue lane labels", () => {
+    const metrics = createMetricsHarness();
+
+    metrics.record({
+      type: "queue.lane.enqueue",
+      lane: "dreaming-narrative:session-main",
+      queueSize: 2,
+    });
+
+    const rendered = metrics.render();
+
+    expect(rendered).toContain('openclaw_queue_lane_size{lane="dreaming-narrative"} 2');
+    expect(rendered).not.toContain("session-main");
+  });
+
+  it("records skill usage metrics without raw paths or session identifiers", () => {
+    const metrics = createMetricsHarness();
+
+    metrics.record({
+      type: "skill.used",
+      agentId: "main",
+      runId: "run-should-not-export",
+      sessionKey: "session-should-not-export",
+      skillName: "tiny-llm-brainstorm",
+      skillSource: "workspace",
+      activation: "read",
+      toolName: "read",
+    });
+
+    const rendered = metrics.render();
+
+    expect(rendered).toContain("# TYPE openclaw_skill_used_total counter");
+    expect(rendered).toContain(
+      'openclaw_skill_used_total{activation="read",agent="main",skill="tiny-llm-brainstorm",source="workspace"} 1',
+    );
+    expect(rendered).not.toContain("run-should-not-export");
+    expect(rendered).not.toContain("session-should-not-export");
+    expect(rendered).not.toContain("SKILL.md");
+  });
+
+  it("bounds messaging labels without exporting raw chat identifiers", () => {
+    const metrics = createMetricsHarness();
+
+    metrics.record({
+      type: "message.delivery.started",
+      channel: "matrix",
+      deliveryKind: "text",
+      sessionKey: "session-should-not-export",
+    });
+    metrics.record({
+      type: "message.processed",
+      channel: "telegram/custom",
+      chatId: "chat-should-not-export",
+      messageId: "message-should-not-export",
+      outcome: "completed",
+      reason: "progress draft / message tool 123",
+      durationMs: 25,
+    });
+    metrics.record({
+      type: "message.delivery.error",
+      channel: "discord/custom",
+      deliveryKind: "progress draft" as never,
+      durationMs: 50,
+      errorCategory: "TimeoutError",
+    });
+
+    const rendered = metrics.render();
+
+    expect(rendered).toContain(
+      'openclaw_message_delivery_started_total{channel="matrix",delivery_kind="text"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_processed_total{channel="unknown",outcome="completed",reason="none"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_delivery_total{channel="unknown",delivery_kind="other",error_category="TimeoutError",outcome="error"} 1',
+    );
+    expect(rendered).not.toContain("chat-should-not-export");
+    expect(rendered).not.toContain("message-should-not-export");
+    expect(rendered).not.toContain("session-should-not-export");
+    expect(rendered).not.toContain("progress draft");
+  });
+
+  it("records inbound dispatch and session turn telemetry", () => {
+    const metrics = createMetricsHarness();
+
+    metrics.record({
+      type: "message.received",
+      channel: "telegram",
+      source: "webhook",
+    });
+    metrics.record({
+      type: "message.dispatch.started",
+      channel: "telegram",
+      source: "webhook",
+    });
+    metrics.record({
+      type: "message.dispatch.completed",
+      channel: "telegram",
+      source: "webhook",
+      durationMs: 250,
+      outcome: "completed",
+    });
+    metrics.record({
+      type: "message.dispatch.completed",
+      channel: "telegram/custom",
+      source: "webhook with secret sk-test",
+      durationMs: 300,
+      outcome: "completed",
+      reason: "progress draft / message tool 123",
+    });
+    metrics.record({
+      type: "session.turn.created",
+      runId: "run-should-not-export",
+      agentId: "agent.default",
+      channel: "telegram",
+      trigger: "user",
+    });
+
+    const rendered = metrics.render();
+
+    expect(rendered).toContain(
+      'openclaw_message_received_total{channel="telegram",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_started_total{channel="telegram",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_completed_total{channel="telegram",outcome="completed",reason="none",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_duration_seconds_sum{channel="telegram",outcome="completed",reason="none",source="webhook"} 0.25',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_completed_total{channel="unknown",outcome="completed",reason="none",source="unknown"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_duration_seconds_sum{channel="unknown",outcome="completed",reason="none",source="unknown"} 0.3',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_turn_created_total{agent="agent.default",channel="telegram",trigger="user"} 1',
+    );
+    expect(rendered).not.toContain("run-should-not-export");
+  });
+
+  it("records session recovery and talk metrics without exporting raw ids or content", () => {
+    const metrics = createMetricsHarness();
+
+    metrics.record({
+      type: "session.recovery.completed",
+      sessionId: "session-should-not-export",
+      sessionKey: "key-should-not-export",
+      state: "processing",
+      stateGeneration: 2,
+      ageMs: 12_000,
+      queueDepth: 1,
+      reason: "startup-sweep",
+      activeWorkKind: "tool_call",
+      allowActiveAbort: true,
+      status: "released",
+      action: "abort-active-run",
+    });
+    metrics.record({
+      type: "talk.event",
+      sessionId: "talk-session-should-not-export",
+      turnId: "turn-should-not-export",
+      talkEventType: "input.audio.delta",
+      mode: "realtime",
+      transport: "gateway-relay",
+      brain: "agent-consult",
+      provider: "openai",
+      byteLength: 320,
+    });
+
+    const rendered = metrics.render();
+
+    expect(rendered).toContain(
+      'openclaw_session_recovery_total{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_recovery_age_seconds_sum{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 12',
+    );
+    expect(rendered).toContain(
+      'openclaw_talk_event_total{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delta",mode="realtime",provider="openai",transport="gateway-relay"} 320',
+    );
+    expect(rendered).not.toContain("session-should-not-export");
+    expect(rendered).not.toContain("key-should-not-export");
+    expect(rendered).not.toContain("talk-session-should-not-export");
+    expect(rendered).not.toContain("turn-should-not-export");
+  });
+
+  it("keeps existing operational samples updating when RPC timings fill the shared cap", () => {
+    const metrics = createMetricsHarness();
     const queue = {
       ...baseEvent(),
       type: "queue.lane.dequeue" as const,
@@ -626,46 +862,65 @@ openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delt
     metrics.record(queue);
     // Enough distinct methods to exhaust the shared cap without importing core internals.
     for (let index = 0; index < 426; index += 1) {
+      const base = { ...baseEvent(), type: "gateway.rpc" as const, method: `core.method.${index}` };
       for (const event of [
-        rpc("received", { method: `core.method.${index}` }),
-        rpc("response", { method: `core.method.${index}`, durationMs: 10, responseBytes: 1024 }),
-        rpc("handler", {
-          method: `core.method.${index}`,
+        { ...base, phase: "received" },
+        { ...base, phase: "response", outcome: "ok", durationMs: 10, responseBytes: 1024 },
+        {
+          ...base,
+          phase: "handler",
+          outcome: "returned",
           durationMs: 10,
           admissionMs: 1,
           heapDeltaBytes: -1024,
-        }),
-        rpc("dispatch", { method: `core.method.${index}`, durationMs: 11, queueWaitMs: 1 }),
-      ] satisfies RpcEvent[]) {
+        },
+        {
+          ...base,
+          phase: "dispatch",
+          outcome: "returned",
+          durationMs: 11,
+          queueWaitMs: 1,
+          response: "sent",
+        },
+      ] satisfies DiagnosticEventPayload[]) {
         metrics.record(event);
       }
     }
     expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 1791");
     metrics.record({ ...queue, queueSize: 2 });
     const existing = metrics.render();
-    expectMetrics(existing)(`
-      openclaw_queue_lane_size{lane="main"} 2
-      openclaw_queue_lane_wait_seconds_count{lane="main"} 2
-      openclaw_prometheus_series_dropped_total 1791
-    `);
+    expect(existing).toContain('openclaw_queue_lane_size{lane="main"} 2');
+    expect(existing).toContain('openclaw_queue_lane_wait_seconds_count{lane="main"} 2');
+    expect(existing).toContain("openclaw_prometheus_series_dropped_total 1791");
     metrics.record({ ...queue, lane: "later" });
     expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 1793");
     expect(metrics.render()).not.toContain('lane="later"');
+    metrics.stop();
   });
 
-  test("subscribes to internal diagnostics and renders scrape text", () => {
-    const listeners: Parameters<TrustedExporterInternalDiagnostics["onEvent"]>[0][] = [];
+  it("subscribes to internal diagnostics and renders scrape text", () => {
+    const listeners: Array<
+      (
+        event: DiagnosticEventPayload,
+        metadata: DiagnosticEventMetadata,
+        privateData: DiagnosticEventPrivateData,
+      ) => void
+    > = [];
     const emitted: unknown[] = [];
     const healthReports: ExporterHealthReport[] = [];
     const error = vi.fn();
-    const noop = () => {};
     const exporter = createDiagnosticsPrometheusExporter();
     const unsubscribe = vi.fn();
 
     exporter.service.start({
-      config: {},
+      config: {} as never,
       stateDir: "/tmp/openclaw-prometheus-test",
-      logger: { info: noop, warn: noop, error, debug: noop },
+      logger: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error,
+        debug: vi.fn(),
+      },
       internalDiagnostics: {
         emit: (event) => emitted.push(event),
         onEvent: (listener) => {
@@ -680,23 +935,18 @@ openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delt
     });
 
     expect(listeners).toHaveLength(1);
-    const recordUsage = (
-      usage: Extract<DiagnosticEventPayload, { type: "model.usage" }>["usage"],
-      agentId?: string,
-    ) =>
-      expectDefined(listeners[0], "Prometheus diagnostics listener")(
-        {
-          ...baseEvent(),
-          type: "model.usage",
-          provider: "openai",
-          model: "gpt-5.4",
-          usage,
-          agentId,
-        },
-        trusted,
-        {},
-      );
-    recordUsage({ input: 12, output: 3, total: 15 }, "Agent:qa:otel-trace-smoke");
+    expectDefined(listeners[0], "Prometheus diagnostics listener")(
+      {
+        ...baseEvent(),
+        type: "model.usage",
+        agentId: "Agent:qa:otel-trace-smoke",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: { input: 12, output: 3, total: 15 },
+      },
+      trusted,
+      {},
+    );
 
     expect(emitted).toStrictEqual([
       {
@@ -721,11 +971,23 @@ openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delt
     expect(exporter.render()).not.toContain("Agent:qa:otel-trace-smoke");
 
     const prefix = "x".repeat(499);
-    recordUsage({
-      get input() {
+    const usage = {} as Extract<DiagnosticEventPayload, { type: "model.usage" }>["usage"];
+    Object.defineProperty(usage, "input", {
+      get() {
         throw new Error(`${prefix}😀`);
       },
     });
+    expectDefined(listeners[0], "Prometheus diagnostics listener")(
+      {
+        ...baseEvent(),
+        type: "model.usage",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage,
+      },
+      trusted,
+      {},
+    );
     expect(error).toHaveBeenCalledWith(
       `diagnostics-prometheus: event handler failed (model.usage): ${prefix}`,
     );
@@ -749,10 +1011,16 @@ openclaw_talk_audio_bytes_sum{brain="agent-consult",event_type="input.audio.delt
 });
 
 describe("metrics HTTP handler", () => {
-  test("sends byte-accurate representation metadata on HEAD", async ({ metrics }) => {
+  it("sends byte-accurate representation metadata on HEAD", async () => {
+    const metrics = createMetricsHarness();
     metrics.record({
       type: "run.completed",
       runId: "run-1",
+      sessionKey: "session-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      channel: "discord",
+      trigger: "message",
       durationMs: 1500,
       outcome: "completed",
     });
@@ -774,10 +1042,10 @@ describe("metrics HTTP handler", () => {
       metrics.record({ type: "queue.lane.dequeue", lane: "main", queueSize: 0, waitMs: 10 });
       const updated = await fetch(base);
       const updatedBody = await updated.text();
-      expectMetrics(updatedBody)(`
-        openclaw_queue_lane_size{lane="main"} 0
-        openclaw_queue_lane_wait_seconds_bucket{lane="main",le="0.005"} 0
-      `);
+      expect(updatedBody).toContain('openclaw_queue_lane_size{lane="main"} 0\n');
+      expect(updatedBody).toContain(
+        'openclaw_queue_lane_wait_seconds_bucket{lane="main",le="0.005"} 0\n',
+      );
       expect(updated.headers.get("content-length")).toBe(String(Buffer.byteLength(updatedBody)));
 
       metrics.stop();

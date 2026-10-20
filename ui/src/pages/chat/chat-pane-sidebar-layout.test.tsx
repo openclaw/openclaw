@@ -1,21 +1,18 @@
 /* @vitest-environment jsdom */
 
-import { Show } from "solid-js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { Show, createSignal, type Setter } from "solid-js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import {
-  mountState,
-  SidebarFixture,
-  sidebarCallbacks,
-} from "./chat-pane-sidebar-fixture.test-support.tsx";
-import {
   resolveSidebarLayoutForBoard,
   sidebarRegionCallbacks,
 } from "./chat-pane-sidebar-layout.ts";
+import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import "./components/chat-sidebar-region.runtime.tsx";
 import {
@@ -39,126 +36,197 @@ function board(face: ResolvedBoardView["face"] = "dashboard") {
   } as ResolvedBoardView;
 }
 
+const containers: HTMLElement[] = [];
+
+function callbacks() {
+  return {
+    activatePanel: vi.fn(),
+    togglePanelExpanded: vi.fn(),
+    closeSlot: vi.fn(),
+    openSlot: vi.fn(),
+    reorderPanel: vi.fn(),
+    resizePanel: vi.fn(),
+    setOpen: vi.fn(),
+  };
+}
+
 function DetailContent() {
   return (
     <aside data-detail>
+      Details
       <input type="checkbox" />
-      <textarea aria-label="Side panel input" />
     </aside>
   );
 }
 
-function boardLayout(layout: SidebarLayout, resolvedBoard = board()) {
-  return resolveSidebarLayoutForBoard({ board: resolvedBoard, layout, paneWidth: 1_400 });
+function CloseDetailContent() {
+  return <textarea aria-label="Side panel input" />;
 }
 
-function callbackFixture(layout: SidebarLayout, stored = layout) {
-  const state = {
-    sidebarLayout: stored,
-    updateSidebarLayout: vi.fn(),
-    updateSidebarActivePanel: vi.fn(),
-  } as unknown as ChatPageHost;
-  const params = {
-    state,
-    layout,
-    closePanelSlot: vi.fn(),
-    openPanelSlot: vi.fn(),
-    forgetDiscussionUrl: vi.fn(),
-    resizePanel: vi.fn(),
-    setPanelOpen: vi.fn(),
-  };
-  return { ...params, callbacks: sidebarRegionCallbacks(params) };
+function WorkspaceContent() {
+  return <div>Workspace</div>;
 }
 
-type LayoutState = { layout: SidebarLayout; narrow: boolean; availableWidth: number };
-type LayoutOptions = { container?: HTMLElement; presentationId?: string; width?: number };
-function definitions(slots = ["detail", "terminal", "workspace"]) {
-  return sidebarPanelDefinitions().map((definition) =>
-    Object.assign(definition, {
-      available: slots.includes(definition.slot),
-      content: definition.slot === "detail" ? <DetailContent /> : null,
-    }),
+type LayoutState = {
+  layout: SidebarLayout;
+  narrow: boolean;
+  presentationId: string;
+  availableWidth: number;
+};
+
+const layouts = new Map<HTMLElement, Setter<LayoutState>>();
+
+function nativeCloseLayoutFixture() {
+  const [layout, setLayout] = createSignal(
+    openSlot(openSlot({ columns: [] }, "workspace"), "detail"),
   );
+  const { container } = mountSolid(() => {
+    const panelDefinitions = sidebarPanelDefinitions().map((definition) =>
+      Object.assign(definition, {
+        available: definition.slot === "detail" || definition.slot === "workspace",
+        content:
+          definition.slot === "detail" ? (
+            <CloseDetailContent />
+          ) : definition.slot === "workspace" ? (
+            <WorkspaceContent />
+          ) : null,
+      }),
+    );
+    return (
+      <SidebarRegionView
+        panelIdPrefix="chat-panel-sidebar-layout-fixture"
+        presentationId="sidebar-layout-fixture"
+        availableWidth={1_400}
+        callbacks={{
+          ...callbacks(),
+          closeSlot: (slot) => setLayout((current) => closeSlot(current, slot)),
+        }}
+        layout={layout()}
+        narrow={false}
+        panelDefinitions={panelDefinitions}
+        primary={<main>Conversation</main>}
+        regionError={undefined}
+      />
+    );
+  });
+  return { container, layout };
 }
 
-async function layoutFixture(layout: SidebarLayout, options: LayoutOptions = {}) {
-  const mounted = mountState<LayoutState>(
-    { layout, narrow: false, availableWidth: options.width ?? 1400 },
-    (props) => {
-      const panels = definitions();
-      return (
-        <SidebarFixture
-          presentationId={options.presentationId ?? "sidebar-layout-fixture"}
-          availableWidth={props.value.availableWidth}
-          layout={props.value.layout}
-          narrow={props.value.narrow}
-          panelDefinitions={panels}
-          callbacks={{
-            ...sidebarCallbacks(),
-            closeSlot: (slot) =>
-              mounted.modify((value) => ({ ...value, layout: closeSlot(value.layout, slot) })),
-          }}
-          primary={
-            <main data-primary>
-              <textarea />
-            </main>
-          }
-        />
-      );
-    },
-    options.container ? { container: options.container } : undefined,
-  );
-  const { container } = mounted;
-  const draw = async (next: SidebarLayout, narrow = false, width = narrow ? 620 : 1400) => {
-    mounted.update({ layout: next, narrow, availableWidth: width });
-    await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
-  };
-  await draw(layout, false, options.width ?? 1400);
-  return { container, draw, layout: () => mounted.read().layout };
+async function renderLayout(
+  container: HTMLElement,
+  layout: SidebarLayout,
+  narrow = false,
+  presentationId = "sidebar-layout-fixture",
+  availableWidth = narrow ? 620 : 1_400,
+) {
+  const next = { layout, narrow, presentationId, availableWidth };
+  const update = layouts.get(container);
+  if (update) {
+    update(next);
+  } else {
+    mountSolid(
+      () => {
+        const [state, setState] = createSignal(next);
+        layouts.set(container, setState);
+        const panelDefinitions = sidebarPanelDefinitions().map((definition) =>
+          Object.assign(definition, {
+            available: ["detail", "terminal", "workspace"].includes(definition.slot),
+            content: definition.slot === "detail" ? <DetailContent /> : null,
+          }),
+        );
+        return (
+          <SidebarRegionView
+            panelIdPrefix={`chat-panel-${encodeURIComponent(state().presentationId)}`}
+            presentationId={state().presentationId}
+            availableWidth={state().availableWidth}
+            callbacks={callbacks()}
+            layout={state().layout}
+            narrow={state().narrow}
+            panelDefinitions={panelDefinitions}
+            primary={
+              <main data-primary>
+                Primary
+                <textarea />
+              </main>
+            }
+            regionError={undefined}
+          />
+        );
+      },
+      { container },
+    );
+  }
+  flush();
+  await container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
 }
+
+afterEach(() => {
+  layouts.clear();
+  for (const container of containers.splice(0)) {
+    container.remove();
+  }
+});
 
 describe("chat pane sidebar layout", () => {
   it.each(["surviving opener", "removed opener", "outside focus"] as const)(
     "restores side-panel focus with a %s",
     async (scenario) => {
       const layout = openSlot({ columns: [] }, "detail");
-      const mounted = mountState({ locked: false, showOpener: true, open: true }, (props) => (
-        <>
-          <button data-outside>Outside</button>
-          <SidebarFixture
-            presentationId="focus-return"
-            layout={setSidebarOpen(layout, props.value.open)}
-            sideFocusLocked={props.value.locked}
-            sideFocusManaged={true}
-            primary={<main>Conversation</main>}
-            panelDefinitions={definitions(["detail"])}
-            header={
-              <>
-                <Show when={props.value.showOpener}>
-                  <button data-opener>Open panel</button>
-                </Show>
-                <button>Actions</button>
-              </>
-            }
-          />
-        </>
-      ));
-      const { container } = mounted;
+      let update!: Setter<{ locked: boolean; showOpener: boolean; open: boolean }>;
+      const { container } = mountSolid(() => {
+        const [state, setState] = createSignal({ locked: false, showOpener: true, open: true });
+        update = setState;
+        return (
+          <>
+            <button data-outside>Outside</button>
+            <SidebarRegionView
+              panelIdPrefix="chat-panel-focus-return"
+              presentationId="focus-return"
+              availableWidth={1_400}
+              callbacks={callbacks()}
+              layout={setSidebarOpen(layout, state().open)}
+              narrow={false}
+              sideFocusLocked={state().locked}
+              sideFocusManaged={true}
+              panelDefinitions={sidebarPanelDefinitions().map((definition) =>
+                Object.assign(definition, {
+                  available: definition.slot === "detail",
+                  content: definition.slot === "detail" ? <DetailContent /> : null,
+                }),
+              )}
+              header={
+                <>
+                  <Show when={state().showOpener}>
+                    <button data-opener>Open panel</button>
+                  </Show>
+                  <button>Actions</button>
+                </>
+              }
+              primary={<main>Conversation</main>}
+              regionError={undefined}
+            />
+          </>
+        );
+      });
+      containers.push(container);
       const region = container.querySelector("openclaw-chat-sidebar-region")!;
       await region.updateComplete;
       const opener = container.querySelector<HTMLButtonElement>("[data-opener]")!;
       opener.focus();
-      mounted.modify((state) => ({ ...state, locked: true }));
+      update((state) => ({ ...state, locked: true }));
+      flush();
       await region.updateComplete;
       container.querySelector<HTMLInputElement>("[data-detail] input")!.focus();
       if (scenario !== "surviving opener") {
-        mounted.modify((state) => ({ ...state, showOpener: false }));
+        update((state) => ({ ...state, showOpener: false }));
+        flush();
       }
       const outside = container.querySelector<HTMLButtonElement>("[data-outside]")!;
       if (scenario === "outside focus") {
         outside.focus();
       }
-      mounted.modify((state) => ({ ...state, locked: false, open: false }));
+      update((state) => ({ ...state, locked: false, open: false }));
+      flush();
       await region.updateComplete;
       expect(document.activeElement).toBe(
         scenario === "surviving opener"
@@ -173,22 +241,23 @@ describe("chat pane sidebar layout", () => {
   it("keeps native content and the parent layout writable when the DOM provider changes", async () => {
     // SAFETY: the region transports application context; this fixture's panel reads no capabilities.
     const container = createApplicationContextProvider({} as ApplicationContext);
-    onTestFinished(() => container.remove());
+    containers.push(container);
     document.body.append(container);
     const layout = openSlot({ columns: [] }, "detail");
-    const { draw } = await layoutFixture(layout, { container });
+    await renderLayout(container, layout);
     const region = container.querySelector("openclaw-chat-sidebar-region")!;
     const primary = container.querySelector("[data-primary]");
     const detail = container.querySelector("[data-detail]")!;
     const checkbox = detail.querySelector("input")!;
     checkbox.checked = true;
 
+    // Native JSX content stays with its parent Solid owner when the DOM provider changes.
     container.setContext({} as ApplicationContext);
     await region.updateComplete;
     expect(container.querySelector("[data-detail]")).toBe(detail);
     expect(checkbox.checked).toBe(true);
 
-    await draw(promoteSidebarPanel(layout, "detail"));
+    await renderLayout(container, promoteSidebarPanel(layout, "detail"));
     expect(container.querySelector("[data-primary]")).toBe(primary);
     expect(
       container
@@ -208,12 +277,15 @@ describe("chat pane sidebar layout", () => {
     const targetIds: string[] = [];
     const tabIds: string[] = [];
     for (const presentation of presentations) {
+      const container = document.createElement("div");
+      containers.push(container);
+      document.body.append(container);
       const presentationId = JSON.stringify(presentation);
-      const { container, draw } = await layoutFixture(layout, { presentationId });
+      await renderLayout(container, layout, false, presentationId);
       const detail = container.querySelector("[data-detail]")!;
       const primary = container.querySelector("[data-primary]")!;
       for (const next of [layout, promoteSidebarPanel(layout, "detail"), layout]) {
-        await draw(next);
+        await renderLayout(container, next, false, presentationId);
         const tab = container.querySelector(".tabstrip-tab[active]")!;
         const targetId = tab.getAttribute("aria-controls")!;
         const target = document.getElementById(targetId);
@@ -235,11 +307,12 @@ describe("chat pane sidebar layout", () => {
   });
 
   it("restores focus to the surviving tab after its parent commits native Close", async () => {
-    const { container: parent, layout } = await layoutFixture(
-      openSlot(openSlot({ columns: [] }, "workspace"), "detail"),
-    );
+    const { container: parent, layout } = nativeCloseLayoutFixture();
+    containers.push(parent);
+    flush();
     const region = parent.querySelector("openclaw-chat-sidebar-region")!;
-    parent.querySelector<HTMLTextAreaElement>("[data-detail] textarea")!.focus();
+    await region.updateComplete;
+    parent.querySelector("textarea")!.focus();
 
     const command = new CustomEvent("openclaw:native-close-focused-panel", { cancelable: true });
     window.dispatchEvent(command);
@@ -254,37 +327,41 @@ describe("chat pane sidebar layout", () => {
   });
 
   it("preserves drafts and panel state across swapping, docking, focus, minimize, and mobile", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    containers.push(container);
     const open = openSlot({ columns: [] }, "detail");
-    const { container, draw } = await layoutFixture({ columns: [], open: false });
+
+    await renderLayout(container, { columns: [], open: false });
     const primary = container.querySelector("[data-primary]");
     const draft = primary!.querySelector("textarea")!;
     draft.value = "Keep this draft";
-    await draw(open);
+    await renderLayout(container, open);
     const detail = container.querySelector<HTMLElement>("[data-detail]")!;
     const checkbox = detail.querySelector("input")!;
     checkbox.checked = true;
     expect(container.querySelector("[data-primary]")).toBe(primary);
     const promoted = promoteSidebarPanel(open, "detail");
     for (const dock of ["left", "right", "bottom"] as const) {
-      await draw(setSidebarDock(promoted, dock));
+      await renderLayout(container, setSidebarDock(promoted, dock));
       expect(detail.closest("[data-region]")?.getAttribute("data-region")).toBe("main");
       expect(primary?.closest("[data-region]")?.getAttribute("data-region")).toBe("side");
       expect(primary?.closest("[data-region]")?.hasAttribute("hidden")).toBe(false);
       expect(container.querySelector("[data-detail]")).toBe(detail);
       expect(container.querySelector("[data-primary]")).toBe(primary);
     }
-    await draw(setSidebarExpanded(promoted, true));
+    await renderLayout(container, setSidebarExpanded(promoted, true));
     expect(primary?.closest("[data-region]")?.hasAttribute("hidden")).toBe(true);
     expect(detail.closest("[data-region]")?.hasAttribute("hidden")).toBe(false);
-    await draw(setSidebarOpen(promoted, false));
+    await renderLayout(container, setSidebarOpen(promoted, false));
     expect(primary?.closest("[data-region]")?.hasAttribute("hidden")).toBe(true);
-    await draw(setSidebarOpen(promoted, true), true);
+    await renderLayout(container, setSidebarOpen(promoted, true), true);
     expect(primary?.closest("[data-region]")?.hasAttribute("hidden")).toBe(false);
     expect(container.querySelector(".sidebar-region--narrow")).not.toBeNull();
     const conversation = promoted.columns[0]!.panels.find(
       (panel) => panel.slot === "conversation",
     )!;
-    await draw(promoteSidebarPanel(promoted, conversation.id));
+    await renderLayout(container, promoteSidebarPanel(promoted, conversation.id));
     expect(primary?.closest("[data-region]")?.getAttribute("data-region")).toBe("main");
     expect(container.querySelector("[data-detail]")).toBe(detail);
     expect(container.querySelector("[data-primary]")).toBe(primary);
@@ -293,7 +370,15 @@ describe("chat pane sidebar layout", () => {
   });
 
   it("keeps an unmeasured shell in the wide layout", async () => {
-    const { container } = await layoutFixture(openSlot({ columns: [] }, "detail"), { width: 0 });
+    const container = document.createElement("div");
+    containers.push(container);
+    await renderLayout(
+      container,
+      openSlot({ columns: [] }, "detail"),
+      false,
+      "sidebar-layout-fixture",
+      0,
+    );
     expect(container.querySelector(".sidebar-region--narrow")).toBeNull();
   });
 
@@ -325,7 +410,11 @@ describe("chat pane sidebar layout", () => {
   });
 
   it("preserves a saved bottom dock and panel selection on a dashboard route", () => {
-    const layout = boardLayout({ ...openSlot({ columns: [] }, "terminal"), dock: "bottom" });
+    const layout = resolveSidebarLayoutForBoard({
+      board: board(),
+      layout: { ...openSlot({ columns: [] }, "terminal"), dock: "bottom" },
+      paneWidth: 1_400,
+    });
 
     expect(layout.dock).toBe("bottom");
     expect(layout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal"]);
@@ -375,26 +464,61 @@ describe("chat pane sidebar layout", () => {
       openSlot(openSlot({ columns: [] }, "terminal"), "dashboard"),
       "dashboard",
     );
-    const { state, callbacks: actions } = callbackFixture(boardLayout(stored), stored);
-    actions.activatePanel("terminal");
+    const rendered = resolveSidebarLayoutForBoard({
+      board: board(),
+      layout: stored,
+      paneWidth: 1_400,
+    });
+    const updateSidebarLayout = vi.fn();
+    const updateSidebarActivePanel = vi.fn();
+    const state = {
+      sidebarLayout: stored,
+      updateSidebarLayout,
+      updateSidebarActivePanel,
+    } as unknown as ChatPageHost;
 
-    expect(state.updateSidebarLayout).toHaveBeenCalledWith(
+    sidebarRegionCallbacks({
+      state,
+      layout: rendered,
+      closePanelSlot: vi.fn(),
+      openPanelSlot: vi.fn(),
+      forgetDiscussionUrl: vi.fn(),
+      resizePanel: vi.fn(),
+      setPanelOpen: vi.fn(),
+    }).activatePanel("terminal");
+
+    expect(updateSidebarLayout).toHaveBeenCalledWith(
       expect.objectContaining({
         mainPanelId: "dashboard",
         columns: [expect.objectContaining({ activePanelId: "terminal" })],
       }),
     );
-    expect(state.updateSidebarActivePanel).toHaveBeenCalledWith("terminal");
+    expect(updateSidebarActivePanel).toHaveBeenCalledWith("terminal");
   });
 
   it("closes dashboard presentation through its owner without minimizing unrelated tabs", () => {
-    const {
+    const layout = resolveSidebarLayoutForBoard({
+      board: board(),
+      layout: { columns: [] },
+      paneWidth: 1_400,
+    });
+    const setPanelOpen = vi.fn();
+    const closePanelSlot = vi.fn();
+    const state = {
+      sidebarLayout: layout,
+      updateSidebarLayout: vi.fn(),
+      updateSidebarActivePanel: vi.fn(),
+    } as unknown as ChatPageHost;
+
+    sidebarRegionCallbacks({
       state,
-      callbacks: actions,
+      layout,
       closePanelSlot,
+      openPanelSlot: vi.fn(),
+      forgetDiscussionUrl: vi.fn(),
+      resizePanel: vi.fn(),
       setPanelOpen,
-    } = callbackFixture(boardLayout({ columns: [] }));
-    actions.closeSlot("dashboard");
+    }).closeSlot("dashboard");
 
     expect(closePanelSlot).toHaveBeenCalledWith("dashboard");
     expect(setPanelOpen).not.toHaveBeenCalled();
@@ -407,13 +531,20 @@ describe("chat pane sidebar layout", () => {
       "dashboard",
     );
     const loading = { ...board(), hasBoard: false };
-    const awaitingSnapshot = boardLayout(layout, {
-      ...loading,
-      provider: { hasLoadedSnapshot: false },
-    } as ResolvedBoardView);
+    const awaitingSnapshot = resolveSidebarLayoutForBoard({
+      board: { ...loading, provider: { hasLoadedSnapshot: false } } as ResolvedBoardView,
+      layout,
+      paneWidth: 1_400,
+    });
     expect(awaitingSnapshot).toEqual(layout);
-    expect(boardLayout(layout, loading)).toEqual(layout);
-    const removed = boardLayout(layout, { ...loading, available: false });
+    expect(resolveSidebarLayoutForBoard({ board: loading, layout, paneWidth: 1_400 })).toEqual(
+      layout,
+    );
+    const removed = resolveSidebarLayoutForBoard({
+      board: { ...loading, available: false },
+      layout,
+      paneWidth: 1_400,
+    });
     expect(sidebarMainPanel(removed)?.slot).toBe("conversation");
     expect(sidebarActivePanel(removed)?.slot).toBe("detail");
   });
