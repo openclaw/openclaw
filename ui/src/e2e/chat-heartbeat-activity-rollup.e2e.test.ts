@@ -1,16 +1,5 @@
-// Control UI E2E covers pooling reply-less wake activity (heartbeats) into one rollup row.
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-
-let artifactDir: string | undefined;
-beforeEach(() => {
-  const parent = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-  artifactDir = parent
-    ? createControlUiE2eArtifactDir("chat-heartbeat-activity-rollup", parent)
-    : undefined;
-});
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -20,13 +9,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-async function captureProof(page: import("playwright").Page, name: string) {
-  if (!artifactDir) {
-    return;
-  }
-  await page.screenshot({ path: path.join(artifactDir, `${name}.png`), fullPage: true });
-}
-
 function heartbeatWake(index: number): Array<Record<string, unknown>> {
   const runId = `heartbeat-run-${index}`;
   const callId = `heartbeat-call-${index}`;
@@ -35,12 +17,7 @@ function heartbeatWake(index: number): Array<Record<string, unknown>> {
     {
       role: "assistant",
       content: [
-        {
-          type: "toolCall",
-          id: callId,
-          name: "heartbeat_respond",
-          arguments: { notify: false },
-        },
+        { type: "toolCall", id: callId, name: "heartbeat_respond", arguments: { notify: false } },
       ],
       runId,
       timestamp,
@@ -87,17 +64,14 @@ suite.define(() => {
       await expect
         .poll(async () => rollup.locator(".chat-activity-group__label").textContent())
         .toBe(`${wakeCount} other operations`);
-      // One pooled row owns all wakes; no per-wake rows remain in the transcript.
       expect(await rollup.count()).toBe(1);
       expect(await page.locator(".chat-tool-row").count()).toBe(0);
-      await captureProof(page, "heartbeat-rollup-collapsed");
 
       await rollup.click();
       await expect
         .poll(async () => page.locator(".chat-activity-group__body .chat-tool-row").count())
         .toBe(wakeCount);
       await waitForChatScrollIdle(page);
-      await captureProof(page, "heartbeat-rollup-expanded");
     });
   });
 });

@@ -1,10 +1,8 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import type { Locator, Page } from "playwright";
+import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -14,14 +12,16 @@ const suite = createControlUiE2eSuite({
   trackBrowserContexts: true,
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProofEnabled) {
-    proofDir = createControlUiE2eArtifactDir("image-lightbox");
-  }
-});
-
+const expectLoadedImage = (image: Locator) =>
+  expect
+    .poll(() =>
+      image.evaluate((element) =>
+        element instanceof HTMLImageElement && element.complete ? element.naturalWidth : 0,
+      ),
+    )
+    .toBeGreaterThan(0);
+const expectFocused = (element: Locator) =>
+  expect.poll(() => element.evaluate((node) => node.matches(":focus"))).toBe(true);
 async function installImageGalleries(page: Page) {
   const images = await page.evaluate(() =>
     Array.from({ length: 5 }, (_, index) => {
@@ -59,9 +59,6 @@ suite.define(() => {
     const dataUrl = `data:image/png;base64,${bannerBase64}`;
     const context = await suite.newBrowserContext({
       locale: "en-US",
-      recordVideo: captureUiProofEnabled
-        ? { dir: proofDir, size: { height: 900, width: 1440 } }
-        : undefined,
       serviceWorkers: "block",
       viewport: { height: 900, width: 1440 },
     });
@@ -176,32 +173,12 @@ suite.define(() => {
       }
       await page.evaluate(() => document.documentElement.setAttribute("data-theme-mode", "dark"));
       const focusIsInsideLightbox = () =>
-        page.locator("openclaw-image-lightbox").evaluate((lightbox) => {
-          let active: Element | null = document.activeElement;
-          while (active instanceof HTMLElement && active.shadowRoot?.activeElement) {
-            active = active.shadowRoot.activeElement;
-          }
-          let node: Node | null = active;
-          while (node) {
-            if (node === lightbox) {
-              return true;
-            }
-            const root = node.getRootNode();
-            node = root instanceof ShadowRoot ? root.host : node.parentNode;
-          }
-          return false;
-        });
-      await expect
-        .poll(() => closeButton.evaluate((element) => element.matches(":focus")))
-        .toBe(true);
+        page
+          .locator("openclaw-image-lightbox")
+          .evaluate((lightbox) => lightbox.matches(":focus-within"));
+      await expectFocused(closeButton);
       const displayedImage = page.getByAltText("OpenClaw banner").last();
-      await expect
-        .poll(() =>
-          displayedImage.evaluate((image) =>
-            image instanceof HTMLImageElement && image.complete ? image.naturalWidth : 0,
-          ),
-        )
-        .toBeGreaterThan(0);
+      await expectLoadedImage(displayedImage);
       await page
         .locator("openclaw-image-lightbox openclaw-modal-dialog > dialog")
         .evaluate(finishElementAnimations);
@@ -222,9 +199,7 @@ suite.define(() => {
       await expect.poll(focusIsInsideLightbox).toBe(true);
       await page.keyboard.press("Escape");
       await expect.poll(() => dialog.count()).toBe(0);
-      await expect
-        .poll(() => transcriptTrigger.evaluate((element) => element.matches(":focus")))
-        .toBe(true);
+      await expectFocused(transcriptTrigger);
 
       await openChatSidePanelType(page, "Files");
       await page.locator(".chat-workspace-rail__group-summary", { hasText: "Artifacts" }).click();
@@ -238,82 +213,14 @@ suite.define(() => {
       });
       await sidebarTrigger.waitFor({ state: "visible", timeout: 10_000 });
 
-      if (captureUiProofEnabled) {
-        await writeFile(
-          path.join(proofDir, "01-sidebar-image.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [sidebarTrigger]),
-        );
-      }
-
       await sidebarTrigger.click();
       const sidebarDialog = page.getByRole("dialog", {
         name: "Image preview: openclaw-banner.png",
       });
       await sidebarDialog.waitFor({ state: "visible" });
-      if (captureUiProofEnabled) {
-        await writeFile(
-          path.join(proofDir, "02-sidebar-lightbox.png"),
-          await takeControlUiViewportScreenshot(page, sidebarDialog, [
-            page.getByRole("button", { name: "Close image preview" }),
-          ]),
-        );
-      }
-      const closeProbe = await page.evaluateHandle(() => {
-        const controller = new AbortController();
-        const events: { type: string; capture: boolean; target: string; prevented: boolean }[] = [];
-        for (const type of ["click", "image-lightbox-close"]) {
-          for (const capture of [true, false]) {
-            document.addEventListener(
-              type,
-              (event) => {
-                const target = event.target;
-                if (target instanceof Element && target.closest("openclaw-image-lightbox")) {
-                  events.push({
-                    type,
-                    capture,
-                    target: target.localName,
-                    prevented: event.defaultPrevented,
-                  });
-                }
-              },
-              { capture, signal: controller.signal },
-            );
-          }
-        }
-        return { events, dispose: () => controller.abort() };
-      });
-      try {
-        await page.getByRole("button", { name: "Close image preview" }).click();
-        await expect.poll(() => sidebarDialog.count()).toBe(0);
-        await expect
-          .poll(() => sidebarTrigger.evaluate((element) => element.matches(":focus")))
-          .toBe(true);
-      } catch (error) {
-        console.error(
-          "Sidebar lightbox Close diagnostic",
-          await closeProbe.evaluate(({ events }) => ({
-            events,
-            visibility: document.visibilityState,
-            lightboxes: Array.from(document.querySelectorAll("openclaw-image-lightbox")).map(
-              (host) => ({
-                connected: host.isConnected,
-                dialogs: Array.from(host.querySelectorAll("dialog")).map((nativeDialog) => ({
-                  connected: nativeDialog.isConnected,
-                  open: nativeDialog.open,
-                })),
-              }),
-            ),
-            focus: {
-              tag: document.activeElement?.localName,
-              class: document.activeElement?.getAttribute("class"),
-            },
-          })),
-        );
-        throw error;
-      } finally {
-        await closeProbe.evaluate(({ dispose }) => dispose());
-        await closeProbe.dispose();
-      }
+      await page.getByRole("button", { name: "Close image preview" }).click();
+      await expect.poll(() => sidebarDialog.count()).toBe(0);
+      await expectFocused(sidebarTrigger);
 
       await page.setViewportSize({ height: 844, width: 390 });
       await sidebarTrigger.click();
@@ -389,80 +296,8 @@ suite.define(() => {
         mobileImage.evaluate((image) =>
           Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2)),
         );
-      const zoomDiagnostic = await page.evaluateHandle(() => {
-        const host = document.querySelector("openclaw-image-lightbox")!;
-        const originalImage = host.querySelector<HTMLImageElement>(".image")!;
-        const originalSrc = originalImage.getAttribute("src");
-        const originalCurrentSrc = originalImage.currentSrc;
-        const doubleClicks: { originalTarget: boolean; currentTarget: boolean }[] = [];
-        const panzoomScales: number[] = [];
-        const snapshot = () => {
-          const image = host.querySelector<HTMLImageElement>(".image");
-          const box = image?.getBoundingClientRect();
-          const stage = host.querySelector(".stage")?.getBoundingClientRect();
-          return {
-            originalNodeConnected: originalImage.isConnected,
-            sameImageNode: image === originalImage,
-            sameSrc: image?.getAttribute("src") === originalSrc,
-            sameCurrentSrc: image?.currentSrc === originalCurrentSrc,
-            complete: image?.complete,
-            naturalWidth: image?.naturalWidth,
-            naturalHeight: image?.naturalHeight,
-            imageBox: box && { x: box.x, y: box.y, width: box.width, height: box.height },
-            stageSize: stage && { width: stage.width, height: stage.height },
-            viewport: { width: innerWidth, height: innerHeight },
-            displayedScale: image
-              ? Number(new DOMMatrixReadOnly(getComputedStyle(image).transform).a.toFixed(2))
-              : null,
-            zoomInDisabled: host
-              .querySelector('[aria-label="Zoom in"]')
-              ?.getAttribute("aria-disabled"),
-            zoomLabel: host.querySelector('[aria-label="Reset zoom"]')?.textContent?.trim(),
-          };
-        };
-        const before = snapshot();
-        const onDoubleClick = (event: Event) => {
-          doubleClicks.push({
-            originalTarget: event.target === originalImage,
-            currentTarget: event.target === host.querySelector(".image"),
-          });
-        };
-        const onPanzoomChange = (event: Event) => {
-          const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
-          if (
-            typeof detail === "object" &&
-            detail !== null &&
-            "scale" in detail &&
-            typeof detail.scale === "number"
-          ) {
-            panzoomScales.push(detail.scale);
-          }
-        };
-        host.addEventListener("dblclick", onDoubleClick, true);
-        host.addEventListener("panzoomchange", onPanzoomChange, true);
-        return {
-          read: () => ({ before, after: snapshot(), doubleClicks, panzoomScales }),
-          dispose: () => {
-            host.removeEventListener("dblclick", onDoubleClick, true);
-            host.removeEventListener("panzoomchange", onPanzoomChange, true);
-          },
-        };
-      });
-      try {
-        await mobileImage.dblclick();
-        try {
-          await expect.poll(readMobileScale).toBeGreaterThan(1);
-        } catch (error) {
-          console.error(
-            "Lightbox double-click zoom diagnostic:",
-            JSON.stringify(await zoomDiagnostic.evaluate((diagnostic) => diagnostic.read())),
-          );
-          throw error;
-        }
-      } finally {
-        await zoomDiagnostic.evaluate((diagnostic) => diagnostic.dispose());
-        await zoomDiagnostic.dispose();
-      }
+      await mobileImage.dblclick();
+      await expect.poll(readMobileScale).toBeGreaterThan(1);
       await page.getByRole("button", { name: "Reset zoom" }).click();
       await expect.poll(readMobileScale).toBe(1);
       const zoomIn = page.getByRole("button", { name: "Zoom in" });
@@ -473,12 +308,6 @@ suite.define(() => {
       expect((zoomedImageBox?.y ?? 0) + (zoomedImageBox?.height ?? 0)).toBeGreaterThan(0);
       expect(zoomedImageBox?.x ?? mobileViewport.width).toBeLessThan(mobileViewport.width);
       expect(zoomedImageBox?.y ?? mobileViewport.height).toBeLessThan(mobileViewport.height);
-      if (captureUiProofEnabled) {
-        await writeFile(
-          path.join(proofDir, "03-mobile-lightbox.png"),
-          await takeControlUiViewportScreenshot(page, sidebarDialog, [mobileImage]),
-        );
-      }
       await page.keyboard.press("Escape");
       await expect.poll(() => sidebarDialog.count()).toBe(0);
     } finally {
@@ -515,6 +344,8 @@ suite.define(() => {
     );
     const sources = names.map((name) => "media://inbound/" + name + ".png");
     const mediaRequests: { source: string; variant: string | null; width: string | null }[] = [];
+    const renditionSources = () =>
+      mediaRequests.filter((request) => request.width === "1920").map((request) => request.source);
     await page.route("**/__openclaw__/assistant-media?**", async (route) => {
       const url = new URL(route.request().url());
       const index = sources.indexOf(url.searchParams.get("source") ?? "");
@@ -567,53 +398,21 @@ suite.define(() => {
       }
       await trigger.click();
       await lightbox.getByRole("dialog").waitFor({ state: "visible" });
-      await expect
-        .poll(() =>
-          image.evaluate(
-            (element) =>
-              element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0,
-          ),
-        )
-        .toBe(true);
+      await expectLoadedImage(image);
       await expect.poll(() => image.getAttribute("src")).toContain("width=1920");
-      expect(
-        mediaRequests
-          .filter((request) => request.width === "1920")
-          .map((request) => request.source),
-      ).toEqual([sources[0]]);
+      expect(renditionSources()).toEqual([sources[0]]);
       expect(mediaRequests.every((request) => request.variant === "thumbnail")).toBe(true);
-      if (captureUiProofEnabled && !reloaded) {
-        await lightbox.locator("openclaw-modal-dialog > dialog").evaluate(finishElementAnimations);
-        await writeFile(
-          path.join(proofDir, "media-gallery-open.png"),
-          await takeControlUiViewportScreenshot(page, image, [image]),
-        );
-      }
       await page.keyboard.press("ArrowRight");
       await expect.poll(() => image.getAttribute("alt")).toBe("after.png");
       await expect
         .poll(() => lightbox.locator(".gallery-counter").textContent())
         .toContain("2 / 3");
-      if (captureUiProofEnabled && !reloaded) {
-        await writeFile(
-          path.join(proofDir, "media-gallery-next.png"),
-          await takeControlUiViewportScreenshot(page, image, [image]),
-        );
-      }
-      expect(
-        mediaRequests
-          .filter((request) => request.width === "1920")
-          .map((request) => request.source),
-      ).toEqual(sources.slice(0, 2));
+      expect(renditionSources()).toEqual(sources.slice(0, 2));
       await page.keyboard.press("ArrowRight");
       await expect.poll(() => image.getAttribute("alt")).toBe("hover.png");
       await page.keyboard.press("ArrowLeft");
       await expect.poll(() => image.getAttribute("alt")).toBe("after.png");
-      expect(
-        mediaRequests
-          .filter((request) => request.width === "1920")
-          .map((request) => request.source),
-      ).toEqual(sources);
+      expect(renditionSources()).toEqual(sources);
       expect(mediaRequests.every((request) => request.variant === "thumbnail")).toBe(true);
       const requestedDownload = page.waitForEvent("download");
       await lightbox.getByRole("button", { name: "Download image", exact: true }).click();
@@ -624,7 +423,7 @@ suite.define(() => {
       mediaRequests.length = 0;
       await page.keyboard.press("Escape");
       await expect.poll(() => lightbox.count()).toBe(0);
-      await expect.poll(() => trigger.evaluate((element) => element.matches(":focus"))).toBe(true);
+      await expectFocused(trigger);
     }
   });
 
@@ -680,16 +479,7 @@ suite.define(() => {
           await expect
             .poll(() => image.getAttribute("alt"))
             .toBe(`Gallery ${count} image ${index}`);
-          await expect
-            .poll(() =>
-              image.evaluate(
-                (element) =>
-                  element instanceof HTMLImageElement &&
-                  element.complete &&
-                  element.naturalWidth > 0,
-              ),
-            )
-            .toBe(true);
+          await expectLoadedImage(image);
           expect(await lightbox.locator(".stage").boundingBox()).toEqual(stageBox);
         }
         expect(await next.isDisabled()).toBe(true);
@@ -698,7 +488,7 @@ suite.define(() => {
       }
       await page.keyboard.press("Escape");
       await expect.poll(() => lightbox.count()).toBe(0);
-      await expect.poll(() => trigger.evaluate((element) => element.matches(":focus"))).toBe(true);
+      await expectFocused(trigger);
     }
   });
 

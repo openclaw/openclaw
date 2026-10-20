@@ -1,4 +1,4 @@
-import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -9,6 +9,13 @@ const suite = createControlUiE2eSuite({
   name: "Control UI image approval and loading",
   startServerBeforeBrowser: true,
 });
+const frameSizes = (frames: Locator) =>
+  frames.evaluateAll((elements) =>
+    elements.map((element) => {
+      const { width, height } = element.getBoundingClientRect();
+      return { width, height };
+    }),
+  );
 
 suite.define(() => {
   it.each([
@@ -102,10 +109,6 @@ suite.define(() => {
           await allow.waitFor({ state: "visible" });
           await expect.poll(() => frames.count()).toBe(2);
           await waitForChatScrollIdle(page);
-          await page.locator(".chat-group.user").screenshot({
-            path: path.join(suite.artifactDir, "loading-" + width + "-" + colorScheme + ".png"),
-            animations: "disabled",
-          });
           const blocked = page.locator(".chat-image-frame--compact").filter({ has: allow });
           const reason = blocked.locator(".chat-assistant-attachment-card__status-reason");
           expect((await reason.textContent())?.trim()).not.toBe("");
@@ -128,12 +131,7 @@ suite.define(() => {
           expect(
             requests.some((request) => request.source === protectedSource && !request.meta),
           ).toBe(false);
-          const before = await frames.evaluateAll((elements) =>
-            elements.map((element) => {
-              const rect = element.getBoundingClientRect();
-              return { width: rect.width, height: rect.height };
-            }),
-          );
+          const before = await frameSizes(frames);
           for (const frame of await frames.all()) {
             expect((await frame.textContent())?.trim()).toBe("");
             expect(await frame.locator(".chat-assistant-attachment-card").count()).toBe(0);
@@ -159,14 +157,7 @@ suite.define(() => {
           await gallery.evaluate((element) =>
             Promise.all(Array.from(element.querySelectorAll("img"), (image) => image.decode())),
           );
-          expect(
-            await frames.evaluateAll((elements) =>
-              elements.map((element) => {
-                const rect = element.getBoundingClientRect();
-                return { width: rect.width, height: rect.height };
-              }),
-            ),
-          ).toEqual(before);
+          expect(await frameSizes(frames)).toEqual(before);
           expect(await gallery.locator(".chat-image-skeleton").count()).toBe(0);
           expect(await allow.isVisible()).toBe(true);
           await allow.click();

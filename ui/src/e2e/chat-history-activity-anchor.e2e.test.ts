@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
-  captureUiProof,
   createChatFlowE2eSuite,
   installMockGateway,
   waitForChatScrollIdle,
@@ -155,12 +154,6 @@ suite.define(() => {
           1,
         );
         expect(Math.abs((await anchor.boundingBox())!.y - before!.y)).toBeLessThanOrEqual(1);
-        await captureUiProof(
-          suite,
-          page,
-          "chat-history-activity-anchor",
-          `${width}px-${split ? "split" : "classic"}-stable.png`,
-        );
       } finally {
         await suite.closeBrowserContext(context);
       }

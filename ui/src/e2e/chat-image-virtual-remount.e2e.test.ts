@@ -1,3 +1,4 @@
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
   createChatFlowE2eSuite,
@@ -8,6 +9,40 @@ import {
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const observeAppearance = (thread: Locator, selector: string, includeTargets = false) =>
+  thread.evaluateHandle(
+    (element, options) => {
+      let appeared = false;
+      const observer = new MutationObserver((records) => {
+        appeared ||= records.some((record) =>
+          [...record.addedNodes, ...(options.includeTargets ? [record.target] : [])].some(
+            (node) =>
+              node instanceof Element &&
+              (node.matches(options.selector) || node.querySelector(options.selector) !== null),
+          ),
+        );
+      });
+      observer.observe(element, {
+        childList: true,
+        subtree: true,
+        attributes: options.includeTargets,
+      });
+      return {
+        stop: () => {
+          observer.disconnect();
+          return appeared;
+        },
+      };
+    },
+    { selector, includeTargets },
+  );
+
+async function scrollToBottom(thread: Locator) {
+  await thread.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+}
 
 suite.define(() => {
   it.each(["unchanged", "sharing", "role assignment", "role definition"] as const)(
@@ -72,31 +107,9 @@ suite.define(() => {
         await waitForLoadedImage();
         await waitForChatScrollIdle(page);
         const row = await image.evaluateHandle((element) => element.closest(".chat-virtual-row")!);
-        const trace = await page.locator(".chat-thread").evaluateHandle((thread) => {
-          const selector = '.chat-image-frame[aria-busy="true"]';
-          let showedSkeleton = false;
-          const observer = new MutationObserver((records) => {
-            // Inspect added subtrees too: a flash may be removed before the callback runs.
-            showedSkeleton ||= records.some((record) =>
-              [...record.addedNodes, record.target].some(
-                (node) =>
-                  node instanceof Element &&
-                  (node.matches(selector) || node.querySelector(selector) !== null),
-              ),
-            );
-          });
-          observer.observe(thread, { childList: true, subtree: true, attributes: true });
-          return {
-            stop: () => {
-              observer.disconnect();
-              return showedSkeleton;
-            },
-          };
-        });
-        await page.locator(".chat-thread").evaluate((thread) => {
-          thread.scrollTop = thread.scrollHeight;
-          thread.dispatchEvent(new Event("scroll", { bubbles: true }));
-        });
+        const thread = page.locator(".chat-thread");
+        const trace = await observeAppearance(thread, '.chat-image-frame[aria-busy="true"]', true);
+        await scrollToBottom(thread);
         await expect.poll(() => image.count()).toBe(0);
         await expect.poll(() => row.evaluate((element) => element.isConnected)).toBe(false);
         await waitForChatScrollIdle(page);
@@ -109,32 +122,10 @@ suite.define(() => {
         if (change === "unchanged") {
           return;
         }
-        await page.locator(".chat-thread").evaluate((thread) => {
-          thread.scrollTop = thread.scrollHeight;
-          thread.dispatchEvent(new Event("scroll", { bubbles: true }));
-        });
+        await scrollToBottom(thread);
         await expect.poll(() => image.count()).toBe(0);
         await waitForChatScrollIdle(page);
-        const withdrawn = await page.locator(".chat-thread").evaluateHandle((thread) => {
-          const selector = 'img[alt="Remounted image"]';
-          let displayed = false;
-          const observer = new MutationObserver((records) => {
-            displayed ||= records.some((record) =>
-              [...record.addedNodes].some(
-                (node) =>
-                  node instanceof Element &&
-                  (node.matches(selector) || node.querySelector(selector) !== null),
-              ),
-            );
-          });
-          observer.observe(thread, { childList: true, subtree: true });
-          return {
-            stop: () => {
-              observer.disconnect();
-              return displayed;
-            },
-          };
-        });
+        const withdrawn = await observeAppearance(thread, 'img[alt="Remounted image"]');
         revoked = true;
         if (change === "sharing") {
           // Revoked readers receive the redacted catalog invalidation, not a private row.

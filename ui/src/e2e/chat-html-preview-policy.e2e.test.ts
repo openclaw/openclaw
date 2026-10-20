@@ -1,6 +1,4 @@
-import { writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
@@ -42,7 +40,6 @@ suite.define(() => {
   it("rejects descendant requests before network I/O in strict, scripts, and mode transitions", async (test) => {
     const received: string[] = [];
     const rejectedModes: string[] = [];
-    const diagnostics: string[] = [];
     let rejectNetwork!: (error: Error) => void;
     const forbiddenRequest = new Promise<never>((_resolve, reject) => {
       rejectNetwork = reject;
@@ -75,7 +72,6 @@ suite.define(() => {
             await control.goto("http://127.0.0.1:" + receiverPort + "/control");
             await control.close();
             expect(received).toEqual(["/control"]);
-            page.on("pageerror", (error) => diagnostics.push(error.message));
             const gateway = await installMockGateway(page, {
               workspace: "/workspace",
               featureMethods: [...defaultControlUiFeatureMethods, "canvas.document.preview"],
@@ -163,10 +159,6 @@ suite.define(() => {
         );
       },
       close: async () => {
-        await writeFile(
-          path.join(suite.artifactDir, "resource-boundary.json"),
-          JSON.stringify({ received, rejectedModes, diagnostics }, null, 2),
-        );
         await Promise.all([close(receiver), close(sandbox)]);
       },
     });
