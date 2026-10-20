@@ -2,7 +2,6 @@ import type {
   PluginConversationBinding,
   PluginHookInboundClaimEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { Mock } from "vitest";
 import { threadStartResult } from "./app-server/codex-app-server.test-fixtures.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { handleCodexConversationBindingResolved } from "./conversation-binding-hooks.js";
@@ -51,35 +50,29 @@ export function createConversationClaimFixtures(
     };
   }
 
-  function boundConversationClaim(sessionFile: string, sessionKey?: string) {
-    return {
-      event: conversationMessage("continue", {
-        bodyForAgent: "continue",
-        ...(sessionKey ? { sessionKey } : {}),
-      }),
-      ctx: conversationClaimContext(legacyConversationData(sessionFile), sessionKey || undefined),
-    };
-  }
-
-  function denyConversationBinding(data: NonNullable<PluginConversationBinding["data"]>) {
-    return handleCodexConversationBindingResolved(
-      {
-        status: "denied",
-        decision: "deny",
-        request: {
-          data,
-          conversation: { channel: "discord", accountId: "default", conversationId: "channel:1" },
-        },
-      },
-      { bindingStore },
-    );
-  }
-
   return {
     conversationClaimContext,
     legacyConversationData,
-    boundConversationClaim,
-    denyConversationBinding,
+    boundConversationClaim(sessionFile: string, sessionKey?: string) {
+      return {
+        event: conversationMessage("continue", sessionKey ? { sessionKey } : {}),
+        ctx: conversationClaimContext(legacyConversationData(sessionFile), sessionKey || undefined),
+      };
+    },
+
+    denyConversationBinding(data: NonNullable<PluginConversationBinding["data"]>) {
+      return handleCodexConversationBindingResolved(
+        {
+          status: "denied",
+          decision: "deny",
+          request: {
+            data,
+            conversation: { channel: "discord", accountId: "default", conversationId: "channel:1" },
+          },
+        },
+        { bindingStore },
+      );
+    },
   };
 }
 
@@ -88,27 +81,16 @@ export function conversationThreadStartResult(
   threadId: string,
   canAcceptDirectInput?: boolean | null,
 ) {
+  const result = threadStartResult(threadId, cwd);
   return {
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    cwd,
+    ...result,
     model: "gpt-5.4-mini",
-    modelProvider: "openai",
     sandbox: { type: "workspaceWrite", networkAccess: false },
-    serviceTier: null,
     activePermissionProfile: null,
     thread: {
-      ...threadStartResult(threadId, cwd).thread,
+      ...result.thread,
       cliVersion: "0.149.0",
       ...(canAcceptDirectInput !== undefined ? { canAcceptDirectInput } : {}),
     },
   };
-}
-
-export function mockCallArg(mock: Mock, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[argIndex];
 }

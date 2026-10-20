@@ -28,7 +28,18 @@ export function pluginSummary(
   } satisfies v2.PluginSummary;
 }
 
-export function pluginRuntime(params?: {
+export function pluginRuntime({
+  marketplace = "company-tools",
+  pluginName = "security-review",
+  remotePluginId,
+  mustShowInstallationInterstitial = false,
+  installed = false,
+  enabled = false,
+  marketplacePath,
+  install = async () => ({ authPolicy: "ON_USE", appsNeedingAuth: [] }),
+  refresh,
+  setupAllowed,
+}: {
   marketplace?: string;
   marketplacePath?: string;
   pluginName?: string;
@@ -39,28 +50,17 @@ export function pluginRuntime(params?: {
   install?: CodexPluginsManagementRuntime["install"];
   refresh?: CodexPluginsManagementRuntime["refresh"];
   setupAllowed?: boolean;
-}) {
-  const marketplace = params?.marketplace ?? "company-tools";
-  const pluginName = params?.pluginName ?? "security-review";
+} = {}) {
   const summary = pluginSummary(pluginName, marketplace, {
-    ...(params?.remotePluginId
-      ? {
-          remotePluginId: params.remotePluginId,
-          ...(params.mustShowInstallationInterstitial !== undefined
-            ? {
-                mustShowInstallationInterstitial: params.mustShowInstallationInterstitial,
-              }
-            : {}),
-        }
-      : {}),
-    ...(params?.installed ? { installed: true } : {}),
-    ...(params?.enabled ? { enabled: true } : {}),
+    installed,
+    enabled,
+    ...(remotePluginId ? { remotePluginId, mustShowInstallationInterstitial } : {}),
   });
   const listed = {
     marketplaces: [
       {
         name: marketplace,
-        ...(params?.marketplacePath ? { path: params.marketplacePath } : {}),
+        ...(marketplacePath ? { path: marketplacePath } : {}),
         plugins: [summary],
       },
     ],
@@ -68,8 +68,7 @@ export function pluginRuntime(params?: {
     featuredPluginIds: [],
   } satisfies v2.PluginListResponse;
   let pendingApps: v2.AppSummary[] = [];
-  const install =
-    params?.install ?? vi.fn(async () => ({ authPolicy: "ON_USE", appsNeedingAuth: [] }));
+  const policy = { enabled: true, marketplaceName: marketplace, pluginName };
   return {
     workspaceDir: vi.fn(async () => "/repo/company"),
     list: vi.fn(async () => listed),
@@ -84,16 +83,7 @@ export function pluginRuntime(params?: {
         agentId: "test",
         appCacheKey: "test",
         validateCurrent: async () => {},
-        current: {
-          enabled: true,
-          plugins: {
-            [`${pluginName}@${marketplace}`]: {
-              enabled: true,
-              marketplaceName: marketplace,
-              pluginName,
-            },
-          },
-        },
+        current: { enabled: true, plugins: { [`${pluginName}@${marketplace}`]: policy } },
         request: async <TResponse>(method: string): Promise<TResponse> => {
           const responses: Record<string, unknown> = {
             "account/read": { account: { type: "chatgpt" } },
@@ -102,17 +92,11 @@ export function pluginRuntime(params?: {
               nextCursor: null,
             },
             "plugin/installed": listed,
-            "plugin/read": {
-              plugin: {
-                summary,
-                apps: pendingApps,
-                mcpServers: [],
-              },
-            },
+            "plugin/read": { plugin: { summary, apps: pendingApps, mcpServers: [] } },
             "app/installed": { apps: [] },
             "app/read": {
-              apps: params?.setupAllowed === false ? [] : pendingApps,
-              missingAppIds: params?.setupAllowed === false ? pendingApps.map((app) => app.id) : [],
+              apps: setupAllowed === false ? [] : pendingApps,
+              missingAppIds: setupAllowed === false ? pendingApps.map((app) => app.id) : [],
             },
           };
           if (!(method in responses)) {
@@ -121,7 +105,7 @@ export function pluginRuntime(params?: {
           return responses[method] as TResponse;
         },
       }),
-    ...(params?.refresh ? { refresh: params.refresh } : {}),
+    ...(refresh ? { refresh } : {}),
   } satisfies CodexPluginsManagementRuntime;
 }
 
