@@ -54,6 +54,12 @@ it.each([
   const root = await checkout(version);
   const calls: string[][] = [];
   let prefix = "";
+  const baseEnv = Object.freeze({
+    Path: "synthetic-bin",
+    PATH: undefined,
+    EMPTY: "",
+    KEEP: "value",
+  });
   const runCommand: PackageManagerCommandRunner = async (argv, options) => {
     calls.push(argv);
     expect(options.cwd).toBe(root);
@@ -65,6 +71,12 @@ it.each([
       const envPath = options.env?.PATH ?? options.env?.Path ?? "";
       const expectedBin = path.join(prefix, "node_modules", ".bin");
       const local = prefix && envPath.split(path.delimiter)[0] === expectedBin;
+      if (local) {
+        assert(options.env);
+        expect(options.env).toMatchObject({ EMPTY: "", KEEP: "value" });
+        expect(Object.hasOwn(options.env, "PATH")).toBe(false);
+        expect(options.env).not.toBe(baseEnv);
+      }
       return { stdout: local ? version : "10.0.0", stderr: "", code: 0 };
     }
     if (key === "npm --version") {
@@ -81,7 +93,7 @@ it.each([
     }
     throw new Error(`Unexpected command ${key}`);
   };
-  const result = await resolveUpdateBuildManager(runCommand, root, 5000);
+  const result = await resolveUpdateBuildManager(runCommand, root, 5000, baseEnv);
   if (failure) {
     expect(result).toEqual({
       kind: "missing-required",
