@@ -20,6 +20,25 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 afterEach(() => vi.restoreAllMocks());
 
+type Fixture = ReturnType<typeof createSessionCompoundWorkerFixture>;
+async function withFixture(run: (fixture: Fixture) => Promise<void>) {
+  await withOpenClawTestState({ scenario: "minimal" }, async () =>
+    run(createSessionCompoundWorkerFixture()),
+  );
+}
+const deleteExpected = (
+  scope: Fixture["scope"],
+  expectedEntry: Awaited<ReturnType<typeof readSessionEntryInWorker>>,
+  options: { archiveTranscript?: boolean; commitGuard?: () => void } = {},
+) =>
+  deleteSessionEntryLifecycle({
+    ...scope,
+    target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+    archiveTranscript: false,
+    expectedEntry,
+    ...options,
+  });
+
 it.each(["main", "other"])(
   "deletes a completed %s run alias while reporting transcript attribution changes",
   async (agentId) => {
@@ -32,11 +51,8 @@ it.each(["main", "other"])(
         sessionKey: "agent:main:compound-worker",
         sessionId: "original",
       };
-      replaceSessionEntrySync(scope, {
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        label: "initial",
-      });
+      const initial = { sessionId: scope.sessionId, updatedAt: 1, label: "initial" };
+      replaceSessionEntrySync(scope, initial);
       const events = [
         { type: "session", id: scope.sessionId, version: 3 },
         {
@@ -62,14 +78,10 @@ it.each(["main", "other"])(
         }
       });
       try {
-        await expect(
-          deleteSessionEntryLifecycle({
-            ...alias,
-            target: { canonicalKey: alias.sessionKey, storeKeys: [alias.sessionKey] },
-            archiveTranscript: false,
-            expectedEntry,
-          }),
-        ).resolves.toMatchObject({ deleted: true, archivedTranscripts: [] });
+        await expect(deleteExpected(alias, expectedEntry)).resolves.toMatchObject({
+          deleted: true,
+          archivedTranscripts: [],
+        });
       } finally {
         unsubscribe();
       }
@@ -79,10 +91,7 @@ it.each(["main", "other"])(
       });
 
       await expect(readSessionEntryInWorker(alias)).resolves.toBeUndefined();
-      await expect(readSessionEntryInWorker(scope)).resolves.toMatchObject({
-        sessionId: "original",
-        label: "initial",
-      });
+      await expect(readSessionEntryInWorker(scope)).resolves.toMatchObject(initial);
       await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual(events);
     });
   },
@@ -94,36 +103,23 @@ it.each([
 ])(
   "keeps an entry changed by an in-process $change write after cleanup captured it",
   async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = createSessionCompoundWorkerFixture();
+    await withFixture(async (f) => {
       const expectedEntry = await readSessionEntryInWorker(f.scope);
       expect(expectedEntry).toMatchObject({ sessionId: "original", label: "initial" });
-      await replaceSessionEntry(f.scope, {
-        sessionId: change.sessionId,
-        label: change.label,
-        updatedAt: 2,
-      });
+      const replacement = { sessionId: change.sessionId, label: change.label, updatedAt: 2 };
+      await replaceSessionEntry(f.scope, replacement);
 
-      await expect(
-        deleteSessionEntryLifecycle({
-          ...f.scope,
-          target: f.target,
-          archiveTranscript: false,
-          expectedEntry,
-        }),
-      ).resolves.toMatchObject({ deleted: false, expectedEntryMismatch: true });
-      await expect(readSessionEntryInWorker(f.scope)).resolves.toMatchObject({
-        sessionId: change.sessionId,
-        label: change.label,
-        updatedAt: 2,
+      await expect(deleteExpected(f.scope, expectedEntry)).resolves.toMatchObject({
+        deleted: false,
+        expectedEntryMismatch: true,
       });
+      await expect(readSessionEntryInWorker(f.scope)).resolves.toMatchObject(replacement);
     });
   },
 );
 
 it("rolls back entry deletion when cleanup authority is lost at native commit", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = createSessionCompoundWorkerFixture();
+  await withFixture(async (f) => {
     const expectedEntry = await readSessionEntryInWorker(f.scope);
     expect(expectedEntry).toMatchObject({ sessionId: "original", label: "initial" });
     let authorityCurrent = true;
@@ -140,11 +136,7 @@ it("rolls back entry deletion when cleanup authority is lost at native commit", 
       );
     try {
       await expect(
-        deleteSessionEntryLifecycle({
-          ...f.scope,
-          target: f.target,
-          archiveTranscript: false,
-          expectedEntry,
+        deleteExpected(f.scope, expectedEntry, {
           commitGuard() {
             if (!authorityCurrent) {
               throw new Error("cleanup lease lost");
@@ -164,8 +156,7 @@ it("rolls back entry deletion when cleanup authority is lost at native commit", 
 });
 
 it("deletes empty transcripts through the admitted writer without starting an archive worker", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = createSessionCompoundWorkerFixture();
+  await withFixture(async (f) => {
     const createArchiveWorker = vi.spyOn(archive, "createSqliteTranscriptArchiveWorker");
     for (const suffix of ["first", "second", "third"]) {
       const scope = { ...f.scope, sessionKey: `agent:main:empty-${suffix}`, sessionId: suffix };
@@ -174,12 +165,7 @@ it("deletes empty transcripts through the admitted writer without starting an ar
       const expectedEntry = await readSessionEntryInWorker(scope);
       expect(expectedEntry).toMatchObject(entry);
       await expect(
-        deleteSessionEntryLifecycle({
-          ...scope,
-          target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-          archiveTranscript: true,
-          expectedEntry,
-        }),
+        deleteExpected(scope, expectedEntry, { archiveTranscript: true }),
       ).resolves.toMatchObject({ deleted: true, archivedTranscripts: [] });
       await expect(readSessionEntryInWorker(scope)).resolves.toBeUndefined();
       await expect(loadSessionTranscriptEvents(scope)).resolves.toEqual([]);

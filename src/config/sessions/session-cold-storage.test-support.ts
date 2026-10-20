@@ -99,6 +99,8 @@ export async function createSessionColdStorageFixture(
 
   const database = () => requireNativeSqliteDatabase(openOpenClawAgentDatabase(options).db);
   const snapshot = (db = database()) => {
+    const rows = (table: string, order: string, columns = "*") =>
+      db.prepare(`SELECT ${columns} FROM ${table} ORDER BY ${order}`).all();
     return {
       events: executeSqliteQuerySync(
         db,
@@ -114,25 +116,17 @@ export async function createSessionColdStorageFixture(
           .orderBy("session_id")
           .orderBy("seq"),
       ).rows,
-      identities: db
-        .prepare("SELECT * FROM transcript_event_identities ORDER BY session_id, seq, event_id")
-        .all(),
-      active: db
-        .prepare(
-          "SELECT * FROM session_transcript_active_events ORDER BY session_id, active_position",
-        )
-        .all(),
-      index: db.prepare("SELECT * FROM session_transcript_index_state ORDER BY session_id").all(),
-      search: db
-        .prepare(
-          "SELECT session_id, message_id, text, role, timestamp FROM session_transcript_fts ORDER BY session_id, message_id",
-        )
-        .all(),
-      generations: db
-        .prepare("SELECT * FROM transcript_rewrite_watermarks ORDER BY session_id")
-        .all(),
-      windows: db.prepare("SELECT * FROM session_windows ORDER BY session_id").all(),
-      nodes: db.prepare("SELECT * FROM session_nodes ORDER BY session_key").all(),
+      identities: rows("transcript_event_identities", "session_id, seq, event_id"),
+      active: rows("session_transcript_active_events", "session_id, active_position"),
+      index: rows("session_transcript_index_state", "session_id"),
+      search: rows(
+        "session_transcript_fts",
+        "session_id, message_id",
+        "session_id, message_id, text, role, timestamp",
+      ),
+      generations: rows("transcript_rewrite_watermarks", "session_id"),
+      windows: rows("session_windows", "session_id"),
+      nodes: rows("session_nodes", "session_key"),
     };
   };
   const original = snapshot();

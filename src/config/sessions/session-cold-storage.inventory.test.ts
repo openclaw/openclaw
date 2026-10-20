@@ -26,6 +26,21 @@ let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createSessionColdStorageFixture>>;
 let embeddedBytes: number;
 let embeddedBlob: Buffer;
+function setStorage(db: ReturnType<typeof openNodeSqliteDatabase>, storage: "sqlite" | "file") {
+  db.prepare(
+    "UPDATE session_transcript_cold_archives SET storage = ?, archive_blob = ? WHERE session_id = ?",
+  ).run(storage, storage === "sqlite" ? embeddedBlob : null, historicalId);
+}
+const emptyInventory = (storePath: string) => ({
+  agentId: "main",
+  storePath,
+  hotTranscripts: 0,
+  coldTranscripts: 0,
+  embeddedArchiveBytes: 0,
+  archiveBytes: 0,
+  databaseBytes: 0,
+  walBytes: 0,
+});
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
   fixture = await createSessionColdStorageFixture(state.statePath("shared.sqlite"));
@@ -40,12 +55,7 @@ beforeAll(async () => {
   embeddedBlob = await fs.readFile(
     path.join(state.stateDir, "cold", String(descriptor.archive_name)),
   );
-  fixture
-    .database()
-    .prepare(
-      "UPDATE session_transcript_cold_archives SET storage = 'sqlite', archive_blob = ? WHERE session_id = ?",
-    )
-    .run(embeddedBlob, historicalId);
+  setStorage(fixture.database(), "sqlite");
   await closeOpenClawAgentDatabasesAsync();
 });
 afterEach(() => vi.restoreAllMocks());
@@ -59,11 +69,9 @@ it.each(["sqlite", "file"] as const)(
     const missing = state.statePath("missing", "openclaw-agent.sqlite");
     const foreign =
       storage === "file" ? openNodeSqliteDatabase(fixture.scope.storePath) : undefined;
-    foreign
-      ?.prepare(
-        "UPDATE session_transcript_cold_archives SET storage = 'file', archive_blob = NULL WHERE session_id = ?",
-      )
-      .run(historicalId);
+    if (foreign) {
+      setStorage(foreign, "file");
+    }
     const observer = observeParentSqlite();
     try {
       const config = maintenanceConfig(fixture.scope.storePath);
@@ -77,8 +85,7 @@ it.each(["sqlite", "file"] as const)(
       const result = await getSessionColdStorageStatus(config);
       expect(result).toEqual([
         {
-          agentId: "main",
-          storePath: fixture.scope.storePath,
+          ...emptyInventory(fixture.scope.storePath),
           hotTranscripts: 1,
           coldTranscripts: 1,
           embeddedArchiveBytes: storage === "sqlite" ? embeddedBytes : 0,
@@ -90,16 +97,7 @@ it.each(["sqlite", "file"] as const)(
       expect(result[0]!.databaseBytes).toBeGreaterThan(0);
       if (storage === "sqlite") {
         expect(await getSessionColdStorageStatus(maintenanceConfig(missing))).toEqual([
-          {
-            agentId: "main",
-            storePath: missing,
-            hotTranscripts: 0,
-            coldTranscripts: 0,
-            embeddedArchiveBytes: 0,
-            archiveBytes: 0,
-            databaseBytes: 0,
-            walBytes: 0,
-          },
+          emptyInventory(missing),
         ]);
         await expect(fs.stat(missing)).rejects.toMatchObject({ code: "ENOENT" });
       }
@@ -107,11 +105,7 @@ it.each(["sqlite", "file"] as const)(
     } finally {
       observer.restore();
       if (foreign) {
-        foreign
-          .prepare(
-            "UPDATE session_transcript_cold_archives SET storage = 'sqlite', archive_blob = ? WHERE session_id = ?",
-          )
-          .run(embeddedBlob, historicalId);
+        setStorage(foreign, "sqlite");
         foreign.close();
       }
     }

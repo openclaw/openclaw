@@ -1,8 +1,8 @@
 import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   readOpenClawAgentDatabaseIdentity,
   registerOpenClawAgentDatabaseIdentity,
@@ -20,45 +20,48 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...actual, statSync: vi.fn(actual.statSync) };
 });
 
-afterEach(() => vi.restoreAllMocks());
-const directories = useAutoCleanupTempDirTracker(afterEach);
+let databasePath: string;
+let db: DatabaseSync;
+beforeEach(() => {
+  databasePath = path.join(directories.make("session-publication-"), "agent.sqlite");
+  db = new DatabaseSync(databasePath);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  db.close();
+  directories.cleanup();
+});
+const directories = createTempDirTracker();
+const publication = (...args: Parameters<typeof assertSessionEntryCreationPublication>) =>
+  expect(() => assertSessionEntryCreationPublication(...args));
+const expired = "Session creation publication owner is no longer current";
 
 it("binds a native creation to its prepared physical identity", async () => {
-  const databasePath = path.join(directories.make("session-publication-native-"), "agent.sqlite");
-  const db = new DatabaseSync(databasePath);
   const database = { agentId: "main", path: databasePath, db };
   const target = {
     agentId: database.agentId,
     sessionKey: "agent:main:native-publication",
     paths: new Set([databasePath]),
   };
-  try {
-    registerOpenClawAgentDatabaseIdentity(db);
-    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
-    if (typeof identity !== "string") {
-      throw new Error("Expected a file-backed native creation fixture");
-    }
-    await withSessionEntryCreationPublication(
-      { agentId: target.agentId, sessionKey: target.sessionKey, database },
-      async (operation) => {
-        expect(() =>
-          assertSessionEntryCreationPublication(operation, {
-            ...target,
-            paths: new Set(),
-            databaseIdentity: `file:${identity}`,
-          }),
-        ).not.toThrow();
-        expect(() =>
-          assertSessionEntryCreationPublication(operation, {
-            ...target,
-            databaseIdentity: "file:0:0",
-          }),
-        ).toThrow("Session creation publication owner is no longer current");
-      },
-    );
-  } finally {
-    db.close();
+  registerOpenClawAgentDatabaseIdentity(db);
+  const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+  if (typeof identity !== "string") {
+    throw new Error("Expected a file-backed native creation fixture");
   }
+  await withSessionEntryCreationPublication(
+    { agentId: target.agentId, sessionKey: target.sessionKey, database },
+    async (operation) => {
+      publication(operation, {
+        ...target,
+        paths: new Set(),
+        databaseIdentity: `file:${identity}`,
+      }).not.toThrow();
+      publication(operation, {
+        ...target,
+        databaseIdentity: "file:0:0",
+      }).toThrow(expired);
+    },
+  );
 });
 
 it.each([
@@ -80,11 +83,6 @@ it.each([
 ])(
   "retains creation publication custody across $name namespace aliases",
   async ({ runtimePath, openedPath = runtimePath }) => {
-    const databasePath = path.join(
-      directories.make("session-publication-windows-"),
-      "agent.sqlite",
-    );
-    const database = new DatabaseSync(databasePath);
     const metadata = statSync(databasePath, { bigint: true });
     const namespacedPath = path.win32.toNamespacedPath(openedPath);
     const target = {
@@ -93,48 +91,39 @@ it.each([
       paths: new Set([path.win32.resolve(runtimePath)]),
     };
     const resolveWindowsPath = path.win32.resolve;
-    try {
-      mockProcessPlatform("win32");
-      vi.spyOn(path, "resolve").mockImplementation(resolveWindowsPath);
-      vi.spyOn(database, "location").mockReturnValue(namespacedPath);
-      // Model the Windows native boundary while preserving the real handle's physical identity.
-      vi.spyOn(realpathSync, "native").mockReturnValue(path.win32.toNamespacedPath(runtimePath));
-      vi.mocked(statSync).mockReturnValueOnce(metadata).mockReturnValueOnce(metadata);
-      registerOpenClawAgentDatabaseIdentity(database);
-      const identity = readOpenClawAgentDatabaseIdentity({ db: database });
-      if (typeof identity.identity !== "string") {
-        throw new Error("Expected a file-backed creation publication fixture");
-      }
-      const operation = await withSessionEntryCreationPublication(
-        {
+    mockProcessPlatform("win32");
+    vi.spyOn(path, "resolve").mockImplementation(resolveWindowsPath);
+    vi.spyOn(db, "location").mockReturnValue(namespacedPath);
+    // Model the Windows native boundary while preserving the real handle's physical identity.
+    vi.spyOn(realpathSync, "native").mockReturnValue(path.win32.toNamespacedPath(runtimePath));
+    vi.mocked(statSync).mockReturnValueOnce(metadata).mockReturnValueOnce(metadata);
+    registerOpenClawAgentDatabaseIdentity(db);
+    const identity = readOpenClawAgentDatabaseIdentity({ db });
+    if (typeof identity.identity !== "string") {
+      throw new Error("Expected a file-backed creation publication fixture");
+    }
+    const operation = await withSessionEntryCreationPublication(
+      {
+        agentId: target.agentId,
+        sessionKey: target.sessionKey,
+        file: {
+          path: identity.canonicalPath,
           agentId: target.agentId,
-          sessionKey: target.sessionKey,
-          file: {
-            path: identity.canonicalPath,
-            agentId: target.agentId,
-            databaseIdentity: identity.identity,
-            assertCurrent: () => {
-              expect(database.isOpen).toBe(true);
-            },
+          databaseIdentity: identity.identity,
+          assertCurrent: () => {
+            expect(db.isOpen).toBe(true);
           },
         },
-        async (current) => {
-          expect(() => assertSessionEntryCreationPublication(current, target)).not.toThrow();
-          expect(() =>
-            assertSessionEntryCreationPublication(current, {
-              ...target,
-              paths: new Set([path.win32.join(path.win32.dirname(runtimePath), "other.sqlite")]),
-            }),
-          ).toThrow("Session creation publication owner is no longer current");
-          return current;
-        },
-      );
-      expect(() => assertSessionEntryCreationPublication(operation, target)).toThrow(
-        "Session creation publication owner is no longer current",
-      );
-    } finally {
-      vi.restoreAllMocks();
-      database.close();
-    }
+      },
+      async (current) => {
+        publication(current, target).not.toThrow();
+        publication(current, {
+          ...target,
+          paths: new Set([path.win32.join(path.win32.dirname(runtimePath), "other.sqlite")]),
+        }).toThrow(expired);
+        return current;
+      },
+    );
+    publication(operation, target).toThrow(expired);
   },
 );

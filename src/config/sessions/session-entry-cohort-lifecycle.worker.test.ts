@@ -42,6 +42,8 @@ import {
 import { addSessionMember } from "./session-sharing-store.native.js";
 
 let state: OpenClawTestState;
+const noop = () => {};
+const revoked = /released|closed|revoked/iu;
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
 });
@@ -120,6 +122,45 @@ function holdCohortReply() {
   };
 }
 
+async function withGatedRead(
+  scope: SessionAccessScope,
+  assertCurrent: () => void,
+  run: (
+    context: Awaited<ReturnType<typeof admitCohort>> & {
+      gate: ReturnType<typeof holdCohortReply>;
+      reading: Promise<unknown>;
+      consume: ReturnType<typeof vi.fn>;
+    },
+  ) => Promise<void>,
+) {
+  const gate = holdCohortReply();
+  let admitted: Awaited<ReturnType<typeof admitCohort>> | undefined;
+  let reading: Promise<unknown> | undefined;
+  const consume = vi.fn();
+  try {
+    admitted = await admitCohort(scope);
+    addSessionMember(scope, { identityId: "reply-member", addedBy: "owner", addedAt: 2 });
+    gate.arm();
+    reading = admitted.reader.withRead(
+      { sessionKeys: [scope.sessionKey], includeMembers: true },
+      assertCurrent,
+      consume,
+    );
+    void reading.catch(noop);
+    await awaitGateBeforeSettlement(
+      gate.entered.promise,
+      reading,
+      "Cohort settled before its reply gate",
+    );
+    await run({ ...admitted, gate, reading, consume });
+  } finally {
+    gate.release.resolve();
+    await Promise.allSettled([reading]);
+    await admitted?.claim.release();
+    gate.restore();
+  }
+}
+
 it.for(["warm", "cold"] as const)(
   "returns %s admitted entry data without waiting for another writer and refreshes committed facts",
   async (cache, { signal }) => {
@@ -145,8 +186,8 @@ it.for(["warm", "cold"] as const)(
       await withinTest(entered.promise, signal);
       reads = outside(() =>
         Promise.all([
-          readSessionEntryInWorker(scope, () => {}, undefined, undefined, reader),
-          readSessionEntryReadOnlyInWorker(scope, () => {}, reader),
+          readSessionEntryInWorker(scope, noop, undefined, undefined, reader),
+          readSessionEntryReadOnlyInWorker(scope, noop, reader),
         ]),
       );
       expect(
@@ -158,13 +199,11 @@ it.for(["warm", "cold"] as const)(
       release.resolve();
       await writer;
       replaceSessionEntrySync(scope, { ...entry, label: "committed update" });
-      await expect(
-        readSessionEntryReadOnlyInWorker(scope, () => {}, reader),
-      ).resolves.toMatchObject({
+      await expect(readSessionEntryReadOnlyInWorker(scope, noop, reader)).resolves.toMatchObject({
         label: "committed update",
       });
       replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "successor" });
-      await expect(readSessionEntryReadOnlyInWorker(scope, () => {}, reader)).rejects.toThrow(
+      await expect(readSessionEntryReadOnlyInWorker(scope, noop, reader)).rejects.toThrow(
         "Session entry changed during read",
       );
     } finally {
@@ -187,17 +226,13 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
   const observer = observeParentSqlite();
   let escaped: (() => void) | undefined;
   try {
-    await reader.withRead(
-      request,
-      () => {},
-      (read, assertCurrent) => {
-        assertCurrent();
-        escaped = assertCurrent;
-        expect(read.members?.[scope.sessionKey]?.map(({ identityId }) => identityId)).toEqual([
-          "original-member",
-        ]);
-      },
-    );
+    await reader.withRead(request, noop, (read, assertCurrent) => {
+      assertCurrent();
+      escaped = assertCurrent;
+      expect(read.members?.[scope.sessionKey]?.map(({ identityId }) => identityId)).toEqual([
+        "original-member",
+      ]);
+    });
     expect(observer.counts).toEqual(emptySqliteCounts());
     expect(escaped).toThrow("consumption has ended");
     let readTarget: SessionEntryTargetPatchScope | undefined;
@@ -205,7 +240,7 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
       readTarget = target;
     };
     await expect(
-      readSessionEntryInWorker(scope, () => {}, undefined, recordReadTarget, reader),
+      readSessionEntryInWorker(scope, noop, undefined, recordReadTarget, reader),
     ).resolves.toMatchObject({ sessionId: "fresh-phases", lifecycleRevision: "original" });
     if (!readTarget) {
       throw new Error("Writable cohort read omitted its physical target");
@@ -223,16 +258,12 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
     });
     expect(observer.counts).toEqual(emptySqliteCounts());
     following = external.promise.then(() =>
-      reader.withRead(
-        request,
-        () => {},
-        (read) => {
-          expect(read.entries[0]?.entry).toMatchObject({ label: "known write" });
-          expect(read.members?.[scope.sessionKey]?.map(({ identityId }) => identityId)).toEqual([
-            "foreign-member",
-          ]);
-        },
-      ),
+      reader.withRead(request, noop, (read) => {
+        expect(read.entries[0]?.entry).toMatchObject({ label: "known write" });
+        expect(read.members?.[scope.sessionKey]?.map(({ identityId }) => identityId)).toEqual([
+          "foreign-member",
+        ]);
+      }),
     );
     // Completing the writer before releasing the external wait proves no FIFO is held between phases.
     await patchSessionEntryTarget(readTarget, () => ({ label: "known write" }), {
@@ -247,18 +278,14 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
     external.resolve();
     await following;
     expect(observer.counts).toEqual(emptySqliteCounts());
-    await expect(
-      reader.withRead(
-        request,
-        () => {},
-        async () => undefined,
-      ),
-    ).rejects.toThrow("consumers must remain synchronous");
+    await expect(reader.withRead(request, noop, async () => undefined)).rejects.toThrow(
+      "consumers must remain synchronous",
+    );
     await claim.release();
     readTarget = undefined;
     await expect(
-      readSessionEntryInWorker(scope, () => {}, undefined, recordReadTarget, reader),
-    ).rejects.toThrow(/released|closed|revoked/iu);
+      readSessionEntryInWorker(scope, noop, undefined, recordReadTarget, reader),
+    ).rejects.toThrow(revoked);
     expect(readTarget).toBeUndefined();
   } finally {
     observer.restore();
@@ -286,7 +313,7 @@ it.each(["reset", "delete", "release"] as const)(
         await claim.release();
       }
       await expect(
-        reader.withRead({ sessionKeys: [scope.sessionKey] }, () => {}, consume),
+        reader.withRead({ sessionKeys: [scope.sessionKey] }, noop, consume),
       ).rejects.toThrow(/changed|replaced|released|closed/iu);
       expect(consume).not.toHaveBeenCalled();
     } finally {
@@ -302,72 +329,51 @@ it.each(["native mutation", "caller revocation"] as const)(
     if (change === "native mutation") {
       addSessionMember(scope, { identityId: "native-member", addedBy: "owner", addedAt: 1 });
     }
-    const gate = holdCohortReply();
-    let claim: Awaited<ReturnType<typeof admitCohort>>["claim"] | undefined;
-    let reading: Promise<unknown> | undefined;
-    const consume = vi.fn();
     let allowed = true;
-    try {
-      const admitted = await admitCohort(scope);
-      claim = admitted.claim;
-      addSessionMember(scope, { identityId: "reply-member", addedBy: "owner", addedAt: 2 });
-      gate.arm();
-      reading = admitted.reader.withRead(
-        { sessionKeys: [scope.sessionKey], includeMembers: true },
-        () => {
-          if (!allowed) {
-            throw new Error("Cohort caller was revoked");
-          }
-        },
-        consume,
-      );
-      void reading.catch(() => {});
-      await awaitGateBeforeSettlement(
-        gate.entered.promise,
-        reading,
-        "Cohort settled before its reply gate",
-      );
-      if (change === "native mutation") {
-        // The synchronous SDK can write without entering the FIFO or publishing sessionChanges.
-        const mutation = database.db
-          .prepare(
-            "UPDATE session_members SET added_at = added_at + 1 WHERE session_key = ? AND identity_id = 'native-member'",
-          )
-          .run(scope.sessionKey);
-        expect(mutation.changes).toBe(1);
-      } else {
-        allowed = false;
-      }
-      gate.release.resolve();
-      await expect(reading).rejects.toThrow(
-        change === "native mutation" ? /changed during read/u : /caller was revoked/u,
-      );
-      expect(consume).not.toHaveBeenCalled();
-      if (change === "native mutation") {
-        const mutateDuringConsumption = vi.fn(() => {
-          const mutation = database.db
-            .prepare(
-              "UPDATE session_members SET added_at = added_at + 1 WHERE session_key = ? AND identity_id = 'native-member'",
-            )
-            .run(scope.sessionKey);
-          expect(mutation.changes).toBe(1);
-          return "must not escape the final witness";
-        });
-        await expect(
-          admitted.reader.withRead(
-            { sessionKeys: [scope.sessionKey], includeMembers: true },
-            () => {},
-            mutateDuringConsumption,
-          ),
-        ).rejects.toThrow("Session entry changed during read");
-        expect(mutateDuringConsumption).toHaveBeenCalledOnce();
-      }
-    } finally {
-      gate.release.resolve();
-      await Promise.allSettled(reading ? [reading] : []);
-      await claim?.release();
-      gate.restore();
-    }
+    await withGatedRead(
+      scope,
+      () => {
+        if (!allowed) {
+          throw new Error("Cohort caller was revoked");
+        }
+      },
+      async ({ reader, gate, reading, consume }) => {
+        const mutate = () => {
+          // Native SDK writes bypass FIFO and sessionChanges publication.
+          expect(
+            database.db
+              .prepare(
+                "UPDATE session_members SET added_at = added_at + 1 WHERE session_key = ? AND identity_id = 'native-member'",
+              )
+              .run(scope.sessionKey).changes,
+          ).toBe(1);
+        };
+        if (change === "native mutation") {
+          mutate();
+        } else {
+          allowed = false;
+        }
+        gate.release.resolve();
+        await expect(reading).rejects.toThrow(
+          change === "native mutation" ? /changed during read/u : /caller was revoked/u,
+        );
+        expect(consume).not.toHaveBeenCalled();
+        if (change === "native mutation") {
+          const mutateDuringConsumption = vi.fn(() => {
+            mutate();
+            return "must not escape the final witness";
+          });
+          await expect(
+            reader.withRead(
+              { sessionKeys: [scope.sessionKey], includeMembers: true },
+              noop,
+              mutateDuringConsumption,
+            ),
+          ).rejects.toThrow("Session entry changed during read");
+          expect(mutateDuringConsumption).toHaveBeenCalledOnce();
+        }
+      },
+    );
   },
 );
 
@@ -375,50 +381,30 @@ it.each(["release", "close"] as const)(
   "joins an accepted cohort reply before completing %s",
   async (ending) => {
     const { scope, database } = createCohortFixture(`join-${ending}`);
-    const gate = holdCohortReply();
-    let claim: Awaited<ReturnType<typeof admitCohort>>["claim"] | undefined;
-    let reading: Promise<unknown> | undefined;
-    let closing: Promise<void> | undefined;
-    const consume = vi.fn();
-    try {
-      const admitted = await admitCohort(scope);
-      claim = admitted.claim;
-      addSessionMember(scope, { identityId: "reply-member", addedBy: "owner", addedAt: 2 });
-      gate.arm();
-      reading = admitted.reader.withRead(
-        { sessionKeys: [scope.sessionKey], includeMembers: true },
-        () => {},
-        consume,
-      );
-      void reading.catch(() => {});
-      await awaitGateBeforeSettlement(
-        gate.entered.promise,
-        reading,
-        "Cohort settled before its reply gate",
-      );
+    await withGatedRead(scope, noop, async ({ claim, reader, gate, reading, consume }) => {
       let closed = false;
-      closing = (
+      const closing = (
         ending === "release"
           ? claim.release()
           : closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId)
       ).then(() => {
         closed = true;
       });
-      await expect(
-        admitted.reader.withRead({ sessionKeys: [scope.sessionKey] }, () => {}, consume),
-      ).rejects.toThrow(/released|closed|revoked/iu);
-      expect(closed).toBe(false);
-      gate.release.resolve();
-      await expect(reading).rejects.toThrow(/released|closed|revoked/iu);
-      await closing;
-      expect(closed).toBe(true);
-      expect(consume).not.toHaveBeenCalled();
-    } finally {
-      gate.release.resolve();
-      await Promise.allSettled([...(reading ? [reading] : []), ...(closing ? [closing] : [])]);
-      await claim?.release();
-      gate.restore();
-    }
+      try {
+        await expect(
+          reader.withRead({ sessionKeys: [scope.sessionKey] }, noop, consume),
+        ).rejects.toThrow(revoked);
+        expect(closed).toBe(false);
+        gate.release.resolve();
+        await expect(reading).rejects.toThrow(revoked);
+        await closing;
+        expect(closed).toBe(true);
+        expect(consume).not.toHaveBeenCalled();
+      } finally {
+        gate.release.resolve();
+        await Promise.allSettled([closing]);
+      }
+    });
   },
 );
 
@@ -437,13 +423,9 @@ it.for(["release", "physical close"] as const)(
     let closing: Promise<void> | undefined;
     try {
       await expect(
-        reader.withRead(
-          { sessionKeys: [scope.sessionKey] },
-          () => {},
-          (read) => {
-            expect(read.entries[0]?.entry.sessionId).toBe(entry.sessionId);
-          },
-        ),
+        reader.withRead({ sessionKeys: [scope.sessionKey] }, noop, (read) => {
+          expect(read.entries[0]?.entry.sessionId).toBe(entry.sessionId);
+        }),
       ).resolves.toBeUndefined();
       writer = runOpenClawAgentWorkerWrite(reader.database, async () => {
         entered.resolve();
@@ -453,7 +435,7 @@ it.for(["release", "physical close"] as const)(
         awaitGateBeforeSettlement(entered.promise, writer, "Host FIFO blocker did not enter"),
         signal,
       );
-      reading = reader.withRead({ sessionKeys: [scope.sessionKey] }, () => {}, consume);
+      reading = reader.withRead({ sessionKeys: [scope.sessionKey] }, noop, consume);
       let readSettled = false;
       void reading.then(
         () => {
@@ -473,10 +455,10 @@ it.for(["release", "physical close"] as const)(
         closed = true;
       });
       // Cancellation settles the queued phase while the unrelated predecessor still holds FIFO.
-      await expect(withinTest(reading, signal)).rejects.toThrow(/released|closed|revoked/iu);
+      await expect(withinTest(reading, signal)).rejects.toThrow(revoked);
       await expect(
-        reader.withRead({ sessionKeys: [scope.sessionKey] }, () => {}, consume),
-      ).rejects.toThrow(/released|closed|revoked/iu);
+        reader.withRead({ sessionKeys: [scope.sessionKey] }, noop, consume),
+      ).rejects.toThrow(revoked);
       releaseWriter.resolve();
       await withinTest(writer, signal);
       await withinTest(closing, signal);
@@ -503,11 +485,8 @@ it("refuses malformed folded candidate state while retaining the healthy request
   const database = openOpenClawAgentDatabase(scope);
   const { claim, reader } = await admitCohort(scope);
   const read = () =>
-    reader.withRead(
-      { sessionKeys: [scope.sessionKey] },
-      () => {},
-      (cohort) =>
-        cohort.entries.map(({ sessionKey, entry }) => ({ sessionKey, sessionId: entry.sessionId })),
+    reader.withRead({ sessionKeys: [scope.sessionKey] }, noop, (cohort) =>
+      cohort.entries.map(({ sessionKey, entry }) => ({ sessionKey, sessionId: entry.sessionId })),
     );
   try {
     await expect(read()).resolves.toEqual([{ sessionKey: scope.sessionKey, sessionId: "healthy" }]);
@@ -528,7 +507,7 @@ it("refuses malformed folded candidate state while retaining the healthy request
     await expect(Promise.resolve().then(() => loadSessionEntry(scope))).rejects.toMatchObject({
       code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
     });
-    await expect(readSessionEntryInWorker(scope, () => {})).rejects.toMatchObject({
+    await expect(readSessionEntryInWorker(scope, noop)).rejects.toMatchObject({
       code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
     });
   } finally {
