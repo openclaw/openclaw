@@ -45,20 +45,17 @@ const LOCAL_TLS_FINGERPRINT = "c".repeat(64);
 const REMOTE_TLS_FINGERPRINT = "d".repeat(64);
 
 function createConfig(pluginPublicUrl?: string): OpenClawConfig {
-  return {
+  const config: OpenClawConfig = {
     gateway: {
       bind: "loopback",
       publicOrigin: PUBLIC_ORIGIN,
       auth: { mode: "token", token: "gateway-token" },
     },
-    ...(pluginPublicUrl
-      ? {
-          plugins: {
-            entries: { "device-pair": { config: { publicUrl: pluginPublicUrl } } },
-          },
-        }
-      : {}),
   };
+  if (pluginPublicUrl) {
+    config.plugins = { entries: { "device-pair": { config: { publicUrl: pluginPublicUrl } } } };
+  }
+  return config;
 }
 
 describe("worker node enrollment", () => {
@@ -96,16 +93,16 @@ describe("worker node enrollment", () => {
     managers.push(manager);
     return manager;
   };
-  const createRequested = async () =>
+  const createRequested = async (profileId = "test-profile") =>
     await store.createIntent({
       environmentId: "worker-enrollment",
       providerId: "fake-provider",
-      profileId: "test-profile",
+      profileId,
       profileSnapshot: { settings: {} },
       provisionOperationId: "provision:worker-enrollment",
     });
-  const createProvisioning = async (nodeDeviceId?: string) => {
-    const record = await createRequested();
+  const createProvisioning = async (nodeDeviceId?: string, profileId?: string) => {
+    const record = await createRequested(profileId);
     return await store.transition({
       environmentId: record.environmentId,
       from: "requested",
@@ -113,43 +110,62 @@ describe("worker node enrollment", () => {
       ...(nodeDeviceId ? { patch: { nodeDeviceId } } : {}),
     });
   };
+  const downloadRequest = (descriptor: { token: string; sha256: string }) => ({
+    token: descriptor.token,
+    artifactKey: descriptor.sha256,
+  });
+  const authorize = (descriptor: { token: string; sha256: string }) =>
+    transfer.authorize(downloadRequest(descriptor));
+  const destroy = (record: { environmentId: string }) =>
+    store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
+  const expectUnenrolled = (record: { environmentId: string }) =>
+    expect(store.get(record.environmentId)).toMatchObject({
+      state: "requested",
+      nodeSetupId: null,
+      nodeDeviceId: null,
+    });
+  const holdFirstArtifact = () => {
+    const entered = createDeferredCore();
+    const resume = createDeferredCore();
+    const prepareArtifact = vi
+      .fn(async () => artifact())
+      .mockImplementationOnce(async () => {
+        entered.resolve();
+        await resume.promise;
+        return artifact();
+      });
+    return { entered, resume, manager: createManager({ prepareArtifact }) };
+  };
 
   const createArtifactProvider = async () => {
     const packageRoot = path.join(root, "gateway");
     await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-    await Promise.all([
-      fs.writeFile(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.8.1", type: "module" }),
+    const files = {
+      "package.json": JSON.stringify({ name: "openclaw", version: "2026.8.1", type: "module" }),
+      "openclaw.mjs": 'import "./dist/entry.js";',
+      "node-version.mjs": "export const supported = true;",
+      "node-sqlite.mjs": "export const probe = true;",
+      "node-host-launcher.mjs": "export const launcher = true;",
+      "node-runtime-update.mjs": "export const update = true;",
+      "node-runtime-recovery.mjs": "export const recovery = true;",
+      "cli-parent-lifetime.mjs": "export {};",
+      "cli-root-options.mjs": "export {};",
+      "cli-invocation.mjs": "export {};",
+      "node-runtime-env.mjs": "export {};",
+      "node-compile-cache.mjs": "export {};",
+      "gateway-run-argv.mjs": "export {};",
+      "gateway-shutdown-budget.mjs": "export {};",
+      "dist/entry.js": "export const ready = true;",
+      "dist/build-info.json": JSON.stringify({
+        version: "2026.8.1",
+        buildId: "gateway-source-build",
+      }),
+    };
+    await Promise.all(
+      Object.entries(files).map(([file, contents]) =>
+        fs.writeFile(path.join(packageRoot, file), contents),
       ),
-      fs.writeFile(path.join(packageRoot, "openclaw.mjs"), 'import "./dist/entry.js";'),
-      fs.writeFile(path.join(packageRoot, "node-version.mjs"), "export const supported = true;"),
-      fs.writeFile(path.join(packageRoot, "node-sqlite.mjs"), "export const probe = true;"),
-      fs.writeFile(
-        path.join(packageRoot, "node-host-launcher.mjs"),
-        "export const launcher = true;",
-      ),
-      fs.writeFile(
-        path.join(packageRoot, "node-runtime-update.mjs"),
-        "export const update = true;",
-      ),
-      fs.writeFile(
-        path.join(packageRoot, "node-runtime-recovery.mjs"),
-        "export const recovery = true;",
-      ),
-      fs.writeFile(path.join(packageRoot, "cli-parent-lifetime.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "cli-root-options.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "cli-invocation.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "node-runtime-env.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "node-compile-cache.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "gateway-run-argv.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "gateway-shutdown-budget.mjs"), "export {};"),
-      fs.writeFile(path.join(packageRoot, "dist/entry.js"), "export const ready = true;"),
-      fs.writeFile(
-        path.join(packageRoot, "dist/build-info.json"),
-        JSON.stringify({ version: "2026.8.1", buildId: "gateway-source-build" }),
-      ),
-    ]);
+    );
     const provider = createNodeBootstrapArtifactProvider({
       packageRoot,
       runningBuildId: "gateway-source-build",
@@ -181,29 +197,19 @@ describe("worker node enrollment", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.each([
-    {
-      host: "localhost",
-      config: createConfig("http://localhost:19821"),
-      source: "plugins.entries.device-pair.config.publicUrl",
-    },
-  ])(
-    "rejects unreachable cloud Gateway host $host from $source before preparing artifacts",
-    async ({ host, config, source }) => {
-      const prepareArtifact = vi.fn(async () => artifact());
-      const manager = createManager({
-        getConfig: () => config,
-        prepareArtifact,
-      });
-
-      await expect(manager.prepare(await createRequested())).rejects.toThrow(
-        new Error(
-          `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${new URL(`http://${host}`).hostname}:19821, from ${source}). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
-        ),
-      );
-      expect(prepareArtifact).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects an unreachable plugin Gateway URL before preparing artifacts", async () => {
+    const prepareArtifact = vi.fn(async () => artifact());
+    const manager = createManager({
+      getConfig: () => createConfig("http://localhost:19821"),
+      prepareArtifact,
+    });
+    await expect(manager.prepare(await createRequested())).rejects.toThrow(
+      new Error(
+        "Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://localhost:19821, from plugins.entries.device-pair.config.publicUrl). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.",
+      ),
+    );
+    expect(prepareArtifact).not.toHaveBeenCalled();
+  });
 
   it("prepares requested-state artifacts without enrollment or transfer grants", async () => {
     const record = await createRequested();
@@ -218,11 +224,7 @@ describe("worker node enrollment", () => {
     expect(caller.signal.aborted).toBe(false);
     expect(ensureEnrollment).not.toHaveBeenCalled();
     expect(grant).not.toHaveBeenCalled();
-    expect(store.get(record.environmentId)).toMatchObject({
-      state: "requested",
-      nodeSetupId: null,
-      nodeDeviceId: null,
-    });
+    expectUnenrolled(record);
     await provider.close();
   });
 
@@ -266,11 +268,7 @@ describe("worker node enrollment", () => {
         expect(caller.signal.aborted).toBe(reason === "caller");
         expect(ensureEnrollment).not.toHaveBeenCalled();
         expect(grant).not.toHaveBeenCalled();
-        expect(store.get(record.environmentId)).toMatchObject({
-          state: "requested",
-          nodeSetupId: null,
-          nodeDeviceId: null,
-        });
+        expectUnenrolled(record);
         const closed = vi.fn();
         closing = provider.close().then(closed);
         await fs.access(stagingRoot);
@@ -306,9 +304,7 @@ describe("worker node enrollment", () => {
       expect(runtime.bootstrapTimeoutMs).toBe(runtimeMs);
       transferNow += runtimeMs - 1;
       for (const download of [runtime.nodeBootstrap, runtime.workerBundle]) {
-        expect(
-          transfer.authorize({ token: download.token, artifactKey: download.sha256 }),
-        ).toBeDefined();
+        expect(authorize(download)).toBeDefined();
       }
       const enrollment = await manager.begin(record);
       expect(enrollment.bootstrapTimeoutMs).toBe(enrollmentMs);
@@ -322,17 +318,14 @@ describe("worker node enrollment", () => {
       const manager = createManager();
       const operation = new AbortController();
       const runtime = await manager.prepareRuntime(record, bundle(), operation.signal);
-      const requests = [runtime.nodeBootstrap, runtime.workerBundle].map((descriptor) => ({
-        token: descriptor.token,
-        artifactKey: descriptor.sha256,
-      }));
+      const requests = [runtime.nodeBootstrap, runtime.workerBundle].map(downloadRequest);
       const authorizations = requests.map((request) => transfer.authorize(request)!);
       if (reason === "shutdown") {
         manager.stop();
       } else if (reason === "operation-abort") {
         operation.abort();
       } else {
-        await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
+        await destroy(record);
       }
       for (const [index, authorization] of authorizations.entries()) {
         expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
@@ -437,10 +430,7 @@ describe("worker node enrollment", () => {
       });
       // Client body completion precedes the server releasing its transfer authorization.
       await Promise.all(handledRequests);
-      const authorization = transfer.authorize({
-        token: current.workerBundle.token,
-        artifactKey: current.workerBundle.sha256,
-      })!;
+      const authorization = authorize(current.workerBundle)!;
       const enrollment = await manager.begin(record);
       expect(enrollment).not.toHaveProperty("workerBundle");
       expect(current.signal?.aborted).toBe(true);
@@ -448,12 +438,7 @@ describe("worker node enrollment", () => {
       manager.closeRuntime(current);
       manager.close({ ...enrollment });
       expect(enrollment.signal?.aborted).toBe(false);
-      expect(
-        transfer.authorize({
-          token: enrollment.nodeBootstrap.token,
-          artifactKey: enrollment.nodeBootstrap.sha256,
-        }),
-      ).toBeDefined();
+      expect(authorize(enrollment.nodeBootstrap)).toBeDefined();
     } finally {
       resumeEof.resolve();
       await dispatcher.destroy();
@@ -468,18 +453,7 @@ describe("worker node enrollment", () => {
     "rejects late artifact preparation after %s",
     async (reason) => {
       const record = await createProvisioning();
-      const entered = createDeferredCore();
-      const resume = createDeferredCore();
-      let preparations = 0;
-      const manager = createManager({
-        prepareArtifact: async () => {
-          if (++preparations === 1) {
-            entered.resolve();
-            await resume.promise;
-          }
-          return artifact();
-        },
-      });
+      const { entered, resume, manager } = holdFirstArtifact();
       const operation = new AbortController();
       const pending = manager.prepareRuntime(record, bundle(), operation.signal);
       const rejected = expect(pending).rejects.toThrow();
@@ -489,18 +463,13 @@ describe("worker node enrollment", () => {
         operation.abort();
       }
       if (reason === "destroy") {
-        await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
+        await destroy(record);
       }
       resume.resolve();
       await rejected;
       if (enrollment) {
         expect(enrollment.signal?.aborted).toBe(false);
-        expect(
-          transfer.authorize({
-            token: enrollment.nodeBootstrap.token,
-            artifactKey: enrollment.nodeBootstrap.sha256,
-          }),
-        ).toBeDefined();
+        expect(authorize(enrollment.nodeBootstrap)).toBeDefined();
       }
     },
   );
@@ -585,10 +554,7 @@ describe("worker node enrollment", () => {
       enabledPluginIds: ["runtime-plugin"],
     });
     expect(enrollment.nodeBootstrap.tlsFingerprint).toBe(expectedFingerprint);
-    const authorization = transfer.authorize({
-      token: enrollment.nodeBootstrap.token,
-      artifactKey: enrollment.nodeBootstrap.sha256,
-    });
+    const authorization = authorize(enrollment.nodeBootstrap);
     expect(authorization).toBeDefined();
     const opened = await transfer.openFile(authorization!);
     expect(await opened?.handle.readFile("utf8")).toBe("x");
@@ -596,19 +562,7 @@ describe("worker node enrollment", () => {
   });
 
   it("does not split surrogate pairs when bounding the enrollment display name", async () => {
-    const profileId = `${"x".repeat(50)}😀tail`;
-    const requested = await store.createIntent({
-      environmentId: "worker-enrollment-display-name",
-      providerId: "fake-provider",
-      profileId,
-      profileSnapshot: { settings: {} },
-      provisionOperationId: "provision:worker-enrollment-display-name",
-    });
-    const record = await store.transition({
-      environmentId: requested.environmentId,
-      from: "requested",
-      to: "provisioning",
-    });
+    const record = await createProvisioning(undefined, `${"x".repeat(50)}😀tail`);
     const manager = createManager();
 
     await expect(manager.begin(record)).resolves.toMatchObject({
@@ -676,19 +630,7 @@ describe("worker node enrollment", () => {
   });
 
   it("aborts pending enrollment waits idempotently and rejects enrollment after shutdown", async () => {
-    const intent = await store.createIntent({
-      environmentId: "worker-enrollment-stop",
-      providerId: "fake-provider",
-      profileId: "test-profile",
-      profileSnapshot: { settings: {} },
-      provisionOperationId: "provision:worker-enrollment-stop",
-    });
-    const record = await store.transition({
-      environmentId: intent.environmentId,
-      from: "requested",
-      to: "provisioning",
-      patch: { nodeDeviceId: "device-pending" },
-    });
+    const record = await createProvisioning("device-pending");
     const manager = createManager();
     const enrollment = await manager.begin(record);
     const waiting = enrollment.waitForDeviceId();
@@ -710,10 +652,7 @@ describe("worker node enrollment", () => {
       const record = await createProvisioning();
       const manager = createManager();
       const enrollment = await manager.begin(record);
-      const request = {
-        token: enrollment.nodeBootstrap.token,
-        artifactKey: enrollment.nodeBootstrap.sha256,
-      };
+      const request = downloadRequest(enrollment.nodeBootstrap);
       const authorization = transfer.authorize(request)!;
       expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
 
@@ -722,7 +661,7 @@ describe("worker node enrollment", () => {
       } else if (reason === "shutdown") {
         manager.stop();
       } else {
-        await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
+        await destroy(record);
       }
 
       expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
@@ -738,22 +677,14 @@ describe("worker node enrollment", () => {
     const previous = await manager.begin(record);
     const replacement = await manager.begin(record);
     expect(previous.signal?.aborted).toBe(true);
-    expect(
-      transfer.authorize({
-        token: previous.nodeBootstrap.token,
-        artifactKey: previous.nodeBootstrap.sha256,
-      }),
-    ).toBeUndefined();
+    expect(authorize(previous.nodeBootstrap)).toBeUndefined();
 
     manager.close(previous);
     manager.close({ ...replacement });
     await expect(
       manager.begin({ ...record, provisionOperationId: "retired-provision" }),
     ).rejects.toThrow("no longer provisioning");
-    const authorization = transfer.authorize({
-      token: replacement.nodeBootstrap.token,
-      artifactKey: replacement.nodeBootstrap.sha256,
-    })!;
+    const authorization = authorize(replacement.nodeBootstrap)!;
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
     manager.close(replacement);
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(false);
@@ -761,27 +692,12 @@ describe("worker node enrollment", () => {
 
   it("does not let an older pending enrollment replace a newer enrollment", async () => {
     const record = await createProvisioning();
-    const entered = createDeferredCore();
-    const resume = createDeferredCore();
-    let preparations = 0;
-    const manager = createManager({
-      prepareArtifact: async () => {
-        preparations += 1;
-        if (preparations === 1) {
-          entered.resolve();
-          await resume.promise;
-        }
-        return artifact();
-      },
-    });
+    const { entered, resume, manager } = holdFirstArtifact();
     const pending = manager.begin(record);
     const rejected = expect(pending).rejects.toThrow();
     await entered.promise;
     const current = await manager.begin(record);
-    const authorization = transfer.authorize({
-      token: current.nodeBootstrap.token,
-      artifactKey: current.nodeBootstrap.sha256,
-    })!;
+    const authorization = authorize(current.nodeBootstrap)!;
     expect(transfer.isAuthorizationCurrent(authorization)).toBe(true);
 
     resume.resolve();
@@ -822,7 +738,7 @@ describe("worker node enrollment", () => {
         /cannot begin node enrollment|no longer provisioning|authority is unavailable/u,
       );
       await entered.promise;
-      await store.requestDestroy({ environmentId: record.environmentId, state: "provisioning" });
+      await destroy(record);
       resume.resolve();
       await rejected;
     },

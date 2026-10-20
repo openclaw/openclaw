@@ -54,8 +54,10 @@ let changedCommit: string;
 const ignoreVariants = new Map<string, string>();
 let env: NodeJS.ProcessEnv;
 
-async function expectMissing(root: string, relative: string) {
-  await expect(fs.lstat(path.join(root, relative))).rejects.toMatchObject({ code: "ENOENT" });
+async function expectMissing(root: string, ...relatives: string[]) {
+  for (const relative of relatives) {
+    await expect(fs.lstat(path.join(root, relative))).rejects.toMatchObject({ code: "ENOENT" });
+  }
 }
 
 async function write(root: string, relative: string, value: string) {
@@ -110,8 +112,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.backend.mockResolvedValue(createCopyWorktreeBackend());
   mocks.install.mockImplementation(async ({ directory }) => {
-    await expectMissing(directory, ".env.local");
-    await expectMissing(directory, ".npmrc");
+    await expectMissing(directory, ".env.local", ".npmrc");
     await writeModulesManifest(directory);
     await write(
       directory,
@@ -192,8 +193,7 @@ it("retains only installed node_modules and never copies source credentials", as
   signal,
 }) => {
   mocks.install.mockImplementation(async ({ directory }) => {
-    await expectMissing(directory, ".env.local");
-    await expectMissing(directory, ".npmrc");
+    await expectMissing(directory, ".env.local", ".npmrc");
     await writeModulesManifest(directory);
     await write(directory, "node_modules/dependency/index.js", "root dependency\n");
     await write(
@@ -214,15 +214,14 @@ it("retains only installed node_modules and never copies source credentials", as
       "workspace dependency\n",
     );
     expect(await read(checkout, ".git/config")).not.toContain("credential");
-    for (const relative of [
+    await expectMissing(
+      checkout,
       ".env.local",
       ".npmrc",
       ".env.installer",
       "build",
       "untracked-output.txt",
-    ]) {
-      await expectMissing(checkout, relative);
-    }
+    );
   }
   expect(mocks.install).toHaveBeenCalledOnce();
 });
@@ -240,8 +239,7 @@ it("falls back instead of retaining links into a virtual store that would be tri
   for (const name of ["first", "second"]) {
     const checkout = await clone(name);
     expect(await read(checkout, "source.ts")).toBe(sourceText);
-    await expectMissing(checkout, "node_modules");
-    await expectMissing(checkout, ".pnpm");
+    await expectMissing(checkout, "node_modules", ".pnpm");
   }
   expect(mocks.install).toHaveBeenCalledOnce();
 });
@@ -264,10 +262,7 @@ for (const failure of ["install failure", "tracked source changed"]) {
       const checkout = await clone(name);
       expect(await read(checkout, "source.ts")).toBe(sourceText);
       expect(await read(checkout, "pnpm-lock.yaml")).toBe(firstLock);
-      await expectMissing(checkout, "node_modules");
-      await expectMissing(checkout, ".env.installer");
-      await expectMissing(checkout, ".env.local");
-      await expectMissing(checkout, ".npmrc");
+      await expectMissing(checkout, "node_modules", ".env.installer", ".env.local", ".npmrc");
     }
     expect(mocks.install).toHaveBeenCalledOnce();
   });
