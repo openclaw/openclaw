@@ -7,31 +7,31 @@ import {
 } from "../internal/test-builders.test-support.js";
 import { buildDiscordMessageProcessContext } from "./message-handler.context.js";
 import { hydrateDiscordMessageIfNeeded } from "./message-handler.hydration.js";
+import { createDiscordMessage } from "./message-handler.preflight.test-helpers.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
 
+function user(id: string, username: string) {
+  return { id, username, global_name: null, discriminator: "0", avatar: null };
+}
 function payload(overrides = {}) {
   return {
-    id: "1001",
-    channel_id: "c1",
-    content: "what did this mean?",
-    attachments: [],
-    embeds: [],
-    mentions: [],
-    mention_roles: [],
-    mention_everyone: false,
-    timestamp: "2026-01-01T00:00:00.000Z",
-    edited_timestamp: null,
-    author: { id: "u1", username: "alice", global_name: null, discriminator: "0", avatar: null },
-    type: MessageType.Default,
-    tts: false,
-    pinned: false,
+    ...createDiscordMessage({
+      id: "1001",
+      channelId: "c1",
+      content: "what did this mean?",
+      timestamp: "2026-01-01T00:00:00.000Z",
+      author: { id: "u1", username: "alice", bot: false },
+    }).rawData,
     flags: 0,
     ...overrides,
   };
 }
+function reference(type = MessageReferenceType.Default, channel_id = "c1") {
+  return { type, message_id: "1000", channel_id };
+}
 function reply(overrides = {}) {
   return payload({
-    message_reference: { type: MessageReferenceType.Default, message_id: "1000", channel_id: "c1" },
+    message_reference: reference(),
     type: MessageType.Reply,
     ...overrides,
   });
@@ -40,8 +40,13 @@ function referenced(content: string, overrides = {}) {
   return payload({
     id: "1000",
     content,
-    author: { id: "u2", username: "bob", bot: true, discriminator: "0", avatar: null },
+    author: { ...user("u2", "bob"), bot: true },
     ...overrides,
+  });
+}
+function staleReply() {
+  return reply({
+    referenced_message: referenced("unrelated older context", { id: "stale-message" }),
   });
 }
 function fixture(raw: ConstructorParameters<typeof Message>[1], responses: unknown[] = []) {
@@ -82,15 +87,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
         content: "hello <@u2>",
         attachments: [{ id: "a1", filename: "note.txt" }],
         embeds: [{ title: "Embed" }],
-        mentions: [
-          {
-            id: "u2",
-            username: "bob",
-            global_name: "Bob Builder",
-            discriminator: "0",
-            avatar: null,
-          },
-        ],
+        mentions: [{ ...user("u2", "bob"), global_name: "Bob Builder" }],
         mention_roles: ["role1"],
         referenced_message: referenced("earlier"),
       }),
@@ -116,15 +113,9 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     const { rest, hydrate } = fixture(
       reply({
         referenced_message: referenced(""),
-        message_reference: {
-          type: MessageReferenceType.Default,
-          message_id: "1000",
-          channel_id: "c2",
-        },
+        message_reference: reference(MessageReferenceType.Default, "c2"),
         content: "<@bot> ok do it",
-        mentions: [
-          { id: "bot", username: "openclaw", global_name: null, discriminator: "0", avatar: null },
-        ],
+        mentions: [user("bot", "openclaw")],
       }),
       [referenced(text)],
     );
@@ -135,12 +126,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
   });
 
   it("replaces a mismatched nested reply with the canonical referenced message", async () => {
-    const { rest, hydrate } = fixture(
-      reply({
-        referenced_message: referenced("unrelated older context", { id: "stale-message" }),
-      }),
-      [referenced("the canonical reply target")],
-    );
+    const { rest, hydrate } = fixture(staleReply(), [referenced("the canonical reply target")]);
     const { message } = await hydrate();
     expect(rest.calls.map((call) => call.path)).toEqual(["/channels/c1/messages/1000"]);
     expect(message.referencedMessage?.id).toBe("1000");
@@ -152,11 +138,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
   });
 
   it("discards a mismatched nested reply when canonical hydration fails", async () => {
-    const { rest, hydrate } = fixture(
-      reply({
-        referenced_message: referenced("unrelated older context", { id: "stale-message" }),
-      }),
-    );
+    const { rest, hydrate } = fixture(staleReply());
     rest.get = vi
       .fn()
       .mockRejectedValue(Object.assign(new Error("Missing Access"), { status: 403 }));
@@ -182,13 +164,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
   it("does not hydrate known-deleted or forwarded references", async () => {
     const deleted = fixture(reply({ referenced_message: null }));
     const forwarded = fixture(
-      payload({
-        message_reference: {
-          type: MessageReferenceType.Forward,
-          message_id: "1000",
-          channel_id: "c1",
-        },
-      }),
+      payload({ message_reference: reference(MessageReferenceType.Forward) }),
     );
     await deleted.hydrate();
     await forwarded.hydrate();

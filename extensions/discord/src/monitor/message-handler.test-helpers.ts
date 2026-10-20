@@ -1,4 +1,3 @@
-// Discord helper module supports message handler helpers behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { onTestFinished, vi } from "vitest";
 import type { DiscordIngressLifecycle } from "./ingress.js";
@@ -7,32 +6,19 @@ import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 export const DEFAULT_DISCORD_BOT_USER_ID = "bot-123";
 
-export function createDiscordHandlerParams(overrides?: {
-  botUserId?: string;
-  setStatus?: (patch: Record<string, unknown>) => void;
-  abortSignal?: AbortSignal;
-}): Parameters<typeof createDiscordMessageDispatcher>[0] {
+function createHandlerContext() {
+  const discordConfig = { enabled: true, token: "test-token", groupPolicy: "allowlist" as const };
   const cfg: OpenClawConfig = {
-    channels: {
-      discord: {
-        enabled: true,
-        token: "test-token",
-        groupPolicy: "allowlist",
-      },
-    },
-    messages: {
-      inbound: {
-        debounceMs: 0,
-      },
-    },
+    channels: { discord: discordConfig },
+    messages: { inbound: { debounceMs: 0 } },
   };
-  const threadBindings = createNoopThreadBindingManager("default");
-  onTestFinished(() => threadBindings.stop());
   return {
     cfg,
-    discordConfig: cfg.channels?.discord,
+    discordConfig,
     accountId: "default",
     token: "test-token",
+    textLimit: 2_000,
+    replyToMode: "off" as const,
     runtime: {
       log: vi.fn(),
       error: vi.fn(),
@@ -40,12 +26,22 @@ export function createDiscordHandlerParams(overrides?: {
         throw new Error(`exit ${code}`);
       },
     },
+  };
+}
+
+export function createDiscordHandlerParams(overrides?: {
+  botUserId?: string;
+  setStatus?: (patch: Record<string, unknown>) => void;
+  abortSignal?: AbortSignal;
+}): Parameters<typeof createDiscordMessageDispatcher>[0] {
+  const threadBindings = createNoopThreadBindingManager("default");
+  onTestFinished(() => threadBindings.stop());
+  return {
+    ...createHandlerContext(),
     botUserId: overrides?.botUserId ?? DEFAULT_DISCORD_BOT_USER_ID,
     guildHistories: new Map(),
     historyLimit: 0,
     mediaMaxBytes: 10_000,
-    textLimit: 2_000,
-    replyToMode: "off" as const,
     dmEnabled: true,
     dmPolicy: "pairing",
     groupDmEnabled: false,
@@ -56,23 +52,11 @@ export function createDiscordHandlerParams(overrides?: {
 }
 
 export function createDiscordPreflightContext(channelId = "ch-1") {
+  const message = { id: `msg-${channelId}`, channel_id: channelId, attachments: [] };
   return {
-    data: {
-      channel_id: channelId,
-      message: {
-        id: `msg-${channelId}`,
-        channel_id: channelId,
-        attachments: [],
-      },
-    },
-    message: {
-      id: `msg-${channelId}`,
-      channel_id: channelId,
-      attachments: [],
-    },
-    route: {
-      sessionKey: `agent:main:discord:channel:${channelId}`,
-    },
+    data: { channel_id: channelId, message: { ...message, attachments: [] } },
+    message,
+    route: { sessionKey: `agent:main:discord:channel:${channelId}` },
     baseSessionKey: `agent:main:discord:channel:${channelId}`,
     messageChannelId: channelId,
     messageText: "hello",
@@ -102,42 +86,12 @@ export function createIngressLifecycle(): DiscordIngressLifecycle & {
 }
 
 export function createDiscordQueuePreflightContext(channelId = "ch-1") {
-  const discordConfig = {
-    enabled: true,
-    token: "test-token",
-    groupPolicy: "allowlist" as const,
-  };
-  const cfg: OpenClawConfig = {
-    channels: {
-      discord: discordConfig,
-    },
-    messages: {
-      inbound: {
-        debounceMs: 0,
-      },
-    },
-  };
   return {
     ...createDiscordPreflightContext(channelId),
-    cfg,
-    accountId: "default",
-    token: "test-token",
-    runtime: {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: (code: number): never => {
-        throw new Error(`exit ${code}`);
-      },
-    },
-    textLimit: 2_000,
-    replyToMode: "off" as const,
-    discordConfig,
-    messageText: "hello",
+    ...createHandlerContext(),
     isDirectMessage: false,
     isGuildMessage: true,
-    isGroupDm: false,
     inboundEventKind: "message" as const,
-    effectiveWasMentioned: false,
   };
 }
 

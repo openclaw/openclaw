@@ -1,8 +1,6 @@
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 
 installDiscordIngressTestRuntime();
-// Discord tests cover debounce partitioning by reply target.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createDiscordMessageHandler,
@@ -11,7 +9,7 @@ import {
 } from "./message-handler.module-test-helpers.js";
 import {
   createDiscordHandlerParams,
-  createDiscordPreflightContext,
+  createDiscordQueuePreflightContext,
 } from "./message-handler.test-helpers.js";
 
 function createTextMessageData(messageId: string, channelId = "ch-1") {
@@ -28,37 +26,6 @@ function createTextMessageData(messageId: string, channelId = "ch-1") {
   };
 }
 
-function createPreflightContext(channelId = "ch-1") {
-  const discordConfig = {
-    enabled: true,
-    token: "test-token",
-    groupPolicy: "allowlist" as const,
-  };
-  const cfg: OpenClawConfig = {
-    channels: { discord: discordConfig },
-    messages: { inbound: { debounceMs: 0 } },
-  };
-  return {
-    ...createDiscordPreflightContext(channelId),
-    cfg,
-    accountId: "default",
-    token: "test-token",
-    runtime: {
-      log: () => {},
-      error: () => {},
-      exit: (code: number): never => {
-        throw new Error(`exit ${code}`);
-      },
-    },
-    textLimit: 2_000,
-    replyToMode: "off" as const,
-    discordConfig,
-    messageText: "hello",
-    isDirectMessage: false,
-    isGuildMessage: true,
-  };
-}
-
 describe("Discord reply-target debounce partitioning", () => {
   beforeEach(() => {
     preflightDiscordMessageMock.mockReset();
@@ -70,7 +37,7 @@ describe("Discord reply-target debounce partitioning", () => {
     params.cfg.messages = { inbound: { debounceMs: 20 } };
     preflightDiscordMessageMock.mockImplementation(
       async (preflightParams: { data: ReturnType<typeof createTextMessageData> }) => ({
-        ...createPreflightContext(preflightParams.data.channel_id),
+        ...createDiscordQueuePreflightContext(preflightParams.data.channel_id),
         message: preflightParams.data.message,
         messageText: preflightParams.data.message.content,
       }),

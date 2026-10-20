@@ -1,7 +1,6 @@
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 
 installDiscordIngressTestRuntime();
-import * as conversationBindingRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
@@ -16,16 +15,14 @@ import {
 const ensureConfiguredBindingRouteReadyMock = vi.hoisted(() => vi.fn());
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async () => {
-  const { createConfiguredBindingConversationRuntimeModuleMock } =
-    await import("../test-support/configured-binding-runtime.js");
-  return await createConfiguredBindingConversationRuntimeModuleMock(
-    { ensureConfiguredBindingRouteReadyMock, resolveConfiguredBindingRouteMock },
-    () =>
-      vi.importActual<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>(
-        "openclaw/plugin-sdk/conversation-binding-runtime",
-      ),
-  );
+vi.mock("openclaw/plugin-sdk/conversation-binding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/conversation-binding-runtime")>();
+  return {
+    ...actual,
+    ensureConfiguredBindingRouteReady: ensureConfiguredBindingRouteReadyMock,
+    resolveConfiguredBindingRoute: resolveConfiguredBindingRouteMock,
+  };
 });
 
 const GUILD_ID = "guild-1";
@@ -44,42 +41,9 @@ function createConfiguredDiscordRoute() {
     boundAt: 0,
     metadata: { source: "config", mode: "persistent", agentId: "codex" },
   } as const;
-  const statefulTarget = {
-    kind: "stateful",
-    driverId: "acp",
-    sessionKey: SESSION_KEY,
-    agentId: "codex",
-  } as const;
   return {
-    bindingResolution: {
-      conversation,
-      compiledBinding: {
-        channel: "discord",
-        accountPattern: "default",
-        binding: {
-          type: "acp",
-          agentId: "codex",
-          match: {
-            channel: "discord",
-            accountId: "default",
-            peer: { kind: "channel", id: CHANNEL_ID },
-          },
-        },
-        bindingConversationId: CHANNEL_ID,
-        target: { conversationId: CHANNEL_ID },
-        agentId: "codex",
-        provider: {
-          compileConfiguredBinding: () => ({ conversationId: CHANNEL_ID }),
-          matchInboundConversation: () => ({ conversationId: CHANNEL_ID }),
-        },
-        targetFactory: { driverId: "acp", materialize: () => ({ record, statefulTarget }) },
-      },
-      match: { conversationId: CHANNEL_ID },
-      record,
-      statefulTarget,
-    },
-    configuredBinding: { spec: { ...conversation, agentId: "codex", mode: "persistent" }, record },
-    boundSessionKey: SESSION_KEY,
+    // Preflight consumes the record and route; binding compilation/readiness is mocked.
+    bindingResolution: { record },
     route: {
       agentId: "codex",
       accountId: "default",
@@ -123,12 +87,6 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     resolveConfiguredBindingRouteMock.mockReset();
     resolveConfiguredBindingRouteMock.mockReturnValue(createConfiguredDiscordRoute());
     ensureConfiguredBindingRouteReadyMock.mockResolvedValue({ ok: true });
-    vi.spyOn(conversationBindingRuntime, "resolveConfiguredBindingRoute").mockImplementation(
-      resolveConfiguredBindingRouteMock,
-    );
-    vi.spyOn(conversationBindingRuntime, "ensureConfiguredBindingRouteReady").mockImplementation(
-      ensureConfiguredBindingRouteReadyMock,
-    );
   });
 
   it("does not initialize configured ACP bindings for rejected messages", async () => {
@@ -160,10 +118,11 @@ describe("preflightDiscordMessage configured ACP bindings", () => {
     }) as unknown as Parameters<typeof preflightDiscordMessage>[0]["client"];
     const result = await preflightDiscordMessage(preflightParams(message, true, client));
     expect(restGet).toHaveBeenCalledTimes(1);
-    expect(result?.messageText).toBe("");
     expect(ensureConfiguredBindingRouteReadyMock).toHaveBeenCalledTimes(1);
-    expect(result?.boundSessionKey).toBe(SESSION_KEY);
-    expect(result?.route.sessionKey).toBe(SESSION_KEY);
-    expect(result?.route.agentId).toBe("codex");
+    expect(result).toMatchObject({
+      messageText: "",
+      boundSessionKey: SESSION_KEY,
+      route: { sessionKey: SESSION_KEY, agentId: "codex" },
+    });
   });
 });

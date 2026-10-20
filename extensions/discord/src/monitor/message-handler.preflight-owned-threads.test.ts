@@ -16,6 +16,8 @@ import {
 beforeEach(() => sessionBindingTesting.resetSessionBindingAdaptersForTests());
 afterEach(() => sessionBindingTesting.resetSessionBindingAdaptersForTests());
 
+const botThread = { ownerId: "openclaw-bot", admitted: true };
+
 describe("Discord bot-owned thread mention gating", () => {
   it("validates guild and channel overrides without adding a default", () => {
     const config = DiscordConfigSchema.parse({
@@ -35,24 +37,13 @@ describe("Discord bot-owned thread mention gating", () => {
     ).toBe(false);
   });
   it.each([
+    { ...botThread, name: "bot-created thread", requireMentionInBotThreads: false },
+    { ...botThread, name: "automatically created thread", autoThread: true },
     {
-      name: "bot-created thread",
-      ownerId: "openclaw-bot",
-      requireMentionInBotThreads: false,
-      admitted: true,
-    },
-    {
-      name: "automatically created thread",
-      autoThread: true,
-      ownerId: "openclaw-bot",
-      admitted: true,
-    },
-    {
+      ...botThread,
       name: "strict thread explicit mention",
-      ownerId: "openclaw-bot",
       requireMentionInBotThreads: true,
       mentioned: true,
-      admitted: true,
     },
     {
       name: "strict thread implicit reply",
@@ -76,76 +67,63 @@ describe("Discord bot-owned thread mention gating", () => {
       users: ["222222222222222222"],
       admitted: false,
     },
-  ])(
-    "checks unmentioned follow-ups in $name",
-    async ({
-      name,
-      autoThread,
-      ownerId,
-      users,
-      admitted,
-      requireMentionInBotThreads,
-      guildRequirement,
-      normalRequirement,
-      mentioned,
-      replyToBot,
-    }) => {
-      const parentId = `parent-${name}`;
-      const threadId = `thread-${name}`;
-      const channelId = threadId;
-      const message = createDiscordMessage({
-        id: "unmentioned-follow-up",
-        channelId,
-        content: mentioned
-          ? "<@openclaw-bot> Can you explain the next step?"
-          : "Can you explain the next step?",
-        mentionedUsers: mentioned ? [{ id: "openclaw-bot" }] : [],
-        referencedMessage: replyToBot
-          ? createDiscordMessage({
-              id: "bot-root",
-              channelId,
-              content: "Started this thread",
-              author: { id: "openclaw-bot", bot: true },
-            })
-          : undefined,
-        author: { id: "111111111111111111", bot: false, username: "Pat" },
-      });
-      const result = await preflightDiscordMessage({
-        ...createDiscordPreflightArgs({
-          cfg: DEFAULT_PREFLIGHT_CFG,
-          discordConfig: {},
-          data: createGuildEvent({
+  ])("checks unmentioned follow-ups in $name", async (scenario) => {
+    const parentId = `parent-${scenario.name}`;
+    const channelId = `thread-${scenario.name}`;
+    const message = createDiscordMessage({
+      id: "unmentioned-follow-up",
+      channelId,
+      content: scenario.mentioned
+        ? "<@openclaw-bot> Can you explain the next step?"
+        : "Can you explain the next step?",
+      mentionedUsers: scenario.mentioned ? [{ id: "openclaw-bot" }] : [],
+      referencedMessage: scenario.replyToBot
+        ? createDiscordMessage({
+            id: "bot-root",
             channelId,
-            guildId: "guild-1",
-            author: message.author,
-            message,
-          }),
-          client: createThreadClient({ threadId, parentId, ownerId }),
+            content: "Started this thread",
+            author: { id: "openclaw-bot", bot: true },
+          })
+        : undefined,
+      author: { id: "111111111111111111", bot: false, username: "Pat" },
+    });
+    const result = await preflightDiscordMessage({
+      ...createDiscordPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {},
+        data: createGuildEvent({
+          channelId,
+          guildId: "guild-1",
+          author: message.author,
+          message,
         }),
-        groupPolicy: "allowlist",
-        guildEntries: {
-          "guild-1": {
-            requireMention: true,
-            requireMentionInBotThreads: guildRequirement,
-            channels: {
-              [parentId]: {
-                enabled: true,
-                requireMention: normalRequirement ?? true,
-                requireMentionInBotThreads,
-                autoThread,
-                users: users ?? ["111111111111111111"],
-              },
+        client: createThreadClient({ threadId: channelId, parentId, ownerId: scenario.ownerId }),
+      }),
+      groupPolicy: "allowlist",
+      guildEntries: {
+        "guild-1": {
+          requireMention: true,
+          requireMentionInBotThreads: scenario.guildRequirement,
+          channels: {
+            [parentId]: {
+              enabled: true,
+              requireMention: scenario.normalRequirement ?? true,
+              requireMentionInBotThreads: scenario.requireMentionInBotThreads,
+              autoThread: scenario.autoThread,
+              users: scenario.users ?? ["111111111111111111"],
             },
           },
         },
-      });
-      if (!admitted) {
-        expect(result).toBeNull();
-        return;
-      }
-      expect(result?.shouldRequireMention).toBe(requireMentionInBotThreads === true);
-      expect(result?.messageChannelId).toBe(threadId);
-      expect(result?.effectiveWasMentioned).toBe(mentioned === true);
-    },
-  );
+      },
+    });
+    if (!scenario.admitted) {
+      expect(result).toBeNull();
+      return;
+    }
+    expect(result).toMatchObject({
+      shouldRequireMention: scenario.requireMentionInBotThreads === true,
+      messageChannelId: channelId,
+      effectiveWasMentioned: scenario.mentioned === true,
+    });
+  });
 });
