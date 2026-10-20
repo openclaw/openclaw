@@ -1,21 +1,14 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
-import {
-  controlUiSessionPath,
-  installMockGateway,
-  startControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI retained pane Escape",
-  startServer: () => startControlUiE2eServer(),
   startServerBeforeBrowser: true,
 });
-const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const sessionKeys = ["agent:main:review-a", "agent:main:review-b"] as const;
 
 suite.define(() => {
@@ -26,25 +19,20 @@ suite.define(() => {
       locale: "en-US",
       serviceWorkers: "block",
       viewport,
-      ...(captureProof ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
-        "sessions.list": {
-          count: sessionKeys.length,
-          defaults: { contextTokens: null, model: "gpt-5.6-luna", modelProvider: "openai" },
-          path: "",
-          sessions: sessionKeys.map((key, index) => ({
+        "sessions.list": chatSessionListResponse(
+          sessionKeys.map((key, index) => ({
             key,
             kind: "direct",
             label: `Review ${index === 0 ? "A" : "B"}`,
             updatedAt: sessionKeys.length - index,
           })),
-          ts: 1,
-        },
+        ),
       },
       sessionKey: sessionKeys[0],
     });
@@ -110,9 +98,6 @@ suite.define(() => {
       await expect
         .poll(() => visibleChecks.locator(".chat-pr__checks-menu").isVisible())
         .toBe(true);
-      if (captureProof) {
-        await page.screenshot({ path: path.join(suite.artifactDir, "before-escape.png") });
-      }
       await page.keyboard.press("Escape");
       await expect.poll(() => visibleChecks.getAttribute("open")).toBeNull();
       await expect
@@ -120,17 +105,6 @@ suite.define(() => {
         .toBe(false);
       expect(await hiddenChecks.getAttribute("open")).toBe("");
     } finally {
-      if (captureProof) {
-        await page.screenshot({ path: path.join(suite.artifactDir, "after-escape.png") });
-        const panes = await page.locator("openclaw-chat-pane").evaluateAll((elements) =>
-          elements.map((element) => ({
-            sessionKey: (element as HTMLElement & { sessionKey?: string }).sessionKey,
-            hidden: element.getAttribute("aria-hidden"),
-            openChecks: element.querySelector(".chat-pr__checks")?.hasAttribute("open"),
-          })),
-        );
-        await writeFile(path.join(suite.artifactDir, "panes.json"), JSON.stringify(panes, null, 2));
-      }
       await suite.closeBrowserContext(context);
     }
   });

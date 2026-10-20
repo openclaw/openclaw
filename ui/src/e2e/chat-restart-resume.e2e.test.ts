@@ -1,12 +1,10 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
+  exactButton,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
 
@@ -62,24 +60,17 @@ suite.define(() => {
         const resume = banner.getByRole("button", { name: "Resume", exact: true });
         await resume.waitFor();
         expect(await resume.isEnabled()).toBe(true);
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(page, pane, [banner, resume], {
-            animations: "disabled",
-            elements: [banner],
-          });
-          await writeFile(path.join(suite.artifactDir, "restart-resume-after.png"), frame.png);
-        }
 
         await resume.click();
         const request = await gateway.waitForRequest("sessions.recover");
-        expect(request.params).toEqual({
+        const recoveryTarget = {
           agentId: "main",
           key: sessionKey,
-          mode: "in-place",
           sessionId,
           recoveryCycleId: "restart-cycle-1",
-        });
-        await banner.getByRole("button", { name: "Resuming…", exact: true }).waitFor();
+        };
+        expect(request.params).toEqual({ ...recoveryTarget, mode: "in-place" });
+        await exactButton(banner, "Resuming…").waitFor();
         if (mode === "new-session") {
           await gateway.resolveDeferred("sessions.recover", {
             ok: true,
@@ -94,20 +85,10 @@ suite.define(() => {
               },
             },
           });
-          const fallback = banner.getByRole("button", {
-            name: "Resume in new session",
-            exact: true,
-          });
+          const fallback = exactButton(banner, "Resume in new session");
           await fallback.waitFor();
           expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           expect(await gateway.getRequests("sessions.recover")).toHaveLength(1);
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            const frame = await takeControlUiScreenshotFrame(page, pane, [banner, fallback], {
-              animations: "disabled",
-              elements: [banner],
-            });
-            await writeFile(path.join(suite.artifactDir, "restart-resume-fallback.png"), frame.png);
-          }
         }
         const resumedKey = mode === "new-session" ? "agent:main:dashboard:replacement" : sessionKey;
         const resumedSession = {
@@ -132,15 +113,9 @@ suite.define(() => {
           continuation: { status: "started", runId: "resumed-task" },
         });
         if (mode === "new-session") {
-          await banner.getByRole("button", { name: "Resume in new session", exact: true }).click();
+          await exactButton(banner, "Resume in new session").click();
           const fallbackRequest = await gateway.waitForRequest("sessions.recover", { after: 1 });
-          expect(fallbackRequest.params).toEqual({
-            agentId: "main",
-            key: sessionKey,
-            sessionId,
-            recoveryCycleId: "restart-cycle-1",
-            mode: "new-session",
-          });
+          expect(fallbackRequest.params).toEqual({ ...recoveryTarget, mode: "new-session" });
         } else {
           await gateway.resolveDeferred("sessions.recover");
         }

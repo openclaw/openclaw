@@ -1,8 +1,22 @@
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI reasoning visibility" });
+const message = (
+  role: string,
+  content: unknown,
+  timestamp: number,
+  extra: Record<string, unknown> = {},
+) => ({
+  role,
+  content,
+  timestamp,
+  ...extra,
+});
 
 suite.define(() => {
   it.each([
@@ -13,58 +27,35 @@ suite.define(() => {
     { reasoningLevel: "on", withTools: true },
     { reasoningLevel: "stream", withTools: true },
   ])("keeps reasoning in work: %o", async ({ reasoningLevel, withTools }) => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
-    });
-    try {
-      const page = await context.newPage();
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const sessionKey = "agent:main:dashboard:reasoning-visibility";
       const reasoningText = "Compare the evidence before answering.";
       const code = 'const label = "*literal*";\n\nconsole.log(label);\n';
       const conclusion = "Compare both outputs.";
       const finalText = "The answer is ready.";
+      const thinking = `${reasoningText}\n\n\`\`\`ts\n${code}\`\`\`\n\n${conclusion}`;
+      const toolCall = {
+        type: "toolCall",
+        id: "read-evidence",
+        name: "read",
+        arguments: { path: "evidence.txt" },
+      };
+      const tools = [
+        message("assistant", [toolCall], 2_500),
+        message("toolResult", "Evidence checked.", 3_000, {
+          toolCallId: "read-evidence",
+          toolName: "read",
+        }),
+      ];
       const gateway = await installMockGateway(page, {
         sessionKey,
         sessionInfo: { reasoningLevel },
         sessions: [{ key: sessionKey, kind: "direct", reasoningLevel, updatedAt: 4_000 }],
         historyMessages: [
-          { role: "user", content: "Check the evidence.", timestamp: 1_000 },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "thinking",
-                thinking: `${reasoningText}\n\n\`\`\`ts\n${code}\`\`\`\n\n${conclusion}`,
-              },
-            ],
-            timestamp: 2_000,
-          },
-          ...(withTools
-            ? [
-                {
-                  role: "assistant",
-                  content: [
-                    {
-                      type: "toolCall",
-                      id: "read-evidence",
-                      name: "read",
-                      arguments: { path: "evidence.txt" },
-                    },
-                  ],
-                  timestamp: 2_500,
-                },
-                {
-                  role: "toolResult",
-                  toolCallId: "read-evidence",
-                  toolName: "read",
-                  content: "Evidence checked.",
-                  timestamp: 3_000,
-                },
-              ]
-            : []),
-          { role: "assistant", content: [{ type: "text", text: finalText }], timestamp: 4_000 },
+          message("user", "Check the evidence.", 1_000),
+          message("assistant", [{ type: "thinking", thinking }], 2_000),
+          ...(withTools ? tools : []),
+          message("assistant", [{ type: "text", text: finalText }], 4_000),
         ],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
@@ -114,8 +105,6 @@ suite.define(() => {
         expect(await answer.isVisible()).toBe(true);
       }
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
+    });
   });
 });

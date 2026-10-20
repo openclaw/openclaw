@@ -1,7 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   controlUiSessionUrl,
@@ -13,20 +10,32 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 const sessionKey = "agent:main:reply-preview";
 const timestamp = 1_800_000_000_000;
+const entry = (role: string, content: string, id: string, seq: number) => ({
+  role,
+  content,
+  timestamp: timestamp + seq - 1,
+  __openclaw: { id, seq },
+});
+const quotedReply = (
+  id: string,
+  seq: number,
+  sourceId: string,
+  replyToMessage: unknown,
+  content = "Follow up on the earlier answer.",
+) => ({
+  ...entry("user", content, id, seq),
+  __openclaw: { id, seq, replyToId: sourceId, replyToMessage },
+});
 
 suite.define(() => {
   it("renders 50 quoted references without per-reference requests, including after reconnect", async () => {
-    const artifactDir = createControlUiE2eArtifactDir("chat-reply-preview-requests");
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const historyMessages = Array.from({ length: 50 }, (_, index) => ({
-        role: "user",
-        content: `Follow-up ${index + 1}.`,
-        timestamp: timestamp + index,
-        __openclaw: {
-          id: `reply-${index}`,
-          seq: 100 + index,
-          replyToId: `source-${index}`,
-          replyToMessage: {
+        ...quotedReply(
+          `reply-${index}`,
+          100 + index,
+          `source-${index}`,
+          {
             ok: true,
             message: {
               role: "assistant",
@@ -34,7 +43,9 @@ suite.define(() => {
               __openclaw: { id: `source-${index}` },
             },
           },
-        },
+          `Follow-up ${index + 1}.`,
+        ),
+        timestamp: timestamp + index,
       }));
       const gateway = await installMockGateway(page, {
         sessionKey,
@@ -45,13 +56,7 @@ suite.define(() => {
       const pane = page.locator(".chat-pane-cache__pane--active");
       const strips = pane.locator(".chat-reply-attribution--inline");
       await expect.poll(() => strips.count()).toBe(50);
-      const renderGetCount = (await gateway.getRequests("chat.message.get")).length;
-      await writeFile(
-        path.join(artifactDir, "requests.json"),
-        JSON.stringify({ references: 50, renderGetCount }, null, 2),
-      );
-      console.info(JSON.stringify({ references: 50, renderGetCount }));
-      expect(renderGetCount).toBe(0);
+      expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
       expect(await strips.getByRole("button").count()).toBe(50);
       expect(await pane.locator('[data-entry-id^="source-"]').count()).toBe(0);
 
@@ -59,12 +64,7 @@ suite.define(() => {
       await gateway.closeLatest(1006, "synthetic reconnect");
       await waitForRequests(gateway, "connect", connectCount + 1);
       await expect.poll(() => strips.getByRole("button").count()).toBe(50);
-      const afterReconnectGetCount = (await gateway.getRequests("chat.message.get")).length;
-      await writeFile(
-        path.join(artifactDir, "requests.json"),
-        JSON.stringify({ references: 50, renderGetCount, afterReconnectGetCount }, null, 2),
-      );
-      expect(afterReconnectGetCount).toBe(0);
+      expect(await gateway.getRequests("chat.message.get")).toHaveLength(0);
     });
   });
 
@@ -79,19 +79,7 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
         sessionKey,
-        historyMessages: [
-          {
-            role: "user",
-            content: "Follow up on the earlier answer.",
-            timestamp,
-            __openclaw: {
-              id: "reply",
-              seq: 101,
-              replyToId: "older-answer",
-              replyToMessage: result,
-            },
-          },
-        ],
+        historyMessages: [{ ...quotedReply("reply", 101, "older-answer", result), timestamp }],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const pane = page.locator(".chat-pane-cache__pane--active");
@@ -109,29 +97,25 @@ suite.define(() => {
 
   it("refreshes the page-carried original after reconnect and keeps source navigation working", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const source = {
-        role: "assistant",
-        content: "The current original answer.",
-        timestamp,
-        __openclaw: { id: "reconnect-source", seq: 1 },
-      };
-      const reply = {
-        role: "user",
-        content: "A follow-up question after reconnect.",
-        timestamp: timestamp + 61,
-        __openclaw: {
-          id: "reconnect-reply",
-          seq: 62,
-          replyToId: "reconnect-source",
-          replyToMessage: { ok: false, unavailableReason: "not_found" },
+      const source = entry("assistant", "The current original answer.", "reconnect-source", 1);
+      const reply = quotedReply(
+        "reconnect-reply",
+        62,
+        "reconnect-source",
+        {
+          ok: false,
+          unavailableReason: "not_found",
         },
-      };
-      const intervening = Array.from({ length: 60 }, (_, index) => ({
-        role: index % 2 === 0 ? "assistant" : "user",
-        content: `Conversation entry ${index + 2}.`,
-        timestamp: timestamp + index + 1,
-        __openclaw: { id: `intervening-${index}`, seq: index + 2 },
-      }));
+        "A follow-up question after reconnect.",
+      );
+      const intervening = Array.from({ length: 60 }, (_, index) =>
+        entry(
+          index % 2 === 0 ? "assistant" : "user",
+          `Conversation entry ${index + 2}.`,
+          `intervening-${index}`,
+          index + 2,
+        ),
+      );
       const messages = [...intervening, reply];
       const tailPage = (pageMessages: unknown[]) => ({
         messages: pageMessages,

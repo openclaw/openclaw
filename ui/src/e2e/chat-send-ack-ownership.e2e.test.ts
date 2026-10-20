@@ -1,7 +1,7 @@
-import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { exactButton } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI failed input ACK ownership" });
@@ -26,7 +26,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const composer = page.locator(".agent-chat__input textarea");
       await composer.fill("Start the original task.");
-      await page.getByRole("button", { name: "Send message", exact: true }).click();
+      await exactButton(page, "Send message").click();
       const original = await gateway.waitForRequest("chat.send");
       const runId = String(asOptionalRecord(original.params)?.idempotencyKey);
       const stop = page.getByRole("button", { name: "Stop generating" });
@@ -54,7 +54,6 @@ suite.define(() => {
       const successorTool = page
         .locator(".chat-tool-msg-summary")
         .filter({ hasText: "Successor C tool proof" });
-      const captureName = ownership === "adopted-a" ? "steer-timeout" : "unadopted-c-timeout";
       if (ownership === "unadopted-c") {
         await gateway.emitChatFinal({ runId, text: "Original task completed." });
         await page
@@ -88,10 +87,6 @@ suite.define(() => {
         expect(await successorTool.count()).toBe(1);
         await successorTool.scrollIntoViewIfNeeded();
       }
-      await page.screenshot({
-        path: path.join(suite.artifactDir, `before-${captureName}.png`),
-        fullPage: false,
-      });
 
       // Mirrors a targeted cancellation of the separate pre-ACK steer controller.
       await gateway.resolveDeferred("chat.send", {
@@ -102,10 +97,6 @@ suite.define(() => {
       await page
         .getByTitle("The run ended before the message was accepted.", { exact: true })
         .waitFor();
-      await page.screenshot({
-        path: path.join(suite.artifactDir, `after-${captureName}.png`),
-        fullPage: false,
-      });
       expect(await composer.inputValue()).toBe("Keep this next message draft.");
 
       if (ownership === "adopted-a") {
