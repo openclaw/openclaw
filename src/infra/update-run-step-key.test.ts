@@ -10,7 +10,7 @@ import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(closeOpenClawStateDatabaseForTest);
 
 // v2026.9.4 update-run-schema.ts:18 and gateway/server-methods/update-report.ts:111.
 // That reader drops exitCode from ledger rows and joins the sentinel by exact name.
@@ -50,8 +50,7 @@ it.each([
     recordUpdateRunStep(run.runId, { ...receipt, endedAtMs: 2 }, options);
   }
   const recorded = getUpdateRun(run.runId, options)!;
-  const decoded = releasedSteps.parse(recorded.steps);
-  expect(decoded).toEqual([
+  expect(releasedSteps.parse(recorded.steps)).toEqual([
     ...releasedSteps.parse(run.steps),
     {
       step: releasedName,
@@ -70,10 +69,9 @@ it.each([
     durationMs: 1,
   };
   const sentinel = buildUpdateRestartSentinelPayload({ result, meta: {} });
-  expect(sentinel.stats?.steps?.map((entry) => entry.name)).toEqual([releasedName]);
-  expect(sentinel.stats?.steps?.filter((entry) => !entry.advisory)).toMatchObject([
-    { name: releasedName, log: { exitCode: 0 } },
-  ]);
+  expect(
+    sentinel.stats?.steps?.map(({ name: key, log, advisory }) => [key, log?.exitCode, advisory]),
+  ).toEqual([[releasedName, 0, undefined]]);
   const report = await prepareUpdateFailureReport(
     { attemptId: run.runId, result, recordedRun: recorded },
     options,
