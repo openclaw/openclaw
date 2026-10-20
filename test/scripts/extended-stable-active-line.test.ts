@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -41,7 +41,7 @@ describe("extended-stable live publication eligibility", () => {
         "plugin-sdk-api-release-evidence.mjs",
         "lib/release-version.mjs",
       ]) {
-        writeFileSync(join(harness, script), readFileSync(join("scripts", script)));
+        copyFileSync(join("scripts", script), join(harness, script));
       }
       // Stop at the next phase boundary: prove admission without publishing.
       writeFileSync(
@@ -49,12 +49,12 @@ describe("extended-stable live publication eligibility", () => {
         `${readFileSync("scripts/lib/release-publish-children.sh", "utf8")}\nverify_release_tag_target() { echo admitted >> "$EVENTS"; exit 42; }\n`,
       );
       const events = join(root, "events");
+      const executable = (name: string, source: string) =>
+        writeFileSync(join(bin, name), source, { mode: 0o755 });
       writeFileSync(events, "");
-      writeFileSync(join(bin, "node"), `#!/bin/sh\nexec "${nodeExecutable}" "$@"\n`, {
-        mode: 0o755,
-      });
-      writeFileSync(
-        join(bin, "gh"),
+      executable("node", `#!/bin/sh\nexec "${nodeExecutable}" "$@"\n`);
+      executable(
+        "gh",
         `#!${nodeExecutable}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -69,7 +69,6 @@ if (${JSON.stringify(mainVersion)} === "unavailable") {
 }
 process.stdout.write(${JSON.stringify(Buffer.from(JSON.stringify({ version: mainVersion })).toString("base64"))});
 `,
-        { mode: 0o755 },
       );
       const workflow = parse(
         readFileSync(".github/workflows/openclaw-release-publish.yml", "utf8"),

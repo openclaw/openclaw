@@ -43,12 +43,18 @@ function runSharedWorkspaceDelete(transport: string | undefined) {
   return run();
 }
 
-function invalidDeleteOutput(marker: string, tail: string, maxBytes: string) {
+function invalidDeleteOutput(maxBytes: string) {
   const { outputPath, run } = workspaceFixture();
-  writeFileSync(outputPath, `${marker}${"x".repeat(70 * 1024)}\n${tail}`, "utf8");
+  writeFileSync(
+    outputPath,
+    `DO_NOT_DUMP_OLD${"x".repeat(70 * 1024)}\nrecent diagnostic tail`,
+    "utf8",
+  );
   const result = run(maxBytes);
   expect(result.status).not.toBe(0);
-  expect(result.stderr).toContain(tail);
+  expect(result.stderr).toContain("recent diagnostic tail");
+  // Node and Bun expose different prefix lengths in their JSON parse errors.
+  expect(result.stderr).not.toContain("DO_NOT_");
   return { ...result, outputPath };
 }
 
@@ -74,26 +80,15 @@ describe("workspace fixture assertions", () => {
     expect(existsSync(rootStatePath)).toBe(false);
   });
 
-  it("rejects oversized agents delete output before parsing it", () => {
-    const result = invalidDeleteOutput(
-      "DO_NOT_DUMP_OLD_AGENTS_DELETE",
-      "recent agents delete tail",
-      "1024",
-    );
-    expect(result.stderr).toContain("agents delete --json output exceeded 1024 bytes");
-    expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_AGENTS_DELETE");
-  });
-
-  it("bounds invalid agents delete JSON diagnostics", () => {
-    const result = invalidDeleteOutput(
-      "DO_NOT_DUMP_OLD_INVALID_JSON",
-      "recent invalid json tail",
-      "131072",
-    );
-    expect(result.stderr).toContain("agents delete --json did not emit valid JSON");
-    // Node can quote only a short input prefix, while Bun includes more of the same marker.
-    expect(result.stderr).not.toContain("DO_NOT_");
-    expect(result.stderr).toContain(result.outputPath);
+  it.each([
+    ["1024", "output exceeded 1024 bytes"],
+    ["131072", "did not emit valid JSON"],
+  ])("bounds agents-delete diagnostics with a %s byte limit", (limit, error) => {
+    const result = invalidDeleteOutput(limit);
+    expect(result.stderr).toContain(`agents delete --json ${error}`);
+    if (limit === "131072") {
+      expect(result.stderr).toContain(result.outputPath);
+    }
   });
 
   it.each(["local", undefined])("rejects deletion output with transport %s", (transport) => {

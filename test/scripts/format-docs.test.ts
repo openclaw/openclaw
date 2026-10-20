@@ -37,16 +37,15 @@ function writeDocsFixture(directory: string, files = ["README.md", "docs/guide.m
 
 function mockFormatter(
   files: string[],
-  run: (command: string, args: readonly string[]) => SpawnSyncReturns<string> = () =>
-    commandResult(),
+  run: () => SpawnSyncReturns<string> = () => commandResult(),
 ) {
-  const calls: Array<{ command: string; args: readonly string[] }> = [];
-  vi.mocked(spawnSync).mockImplementation((command, args = []) => {
+  const calls: Array<{ command: string; args: readonly string[]; options: unknown }> = [];
+  vi.mocked(spawnSync).mockImplementation((command, args, options) => {
     if (command === "git") {
-      return args[0] === "ls-files" ? commandResult(files.join("\n")) : commandResult("", "", 1);
+      return args?.[0] === "ls-files" ? commandResult(files.join("\n")) : commandResult("", "", 1);
     }
-    calls.push({ command, args });
-    return run(command, args);
+    calls.push({ command, args: args ?? [], options });
+    return run();
   });
   return calls;
 }
@@ -66,13 +65,9 @@ describe("format-docs", () => {
       {
         command: "C:\\Windows\\System32\\cmd.exe",
         args: ["/d", "/s", "/c", expect.stringMatching(/oxfmt\.cmd.*--write.*docs\/guide\.mdx/u)],
+        options: expect.objectContaining({ shell: false, windowsVerbatimArguments: true }),
       },
     ]);
-    expect(spawnSync).toHaveBeenLastCalledWith(
-      expect.any(String),
-      expect.any(Array),
-      expect.objectContaining({ shell: false, windowsVerbatimArguments: true }),
-    );
   });
 
   it("batches oxfmt invocations without losing docs that exceed the command line budget", () => {

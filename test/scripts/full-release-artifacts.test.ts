@@ -14,9 +14,15 @@ const WORKFLOW = ".github/workflows/full-release-artifacts.yml";
 const SOURCE_SHA = "a".repeat(40);
 const TOOLING_SHA = "b".repeat(40);
 const DISPATCH_ID = "full-release-validation-51-1-artifacts-npm";
+const RECEIPT_MISMATCH = "receipt does not match its exact request and producer attempt";
+const JOB_MISMATCH = "unique exact completed producer job";
+const RUN_MISMATCH = "Artifact producer run identity changed";
+const DISPATCH_MISMATCH = "Original artifact dispatch is unavailable or changed";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+const readLines = (file: string) =>
+  existsSync(file) ? readFileSync(file, "utf8").trim().split("\n") : [];
 const completed = { status: "completed", conclusion: "success" };
 const dispatchRecord = () => ({ request: artifactRequest(), runId: "81", runAttempt: "1" });
 function artifactMetadata(id: number, name: string, digest: string, runId = 81, size = 256) {
@@ -226,21 +232,13 @@ globalThis.fetch = async (input) => {
       },
     );
     expect(result.error, result.stderr).toBeUndefined();
-    const outputLines = existsSync(outputPath)
-      ? readFileSync(outputPath, "utf8").trim().split("\n")
-      : [];
     const outputs = Object.fromEntries(
-      outputLines.map((line) => {
+      readLines(outputPath).map((line) => {
         const separator = line.indexOf("=");
         return [line.slice(0, separator), line.slice(separator + 1)];
       }),
     );
-    const calls = existsSync(callsPath)
-      ? readFileSync(callsPath, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line) as string[])
-      : [];
+    const calls = readLines(callsPath).map((line) => JSON.parse(line) as string[]);
     return { ...result, outputs, calls };
   };
   const artifact = (
@@ -507,66 +505,64 @@ function expectRejected(result: Result, message: string) {
 
 describe.skipIf(process.platform === "win32")("immutable release artifact CLI", () => {
   it.each([
-    "retained",
-    "expired payload",
-    "deleted archive",
-    "expired SDK archive",
-    "missing SDK archive",
-    "wrong SDK attempt",
-    "changed receipt",
-    "changed digest",
-  ])("resolves original publication artifacts for %s without dispatching producers", (scenario) => {
-    const test = publicationReuseFixture(scenario === "changed receipt");
-    const payload = test.payloads[0];
-    assert(payload, "expected Docker payload fixture");
-    if (scenario === "expired payload") {
-      payload.expired = true;
-    }
-    if (scenario === "changed digest") {
-      payload.digest = `sha256:${"0".repeat(64)}`;
-    }
-    if (scenario === "deleted archive") {
-      test.api("actions/artifacts/402", { fixtureError: "gh: Not Found (HTTP 404)" });
-    }
-    if (scenario === "expired SDK archive") {
-      test.sdk.expired = true;
-    }
-    if (scenario === "missing SDK archive") {
-      test.list(
-        "actions/runs/81/artifacts?name=plugin-sdk-api-release-diff-81-1&per_page=100",
-        "artifacts",
-        [],
-      );
-    }
-    if (scenario === "wrong SDK attempt") {
-      test.sdk.name = "plugin-sdk-api-release-diff-81-2";
-    }
-    const result = test.run("reuse", test.env);
-    if (scenario === "changed receipt" || scenario === "changed digest") {
-      expectRejected(
-        result,
-        scenario === "changed receipt" ? "npm receipts differ" : "immutable publication tuple",
-      );
-    } else {
-      expect(result.status, result.stderr).toBe(0);
-      if (scenario === "retained") {
-        assert(result.outputs.prepared_bundle_json);
-        assert(result.outputs.qualified_preflight_bundle_json);
-        expect(JSON.parse(result.outputs.prepared_bundle_json)).toEqual(test.raw);
-        expect(JSON.parse(result.outputs.qualified_preflight_bundle_json)).toEqual(test.qualified);
-        expect(result.outputs).toMatchObject({
-          publication_artifacts_reused: "true",
-          npm_run_id: "81",
-          npm_run_attempt: "1",
-          prepared_run_id: "91",
-          prepared_run_attempt: "1",
-          prepared_manifest_sha256: test.docker.preparedManifestSha256,
-        });
-      } else {
-        expect(result.outputs).toEqual({ publication_artifacts_reused: "false" });
+    ["retained", {}, {}, "", ""],
+    ["expired payload", { expired: true }, {}, "", ""],
+    ["deleted archive", {}, {}, "npm", ""],
+    ["expired SDK archive", {}, { expired: true }, "", ""],
+    ["missing SDK archive", {}, {}, "sdk", ""],
+    ["wrong SDK attempt", {}, { name: "plugin-sdk-api-release-diff-81-2" }, "", ""],
+    ["changed receipt", {}, {}, "", "npm receipts differ"],
+    [
+      "changed digest",
+      { digest: `sha256:${"0".repeat(64)}` },
+      {},
+      "",
+      "immutable publication tuple",
+    ],
+  ] as const)(
+    "reuses publication artifacts without dispatch for %s",
+    (scenario, payloadChanges, sdkChanges, missing, error) => {
+      const test = publicationReuseFixture(scenario === "changed receipt");
+      const payload = test.payloads[0];
+      assert(payload, "expected Docker payload fixture");
+      Object.assign(payload, payloadChanges);
+      Object.assign(test.sdk, sdkChanges);
+      if (missing === "npm") {
+        test.api("actions/artifacts/402", { fixtureError: "gh: Not Found (HTTP 404)" });
       }
-    }
-  });
+      if (missing === "sdk") {
+        test.list(
+          "actions/runs/81/artifacts?name=plugin-sdk-api-release-diff-81-1&per_page=100",
+          "artifacts",
+          [],
+        );
+      }
+      const result = test.run("reuse", test.env);
+      if (error) {
+        expectRejected(result, error);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        if (scenario === "retained") {
+          assert(result.outputs.prepared_bundle_json);
+          assert(result.outputs.qualified_preflight_bundle_json);
+          expect(JSON.parse(result.outputs.prepared_bundle_json)).toEqual(test.raw);
+          expect(JSON.parse(result.outputs.qualified_preflight_bundle_json)).toEqual(
+            test.qualified,
+          );
+          expect(result.outputs).toMatchObject({
+            publication_artifacts_reused: "true",
+            npm_run_id: "81",
+            npm_run_attempt: "1",
+            prepared_run_id: "91",
+            prepared_run_attempt: "1",
+            prepared_manifest_sha256: test.docker.preparedManifestSha256,
+          });
+        } else {
+          expect(result.outputs).toEqual({ publication_artifacts_reused: "false" });
+        }
+      }
+    },
+  );
   it.each([
     ["exact active parent", {}, true],
     ["another attempt", { run_attempt: 2 }, false],
@@ -684,42 +680,33 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
   });
 
   it.each([
-    "missing record",
-    "changed request",
-    "record names another producer",
-    "producer attempt regressed",
-    "missing producer",
-  ] as const)("refuses retry reuse with %s", (failure) => {
+    ["missing record", {}, true, "", DISPATCH_MISMATCH],
+    [
+      "changed request",
+      { request: { ...artifactRequest(), sourceSha: "c".repeat(40) } },
+      false,
+      "",
+      DISPATCH_MISMATCH,
+    ],
+    ["record names another producer", { runId: "83" }, false, "", DISPATCH_MISMATCH],
+    ["producer attempt regressed", { runAttempt: "2" }, false, "", "producer run identity changed"],
+    ["missing producer", {}, false, "HTTP 404: producer missing", "HTTP 404: producer missing"],
+  ] as const)("refuses retry reuse with %s", (_name, changes, missing, apiError, error) => {
     const test = fixture();
-    const record = dispatchRecord();
-    if (failure === "changed request") {
-      record.request.sourceSha = "c".repeat(40);
-    }
-    if (failure === "record names another producer") {
-      record.runId = "83";
+    const record = { ...dispatchRecord(), ...changes };
+    if (record.runId === "83") {
       test.runApi("83", { id: 83 });
     }
-    if (failure === "missing record") {
+    if (missing) {
       test.list(`actions/artifacts?name=${DISPATCH_ID}-dispatch&per_page=100`, "artifacts", []);
     } else {
       test.artifact(`${DISPATCH_ID}-dispatch`, "dispatch.json", record, true);
     }
-    if (failure === "producer attempt regressed") {
-      record.runAttempt = "2";
-      test.artifact(`${DISPATCH_ID}-dispatch`, "dispatch.json", record, true);
-      test.runApi("81", { run_attempt: 1 });
-    }
-    if (failure === "missing producer") {
-      test.api("actions/runs/81", { fixtureError: "HTTP 404: producer missing" });
+    if (apiError) {
+      test.api("actions/runs/81", { fixtureError: apiError });
     }
     const result = test.run("resolve", { GITHUB_RUN_ATTEMPT: "2", ARTIFACT_RUN_ID: "99" });
-    const message =
-      failure === "producer attempt regressed"
-        ? "producer run identity changed"
-        : failure === "missing producer"
-          ? "HTTP 404: producer missing"
-          : "Original artifact dispatch is unavailable or changed";
-    expectRejected(result, message);
+    expectRejected(result, error);
   });
 
   it.each([
@@ -757,90 +744,59 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
   });
 
   it.each([
-    "successful raw job",
-    "failed unrelated qualifier",
-    "failed raw job",
-    "wrong raw attempt",
-    "rerun during download",
+    ["successful raw job", {}, {}, false, ""],
+    ["failed unrelated qualifier", {}, { ...completed, conclusion: "failure" }, false, ""],
+    ["failed raw job", { conclusion: "failure" }, {}, false, JOB_MISMATCH],
+    ["wrong raw attempt", { run_attempt: 2 }, {}, false, JOB_MISMATCH],
+    ["rerun during download", {}, {}, true, RUN_MISMATCH],
+  ] as const)("requires an exact completed raw job: %s", (_name, raw, qualifier, rerun, error) => {
+    const test = fixture();
+    Object.assign(test.jobs[0]!, raw);
+    Object.assign(test.jobs[1]!, { status: "in_progress", conclusion: null }, qualifier);
+    test.rawArtifact();
+    const result = test.run("wait", {
+      ARTIFACT_OUTPUT: "raw",
+      FIXTURE_RERUN_DURING_DOWNLOAD: String(rerun),
+    });
+    if (!error) {
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
+      expect(result.outputs.qualified_preflight_bundle_json).toBeUndefined();
+    } else {
+      expectRejected(result, error);
+    }
+  });
+
+  it.each([
+    ["valid", {}, false, false, ""],
+    ["source changed", { sourceSha: "c".repeat(40) }, false, false, RECEIPT_MISMATCH],
+    ["tooling changed", { toolingSha: "c".repeat(40) }, false, false, RECEIPT_MISMATCH],
+    ["attempt changed", { runAttempt: "2" }, false, false, RECEIPT_MISMATCH],
+    ["qualifier failed", {}, true, false, JOB_MISMATCH],
+    ["rerun during download", {}, false, true, RUN_MISMATCH],
   ] as const)(
-    "requires an exact completed raw job while qualification is still active: %s",
-    (outcome) => {
+    "authenticates the terminal qualification receipt: %s",
+    (_name, changes, failed, rerun, error) => {
       const test = fixture();
-      test.jobs[1]!.status = "in_progress";
-      test.jobs[1]!.conclusion = null;
-      if (outcome === "failed raw job") {
-        test.jobs[0]!.conclusion = "failure";
-      }
-      if (outcome === "failed unrelated qualifier") {
-        test.jobs[1]!.status = "completed";
+      test.runApi("81", completed);
+      test.runApi("81/attempts/1", completed);
+      const receipt = Object.assign(test.seal(), changes);
+      if (failed) {
         test.jobs[1]!.conclusion = "failure";
       }
-      if (outcome === "wrong raw attempt") {
-        test.jobs[0]!.run_attempt = 2;
-      }
-      test.rawArtifact();
+      test.receiptArtifact(receipt);
       const result = test.run("wait", {
-        ARTIFACT_OUTPUT: "raw",
-        FIXTURE_RERUN_DURING_DOWNLOAD: String(outcome === "rerun during download"),
+        ARTIFACT_OUTPUT: "receipt",
+        FIXTURE_RERUN_DURING_DOWNLOAD: String(rerun),
       });
-      if (outcome === "successful raw job" || outcome === "failed unrelated qualifier") {
+      if (!error) {
         expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
-        expect(result.outputs.qualified_preflight_bundle_json).toBeUndefined();
+        expect(result.outputs).toEqual(test.outputs);
       } else {
-        expectRejected(
-          result,
-          outcome === "rerun during download"
-            ? "Artifact producer run identity changed"
-            : "unique exact completed producer job",
-        );
+        expectRejected(result, error);
       }
     },
   );
-
-  it.each([
-    "valid",
-    "source changed",
-    "tooling changed",
-    "attempt changed",
-    "qualifier failed",
-    "rerun during download",
-  ] as const)("authenticates the terminal qualification receipt: %s", (outcome) => {
-    const test = fixture();
-    test.runApi("81", completed);
-    test.runApi("81/attempts/1", completed);
-    const receipt = test.seal();
-    if (outcome === "source changed") {
-      receipt.sourceSha = "c".repeat(40);
-    }
-    if (outcome === "tooling changed") {
-      receipt.toolingSha = "c".repeat(40);
-    }
-    if (outcome === "attempt changed") {
-      receipt.runAttempt = "2";
-    }
-    if (outcome === "qualifier failed") {
-      test.jobs[1]!.conclusion = "failure";
-    }
-    test.receiptArtifact(receipt);
-    const result = test.run("wait", {
-      ARTIFACT_OUTPUT: "receipt",
-      FIXTURE_RERUN_DURING_DOWNLOAD: String(outcome === "rerun during download"),
-    });
-    if (outcome === "valid") {
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.outputs).toEqual(test.outputs);
-    } else {
-      expectRejected(
-        result,
-        outcome === "rerun during download"
-          ? "Artifact producer run identity changed"
-          : outcome === "qualifier failed"
-            ? "unique exact completed producer job"
-            : "receipt does not match its exact request and producer attempt",
-      );
-    }
-  });
 
   it.each(["digest changed", "malformed ZIP", "producer failed"] as const)(
     "never exposes raw artifacts after %s",
