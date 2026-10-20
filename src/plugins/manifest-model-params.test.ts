@@ -15,18 +15,28 @@ const manifestRegistry = loadPluginManifestRegistryCore({
   ],
 });
 const metadata = { pluginMetadataSnapshot: { manifestRegistry } };
+const model = (type: string) => ({
+  modelParamsSchema: { type: "object", properties: { priorityScheduling: { type } } },
+});
+const schemaFor = (registry = manifestRegistry) =>
+  buildConfigSchemaCore({ plugins: collectPluginSchemaMetadataCore(registry) });
+const priorityPath = (scope: string, provider = "vllm") =>
+  `${scope}.models.${provider}/model.params.priorityScheduling`;
+type Models = Record<string, { params: Record<string, unknown> }>;
+const agentConfig = (models: Models, agentModels?: Models) => ({
+  agents: {
+    defaults: { models },
+    ...(agentModels && { entries: { main: { models: agentModels } } }),
+  },
+});
 
 describe("provider-owned model params", () => {
   it("rejects invalid vLLM model options in default and per-agent scopes", () => {
     const result = validateConfigObjectRawWithPlugins(
-      {
-        agents: {
-          defaults: { models: { "vllm/model": { params: { priorityScheduling: "true" } } } },
-          entries: {
-            main: { models: { "vllm/model": { params: { priorityScheduling: 1 } } } },
-          },
-        },
-      },
+      agentConfig(
+        { "vllm/model": { params: { priorityScheduling: "true" } } },
+        { "vllm/model": { params: { priorityScheduling: 1 } } },
+      ),
       metadata,
     );
     expect(result.ok).toBe(false);
@@ -51,12 +61,7 @@ describe("provider-owned model params", () => {
       "other/model": { params: { priorityScheduling: "other-provider-contract" } },
     };
     const result = validateConfigObjectRawWithPlugins(
-      {
-        agents: {
-          defaults: { models },
-          entries: { main: { models: { "vllm/interactive": { params: { temperature: 0.5 } } } } },
-        },
-      },
+      agentConfig(models, { "vllm/interactive": { params: { temperature: 0.5 } } }),
       metadata,
     );
     expect(result.ok).toBe(true);
@@ -69,23 +74,16 @@ describe("provider-owned model params", () => {
   });
 
   it("exposes the model schema and server prerequisite only for vLLM model paths", () => {
-    const response = buildConfigSchemaCore({
-      plugins: collectPluginSchemaMetadataCore(manifestRegistry),
-    });
+    const response = schemaFor();
     for (const scope of ["agents.defaults", "agents.entries.main"]) {
-      expect(
-        lookupConfigSchema(response, `${scope}.models.vllm/model.params.priorityScheduling`),
-      ).toMatchObject({
+      expect(lookupConfigSchema(response, priorityPath(scope))).toMatchObject({
         schema: {
           type: "boolean",
           title: "Priority scheduling",
           description: expect.stringContaining("--scheduling-policy priority"),
         },
       });
-      const unrelated = lookupConfigSchema(
-        response,
-        `${scope}.models.other/model.params.priorityScheduling`,
-      );
+      const unrelated = lookupConfigSchema(response, priorityPath(scope, "other"));
       expect(unrelated?.schema.type).toBeUndefined();
       expect(unrelated?.schema.description).toBeUndefined();
       expect(lookupConfigSchema(response, `${scope}.models.vllm/model.alias`)?.schema.type).toBe(
@@ -101,39 +99,22 @@ describe("provider-owned model params", () => {
         {
           ...plugin,
           id: "z-first",
-          providerRequest: {
-            providers: {
-              vllm: {
-                modelParamsSchema: {
-                  type: "object",
-                  properties: { priorityScheduling: { type: "string" } },
-                },
-              },
-            },
-          },
+          providerRequest: { providers: { vllm: model("string") } },
         },
         { ...plugin, id: "a-last" },
       ]),
     };
     const result = validateConfigObjectRawWithPlugins(
-      {
-        agents: {
-          defaults: { models: { "vllm/model": { params: { priorityScheduling: true } } } },
-        },
-      },
+      agentConfig({ "vllm/model": { params: { priorityScheduling: true } } }),
       { pluginMetadataSnapshot: { manifestRegistry: registry } },
     );
     expect(result.ok).toBe(true);
-    const response = buildConfigSchemaCore({ plugins: collectPluginSchemaMetadataCore(registry) });
     expect(
-      lookupConfigSchema(response, "agents.defaults.models.vllm/model.params.priorityScheduling")
-        ?.schema.type,
+      lookupConfigSchema(schemaFor(registry), priorityPath("agents.defaults"))?.schema.type,
     ).toBe("boolean");
     expect(
       buildPluginMetadataProviderFacts(registry.plugins).providerRequests.get("vllm"),
-    ).toMatchObject({
-      modelParamsSchema: { properties: { priorityScheduling: { type: "boolean" } } },
-    });
+    ).toMatchObject(model("boolean"));
   });
 
   it("budgets both default and per-agent copies of provider model schemas", () => {

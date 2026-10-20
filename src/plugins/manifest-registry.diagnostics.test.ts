@@ -17,13 +17,18 @@ function makeTempDir() {
 }
 
 function writeManifest(dir: string, manifest: Record<string, unknown>) {
-  fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), JSON.stringify(manifest), "utf-8");
+  fs.writeFileSync(
+    path.join(dir, "openclaw.plugin.json"),
+    JSON.stringify({ configSchema: { type: "object" }, ...manifest }),
+    "utf-8",
+  );
 }
 
 function createPluginCandidate(
-  params: Pick<PluginCandidate, "idHint" | "rootDir" | "origin">,
+  rootDir: string,
+  origin: PluginCandidate["origin"],
 ): PluginCandidate {
-  return { ...params, source: path.join(params.rootDir, "index.ts") };
+  return { idHint: "external-chat", rootDir, origin, source: path.join(rootDir, "index.ts") };
 }
 
 function expectNoRegistryDiagnosticContains(
@@ -41,11 +46,7 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
   it("reports only selected plugin compatibility diagnostics", () => {
     const globalDir = makeTempDir();
     const configDir = makeTempDir();
-    const manifest = {
-      id: "external-chat",
-      channels: ["external-chat"],
-      configSchema: { type: "object" },
-    };
+    const manifest = { id: "external-chat", channels: ["external-chat"] };
     writeManifest(globalDir, { ...manifest, uiCapabilities: "page" });
     writeManifest(configDir, {
       ...manifest,
@@ -55,16 +56,8 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
 
     const registry = loadPluginManifestRegistryCore({
       candidates: [
-        createPluginCandidate({
-          idHint: "external-chat",
-          rootDir: globalDir,
-          origin: "global",
-        }),
-        createPluginCandidate({
-          idHint: "external-chat",
-          rootDir: configDir,
-          origin: "config",
-        }),
+        createPluginCandidate(globalDir, "global"),
+        createPluginCandidate(configDir, "config"),
       ],
       diagnostics: [globalDir, configDir, globalDir].map((source) => ({
         level: "warn" as const,
@@ -96,13 +89,8 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
     writeManifest(dir, {
       id: "external-chat",
       channels: ["external-chat"],
-      configSchema: { type: "object" },
     });
-    const candidate = createPluginCandidate({
-      idHint: "external-chat",
-      rootDir: dir,
-      origin: "global",
-    });
+    const candidate = createPluginCandidate(dir, "global");
 
     const disabledRegistry = loadPluginManifestRegistryCore({
       config: { plugins: { entries: { "external-chat": { enabled: false } } } },
@@ -118,6 +106,12 @@ describe("loadPluginManifestRegistry compatibility diagnostics", () => {
   });
 });
 
+const authChoice = (provider: string, method = "api-key") => ({
+  provider,
+  method,
+  choiceId: `${provider}-${method}`,
+});
+
 it.each([
   {
     name: "drops non-HTTPS provider auth presentation URLs",
@@ -125,51 +119,30 @@ it.each([
       id: "unsafe-auth-artwork",
       providerAuthChoices: [
         {
-          provider: "unsafe",
-          method: "api-key",
-          choiceId: "unsafe-api-key",
+          ...authChoice("unsafe"),
           icon: "http://example.com/icon.svg",
           website: "javascript:alert(1)",
           docsUrl: "javascript:alert(1)",
         },
         {
-          provider: "oversized",
-          method: "api-key",
-          choiceId: "oversized-api-key",
+          ...authChoice("oversized"),
           icon: `https://example.com/${"a".repeat(2048)}`,
           docsUrl: `https://example.com/${"a".repeat(2048)}`,
         },
       ],
-      configSchema: { type: "object" },
     },
     expected: {
-      providerAuthChoices: [
-        {
-          provider: "unsafe",
-          method: "api-key",
-          choiceId: "unsafe-api-key",
-        },
-        {
-          provider: "oversized",
-          method: "api-key",
-          choiceId: "oversized-api-key",
-        },
-      ],
+      providerAuthChoices: [authChoice("unsafe"), authChoice("oversized")],
     },
   },
   ...[["not-a-platform"], "darwin"].map((platforms) => ({
     name: `preserves unavailable platform restriction ${JSON.stringify(platforms)}`,
     manifest: {
       id: "native-provider",
-      configSchema: { type: "object" },
-      providerAuthChoices: [
-        { provider: "native", method: "local", choiceId: "native-local", platforms },
-      ],
+      providerAuthChoices: [{ ...authChoice("native", "local"), platforms }],
     },
     expected: {
-      providerAuthChoices: [
-        { provider: "native", method: "local", choiceId: "native-local", platforms: [] },
-      ],
+      providerAuthChoices: [{ ...authChoice("native", "local"), platforms: [] }],
     },
   })),
 ])("$name", ({ manifest, expected }) => {

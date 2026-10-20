@@ -26,31 +26,16 @@ describe("manifest owner policy", () => {
       },
     });
 
-    expect(
-      passesManifestOwnerBasePolicy({
-        plugin: { id: "demo" },
-        normalizedConfig,
-      }),
-    ).toBe(true);
-    expect(
-      passesManifestOwnerBasePolicy({
-        plugin: { id: "blocked" },
-        normalizedConfig,
-      }),
-    ).toBe(false);
-    expect(
-      passesManifestOwnerBasePolicy({
-        plugin: { id: "disabled" },
-        normalizedConfig,
-      }),
-    ).toBe(false);
+    const passes = (id: string) =>
+      passesManifestOwnerBasePolicy({ plugin: { id }, normalizedConfig });
+    expect(passes("demo")).toBe(true);
+    expect(passes("blocked")).toBe(false);
+    expect(passes("disabled")).toBe(false);
 
     const explicitlyTrustedDisabledConfig = normalizePluginsConfig({
       enabled: true,
       allow: ["disabled"],
-      entries: {
-        disabled: { enabled: false },
-      },
+      entries: { disabled: { enabled: false } },
     });
     expect(
       passesManifestOwnerBasePolicy({
@@ -58,12 +43,7 @@ describe("manifest owner policy", () => {
         normalizedConfig: explicitlyTrustedDisabledConfig,
       }),
     ).toBe(false);
-    expect(
-      passesManifestOwnerBasePolicy({
-        plugin: { id: "other" },
-        normalizedConfig,
-      }),
-    ).toBe(false);
+    expect(passes("other")).toBe(false);
   });
 
   it("reports base policy block reasons and supports explicit allowlist bypasses", () => {
@@ -71,92 +51,41 @@ describe("manifest owner policy", () => {
       enabled: true,
       allow: ["allowed"],
       deny: ["blocked"],
-      entries: {
-        disabled: { enabled: false },
-      },
+      entries: { disabled: { enabled: false } },
     });
 
-    expect(
+    const block = (id: string, allowRestrictiveAllowlistBypass = false) =>
       resolveManifestOwnerBasePolicyBlock({
-        plugin: { id: "other" },
+        plugin: { id },
         normalizedConfig,
-      }),
-    ).toBe("not-in-allowlist");
-    expect(
-      resolveManifestOwnerBasePolicyBlock({
-        plugin: { id: "other" },
-        normalizedConfig,
-        allowRestrictiveAllowlistBypass: true,
-      }),
-    ).toBeNull();
-    expect(
-      resolveManifestOwnerBasePolicyBlock({
-        plugin: { id: "blocked" },
-        normalizedConfig,
-        allowRestrictiveAllowlistBypass: true,
-      }),
-    ).toBe("blocked-by-denylist");
-    expect(
-      resolveManifestOwnerBasePolicyBlock({
-        plugin: { id: "disabled" },
-        normalizedConfig,
-        allowRestrictiveAllowlistBypass: true,
-      }),
-    ).toBe("plugin-disabled");
+        allowRestrictiveAllowlistBypass,
+      });
+    expect(block("other")).toBe("not-in-allowlist");
+    expect(block("other", true)).toBeNull();
+    expect(block("blocked", true)).toBe("blocked-by-denylist");
+    expect(block("disabled", true)).toBe("plugin-disabled");
   });
 
   it("detects explicit manifest owner trust from allowlist or explicit enablement", () => {
-    const allowlistConfig = normalizePluginsConfig({
-      allow: ["demo"],
-    });
-    const entriesConfig = normalizePluginsConfig({
-      entries: {
-        demo: { enabled: true },
-      },
-    });
-
-    expect(
+    const trusted = (config: Parameters<typeof normalizePluginsConfig>[0]) =>
       hasExplicitManifestOwnerTrust({
         plugin: { id: "demo" },
-        normalizedConfig: allowlistConfig,
-      }),
-    ).toBe(true);
-    expect(
-      hasExplicitManifestOwnerTrust({
-        plugin: { id: "demo" },
-        normalizedConfig: entriesConfig,
-      }),
-    ).toBe(true);
-    expect(
-      hasExplicitManifestOwnerTrust({
-        plugin: { id: "demo" },
-        normalizedConfig: normalizePluginsConfig({}),
-      }),
-    ).toBe(false);
+        normalizedConfig: normalizePluginsConfig(config),
+      });
+    expect(trusted({ allow: ["demo"] })).toBe(true);
+    expect(trusted({ entries: { demo: { enabled: true } } })).toBe(true);
+    expect(trusted({})).toBe(false);
   });
 
   it("uses effective activation state for activated manifest owners", () => {
+    const plugin = { id: "demo", origin: "bundled" as const, enabledByDefault: true };
+    expect(isActivatedManifestOwner({ plugin, normalizedConfig: normalizePluginsConfig({}) })).toBe(
+      true,
+    );
     expect(
       isActivatedManifestOwner({
-        plugin: {
-          id: "demo",
-          origin: "bundled",
-          enabledByDefault: true,
-        },
-        normalizedConfig: normalizePluginsConfig({}),
-      }),
-    ).toBe(true);
-
-    expect(
-      isActivatedManifestOwner({
-        plugin: {
-          id: "demo",
-          origin: "bundled",
-          enabledByDefault: true,
-        },
-        normalizedConfig: normalizePluginsConfig({
-          enabled: false,
-        }),
+        plugin,
+        normalizedConfig: normalizePluginsConfig({ enabled: false }),
       }),
     ).toBe(false);
   });
