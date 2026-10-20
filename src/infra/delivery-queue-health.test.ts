@@ -36,6 +36,25 @@ describe("delivery queue health publication", () => {
   let stateDir: string;
   let tmpDir: string;
   const QUEUE = "test-q";
+  type Seed = Parameters<typeof seedDeliveryQueueEntry>[0];
+  const seed = (
+    entry: Pick<Seed["entry"], "id"> & Partial<Seed["entry"]>,
+    status: Seed["status"] = "pending",
+    queueName = QUEUE,
+  ) =>
+    seedDeliveryQueueEntry({
+      queueName,
+      // Terminalization compares serialized entries, including property order.
+      entry: { id: entry.id, enqueuedAt: 1, retryCount: 0, ...entry },
+      status,
+      stateDir,
+    });
+  const load = (id: string) => loadDeliveryQueueEntry(QUEUE, id, stateDir, "all");
+  const count = () => countFailedDeliveryQueueEntries(stateDir);
+  const touchConfig = () =>
+    writeConfigMachineStateAsync("config.lastTouchedAt", "changed", {
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
   const openTestDatabase = () =>
     openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
 
@@ -53,26 +72,19 @@ describe("delivery queue health publication", () => {
   it.each(["pending", "failed"] as const)(
     "reuses %s queue health across idle reads and unrelated writer receipts",
     async (status) => {
-      seedDeliveryQueueEntry({
-        queueName: QUEUE,
-        entry: { id: "health", enqueuedAt: 1, retryCount: 0 },
-        status,
-        stateDir,
-      });
-      const expected = await countFailedDeliveryQueueEntries(stateDir);
+      seed({ id: "health" }, status);
+      const expected = await count();
       expect(expected).toEqual(
         status === "failed"
           ? [{ queueName: QUEUE, count: 1, oldestFailedAt: expect.any(Number) }]
           : [],
       );
-      await writeConfigMachineStateAsync("config.lastTouchedAt", "changed", {
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-      });
+      await touchConfig();
       const requests = vi.spyOn(Worker.prototype, "postMessage");
       const observer = observeParentSqlite();
       try {
-        expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual(expected);
-        expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual(expected);
+        expect(await count()).toEqual(expected);
+        expect(await count()).toEqual(expected);
         expect(requests).not.toHaveBeenCalled();
         expect(observer.counts).toEqual(emptySqliteCounts());
       } finally {
@@ -93,7 +105,7 @@ describe("delivery queue health publication", () => {
       preparationOwnerId: "health-owner",
       preparationLeaseExpiresAt: Date.now() + 60_000,
     };
-    seedDeliveryQueueEntry({ queueName, entry, stateDir });
+    seed(entry, "pending", queueName);
     const context = captureDeliveryQueueStateContext(stateDir);
     expect(await countFailedDeliveryQueueEntries(stateDir, context)).toEqual([]);
     await executeDeliveryQueueOperation(context, undefined, {
@@ -116,20 +128,9 @@ describe("delivery queue health publication", () => {
         ["health-old", now - 7_200_000],
         ["health-new", now],
       ] as const) {
-        seedDeliveryQueueEntry({
-          queueName: QUEUE,
-          entry: {
-            id,
-            enqueuedAt,
-            retryCount: 0,
-            recoveryState: "completed_bounded",
-            completionRetention,
-          },
-          status: "failed",
-          stateDir,
-        });
+        seed({ id, enqueuedAt, recoveryState: "completed_bounded", completionRetention }, "failed");
       }
-      expect(await countFailedDeliveryQueueEntries(stateDir)).toMatchObject([{ count: 2 }]);
+      expect(await count()).toMatchObject([{ count: 2 }]);
       if (policy === "age") {
         await pruneExpiredDeliveryQueueTombstones(stateDir);
       } else {
@@ -141,48 +142,41 @@ describe("delivery queue health publication", () => {
           }),
         );
       }
-      expect(await countFailedDeliveryQueueEntries(stateDir)).toMatchObject([{ count: 1 }]);
+      expect(await count()).toMatchObject([{ count: 1 }]);
     },
   );
 
   it("does not publish rolled-back health or retain health across database replacement", async () => {
     const entry = { id: "health-rollback", enqueuedAt: 1, retryCount: 0 };
-    seedDeliveryQueueEntry({ queueName: QUEUE, entry, status: "failed", stateDir });
-    const expected = await countFailedDeliveryQueueEntries(stateDir);
+    seed(entry, "failed");
+    const expected = await count();
     const database = openTestDatabase();
     expect(() =>
       runSqliteImmediateTransactionSync(database.db, () => {
-        seedDeliveryQueueEntry({ queueName: QUEUE, entry, status: "pending", stateDir });
+        seed(entry);
         expect(countFailedDeliveryQueueEntriesInDatabase(database)).toEqual([]);
         throw new Error("rollback health");
       }),
     ).toThrow("rollback health");
-    expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual(expected);
+    expect(await count()).toEqual(expected);
     await closeOpenClawStateDatabaseAsync();
     fs.rmSync(stateDir, { recursive: true });
     fs.mkdirSync(stateDir);
-    expect(await countFailedDeliveryQueueEntries(stateDir)).toEqual([]);
+    expect(await count()).toEqual([]);
   });
 
   it("skips empty tombstone sweeps until a producer commits a terminal row", async () => {
     await pruneExpiredDeliveryQueueTombstones(stateDir);
-    await writeConfigMachineStateAsync("config.lastTouchedAt", "changed", {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    await touchConfig();
     const requests = vi.spyOn(Worker.prototype, "postMessage");
     try {
       await pruneExpiredDeliveryQueueTombstones(stateDir);
       await pruneExpiredDeliveryQueueTombstones(stateDir);
       expect(requests).not.toHaveBeenCalled();
 
-      seedDeliveryQueueEntry({
-        queueName: QUEUE,
-        entry: { id: "expired-ordinary", enqueuedAt: Date.now() - 31 * 86_400_000, retryCount: 0 },
-        status: "completed",
-        stateDir,
-      });
+      seed({ id: "expired-ordinary", enqueuedAt: Date.now() - 31 * 86_400_000 }, "completed");
       await pruneExpiredDeliveryQueueTombstones(stateDir);
-      expect(loadDeliveryQueueEntry(QUEUE, "expired-ordinary", stateDir, "all")).toBeNull();
+      expect(load("expired-ordinary")).toBeNull();
 
       await pruneExpiredDeliveryQueueTombstones(stateDir);
       requests.mockClear();
@@ -205,7 +199,7 @@ describe("delivery queue health publication", () => {
     };
     try {
       pruneExpiredDeliveryQueueTombstonesInDatabase(database);
-      seedDeliveryQueueEntry({ queueName: QUEUE, entry, stateDir });
+      seed(entry);
       expect(
         terminalizePendingDeliveryQueueEntryInDatabase(
           database,
@@ -221,10 +215,10 @@ describe("delivery queue health publication", () => {
       } finally {
         observer.restore();
       }
-      expect(loadDeliveryQueueEntry(QUEUE, entry.id, stateDir, "all")).not.toBeNull();
+      expect(load(entry.id)).not.toBeNull();
       now.mockReturnValue(1_060_001);
       pruneExpiredDeliveryQueueTombstonesInDatabase(database);
-      expect(loadDeliveryQueueEntry(QUEUE, entry.id, stateDir, "all")).toBeNull();
+      expect(load(entry.id)).toBeNull();
     } finally {
       now.mockRestore();
     }
@@ -237,7 +231,7 @@ describe("delivery queue health publication", () => {
       enqueuedAt: Date.now() - 31 * 86_400_000,
       retryCount: 0,
     };
-    seedDeliveryQueueEntry({ queueName: QUEUE, entry, status: "completed", stateDir });
+    seed(entry, "completed");
     expect(() =>
       runSqliteImmediateTransactionSync(database.db, () => {
         pruneExpiredDeliveryQueueTombstonesInDatabase(database);
@@ -248,7 +242,7 @@ describe("delivery queue health publication", () => {
 
     pruneExpiredDeliveryQueueTombstonesInDatabase(database);
 
-    expect(loadDeliveryQueueEntry(QUEUE, entry.id, stateDir, "all")).toBeNull();
+    expect(load(entry.id)).toBeNull();
   });
 
   it("keeps very long bounded retention exact without summing timestamps in JavaScript", () => {
@@ -262,21 +256,18 @@ describe("delivery queue health publication", () => {
       ["future", Date.now()],
       ["past", 1],
     ] as const) {
-      seedDeliveryQueueEntry({
-        queueName: QUEUE,
-        entry: {
+      seed(
+        {
           id: `expiry-huge-${id}`,
           enqueuedAt,
-          retryCount: 0,
           recoveryState: "completed_bounded",
           completionRetention,
         },
-        status: "completed",
-        stateDir,
-      });
+        "completed",
+      );
     }
     pruneExpiredDeliveryQueueTombstonesInDatabase(database);
-    expect(loadDeliveryQueueEntry(QUEUE, "expiry-huge-future", stateDir, "all")).not.toBeNull();
-    expect(loadDeliveryQueueEntry(QUEUE, "expiry-huge-past", stateDir, "all")).not.toBeNull();
+    expect(load("expiry-huge-future")).not.toBeNull();
+    expect(load("expiry-huge-past")).not.toBeNull();
   });
 });

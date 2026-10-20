@@ -9,6 +9,35 @@ import { ensureDeviceToken } from "./device-pairing-tokens.js";
 import { getPairedDevice, listDevicePairing, requestDevicePairing } from "./device-pairing.js";
 
 const roots = createSuiteTempRootTracker({ prefix: "openclaw-pairing-approval-policy-" });
+const operator = { deviceId: "browser", role: "operator", scopes: ["operator.read"] };
+const requestOperator = (baseDir: string) =>
+  requestDevicePairing({ ...operator, publicKey: "browser-key" }, baseDir);
+const issueToken = (baseDir: string, generation: string, isIssuanceCurrent?: () => boolean) =>
+  ensureDeviceToken({
+    ...operator,
+    baseDir,
+    issuer: { kind: "shared-gateway-auth", generation },
+    isIssuanceCurrent,
+  });
+
+async function withHeldPairingLock(work: (unlock: () => Promise<void>) => Promise<void>) {
+  const locked = createDeferredCore();
+  const release = createDeferredCore();
+  const holding = withDevicePairingLock(async () => {
+    locked.resolve();
+    await release.promise;
+  });
+  await locked.promise;
+  try {
+    await work(async () => {
+      release.resolve();
+      await holding;
+    });
+  } finally {
+    release.resolve();
+    await holding;
+  }
+}
 
 beforeAll(async () => {
   await roots.setup();
@@ -21,82 +50,35 @@ afterAll(async () => {
 describe("automatic pairing policy at commit", () => {
   it("preserves the current token when a stale handshake waits for the issuance lock", async () => {
     const baseDir = await roots.make();
-    const pending = await requestDevicePairing(
-      {
-        deviceId: "browser",
-        publicKey: "browser-key",
-        role: "operator",
-        scopes: ["operator.read"],
-      },
-      baseDir,
-    );
+    const pending = await requestOperator(baseDir);
     await approveDevicePairing(
       pending.request.requestId,
       { callerScopes: ["operator.read"] },
       baseDir,
     );
-    const original = await ensureDeviceToken({
-      deviceId: "browser",
-      role: "operator",
-      scopes: ["operator.read"],
-      issuer: { kind: "shared-gateway-auth", generation: "current" },
-      baseDir,
-    });
+    const original = await issueToken(baseDir, "current");
     assert(original);
     let allowed = true;
-    const locked = createDeferredCore();
-    const release = createDeferredCore();
-    const holding = withDevicePairingLock(async () => {
-      locked.resolve();
-      await release.promise;
-    });
-    await locked.promise;
-    try {
-      const issuing = ensureDeviceToken({
-        deviceId: "browser",
-        role: "operator",
-        scopes: ["operator.read"],
-        issuer: { kind: "shared-gateway-auth", generation: "stale" },
-        isIssuanceCurrent: () => allowed,
-        baseDir,
-      });
+    await withHeldPairingLock(async (unlock) => {
+      const issuing = issueToken(baseDir, "stale", () => allowed);
       allowed = false;
-      release.resolve();
-      await holding;
+      await unlock();
       expect(Boolean(await issuing)).toBe(false);
       const current = await getPairedDevice("browser", baseDir);
       const currentToken = current?.tokens?.operator;
       assert(currentToken);
       expect(currentToken.token === original.token).toBe(true);
       expect(currentToken.issuer?.generation).toBe("current");
-    } finally {
-      release.resolve();
-      await holding;
-    }
+    });
   });
 
   it.each(["owner", "bootstrap"] as const)(
     "keeps %s approval pending when its policy is revoked while waiting for the lock",
     async (lane) => {
       const baseDir = await roots.make();
-      const pending = await requestDevicePairing(
-        {
-          deviceId: "browser",
-          publicKey: "browser-key",
-          role: "operator",
-          scopes: ["operator.read"],
-        },
-        baseDir,
-      );
+      const pending = await requestOperator(baseDir);
       let allowed = true;
       const options = { isApprovalCurrent: () => allowed };
-      const locked = createDeferredCore();
-      const release = createDeferredCore();
-      const holding = withDevicePairingLock(async () => {
-        locked.resolve();
-        await release.promise;
-      });
-      await locked.promise;
       const approve = () =>
         lane === "bootstrap"
           ? approveBootstrapDevicePairing(
@@ -110,11 +92,10 @@ describe("automatic pairing policy at commit", () => {
               { ...options, callerScopes: ["operator.read"] },
               baseDir,
             );
-      try {
+      await withHeldPairingLock(async (unlock) => {
         const approval = approve();
         allowed = false;
-        release.resolve();
-        await holding;
+        await unlock();
 
         await expect(approval).resolves.toEqual({
           status: "forbidden",
@@ -127,10 +108,7 @@ describe("automatic pairing policy at commit", () => {
 
         allowed = true;
         await expect(approve()).resolves.toMatchObject({ status: "approved" });
-      } finally {
-        release.resolve();
-        await holding;
-      }
+      });
     },
   );
 });
