@@ -2,12 +2,6 @@ import { onTestFinished, vi } from "vitest";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
-import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
-import {
-  SubagentLifecycleController,
-  type SubagentLifecycleOptions,
-} from "./subagent-registry-lifecycle.js";
 import * as subagentMemory from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { createSubagentRegistrySweeper } from "./subagent-registry-sweeper.js";
@@ -49,36 +43,6 @@ export function createArchivedSubagentSweeperRun(
   };
 }
 
-export function createSubagentSweeperController(
-  runs: Map<string, SubagentRunRecord>,
-  overrides: Partial<SubagentLifecycleOptions> = {},
-) {
-  const controller = new SubagentLifecycleController({
-    runs,
-    resumedRuns: new Set(),
-    subagentAnnounceTimeoutMs: 1_000,
-    getRuntimeConfig: () => ({}),
-    clearPendingLifecycleError: vi.fn(),
-    countPendingDescendantRuns: vi.fn(async () => 0),
-    getLatestRunForChildSession: vi.fn(() => null),
-    suppressAnnounceForSteerRestart: vi.fn(() => false),
-    shouldEmitEndedHookForRun: vi.fn(() => false),
-    emitSubagentEndedHookForRun: vi.fn(async () => {}),
-    emitSubagentProgressEndedForRun: vi.fn(async () => {}),
-    notifyContextEngineSubagentEnded: vi.fn(async () => {}),
-    retireSupersededRun: vi.fn(async () => {}),
-    resumeSubagentRun: vi.fn(),
-    confirmProvisionalKill: vi.fn(),
-    callGateway: vi.fn(),
-    captureSubagentCompletionReply: vi.fn(),
-    runSubagentAnnounceFlow: vi.fn(),
-    maybeWakeRequesterAfterAllChildrenSettled: vi.fn(),
-    warn: vi.fn(),
-    ...overrides,
-  });
-  return controller;
-}
-
 export function createSubagentSweeperHarness(
   runtime: { current?: GatewayRecoveryRuntime },
   entry = createSubagentSweeperRun(),
@@ -113,7 +77,7 @@ export function createSubagentSweeperHarness(
   );
   const completeSubagentRunWithRecovery = vi.fn();
   const completeCleanupBookkeeping = vi.fn<
-    SubagentLifecycleController["completeCleanupBookkeeping"]
+    Parameters<typeof createSubagentRegistrySweeper>[0]["completeCleanupBookkeeping"]
   >(async (params) => {
     if (params.isCurrent && !params.isCurrent()) {
       return;
@@ -157,67 +121,40 @@ export function createSubagentSweeperHarness(
             requesterSessionKey,
       ),
     );
-  const controller = createSubagentSweeperController(runs, {
-    emitSubagentEndedHookForRun,
-    notifyContextEngineSubagentEnded,
-    callGateway,
-    warn,
-  });
-  vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockImplementation(
-    startSubagentAnnounceCleanupFlow,
-  );
-  vi.spyOn(controller, "completeCleanupBookkeeping").mockImplementation(completeCleanupBookkeeping);
-  vi.spyOn(controller, "resumeRequesterSettleWake").mockImplementation(resumeRequesterSettleWake);
-  vi.spyOn(controller, "resumePendingRequesterSettlements").mockReturnValue(false);
-  vi.spyOn(controller, "isCleanupOwnerCurrent").mockImplementation(
-    (selected) =>
-      isSameSubagentRunOwner(runs.get(selected.runId), selected) || !runs.has(selected.runId),
-  );
-  vi.spyOn(controller, "isTerminalTailActive").mockReturnValue(false);
-  vi.spyOn(controller, "sessionEffectsHostCurrent").mockImplementation(
-    (selected) => selected.execution.suppressSessionEffects !== true,
-  );
-  vi.spyOn(controller, "shouldSuppressSessionEffects").mockImplementation(
-    async (selected) => selected.execution.suppressSessionEffects === true,
-  );
-  const contextCleanup = createSubagentRegistryContextCleanup({
-    isEndedHookOwnerCurrent: () => true,
-  });
-  vi.spyOn(contextCleanup, "cleanupCollectorLaunchResources").mockResolvedValue(true);
-  vi.spyOn(contextCleanup, "runContextEngineSubagentEnded").mockImplementation(
-    runContextEngineSubagentEnded,
-  );
-  const completion = createSubagentRegistryCompletionRuntime({
-    runs,
-    resumed: controller.options.resumedRuns,
-    retryTimers: new Set(),
-    completeSubagentRun: vi.fn(),
-    scheduleSweep: vi.fn(),
-    resumeRun: vi.fn(),
-  });
-  vi.spyOn(completion, "completeSubagentRunWithRecovery").mockImplementation(
-    completeSubagentRunWithRecovery,
-  );
-  vi.spyOn(completion, "finalizeInterruptedSubagentRun").mockImplementation(
-    finalizeInterruptedSubagentRun,
-  );
-  vi.spyOn(completion.pendingLifecycle, "clearTimeout").mockImplementation(vi.fn());
-  vi.spyOn(completion.pendingLifecycle, "sweepExpired").mockImplementation(vi.fn());
   const sweeper = createSubagentRegistrySweeper({
-    controller,
-    contextCleanup,
-    completion,
+    runs,
+    resumedRuns: new Set(),
+    clearPendingLifecycleError: vi.fn(),
+    clearPendingLifecycleTimeout: vi.fn(),
+    sweepPendingLifecycle: vi.fn(),
+    completeSubagentRunWithRecovery,
     getGatewayRecoveryRuntime: () => runtime.current,
+    finalizeInterruptedSubagentRun,
+    startSubagentAnnounceCleanupFlow,
+    completeCleanupBookkeeping,
+    resumeRequesterSettleWake,
+    resumePendingRequesterSettlements: () => false,
+    isCleanupOwnerCurrent: (selected) =>
+      isSameSubagentRunOwner(runs.get(selected.runId), selected) || !runs.has(selected.runId),
+    isTerminalTailActive: () => false,
+    sessionEffectsHostCurrent: (selected) => selected.execution.suppressSessionEffects !== true,
+    shouldSuppressSessionEffects: async (selected) =>
+      selected.execution.suppressSessionEffects === true,
     discardTerminalDelivery,
+    shouldEmitEndedHookForRun: vi.fn(() => false),
+    emitSubagentEndedHookForRun,
+    callGateway,
+    cleanupCollectorLaunchResources: vi.fn(async () => true),
+    runContextEngineSubagentEnded,
+    notifyContextEngineSubagentEnded,
+    retireSupersededRun: vi.fn(),
     retireObligations: vi.fn(async () => {}),
     getRunsForChildSession: childLookup,
     getRunsForCollectorGroup: collectorLookup,
+    warn,
   });
   onTestFinished(async () => {
     await sweeper.reset();
-    completion.pendingLifecycle.clearAll();
-    contextCleanup.reset();
-    controller.clearRuntimeState();
     childLookup.mockRestore();
     collectorLookup.mockRestore();
     worker.mockRestore();
@@ -225,7 +162,6 @@ export function createSubagentSweeperHarness(
   return {
     entry,
     runs,
-    controller,
     callGateway,
     completeCleanupBookkeeping,
     completeSubagentRunWithRecovery,

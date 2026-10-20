@@ -155,7 +155,7 @@ export abstract class AgentSessionInspection extends AgentSessionPrompting {
     const effectiveLevel = availableLevels.includes(level)
       ? level
       : model
-        ? (clampThinkingLevel(model, level) as ThinkingLevel)
+        ? clampThinkingLevel(model, level)
         : "off";
     const previousLevel = this.agent.state.thinkingLevel;
     if (effectiveLevel === previousLevel) {

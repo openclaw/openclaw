@@ -169,6 +169,7 @@ const {
   finalizeResumedAnnounceGiveUpInBackground,
   refreshFrozenResultFromSession,
   resumeRequesterSettleWake,
+  resumePendingRequesterSettlements,
   settleRequesterTurnAfterSessionSpawns,
   startSubagentAnnounceCleanupFlow,
 } = subagentLifecycleController;
@@ -353,10 +354,13 @@ async function confirmAfterSettlements(
       runId: current.runId,
       entry: current,
       now: Date.now(),
-      controller: subagentLifecycleController,
+      runs: subagentRuns,
       completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
+      retireSupersededRun: retireSupersededSubagentRun,
       retireObligations: retireKilledSubagentObligations,
+      startSubagentAnnounceCleanupFlow,
       getRunsForChildSession: getSubagentRunsForChildSession,
+      warn,
     });
   }, "subagents:kill-confirm").catch((error: unknown) => {
     // The sweeper reconciles a kill whose confirmation could not run here.
@@ -557,14 +561,32 @@ function retireSupersededSubagentRun(
 }
 
 const subagentSweeper = createSubagentRegistrySweeper({
-  controller: subagentLifecycleController,
-  contextCleanup,
-  completion: completionRuntime,
+  ...contextCleanup,
+  runs: subagentRuns,
+  resumedRuns,
+  clearPendingLifecycleError,
+  clearPendingLifecycleTimeout,
+  sweepPendingLifecycle: (now) => pendingLifecycle.sweepExpired(now),
+  completeSubagentRunWithRecovery: completionRuntime.completeSubagentRunWithRecovery,
   getGatewayRecoveryRuntime: () => activeGatewayContextResolver?.()?.recoveryRuntime,
+  finalizeInterruptedSubagentRun: completionRuntime.finalizeInterruptedSubagentRun,
+  startSubagentAnnounceCleanupFlow,
+  completeCleanupBookkeeping,
+  resumeRequesterSettleWake,
+  resumePendingRequesterSettlements,
+  isCleanupOwnerCurrent: subagentLifecycleController.isCleanupOwnerCurrent,
+  isTerminalTailActive: subagentLifecycleController.isTerminalTailActive,
+  sessionEffectsHostCurrent: (entry) =>
+    subagentLifecycleController.sessionEffectsHostCurrent(entry),
+  shouldSuppressSessionEffects: (entry, effects) =>
+    subagentLifecycleController.shouldSuppressSessionEffects(entry, effects),
   discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
+  callGateway: callSubagentRegistryGateway,
+  retireSupersededRun: retireSupersededSubagentRun,
   retireObligations: retireKilledSubagentObligations,
   getRunsForChildSession: getSubagentRunsForChildSession,
   getRunsForCollectorGroup: getSubagentRunsForCollectorGroup,
+  warn,
 });
 
 const subagentListener = createSubagentRegistryListener({

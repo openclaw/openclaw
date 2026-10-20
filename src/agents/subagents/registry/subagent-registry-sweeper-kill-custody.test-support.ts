@@ -4,7 +4,6 @@ import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import {
-  createSubagentSweeperController,
   mockSubagentSweeperChildLookup,
   createSubagentSweeperRun as run,
 } from "./subagent-registry-sweeper.test-support.js";
@@ -52,14 +51,15 @@ export function registerSubagentSweepKillCustodyTests(killSessionEntry: {
       });
       const completeSubagentRunWithRecovery = vi.fn();
       const retireSupersededRun = vi.fn();
-      const controller = createSubagentSweeperController(runs, { retireSupersededRun });
       const pending = reconcileDurableSubagentKillIntent({
         runId: entry.runId,
         entry,
-        controller,
+        runs,
         getRunsForChildSession: childLookup,
         retireObligations: vi.fn(async () => {}),
         completeSubagentRunWithRecovery,
+        retireSupersededRun,
+        warn: vi.fn(),
       });
 
       try {
@@ -82,7 +82,6 @@ export function registerSubagentSweepKillCustodyTests(killSessionEntry: {
       } finally {
         prepared.resolve();
         await pending;
-        controller.clearRuntimeState();
         childLookup.mockRestore();
         vi.mocked(prepareSubagentKillSession).mockImplementation(prepare);
       }

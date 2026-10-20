@@ -1,8 +1,5 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage, createHook } from "node:async_hooks";
-import { createSubagentRegistryCompletionRuntime } from "../agents/subagents/registry/subagent-registry-completion-runtime.js";
-import { createSubagentRegistryContextCleanup } from "../agents/subagents/registry/subagent-registry-context-cleanup.js";
-import { SubagentLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
 import { createSubagentRegistrySweeper } from "../agents/subagents/registry/subagent-registry-sweeper.js";
 import { collectForRetentionCheck } from "../test-utils/retention.js";
 import { GatewayScheduler } from "./gateway-scheduler.js";
@@ -53,63 +50,41 @@ type TimerFixture = {
 };
 
 function sweeperFixture(): TimerFixture {
-  const controller = new SubagentLifecycleController({
+  const sweeper = createSubagentRegistrySweeper({
     runs: new Map(),
     resumedRuns: new Set(),
-    subagentAnnounceTimeoutMs: 1_000,
-    getRuntimeConfig: unexpected,
     clearPendingLifecycleError: unexpected,
-    countPendingDescendantRuns: unexpected,
-    getLatestRunForChildSession: unexpected,
-    suppressAnnounceForSteerRestart: unexpected,
+    clearPendingLifecycleTimeout: unexpected,
+    sweepPendingLifecycle: unexpected,
+    completeSubagentRunWithRecovery: unexpected,
+    getGatewayRecoveryRuntime: unexpected,
+    finalizeInterruptedSubagentRun: unexpected,
+    startSubagentAnnounceCleanupFlow: unexpected,
+    completeCleanupBookkeeping: unexpected,
+    resumeRequesterSettleWake: unexpected,
+    resumePendingRequesterSettlements: unexpected,
+    isCleanupOwnerCurrent: unexpected,
+    isTerminalTailActive: unexpected,
+    sessionEffectsHostCurrent: unexpected,
+    shouldSuppressSessionEffects: unexpected,
+    discardTerminalDelivery: unexpected,
     shouldEmitEndedHookForRun: unexpected,
     emitSubagentEndedHookForRun: unexpected,
-    emitSubagentProgressEndedForRun: unexpected,
+    callGateway: unexpected,
+    cleanupCollectorLaunchResources: unexpected,
+    runContextEngineSubagentEnded: unexpected,
     notifyContextEngineSubagentEnded: unexpected,
     retireSupersededRun: unexpected,
-    resumeSubagentRun: unexpected,
-    confirmProvisionalKill: unexpected,
-    callGateway: unexpected,
-    captureSubagentCompletionReply: unexpected,
-    runSubagentAnnounceFlow: unexpected,
-    maybeWakeRequesterAfterAllChildrenSettled: unexpected,
-    warn: unexpected,
-  });
-  const completion = createSubagentRegistryCompletionRuntime({
-    runs: controller.options.runs,
-    resumed: controller.options.resumedRuns,
-    retryTimers: new Set(),
-    completeSubagentRun: unexpected,
-    scheduleSweep: unexpected,
-    resumeRun: unexpected,
-  });
-  const contextCleanup = createSubagentRegistryContextCleanup({
-    isEndedHookOwnerCurrent: unexpected,
-  });
-  const sweeper = createSubagentRegistrySweeper({
-    controller,
-    completion,
-    contextCleanup,
-    getGatewayRecoveryRuntime: unexpected,
-    discardTerminalDelivery: unexpected,
     retireObligations: unexpected,
     getRunsForChildSession: unexpected,
     getRunsForCollectorGroup: unexpected,
+    warn: unexpected,
   });
   let references: WeakRef<object>[] = [];
   const timer = observeTimer(() => {
     references = invokeCaller(sweeper.start);
   });
-  return {
-    references,
-    timer,
-    close: async () => {
-      await sweeper.reset();
-      completion.pendingLifecycle.clearAll();
-      contextCleanup.reset();
-      controller.clearRuntimeState();
-    },
-  };
+  return { references, timer, close: () => sweeper.reset() };
 }
 
 function schedulerFixture(): TimerFixture {

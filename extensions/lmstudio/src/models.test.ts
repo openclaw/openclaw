@@ -42,22 +42,18 @@ describe("lmstudio-models", () => {
   const discover = (
     fetchMock: unknown,
     options: Partial<Parameters<typeof discoverLmstudioModels>[0]> = {},
-  ) => {
-    vi.stubGlobal("fetch", asFetch(fetchMock));
-    return discoverLmstudioModels({
+  ) =>
+    discoverLmstudioModels({
       baseUrl,
       apiKey: "lm-token",
       quiet: true,
+      fetchImpl: asFetch(fetchMock),
       ...options,
     });
-  };
   const fetchModels = (
     fetchMock: unknown,
     options: Partial<Parameters<typeof fetchLmstudioModels>[0]> = {},
-  ) => {
-    vi.stubGlobal("fetch", asFetch(fetchMock));
-    return fetchLmstudioModels({ baseUrl, ...options });
-  };
+  ) => fetchLmstudioModels({ baseUrl, fetchImpl: asFetch(fetchMock), ...options });
   const catalog = (models: unknown[]) =>
     vi.fn(async (_url: string | URL, _init?: RequestInit) => Response.json({ models }));
   const parseBody = (init: RequestInit | undefined): unknown => {

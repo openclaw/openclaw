@@ -610,7 +610,7 @@ describe("subagent registry recovery scheduling", () => {
       .mocked(prepareSubagentKillSession)
       .withImplementation(actual.prepareSubagentKillSession, async () => {
         await withSweeperSessionState(async (state) => {
-          const { entry, runs, controller, completeSubagentRunWithRecovery } = createHarness({});
+          const { entry, runs, completeSubagentRunWithRecovery } = createHarness({});
           entry.childSessionKey = "global";
           entry.childAgentId = "research";
           entry.childSessionIdentity = {
@@ -669,10 +669,12 @@ describe("subagent registry recovery scheduling", () => {
               await reconcileDurableSubagentKillIntent({
                 runId: entry.runId,
                 entry,
-                controller,
+                runs,
                 getRunsForChildSession: getSubagentRunsForChildSession,
                 retireObligations: vi.fn(async () => {}),
                 completeSubagentRunWithRecovery,
+                retireSupersededRun: vi.fn(),
+                warn: vi.fn(),
               }),
             ).toBe(true);
             sql.expectIdle();
