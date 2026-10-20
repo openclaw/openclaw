@@ -20,6 +20,21 @@ export function registerGoalAutomaticContinuationCases(
   goalStart: (message: string) => Record<string, unknown>,
   userMessages: () => readonly unknown[],
 ) {
+  const result = (
+    sessionId: string,
+    text: string,
+    aborted?: boolean,
+  ): Awaited<ReturnType<typeof executeEmbeddedAgent>> => ({
+    payloads: aborted ? [] : [{ text }],
+    meta: {
+      durationMs: 0,
+      stopReason: aborted ? "aborted" : "end_turn",
+      ...(aborted === undefined ? {} : { aborted }),
+      agentMeta: { sessionId, provider: "test", model: "test", usage: { input: 1, output: 1 } },
+    },
+  });
+  const expectDrained = async () =>
+    expect((await waitForGatewayActiveWork(30_000)).drained).toBe(true);
   it("nudges consecutive normal final turns until the same Goal is complete", async () => {
     const completed = createDeferred();
     runEmbeddedAgent.mockImplementation(async (params) => {
@@ -30,25 +45,12 @@ export function registerGoalAutomaticContinuationCases(
         }));
         completed.resolve();
       }
-      return {
-        payloads: [{ text: calls === 3 ? "Verified the goal." : "More work remains." }],
-        meta: {
-          durationMs: 0,
-          stopReason: "end_turn",
-          agentMeta: {
-            sessionId: params.sessionId,
-            provider: "test",
-            model: "test",
-            usage: { input: 1, output: 1 },
-          },
-        },
-      };
+      return result(params.sessionId, calls === 3 ? "Verified the goal." : "More work remains.");
     });
     const started = await rpc("chat.send", goalStart("Finish a three-turn checklist"));
     expect(started.mock.calls[0]?.[0]).toBe(true);
     await completed.promise;
-    const drained = await waitForGatewayActiveWork(30_000);
-    expect(drained.drained).toBe(true);
+    await expectDrained();
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
     expect(runEmbeddedAgent.mock.calls[1]?.[0].prompt).toContain("Advance");
     expect(runEmbeddedAgent.mock.calls[2]?.[0].prompt).toContain("Advance");
@@ -105,21 +107,11 @@ export function registerGoalAutomaticContinuationCases(
           params.replyOperation?.detachBackend(backend);
         }
       }
-      const aborted = continuationSignal?.aborted === true;
-      return {
-        payloads: aborted ? [] : [{ text: "The goal is not complete yet." }],
-        meta: {
-          durationMs: 0,
-          stopReason: aborted ? "aborted" : "end_turn",
-          aborted,
-          agentMeta: {
-            sessionId: params.sessionId,
-            provider: "test",
-            model: "test",
-            usage: { input: 1, output: 1 },
-          },
-        },
-      };
+      return result(
+        params.sessionId,
+        "The goal is not complete yet.",
+        continuationSignal?.aborted === true,
+      );
     });
     const started = await rpc("chat.send", goalStart("Keep working until stopped"));
     expect(started.mock.calls[0]?.[0]).toBe(true);
@@ -136,8 +128,7 @@ export function registerGoalAutomaticContinuationCases(
       }
       released.resolve();
     }
-    const drained = await waitForGatewayActiveWork(30_000);
-    expect(drained.drained).toBe(true);
+    await expectDrained();
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
     expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
   });

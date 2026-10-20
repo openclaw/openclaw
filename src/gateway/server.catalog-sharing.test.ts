@@ -37,6 +37,8 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
   const publishHeldHosts: Array<() => void> = [];
   const providerRuns: Promise<SessionCatalogHost[]>[] = [];
   const requests: Promise<CatalogResponse>[] = [];
+  const expectCatalog = (response: unknown, id: string, hosts: SessionCatalogHost[] = []) =>
+    expect(response).toMatchObject({ ok: true, payload: { catalogs: [{ id, hosts }] } });
   let heldCalls = 0;
   const registry = createEmptyPluginRegistry();
   for (const catalogId of [heldCatalogId, completedCatalogId]) {
@@ -92,14 +94,8 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
         (frame) => frame.type === "res" && frame.id === id,
       );
       requests.push(response);
-      socket.send(
-        JSON.stringify({
-          type: "req",
-          id,
-          method: "sessions.catalog.list",
-          params: { catalogId, search, progressId },
-        }),
-      );
+      const params = { catalogId, search, progressId };
+      socket.send(JSON.stringify({ type: "req", id, method: "sessions.catalog.list", params }));
       return response;
     };
     const leader = request(heldCatalogId, "held", "leader-progress");
@@ -110,10 +106,7 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
       }),
     ]);
     for (let index = 0; index < 128; index += 1) {
-      expect(await request(completedCatalogId, `completed-${index}`)).toMatchObject({
-        ok: true,
-        payload: { catalogs: [{ id: completedCatalogId, hosts: [] }] },
-      });
+      expectCatalog(await request(completedCatalogId, `completed-${index}`), completedCatalogId);
     }
     followerHost = onceMessage(
       socket,
@@ -127,10 +120,7 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
       request(completedCatalogId, "after-follower"),
       followerHost,
     ]);
-    expect(barrier).toMatchObject({
-      ok: true,
-      payload: { catalogs: [{ id: completedCatalogId, hosts: [] }] },
-    });
+    expectCatalog(barrier, completedCatalogId);
     expect(progress).toMatchObject({
       payload: {
         progressId: "follower-progress",
@@ -139,10 +129,7 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
     });
     unblock();
     for (const response of await Promise.all([leader, follower])) {
-      expect(response).toMatchObject({
-        ok: true,
-        payload: { catalogs: [{ id: heldCatalogId, hosts: [host] }] },
-      });
+      expectCatalog(response, heldCatalogId, [host]);
     }
     expect(heldCalls).toBe(1);
   } finally {

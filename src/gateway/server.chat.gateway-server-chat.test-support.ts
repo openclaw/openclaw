@@ -7,6 +7,7 @@ import {
   getActiveGatewayRootWorkHolders,
 } from "../process/gateway-work-admission.js";
 import { drainOpenClawAgentWriteQueuesForTest } from "../state/openclaw-agent-write-admission.test-support.js";
+import { expectObjectFields as expectRecordFields } from "../test-utils/mock-call-assertions.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createMainChatSessionStoreFixture } from "./server.chat-session-store.test-support.js";
@@ -59,27 +60,16 @@ export function installGatewayServerChatTestSuite(
   afterAll(mainSessionStore.dispose);
 
   const socket = () => expectDefined(ws, "connected Gateway socket");
-  const expectRecordFields = (value: unknown, expected: Record<string, unknown>) => {
-    if (!value || typeof value !== "object") {
-      throw new Error("Expected record");
-    }
-    const actual = value as Record<string, unknown>;
-    for (const [key, expectedValue] of Object.entries(expected)) {
-      expect(actual[key]).toEqual(expectedValue);
-    }
-    return actual;
-  };
+  const expectRunStatus = (res: Awaited<ReturnType<typeof rpcReq>>, status: string) =>
+    expect(res).toMatchObject({ ok: true, payload: { status } });
   const expectAgentWaitTimeout = (res: Awaited<ReturnType<typeof rpcReq>>, error?: string) => {
-    expect(res.ok).toBe(true);
-    expect(res.payload?.status).toBe("timeout");
+    expectRunStatus(res, "timeout");
     if (error !== undefined) {
-      expect(res.payload?.error).toBe(error);
-      expect(res.payload?.pendingError).toBe(true);
+      expect(res.payload).toMatchObject({ error, pendingError: true });
     }
   };
   const expectAgentWaitStartedAt = (res: Awaited<ReturnType<typeof rpcReq>>, startedAt: number) => {
-    expect(res.ok).toBe(true);
-    expect(res.payload?.status).toBe("ok");
+    expectRunStatus(res, "ok");
     expect(res.payload?.startedAt).toBe(startedAt);
   };
   const sendChatAndExpectStarted = async (runId: string, message = "/context list") => {
@@ -88,14 +78,12 @@ export function installGatewayServerChatTestSuite(
       message,
       idempotencyKey: runId,
     });
-    expect(res.ok).toBe(true);
-    expect(res.payload?.status).toBe("started");
+    expectRunStatus(res, "started");
     return res;
   };
   const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000, target = socket()) => {
     const res = await rpcReq(target, "agent.wait", { runId, timeoutMs });
-    expect(res.ok).toBe(true);
-    expect(res.payload?.status, JSON.stringify(res.payload)).toBe("ok");
+    expectRunStatus(res, "ok");
     return res;
   };
   const waitForAgentRunDrained = async (runId: string, target = socket()) => {
@@ -113,18 +101,11 @@ export function installGatewayServerChatTestSuite(
     const blockedReply = createDeferred();
     mockGetReplyFromConfigOnce(async (_ctx, opts) => {
       await new Promise<void>((resolve) => {
-        let settled = false;
-        const finish = () => {
-          if (!settled) {
-            settled = true;
-            resolve();
-          }
-        };
-        void blockedReply.promise.then(finish);
+        void blockedReply.promise.then(resolve);
         if (opts?.abortSignal?.aborted) {
-          finish();
+          resolve();
         } else {
-          opts?.abortSignal?.addEventListener("abort", finish, { once: true });
+          opts?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
         }
       });
       return undefined;

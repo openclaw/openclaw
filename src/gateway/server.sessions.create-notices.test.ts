@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test } from "vitest";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -8,6 +9,7 @@ import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
 } from "./local-user-ingress.js";
+import type { GatewayClient } from "./server-methods/types.js";
 import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
@@ -19,40 +21,37 @@ const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 test("sessions.create preserves creation and notices after an unknown signal outcome", async () => {
   const { storePath } = await createSessionStoreDir();
   const profileId = ensureProfileForEmail("session-creator@example.test").id;
+  const profile = { profileId, displayName: "Test Operator" };
   const client = {
     connect: { scopes: ["operator.read", "operator.write"] },
-    authenticatedUserProfile: {
-      profileId,
-      displayName: "Test Operator",
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: { ...profile, hasAvatar: false, updatedAt: 1 },
   };
   attachGatewayLocalUserIngress(
     client,
     prepareGatewayLocalUserIngress({
       authenticatedUserExpected: true,
-      profile: { profileId, displayName: "Test Operator" },
+      profile,
       isLocalClient: false,
     }),
   );
+  const create = (
+    params: Record<string, unknown>,
+    creator: Parameters<typeof directSessionReq>[2] = { client: client as never },
+  ) => directSessionReq<{ key?: string; entry?: SessionEntry }>("sessions.create", params, creator);
+  const syntheticClient = (
+    sessionCreation?: NonNullable<GatewayClient["internal"]>["sessionCreation"],
+  ) => ({
+    client: {
+      connect: { scopes: ["operator.write"] },
+      internal: { syntheticClient: true, sessionCreation },
+    } as never,
+  });
   const signal = loseSessionSignalAcknowledgement();
-  const created = await directSessionReq<{
-    key?: string;
-    entry?: {
-      createdVia?: string;
-      createdActor?: { type: string; id?: string };
-      createdAt?: number;
-    };
-  }>(
-    "sessions.create",
-    {
-      agentId: "main",
-      key: "agent:main:dashboard:created-signal",
-      label: "Investigate build failure",
-    },
-    { client: client as never },
-  ).finally(signal.restore);
+  const created = await create({
+    agentId: "main",
+    key: "agent:main:dashboard:created-signal",
+    label: "Investigate build failure",
+  }).finally(signal.restore);
 
   expect(created.ok).toBe(true);
   expect(signal.attempts()).toBe(1);
@@ -81,7 +80,7 @@ test("sessions.create preserves creation and notices after an unknown signal out
   expect(notices[0]).toContain(key);
   expect(notices[0]).toContain("operator");
 
-  const existing = await directSessionReq("sessions.create", { key }, { client: client as never });
+  const existing = await create({ key });
   expect(existing.ok).toBe(true);
   expect(peekSystemEvents("agent:main:main")).toEqual([]);
   expect((await listSessionStateEventsSince(key, "main", 0, 20)).events).toHaveLength(1);
@@ -90,21 +89,9 @@ test("sessions.create preserves creation and notices after an unknown signal out
     { key },
     { client: client as never },
   );
-  expect(described.ok).toBe(true);
-  expect(described.payload?.session).toMatchObject({ key });
+  expect(described).toMatchObject({ ok: true, payload: { session: { key } } });
 
-  const synthetic = await directSessionReq<{
-    entry?: { createdVia?: string; createdActor?: unknown; createdAt?: number };
-  }>(
-    "sessions.create",
-    { agentId: "main" },
-    {
-      client: {
-        connect: { scopes: ["operator.write"] },
-        internal: { syntheticClient: true },
-      } as never,
-    },
-  );
+  const synthetic = await create({ agentId: "main" }, syntheticClient());
   expect(synthetic.payload?.entry).toMatchObject({
     createdVia: "operator",
     createdAt: expect.any(Number),
@@ -144,26 +131,9 @@ test("sessions.create preserves creation and notices after an unknown signal out
   ] as const) {
     // Trusted creation hints retain causal attribution separately from required isolation.
     // A selected human isolation identity alone does not prove a human initiated the work.
-    const hinted = await directSessionReq<{
-      key?: string;
-      entry?: { createdVia?: string; createdActor?: unknown; sandbox?: "required" };
-    }>(
-      "sessions.create",
+    const hinted = await create(
       { agentId: "main" },
-      {
-        client: {
-          connect: { scopes: ["operator.write"] },
-          internal: {
-            syntheticClient: true,
-            sessionCreation: {
-              via: "spawn",
-              actor,
-              sandbox,
-              requesterSessionKey: "agent:main:main",
-            },
-          },
-        } as never,
-      },
+      syntheticClient({ via: "spawn", actor, sandbox, requesterSessionKey: "agent:main:main" }),
     );
     expect(hinted.ok, JSON.stringify(hinted.error)).toBe(true);
     expect(hinted.payload?.entry).toMatchObject({

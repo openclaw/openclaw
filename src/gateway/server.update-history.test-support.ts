@@ -22,20 +22,24 @@ export function registerGatewayUpdateHistoryTests(
     turns: Promise<void>[];
   },
 ) {
+  const connect = () =>
+    connectGatewayClient({
+      url: `ws://127.0.0.1:${getPort()}`,
+      token: "secret",
+      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      mode: GATEWAY_CLIENT_MODES.CLI,
+      clientVersion: "1.0.0",
+      scopes: ["operator.admin"],
+    });
+  const atAge = (minutes: number) =>
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() - minutes * 60_000);
   describe("gateway update history", () => {
     test.each(["signal", "service-stop"] as const)(
       "reads progress on an existing authenticated connection during %s",
       async (phase) => {
-        const client = await connectGatewayClient({
-          url: `ws://127.0.0.1:${getPort()}`,
-          token: "secret",
-          clientName: GATEWAY_CLIENT_NAMES.CLI,
-          mode: GATEWAY_CLIENT_MODES.CLI,
-          clientVersion: "1.0.0",
-          scopes: ["operator.admin"],
-        });
+        const client = await connect();
         try {
-          const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 25 * 60 * 60_000);
+          const clock = atAge(25 * 60);
           const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
           clock.mockRestore();
           if (phase === "signal") {
@@ -60,19 +64,9 @@ export function registerGatewayUpdateHistoryTests(
     test.each(["fresh", "expired", "retained"] as const)(
       "keeps authenticated update history responsive (%s)",
       async (shape) => {
-        const port = getPort();
-        const client = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
-          token: "secret",
-          clientName: GATEWAY_CLIENT_NAMES.CLI,
-          mode: GATEWAY_CLIENT_MODES.CLI,
-          clientVersion: "1.0.0",
-          scopes: ["operator.admin"],
-        });
+        const client = await connect();
         try {
-          const clock = vi
-            .spyOn(Date, "now")
-            .mockReturnValue(Date.now() - (shape === "fresh" ? 0 : 25 * 60 * 60_000));
+          const clock = atAge(shape === "fresh" ? 0 : 25 * 60);
           const run = createUpdateRun({ trigger: "api" });
           if (shape === "retained") {
             const from = {
@@ -100,9 +94,10 @@ export function registerGatewayUpdateHistoryTests(
               }
               expect(isOpenClawStateDatabaseOpen(databasePath)).toBe(cache === "warm");
               const before = readonlyPreparation.prepared.length;
+              const get = method === "update.runs.get";
               const result = await client.request(
                 method,
-                method === "update.runs.get" ? { runId: run.runId } : { limit: 1 },
+                get ? { runId: run.runId } : { limit: 1 },
               );
               await Promise.all(readonlyPreparation.turns);
               const expected =
@@ -113,9 +108,7 @@ export function registerGatewayUpdateHistoryTests(
                       reason: "legacy-driver-expired",
                     })
                   : run;
-              expect(result).toEqual(
-                method === "update.runs.get" ? { run: expected } : { runs: [expected] },
-              );
+              expect(result).toEqual(get ? { run: expected } : { runs: [expected] });
               const prepared = readonlyPreparation.prepared
                 .slice(before)
                 .filter((entry) => entry.pathname === databasePath);
