@@ -263,6 +263,49 @@ afterEach(async () => {
 });
 
 describe("public ClawHub Claw catalog", () => {
+  it("preserves curated Featured order across official and community Claws", async () => {
+    mocks.list.mockResolvedValue({
+      items: [
+        { ...communityPackage(), featuredAt: 20 },
+        { ...officialPackage(), featuredAt: 10 },
+      ],
+      nextCursor: null,
+    });
+
+    const entries = await listClawHubClaws({ featured: true });
+
+    expect(entries.map((entry) => entry.packageName)).toEqual([
+      "@alice/research-briefing",
+      packageName,
+    ]);
+    expect(mocks.list).toHaveBeenCalledWith(
+      expect.objectContaining({ family: "claw", featured: true }),
+    );
+  });
+
+  it("ranks every category Claw by installs without an Official boost", async () => {
+    mocks.list
+      .mockResolvedValueOnce({
+        items: [{ ...officialPackage(), stats: { installs: 1 } }],
+        nextCursor: "next",
+      })
+      .mockResolvedValueOnce({
+        items: [{ ...communityPackage(), stats: { installs: 20 } }],
+        nextCursor: null,
+      });
+
+    const entries = await listClawHubClaws({ category: "research" });
+
+    expect(entries.map((entry) => [entry.packageName, entry.installs])).toEqual([
+      ["@alice/research-briefing", 20],
+      [packageName, 1],
+    ]);
+    expect(mocks.list).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ family: "claw", category: "research" }),
+    );
+  });
+
   it("uses the current publisher badge without hiding a former official Claw", async () => {
     const revoked = { ...officialPackage(), ownerOfficial: false };
     mocks.list.mockResolvedValue({ items: [revoked], nextCursor: null });

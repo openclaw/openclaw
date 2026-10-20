@@ -28,6 +28,9 @@ const enAgentsHome = {
   clawsCatalog: {
     explore: "Explore Claws",
     exploreDescription: "Purpose-built agents for your team.",
+    featured: "Featured",
+    browseAll: "Browse all",
+    categories: "Claw categories",
     title: "Explore Claws",
     search: "Search Claws",
     searchPlaceholder: "Search Claws",
