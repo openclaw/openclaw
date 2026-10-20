@@ -1,4 +1,3 @@
-// Coverage for normalizing assistant replay content before provider requests.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import { convertMessages } from "../../../packages/ai/src/openai-completions-messages.js";
@@ -37,25 +36,42 @@ function bedrockAssistant(
   stopReason: "error" | "stop" | "toolUse" | "length" = "error",
   usageOverrides: Record<string, number> = {},
 ): AgentMessage {
-  // Bedrock fixtures cover providers that can return empty or legacy-shaped
-  // assistant content during streamed turns.
   return {
     role: "assistant",
     content,
     api: "bedrock-converse-stream",
     provider: "amazon-bedrock",
     model: "anthropic.claude-3-haiku-20240307-v1:0",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      ...usageOverrides,
-    },
+    usage: { ...createZeroUsageFixture(), ...usageOverrides },
     stopReason,
     timestamp: 0,
+  } as unknown as AgentMessage;
+}
+
+const textBlock = (text: string) => ({ type: "text" as const, text });
+const thinkingBlock = (thinking: string, thinkingSignature: string) => ({
+  type: "thinking" as const,
+  thinking,
+  thinkingSignature,
+});
+const providerMessages = (messages: AgentMessage[]) =>
+  messages.filter(
+    (message) =>
+      message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+  );
+function completionsModel() {
+  return makeProviderModelFixture<"openai-completions">({
+    id: "test-model",
+    api: "openai-completions",
+    provider: "custom-openai-compatible",
+    baseUrl: "https://proxy.example/v1",
+  });
+}
+function lateMediaUser(media: Record<string, unknown>[], content: unknown = ""): AgentMessage {
+  return {
+    role: "user",
+    content,
+    __openclaw: { lateMedia: true, media },
   } as unknown as AgentMessage;
 }
 
@@ -63,10 +79,18 @@ function userMessage(text: string): AgentMessage {
   return { role: "user", content: text, timestamp: 0 } as unknown as AgentMessage;
 }
 
+function expectReplayDrop(before: string, dropped: AgentMessage | AgentMessage[], after: string) {
+  const kept = [userMessage(before), userMessage(after)];
+  const messages = [kept[0]!, ...[dropped].flat(), ...kept.slice(1)];
+  const result = normalizeAssistantReplayContent(messages);
+  expect(result).toEqual(kept);
+  return result;
+}
+
 function openclawTranscriptAssistant(model: "delivery-mirror" | "gateway-injected"): AgentMessage {
   return {
     role: "assistant",
-    content: [{ type: "text", text: "channel mirror" }],
+    content: [textBlock("channel mirror")],
     api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
     provider: "openclaw",
     model,
@@ -78,12 +102,7 @@ function openclawTranscriptAssistant(model: "delivery-mirror" | "gateway-injecte
 
 describe("normalizeAssistantReplayContent", () => {
   it("reconstructs hidden tool calls, results, and internal answers in the provider request", () => {
-    const model = makeProviderModelFixture<"openai-completions">({
-      id: "test-model",
-      api: "openai-completions",
-      provider: "custom-openai-compatible",
-      baseUrl: "https://proxy.example/v1",
-    });
+    const model = completionsModel();
     const toolCall = { type: "toolCall" as const, id: "call_hidden", name: "read", arguments: {} };
     const hiddenCall = projectAgentHarnessTranscriptMessageForDisplay({
       hidden: true,
@@ -102,7 +121,7 @@ describe("normalizeAssistantReplayContent", () => {
         api: model.api,
         provider: model.provider,
         model: model.id,
-        content: [{ type: "text", text: "Internal result: file is ready." }],
+        content: [textBlock("Internal result: file is ready.")],
         stopReason: "stop",
         errorMessage: undefined,
       }),
@@ -114,7 +133,7 @@ describe("normalizeAssistantReplayContent", () => {
         role: "toolResult",
         toolCallId: toolCall.id,
         toolName: toolCall.name,
-        content: [{ type: "text", text: "file contents" }],
+        content: [textBlock("file contents")],
         isError: false,
         timestamp: 1,
       },
@@ -125,12 +144,7 @@ describe("normalizeAssistantReplayContent", () => {
       model,
       {
         tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
-        messages: normalizeAssistantReplayContent(messages).filter(
-          (message) =>
-            message.role === "user" ||
-            message.role === "assistant" ||
-            message.role === "toolResult",
-        ),
+        messages: providerMessages(normalizeAssistantReplayContent(messages)),
       },
       resolveOpenAICompletionsCompat(model),
     );
@@ -166,11 +180,7 @@ describe("normalizeAssistantReplayContent", () => {
         baseUrl: "https://api.anthropic.com",
         reasoning: true,
       });
-      const thinking = {
-        type: "thinking" as const,
-        thinking: "tool planning",
-        thinkingSignature: "signed-tool-planning",
-      };
+      const thinking = thinkingBlock("tool planning", "signed-tool-planning");
       const completed = { type: "toolCall" as const, id: "done", name: "read", arguments: {} };
       const unfinished = { ...completed, id: "unfinished" };
       const source: Extract<AgentMessage, { role: "assistant" }> = {
@@ -178,7 +188,7 @@ describe("normalizeAssistantReplayContent", () => {
         api: model.api,
         provider: model.provider,
         model: model.id,
-        content: [thinking, { type: "text", text: "partial response" }, completed, unfinished],
+        content: [thinking, textBlock("partial response"), completed, unfinished],
         usage: createZeroUsageFixture(),
         stopReason,
         timestamp: 1,
@@ -189,26 +199,18 @@ describe("normalizeAssistantReplayContent", () => {
           role: "toolResult",
           toolCallId: completed.id,
           toolName: completed.name,
-          content: [{ type: "text", text: "file contents" }],
+          content: [textBlock("file contents")],
           isError: false,
           timestamp: 2,
         },
       ];
       const normalized = normalizeAssistantReplayContent(messages);
-      const replay = transformMessages(
-        normalized.filter(
-          (message) =>
-            message.role === "assistant" ||
-            message.role === "user" ||
-            message.role === "toolResult",
-        ),
-        model,
-      );
+      const replay = transformMessages(providerMessages(normalized), model);
       expect(replay).toHaveLength(2);
       expect(replay[0]).toMatchObject({ content: [thinking, completed], stopReason: "toolUse" });
       expect(source.content).toEqual([
         thinking,
-        { type: "text", text: "partial response" },
+        textBlock("partial response"),
         completed,
         unfinished,
       ]);
@@ -218,15 +220,10 @@ describe("normalizeAssistantReplayContent", () => {
   it.each([false, true])(
     "replays speech-only assistant content without changing the transcript (empty block: %s)",
     (emptyBlock) => {
-      const model = makeProviderModelFixture<"openai-completions">({
-        id: "test-model",
-        api: "openai-completions",
-        provider: "custom-openai-compatible",
-        baseUrl: "https://proxy.example/v1",
-      });
+      const model = completionsModel();
       const speech = makeAssistantMessageFixture({
         content: [
-          { type: "thinking", thinking: "plan the reply", thinkingSignature: "reasoning_content" },
+          thinkingBlock("plan the reply", "reasoning_content"),
           ...(emptyBlock ? [{ type: "text" as const, text: "" }] : []),
         ],
         stopReason: "stop",
@@ -247,12 +244,7 @@ describe("normalizeAssistantReplayContent", () => {
       const converted = convertMessages(
         model,
         {
-          messages: normalized.filter(
-            (message) =>
-              message.role === "user" ||
-              message.role === "assistant" ||
-              message.role === "toolResult",
-          ),
+          messages: providerMessages(normalized),
         },
         resolveOpenAICompletionsCompat(model),
       );
@@ -261,7 +253,7 @@ describe("normalizeAssistantReplayContent", () => {
       expect(converted[1]?.content).toBe("Done, it is sent.");
       const written = makeAssistantMessageFixture({
         ...speech,
-        content: [{ type: "text", text: "Written answer" }],
+        content: [textBlock("Written answer")],
       });
       const withText = [userMessage("send it"), written];
       expect(normalizeAssistantReplayContent(withText)).toBe(withText);
@@ -272,7 +264,7 @@ describe("normalizeAssistantReplayContent", () => {
   it("removes persisted attachment display blocks before model replay", () => {
     const damaged = bedrockAssistant(
       [
-        { type: "text", text: "Slides ready" },
+        textBlock("Slides ready"),
         { type: "attachment", attachment: { label: "slides.pptx" } },
         { type: "attachment_error", attachment: { label: "missing.txt" } },
       ],
@@ -281,7 +273,7 @@ describe("normalizeAssistantReplayContent", () => {
     );
 
     expect(normalizeAssistantReplayContent([damaged, userMessage("continue")])).toEqual([
-      { ...damaged, content: [{ type: "text", text: "Slides ready" }] },
+      { ...damaged, content: [textBlock("Slides ready")] },
       userMessage("continue"),
     ]);
   });
@@ -294,29 +286,10 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("keeps bare marked late-media turns alive while rejecting whitespace-only media fields", () => {
-    const blankString = {
-      role: "user",
-      content: "",
-      __openclaw: { lateMedia: true, media: [{ path: "/tmp/late.png" }] },
-    } as unknown as AgentMessage;
-    const blankArray = {
-      role: "user",
-      content: [{ type: "text", text: "  " }],
-      __openclaw: { lateMedia: true, media: [{}, { path: "/tmp/late-array.png" }] },
-    } as unknown as AgentMessage;
-    const whitespaceOnlyPath = {
-      role: "user",
-      content: "",
-      __openclaw: { lateMedia: true, media: [{ path: "   " }] },
-    } as unknown as AgentMessage;
-    const urlOnly = {
-      role: "user",
-      content: "",
-      __openclaw: {
-        lateMedia: true,
-        media: [{ url: "https://example.test/late.png", kind: "image" }],
-      },
-    } as unknown as AgentMessage;
+    const blankString = lateMediaUser([{ path: "/tmp/late.png" }]);
+    const blankArray = lateMediaUser([{}, { path: "/tmp/late-array.png" }], [textBlock("  ")]);
+    const whitespaceOnlyPath = lateMediaUser([{ path: "   " }]);
+    const urlOnly = lateMediaUser([{ url: "https://example.test/late.png", kind: "image" }]);
     const legacyOnly = {
       role: "user",
       content: "",
@@ -339,7 +312,7 @@ describe("normalizeAssistantReplayContent", () => {
     "drops failed attempt content $content before a later reply and across user turns",
     async ({ content }) => {
       const before = userMessage("hello");
-      const reply = bedrockAssistant([{ type: "text", text: "recovered" }], "stop");
+      const reply = bedrockAssistant([textBlock("recovered")], "stop");
       const after = userMessage("continue");
       expect(
         normalizeAssistantReplayContent([
@@ -392,10 +365,7 @@ describe("normalizeAssistantReplayContent", () => {
             : [
                 {
                   ...after,
-                  content: [
-                    { type: "text", text: "hello" },
-                    { type: "text", text: "continue" },
-                  ],
+                  content: [textBlock("hello"), textBlock("continue")],
                 },
               ],
         );
@@ -416,7 +386,7 @@ describe("normalizeAssistantReplayContent", () => {
     const messages = [
       {
         role: "user",
-        content: [{ type: "text", text: "   " }, imageBlock],
+        content: [textBlock("   "), imageBlock],
         timestamp: 0,
       } as unknown as AgentMessage,
     ];
@@ -426,11 +396,7 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("preserves nonzero-usage silent-reply turns (stopReason=stop, content=[]) untouched", () => {
-    // run.shared-integration.test.ts treats `stopReason:"stop"` + `content:[]`
-    // as a legitimate NO_REPLY / silent-reply, NOT a crash. Substituting the
-    // failure sentinel here would inject a fabricated "[assistant turn failed
-    // before producing content]" into the next provider request and change
-    // model behavior even though no failure occurred.
+    // A billed silent reply is not a failed attempt; never fabricate replay text.
     const silentStop = bedrockAssistant([], "stop", { input: 100, totalTokens: 100 });
     const messages = [userMessage("hello"), silentStop];
     const out = normalizeAssistantReplayContent(messages);
@@ -441,12 +407,7 @@ describe("normalizeAssistantReplayContent", () => {
   it.each([{ content: [] }, { content: null }])(
     "drops mid-turn zero-usage empty stop content $content",
     ({ content }) => {
-      const messages = [
-        userMessage("hello"),
-        bedrockAssistant(content, "stop"),
-        userMessage("retry"),
-      ];
-      expect(normalizeAssistantReplayContent(messages)).toEqual([messages[0], messages[2]]);
+      expectReplayDrop("hello", bedrockAssistant(content, "stop"), "retry");
     },
   );
 
@@ -472,10 +433,7 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("preserves empty content with non-error stopReasons (toolUse, length) untouched", () => {
-    // Boundary lock: only `stopReason:"error"` should trip the sentinel
-    // substitution. `toolUse` and `length` are reachable in practice when a
-    // provider terminates a turn before a content block is emitted, and
-    // rewriting them as a failure would lie about what happened.
+    // Empty tool/length states are real provider turns, not failed attempts.
     const toolUse = bedrockAssistant([], "toolUse");
     const length = bedrockAssistant([], "length");
     const messages = [userMessage("hello"), toolUse, length];
@@ -487,66 +445,39 @@ describe("normalizeAssistantReplayContent", () => {
 
   it("drops reasoning-only length turns before provider replay", () => {
     const reasoningOnly = bedrockAssistant(
-      [
-        {
-          type: "thinking",
-          thinking: "partial hidden reasoning",
-          thinkingSignature: "partial-signature",
-        },
-        { type: "text", text: "  " },
-      ],
+      [thinkingBlock("partial hidden reasoning", "partial-signature"), textBlock("  ")],
       "length",
       { output: 42, totalTokens: 42 },
     );
-    const messages = [userMessage("before"), reasoningOnly, userMessage("continue")];
-
-    const out = normalizeAssistantReplayContent(messages);
-
-    expect(out).toEqual([messages[0], messages[2]]);
+    const out = expectReplayDrop("before", reasoningOnly, "continue");
     expect(JSON.stringify(out)).not.toContain("partial-signature");
   });
 
   it("drops length turns that become reasoning-only after content normalization", () => {
-    const messages = [
-      userMessage("before"),
-      bedrockAssistant(
-        [
-          {
-            type: "thinking",
-            thinking: "partial hidden reasoning",
-            thinkingSignature: "partial-signature",
-          },
-          { type: "text", text: "NO_REPLY" },
-        ],
-        "length",
-      ),
-      {
-        ...bedrockAssistant([], "length"),
-        content: {
-          type: "thinking",
-          thinking: "partial object reasoning",
-          thinkingSignature: "partial-object-signature",
+    expectReplayDrop(
+      "before",
+      [
+        bedrockAssistant(
+          [thinkingBlock("partial hidden reasoning", "partial-signature"), textBlock("NO_REPLY")],
+          "length",
+        ),
+        {
+          ...bedrockAssistant([], "length"),
+          content: thinkingBlock("partial object reasoning", "partial-object-signature"),
         },
-      },
-      userMessage("continue"),
-    ] as AgentMessage[];
-
-    const out = normalizeAssistantReplayContent(messages);
-
-    expect(out).toEqual([messages[0], messages[3]]);
+      ] as AgentMessage[],
+      "continue",
+    );
   });
 
   it("preserves length turns with visible text or tool calls", () => {
     const visible = bedrockAssistant(
-      [
-        { type: "thinking", thinking: "partial reasoning", thinkingSignature: "sig_visible" },
-        { type: "text", text: "partial visible answer" },
-      ],
+      [thinkingBlock("partial reasoning", "sig_visible"), textBlock("partial visible answer")],
       "length",
     );
     const toolCall = bedrockAssistant(
       [
-        { type: "thinking", thinking: "partial reasoning", thinkingSignature: "sig_tool" },
+        thinkingBlock("partial reasoning", "sig_tool"),
         { type: "toolCall", id: "call_1", name: "read", arguments: {} },
       ],
       "length",
@@ -562,11 +493,11 @@ describe("normalizeAssistantReplayContent", () => {
     const messages = [userMessage("hi"), bedrockAssistant("plain string content")];
     const out = normalizeAssistantReplayContent(messages);
     const wrapped = out[1] as AgentMessage & { content: { type: string; text: string }[] };
-    expect(wrapped.content).toEqual([{ type: "text", text: "plain string content" }]);
+    expect(wrapped.content).toEqual([textBlock("plain string content")]);
   });
 
   it("wraps legacy object assistant content as a single block (regression)", () => {
-    const block = { type: "text", text: "plain object content" };
+    const block = textBlock("plain object content");
     const messages = [userMessage("hi"), bedrockAssistant(block, "stop")];
     const out = normalizeAssistantReplayContent(messages);
     const wrapped = out[1] as AgentMessage & { content: unknown[] };
@@ -581,45 +512,38 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("drops metadata-only legacy string assistant content from replay", () => {
-    const messages = [
-      userMessage("first"),
+    const out = expectReplayDrop(
+      "first",
       bedrockAssistant(COPIED_INBOUND_METADATA_ONLY_TEXT),
-      userMessage("second"),
-    ];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).toEqual([messages[0], messages[2]]);
+      "second",
+    );
     expect(JSON.stringify(out)).not.toContain("assistant copied inbound metadata omitted");
   });
 
   it.each(["NO_REPLY", "no_reply", "No_Reply"])(
     "drops standalone %s assistant replay text",
     (text) => {
-      const messages = [userMessage("first"), bedrockAssistant(text), userMessage("second")];
-      const out = normalizeAssistantReplayContent(messages);
-      expect(out).toEqual([messages[0], messages[2]]);
+      expectReplayDrop("first", bedrockAssistant(text), "second");
     },
   );
 
   it.each([
-    [
-      "directly",
-      "NO_REPLY",
-      { type: "thinking", thinking: "yield reasoning", thinkingSignature: "sig_yield" },
-    ],
+    ["directly", "NO_REPLY", thinkingBlock("yield reasoning", "sig_yield")],
     ["with redacted reasoning", "NO_REPLY", { type: "redacted_thinking", data: "redacted-yield" }],
   ])("drops thinking-only silent replies %s (#99620)", (_label, text, reasoning) => {
-    const messages = [
-      userMessage("hi"),
-      bedrockAssistant([reasoning, { type: "text", text }], "stop"),
-    ];
-
-    expect(normalizeAssistantReplayContent(messages)).toStrictEqual([messages[0]]);
+    const kept = userMessage("hi");
+    expect(
+      normalizeAssistantReplayContent([
+        kept,
+        bedrockAssistant([reasoning, { type: "text", text }], "stop"),
+      ]),
+    ).toStrictEqual([kept]);
   });
 
   it("drops silent thinking residue before a follow-up tool turn (#99620)", () => {
     const nextToolTurn = bedrockAssistant(
       [
-        { type: "thinking", thinking: "next reasoning", thinkingSignature: "sig_next" },
+        thinkingBlock("next reasoning", "sig_next"),
         { type: "toolCall", id: "call_1", name: "exec", arguments: {} },
       ],
       "toolUse",
@@ -627,10 +551,7 @@ describe("normalizeAssistantReplayContent", () => {
     const messages = [
       userMessage("hi"),
       bedrockAssistant(
-        [
-          { type: "thinking", thinking: "yield reasoning", thinkingSignature: "sig_yield" },
-          { type: "text", text: "NO_REPLY" },
-        ],
+        [thinkingBlock("yield reasoning", "sig_yield"), textBlock("NO_REPLY")],
         "stop",
       ),
       nextToolTurn,
@@ -649,11 +570,7 @@ describe("normalizeAssistantReplayContent", () => {
     const messages = [
       userMessage("hi"),
       bedrockAssistant(
-        [
-          { type: "thinking", thinking: "useful reasoning", thinkingSignature: "sig" },
-          companion,
-          { type: "text", text: "NO_REPLY" },
-        ],
+        [thinkingBlock("useful reasoning", "sig"), companion, textBlock("NO_REPLY")],
         "stop",
       ),
     ];
@@ -661,9 +578,9 @@ describe("normalizeAssistantReplayContent", () => {
     const out = normalizeAssistantReplayContent(messages);
     expect(out).toHaveLength(2);
     expect((out[1] as { content: unknown[] }).content).toEqual([
-      { type: "thinking", thinking: "useful reasoning", thinkingSignature: "sig" },
+      thinkingBlock("useful reasoning", "sig"),
       companion,
-      { type: "text", text: "NO_REPLY" },
+      textBlock("NO_REPLY"),
     ]);
   });
 
@@ -686,8 +603,8 @@ describe("normalizeAssistantReplayContent", () => {
 
   it("does not classify a text block separately from the answer", () => {
     const message = bedrockAssistant([
-      { type: "text", text: "NO_REPLY" },
-      { type: "text", text: " is the protocol marker." },
+      textBlock("NO_REPLY"),
+      textBlock(" is the protocol marker."),
     ]);
     expect(normalizeAssistantReplayContent([message])).toEqual([message]);
   });
@@ -713,7 +630,7 @@ describe("normalizeAssistantReplayContent", () => {
     ];
     const out = normalizeAssistantReplayContent(messages);
     const normalized = out[1] as AgentMessage & { content: unknown[] };
-    expect(normalized.content).toEqual([{ type: "text", text: "Visible before\n\nVisible after" }]);
+    expect(normalized.content).toEqual([textBlock("Visible before\n\nVisible after")]);
   });
 
   it("drops metadata-only assistant text blocks without fabricating placeholder output", () => {
@@ -731,17 +648,16 @@ describe("normalizeAssistantReplayContent", () => {
     ];
     const out = normalizeAssistantReplayContent(messages);
     const normalized = out[1] as AgentMessage & { content: unknown[] };
-    expect(normalized.content).toEqual([{ type: "text", text: "Visible reply" }, toolCall]);
+    expect(normalized.content).toEqual([textBlock("Visible reply"), toolCall]);
     expect(JSON.stringify(out)).not.toContain("assistant copied inbound metadata omitted");
   });
 
   it("filters openclaw delivery-mirror and gateway-injected assistant messages from replay", () => {
-    // Gateway mirror entries are transcript artifacts, not model-authored
-    // assistant turns, so they must not be sent back to providers.
+    // Transcript artifacts must not become provider input.
     const messages = [
       userMessage("hello"),
       openclawTranscriptAssistant("delivery-mirror"),
-      bedrockAssistant([{ type: "text", text: "real reply" }]),
+      bedrockAssistant([textBlock("real reply")]),
       openclawTranscriptAssistant("gateway-injected"),
     ];
     const out = normalizeAssistantReplayContent(messages);
@@ -757,12 +673,12 @@ describe("normalizeAssistantReplayContent", () => {
     "model-fallback",
   ] as const)("filters a stripped delivery mirror identified by %s", (kind) => {
     const strippedMirror = {
-      ...bedrockAssistant([{ type: "text", text: "channel mirror" }], "stop"),
+      ...bedrockAssistant([textBlock("channel mirror")], "stop"),
       provider: undefined,
       model: undefined,
       openclawDeliveryMirror: { kind },
     } as unknown as AgentMessage;
-    const realReply = bedrockAssistant([{ type: "text", text: "real reply" }], "stop", {
+    const realReply = bedrockAssistant([textBlock("real reply")], "stop", {
       input: 1,
       output: 1,
       totalTokens: 2,
@@ -775,7 +691,7 @@ describe("normalizeAssistantReplayContent", () => {
 
   it("preserves an assistant carrying an invalid delivery-mirror marker", () => {
     const assistant = {
-      ...bedrockAssistant([{ type: "text", text: "real reply" }], "stop", {
+      ...bedrockAssistant([textBlock("real reply")], "stop", {
         input: 1,
         output: 1,
         totalTokens: 2,
@@ -788,7 +704,7 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("filters an adjacent marker-free zero-usage delivery mirror", () => {
-    const content = [{ type: "text", text: "real reply" }];
+    const content = [textBlock("real reply")];
     const realReply = bedrockAssistant(content, "stop", {
       input: 1,
       output: 1,
@@ -803,7 +719,7 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("preserves an identical canonical automation result after an assistant reply", () => {
-    const content = [{ type: "text", text: "Report ready" }];
+    const content = [textBlock("Report ready")];
     const reply = bedrockAssistant(content, "stop", { output: 1, totalTokens: 1 });
     const result = {
       ...bedrockAssistant(content, "stop"),
@@ -817,7 +733,7 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("preserves adjacent identical assistant turns with nonzero usage", () => {
-    const content = [{ type: "text", text: "intentional repeat" }];
+    const content = [textBlock("intentional repeat")];
     const first = bedrockAssistant(content, "stop", { output: 1, totalTokens: 1 });
     const second = bedrockAssistant(content, "stop", { output: 1, totalTokens: 1 });
     const messages = [userMessage("repeat"), first, second];
@@ -827,7 +743,7 @@ describe("normalizeAssistantReplayContent", () => {
 
   it("preserves adjacent zero-usage assistant turns with tool calls", () => {
     const content = [
-      { type: "text", text: "checking" },
+      textBlock("checking"),
       { type: "toolCall", id: "call_1", name: "read", arguments: { path: "file.txt" } },
     ];
     const first = bedrockAssistant(content, "stop");
@@ -838,11 +754,7 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("preserves a trailing real model reply whose only content happens to be the sentinel text (clawsweeper review on #77287)", () => {
-    // Defensive boundary: even if a model legitimately replies with the
-    // exact sentinel string, the trim must require synthetic provenance
-    // (stopReason: "error" or zero-usage stop) before dropping. Without
-    // this guard the trim would silently delete a real reply on next
-    // replay.
+    // Sentinel text alone is not synthetic provenance.
     const realReplyAsStop = bedrockAssistant([{ type: "text", text: FALLBACK_TEXT }], "stop", {
       input: 1,
       output: 1,
@@ -866,17 +778,14 @@ describe("normalizeAssistantReplayContent", () => {
   });
 
   it("still drops a trailing zero-usage stop turn whose content was already lifted to the sentinel block (post-rewrite shape)", () => {
-    // Confirms the sentinel-content branch still recognizes the post-rewrite
-    // shape produced by the in-memory rewrite earlier in the same loop:
-    // stopReason: "stop" + zero usage + sentinel content. Only the synthetic
-    // provenance (zero usage + stop) makes this droppable; a non-zero-usage
-    // version is preserved by the regression test above.
+    // Zero usage plus stop identifies the persisted synthetic sentinel.
     const persistedZeroUsageSentinel = bedrockAssistant(
       [{ type: "text", text: FALLBACK_TEXT }],
       "stop",
     );
-    const messages = [userMessage("hi"), persistedZeroUsageSentinel];
-    const out = normalizeAssistantReplayContent(messages);
-    expect(out).toStrictEqual([messages[0]]);
+    const kept = userMessage("hi");
+    expect(normalizeAssistantReplayContent([kept, persistedZeroUsageSentinel])).toStrictEqual([
+      kept,
+    ]);
   });
 });

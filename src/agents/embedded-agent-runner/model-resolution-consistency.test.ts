@@ -187,6 +187,40 @@ const { resolveEmbeddedRunModelSetup } = await import("./run/model-setup.js");
 const { prepareDirectCompactionAttempt } = await import("./direct-compaction-preparation.js");
 const { prepareCompactionHarnessAuth } = await import("./compaction-runtime-preparation.js");
 
+function prepareCompaction(
+  runtime: ReturnType<typeof createPreparedModelRuntime>,
+  provider = PROVIDER,
+  model = STATIC_MODEL_ID,
+) {
+  return prepareDirectCompactionAttempt({
+    config: runtime.config,
+    provider,
+    model,
+    agentId: "main",
+    sessionId: "compact-session",
+    sessionKey: "agent:main:compact-session",
+    sessionFile: "agent:main:compact-session",
+    workspaceDir: runtime.workspaceDir,
+    preparedModelRuntime: runtime as never,
+  });
+}
+
+const route = { api: staticCatalogModel.api, baseUrl: staticCatalogModel.baseUrl };
+const thinkingCompat = { supportedReasoningEfforts: ["max", "ultra"] } as const;
+function capability(agentRuntime = "openclaw") {
+  return {
+    provider: PROVIDER,
+    modelId: STATIC_MODEL_ID,
+    agentRuntime,
+    route,
+    compat: thinkingCompat,
+  };
+}
+function expectDiscoveryDeferred() {
+  expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
+  expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+}
+
 function createPreparedModelRuntime(config: Record<string, unknown>) {
   return {
     agentDir: "/tmp/agents/main/agent",
@@ -233,8 +267,7 @@ describe("embedded model resolution consistency", () => {
         model: "worker-haiku",
       }),
     ).toEqual({ provider: "anthropic", modelId: "claude-haiku-4-5" });
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+    expectDiscoveryDeferred();
   });
 
   it("defers custom-provider normalization until prepared manifest policy is available", () => {
@@ -259,8 +292,7 @@ describe("embedded model resolution consistency", () => {
       provider: "custom-provider",
       modelId: "legacy-model",
     });
-    expect(loadManifestMetadataSnapshotMock).not.toHaveBeenCalled();
-    expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
+    expectDiscoveryDeferred();
 
     const manifestPlugins = [
       {
@@ -334,17 +366,11 @@ describe("embedded model resolution consistency", () => {
       compactionThinkingDefault: "off",
     });
 
-    const compaction = await prepareDirectCompactionAttempt({
-      config,
-      provider: target.provider,
-      model: target.modelId,
-      agentId: "main",
-      sessionId: "compact-session",
-      sessionKey: "agent:main:compact-session",
-      sessionFile: "agent:main:compact-session",
-      workspaceDir: preparedModelRuntime.workspaceDir,
-      preparedModelRuntime: preparedModelRuntime as never,
-    });
+    const compaction = await prepareCompaction(
+      preparedModelRuntime,
+      target.provider,
+      target.modelId,
+    );
 
     expect(emptyModelRegistry.find(PROVIDER, STATIC_MODEL_ID)).toBeNull();
     if (!compaction.ok) {
@@ -364,19 +390,11 @@ describe("embedded model resolution consistency", () => {
   });
 
   it("labels an unresolved compaction model independently of provider error text", async () => {
-    const config = {};
-    const preparedModelRuntime = createPreparedModelRuntime(config);
-    const compaction = await prepareDirectCompactionAttempt({
-      config,
-      provider: "test-provider",
-      model: "missing-compaction-model",
-      agentId: "main",
-      sessionId: "compact-session",
-      sessionKey: "agent:main:compact-session",
-      sessionFile: "agent:main:compact-session",
-      workspaceDir: preparedModelRuntime.workspaceDir,
-      preparedModelRuntime: preparedModelRuntime as never,
-    });
+    const compaction = await prepareCompaction(
+      createPreparedModelRuntime({}),
+      "test-provider",
+      "missing-compaction-model",
+    );
 
     expect(compaction).toMatchObject({
       ok: false,
@@ -393,22 +411,10 @@ describe("embedded model resolution consistency", () => {
   });
 
   it("returns compaction auth failure details without logging provider prose", async () => {
-    const config = {};
-    const preparedModelRuntime = createPreparedModelRuntime(config);
     const error = new Error("private_compaction_auth_payload");
     vi.mocked(prepareCompactionHarnessAuth).mockResolvedValueOnce({ ok: false, error });
 
-    const compaction = await prepareDirectCompactionAttempt({
-      config,
-      provider: PROVIDER,
-      model: STATIC_MODEL_ID,
-      agentId: "main",
-      sessionId: "compact-session",
-      sessionKey: "agent:main:compact-session",
-      sessionFile: "agent:main:compact-session",
-      workspaceDir: preparedModelRuntime.workspaceDir,
-      preparedModelRuntime: preparedModelRuntime as never,
-    });
+    const compaction = await prepareCompaction(createPreparedModelRuntime({}));
 
     expect(compaction).toMatchObject({
       ok: false,
@@ -421,27 +427,18 @@ describe("embedded model resolution consistency", () => {
   });
 
   it("resolves route-bound thinking compatibility for the final model", () => {
-    const capability = {
-      provider: PROVIDER,
-      modelId: STATIC_MODEL_ID,
-      agentRuntime: "openclaw",
-      route: { api: staticCatalogModel.api, baseUrl: staticCatalogModel.baseUrl },
-      compat: {
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
-      },
-    } as const;
-
+    const expected = { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] };
     expect(
       resolvePreparedModelThinkingCompat({
-        capability,
+        capability: { ...capability(), compat: expected },
         model: staticCatalogModel,
         agentRuntime: "openclaw",
       }),
-    ).toEqual(capability.compat);
+    ).toEqual(expected);
   });
 
   it("keeps configured provider routes off harness-scoped thinking capability", () => {
-    const compat = { supportedReasoningEfforts: ["max", "ultra"] };
+    const compat = thinkingCompat;
     const preparedCatalog: ModelCatalogEntry[] = [
       {
         provider: PROVIDER,
@@ -476,16 +473,9 @@ describe("embedded model resolution consistency", () => {
   });
 
   it("resolves harness-scoped thinking compatibility across prepared auth routes", () => {
-    const compat = { supportedReasoningEfforts: ["max", "ultra"] } as const;
-
     expect(
       resolvePreparedModelThinkingCompat({
-        capability: {
-          provider: PROVIDER,
-          modelId: STATIC_MODEL_ID,
-          agentRuntime: "codex",
-          compat,
-        },
+        capability: { ...capability("codex"), route: undefined },
         model: {
           ...staticCatalogModel,
           api: "openai-responses",
@@ -493,7 +483,7 @@ describe("embedded model resolution consistency", () => {
         },
         agentRuntime: "codex",
       }),
-    ).toEqual(compat);
+    ).toEqual(thinkingCompat);
   });
 
   it.each([
@@ -516,13 +506,7 @@ describe("embedded model resolution consistency", () => {
     "does not apply prepared thinking compatibility to a different $name",
     ({ model, agentRuntime }) => {
       const result = resolvePreparedModelThinkingCompat({
-        capability: {
-          provider: PROVIDER,
-          modelId: STATIC_MODEL_ID,
-          agentRuntime: "openclaw",
-          route: { api: staticCatalogModel.api, baseUrl: staticCatalogModel.baseUrl },
-          compat: { supportedReasoningEfforts: ["max"] },
-        },
+        capability: { ...capability(), compat: { supportedReasoningEfforts: ["max"] } },
         model,
         agentRuntime,
       });

@@ -25,6 +25,59 @@ let PreparedModelRuntimeOwnerNotPublishedError: typeof import("../prepared-model
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 let registerPreparedAgentHarness: typeof import("../harness/registry.js").registerAgentHarness;
 
+function acquireRuntime() {
+  return mockedAcquireAgentRunPreparedModelRuntime({
+    agentId: "main",
+    agentDir: state.agentDir(),
+    config: {},
+    workspaceDir: state.workspaceDir,
+  });
+}
+function fixtureRunParams() {
+  return {
+    ...createOverflowRunParams(state),
+    agentHarnessId: "openclaw",
+    provider: "fixture-provider",
+    model: "fixture-model",
+    sessionKey: undefined,
+  };
+}
+function requestRefresh(
+  params: Pick<Parameters<AgentHarness["runAttempt"]>[0], "registerPluginRuntimeRefreshConsumer">,
+) {
+  params.registerPluginRuntimeRefreshConsumer?.(() => true);
+  expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+}
+function expectOneLifecycleEvent(events: ReturnType<typeof vi.fn>, phase: string) {
+  expect(
+    events.mock.calls.filter(
+      ([event]) => event.stream === "lifecycle" && event.data.phase === phase,
+    ),
+  ).toHaveLength(1);
+}
+function settledWrite(
+  id: string,
+  path: string,
+  content: string,
+  reply: string,
+  timestamp: number,
+): EmbeddedRunAttemptResult["messagesSnapshot"] {
+  return [
+    buildEmbeddedRunnerAssistant({
+      stopReason: "toolUse",
+      content: [{ type: "toolCall", id, name: "write", arguments: { path, content } }],
+    }),
+    {
+      role: "toolResult",
+      toolCallId: id,
+      toolName: "write",
+      content: [{ type: "text", text: reply }],
+      isError: false,
+      timestamp,
+    },
+  ];
+}
+
 beforeAll(async () => {
   runEmbeddedAgent = await loadSharedRunIntegrationHarness();
   ({ PreparedModelRuntimeInitialRunAdmissionError, PreparedModelRuntimeOwnerNotPublishedError } =
@@ -56,11 +109,7 @@ describe("plugin runtime refresh admission", () => {
     mockedAcquireAgentRunPreparedModelRuntime.mockRejectedValueOnce(refusal);
 
     const error = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      agentHarnessId: "openclaw",
-      provider: "fixture-provider",
-      model: "fixture-model",
-      sessionKey: undefined,
+      ...fixtureRunParams(),
       onAttemptStart,
     }).catch((caught: unknown) => caught);
 
@@ -76,20 +125,14 @@ describe("plugin runtime refresh admission", () => {
       "Model runtime replacement is in progress",
       { admissionBlocked: true },
     );
-    const base = await mockedAcquireAgentRunPreparedModelRuntime({
-      agentId: "main",
-      agentDir: state.agentDir(),
-      config: {},
-      workspaceDir: state.workspaceDir,
-    });
+    const base = await acquireRuntime();
     mockedAcquireAgentRunPreparedModelRuntime.mockClear();
     mockedAcquireAgentRunPreparedModelRuntime
       .mockResolvedValueOnce(base)
       .mockRejectedValueOnce(refusal);
     const onAttemptStart = vi.fn();
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-      params.registerPluginRuntimeRefreshConsumer?.(() => true);
-      expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+      requestRefresh(params);
       return makeAttemptResult({
         assistantTexts: [],
         toolMetas: [
@@ -101,12 +144,8 @@ describe("plugin runtime refresh admission", () => {
 
     await expect(
       runEmbeddedAgent({
-        ...createOverflowRunParams(state),
+        ...fixtureRunParams(),
         prompt: "write the receipt, reload the plugin, then verify the receipt",
-        agentHarnessId: "openclaw",
-        provider: "fixture-provider",
-        model: "fixture-model",
-        sessionKey: undefined,
         onAttemptStart,
       }),
     ).rejects.toBe(refusal);
@@ -119,27 +158,13 @@ describe("plugin runtime refresh admission", () => {
   it("retains settled work from an overloaded attempt through a later plugin refresh", async () => {
     const originalPrompt = "write the receipt, reload the plugin, then report the receipt ID";
     const originalMessage = { role: "user" as const, content: originalPrompt, timestamp: 1 };
-    const settledMessages: EmbeddedRunAttemptResult["messagesSnapshot"] = [
-      buildEmbeddedRunnerAssistant({
-        stopReason: "toolUse",
-        content: [
-          {
-            type: "toolCall",
-            id: "receipt-write",
-            name: "write",
-            arguments: { path: "receipt.txt", content: "AMBER-731" },
-          },
-        ],
-      }),
-      {
-        role: "toolResult",
-        toolCallId: "receipt-write",
-        toolName: "write",
-        content: [{ type: "text", text: "Created receipt AMBER-731." }],
-        isError: false,
-        timestamp: 2,
-      },
-    ];
+    const settledMessages = settledWrite(
+      "receipt-write",
+      "receipt.txt",
+      "AMBER-731",
+      "Created receipt AMBER-731.",
+      2,
+    );
     const refreshedMessage = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "Plugin refreshed; receipt verification remains." }],
     });
@@ -161,8 +186,7 @@ describe("plugin runtime refresh admission", () => {
     );
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
       expect(params.continuation).toEqual({ prompt: originalPrompt, messages: settledMessages });
-      params.registerPluginRuntimeRefreshConsumer?.(() => true);
-      expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+      requestRefresh(params);
       return makeAttemptResult({
         assistantTexts: [],
         pluginRuntimeRefreshMessages: [originalMessage, refreshedMessage],
@@ -179,12 +203,8 @@ describe("plugin runtime refresh admission", () => {
       return makeAttemptResult({ assistantTexts: ["Receipt AMBER-731 verified."] });
     });
     const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
+      ...fixtureRunParams(),
       prompt: originalPrompt,
-      agentHarnessId: "openclaw",
-      provider: "fixture-provider",
-      model: "fixture-model",
-      sessionKey: undefined,
     });
     expect(result.meta.error).toBeUndefined();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
@@ -226,8 +246,7 @@ describe("plugin runtime refresh admission", () => {
           },
         });
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-        params.registerPluginRuntimeRefreshConsumer?.(() => true);
-        expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+        requestRefresh(params);
         return makeAttemptResult({
           assistantTexts: [],
           toolMetas: [{ toolName: "plugins", isError: false }],
@@ -237,11 +256,7 @@ describe("plugin runtime refresh admission", () => {
 
       try {
         const result = await runEmbeddedAgent({
-          ...createOverflowRunParams(state),
-          agentHarnessId: "openclaw",
-          provider: "fixture-provider",
-          model: "fixture-model",
-          sessionKey: undefined,
+          ...fixtureRunParams(),
         });
 
         expect(result.payloads).toEqual([{ text: "Receipt verified." }]);
@@ -286,8 +301,7 @@ describe("plugin runtime refresh admission", () => {
     };
     const payload = { text };
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-      params.registerPluginRuntimeRefreshConsumer?.(() => true);
-      expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+      requestRefresh(params);
       return makeAttemptResult({
         assistantTexts: [],
         toolMetas: [
@@ -304,12 +318,8 @@ describe("plugin runtime refresh admission", () => {
     mockedBuildEmbeddedRunPayloads.mockReturnValue([payload]);
     const onAttemptStart = vi.fn();
     const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
+      ...fixtureRunParams(),
       prompt: "send the result, reload the plugin, then verify the result",
-      agentHarnessId: "openclaw",
-      provider: "fixture-provider",
-      model: "fixture-model",
-      sessionKey: undefined,
       onAttemptStart,
     });
     expect(result.meta.error).toBeUndefined();
@@ -342,17 +352,12 @@ describe("plugin runtime refresh admission", () => {
       withPreparedModelRuntimePluginGenerationScope,
     } = await import("../prepared-model-runtime-generation-scope.js");
     const { getAgentRunContext } = await import("../../infra/agent-run-registry.js");
-    const runParams = createOverflowRunParams(state);
+    const runParams = fixtureRunParams();
     const originalPrompt = "edit and reload twice";
     const originalMessage = { role: "user" as const, content: originalPrompt, timestamp: 1 };
     const onUserMessagePersisted = vi.fn();
     const onAgentEvent = vi.fn();
-    const base = await mockedAcquireAgentRunPreparedModelRuntime({
-      agentId: "main",
-      agentDir: state.agentDir(),
-      config: {},
-      workspaceDir: state.workspaceDir,
-    });
+    const base = await acquireRuntime();
     // Distinct registries prove that an old ambient owner cannot supply the next generation.
     // oxlint-disable-next-line no-map-spread -- Every generation needs an independent registry, not mutations of its predecessor.
     const snapshots = ["first", "next", "final"].map((policyHash) => ({
@@ -458,10 +463,6 @@ describe("plugin runtime refresh admission", () => {
               prompt: originalPrompt,
               onUserMessagePersisted,
               onAgentEvent,
-              agentHarnessId: "openclaw",
-              provider: "fixture-provider",
-              model: "fixture-model",
-              sessionKey: undefined,
             }),
           ),
         () => first as NonNullable<ReturnType<typeof getPreparedModelRuntimeBorrowedSnapshot>>,
@@ -476,18 +477,14 @@ describe("plugin runtime refresh admission", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(3);
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledTimes(3);
     expect(onUserMessagePersisted).toHaveBeenCalledExactlyOnceWith(originalMessage);
-    expect(
-      onAgentEvent.mock.calls.filter(
-        ([event]) => event.stream === "lifecycle" && event.data.phase === "end",
-      ),
-    ).toHaveLength(1);
+    expectOneLifecycleEvent(onAgentEvent, "end");
     for (const release of releases) {
       expect(release).toHaveBeenCalledOnce();
     }
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({ assistantTexts: ["separate operator turn"] }),
     );
-    const next = await runEmbeddedAgent({ ...runParams, prompt: "new task" });
+    const next = await runEmbeddedAgent({ ...createOverflowRunParams(state), prompt: "new task" });
     expect(next.meta.agentMeta?.terminalReceipt?.successfulToolNames).toEqual([]);
   });
   it.each(["generated", "host-owned", "tts", "foreign-tts"])(
@@ -516,8 +513,7 @@ describe("plugin runtime refresh admission", () => {
         },
       });
       mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-        params.registerPluginRuntimeRefreshConsumer?.(() => true);
-        expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+        requestRefresh(params);
         const attempt = makeAttemptResult({
           assistantTexts: [],
           toolMetas: [{ toolName: "produce_media", isError: false }],
@@ -555,11 +551,7 @@ describe("plugin runtime refresh admission", () => {
       expect(result.didSendViaMessagingTool).not.toBe(true);
       expect(result.messagingToolSentMediaUrls ?? []).toEqual([]);
       expect(result.meta.agentMeta?.terminalReceipt?.sourceReplyDelivered).not.toBe(true);
-      expect(
-        onAgentEvent.mock.calls.filter(
-          ([event]) => event.stream === "lifecycle" && event.data.phase === "end",
-        ),
-      ).toHaveLength(1);
+      expectOneLifecycleEvent(onAgentEvent, "end");
       const mediaPayloads = (result.payloads ?? []).filter((payload) => payload.mediaUrls?.length);
       const deliverable =
         kind === "generated"
@@ -577,12 +569,11 @@ describe("plugin runtime refresh admission", () => {
     },
   );
   it("does not readmit completed work after a provider-shaped handoff failure", async () => {
-    const runParams = createOverflowRunParams(state);
+    const runParams = fixtureRunParams();
     const onAgentEvent = vi.fn();
     const completedEffect = vi.fn();
     mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
-      params.registerPluginRuntimeRefreshConsumer?.(() => true);
-      expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+      requestRefresh(params);
       completedEffect();
       return makeAttemptResult({
         assistantTexts: [],
@@ -602,47 +593,24 @@ describe("plugin runtime refresh admission", () => {
     const result = await runEmbeddedAgent({
       ...runParams,
       prompt: "reload and verify",
-      agentHarnessId: "openclaw",
-      provider: "fixture-provider",
-      model: "fixture-model",
-      sessionKey: undefined,
       onAgentEvent,
     });
     expect(completedEffect).toHaveBeenCalledOnce();
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
     expect(mockedAcquireAgentRunPreparedModelRuntime).toHaveBeenCalledOnce();
     expect(result.meta.error).toBeDefined();
-    expect(
-      onAgentEvent.mock.calls.filter(
-        ([event]) => event.stream === "lifecycle" && event.data.phase === "error",
-      ),
-    ).toHaveLength(1);
+    expectOneLifecycleEvent(onAgentEvent, "error");
   });
   it.each([false, true])(
     "uses only producer-owned settled finalization context (present: %s)",
     async (hasContext) => {
-      const assistant = buildEmbeddedRunnerAssistant({
-        stopReason: "toolUse",
-        content: [
-          {
-            type: "toolCall",
-            id: "committed-write",
-            name: "write",
-            arguments: { path: "plugin.ts", content: "changed" },
-          },
-        ],
-      });
-      const messages: EmbeddedRunAttemptResult["messagesSnapshot"] = [
-        assistant,
-        {
-          role: "toolResult",
-          toolCallId: "committed-write",
-          toolName: "write",
-          content: [{ type: "text", text: "plugin source written" }],
-          isError: false,
-          timestamp: Date.now(),
-        },
-      ];
+      const messages = settledWrite(
+        "committed-write",
+        "plugin.ts",
+        "changed",
+        "plugin source written",
+        Date.now(),
+      );
       const handoffError = new Error(
         hasContext
           ? "Attempt ended without an answer."
@@ -661,8 +629,7 @@ describe("plugin runtime refresh admission", () => {
       );
       const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => {
         if (!hasContext) {
-          params.registerPluginRuntimeRefreshConsumer?.(() => true);
-          expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+          requestRefresh(params);
         }
         return makeAttemptResult({
           terminal: { kind: "failed", source: "prompt", error: handoffError },
@@ -686,7 +653,7 @@ describe("plugin runtime refresh admission", () => {
         assistantTexts.map((text) => ({ text })),
       );
       const result = await runEmbeddedAgent({
-        ...createOverflowRunParams(state),
+        ...fixtureRunParams(),
         provider: "fixture-provider",
         model: "fixture-model",
         agentHarnessId: "handoff-fixture",
@@ -772,8 +739,7 @@ describe("plugin runtime refresh streaming delivery", () => {
     const blocks: BlockReplyPayload[] = [];
     const reasoning: string[] = [];
     mockedRunEmbeddedAttempt.mockImplementationOnce(async (params) => {
-      params.registerPluginRuntimeRefreshConsumer?.(() => true);
-      expect(captureAgentPluginRuntimeRefresh().request()).toBe(true);
+      requestRefresh(params);
       return makeAttemptResult({
         assistantTexts: [],
         toolMetas: [
@@ -840,12 +806,8 @@ describe("plugin runtime refresh streaming delivery", () => {
     });
     mockedBuildEmbeddedRunPayloads.mockReturnValue([{ text: "Final verification complete." }]);
     const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
+      ...fixtureRunParams(),
       prompt: "send the result, reload, then continue verification",
-      agentHarnessId: "openclaw",
-      provider: "fixture-provider",
-      model: "fixture-model",
-      sessionKey: undefined,
       messageChannel: "telegram",
       messageProvider: "telegram",
       messageTo: "telegram:123",
