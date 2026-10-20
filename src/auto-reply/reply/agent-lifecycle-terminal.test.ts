@@ -51,11 +51,7 @@ describe("createAgentLifecycleTerminalBackstop", () => {
     terminal.emit("error", failure);
     expect(emitAgentEvent).toHaveBeenCalledOnce();
     const data = emitAgentEvent.mock.calls[0]?.[0]?.data;
-    expect(data).toMatchObject({
-      phase: "error",
-      error: failure.message,
-      executionSettled: true,
-    });
+    expect(data).toMatchObject({ phase: "error", error: failure.message, executionSettled: true });
     expect(data).not.toHaveProperty("aborted");
     expect(data).not.toHaveProperty("stopReason");
   });
@@ -159,56 +155,50 @@ describe("createAgentLifecycleTerminalBackstop", () => {
 
   it.each(
     (["typed", "raw"] as const).flatMap((kind) => [
-      {
+      [
         kind,
-        code: "selected_auth_profile_unavailable",
-        expected:
-          "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
-      },
-      {
+        "selected_auth_profile_unavailable",
+        "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
+      ],
+      [
         kind,
-        code: AUTH_PROFILE_COOLDOWN_ERROR_CODE,
-        expected: "⚠️ The AI service needs a short break. Please try again in a few minutes.",
-      },
+        AUTH_PROFILE_COOLDOWN_ERROR_CODE,
+        "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+      ],
     ]),
-  )(
-    "publishes bounded $code recovery from $kind failures without discovering providers",
-    ({ kind, code, expected }) => {
-      const classifyProvider = vi
-        .spyOn(providerFailover, "classifyProviderFailoverSignalWithPlugin")
-        .mockImplementation(() => {
-          throw new Error("Terminal presentation must not discover providers");
-        });
-      try {
-        const profileId = "openai:private-profile";
-        const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
-        const terminal = createTerminal({
-          runId: "missing-selected-profile",
-          sessionKey: "agent:main:test",
-          getLifecycleGeneration: () => "test-generation",
-        });
+  )("sanitizes %s auth failure %s without provider discovery", (kind, code, expected) => {
+    const classifyProvider = vi
+      .spyOn(providerFailover, "classifyProviderFailoverSignalWithPlugin")
+      .mockImplementation(() => {
+        throw new Error("Terminal presentation must not discover providers");
+      });
+    try {
+      const profileId = "openai:private-profile";
+      const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
+      const terminal = createTerminal({
+        runId: "missing-selected-profile",
+        sessionKey: "agent:main:test",
+        getLifecycleGeneration: () => "test-generation",
+      });
 
-        const error =
-          kind === "typed"
-            ? new FailoverError(rawCause, {
-                reason: "auth",
-                code,
-                profileId,
-                cause: new Error(rawCause),
-              })
-            : Object.assign(new Error(rawCause), {
-                code,
-              });
-        terminal.emit("error", error);
+      const error =
+        kind === "typed"
+          ? new FailoverError(rawCause, {
+              reason: "auth",
+              code,
+              profileId,
+              cause: new Error(rawCause),
+            })
+          : Object.assign(new Error(rawCause), { code });
+      terminal.emit("error", error);
 
-        const event = emitAgentEvent.mock.calls[0]?.[0];
-        expect(event.data.error).toBe(expected);
-        expect(JSON.stringify(event)).not.toContain(profileId);
-        expect(JSON.stringify(event)).not.toContain(rawCause);
-        expect(classifyProvider).not.toHaveBeenCalled();
-      } finally {
-        classifyProvider.mockRestore();
-      }
-    },
-  );
+      const event = emitAgentEvent.mock.calls[0]?.[0];
+      expect(event.data.error).toBe(expected);
+      expect(JSON.stringify(event)).not.toContain(profileId);
+      expect(JSON.stringify(event)).not.toContain(rawCause);
+      expect(classifyProvider).not.toHaveBeenCalled();
+    } finally {
+      classifyProvider.mockRestore();
+    }
+  });
 });

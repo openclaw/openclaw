@@ -83,6 +83,7 @@ const { runReplyAgent } = await import("./agent-runner-run.js");
 type AgentTurnExecutionResult = Awaited<
   ReturnType<typeof import("./agent-runner-execution.js").executeAgentTurn>
 >;
+type AgentTurnParams = Parameters<typeof import("./agent-runner-execution.js").executeAgentTurn>[0];
 
 function makeRunReplyAgentParams(
   overrides: Partial<Parameters<typeof runReplyAgent>[0]> = {},
@@ -101,12 +102,7 @@ function makeRunReplyAgentParams(
     commandBody: prompt,
     followupRun: createMockFollowupRun({
       prompt,
-      run: {
-        agentId: "main",
-        agentDir: "/tmp/agent",
-        messageProvider: provider,
-        workspaceDir,
-      },
+      run: { agentId: "main", agentDir: "/tmp/agent", messageProvider: provider, workspaceDir },
     }) as unknown as FollowupRun,
     queueKey: "main",
     resolvedQueue: { mode: "interrupt" } as QueueSettings,
@@ -177,10 +173,7 @@ describe("runReplyAgent final MEDIA replies", () => {
     const result = await runReplyAgent(makeRunReplyAgentParams());
     const payloads = Array.isArray(result) ? result : result ? [result] : [];
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]).toMatchObject({
-      mediaUrl,
-      audioAsVoice,
-    });
+    expect(payloads[0]).toMatchObject({ mediaUrl, audioAsVoice });
     expect(payloads[0]?.text).toBeUndefined();
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
@@ -193,20 +186,11 @@ describe("runReplyAgent final MEDIA replies", () => {
         path: path.join("/tmp/outbound-media", `${stagedIndex}-${path.basename(mediaUrl)}`),
       };
     });
-    executeAgentTurnMock.mockImplementationOnce(async (params: unknown) => {
+    executeAgentTurnMock.mockImplementationOnce(async (params: AgentTurnParams) => {
       const { buildReplyPayloads } = await vi.importActual<
         typeof import("./agent-runner-payloads.js")
       >("./agent-runner-payloads.js");
-      const runnerParams = params as {
-        replyMediaContext?: {
-          normalizePayload?: (payload: {
-            text?: string;
-            mediaUrl?: string;
-            mediaUrls?: string[];
-          }) => Promise<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
-        };
-      };
-      const normalizeMediaPaths = runnerParams.replyMediaContext?.normalizePayload;
+      const normalizeMediaPaths = params.replyMediaContext?.normalizePayload;
       assert(normalizeMediaPaths, "runReplyAgent must pass replyMediaContext to the agent turn");
       const commonParams = {
         isHeartbeat: false,
