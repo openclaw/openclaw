@@ -27,7 +27,7 @@ suite.define(() => {
       };
       const commit = (comment: string) =>
         page.evaluate(
-          async ({ expected: draftExpectation, comment: storedComment }) => {
+          async ({ key, draft }) => {
             const database = await new Promise<IDBDatabase>((resolve, reject) => {
               const request = indexedDB.open("openclaw-control-ui");
               request.addEventListener(
@@ -36,61 +36,49 @@ suite.define(() => {
                 { once: true },
               );
               request.addEventListener("success", () => resolve(request.result), { once: true });
-              request.addEventListener(
-                "error",
-                () => reject(request.error ?? new Error("IndexedDB open failed")),
-                { once: true },
-              );
+              const fail = () => reject(request.error ?? new Error("IndexedDB open failed"));
+              request.addEventListener("error", fail, { once: true });
             });
             try {
               await new Promise<void>((resolve, reject) => {
                 const transaction = database.transaction("composerDrafts", "readwrite");
-                transaction.objectStore("composerDrafts").put(
-                  {
-                    revision: 1,
-                    text: draftExpectation.text,
-                    attachments: [
-                      {
-                        fileName: "selection-comment.txt",
-                        selectionAnnotation: { comment: storedComment },
-                      },
-                    ],
-                  },
-                  JSON.stringify([
-                    "ws://synthetic-gateway",
-                    "synthetic-credential",
-                    draftExpectation.scopeKey,
-                  ]),
-                );
+                transaction.objectStore("composerDrafts").put(draft, key);
                 transaction.addEventListener("complete", () => resolve(), { once: true });
-                transaction.addEventListener(
-                  "abort",
-                  () => reject(transaction.error ?? new Error("IndexedDB write aborted")),
-                  { once: true },
-                );
-                transaction.addEventListener(
-                  "error",
-                  () => reject(transaction.error ?? new Error("IndexedDB write failed")),
-                  { once: true },
-                );
+                const fail = () =>
+                  reject(transaction.error ?? new Error("IndexedDB write failed or aborted"));
+                transaction.addEventListener("abort", fail, { once: true });
+                transaction.addEventListener("error", fail, { once: true });
               });
             } finally {
               database.close();
             }
           },
-          { expected, comment },
+          {
+            key: JSON.stringify([
+              "ws://synthetic-gateway",
+              "synthetic-credential",
+              expected.scopeKey,
+            ]),
+            draft: {
+              revision: 1,
+              text: expected.text,
+              attachments: [
+                { fileName: "selection-comment.txt", selectionAnnotation: { comment } },
+              ],
+            },
+          },
         );
 
       await commit(`${finalComment}\nKeep the existing draft.`);
-      expect(
-        await page.evaluate(isComposerDraftCommitted, {
+      const committed = (annotationComments: string | null = expected.annotationComments) =>
+        page.evaluate(isComposerDraftCommitted, {
           context,
-          expected: { ...expected, annotationComments: null },
-        }),
-      ).toBe(true);
-      expect(await page.evaluate(isComposerDraftCommitted, { context, expected })).toBe(false);
+          expected: { ...expected, annotationComments },
+        });
+      expect(await committed(null)).toBe(true);
+      expect(await committed()).toBe(false);
       await commit(finalComment);
-      expect(await page.evaluate(isComposerDraftCommitted, { context, expected })).toBe(true);
+      expect(await committed()).toBe(true);
     });
   });
 
@@ -116,8 +104,10 @@ suite.define(() => {
         {},
       );
 
-      expect(await page.locator("body").getAttribute("data-committed")).toBe("true");
-      expect(await page.locator("body").getAttribute("data-rendered")).toBe("true");
+      expect(await page.locator("body").evaluate((body) => ({ ...body.dataset }))).toMatchObject({
+        committed: "true",
+        rendered: "true",
+      });
     });
   });
 });

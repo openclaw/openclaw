@@ -6,15 +6,13 @@ import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 
 export function expectFocused(locator: Locator, within = false) {
-  return expect
-    .poll(() =>
-      locator.evaluate(
-        (element, subtree) =>
-          subtree ? element.matches(":focus-within") : element === document.activeElement,
-        within,
-      ),
-    )
-    .toBe(true);
+  const read = () =>
+    locator.evaluate(
+      (element, subtree) =>
+        subtree ? element.matches(":focus-within") : element === document.activeElement,
+      within,
+    );
+  return expect.poll(read).toBe(true);
 }
 
 export async function pressAndExpectFocus(
@@ -27,25 +25,16 @@ export async function pressAndExpectFocus(
   await expectFocused(target, within);
 }
 
-export function expectText(locator: Locator, text: string) {
-  return expect.poll(() => locator.textContent()).toContain(text);
-}
-
-export function expectAttribute(locator: Locator, name: string, value: string) {
-  return expect.poll(() => locator.getAttribute(name)).toBe(value);
-}
-
-export function expectCount(locator: Locator, count: number) {
-  return expect.poll(() => locator.count()).toBe(count);
-}
-
-export function expectVisible(locator: Locator, visible = true) {
-  return expect.poll(() => locator.isVisible()).toBe(visible);
-}
-
-export function expectPath(page: Page, pathname: string) {
-  return expect.poll(() => new URL(page.url()).pathname).toBe(pathname);
-}
+export const expectText = (locator: Locator, text: string) =>
+  expect.poll(() => locator.textContent()).toContain(text);
+export const expectAttribute = (locator: Locator, name: string, value: string) =>
+  expect.poll(() => locator.getAttribute(name)).toBe(value);
+export const expectCount = (locator: Locator, count: number) =>
+  expect.poll(() => locator.count()).toBe(count);
+export const expectVisible = (locator: Locator, visible = true) =>
+  expect.poll(() => locator.isVisible()).toBe(visible);
+export const expectPath = (page: Page, pathname: string) =>
+  expect.poll(() => new URL(page.url()).pathname).toBe(pathname);
 
 export function mockRequests(page: Page, method: string) {
   return page.evaluate((name) => {
@@ -124,45 +113,33 @@ export async function captureFrame(
   await writeFile(path.join(directory, name), frame.png);
 }
 
-export function catalogList(fixture: {
-  id: string;
-  label: string;
-  host: string;
-  thread: string;
-  name: string;
-  status: string;
-  archive: boolean;
-  startTerminal?: boolean;
-}) {
+export function catalogList(
+  fixture: Record<"id" | "label" | "host" | "thread" | "name" | "status", string> & {
+    archive: boolean;
+    startTerminal?: boolean;
+  },
+) {
   const { id, label, host, thread, name, status, archive, startTerminal } = fixture;
+  const session = {
+    threadId: thread,
+    name,
+    status,
+    archived: false,
+    canContinue: true,
+    canArchive: archive,
+  };
+  const gateway = {
+    hostId: "gateway:local",
+    label: host,
+    kind: "gateway",
+    connected: true,
+    sessions: [session],
+  };
+  const capabilities = Object.assign(
+    { continueSession: true, archive },
+    startTerminal === undefined ? {} : { startTerminal },
+  );
   return {
-    catalogs: [
-      {
-        id,
-        label,
-        capabilities: Object.assign(
-          { continueSession: true, archive },
-          startTerminal === undefined ? {} : { startTerminal },
-        ),
-        hosts: [
-          {
-            hostId: "gateway:local",
-            label: host,
-            kind: "gateway",
-            connected: true,
-            sessions: [
-              {
-                threadId: thread,
-                name,
-                status,
-                archived: false,
-                canContinue: true,
-                canArchive: archive,
-              },
-            ],
-          },
-        ],
-      },
-    ],
+    catalogs: [{ id, label, capabilities, hosts: [gateway] }],
   };
 }

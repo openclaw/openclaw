@@ -6,6 +6,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { seedStorage } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Shell presentation continuity" });
 const variants = [
@@ -33,15 +34,14 @@ suite.define(() => {
               { role: "assistant", content: "A synthetic conversation for shell presentation." },
             ],
           });
-          await page.addInitScript(
-            ({ gatewayUrl, mode }) => {
-              localStorage.setItem(
-                `openclaw.control.settings.v1:${gatewayUrl}`,
-                JSON.stringify({ gatewayUrl, theme: "claw", themeMode: mode }),
-              );
-            },
-            { gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl), mode: colorScheme },
-          );
+          const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
+          await seedStorage(page, {
+            [`openclaw.control.settings.v1:${gatewayUrl}`]: JSON.stringify({
+              gatewayUrl,
+              theme: "claw",
+              themeMode: colorScheme,
+            }),
+          });
           await page.goto(`${suite.server.baseUrl}new`);
           await waitForControlUiRoute(page, { routeId: "new-session" });
           const shell = page.locator(".shell");
@@ -79,8 +79,7 @@ suite.define(() => {
           const draft = "Keep this synthetic draft through connection recovery.";
           await composer.fill(draft);
           await assertSidebarIdentity();
-          const connectCount = (await gateway.getRequests("connect")).length;
-          await gateway.deferNext("connect");
+          const connectCount = await gateway.deferNext("connect");
           await gateway.setOnline(false);
           await page.locator(".agent-chat__input--offline").waitFor();
           expect(await composer.inputValue()).toBe(draft);

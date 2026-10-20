@@ -7,6 +7,7 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import type { ControlUiSessionFixture } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { seedStorage } from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Agent-first sidebar geometry" });
 const imageAvatar =
@@ -21,34 +22,26 @@ const agentsList: AgentsListResult = {
     { id: "writing", name: "Writing", identity: { avatarUrl: imageAvatar } },
   ],
 };
-const rows: Array<GatewaySessionRow & ControlUiSessionFixture> = [
-  {
-    key: "agent:main:project",
-    agentId: "main",
-    kind: "direct",
-    updatedAt: 100,
+function session(
+  name: string,
+  updatedAt: number,
+  fields: Partial<GatewaySessionRow>,
+): GatewaySessionRow & ControlUiSessionFixture {
+  return { key: `agent:main:${name}`, agentId: "main", kind: "direct", updatedAt, ...fields };
+}
+const rows = [
+  session("project", 100, {
     lastAssistantMessage: {
       text: "I've set up the template, but it still needs a final review before sharing with the team.",
       timestamp: 90,
     },
-  },
-  {
-    key: "agent:main:working",
-    agentId: "main",
-    kind: "direct",
-    updatedAt: 99,
-    hasActiveRun: true,
-    status: "running",
-  },
-  {
-    key: "agent:main:failure",
-    agentId: "main",
-    kind: "direct",
-    updatedAt: 98,
+  }),
+  session("working", 99, { hasActiveRun: true, status: "running" }),
+  session("failure", 98, {
     status: "failed",
     lastRunError:
       "Preflight compaction required but failed: agent tool caller authority is no longer active",
-  },
+  }),
 ];
 const sessions: SessionsListResult = {
   ts: 100,
@@ -76,19 +69,16 @@ suite.define(() => {
           hasTouch: touch,
         },
         async ({ page }) => {
-          await page.addInitScript(
-            ({ key, prefs }) => {
-              localStorage.setItem(key, JSON.stringify(prefs));
-              localStorage.setItem(
-                "openclaw:control-ui:community-invite:v2",
-                JSON.stringify({ dismissedAtMs: Date.now() }),
-              );
-            },
-            {
-              key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-              prefs: { sidebarAgentsMode: "roster", navWidth: width, themeMode: mode },
-            },
-          );
+          await seedStorage(page, {
+            [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
+              sidebarAgentsMode: "roster",
+              navWidth: width,
+              themeMode: mode,
+            }),
+            "openclaw:control-ui:community-invite:v2": JSON.stringify({
+              dismissedAtMs: Date.now(),
+            }),
+          });
           await installMockGateway(page, {
             sessions: rows,
             methodResponses: {

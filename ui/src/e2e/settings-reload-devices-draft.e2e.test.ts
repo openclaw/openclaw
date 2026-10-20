@@ -60,11 +60,13 @@ suite.define(() => {
         });
         const indicator = page.locator("openclaw-settings-save-indicator");
         const reload = indicator.getByRole("button", { name: "Reload", exact: true });
+        const startReload = async () => {
+          const after = await gateway.deferNext("config.get");
+          await reload.click();
+          await gateway.waitForRequest("config.get", { after });
+        };
         await reload.waitFor();
-        const reads = (await gateway.getRequests("config.get")).length;
-        await gateway.deferNext("config.get");
-        await reload.click();
-        await gateway.waitForRequest("config.get", { after: reads });
+        await startReload();
         await binding.scrollIntoViewIfNeeded();
         await expectEditor("new-node", true);
         expect(await gateway.getRequests("config.set")).toHaveLength(1);
@@ -74,10 +76,7 @@ suite.define(() => {
             message: "Synthetic config read failure",
           });
           await expectEditor("new-node", false);
-          const retryReads = (await gateway.getRequests("config.get")).length;
-          await gateway.deferNext("config.get");
-          await reload.click();
-          await gateway.waitForRequest("config.get", { after: retryReads });
+          await startReload();
           await expect.poll(() => binding.isDisabled()).toBe(true);
         }
         await gateway.resolveDeferred("config.get", snapshot);

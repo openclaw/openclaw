@@ -2,17 +2,10 @@ import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 
-type SettledFormControl =
-  | { locator: Locator; value: string }
-  | { locator: Locator; checked: boolean };
+type SettledFormControl = { locator: Locator } & ({ value: string } | { checked: boolean });
 
 async function waitForBrowserRenderBoundary(page: Page): Promise<void> {
-  await page.evaluate(
-    () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => resolve());
-      }),
-  );
+  await page.evaluate(() => new Promise<number>(requestAnimationFrame));
 }
 
 export async function waitForSettledFormControls(
@@ -20,14 +13,12 @@ export async function waitForSettledFormControls(
   controls: readonly SettledFormControl[],
 ): Promise<void> {
   const expected = controls.map((control) =>
-    "value" in control ? { value: control.value } : { checked: control.checked },
+    "value" in control ? control.value : control.checked,
   );
-  const readControls = async () =>
+  const readControls = () =>
     Promise.all(
-      controls.map(async (control) =>
-        "value" in control
-          ? { value: await control.locator.inputValue() }
-          : { checked: await control.locator.isChecked() },
+      controls.map((control) =>
+        "value" in control ? control.locator.inputValue() : control.locator.isChecked(),
       ),
     );
   await expect.poll(readControls).toEqual(expected);
@@ -42,11 +33,9 @@ export async function waitForCommittedState<Arg>(
   probe: Parameters<typeof page.evaluate<boolean, Arg>>[0],
   arg: Arg,
 ): Promise<void> {
-  // waitForFunction treats a Promise as truthy before its boolean resolves.
+  // Resolve async probes and require a match on both sides of a render boundary.
   const readCommittedState = () => page.evaluate(probe, arg);
   await expect.poll(readCommittedState).toBe(true);
-  // A matching store read may still have an older mutation queued behind it.
-  // Require the committed state to survive a browser render boundary before acting.
   await waitForBrowserRenderBoundary(page);
   await expect.poll(readCommittedState).toBe(true);
 }
@@ -74,65 +63,45 @@ export async function isComposerDraftCommitted({
     return false;
   }
   const gatewayOwner = gateway.connection.gatewayUrl.trim() || "default";
-  // Browser probes cannot import Vitest-transformed modules. Read the exact
-  // durable owner/key and await the transaction, independently of the renderer.
+  // Serialized probe: read the durable key independently of the renderer.
   const database = await new Promise<IDBDatabase>((resolve, reject) => {
     const request = indexedDB.open("openclaw-control-ui");
     request.addEventListener("success", () => resolve(request.result), { once: true });
-    request.addEventListener(
-      "error",
-      () => reject(request.error ?? new Error("IndexedDB open failed")),
-      { once: true },
-    );
+    const fail = () => reject(request.error ?? new Error("IndexedDB open failed"));
+    request.addEventListener("error", fail, { once: true });
   });
   try {
-    type DraftRecord = {
+    type Draft = {
       revision: number;
       text: string;
       replyTarget?: { sourceMessageId?: string };
       attachments: { fileName?: string; selectionAnnotation?: { comment: string } }[];
     };
-    const draft = await new Promise<DraftRecord | undefined>((resolve, reject) => {
+    const key = JSON.stringify([gatewayOwner, recoveryScope, expected.scopeKey]);
+    const draft = await new Promise<Draft | undefined>((resolve, reject) => {
       const transaction = database.transaction("composerDrafts", "readonly");
-      const request = transaction
-        .objectStore("composerDrafts")
-        .get(JSON.stringify([gatewayOwner, recoveryScope, expected.scopeKey])) as IDBRequest<
-        DraftRecord | undefined
+      const request = transaction.objectStore("composerDrafts").get(key) as IDBRequest<
+        Draft | undefined
       >;
       transaction.addEventListener("complete", () => resolve(request.result), { once: true });
-      transaction.addEventListener(
-        "abort",
-        () => reject(transaction.error ?? new Error("IndexedDB read aborted")),
-        { once: true },
-      );
-      transaction.addEventListener(
-        "error",
-        () => reject(transaction.error ?? new Error("IndexedDB read failed")),
-        { once: true },
-      );
+      const fail = () => reject(transaction.error ?? new Error("IndexedDB read failed or aborted"));
+      transaction.addEventListener("abort", fail, { once: true });
+      transaction.addEventListener("error", fail, { once: true });
     });
-    if (!draft) {
-      return false;
-    }
-    if (
-      expected.replySourceMessageId !== undefined &&
-      (draft.replyTarget?.sourceMessageId ?? null) !== expected.replySourceMessageId
-    ) {
-      return false;
-    }
-    if (expected.text === null) {
-      return (
-        typeof draft.revision === "number" && draft.text === "" && draft.attachments.length === 0
-      );
-    }
-    return (
-      draft.text === expected.text &&
-      draft.attachments.length === expected.attachmentCount &&
-      (expected.attachmentNames === null ||
-        JSON.stringify(draft.attachments.map((a) => a.fileName)) === expected.attachmentNames) &&
-      (expected.annotationComments === null ||
-        JSON.stringify(draft.attachments.map((a) => a.selectionAnnotation?.comment ?? null)) ===
-          expected.annotationComments)
+    return Boolean(
+      draft &&
+      (expected.replySourceMessageId === undefined ||
+        (draft.replyTarget?.sourceMessageId ?? null) === expected.replySourceMessageId) &&
+      (expected.text === null
+        ? typeof draft.revision === "number" && draft.text === "" && draft.attachments.length === 0
+        : draft.text === expected.text &&
+          draft.attachments.length === expected.attachmentCount &&
+          (expected.attachmentNames === null ||
+            JSON.stringify(draft.attachments.map((a) => a.fileName)) ===
+              expected.attachmentNames) &&
+          (expected.annotationComments === null ||
+            JSON.stringify(draft.attachments.map((a) => a.selectionAnnotation?.comment ?? null)) ===
+              expected.annotationComments)),
     );
   } finally {
     database.close();
