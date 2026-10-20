@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserExecutable } from "./browser/chrome.executables.js";
+import type { RunningChrome } from "./browser/chrome.js";
 import type { BrowserServerState } from "./browser/server-context.types.js";
 
 const { getState, getSource, isReachable, resolveExecutable } = vi.hoisted(() => ({
@@ -43,27 +44,24 @@ describe("browser host availability", () => {
   });
 
   it.each([
-    { name: "disabled browser", config: { browser: { enabled: false } }, profile: undefined },
-    { name: "missing profile", config: {}, profile: "missing" },
-  ])("allows node fallback for a $name", async ({ config, profile }) => {
+    ["disabled browser", { browser: { enabled: false } }, undefined],
+    ["missing profile", {}, "missing"],
+  ] as const)("allows node fallback for a %s", async (_name, config, profile) => {
     expect(await isBrowserHostAvailable(config, profile)).toBe(false);
     expect(resolveExecutable).not.toHaveBeenCalled();
   });
 
   it.each([
-    { name: "existing-session", profile: { driver: "existing-session" as const } },
-    { name: "extension", profile: { driver: "extension" as const } },
-    { name: "remote CDP", profile: { cdpUrl: "https://browser.example.test" } },
-  ])(
-    "preserves a configured $name connection without a managed executable",
-    async ({ profile }) => {
-      resolveExecutable.mockReturnValue(null);
-      expect(
-        await isBrowserHostAvailable({ browser: { profiles: { work: profile } } }, "work"),
-      ).toBe(true);
-      expect(resolveExecutable).not.toHaveBeenCalled();
-    },
-  );
+    { driver: "existing-session" },
+    { driver: "extension" },
+    { cdpUrl: "https://browser.example.test" },
+  ] as const)("preserves configured %j without a managed executable", async (profile) => {
+    resolveExecutable.mockReturnValue(null);
+    expect(await isBrowserHostAvailable({ browser: { profiles: { work: profile } } }, "work")).toBe(
+      true,
+    );
+    expect(resolveExecutable).not.toHaveBeenCalled();
+  });
 
   it("preserves a running managed browser when its executable is removed", async () => {
     const resolved = resolveBrowserConfig(undefined);
@@ -71,24 +69,17 @@ describe("browser host availability", () => {
       resolveProfile(resolved, resolved.defaultProfile),
       "default profile",
     );
+    const running: RunningChrome = {
+      pid: 123,
+      exe: { kind: "chrome", path: "/usr/bin/google-chrome" },
+      userDataDir: "/browser/user-data",
+      cdpPort: profile.cdpPort,
+      proc: new ChildProcess(),
+    };
     getState.mockReturnValue({
       port: resolved.controlPort,
       resolved,
-      profiles: new Map([
-        [
-          profile.name,
-          {
-            profile,
-            running: {
-              pid: 123,
-              exe: { kind: "chrome", path: "/usr/bin/google-chrome" },
-              userDataDir: "/browser/user-data",
-              cdpPort: profile.cdpPort,
-              proc: new ChildProcess(),
-            },
-          },
-        ],
-      ]),
+      profiles: new Map([[profile.name, { profile, running }]]),
     });
     resolveExecutable.mockReturnValue(null);
     expect(await isBrowserHostAvailable({})).toBe(true);
@@ -110,12 +101,8 @@ describe("browser host availability", () => {
       const executablePath = "/browsers/chrome-headless-shell";
       resolveExecutable.mockReturnValue({ kind: "custom", path: executablePath });
       const nodes = vi.fn(() => [{ nodeId: "other-host", caps: ["browser"] }]);
-      expect(
-        await resolveBrowserNodeTarget({
-          config: { browser: { executablePath, headless } },
-          nodes,
-        }),
-      ).toBeNull();
+      const config = { browser: { executablePath, headless } };
+      expect(await resolveBrowserNodeTarget({ config, nodes })).toBeNull();
       expect(nodes).not.toHaveBeenCalled();
       expect(isReachable).not.toHaveBeenCalled();
     },

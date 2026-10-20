@@ -4,15 +4,16 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  createBrowserTool: vi.fn(),
-  startBrowserBridgeServer: vi.fn(),
-  stopBrowserBridgeServer: vi.fn(),
-  closePlaywrightBrowserConnection: vi.fn(),
+  createBrowserTool: vi.fn().mockReturnValue({ name: "browser" }),
+  startBrowserBridgeServer: vi.fn().mockResolvedValue({
+    baseUrl: "http://127.0.0.1:18443",
+    server: { marker: "bridge-server" },
+  }),
+  stopBrowserBridgeServer: vi.fn().mockResolvedValue(undefined),
+  closePlaywrightBrowserConnection: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("./browser-tool.js", () => ({
-  createBrowserTool: mocks.createBrowserTool,
-}));
+vi.mock("./browser-tool.js", () => ({ createBrowserTool: mocks.createBrowserTool }));
 
 vi.mock("./browser/bridge-server.js", () => ({
   startBrowserBridgeServer: mocks.startBrowserBridgeServer,
@@ -23,42 +24,20 @@ vi.mock("./browser/pw-session.js", () => ({
   closePlaywrightBrowserConnection: mocks.closePlaywrightBrowserConnection,
 }));
 
-import { createAttachedBrowserToolRuntime } from "./attached-browser-tool-runtime.js";
+import { createAttachedBrowserToolRuntime as createRuntime } from "./attached-browser-tool-runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const cdpUrl = "http://127.0.0.1:9222";
-function createRuntime(
-  workspaceDir: string,
-  options: Partial<Parameters<typeof createAttachedBrowserToolRuntime>[0]> = {},
-) {
-  return createAttachedBrowserToolRuntime({
-    cdpUrl,
-    ensureAttachTarget: async () => {},
-    workspaceDir,
-    ...options,
-  });
-}
+const defaults = { cdpUrl, ensureAttachTarget: async () => {}, workspaceDir: "/tmp/workspace" };
 
 describe("attached Browser tool runtime", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.closePlaywrightBrowserConnection.mockResolvedValue(undefined);
-    mocks.createBrowserTool.mockReturnValue({ name: "browser" });
-    mocks.startBrowserBridgeServer.mockResolvedValue({
-      baseUrl: "http://127.0.0.1:18443",
-      server: { marker: "bridge-server" },
-    });
-    mocks.stopBrowserBridgeServer.mockResolvedValue(undefined);
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   it("exposes only one raw attach-only CDP profile through an authenticated loopback bridge", async () => {
     const ensureAttachTarget = vi.fn().mockResolvedValue(undefined);
-    const workspaceDir = tempDirs.make("attached-browser-workspace-");
-    const runtime = await createRuntime(workspaceDir, {
-      ensureAttachTarget,
-      agentSessionKey: "agent:worker-agent:worker:session-1",
-      agentDir: "/tmp/worker-state",
-    });
+    const workspaceDir = tempDirs.make("attached-workspace-");
+    const context = { workspaceDir, agentSessionKey: "agent:w:s", agentDir: "/tmp/w" };
+    const runtime = await createRuntime({ ...defaults, ...context, ensureAttachTarget });
 
     expect(mocks.startBrowserBridgeServer).toHaveBeenCalledOnce();
     const bridgeParams = mocks.startBrowserBridgeServer.mock.calls[0]?.[0];
@@ -70,27 +49,20 @@ describe("attached Browser tool runtime", () => {
         enabled: true,
         attachOnly: true,
         defaultProfile: "worker",
-        profiles: {
-          worker: {
-            driver: "openclaw",
-            attachOnly: true,
-            cdpUrl,
-          },
-        },
         extensionRelayPorts: {},
         extensionRelayInternalTokens: {},
       },
     });
-    expect(Object.keys(bridgeParams.resolved.profiles)).toEqual(["worker"]);
+    expect(bridgeParams.resolved.profiles).toEqual({
+      worker: { driver: "openclaw", attachOnly: true, cdpUrl },
+    });
 
     await bridgeParams.onEnsureAttachTarget();
     expect(ensureAttachTarget).toHaveBeenCalledOnce();
     expect(mocks.createBrowserTool).toHaveBeenCalledWith({
       sandboxBridgeUrl: "http://127.0.0.1:18443",
       allowHostControl: false,
-      agentSessionKey: "agent:worker-agent:worker:session-1",
-      agentDir: "/tmp/worker-state",
-      workspaceDir,
+      ...context,
       screenshotResultMode: "path",
       persistScreenshot: expect.any(Function),
     });
@@ -122,7 +94,7 @@ describe("attached Browser tool runtime", () => {
   });
 
   it("retries exact Playwright CDP adapter disposal after a failed disconnect", async () => {
-    const runtime = await createRuntime(tempDirs.make("attached-browser-workspace-"));
+    const runtime = await createRuntime({ ...defaults, workspaceDir: tempDirs.make("attached-") });
     mocks.closePlaywrightBrowserConnection
       .mockRejectedValueOnce(new Error("disconnect failed"))
       .mockResolvedValueOnce(undefined);
@@ -134,21 +106,18 @@ describe("attached Browser tool runtime", () => {
     expect(mocks.closePlaywrightBrowserConnection.mock.calls).toEqual([[{ cdpUrl }], [{ cdpUrl }]]);
   });
 
-  it.runIf(process.platform !== "win32")(
-    "rejects screenshot artifact symlink escapes",
-    async () => {
-      const workspaceDir = tempDirs.make("attached-browser-workspace-");
-      const outsideDir = tempDirs.make("attached-browser-outside-");
-      await fs.symlink(outsideDir, path.join(workspaceDir, ".artifacts"));
-      await createRuntime(workspaceDir);
-      const toolParams = mocks.createBrowserTool.mock.calls.at(-1)?.[0];
-      const sourcePath = path.join(workspaceDir, "source.png");
-      await fs.writeFile(sourcePath, "screenshot-bytes");
+  it.runIf(process.platform !== "win32")("rejects artifact symlink escapes", async () => {
+    const workspaceDir = tempDirs.make("attached-workspace-");
+    const outsideDir = tempDirs.make("attached-browser-outside-");
+    await fs.symlink(outsideDir, path.join(workspaceDir, ".artifacts"));
+    await createRuntime({ ...defaults, workspaceDir });
+    const toolParams = mocks.createBrowserTool.mock.calls.at(-1)?.[0];
+    const sourcePath = path.join(workspaceDir, "source.png");
+    await fs.writeFile(sourcePath, "screenshot-bytes");
 
-      await expect(toolParams.persistScreenshot({ sourcePath, type: "png" })).rejects.toThrow();
-      expect(await fs.readdir(outsideDir)).toEqual([]);
-    },
-  );
+    await expect(toolParams.persistScreenshot({ sourcePath, type: "png" })).rejects.toThrow();
+    expect(await fs.readdir(outsideDir)).toEqual([]);
+  });
 
   it.each([
     "http://localhost:9222",
@@ -156,7 +125,7 @@ describe("attached Browser tool runtime", () => {
     "http://127.0.0.1",
     "http://127.0.0.1:9222/devtools/browser/target",
   ])("rejects non-canonical raw CDP URL %s before starting a bridge", async (url) => {
-    await expect(createRuntime("/tmp/workspace", { cdpUrl: url })).rejects.toThrow(
+    await expect(createRuntime({ ...defaults, cdpUrl: url })).rejects.toThrow(
       "loopback HTTP URL with an explicit port",
     );
     expect(mocks.startBrowserBridgeServer).not.toHaveBeenCalled();

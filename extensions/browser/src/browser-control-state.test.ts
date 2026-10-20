@@ -1,18 +1,13 @@
 import type { Server } from "node:http";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { markBrowserRuntimeStopping } from "./browser/server-context.lifecycle.js";
 
-const runtimeMocks = vi.hoisted(() => ({
-  stopBrowserRuntime: vi.fn(),
-}));
+type RuntimeParams = { server: Server | null; port: number; resolved: unknown };
+const stopRuntime = vi.hoisted(() => vi.fn());
 
 vi.mock("./browser/runtime-lifecycle.js", () => ({
-  createBrowserRuntimeState: (params: {
-    server: Server | null;
-    port: number;
-    resolved: unknown;
-  }) => ({ ...params, profiles: new Map() }),
-  stopBrowserRuntime: runtimeMocks.stopBrowserRuntime,
+  createBrowserRuntimeState: (params: RuntimeParams) => ({ ...params, profiles: new Map() }),
+  stopBrowserRuntime: stopRuntime,
 }));
 
 const {
@@ -26,6 +21,11 @@ const {
 const resolved = { profiles: {}, controlPort: 18_791 } as never;
 const onWarn = vi.fn();
 const runtimeParams = { server: null, port: 18_791, resolved };
+const expectState = (state: unknown, work: boolean) =>
+  expect({ state: getBrowserControlState(), work: hasBrowserControlWork() }).toEqual({
+    state,
+    work,
+  });
 
 function start(server: Server | null = null) {
   return withBrowserControlStart(() => ensureBrowserControlRuntime({ ...runtimeParams, server }));
@@ -36,22 +36,20 @@ function stop(requestedBy: "server" | "service") {
 }
 
 beforeEach(() => {
-  runtimeMocks.stopBrowserRuntime.mockReset().mockImplementation(async (params) => {
-    params.clearState();
-  });
+  stopRuntime.mockReset().mockImplementation(async (params) => params.clearState());
 });
+afterEach(() => stop("server"));
 
 describe("browser control lifecycle", () => {
   it("allows a start after a no-state stop settles", async () => {
     await expect(stop("service")).resolves.toBeNull();
     await expect(start()).resolves.toBeTruthy();
-    await stop("service");
   });
 
   it("rejects new starts while ordinary shutdown is pending", async () => {
     await start();
     const gate = Promise.withResolvers<void>();
-    runtimeMocks.stopBrowserRuntime.mockImplementationOnce(async (params) => {
+    stopRuntime.mockImplementationOnce(async (params) => {
       await gate.promise;
       params.clearState();
     });
@@ -62,27 +60,24 @@ describe("browser control lifecycle", () => {
       gate.resolve();
       await stopping;
     }
-    expect(getBrowserControlState()).toBeNull();
+    expectState(null, false);
     await expect(start()).resolves.toBeTruthy();
-    await stop("service");
   });
 
   it("retains a failed stop owner for an exact retry", async () => {
     await start();
     expect(hasBrowserControlWork()).toBe(true);
-    runtimeMocks.stopBrowserRuntime.mockImplementationOnce(async (params) => {
+    stopRuntime.mockImplementationOnce(async (params) => {
       markBrowserRuntimeStopping(params.current);
       throw new Error("cleanup failed");
     });
 
     await expect(stop("service")).rejects.toThrow("cleanup failed");
-    expect(getBrowserControlState()).toBeNull();
-    expect(hasBrowserControlWork()).toBe(true);
+    expectState(null, true);
 
     await expect(stop("service")).resolves.toBeTruthy();
     expect(hasBrowserControlWork()).toBe(false);
     await expect(start()).resolves.toBeTruthy();
-    await stop("service");
   });
 
   it("lets a foreground server adopt service state without a second runtime", async () => {
@@ -93,10 +88,10 @@ describe("browser control lifecycle", () => {
     expect(serverState).toBe(serviceState);
     expect(serverState.server).toBe(server);
     await stop("service");
-    expect(runtimeMocks.stopBrowserRuntime).not.toHaveBeenCalled();
+    expect(stopRuntime).not.toHaveBeenCalled();
 
     await stop("server");
-    expect(runtimeMocks.stopBrowserRuntime).toHaveBeenCalledOnce();
+    expect(stopRuntime).toHaveBeenCalledOnce();
   });
 
   it("orders a queued stop after an in-progress cold start", async () => {
@@ -106,15 +101,13 @@ describe("browser control lifecycle", () => {
       await startGate.promise;
       return await ensureBrowserControlRuntime(runtimeParams);
     });
-    expect(getBrowserControlState()).toBeNull();
-    expect(hasBrowserControlWork()).toBe(true);
+    expectState(null, true);
     const stopping = stop("service");
     startGate.resolve();
 
     await starting;
     await stopping;
-    expect(runtimeMocks.stopBrowserRuntime).toHaveBeenCalledOnce();
-    expect(getBrowserControlState()).toBeNull();
-    expect(hasBrowserControlWork()).toBe(false);
+    expect(stopRuntime).toHaveBeenCalledOnce();
+    expectState(null, false);
   });
 });

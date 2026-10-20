@@ -3,19 +3,9 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  maybeRepairOwnedChromeExtensionNativeHosts,
-  noteChromeMcpBrowserReadiness,
-} from "../browser-doctor.js";
-import {
-  chromeProductRoots,
-  discoverChromeExtensionIds,
-  installStableChromeExtension,
-} from "./browser/extension-install-fixture.test-support.js";
-import {
-  useExtensionInstallFixture,
-  writeChromePreferences,
-} from "./browser/extension-install.test-support.js";
+import * as doctor from "../browser-doctor.js";
+import * as install from "./browser/extension-install-fixture.test-support.js";
+import { useExtensionInstallFixture } from "./browser/extension-install.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/text-utility-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-utility-runtime")>();
@@ -30,6 +20,16 @@ vi.mock("openclaw/plugin-sdk/text-utility-runtime", async (importOriginal) => {
 const fixture = useExtensionInstallFixture();
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 
+function observeRead<A extends unknown[], R>(
+  read: (...args: A) => Promise<R>,
+  inspect: (target: A[0]) => void,
+) {
+  return async (...args: A) => {
+    inspect(args[0]);
+    return await read(...args);
+  };
+}
+
 afterEach(() => {
   Object.defineProperty(process, "platform", platformDescriptor);
   vi.restoreAllMocks();
@@ -39,16 +39,13 @@ afterEach(() => {
 async function protectedProfiles(platform: NodeJS.Platform, installed: boolean) {
   const value = await fixture(platform);
   if (installed) {
-    await installStableChromeExtension(value.bundledDir, value.deps);
+    await install.installStableChromeExtension(value.bundledDir, value.deps);
   }
-  for (const root of chromeProductRoots(value.deps)) {
-    for (const filename of ["Preferences", "Secure Preferences"] as const) {
-      await writeChromePreferences({
-        userDataDir: root.userDataDir,
-        profile: "Default",
-        filename,
-        entries: {},
-      });
+  for (const root of install.chromeProductRoots(value.deps)) {
+    const profileDir = path.join(root.userDataDir, "Default");
+    await fsp.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    for (const filename of ["Preferences", "Secure Preferences"]) {
+      await fsp.writeFile(path.join(profileDir, filename), "{}", { mode: 0o600 });
     }
   }
   const accesses: string[] = [];
@@ -65,25 +62,17 @@ async function protectedProfiles(platform: NodeJS.Platform, installed: boolean) 
     return readSync(...args);
   });
   const read = fsp.readFile;
-  vi.spyOn(fsp, "readFile").mockImplementation(async (...args) => {
-    denyProfileRead(args[0]);
-    return await read(...args);
-  });
-  const roots = new Set(chromeProductRoots(value.deps).map((root) => root.userDataDir));
+  vi.spyOn(fsp, "readFile").mockImplementation(observeRead(read, denyProfileRead));
+  const roots = new Set(install.chromeProductRoots(value.deps).map((root) => root.userDataDir));
+  const recordRoot = (target: unknown) => {
+    if (roots.has(String(target))) {
+      accesses.push(String(target));
+    }
+  };
   const lstat = fsp.lstat;
-  vi.spyOn(fsp, "lstat").mockImplementation(async (...args) => {
-    if (roots.has(String(args[0]))) {
-      accesses.push(String(args[0]));
-    }
-    return await lstat(...args);
-  });
+  vi.spyOn(fsp, "lstat").mockImplementation(observeRead(lstat, recordRoot));
   const readdir = fsp.readdir;
-  vi.spyOn(fsp, "readdir").mockImplementation(async (...args) => {
-    if (roots.has(String(args[0]))) {
-      accesses.push(String(args[0]));
-    }
-    return await readdir(...args);
-  });
+  vi.spyOn(fsp, "readdir").mockImplementation(observeRead(readdir, recordRoot));
   for (const [key, entry] of Object.entries(value.deps.env)) {
     vi.stubEnv(key, entry);
   }
@@ -107,7 +96,7 @@ describe("general Doctor browser profile permission boundary", () => {
       Object.defineProperty(process, "platform", { ...platformDescriptor, value: platform });
       for (const allowSystemProfileImport of [false, undefined, true]) {
         const noteFn = vi.fn();
-        await noteChromeMcpBrowserReadiness(
+        await doctor.noteChromeMcpBrowserReadiness(
           { browser: { allowSystemProfileImport, extensionRelay: { allowLegacyAuth: false } } },
           { noteFn },
         );
@@ -127,15 +116,15 @@ describe("general Doctor browser profile permission boundary", () => {
         }
       }
       // Explicit discovery must reach the same observer Doctor must leave untouched.
-      await discoverChromeExtensionIds({ approvedDirs: [], deps: value.deps });
-      expect(value.accesses).toContain(chromeProductRoots(value.deps)[0]!.userDataDir);
+      await install.discoverChromeExtensionIds({ approvedDirs: [], deps: value.deps });
+      expect(value.accesses).toContain(install.chromeProductRoots(value.deps)[0]!.userDataDir);
     },
   );
 
   it("reports native-host repair as skipped without discovering profiles or claiming changes", async () => {
     const value = await protectedProfiles(process.platform, true);
     vi.spyOn(os, "homedir").mockReturnValue(value.homeDir);
-    const result = await maybeRepairOwnedChromeExtensionNativeHosts();
+    const result = await doctor.maybeRepairOwnedChromeExtensionNativeHosts();
     expect(value.accesses).toEqual([]);
     expect(result.changes).toEqual([]);
     expect(result.status).toBe("skipped");
