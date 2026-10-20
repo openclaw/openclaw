@@ -1,3 +1,4 @@
+import { ComponentType } from "discord-api-types/v10";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -12,12 +13,11 @@ import {
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  Button,
-  StringSelectMenu,
-  type BaseComponentInteraction,
-  type ComponentData,
-  type MessagePayload,
+import type {
+  BaseMessageInteractiveComponent,
+  BaseComponentInteraction,
+  ComponentData,
+  MessagePayload,
 } from "../internal/discord.js";
 import { splitDiscordModelRef } from "./model-picker-preference-primitives.js";
 import { readDiscordModelPickerRecentModels } from "./model-picker-preferences.js";
@@ -554,26 +554,26 @@ type DiscordModelPickerFallbackParams = {
 
 export function createDiscordModelPickerFallbackButton(
   params: DiscordModelPickerFallbackParams,
-): Button {
-  return new (class extends Button {
-    label = "modelpick";
-    customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=btn`;
+): BaseMessageInteractiveComponent {
+  return {
+    type: ComponentType.Button,
+    customId: `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=btn`,
 
-    override async run(interaction: BaseComponentInteraction, data: ComponentData) {
+    async run(interaction: BaseComponentInteraction, data: ComponentData) {
       await handleDiscordModelPickerInteraction({ ...params, interaction, data });
-    }
-  })();
+    },
+  };
 }
 
 export function createDiscordModelPickerFallbackSelect(
   params: DiscordModelPickerFallbackParams,
-): StringSelectMenu {
-  return new (class extends StringSelectMenu {
-    customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=sel`;
-    options = [];
+): BaseMessageInteractiveComponent {
+  return {
+    type: ComponentType.StringSelect,
+    customId: `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=sel`,
 
-    override async run(interaction: BaseComponentInteraction, data: ComponentData) {
+    async run(interaction: BaseComponentInteraction, data: ComponentData) {
       await handleDiscordModelPickerInteraction({ ...params, interaction, data });
-    }
-  })();
+    },
+  };
 }

@@ -19,14 +19,9 @@ function resolveIrcGroupScope(params: {
   target: string;
 }) {
   const { "*": wildcard, ...groups } = params.groups ?? {};
-  // This adapter historically reads tools only; do not widen it to toolsBySender.
-  const project = (entry: IrcChannelConfig) => ({
-    requireMention: entry.requireMention,
-    tools: entry.tools,
-  });
   const tree: ScopeTree = {
-    defaults: wildcard ? project(wildcard) : undefined,
-    scopes: Object.fromEntries(Object.entries(groups).map(([key, entry]) => [key, project(entry)])),
+    defaults: wildcard,
+    scopes: groups,
   };
   // Legacy IRC matching checks exact keys before case-insensitive keys;
   // the canonical helper preserves that order.
@@ -63,5 +58,6 @@ export function resolveIrcGroupToolPolicy(params: {
   target: string;
 }): GroupToolPolicyConfig | undefined {
   const { tree, path } = resolveIrcGroupScope(params);
-  return resolveScopeToolsPolicy({ tree, path });
+  // IRC reads tools only; sender-specific policies belong to other channel adapters.
+  return resolveScopeToolsPolicy({ tree, path, senderPolicyMode: "never" });
 }

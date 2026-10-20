@@ -174,7 +174,7 @@ async function fetchWithMatrixGuardedRedirects(params: {
   assertCurrent?: () => void;
   beforeDispatch?: () => Promise<void> | undefined;
   assertSendCurrent?: () => void;
-}): Promise<{ response: Response; release: () => Promise<void>; finalUrl: string }> {
+}): Promise<{ response: Response; release: () => Promise<void> }> {
   const effect = captureEffectAuthority();
   const assertDispatchCurrent = () => {
     params.assertCurrent?.();
@@ -243,7 +243,6 @@ async function fetchWithMatrixGuardedRedirects(params: {
             cleanup();
             await closeDispatcher(dispatcher);
           },
-          finalUrl: currentUrl.toString(),
         };
       }
 
