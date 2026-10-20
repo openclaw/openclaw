@@ -40,6 +40,8 @@ export function createAgentDedupeLifecycle(params: {
   suppressVisibleSessionEffects: boolean;
   inputProvenance?: InputProvenance;
   reconcileDurableInput?: boolean;
+  assertAdmissionCurrent?: () => void;
+  assertCancellationCurrent?: () => void;
   ownerConnId?: string;
   ownerDeviceId?: string;
   context: AgentTurnContext;
@@ -225,13 +227,21 @@ export function createAgentDedupeLifecycle(params: {
     if (accepted) {
       return false;
     }
-    const source = getRpcSourceForGateway(params.runId, params.context.resolveGatewayContext);
-    if (source?.adapter.projectSessionTerminalPending) {
-      // Explicit Stop already owns the terminal receipt and its persistence.
-      return false;
+    try {
+      params.assertAdmissionCurrent?.();
+    } catch {
+      const source = getRpcSourceForGateway(params.runId, params.context.resolveGatewayContext);
+      // A canceled execution owner may record its own cancellation, but cannot
+      // replace an explicit Stop publisher or ignore independent authority loss.
+      if (!params.assertCancellationCurrent || source?.adapter.projectSessionTerminalPending) {
+        return false;
+      }
+      try {
+        params.assertCancellationCurrent();
+      } catch {
+        return false;
+      }
     }
-    // Cancellation already committed through its requester authority. Record
-    // that fact even though the cancelled source can no longer execute.
     const keys = ownedReservationKeys();
     if (keys.length !== params.agentDedupeKeys.length) {
       return false;

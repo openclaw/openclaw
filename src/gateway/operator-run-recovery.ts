@@ -89,6 +89,8 @@ export function readGatewayOperatorRecoverySource(
 
 export type RestoredGatewayOperatorAuthority = {
   authority: AdmittedRunOperatorAuthority;
+  /** Original caller policy remains authoritative when its recovered execution is canceled. */
+  assertPolicyCurrent: () => void;
   authenticatedUserProfile: GatewayAuthenticatedUserProfile;
   controlUiAdmin: boolean;
   release: () => void;
@@ -340,6 +342,9 @@ async function restoreGatewayOperatorSnapshot(params: {
     const { id, ...display } = projectUserProfileDisplay(profile);
     return {
       authority,
+      assertPolicyCurrent: () => {
+        assertPolicy();
+      },
       authenticatedUserProfile: { profileId: id, ...display, updatedAt: profile.updated_at },
       controlUiAdmin: snapshot.controlUiAdmin,
       release,
