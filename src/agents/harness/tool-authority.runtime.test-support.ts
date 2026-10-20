@@ -1,8 +1,11 @@
 import { vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
+  type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -16,7 +19,6 @@ export const sessionKey = "agent:main:main";
 type EmbeddedRunHandle = ReturnType<typeof createEmbeddedRunHandle>;
 type QueueMessage = EmbeddedRunHandle["queueMessage"];
 type QueueMock = ReturnType<typeof vi.fn<QueueMessage>>;
-type OperatorAuthority = Parameters<typeof prepareAgentRunAdmission>[0]["operatorAuthority"];
 export const attempt = {
   sessionId,
   sessionKey,
@@ -35,25 +37,29 @@ export const attempt = {
 };
 
 export async function admitted<T>(
-  run: (context: {
-    admittedRunContext: Awaited<ReturnType<ReturnType<typeof prepareAgentRunAdmission>["admit"]>>;
-    close: () => void;
-  }) => Promise<T>,
-  operatorAuthority?: OperatorAuthority,
+  run: (context: { admittedRunContext: AdmittedRunContext; close: () => void }) => Promise<T>,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
+  options: {
+    config?: OpenClawConfig;
+    runId?: string;
+    boundary?: string;
+  } = {},
 ) {
+  const runId = options.runId ?? attempt.runId;
+  const boundary = options.boundary ?? "tool-authority-test";
   const admission = prepareAgentRunAdmission({
-    cfg: {},
-    operationalRunInstance: createOperationalRunInstanceRef(attempt.runId),
+    cfg: options.config ?? {},
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
     operatorAuthority,
     facts: {
       agentId: "main",
-      runId: attempt.runId,
-      ingress: { kind: "system", state: "present", boundary: "tool-authority-test" },
+      runId,
+      ingress: { kind: "system", state: "present", boundary },
     },
   });
   try {
     return await run({
-      admittedRunContext: await admission.admit("embedded", "authority-test"),
+      admittedRunContext: await admission.admit("embedded", options.boundary ?? "authority-test"),
       close: admission.close,
     });
   } finally {
@@ -102,7 +108,7 @@ export async function published<T>(
       ReplyToolAuthorityOverlay,
       "toolsAllow" | "senderId" | "senderName" | "clientCaps" | "gatewayUiCommandTarget"
     > = {},
-  operatorAuthority?: OperatorAuthority,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
   configureHandle?: (handle: EmbeddedRunHandle, queueMessage: QueueMessage) => void,
 ) {
   return admitted(

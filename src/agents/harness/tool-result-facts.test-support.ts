@@ -27,12 +27,16 @@ export function createTelemetry(): AgentHarnessToolResultTelemetry {
 
 type TelemetryParams = Parameters<typeof recordAgentHarnessToolResultTelemetry>[0];
 export function recordTelemetry(
-  params: Pick<TelemetryParams, "toolName" | "result" | "telemetry"> &
+  params: Pick<TelemetryParams, "toolName" | "result"> &
     Partial<
-      Pick<TelemetryParams, "args" | "isError" | "messagingDelivered" | "mediaDeliveryConfirmed">
+      Pick<
+        TelemetryParams,
+        "telemetry" | "args" | "isError" | "messagingDelivered" | "mediaDeliveryConfirmed"
+      >
     >,
 ) {
-  return recordAgentHarnessToolResultTelemetry({
+  const telemetry = params.telemetry ?? createTelemetry();
+  recordAgentHarnessToolResultTelemetry({
     args: {},
     isError: false,
     messagingDelivered: false,
@@ -42,5 +46,7 @@ export function recordTelemetry(
     resolveMessagingMediaSourceUrls: (urls) => urls,
     signal: new AbortController().signal,
     ...params,
+    telemetry,
   });
+  return telemetry;
 }
