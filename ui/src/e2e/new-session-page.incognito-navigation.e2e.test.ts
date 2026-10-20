@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
@@ -7,6 +6,9 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import {
   installMockGateway,
   navigateInApp,
+  pollAttribute,
+  pollCount,
+  pollValue,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
 
@@ -39,19 +41,13 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new?agent=main`);
         await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
         const message = page.locator(".new-session-page__message");
-        const original = await page.locator("openclaw-new-session-page").elementHandle();
-        if (!original) {
-          throw new Error("New Session page did not mount");
-        }
+        const incognito = page.getByRole("switch", { name: "Incognito" });
+        const attachments = page.locator(".chat-attachment-file__name");
         const text = `${scenario.name}: retain this unsent synthetic draft`;
         const filename = `${scenario.name}.txt`;
         if (scenario.incognito) {
-          await page.getByRole("switch", { name: "Incognito" }).click();
-          await expect
-            .poll(() =>
-              page.getByRole("switch", { name: "Incognito" }).getAttribute("aria-checked"),
-            )
-            .toBe("true");
+          await incognito.click();
+          await pollAttribute(incognito, "aria-checked").toBe("true");
           await waitForCommittedNewSessionDraft(page, null, 0);
         }
         await message.pressSequentially(text);
@@ -67,31 +63,10 @@ suite.define(() => {
           await waitForCommittedNewSessionDraft(page, text, 1);
         }
         if (scenario.turnOff) {
-          await page.getByRole("switch", { name: "Incognito" }).click();
-          await expect
-            .poll(() =>
-              page.getByRole("switch", { name: "Incognito" }).getAttribute("aria-checked"),
-            )
-            .toBe("false");
+          await incognito.click();
+          await pollAttribute(incognito, "aria-checked").toBe("false");
         }
         const remainsIncognito = scenario.incognito && !scenario.turnOff;
-        const observe = async () => ({
-          url: page.url(),
-          samePageElement: await original.evaluate(
-            (element) => element === document.querySelector("openclaw-new-session-page"),
-          ),
-          text: (await message.count()) ? await message.inputValue() : null,
-          incognito: (await page.getByRole("switch", { name: "Incognito" }).count())
-            ? await page.getByRole("switch", { name: "Incognito" }).getAttribute("aria-checked")
-            : null,
-          attachments: await page.locator(".chat-attachment-file__name").allTextContents(),
-          routeData: (await page.locator("openclaw-new-session-page").count())
-            ? await page
-                .locator("openclaw-new-session-page")
-                .evaluate((element) => Reflect.get(element, "data"))
-            : null,
-        });
-        const before = await observe();
         await page.screenshot({
           path: path.join(suite.artifactDir, `${scenario.name}-before.png`),
         });
@@ -113,7 +88,6 @@ suite.define(() => {
             )
             .toBe("writer");
         }
-        const away = await observe();
         await page.goBack();
         await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
         await expect
@@ -129,31 +103,13 @@ suite.define(() => {
         await page.screenshot({
           path: path.join(suite.artifactDir, `${scenario.name}-returned.png`),
         });
-        const returned = await observe();
-        const requests = (await gateway.getRequests()).map(({ method, params }) => ({
-          method,
-          params,
-        }));
-        await writeFile(
-          path.join(suite.artifactDir, `${scenario.name}.json`),
-          JSON.stringify(
-            {
-              scenario,
-              before,
-              away,
-              returned,
-              errors,
-              requests,
-            },
-            null,
-            2,
-          ),
-        );
-        // All outcomes are retained before judging the custody hypothesis.
-        expect.soft(returned.text, scenario.name).toBe(text);
-        expect.soft(returned.attachments, scenario.name).toContain(filename);
-        expect.soft(returned.incognito, scenario.name).toBe(String(remainsIncognito));
-        expect.soft(new URL(returned.url).searchParams.get("agent"), scenario.name).toBe("main");
+        const requests = await gateway.getRequests();
+        expect.soft(await message.inputValue(), scenario.name).toBe(text);
+        expect.soft(await attachments.allTextContents(), scenario.name).toContain(filename);
+        expect
+          .soft(await incognito.getAttribute("aria-checked"), scenario.name)
+          .toBe(String(remainsIncognito));
+        expect.soft(new URL(page.url()).searchParams.get("agent"), scenario.name).toBe("main");
         expect.soft(errors, scenario.name).toEqual([]);
         expect
           .soft(
@@ -165,24 +121,17 @@ suite.define(() => {
           await waitForCommittedNewSessionDraft(page, null, 0);
           await page.reload();
           await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
-          await expect.poll(() => message.inputValue()).toBe("");
-          await expect.poll(() => page.locator(".chat-attachment-file__name").count()).toBe(0);
-          await expect
-            .poll(() =>
-              page.getByRole("switch", { name: "Incognito" }).getAttribute("aria-checked"),
-            )
-            .toBe("false");
+          await pollValue(message).toBe("");
+          await pollCount(attachments).toBe(0);
+          await pollAttribute(incognito, "aria-checked").toBe("false");
         }
         if (scenario.turnOff) {
           await waitForCommittedNewSessionDraft(page, text, 1);
           await page.reload();
           await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
-          await expect.poll(() => message.inputValue()).toBe(text);
-          await expect
-            .poll(() => page.locator(".chat-attachment-file__name").allTextContents())
-            .toContain(filename);
+          await pollValue(message).toBe(text);
+          await expect.poll(() => attachments.allTextContents()).toContain(filename);
         }
-        await original.dispose();
       });
     }
   });

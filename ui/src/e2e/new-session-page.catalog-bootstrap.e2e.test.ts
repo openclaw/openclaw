@@ -14,6 +14,30 @@ import {
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const model = (id: string, name: string) => ({ provider: "fixture", id, name, available: true });
+const current = model("current", "Current model");
+const older = model("older", "Older model");
+function catalogScenario(ids = ["alpha", "bravo"]) {
+  return {
+    connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
+    defaultAgentId: "alpha",
+    agentModel: "fixture/current",
+    heldMethods: ["models.list"],
+    models: [older],
+    methodResponses: {
+      "agents.list": {
+        defaultId: "alpha",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: ids.map((id) => ({
+          id,
+          name: id === "alpha" ? "Alpha" : "Bravo",
+          model: { primary: "fixture/current" },
+        })),
+      },
+    },
+  };
+}
 
 suite.define(() => {
   it.each([
@@ -27,53 +51,30 @@ suite.define(() => {
       const context = await suite.browser.newContext(createControlUiE2eContextOptions());
       const gatewayUrl = controlUiBundledGatewayUrl(suite.server.baseUrl);
       await context.addInitScript(
-        ({ key, url, scope }) => {
-          localStorage.setItem(
-            key,
-            JSON.stringify({
-              gatewayUrl: url,
-              sessionsByGateway: {
-                [scope]: {
-                  sessionKey: "agent:bravo:main",
-                  lastActiveSessionKey: "agent:bravo:main",
-                  selectedAgentId: "bravo",
-                },
-              },
-            }),
-          );
+        ({ key, value }) => {
+          localStorage.setItem(key, value);
         },
         {
           key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
-          url: gatewayUrl,
-          scope: gatewayOriginScope(gatewayUrl),
+          value: JSON.stringify({
+            gatewayUrl,
+            sessionsByGateway: {
+              [gatewayOriginScope(gatewayUrl)]: {
+                sessionKey: "agent:bravo:main",
+                lastActiveSessionKey: "agent:bravo:main",
+                selectedAgentId: "bravo",
+              },
+            },
+          }),
         },
       );
       const page = await context.newPage();
-      const current = {
-        provider: "fixture",
-        id: "current",
-        name: "Current model",
-        available: true,
+      const gateway = await installMockGateway(page, catalogScenario());
+      const foreignSnapshot = {
+        target: { agentId: agentId === "alpha" ? "bravo" : "alpha" },
+        scope: { agentId: agentId === "alpha" ? "bravo" : "alpha" },
+        catalog: { models: [{ ...current, id: "foreign", name: "Other agent model" }] },
       };
-      const older = { provider: "fixture", id: "older", name: "Older model", available: true };
-      const gateway = await installMockGateway(page, {
-        connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
-        defaultAgentId: "alpha",
-        agentModel: "fixture/current",
-        heldMethods: ["models.list"],
-        models: [older],
-        methodResponses: {
-          "agents.list": {
-            defaultId: "alpha",
-            mainKey: "main",
-            scope: "per-sender",
-            agents: [
-              { id: "alpha", name: "Alpha", model: { primary: "fixture/current" } },
-              { id: "bravo", name: "Bravo", model: { primary: "fixture/current" } },
-            ],
-          },
-        },
-      });
       try {
         await page.goto(`${suite.server.baseUrl}${route}`);
         const connected = await gateway.waitForRequest("connect");
@@ -81,22 +82,14 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("models.list", { agentId })).length)
           .toBe(1);
-        await gateway.emitGatewayEvent("models.snapshot", {
-          target: { agentId: agentId === "alpha" ? "bravo" : "alpha" },
-          scope: { agentId: agentId === "alpha" ? "bravo" : "alpha" },
-          catalog: { models: [{ ...current, id: "foreign", name: "Other agent model" }] },
-        });
+        await gateway.emitGatewayEvent("models.snapshot", foreignSnapshot);
         expect(await gateway.getRequests("models.list", { agentId })).toHaveLength(1);
         await gateway.emitGatewayEvent("models.snapshot", {
           target: hint ? { agentId: hint } : {},
           scope: { agentId },
           catalog: { models: [current], pendingProviders: ["fixture"] },
         });
-        await gateway.emitGatewayEvent("models.snapshot", {
-          target: { agentId: agentId === "alpha" ? "bravo" : "alpha" },
-          scope: { agentId: agentId === "alpha" ? "bravo" : "alpha" },
-          catalog: { models: [{ ...current, id: "foreign", name: "Other agent model" }] },
-        });
+        await gateway.emitGatewayEvent("models.snapshot", foreignSnapshot);
         const trigger = page.locator("[data-chat-model-select]");
         const requestsBeforeOpen = (await gateway.getRequests("models.list")).length;
         await trigger.click();
@@ -133,23 +126,7 @@ suite.define(() => {
   it("reloads the current catalog after a late initial snapshot without losing its draft", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
-    const current = { provider: "fixture", id: "current", name: "Current model", available: true };
-    const older = { provider: "fixture", id: "older", name: "Older model", available: true };
-    const gateway = await installMockGateway(page, {
-      connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
-      defaultAgentId: "alpha",
-      agentModel: "fixture/current",
-      heldMethods: ["models.list"],
-      models: [older],
-      methodResponses: {
-        "agents.list": {
-          defaultId: "alpha",
-          mainKey: "main",
-          scope: "per-sender",
-          agents: [{ id: "alpha", name: "Alpha", model: { primary: "fixture/current" } }],
-        },
-      },
-    });
+    const gateway = await installMockGateway(page, catalogScenario(["alpha"]));
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("models.list", { match: { agentId: "alpha" } });

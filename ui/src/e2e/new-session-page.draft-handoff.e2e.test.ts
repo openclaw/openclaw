@@ -1,17 +1,28 @@
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  captureUiProof,
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
   createdSessionListResult,
   installMockGateway,
+  pollValue,
   waitForCommittedNewSessionDraft,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const image = (scope: Page | Locator, name: string) =>
+  scope.getByRole("button", { name: `Open image ${name}` });
+const attach = (scope: Page | Locator, name: string) =>
+  scope
+    .locator(".agent-chat__photo-input")
+    .setInputFiles(path.join(process.cwd(), "ui/public", name));
+async function returnToDraft(page: Page) {
+  await page.locator(".sidebar-rail .sidebar-new-session").click();
+  await page.waitForURL((url) => url.pathname.endsWith("/new") && url.search === "?agent=main");
+}
 
 suite.define(() => {
   it.each([
@@ -34,9 +45,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
       const composer = page.locator(".new-session-page__message");
       await composer.fill(message);
-      await page
-        .locator(".agent-chat__photo-input")
-        .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
+      await attach(page, "favicon-32.png");
       await waitForCommittedNewSessionDraft(page, message, ["favicon-32.png"]);
       await composer.press("Enter");
       const create = await gateway.waitForRequest("sessions.create");
@@ -51,7 +60,7 @@ suite.define(() => {
       await composer.waitFor();
       const expected = replacement === "same" ? message : (replacement ?? "");
       if (returnEarly) {
-        await expect.poll(() => composer.inputValue()).toBe(message);
+        await pollValue(composer).toBe(message);
         await page.getByRole("button", { name: "Open image favicon-32.png" }).waitFor();
         if (replacement) {
           await composer.fill("Temporary replacement draft");
@@ -63,20 +72,16 @@ suite.define(() => {
         }
         await gateway.resolveDeferred("sessions.create");
       }
-      try {
-        await expect.poll(() => composer.inputValue()).toBe(expected);
-        await waitForCommittedNewSessionDraft(
-          page,
-          expected || null,
-          replacement ? ["favicon-32.png"] : 0,
-        );
-      } finally {
-        await captureUiProof(suite, page, "composer-after-background-acceptance.png");
-      }
+      await pollValue(composer).toBe(expected);
+      await waitForCommittedNewSessionDraft(
+        page,
+        expected || null,
+        replacement ? ["favicon-32.png"] : 0,
+      );
       expect(new URL(page.url()).pathname.endsWith("/new")).toBe(true);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       await page.reload();
-      await expect.poll(() => composer.inputValue()).toBe(expected);
+      await pollValue(composer).toBe(expected);
       await expect
         .poll(() => page.getByRole("button", { name: "Open image favicon-32.png" }).count())
         .toBe(replacement ? 1 : 0);
@@ -91,6 +96,11 @@ suite.define(() => {
       const durableText = "newer durable draft from the second page";
       const staleFileName = "favicon-32.png";
       const durableFileName = "apple-touch-icon.png";
+      const expectDurableDraft = async (scope: Page | Locator) => {
+        await pollValue(scope.locator(".new-session-page__message")).toBe(durableText);
+        await image(scope, durableFileName).waitFor();
+        await expect(image(scope, staleFileName).count()).resolves.toBe(0);
+      };
       const pageA = await context.newPage();
       await installMockGateway(pageA, {
         methodResponses: {
@@ -102,19 +112,13 @@ suite.define(() => {
         .locator(".sidebar-recent-session")
         .filter({ hasText: "Created session" });
       await existingSession.waitFor();
-      await pageA.locator(".sidebar-rail .sidebar-new-session").click();
-      await pageA.waitForURL(
-        (url) => url.pathname.endsWith("/new") && url.search === "?agent=main",
-      );
+      await returnToDraft(pageA);
 
       const newSessionA = pageA.locator("openclaw-new-session-page");
       const messageA = newSessionA.locator(".new-session-page__message");
       await messageA.fill(staleText);
-      await newSessionA
-        .locator(".agent-chat__photo-input")
-        .setInputFiles(path.join(process.cwd(), "ui/public/favicon-32.png"));
-      await newSessionA.getByRole("button", { name: `Open image ${staleFileName}` }).waitFor();
-      await captureUiProof(suite, pageA, "new-session-draft-before-navigation.png");
+      await attach(newSessionA, staleFileName);
+      await image(newSessionA, staleFileName).waitFor();
 
       await existingSession.click();
       await pageA.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
@@ -124,46 +128,26 @@ suite.define(() => {
       await pageB.goto(`${suite.server.baseUrl}new?agent=main`);
       const newSessionB = pageB.locator("openclaw-new-session-page");
       const messageB = newSessionB.locator(".new-session-page__message");
-      await expect.poll(() => messageB.inputValue()).toBe(staleText);
-      await newSessionB.getByRole("button", { name: `Open image ${staleFileName}` }).waitFor();
+      await pollValue(messageB).toBe(staleText);
+      await image(newSessionB, staleFileName).waitFor();
 
       await messageB.fill(durableText);
       await newSessionB.getByRole("button", { name: `Remove ${staleFileName}` }).click();
-      await newSessionB
-        .locator(".agent-chat__photo-input")
-        .setInputFiles(path.join(process.cwd(), "ui/public/apple-touch-icon.png"));
-      await newSessionB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
+      await attach(newSessionB, durableFileName);
+      await image(newSessionB, durableFileName).waitFor();
       await waitForCommittedNewSessionDraft(pageB, durableText, [durableFileName]);
       await pageB.reload();
-      await expect.poll(() => messageB.inputValue()).toBe(durableText);
-      await newSessionB.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
-      await expect(
-        newSessionB.getByRole("button", { name: `Open image ${staleFileName}` }).count(),
-      ).resolves.toBe(0);
+      await expectDurableDraft(newSessionB);
       await pageB.close();
 
-      await pageA.locator(".sidebar-rail .sidebar-new-session").click();
-      await pageA.waitForURL(
-        (url) => url.pathname.endsWith("/new") && url.search === "?agent=main",
-      );
-      await expect.poll(() => messageA.inputValue()).toBe(durableText);
-      await newSessionA.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
-      await expect(
-        newSessionA.getByRole("button", { name: `Open image ${staleFileName}` }).count(),
-      ).resolves.toBe(0);
-      await captureUiProof(suite, pageA, "new-session-draft-restored.png");
+      await returnToDraft(pageA);
+      await expectDurableDraft(newSessionA);
       await pageA.close();
 
       const freshPage = await context.newPage();
       await installMockGateway(freshPage);
       await freshPage.goto(`${suite.server.baseUrl}new?agent=main`);
-      await expect
-        .poll(() => freshPage.locator(".new-session-page__message").inputValue())
-        .toBe(durableText);
-      await freshPage.getByRole("button", { name: `Open image ${durableFileName}` }).waitFor();
-      await expect(
-        freshPage.getByRole("button", { name: `Open image ${staleFileName}` }).count(),
-      ).resolves.toBe(0);
+      await expectDurableDraft(freshPage);
     } finally {
       await context.close();
     }
