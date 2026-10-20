@@ -74,23 +74,25 @@ it("preserves a routed page's focused draft through loader updates and retryable
     input.value = "Unsaved notes";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
+    const expectDraft = (focused = true) => {
+      expect(outlet.querySelector("input")).toBe(input);
+      expect(input.value).toBe("Unsaved notes");
+      if (focused) {
+        expect(document.activeElement).toBe(input);
+      }
+      expect(firstCleanup).not.toHaveBeenCalled();
+    };
 
     const revalidation = router.revalidate(context, "page");
     await settleRouterOutlet(outlet);
     expect(outlet.querySelector("p")?.textContent).toBe("Initial / loading");
-    expect(outlet.querySelector("input")).toBe(input);
-    expect(input.value).toBe("Unsaved notes");
-    expect(document.activeElement).toBe(input);
-    expect(firstCleanup).not.toHaveBeenCalled();
+    expectDraft();
 
     reload.resolve("Loaded");
     await revalidation;
     await settleRouterOutlet(outlet);
     expect(outlet.querySelector("p")?.textContent).toBe("Loaded / ready");
-    expect(outlet.querySelector("input")).toBe(input);
-    expect(input.value).toBe("Unsaved notes");
-    expect(document.activeElement).toBe(input);
-    expect(firstCleanup).not.toHaveBeenCalled();
+    expectDraft();
 
     const failure = router.revalidate(context, "page");
     await settleRouterOutlet(outlet);
@@ -99,9 +101,7 @@ it("preserves a routed page's focused draft through loader updates and retryable
     await settleRouterOutlet(outlet);
     expect(outlet.textContent).toContain("Fixture refresh failed");
     expect(outlet.querySelector(".lazy-view-error--inline")).not.toBeNull();
-    expect(outlet.querySelector("input")).toBe(input);
-    expect(document.activeElement).toBe(input);
-    expect(firstCleanup).not.toHaveBeenCalled();
+    expectDraft();
 
     const retry = outlet.querySelector<HTMLButtonElement>(".lazy-view-error__action")!;
     retry.focus();
@@ -114,10 +114,8 @@ it("preserves a routed page's focused draft through loader updates and retryable
     await waitForSolid(() =>
       expect(outlet.querySelector("p")?.textContent).toBe("Recovered retry / ready"),
     );
-    expect(outlet.querySelector("input")).toBe(input);
-    expect(input.value).toBe("Unsaved notes");
+    expectDraft(false);
     expect(outlet.querySelector(".lazy-view-error__action")).toBeNull();
-    expect(firstCleanup).not.toHaveBeenCalled();
 
     await router.navigate("next", context);
     await settleRouterOutlet(outlet);

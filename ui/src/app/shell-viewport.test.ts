@@ -7,8 +7,11 @@ let disconnect: (() => void) | undefined;
 let frames: Map<number, FrameRequestCallback>;
 let nextFrame = 0;
 const root = document.documentElement;
-const height = () => root.style.getPropertyValue("--shell-viewport-height");
-const inset = () => root.style.getPropertyValue("--shell-safe-area-bottom");
+const viewportHeight = () => root.style.getPropertyValue("--shell-viewport-height");
+function expectViewport(height: string, inset = "") {
+  expect(viewportHeight()).toBe(height);
+  expect(root.style.getPropertyValue("--shell-safe-area-bottom")).toBe(inset);
+}
 function flush() {
   const pending = [...frames.values()];
   frames.clear();
@@ -83,12 +86,10 @@ describe("shell visual viewport", () => {
         } else {
           resize({ height: next });
         }
-        expect(height()).toBe(`${next}px`);
-        expect(inset()).toBe("");
+        expectViewport(`${next}px`);
         if (next === 782) {
           resize({ height: 770, offsetTop: 12 }, "scroll");
-          expect(height()).toBe("782px");
-          expect(inset()).toBe("");
+          expectViewport("782px");
         }
       }
     },
@@ -100,13 +101,11 @@ describe("shell visual viewport", () => {
       disconnect = connectShellViewport();
       const input = editor(shadow);
       resize({ height: 480 });
-      expect(height()).toBe("480px");
-      expect(inset()).toBe("0px");
+      expectViewport("480px", "0px");
       resize({ height: 440, offsetTop: 70 }, "scroll");
-      expect(height()).toBe("510px");
+      expect(viewportHeight()).toBe("510px");
       resize({ height: 844, offsetTop: 0 });
-      expect(height()).toBe("844px");
-      expect(inset()).toBe("");
+      expectViewport("844px");
       expect(input.matches(":focus")).toBe(true);
     },
   );
@@ -117,12 +116,10 @@ describe("shell visual viewport", () => {
     // The browser can resize both viewports before the first focus frame.
     vi.stubGlobal("innerHeight", 480);
     resize({ height: 480 });
-    expect(height()).toBe("480px");
-    expect(inset()).toBe("0px");
+    expectViewport("480px", "0px");
     vi.stubGlobal("innerHeight", 844);
     resize({ height: 844 });
-    expect(height()).toBe("844px");
-    expect(inset()).toBe("");
+    expectViewport("844px");
   });
 
   it("does not carry portrait keyboard geometry into landscape", () => {
@@ -134,11 +131,9 @@ describe("shell visual viewport", () => {
     resize({ height: 390 });
     window.dispatchEvent(new Event("orientationchange"));
     flush();
-    expect(height()).toBe("390px");
-    expect(inset()).toBe("");
+    expectViewport("390px");
     resize({ height: 210 });
-    expect(height()).toBe("210px");
-    expect(inset()).toBe("0px");
+    expectViewport("210px", "0px");
   });
 
   it("leaves pinch zoom and panning to the browser, including while focused", () => {
@@ -146,10 +141,9 @@ describe("shell visual viewport", () => {
     editor();
     resize({ height: 480 });
     resize({ height: 422, scale: 2, offsetTop: 50 });
-    expect(height()).toBe("");
-    expect(inset()).toBe("");
+    expectViewport("");
     resize({ height: 480, scale: 1, offsetTop: 0 });
-    expect(height()).toBe("480px");
+    expect(viewportHeight()).toBe("480px");
   });
 
   it("coalesces events, removes root overrides, and releases every listener on disconnect", () => {
@@ -164,15 +158,14 @@ describe("shell visual viewport", () => {
     window.dispatchEvent(new Event("resize"));
     disconnect();
     expect(frames.size).toBe(0);
-    expect(height()).toBe("");
-    expect(inset()).toBe("");
+    expectViewport("");
     resize({ height: 300 });
     window.dispatchEvent(new Event("orientationchange"));
     document.dispatchEvent(new Event("focusin"));
     document.dispatchEvent(new Event("focusout"));
     expect(frames.size).toBe(0);
     disconnect = connectShellViewport();
-    expect(height()).toBe("300px");
+    expect(viewportHeight()).toBe("300px");
   });
 
   it("retains the CSS fallback without VisualViewport", () => {
@@ -180,8 +173,7 @@ describe("shell visual viewport", () => {
     disconnect = connectShellViewport();
     editor();
     window.dispatchEvent(new Event("resize"));
-    expect(height()).toBe("");
-    expect(inset()).toBe("");
+    expectViewport("");
     expect(frames.size).toBe(0);
   });
 });
