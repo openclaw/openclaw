@@ -93,6 +93,38 @@ describe("session descriptor reads", () => {
     expect(h.read).toHaveBeenCalledTimes(8);
   });
 
+  it.each(["done", "running"] as const)(
+    "resamples unchanged accumulated runtime when a %s session starts another run",
+    async (status) => {
+      const previous: GatewaySessionRow = {
+        ...initial,
+        status,
+        lastRunId: "old-run",
+        runtimeMs: 500,
+      };
+      vi.setSystemTime(1_000);
+      h.setRow(previous);
+      await h.sessions.describe({ key });
+      vi.setSystemTime(10_000);
+      const running: GatewaySessionRow = {
+        ...previous,
+        updatedAt: 2,
+        status: "running",
+        lastRunId: "new-run",
+        activeRunIds: ["new-run"],
+      };
+      h.event("sessions.changed", { session: running, ancestorSessions: [] });
+      expect((await h.sessions.describe({ key })).session?.runtimeSampledAt).toBe(10_000);
+      vi.setSystemTime(20_000);
+      h.event("sessions.changed", {
+        session: { ...running, updatedAt: 3, activeRunIds: ["new-run"], label: "Renamed" },
+        ancestorSessions: [],
+      });
+      expect((await h.sessions.describe({ key })).session?.runtimeSampledAt).toBe(10_000);
+      expect(h.read).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("reuses a descriptor across unchanged row observations without a time limit", async () => {
     const first = { ...initial, snapshotAt: 1 };
     h.setRow(first);

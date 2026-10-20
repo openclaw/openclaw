@@ -30,18 +30,26 @@ type Read = {
 const MAX_DESCRIBED_SESSIONS = 128;
 
 function sampleRuntime(result: Result, previous?: GatewaySessionRow | null): Result {
-  return result.session?.runtimeMs === undefined
-    ? result
-    : {
-        ...result,
-        session: {
-          ...result.session,
-          runtimeSampledAt:
-            result.session.runtimeMs === previous?.runtimeMs
-              ? (previous.runtimeSampledAt ?? Date.now())
-              : Date.now(),
-        },
-      };
+  const session = result.session;
+  if (session?.runtimeMs === undefined) {
+    return result;
+  }
+  const sameSample =
+    previous &&
+    session.runtimeMs === previous.runtimeMs &&
+    session.status === previous.status &&
+    session.hasActiveRun === previous.hasActiveRun &&
+    session.lastRunId === previous.lastRunId &&
+    session.activeRunIds?.length === previous.activeRunIds?.length &&
+    (session.activeRunIds?.every((runId, index) => runId === previous.activeRunIds?.[index]) ??
+      true);
+  return {
+    ...result,
+    session: {
+      ...session,
+      runtimeSampledAt: sameSample ? (previous.runtimeSampledAt ?? Date.now()) : Date.now(),
+    },
+  };
 }
 
 /** Descriptor completeness belongs to the read owner, not to partial roster snapshots. */
