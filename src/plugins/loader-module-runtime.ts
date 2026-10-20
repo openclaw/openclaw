@@ -148,7 +148,14 @@ export function createPluginModuleLoader(options: {
     rootDir: string;
     registry: PluginRegistry;
     standalone?: boolean;
+    /** Installer-proven identity when the plugin source cannot change in place. */
+    immutableInstallIdentity?: string;
   };
+  // Only uncached inspections of immutable installs may share evaluated code.
+  const inspectionSourceIdentity = (owner: Owner) =>
+    getPluginRegistryInspectionResources(owner.registry) === undefined
+      ? undefined
+      : owner.immutableInstallIdentity;
   const binding = (
     modulePath: string,
     owner: Owner,
@@ -160,7 +167,7 @@ export function createPluginModuleLoader(options: {
     rootDir: owner.rootDir,
     standalone: owner.standalone,
     expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
-    inspectionRegistry: getPluginRegistryInspectionResources(owner.registry) !== undefined,
+    inspectionSourceIdentity: inspectionSourceIdentity(owner),
     devSourceRoot: captured.devSourceRoot,
     pluginSdkResolution: captured.pluginSdkResolution,
     createHostModuleLoader: () => createLoaderForModule(modulePath),
@@ -192,7 +199,7 @@ export function createPluginModuleLoader(options: {
           origin: owner.record.origin,
           source: modulePath,
           expectedSourceDigest: captured.expectedSourceDigests?.[owner.record.id],
-          inspectionRegistry: getPluginRegistryInspectionResources(owner.registry) !== undefined,
+          inspectionSourceIdentity: inspectionSourceIdentity(owner),
           registry: owner.registry,
         });
       if (

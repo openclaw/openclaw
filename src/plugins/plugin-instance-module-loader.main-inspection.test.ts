@@ -49,6 +49,8 @@ it("evaluates an unchanged installed native ESM entry once per main-thread inspe
     workspaceDir: string;
     origin?: PluginRecord["origin"];
     inspection?: boolean;
+    // A registry npm install record; editable local installs have none.
+    immutableInstallIdentity?: string | null;
   }) => {
     const cache = createPluginCache();
     const registry = createEmptyPluginRegistry();
@@ -71,7 +73,16 @@ it("evaluates an unchanged installed native ESM entry once per main-thread inspe
       enabled: true,
       configSchema: false,
     });
-    const owner = { record, rootDir, registry };
+    const identity =
+      params.immutableInstallIdentity === undefined
+        ? "npm-install-1"
+        : params.immutableInstallIdentity;
+    const owner = {
+      record,
+      rootDir,
+      registry,
+      ...(identity === null ? {} : { immutableInstallIdentity: identity }),
+    };
     const loaded = await withPluginCache(cache, async () => {
       const load = createPluginModuleLoader({});
       await load.prepare(source, owner);
@@ -117,6 +128,19 @@ it("evaluates an unchanged installed native ESM entry once per main-thread inspe
         const configPath = await inspect({ workspaceDir: "/workspace/main", origin: "config" });
         expect(configPath.loaded.evaluation).toBe(4);
 
+        // Editable global installs have no install identity and stay fresh; a reinstall
+        // records a new identity and never reuses the older graph.
+        const editable = await inspect({
+          workspaceDir: "/workspace/main",
+          immutableInstallIdentity: null,
+        });
+        expect(editable.loaded.evaluation).toBe(5);
+        const reinstalled = await inspect({
+          workspaceDir: "/workspace/main",
+          immutableInstallIdentity: "npm-install-2",
+        });
+        expect(reinstalled.loaded.evaluation).toBe(6);
+
         // Concurrent first inspections of a workspace both acquire; the later one
         // discards its capture and joins the retained graph.
         const prepared = prepare.mock.calls.length;
@@ -125,7 +149,7 @@ it("evaluates an unchanged installed native ESM entry once per main-thread inspe
           inspect({ workspaceDir: "/workspace/concurrent" }),
         ]);
         expect(prepare).toHaveBeenCalledTimes(prepared + 2);
-        expect([left.loaded.evaluation, right.loaded.evaluation]).toEqual([5, 5]);
+        expect([left.loaded.evaluation, right.loaded.evaluation]).toEqual([7, 7]);
         await left.close();
         await expect(right.loaded.read()).resolves.toMatchObject({ value: "side" });
       } finally {

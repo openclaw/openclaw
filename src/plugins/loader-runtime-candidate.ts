@@ -15,6 +15,7 @@ import {
 } from "./dashboard-capabilities.js";
 import type { PluginCandidate } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { resolveImmutableInstallIdentity } from "./immutable-install-identity.js";
 import { loadSetupRuntimeChannelCandidate } from "./loader-channel-runtime.js";
 import type { PluginLoadCacheContext } from "./loader-load-context.js";
 import {
@@ -513,18 +514,20 @@ export function* loadRuntimePluginCandidate(params: {
     }
     state.pluginLoadAttemptCount++;
     params.logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`);
+    const moduleOwner = {
+      record,
+      rootDir: moduleRoot,
+      registry,
+      standalone: manifestRecord.manifestPath === candidate.source,
+      immutableInstallIdentity: resolveImmutableInstallIdentity(candidate, context.installRecords),
+    };
     if (!recovery && candidate.origin !== "bundled") {
       // Host callers await acquisition after selection and policy checks. Synchronous
       // CLI consumers skip this step and use the same loader's inline acquisition.
       yield async () => {
         const started = performance.now();
         try {
-          await params.loadPluginModule.prepare(safeSource, {
-            record,
-            rootDir: moduleRoot,
-            registry,
-            standalone: manifestRecord.manifestPath === candidate.source,
-          });
+          await params.loadPluginModule.prepare(safeSource, moduleOwner);
         } finally {
           modulePreparationMs = performance.now() - started;
         }
@@ -539,12 +542,7 @@ export function* loadRuntimePluginCandidate(params: {
         }
         return instance.loadModule(source);
       }
-      return params.loadPluginModule(source, {
-        record,
-        rootDir: moduleRoot,
-        registry,
-        standalone: manifestRecord.manifestPath === candidate.source,
-      });
+      return params.loadPluginModule(source, moduleOwner);
     };
     const mod = withProfile(
       { pluginId: record.id, source: safeSource },

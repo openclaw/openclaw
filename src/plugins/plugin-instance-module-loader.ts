@@ -65,7 +65,7 @@ type RetainedNativeEsmTarget = Pick<
   | "expectedSourceDigest"
   | "nativeRecovery"
   | "recoverySourceMap"
-  | "inspectionRegistry"
+  | "inspectionSourceIdentity"
 > & { registry: PluginRegistry | undefined };
 
 function isCatalogWorkerThread(): boolean {
@@ -84,11 +84,12 @@ function retainedNativeEsmKey(target: RetainedNativeEsmTarget): string | undefin
   }
   // Cold main-thread inspections (effective tool inventory, read-only prepared runtimes)
   // otherwise evaluate another copy of an unchanged install on every request. Only
-  // immutable installs in uncached inspection registries join; live registries,
-  // workspace and config-path plugins keep their own evaluation.
+  // installer-proven immutable installs in uncached inspection registries join; live
+  // registries and editable plugins (workspace, config-path, local or archive installs)
+  // keep their own evaluation.
   const inspection =
     isMainThread &&
-    target.inspectionRegistry === true &&
+    target.inspectionSourceIdentity !== undefined &&
     target.origin === "global" &&
     target.registry !== undefined;
   if (!inspection && !isCatalogWorkerThread()) {
@@ -102,10 +103,10 @@ function retainedNativeEsmKey(target: RetainedNativeEsmTarget): string | undefin
   if (!inspection) {
     return `${fs.realpathSync(target.source)}\0${workspace ?? ""}`;
   }
-  // A same-path reinstall changes the expected digest, so it never reuses older code.
+  // A reinstall changes the install identity (or expected digest), so it never reuses older code.
   return workspace === undefined
     ? undefined
-    : `inspection\0${fs.realpathSync(target.source)}\0${workspace}\0${target.expectedSourceDigest ?? ""}`;
+    : `inspection\0${fs.realpathSync(target.source)}\0${workspace}\0${target.inspectionSourceIdentity}\0${target.expectedSourceDigest ?? ""}`;
 }
 
 /** Whether a load would reuse an already captured and retained native ESM artifact. */
