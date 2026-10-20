@@ -7,8 +7,8 @@ const enSecretsStore = {
     access: "Access",
     accessMode: "Access mode",
     value: "Value",
-    allowedHosts: "Allowed hosts",
-    allowedHostsPlaceholder: "api.example.com",
+    allowedHosts: en.secretsStore.allowedHosts,
+    allowedHostsPlaceholder: en.secretsStore.allowedHostsPlaceholder,
     allowedHostsHint:
       "Exact hostnames only, one per line or comma-separated. No wildcards or ports.",
     noAllowedHosts: "None",
@@ -18,13 +18,13 @@ const enSecretsStore = {
     add: "Add",
     edit: "Edit",
     bulk: "Bulk Add",
-    protectedSecret: "Protected secret",
+    protectedSecret: en.secretsStore.protectedSecret,
     protectedSecretHint:
       "Hidden after save and inert unless referenced by a SecretRef or used through enabled destination-bound Gateway egress. It is never directly readable.",
-    agentReadable: "Agent-readable environment",
+    agentReadable: en.secretsStore.agentReadable,
     agentReadableHint:
       "High risk: visible to admins and plaintext to Gateway-hosted agent commands. The agent can print, transmit, or persist it. Applies from the next run.",
-    hint: "Choose protected, write-only secrets or intentionally agent-readable Gateway environment values.",
+    hint: en.secretsStore.hint,
     required: "Enter a value.",
     detect: "Protect credential-like names automatically",
     detected: "{count} protected secrets detected",

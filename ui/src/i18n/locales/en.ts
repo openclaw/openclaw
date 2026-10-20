@@ -3590,7 +3590,14 @@ export const en: TranslationMap & {
     ru: "Русский (Russian)",
     sv: "Svenska (Swedish)",
   },
-  secretsStore: {},
+  // Navigation and in-chat secret requests render before the Secrets page loads.
+  secretsStore: {
+    allowedHosts: "Allowed hosts",
+    allowedHostsPlaceholder: "api.example.com",
+    protectedSecret: "Protected secret",
+    agentReadable: "Agent-readable environment",
+    hint: "Choose protected, write-only secrets or intentionally agent-readable Gateway environment values.",
+  },
   cron: {
     adminRequired: "Browsing only. Automation changes require operator.admin access.",
     tabs: {},
