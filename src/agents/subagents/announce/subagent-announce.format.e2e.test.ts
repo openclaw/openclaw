@@ -1180,10 +1180,9 @@ describe("subagent announce formatting", () => {
     await vi.waitFor(() => {
       expect(agentSpy).toHaveBeenCalledTimes(2);
     });
-    expect(agentSpy.mock.calls.map(([call]) => call.params?.accountId).toSorted()).toEqual([
-      "acct-a",
-      "acct-b",
-    ]);
+    expect(new Set(agentSpy.mock.calls.map(([call]) => call.params?.accountId))).toEqual(
+      new Set(["acct-a", "acct-b"]),
+    );
   });
 
   const telegramRoute = { channel: "telegram", to: "telegram:123" };
