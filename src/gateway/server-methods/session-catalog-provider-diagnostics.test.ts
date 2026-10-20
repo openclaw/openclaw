@@ -10,7 +10,7 @@ import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { catalogLog } from "./session-catalog-log.test-support.js";
 import { listSessionCatalogProvider } from "./session-catalog-provider-access.js";
-import { catalogProvider } from "./session-catalog.fixtures.test-support.js";
+import { catalogHost, catalogProvider } from "./session-catalog.fixtures.test-support.js";
 
 const privateText = "synthetic-private-catalog-label-and-content";
 let clock = 0;
@@ -116,18 +116,16 @@ it("preserves a synchronous failure when its diagnostic sink throws", async () =
 });
 
 it("bounds host inspection and omits oversized provider identity", async () => {
-  const hosts = Array.from({ length: 513 }, (_, index): SessionCatalogHost => ({
-    hostId: privateText,
-    label: privateText,
-    get kind(): SessionCatalogHost["kind"] {
-      if (index === 512) {
+  const host = catalogHost({ hostId: privateText, label: privateText });
+  const hosts = [
+    ...Array<SessionCatalogHost>(512).fill(host),
+    {
+      ...host,
+      get kind(): SessionCatalogHost["kind"] {
         throw new Error("diagnostics must not inspect hosts beyond the bound");
-      }
-      return "gateway";
+      },
     },
-    connected: true,
-    sessions: [],
-  }));
+  ];
   const id = privateText.repeat(10);
   await expect(
     listCatalog(id, async () => {

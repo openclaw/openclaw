@@ -1,5 +1,4 @@
 import { expect, it, vi, type Mock } from "vitest";
-import { jsonResult } from "../../agents/tools/common.js";
 import type { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
@@ -20,112 +19,96 @@ type DeliveryAttemptTestHarness = Pick<
   mockDeliverySuccess: (messageId: string) => void;
 };
 
-export function registerSendDeliveryAttemptTests({
-  mocks,
-  invokeGatewayMessageMethod,
-  mockDeliverySuccess,
-}: DeliveryAttemptTestHarness): void {
+export function registerSendDeliveryAttemptTests(harness: DeliveryAttemptTestHarness): void {
+  const { mocks, invokeGatewayMessageMethod, mockDeliverySuccess } = harness;
   it.each(
     (["message.action", "send", "poll"] as const).flatMap((method) =>
       (["fence-failure", "delivery-authority", "upload-policy"] as const)
         .filter((failure) => method !== "poll" || failure !== "upload-policy")
         .map((failure) => ({ method, failure })),
     ),
-  )(
-    "refuses legacy cron $method delivery on $failure across the durable fence and handoff",
-    async ({ method, failure }) => {
-      const sessionKey = "agent:main:slack:channel:C1";
-      let deliveryCurrent = true;
-      let uploadsEnabled = true;
-      const beforeDeliveryAttempt = vi.fn(async () => {
-        if (failure === "fence-failure") {
-          throw new Error("occurrence delivery fence unavailable");
-        }
-        uploadsEnabled = failure !== "upload-policy";
-      });
-      const { client, context, close } = createMessageActionTurnClientForTests({
-        sessionKey,
-        runId: "scheduled-delivery-fence",
-        deliveryAttempt: {
-          beforeAttempt: beforeDeliveryAttempt,
-          assertCurrent: () => {
-            if (!deliveryCurrent) {
-              throw new Error("occurrence delivery authority is no longer active");
-            }
-          },
+  )("refuses cron $method on $failure at the fence or handoff", async ({ method, failure }) => {
+    const sessionKey = "agent:main:slack:channel:C1";
+    let deliveryCurrent = true;
+    let uploadsEnabled = true;
+    const beforeDeliveryAttempt = vi.fn(async () => {
+      if (failure === "fence-failure") {
+        throw new Error("occurrence delivery fence unavailable");
+      }
+      uploadsEnabled = failure !== "upload-policy";
+    });
+    const { client, context, close } = createMessageActionTurnClientForTests({
+      sessionKey,
+      runId: "scheduled-delivery-fence",
+      deliveryAttempt: {
+        beforeAttempt: beforeDeliveryAttempt,
+        assertCurrent: () => {
+          if (!deliveryCurrent) {
+            throw new Error("occurrence delivery authority is no longer active");
+          }
         },
-      });
-      const platformSend = vi.fn();
-      const delivered = { messageId: "unexpected-delivery" };
-      mockDeliverySuccess(delivered.messageId);
-      if (failure === "delivery-authority") {
-        const handoff =
-          <T>(result: T) =>
-          async (params: { assertDirectAdapterHandoff?: () => void }) => {
-            await Promise.resolve();
-            deliveryCurrent = false;
-            params.assertDirectAdapterHandoff?.();
-            platformSend();
-            return result;
-          };
-        if (method === "message.action") {
-          mocks.dispatchChannelMessageAction.mockImplementationOnce(
-            handoff(jsonResult({ ok: true, ...delivered })),
-          );
-        } else if (method === "send") {
-          mocks.deliverOutboundPayloads.mockImplementationOnce(
-            handoff([{ channel: "slack" as const, ...delivered }]),
-          );
-        } else {
-          mocks.sendPoll.mockImplementationOnce(handoff(delivered));
-        }
-      }
-      try {
-        const respond = vi.fn();
-        const message = { to: "C1", message: "report" };
-        await runWithOperatorToolGatewayAuthority(
-          {
-            scopes: ["operator.write"],
-            signal: new AbortController().signal,
-            assertInputCommitAllowed: () =>
-              assertGatewayUploadsEnabled({ gateway: { uploads: { enabled: uploadsEnabled } } }),
+      },
+    });
+    using _ = { [Symbol.dispose]: close };
+    const platformSend = vi.fn();
+    mockDeliverySuccess("unexpected-delivery");
+    if (failure === "delivery-authority") {
+      const adapter = {
+        "message.action": mocks.dispatchChannelMessageAction,
+        send: mocks.deliverOutboundPayloads,
+        poll: mocks.sendPoll,
+      }[method];
+      adapter.mockImplementationOnce(
+        async (params: { assertDirectAdapterHandoff?: () => void }) => {
+          await Promise.resolve();
+          deliveryCurrent = false;
+          params.assertDirectAdapterHandoff?.();
+          platformSend();
+          throw new Error("Revoked authority reached the platform");
+        },
+      );
+    }
+    const respond = vi.fn();
+    const message = { to: "C1", message: "report" };
+    await runWithOperatorToolGatewayAuthority(
+      {
+        scopes: ["operator.write"],
+        signal: new AbortController().signal,
+        assertInputCommitAllowed: () =>
+          assertGatewayUploadsEnabled({ gateway: { uploads: { enabled: uploadsEnabled } } }),
+      },
+      () =>
+        invokeGatewayMessageMethod({
+          method,
+          client,
+          context,
+          respond,
+          request: {
+            channel: "slack",
+            ...(method === "poll" ? {} : { sessionKey }),
+            idempotencyKey: `scheduled-fence-${method}`,
+            ...(method === "message.action"
+              ? { action: "send", params: message }
+              : method === "send"
+                ? message
+                : { to: "C1", question: "Ship?", options: ["Yes", "No"] }),
           },
-          () =>
-            invokeGatewayMessageMethod({
-              method,
-              client,
-              context,
-              respond,
-              request: {
-                channel: "slack",
-                ...(method === "poll" ? {} : { sessionKey }),
-                idempotencyKey: `scheduled-fence-${method}`,
-                ...(method === "message.action"
-                  ? { action: "send", params: message }
-                  : method === "send"
-                    ? message
-                    : { to: "C1", question: "Ship?", options: ["Yes", "No"] }),
-              },
-            }),
-        );
-        expect(firstRespondCall(respond)[0]).toBe(false);
-        expect(firstRespondCall(respond)[2]?.message).toContain(
-          failure === "fence-failure"
-            ? "occurrence delivery fence unavailable"
-            : failure === "delivery-authority"
-              ? "authority is no longer active"
-              : "uploads are disabled",
-        );
-        expect(beforeDeliveryAttempt).toHaveBeenCalledOnce();
-        expect(platformSend).not.toHaveBeenCalled();
-        if (failure !== "delivery-authority") {
-          expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
-          expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
-          expect(mocks.sendPoll).not.toHaveBeenCalled();
-        }
-      } finally {
-        close();
-      }
-    },
-  );
+        }),
+    );
+    expect(firstRespondCall(respond)[0]).toBe(false);
+    expect(firstRespondCall(respond)[2]?.message).toContain(
+      failure === "fence-failure"
+        ? "occurrence delivery fence unavailable"
+        : failure === "delivery-authority"
+          ? "authority is no longer active"
+          : "uploads are disabled",
+    );
+    expect(beforeDeliveryAttempt).toHaveBeenCalledOnce();
+    expect(platformSend).not.toHaveBeenCalled();
+    if (failure !== "delivery-authority") {
+      expect(mocks.dispatchChannelMessageAction).not.toHaveBeenCalled();
+      expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+      expect(mocks.sendPoll).not.toHaveBeenCalled();
+    }
+  });
 }

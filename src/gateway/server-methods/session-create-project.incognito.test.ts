@@ -2,7 +2,7 @@ import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   isSessionEntryDataSql,
@@ -29,7 +29,6 @@ let storePath: string;
 let workspace: string;
 let cfg: OpenClawConfig;
 let worktrees: ManagedWorktreeService;
-const ownedKeys = new Set<string>();
 
 beforeAll(async () => {
   state = await createOpenClawTestState({ layout: "state-only", prefix: "workspace-actor-" });
@@ -39,16 +38,7 @@ beforeAll(async () => {
   storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
   worktrees = new ManagedWorktreeService({ env: state.env });
 });
-afterEach(async () => {
-  vi.restoreAllMocks();
-  for (const key of ownedKeys) {
-    const record = await worktrees.findLiveByOwner("session", key);
-    if (record) {
-      await worktrees.remove({ id: record.id, reason: "test-cleanup", allowSnapshotLoss: true });
-    }
-  }
-  ownedKeys.clear();
-});
+afterEach(() => vi.restoreAllMocks());
 afterAll(async () => {
   memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
   clearRuntimeConfigSnapshot();
@@ -63,7 +53,12 @@ async function createPendingSession(name: string) {
     incognito: true,
     pendingWorktree: { workspace, name, baseRef: "main", titleSource: name },
   };
-  ownedKeys.add(sessionKey);
+  onTestFinished(async () => {
+    const record = await worktrees.findLiveByOwner("session", sessionKey);
+    if (record) {
+      await worktrees.remove({ id: record.id, reason: "test-cleanup", allowSnapshotLoss: true });
+    }
+  });
   const target = { sessionKey, storePath };
   await replaceSessionEntry(target, entry);
   return {

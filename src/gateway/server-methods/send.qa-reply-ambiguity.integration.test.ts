@@ -15,14 +15,11 @@ import {
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveMessageActionAgentRuntimeIdentity } from "../../agents/tools/gateway.js";
-import { createReplyRestartRecoveryClaimController } from "../../auto-reply/reply/restart-recovery-claim.js";
-import { createReplyRecoveryActorFixture } from "../../auto-reply/reply/restart-recovery-claim.test-support.js";
+import { createRecoveryControllerFixture } from "../../auto-reply/reply/recovery-controller.fixture.test-support.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -143,16 +140,14 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "qa-channel", source: "test", plugin: qaChannelPlugin }]),
     );
-    let entry: InternalSessionEntry = { sessionId: identity.sessionId, updatedAt: 1 };
-    await replaceSessionEntry(scope, entry);
-    const operation = createReplyOperation({ ...identity, resetTriggered: false });
-    const actor = resources.use(
-      createReplyRecoveryActorFixture({
-        ...scope,
-        operation,
-        getSessionId: () => identity.sessionId,
-      }),
+    const recovery = resources.use(
+      await createRecoveryControllerFixture(
+        scope,
+        { sessionId: identity.sessionId, updatedAt: 1 },
+        { getSessionId: () => identity.sessionId },
+      ),
     );
+    const operation = createReplyOperation({ ...identity, resetTriggered: false });
     const recorder = createUserTurnTranscriptRecorder({
       message: {
         role: "user",
@@ -160,24 +155,18 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
         idempotencyKey: sourceTurnId,
         timestamp: 1,
       },
-      target: { ...scope, sessionEntry: entry },
+      target: { ...scope, sessionEntry: recovery.entry },
       updateMode: "none",
     });
-    const claim = createReplyRestartRecoveryClaimController({
-      ...scope,
-      sourceTurnId,
-      admissionRunId: identity.runId,
-      lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      getEntry: () => entry,
-      getSessionId: () => identity.sessionId,
-      setEntry: (next) => {
-        entry = next;
+    const claim = recovery.controller(
+      {
+        sourceTurnId,
+        admissionRunId: identity.runId,
+        resolveDeliveryContext: () => ({ channel: "qa-channel", to: "dm:alice" }),
+        sourceReplyDeliveryMode: "message_tool_only",
       },
-      acquireSessionActor: () => actor.acquireSessionActor(),
-      isRestartAbort: () => false,
-      resolveDeliveryContext: () => ({ channel: "qa-channel", to: "dm:alice" }),
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
+      operation,
+    );
     expect(await claim.admitUserTurn(recorder)).toBe("admitted");
     expect(recorder.hasPersisted()).toBe(true);
     expect(loadSessionEntry(scope)).toMatchObject({
