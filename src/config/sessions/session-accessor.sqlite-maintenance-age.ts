@@ -7,7 +7,6 @@ import {
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { findOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { SessionMaintenanceAgeContinuation } from "./session-accessor.sqlite-lifecycle-types.js";
 import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
 import { hasCanonicalSessionValidationProjection } from "./session-canonical-key.js";
 import { getSessionMaintenanceActivityAt } from "./store-maintenance-activity.js";
@@ -16,6 +15,12 @@ import {
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
+
+export type SessionMaintenanceAgeContinuation = {
+  at: number;
+  after?: { updatedAt: number; sessionKey: string };
+  modelRunPrune: boolean;
+};
 
 export type SessionEntryMaintenanceAgeFact = {
   maintenance: ResolvedSessionMaintenanceConfig;

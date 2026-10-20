@@ -20,7 +20,6 @@ import {
 import type {
   SessionEntryMaintenanceInput,
   SessionEntryMaintenancePlan,
-  SessionMaintenanceAgeContinuation,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
@@ -28,6 +27,7 @@ import {
   readSessionEntryMaintenanceAgeFact,
   recordSessionEntryMaintenanceAgeFact,
   stageSessionEntryMaintenanceAgeFact,
+  type SessionMaintenanceAgeContinuation,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   collectSqliteSessionMaintenanceBaseKeys,

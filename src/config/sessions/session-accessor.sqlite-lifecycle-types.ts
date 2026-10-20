@@ -28,6 +28,7 @@ import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-en
 import type {
   SessionEntryMaintenanceAgeChange,
   SessionEntryMaintenanceAgeFact,
+  SessionMaintenanceAgeContinuation,
 } from "./session-accessor.sqlite-maintenance-age.js";
 import type {
   SessionEntryCommitContext,
@@ -207,12 +208,6 @@ export type SessionEntryMaintenanceInput = {
   maintenance: ResolvedSessionMaintenanceConfig;
   preservation: SessionMaintenancePreservationSnapshot;
   storePath: string;
-};
-
-export type SessionMaintenanceAgeContinuation = {
-  at: number;
-  after?: { updatedAt: number; sessionKey: string };
-  modelRunPrune: boolean;
 };
 
 export type SessionMaintenanceLiveProtection = Pick<
