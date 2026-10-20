@@ -21,27 +21,23 @@ vi.mock("../src/agents/tools/in-process-gateway.js", async (importOriginal) => (
 
 afterEach(() => vi.clearAllMocks());
 
+const literal = (markdown: string, text: string, html = text) => ({ markdown, text, html });
 const cases = [
-  {
-    markdown: "Use `**literal**` now.",
-    text: "Use **literal** now.",
-    html: "Use **literal** now.",
-  },
-  {
-    markdown: "Use `[label](https://example.com)` literally.",
-    text: "Use [label](https://example.com) literally.",
-    html: "Use [label](https://example.com) literally.",
-  },
-  {
-    markdown: "Use `<b>literal</b>` now.",
-    text: "Use <b>literal</b> now.",
-    html: "Use &lt;b&gt;literal&lt;/b&gt; now.",
-  },
-  {
-    markdown: "Use &lt;b&gt;literal&lt;/b&gt; now.",
-    text: "Use <b>literal</b> now.",
-    html: "Use &lt;b&gt;literal&lt;/b&gt; now.",
-  },
+  literal("Use `**literal**` now.", "Use **literal** now."),
+  literal(
+    "Use `[label](https://example.com)` literally.",
+    "Use [label](https://example.com) literally.",
+  ),
+  literal(
+    "Use `<b>literal</b>` now.",
+    "Use <b>literal</b> now.",
+    "Use &lt;b&gt;literal&lt;/b&gt; now.",
+  ),
+  literal(
+    "Use &lt;b&gt;literal&lt;/b&gt; now.",
+    "Use <b>literal</b> now.",
+    "Use &lt;b&gt;literal&lt;/b&gt; now.",
+  ),
 ];
 
 async function runRegisteredCard(

@@ -49,13 +49,7 @@ describe("R2 storage publication", () => {
             ETag: '"marker"',
             ContentRange: `bytes 0-${markerBytes - 1}/${markerBytes}`,
             Body: {
-              transformToWebStream: () =>
-                new ReadableStream<Uint8Array>({
-                  start(controller) {
-                    controller.enqueue(Buffer.from(marker));
-                    controller.close();
-                  },
-                }),
+              transformToWebStream: () => new Blob([marker]).stream(),
             },
           };
         }
