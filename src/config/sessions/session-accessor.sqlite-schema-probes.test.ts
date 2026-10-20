@@ -1,6 +1,6 @@
 import path from "node:path";
 import { constants } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi, describe } from "vitest";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
@@ -34,6 +34,7 @@ import {
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
+import type { SessionMaintenanceMetadataResult } from "./session-accessor.sqlite-lifecycle-types.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { runSessionEntryWorkerMutation } from "./session-accessor.sqlite-replacement-worker.js";
 import {
@@ -49,12 +50,6 @@ import {
 } from "./session-canonical-key.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const noProbes = { admitted: true, schemaVersion: 0, userVersion: 0, dataVersion: 0 };
-const cronKeys = [
-  "agent:main:cron:job:run:old",
-  "agent:main:cron:job:run:recent",
-  "agent:other:cron:job:run:old",
-];
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
@@ -72,15 +67,6 @@ it("refreshes admitted session readers after worker commits without schema or fr
   if (!reader.found) {
     throw new Error("Session probe reader is missing");
   }
-  const nativeWriter = requireNativeSqliteDatabase(writer.db);
-  const withWrite = (run: (database: typeof writer) => void) =>
-    withOpenClawAgentDatabaseWrite(options, run, nativeWriter);
-  const writeProbe = (label?: string, database = writer) =>
-    writeSessionEntry(database, "agent:main:probe", {
-      sessionId: "probe",
-      updatedAt: 1,
-      ...(label === undefined ? {} : { label }),
-    });
   const broker = new SqliteWorkerBroker();
   try {
     const worker = await broker.open<SessionProbeOperations>({
@@ -94,9 +80,6 @@ it("refreshes admitted session readers after worker commits without schema or fr
     if (!worker) {
       throw new Error("Session probe worker is unavailable");
     }
-    const mainKey = () => worker.execute({ type: "mainKey", input: undefined });
-    const expectMainKey = async (value: string) =>
-      expect(await mainKey()).toEqual({ mainKey: value, statements: 0 });
     const lookupDatabase = openOpenClawAgentDatabase({
       ...options,
       path: path.join(path.dirname(writer.path), "lookup-traffic.sqlite"),
@@ -124,13 +107,13 @@ it("refreshes admitted session readers after worker commits without schema or fr
         }),
       }),
     );
-    const afterRace = await mainKey();
+    const afterRace = await worker.execute({ type: "mainKey", input: undefined });
     expect({ raced, afterRace }).toEqual({
       raced: { mainKey: "configured-during-read", statements: 1 },
       afterRace: { mainKey: "configured-during-read", statements: 0 },
     });
     setCanonicalSqliteSessionMainKey(writer, "main");
-    writeProbe();
+    writeSessionEntry(writer, "agent:main:probe", { sessionId: "probe", updatedAt: 1 });
     const borrowed = withOpenClawAgentDatabaseReadOnly(measureSessionSchemaProbes, options);
     if (!borrowed.found) {
       throw new Error("Session probe borrowed reader is missing");
@@ -144,8 +127,12 @@ it("refreshes admitted session readers after worker commits without schema or fr
       borrowed: borrowed.value,
       worker: await worker.execute({ type: "read", input: undefined }),
     };
+    console.log(JSON.stringify(results));
     for (const result of Object.values(results).flatMap(Object.values)) {
-      expect(result).toMatchObject(noProbes);
+      expect(result.admitted).toBe(true);
+      expect(result.schemaVersion).toBe(0);
+      expect(result.userVersion).toBe(0);
+      expect(result.dataVersion).toBe(0);
     }
     const writes = observeHostDataSql();
     try {
@@ -165,13 +152,21 @@ it("refreshes admitted session readers after worker commits without schema or fr
       await worker.execute({ type: "read", input: { label: "worker-committed" } }),
     ];
     for (const result of refreshed.flatMap(Object.values)) {
-      expect(result).toMatchObject(noProbes);
+      expect(result).toMatchObject({
+        admitted: true,
+        schemaVersion: 0,
+        userVersion: 0,
+        dataVersion: 0,
+      });
     }
     expect(readCanonicalSessionMainKey(writer)).toBe("main");
-    await expectMainKey("main");
+    expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
+      mainKey: "main",
+      statements: 0,
+    });
     let fixtureWriteStarted = false;
     let configured: Promise<void> | undefined;
-    await runSessionEntryWorkerMutation(
+    await runSessionEntryWorkerMutation<SessionMaintenanceMetadataResult>(
       { ...options, path: writer.path },
       undefined,
       () => {},
@@ -184,15 +179,19 @@ it("refreshes admitted session readers after worker commits without schema or fr
         identityAgentId: options.agentId,
         beforeCommit() {
           // The real maintenance connection holds SQLite until this grant returns.
-          configured = withWrite(() => {
-            fixtureWriteStarted = true;
-            runOpenClawAgentWriteTransaction((database) => {
-              setCanonicalSqliteSessionMainKey(database, "intermediate");
-              setCanonicalSqliteSessionMainKey(database, "configured");
-              expect(readCanonicalSessionMainKey(database)).toBe("configured");
-              expect(readCanonicalSessionMainKey(reader.database)).toBe("main");
-            }, options);
-          });
+          configured = withOpenClawAgentDatabaseWrite(
+            options,
+            () => {
+              fixtureWriteStarted = true;
+              runOpenClawAgentWriteTransaction((database) => {
+                setCanonicalSqliteSessionMainKey(database, "intermediate");
+                setCanonicalSqliteSessionMainKey(database, "configured");
+                expect(readCanonicalSessionMainKey(database)).toBe("configured");
+                expect(readCanonicalSessionMainKey(reader.database)).toBe("main");
+              }, options);
+            },
+            requireNativeSqliteDatabase(writer.db),
+          );
           expect(fixtureWriteStarted).toBe(false);
         },
       },
@@ -200,18 +199,31 @@ it("refreshes admitted session readers after worker commits without schema or fr
     await configured;
     expect(fixtureWriteStarted).toBe(true);
     expect(readCanonicalSessionMainKey(reader.database)).toBe("configured");
-    await expectMainKey("configured");
-    await withWrite(() => {
-      expect(() =>
-        runOpenClawAgentWriteTransaction((database) => {
-          setCanonicalSqliteSessionMainKey(database, "abandoned");
-          expect(readCanonicalSessionMainKey(database)).toBe("abandoned");
-          throw new Error("rollback main key");
-        }, options),
-      ).toThrow("rollback main key");
+    expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
+      mainKey: "configured",
+      statements: 0,
     });
-    expect((await mainKey()).mainKey).toBe("configured");
-    await expectMainKey("configured");
+    await withOpenClawAgentDatabaseWrite(
+      options,
+      () => {
+        expect(() =>
+          runOpenClawAgentWriteTransaction((database) => {
+            setCanonicalSqliteSessionMainKey(database, "abandoned");
+            expect(readCanonicalSessionMainKey(database)).toBe("abandoned");
+            throw new Error("rollback main key");
+          }, options),
+        ).toThrow("rollback main key");
+      },
+      requireNativeSqliteDatabase(writer.db),
+    );
+    expect((await worker.execute({ type: "mainKey", input: undefined })).mainKey).toBe(
+      "configured",
+    );
+    expect(await worker.execute({ type: "mainKey", input: undefined })).toEqual({
+      mainKey: "configured",
+      statements: 0,
+    });
+    const nativeWriter = requireNativeSqliteDatabase(writer.db);
     // Exercise both native execution paths with statements retained before observation.
     const probeGroups = [
       ["schema_version", "user_version", "data_version"].map((name) =>
@@ -256,7 +268,16 @@ it("refreshes admitted session readers after worker commits without schema or fr
       });
       try {
         expect(read()?.sessionId).toBe("probe");
-        await withWrite((database) => writeProbe("current", database));
+        await withOpenClawAgentDatabaseWrite(
+          options,
+          (database) =>
+            writeSessionEntry(database, "agent:main:probe", {
+              sessionId: "probe",
+              updatedAt: 1,
+              label: "current",
+            }),
+          requireNativeSqliteDatabase(writer.db),
+        );
         expect(publications).toEqual([
           {
             prepared: expect.objectContaining({
@@ -281,25 +302,47 @@ it("refreshes admitted session readers after worker commits without schema or fr
   }
 });
 
-it.each<{ scope: SessionEntryListScope; fullKeys: string[] }>([
-  { scope: { cronRetention: { limit: 32 } }, fullKeys: cronKeys },
-  {
-    scope: { cronRetention: { limit: 1, afterSessionKey: cronKeys[0] } },
-    fullKeys: [cronKeys[1]!],
-  },
-  { scope: { expiredCronRuns: { agentId: "main", updatedBefore: 2 } }, fullKeys: [cronKeys[0]!] },
-  { scope: { expiredCronRuns: { agentId: "main", updatedBefore: 0 } }, fullKeys: [] },
-])(
+it.each<{
+  scope: SessionEntryListScope;
+  fullKeys: string[];
+}>(
+  (
+    [
+      { cronRetention: { limit: 32 } },
+      { cronRetention: { limit: 1, afterSessionKey: "agent:main:cron:job:run:old" } },
+      { expiredCronRuns: { agentId: "main", updatedBefore: 2 } },
+      { expiredCronRuns: { agentId: "main", updatedBefore: 0 } },
+    ] satisfies SessionEntryListScope[]
+  ).map((scope) => ({
+    scope,
+    fullKeys:
+      scope.cronRetention?.limit === 1
+        ? ["agent:main:cron:job:run:recent"]
+        : scope.cronRetention
+          ? [
+              "agent:main:cron:job:run:old",
+              "agent:main:cron:job:run:recent",
+              "agent:other:cron:job:run:old",
+            ]
+          : scope.expiredCronRuns?.updatedBefore === 2
+            ? ["agent:main:cron:job:run:old"]
+            : [],
+  })),
+)(
   "loads only selected cold snapshots outside the retention transaction: $scope",
   ({ scope, fullKeys }) => {
-    const { database, options, read, select } = fixture();
+    const { database, options, read } = fixture(listSessionEntriesReadOnly);
     const saved = { prompt: "cron saved snapshot", skills: [] };
     const usageFamilySessionIds = Array.from({ length: 1024 }, (_, i) => `previous-run-${i}`);
     runOpenClawAgentWriteTransaction((db) => {
-      for (const [index, sessionKey] of cronKeys.entries()) {
+      for (const [sessionKey, updatedAt] of [
+        ["agent:main:cron:job:run:old", 1],
+        ["agent:main:cron:job:run:recent", 2],
+        ["agent:other:cron:job:run:old", 1],
+      ] as const) {
         writeSessionEntry(db, sessionKey, {
           sessionId: sessionKey,
-          updatedAt: index === 1 ? 2 : 1,
+          updatedAt,
           skillsSnapshot: saved,
           usageFamilySessionIds,
         });
@@ -345,12 +388,21 @@ it.each<{ scope: SessionEntryListScope; fullKeys: string[] }>([
       }
       return parse(text, reviver);
     });
-    const entries = select(scope);
+    const entries = listSessionEntriesReadOnly({
+      agentId: "main",
+      storePath: options.path,
+      env: options.env,
+      ...scope,
+    });
     expect(materialized.toSorted()).toEqual(fullKeys);
     expect(decodedInTransaction).toEqual(fullKeys.map(() => false));
     expect(
-      entries.map(({ sessionKey, entry }) => ({ sessionKey, snapshot: entry.skillsSnapshot })),
-    ).toEqual(fullKeys.map((sessionKey) => ({ sessionKey, snapshot: saved })));
+      entries.filter(({ entry }) => entry.skillsSnapshot).map(({ sessionKey }) => sessionKey),
+    ).toEqual(fullKeys);
+    for (const { entry } of entries.filter(({ entry: candidate }) => candidate.skillsSnapshot)) {
+      expect(entry.skillsSnapshot).toEqual(saved);
+    }
+    expect(entries.map(({ sessionKey }) => sessionKey)).toEqual(fullKeys);
     if (scope.cronRetention?.limit === 1) {
       // One page can read its hot payload twice, but must not hydrate its bloated siblings.
       expect(hotPayloadBytes).toBeLessThan(
@@ -360,7 +412,7 @@ it.each<{ scope: SessionEntryListScope; fullKeys: string[] }>([
   },
 );
 
-function fixture(list = listSessionEntriesReadOnly) {
+function fixture(list: typeof listSessionEntriesReadOnly) {
   const stateDir = tempDirs.make("selected-session-list-");
   const options = {
     agentId: "main",
@@ -368,12 +420,6 @@ function fixture(list = listSessionEntriesReadOnly) {
     env: { OPENCLAW_STATE_DIR: stateDir },
   };
   const database = openOpenClawAgentDatabase(options);
-  const write = (key: string, entry: Parameters<typeof writeSessionEntry>[2]) =>
-    runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, key, entry), options);
-  const storeJson = (key: string, json: string) =>
-    database.db
-      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-      .run(json, key);
   const hidden = resolveInternalSessionEffectsIdentity({ agentId: "main", runId: "hidden" });
   runOpenClawAgentWriteTransaction((db) => {
     for (const name of ["c", "a", "b"]) {
@@ -385,25 +431,38 @@ function fixture(list = listSessionEntriesReadOnly) {
     }
     writeSessionEntry(db, hidden.sessionKey, { sessionId: hidden.sessionId, updatedAt: 1 });
   }, options);
-  const scope = { agentId: options.agentId, env: options.env, storePath: options.path };
-  const select = (selection: SessionEntryListScope) => list({ ...scope, ...selection });
-  const read = (sessionKeys?: readonly string[]) => select({ projection: "list", sessionKeys });
-  return { database, hidden, options, scope, read, select, write, storeJson };
+  const read = (sessionKeys?: readonly string[]) =>
+    list({
+      agentId: options.agentId,
+      env: options.env,
+      storePath: options.path,
+      projection: "list",
+      sessionKeys,
+    });
+  return { database, hidden, options, read };
 }
 
 it("reads cron participants only after expiry selection and includes committed changes", () => {
-  const { database, scope: baseScope, select, write } = fixture();
+  const { database, options } = fixture(listSessionEntriesReadOnly);
   const sessionKey = "agent:main:cron:job:run:selected";
-  const scope = { ...baseScope, sessionKey };
+  const scope = {
+    agentId: options.agentId,
+    storePath: options.path,
+    env: options.env,
+    sessionKey,
+  };
   const entry = {
     sessionId: "selected",
     updatedAt: 2,
     skillsSnapshot: { prompt: "retained deletion candidate", skills: [] },
   };
-  write(sessionKey, entry);
+  runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, sessionKey, entry), options);
   recordSessionParticipant(scope, { identity: { type: "agent", id: "before" }, promptedAt: 1 });
   const readExpired = () =>
-    select({ ...scope, expiredCronRuns: { agentId: "main", updatedBefore: 2 } });
+    listSessionEntriesReadOnly({
+      ...scope,
+      expiredCronRuns: { agentId: "main", updatedBefore: 2 },
+    });
   const statements = trackSqliteStatementExecutions(
     requireNativeSqliteDatabase(database.db),
     ["participants"],
@@ -415,7 +474,10 @@ it("reads cron participants only after expiry selection and includes committed c
   } finally {
     statements.restore();
   }
-  write(sessionKey, { ...entry, updatedAt: 1 });
+  runOpenClawAgentWriteTransaction(
+    (db) => writeSessionEntry(db, sessionKey, { ...entry, updatedAt: 1 }),
+    options,
+  );
   recordSessionParticipant(scope, { identity: { type: "agent", id: "after" }, promptedAt: 2 });
   expect(readExpired()).toEqual([
     {
@@ -435,33 +497,42 @@ it("reads cron participants only after expiry selection and includes committed c
 });
 
 it("retains unsplit snapshots on selected cron rows", () => {
-  const { read, select, write, storeJson } = fixture();
+  const { database, options, read } = fixture(listSessionEntriesReadOnly);
   const sessionKey = "agent:main:cron:job:run:legacy";
   const entry = { sessionId: "legacy", updatedAt: 1 };
-  write(sessionKey, entry);
+  runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, sessionKey, entry), options);
   read();
   const retained = { ...entry, skillsSnapshot: { prompt: "retained raw prompt", skills: [] } };
-  storeJson(sessionKey, JSON.stringify(retained));
-  expect(select({ expiredCronRuns: { agentId: "main", updatedBefore: 2 } })).toEqual([
-    { sessionKey, entry: retained },
-  ]);
+  database.db
+    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+    .run(JSON.stringify(retained), sessionKey);
+  expect(
+    listSessionEntriesReadOnly({
+      agentId: "main",
+      storePath: options.path,
+      env: options.env,
+      expiredCronRuns: { agentId: "main", updatedBefore: 2 },
+    }),
+  ).toEqual([{ sessionKey, entry: retained }]);
 });
 
-it.each(
-  [listSessionEntriesReadOnly, listSessionEntriesCore].flatMap((list) =>
-    [
-      { selection: undefined, expected: ["a", "b", "c"] },
-      { selection: ["c", "missing", "a", "c", "hidden", "malformed"], expected: ["a", "c"] },
-      { selection: [], expected: [] },
-    ].map(({ selection, expected }) => ({ list, selection, expected })),
-  ),
-)(
-  "$list.name returns the ordered selected metadata for $selection",
-  ({ list, selection, expected }) => {
-    const { hidden, read, write, storeJson } = fixture(list);
-    write("agent:main:malformed", { sessionId: "malformed", updatedAt: 1 });
+describe.each([
+  { mode: "readonly", list: listSessionEntriesReadOnly },
+  { mode: "core", list: listSessionEntriesCore },
+])("selected $mode listing", ({ list }) => {
+  it.each([
+    { selection: undefined, expected: ["a", "b", "c"] },
+    { selection: ["c", "missing", "a", "c", "hidden", "malformed"], expected: ["a", "c"] },
+    { selection: [], expected: [] },
+  ])("returns the ordered selected metadata for $selection", ({ selection, expected }) => {
+    const { database, hidden, options, read } = fixture(list);
+    runOpenClawAgentWriteTransaction((db) => {
+      writeSessionEntry(db, "agent:main:malformed", { sessionId: "malformed", updatedAt: 1 });
+    }, options);
     read();
-    storeJson("agent:main:malformed", "{");
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+      .run("{", "agent:main:malformed");
     const rows = read(
       selection?.map((name) => (name === "hidden" ? hidden.sessionKey : `agent:main:${name}`)),
     );
@@ -469,42 +540,47 @@ it.each(
       expected.map((name) => `agent:main:${name}`),
     );
     expect(rows.every(({ entry }) => entry.skillsSnapshot === undefined)).toBe(true);
-  },
-);
+  });
+});
 
-it.each([false, true])(
-  "rejects unrelated canonical-key corruption before selecting rows (delivery=%s)",
-  (deliveryAlias) => {
-    const { database, read, write, storeJson } = fixture();
-    const canonicalKey = "agent:main:matrix:channel:!MixedCase:example.org";
-    const key = deliveryAlias ? canonicalKey.toLowerCase() : "AGENT:MAIN:UNRELATED";
-    const entry = { sessionId: deliveryAlias ? key : "unrelated", updatedAt: 1 };
-    if (deliveryAlias) {
-      write(key, entry);
-    }
-    read();
-    if (deliveryAlias) {
-      storeJson(
-        key,
-        JSON.stringify({
-          ...entry,
-          delivery: normalizeSessionDeliveryState({
-            context: { channel: "matrix", to: "!MixedCase:example.org" },
-          }),
-        }),
-      );
-    } else {
-      database.db
-        .prepare(
-          "INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES(?, ?, ?, ?, 1)",
-        )
-        .run(key, entry.sessionId, JSON.stringify(entry), 1);
-    }
-    markCanonicalSessionValidationPending(database, [key]);
-    expect(() => read(deliveryAlias ? ["agent:main:a"] : [])).toThrow(
-      deliveryAlias
-        ? `non-canonical persisted row resolves to session key ${canonicalKey}`
-        : "non-canonical persisted row",
+it("retains unrelated canonical-key errors for an empty selection", () => {
+  const { database, read } = fixture(listSessionEntriesReadOnly);
+  read();
+  // Explicitly pending repair rows must not disappear behind an unrelated selection.
+  database.db
+    .prepare(
+      "INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES(?, ?, ?, ?, 1)",
+    )
+    .run(
+      "AGENT:MAIN:UNRELATED",
+      "unrelated",
+      JSON.stringify({ sessionId: "unrelated", updatedAt: 1 }),
+      1,
     );
-  },
-);
+  markCanonicalSessionValidationPending(database, ["AGENT:MAIN:UNRELATED"]);
+  expect(() => read([])).toThrow("non-canonical persisted row");
+});
+
+it("validates unrelated warm delivery aliases before selecting listing keys", () => {
+  const { database, options, read } = fixture(listSessionEntriesReadOnly);
+  const canonicalKey = "agent:main:matrix:channel:!MixedCase:example.org";
+  const legacyKey = canonicalKey.toLowerCase();
+  runOpenClawAgentWriteTransaction((db) => {
+    writeSessionEntry(db, legacyKey, { sessionId: legacyKey, updatedAt: 1 });
+  }, options);
+  read();
+  const entry = {
+    sessionId: legacyKey,
+    updatedAt: 1,
+    delivery: normalizeSessionDeliveryState({
+      context: { channel: "matrix", to: "!MixedCase:example.org" },
+    }),
+  };
+  database.db
+    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+    .run(JSON.stringify(entry), legacyKey);
+  markCanonicalSessionValidationPending(database, [legacyKey]);
+  expect(() => read(["agent:main:a"])).toThrow(
+    `non-canonical persisted row resolves to session key ${canonicalKey}`,
+  );
+});

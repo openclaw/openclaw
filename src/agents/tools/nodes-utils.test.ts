@@ -1,7 +1,10 @@
+// Node selection defaults and Gateway inventory requests.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 
-const gatewayMocks = vi.hoisted(() => ({ callGatewayTool: vi.fn() }));
+const gatewayMocks = vi.hoisted(() => ({
+  callGatewayTool: vi.fn(),
+}));
 vi.mock("./gateway.js", () => ({
   callGatewayTool: (...args: unknown[]) => gatewayMocks.callGatewayTool(...args),
 }));
@@ -10,14 +13,17 @@ import type { NodeListNode } from "./nodes-utils.js";
 import { listNodes, resolveNodeIdFromList, selectDefaultNodeFromList } from "./nodes-utils.js";
 
 function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string }): NodeListNode {
-  return { nodeId, caps: ["canvas"], connected: true, ...overrides };
+  return {
+    nodeId,
+    caps: ["canvas"],
+    connected: true,
+    ...overrides,
+  };
 }
 
-function offline(nodeId: string, platform: string, connectedAtMs?: number, lastSeenAtMs?: number) {
-  return node({ nodeId, platform, connected: false, connectedAtMs, lastSeenAtMs });
-}
-
-beforeEach(() => gatewayMocks.callGatewayTool.mockReset());
+beforeEach(() => {
+  gatewayMocks.callGatewayTool.mockReset();
+});
 
 describe("resolveNodeIdFromList defaults", () => {
   it("selects a default in one comparison per remaining candidate", () => {
@@ -26,49 +32,89 @@ describe("resolveNodeIdFromList defaults", () => {
     );
     const original = nodes.slice();
     const compare = vi.spyOn(String.prototype, "localeCompare");
+    let selected: NodeListNode | null;
+    let comparisons: number;
     try {
-      const selected = selectDefaultNodeFromList(nodes, { fallback: "first" });
-      const comparisons = compare.mock.calls.length;
-      expect(selected).toBe(nodes[0]);
-      expect(nodes).toEqual(original);
-      expect(comparisons).toBeLessThanOrEqual(nodes.length - 1);
+      selected = selectDefaultNodeFromList(nodes, { fallback: "first" });
+      comparisons = compare.mock.calls.length;
     } finally {
       compare.mockRestore();
     }
+    expect(selected).toBe(nodes[0]);
+    expect(nodes).toEqual(original);
+    expect(comparisons).toBeLessThanOrEqual(nodes.length - 1);
   });
 
-  it.each([
-    {
-      name: "connected candidates outrank offline recency",
-      nodes: [
-        offline("offline-phone", "ios", undefined, 5000),
-        node({ nodeId: "online", platform: "android", connectedAtMs: 1000, lastSeenAtMs: 1000 }),
-      ],
-      expected: "online",
-    },
-    {
-      name: "one local Mac outranks a more recently seen node",
-      nodes: [
-        node({ nodeId: "ios-1", platform: "ios", lastSeenAtMs: 5000 }),
-        node({ nodeId: "mac-1", platform: "macos", lastSeenAtMs: 1000 }),
-      ],
-      expected: "mac-1",
-    },
-    {
-      name: "offline candidates use lastSeenAtMs instead of connectedAtMs",
-      nodes: [
-        offline("abc123-desktop", "macos", 9000, 1000),
-        offline("def456-phone", "ios", 1000, 5000),
-      ],
-      expected: "def456-phone",
-    },
-    {
-      name: "offline candidates without lastSeenAtMs use stable nodeId ordering",
-      nodes: [offline("z-node", "ios", 9000), offline("a-node", "android", 1000)],
-      expected: "a-node",
-    },
-  ])("$name", ({ nodes, expected }) => {
-    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe(expected);
+  it("ignores offline recency when any eligible node is connected", () => {
+    const nodes: NodeListNode[] = [
+      node({
+        nodeId: "offline-phone",
+        platform: "ios",
+        connected: false,
+        lastSeenAtMs: 5000,
+      }),
+      node({
+        nodeId: "connected-desktop",
+        platform: "android",
+        connected: true,
+        connectedAtMs: 1000,
+        lastSeenAtMs: 1000,
+      }),
+    ];
+
+    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("connected-desktop");
+  });
+
+  it("preserves local Mac preference when exactly one local Mac candidate exists", () => {
+    const nodes: NodeListNode[] = [
+      node({ nodeId: "ios-1", platform: "ios", lastSeenAtMs: 5000 }),
+      node({ nodeId: "mac-1", platform: "macos", lastSeenAtMs: 1000 }),
+    ];
+
+    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("mac-1");
+  });
+
+  it("prefers most recently seen node when all candidates are disconnected", () => {
+    const nodes: NodeListNode[] = [
+      node({
+        nodeId: "abc123-desktop",
+        platform: "macos",
+        connected: false,
+        connectedAtMs: 9000,
+        lastSeenAtMs: 1000,
+      }),
+      node({
+        nodeId: "def456-phone",
+        platform: "ios",
+        connected: false,
+        connectedAtMs: 1000,
+        lastSeenAtMs: 5000,
+      }),
+    ];
+
+    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("def456-phone");
+  });
+
+  it("uses stable nodeId ordering when disconnected nodes have no lastSeenAtMs", () => {
+    // Deterministic tie-breaking keeps repeated wake attempts on one target.
+    const nodes: NodeListNode[] = [
+      node({
+        nodeId: "z-node",
+        platform: "ios",
+        connected: false,
+        connectedAtMs: 9000,
+        lastSeenAtMs: undefined,
+      }),
+      node({
+        nodeId: "a-node",
+        platform: "android",
+        connected: false,
+        connectedAtMs: 1000,
+        lastSeenAtMs: undefined,
+      }),
+    ];
+
+    expect(resolveNodeIdFromList(nodes, undefined, true)).toBe("a-node");
   });
 });
 

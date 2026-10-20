@@ -57,7 +57,8 @@ export function createAcpSpawnStoreMocks(mocks: {
       listSessionEntriesReadOnly: listEntries,
       loadSessionEntry: loadEntry,
       loadSessionEntryReadOnly: loadEntry,
-      upsertSessionEntryCore: mocks.upsertSessionEntryMock,
+      upsertSessionEntryCore: async (scope: unknown, patch: SessionEntry) =>
+        await mocks.upsertSessionEntryMock(scope, patch),
     },
     readRuntime: {
       withSessionEntryReadOnlyInWorker,
@@ -68,11 +69,12 @@ export function createAcpSpawnStoreMocks(mocks: {
           assertCurrent: () => void;
         }) => Promise<T>,
       ): Promise<T> => {
-        const entries =
-          scope.sessionKeys?.flatMap((sessionKey) => {
-            const entry = loadEntry({ ...scope, sessionKey });
-            return entry ? [{ sessionKey, entry }] : [];
-          }) ?? listEntries(scope);
+        const entries = scope.sessionKeys
+          ? scope.sessionKeys.flatMap((sessionKey) => {
+              const entry = loadEntry({ ...scope, sessionKey });
+              return entry ? [{ sessionKey, entry }] : [];
+            })
+          : listEntries(scope);
         return consume({ result: { entries }, assertCurrent() {} });
       },
       readSessionEntryReadOnlyInWorker: (scope: SessionEntryReadScope, assertCurrent: () => void) =>
@@ -96,7 +98,10 @@ export function createAcpSpawnSessionBinding(
     },
     status: "active",
     boundAt: Date.now(),
-    metadata: { agentId: "codex", boundBy: "system" },
+    metadata: {
+      agentId: "codex",
+      boundBy: "system",
+    },
     ...overrides,
   };
 }

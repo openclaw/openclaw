@@ -19,100 +19,140 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.each(["alias", "inline"])("resolves captured %s PDF models", async (source) => {
-  const alias = source === "alias";
-  await withOpenClawTestState(
-    {
-      env: {
-        OPENAI_API_KEY: "test-key",
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: alias ? "1" : undefined,
+it.each(["alias", "inline"])(
+  "resolves the captured %s model through PDF execution",
+  async (source) => {
+    const alias = source === "alias";
+    await withOpenClawTestState(
+      {
+        label: "pdf-static-model",
+        env: {
+          OPENAI_API_KEY: "test-key",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: alias ? "1" : undefined,
+        },
       },
-    },
-    async (state) => {
-      const { workspaceDir } = state;
-      const provider = alias ? "pdf-captured-model" : "openai";
-      const modelId = alias ? "middle" : "gpt-5.6-luna";
-      const api = alias ? "openai-completions" : "openai-responses";
-      const baseUrl = "http://127.0.0.1:9/v1";
-      const makeModel = (id: string) => ({ id, name: id, input: ["text"] });
-      const pluginDir = path.join(state.stateDir, "provider");
-      if (alias) {
-        await state.writeJson("provider/openclaw.plugin.json", {
-          id: provider,
-          providers: [provider],
-          configSchema: { type: "object", properties: {}, additionalProperties: false },
-          modelIdNormalization: {
-            providers: { [provider]: { aliases: { entry: "middle", middle: "final" } } },
+      async (state) => {
+        const provider = alias ? "pdf-captured-model" : "openai";
+        const modelId = alias ? "middle" : "gpt-5.6-luna";
+        const api = alias ? "openai-completions" : "openai-responses";
+        const baseUrl = "http://127.0.0.1:9/v1";
+        const input: "text"[] = ["text"];
+        const makeModel = (id: string) => ({
+          id,
+          name: id,
+          reasoning: !alias,
+          input,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: alias ? 16_000 : 128_000,
+          maxTokens: alias ? 4096 : 8192,
+        });
+        const pluginDir = path.join(state.root, "provider");
+        if (alias) {
+          await fs.mkdir(pluginDir);
+          await fs.writeFile(
+            path.join(pluginDir, "openclaw.plugin.json"),
+            JSON.stringify({
+              id: provider,
+              providers: [provider],
+              configSchema: { type: "object", properties: {}, additionalProperties: false },
+              modelIdNormalization: {
+                providers: { [provider]: { aliases: { entry: "middle", middle: "final" } } },
+              },
+              modelCatalog: {
+                discovery: { [provider]: "static" },
+                providers: {
+                  [provider]: {
+                    api,
+                    baseUrl,
+                    models: ["middle", "final"].map((id) => Object.assign(makeModel(id), { api })),
+                  },
+                },
+              },
+            }),
+          );
+          await fs.writeFile(
+            path.join(pluginDir, "index.cjs"),
+            `module.exports = { id: ${JSON.stringify(provider)}, register(api) { api.registerProvider({ id: ${JSON.stringify(provider)}, label: "PDF alias fixture", auth: [] }); } };`,
+          );
+        }
+        const modelRef = `${provider}/${alias ? "entry" : modelId}`;
+        await state.writeConfig({
+          agents: {
+            entries: { main: {} },
+            defaults: {
+              workspace: state.workspaceDir,
+              model: { primary: modelRef },
+              pdfModel: { primary: modelRef },
+            },
           },
-          modelCatalog: {
-            discovery: { [provider]: "static" },
+          models: {
+            ...(!alias ? { mode: "replace" } : {}),
             providers: {
               [provider]: {
-                api,
                 baseUrl,
-                models: ["middle", "final"].map((id) => Object.assign(makeModel(id), { api })),
+                apiKey: "synthetic-fixture",
+                models: alias ? [] : [makeModel(modelId)],
+                ...(!alias ? { api: "openai-responses" } : {}),
               },
             },
           },
+          ...(alias
+            ? {
+                plugins: {
+                  allow: [provider],
+                  entries: { [provider]: { enabled: true } },
+                  load: { paths: [path.join(pluginDir, "index.cjs")] },
+                  slots: { memory: "none" },
+                },
+              }
+            : {}),
         });
-        await state.writeText(
-          "provider/index.cjs",
-          `module.exports = { id: ${JSON.stringify(provider)}, register(api) { api.registerProvider({ id: ${JSON.stringify(provider)}, label: "PDF alias fixture", auth: [] }); } };`,
+        const config = loadConfig({
+          pin: false,
+          skipPluginValidation: true,
+          skipShellEnvFallback: true,
+        });
+        const agentDir = state.agentDir();
+        await fs.mkdir(agentDir, { recursive: true });
+        const lease = await acquireAgentRunPreparedModelRuntime(
+          { agentDir, config, workspaceDir: state.workspaceDir },
+          { catalogMode: "static" },
         );
-      }
-      const model = { primary: `${provider}/${alias ? "entry" : modelId}` };
-      await state.writeConfig({
-        agents: { defaults: { workspace: workspaceDir, model, pdfModel: model } },
-        models: {
-          mode: alias ? undefined : "replace",
-          providers: {
-            [provider]: {
-              baseUrl,
-              apiKey: "synthetic-fixture",
-              models: alias ? [] : [makeModel(modelId)],
-              api: alias ? undefined : "openai-responses",
-            },
-          },
-        },
-        plugins: alias
-          ? {
-              allow: [provider],
-              entries: { [provider]: { enabled: true } },
-              load: { paths: [path.join(pluginDir, "index.cjs")] },
-              slots: { memory: "none" },
-            }
-          : undefined,
-      });
-      const config = loadConfig({
-        pin: false,
-        skipPluginValidation: true,
-        skipShellEnvFallback: true,
-      });
-      const agentDir = state.agentDir();
-      await fs.mkdir(agentDir, { recursive: true });
-      const runtimeOptions = { agentDir, config, workspaceDir };
-      await using lease = await acquireAgentRunPreparedModelRuntime(runtimeOptions, {
-        catalogMode: "static",
-      });
-      vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
-      vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({ text: "PDF", images: [] });
-      completeMock.mockResolvedValue({
-        role: "assistant",
-        stopReason: "stop",
-        content: [{ type: "text", text: "selected model" }],
-      });
-      const tool =
-        createPdfTool({
-          ...runtimeOptions,
-          preparedModelRuntime: lease.snapshot,
-        }) ?? expect.fail("expected PDF tool");
-      const result = await tool.execute("pdf-static", {
-        prompt: "Summarize",
-        pdf: path.join(workspaceDir, "fixture.pdf"),
-      });
-      expect(completeMock).toHaveBeenCalledOnce();
-      expect(completeMock.mock.calls[0]?.[0]).toMatchObject({ provider, id: modelId, baseUrl });
-      expect(result.details).toMatchObject({ model: `${provider}/${modelId}`, native: false });
-    },
-  );
-});
+        try {
+          vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
+          vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({
+            text: "Captured model fixture",
+            images: [],
+          });
+          completeMock.mockResolvedValue({
+            role: "assistant",
+            stopReason: "stop",
+            content: [{ type: "text", text: "selected model" }],
+          });
+          const tool = createPdfTool({
+            config,
+            agentDir,
+            workspaceDir: state.workspaceDir,
+            preparedModelRuntime: lease.snapshot,
+          });
+          if (!tool) {
+            throw new Error("expected PDF tool");
+          }
+          const result = await tool.execute("pdf-static", {
+            prompt: "Summarize",
+            pdf: path.join(state.workspaceDir, "fixture.pdf"),
+          });
+          expect(completeMock).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({ provider, id: modelId, baseUrl }),
+            expect.any(Object),
+            expect.any(Object),
+            expect.any(Function),
+          );
+          expect(result.details).toMatchObject({ model: `${provider}/${modelId}`, native: false });
+        } finally {
+          await lease[Symbol.asyncDispose]();
+        }
+      },
+    );
+  },
+);

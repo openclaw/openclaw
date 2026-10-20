@@ -13,57 +13,76 @@ export function registerAcpSpawnOwnerTests(fixture: {
   spawn: SpawnFn;
   state: { cfg: OpenClawConfig };
   registerSubagentRunMock: unknown;
-  readAcpResumeSessionOwnerMock: { mockResolvedValue: (value: unknown) => unknown };
+  readAcpResumeSessionOwnerMock: {
+    mockResolvedValue: (value: unknown) => unknown;
+  };
   expectAcceptedSpawn: (result: SpawnResult) => Extract<SpawnResult, { status: "accepted" }>;
   expectInitializeSessionFields: (expected: Record<string, unknown>) => Record<string, unknown>;
   createCrossAgentWorkspaceFixture: (options?: {
     createTargetWorkspace?: boolean;
   }) => Promise<{ workspaceRoot: string; mainWorkspace: string; targetWorkspace: string }>;
 }) {
-  const { spawn, expectAcceptedSpawn, expectInitializeSessionFields } = fixture;
-  it.each([
-    { agent: "codex", exists: true },
-    { agent: "claude-code", exists: true },
-    { agent: "claude-code", exists: false },
-  ])("resolves $agent ownership and workspace (exists=$exists)", async ({ agent, exists }) => {
+  it("keeps a raw ACP harness under the requester OpenClaw owner and workspace", async () => {
+    const workspace = await fixture.createCrossAgentWorkspaceFixture();
+    try {
+      fixture.state.cfg.acp = { ...fixture.state.cfg.acp, allowedAgents: ["codex"] };
+      fixture.state.cfg.agents = {
+        entries: { main: { workspace: workspace.mainWorkspace } },
+      };
+      const accepted = fixture.expectAcceptedSpawn(
+        await fixture.spawn({ agentId: "codex", mode: "run" }),
+      );
+      expect(accepted.childSessionKey).toMatch(/^agent:main:acp:/);
+      fixture.expectInitializeSessionFields({
+        agentId: "main",
+        agent: "codex",
+        cwd: workspace.mainWorkspace,
+        sessionKey: accepted.childSessionKey,
+      });
+      expectRegisteredSubagentRun(
+        fixture.registerSubagentRunMock,
+        {
+          childSessionKey: accepted.childSessionKey,
+          childAgentId: "main",
+          requesterAgentId: "main",
+        },
+        { assertCurrent: undefined },
+      );
+    } finally {
+      await fs.rm(workspace.workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([true, false])("resolves the target workspace (exists=%s)", async (exists) => {
     const workspace = await fixture.createCrossAgentWorkspaceFixture({
       createTargetWorkspace: exists,
     });
-    const rawHarness = agent === "codex";
-    const owner = rawHarness ? "main" : agent;
-    const cfg = fixture.state.cfg;
     try {
-      cfg.acp = { ...cfg.acp, allowedAgents: rawHarness ? [agent] : ["codex", agent] };
-      cfg.agents = {
+      fixture.state.cfg.acp = {
+        ...fixture.state.cfg.acp,
+        allowedAgents: ["codex", "claude-code"],
+      };
+      fixture.state.cfg.agents = {
         entries: {
           main: { workspace: workspace.mainWorkspace },
-          ...(!rawHarness ? { [agent]: { workspace: workspace.targetWorkspace } } : {}),
+          "claude-code": { workspace: workspace.targetWorkspace },
         },
       };
-      const { childSessionKey } = expectAcceptedSpawn(await spawn({ agentId: agent, mode: "run" }));
-      expect(childSessionKey).toMatch(new RegExp(`^agent:${owner}:acp:`));
-      expectInitializeSessionFields({
-        agentId: owner,
-        agent,
-        cwd: rawHarness ? workspace.mainWorkspace : exists ? workspace.targetWorkspace : undefined,
-        sessionKey: childSessionKey,
+      fixture.expectAcceptedSpawn(await fixture.spawn({ agentId: "claude-code", mode: "run" }));
+      fixture.expectInitializeSessionFields({
+        agentId: "claude-code",
+        agent: "claude-code",
+        cwd: exists ? workspace.targetWorkspace : undefined,
+        sessionKey: expect.stringMatching(/^agent:claude-code:acp:/),
       });
-      if (rawHarness) {
-        expectRegisteredSubagentRun(
-          fixture.registerSubagentRunMock,
-          { childSessionKey, childAgentId: "main", requesterAgentId: "main" },
-          { assertCurrent: undefined },
-        );
-      }
     } finally {
       await fs.rm(workspace.workspaceRoot, { recursive: true, force: true });
     }
   });
 
   it("resumes through the configured ACP owner and backend", async () => {
-    const cfg = fixture.state.cfg;
-    cfg.agents = {
-      ...cfg.agents,
+    fixture.state.cfg.agents = {
+      ...fixture.state.cfg.agents,
       entries: {
         reviewer: { runtime: { type: "acp", acp: { agent: "codex", backend: "fallback" } } },
       },
@@ -73,11 +92,20 @@ export function registerAcpSpawnOwnerTests(fixture: {
       sessionKey: "agent:reviewer:acp:owned",
       entry: { sessionId: "sess-owned", updatedAt: 100, spawnedBy: "agent:main:main" },
     });
-    expectAcceptedSpawn(await spawn({ agentId: "reviewer", resumeSessionId }));
-    const expected = { agentId: "reviewer", backendId: "fallback", resumeSessionId };
+    fixture.expectAcceptedSpawn(await fixture.spawn({ agentId: "reviewer", resumeSessionId }));
     expect(fixture.readAcpResumeSessionOwnerMock).toHaveBeenCalledWith(
-      expect.objectContaining({ ...expected, runtimeAgentId: "codex" }),
+      expect.objectContaining({
+        agentId: "reviewer",
+        runtimeAgentId: "codex",
+        backendId: "fallback",
+        resumeSessionId,
+      }),
     );
-    expectInitializeSessionFields({ ...expected, agent: "codex" });
+    fixture.expectInitializeSessionFields({
+      agentId: "reviewer",
+      agent: "codex",
+      resumeSessionId,
+      backendId: "fallback",
+    });
   });
 }
