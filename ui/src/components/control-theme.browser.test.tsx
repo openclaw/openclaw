@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { userEvent } from "vitest/browser";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -71,114 +71,112 @@ function expectThemeDefaults() {
   expect(style.getPropertyValue("--control-ui-focus-ring-offset").trim()).toBe("0.0625rem");
 }
 
-describe.runIf("__vitest_browser__" in globalThis)("shared control theme inheritance", () => {
-  it("keeps the account menu, picker, and panel tabs on the selected palette", async () => {
-    const host = document.createElement("div");
-    document.body.append(host);
-    disposeControls = mountSolid(
-      () => (
-        <>
-          {renderSidebarIdentityMenu({
-            position: { x: 16, bottom: 16, width: 250 },
-            nativeGatewaySnapshot: null,
-            canPairDevice: true,
-            basePath: "",
-            gatewayVersion: "test",
-            updateAvailable: true,
-            canRetryConnection: false,
-            themeMode: "dark",
-            triggerWidth: 250,
-            onClose() {},
-            onNavigate() {},
-            onPairMobile() {},
-          })}
-          <Picker
-            params={{
-              label: "Language",
-              value: "en",
-              options: [
-                { value: "en", label: "English" },
-                { value: "fr", label: "French" },
-              ],
-              onChange() {},
-            }}
-          />
-          <PanelTabStrip
-            tabs={["first", "second"].map((id) => ({
-              id,
-              domId: `theme-${id}-tab`,
-              label: id === "first" ? "First" : "Second",
-              closeLabel: `Close ${id}`,
-              icon: id === "first" ? <Icon name="plus" /> : undefined,
-            }))}
-            activeId="first"
-            ariaControls="theme-panel"
-            onSelect={() => {}}
-            onClose={() => {}}
-            onNew={() => {}}
-            newLabel="New tab"
-          />
-          <div id="theme-panel">Content</div>
-        </>
-      ),
-      { container: host },
-    ).unmount;
-    flush();
-    const find = (selector: string) => host.querySelector<HTMLElement>(selector)!;
-    const menu = find(".sidebar-identity-menu");
-    const pickerTrigger = find(".picker-select__trigger");
-    const pickerMenu = find(".picker-select__menu");
-    const pickerList = find('[role="listbox"]');
+it.runIf("__vitest_browser__" in globalThis)("inherits theme colors", async () => {
+  const host = document.createElement("div");
+  document.body.append(host);
+  disposeControls = mountSolid(
+    () => (
+      <>
+        {renderSidebarIdentityMenu({
+          position: { x: 16, bottom: 16, width: 250 },
+          nativeGatewaySnapshot: null,
+          canPairDevice: true,
+          basePath: "",
+          gatewayVersion: "test",
+          updateAvailable: true,
+          canRetryConnection: false,
+          themeMode: "dark",
+          triggerWidth: 250,
+          onClose() {},
+          onNavigate() {},
+          onPairMobile() {},
+        })}
+        <Picker
+          params={{
+            label: "Language",
+            value: "en",
+            options: [
+              { value: "en", label: "English" },
+              { value: "fr", label: "French" },
+            ],
+            onChange() {},
+          }}
+        />
+        <PanelTabStrip
+          tabs={["first", "second"].map((id) => ({
+            id,
+            domId: `theme-${id}-tab`,
+            label: id === "first" ? "First" : "Second",
+            closeLabel: `Close ${id}`,
+            icon: id === "first" ? <Icon name="plus" /> : undefined,
+          }))}
+          activeId="first"
+          ariaControls="theme-panel"
+          onSelect={() => {}}
+          onClose={() => {}}
+          onNew={() => {}}
+          newLabel="New tab"
+        />
+        <div id="theme-panel">Content</div>
+      </>
+    ),
+    { container: host },
+  ).unmount;
+  flush();
+  const find = (selector: string) => host.querySelector<HTMLElement>(selector)!;
+  const menu = find(".sidebar-identity-menu");
+  const pickerTrigger = find(".picker-select__trigger");
+  const pickerMenu = find(".picker-select__menu");
+  const pickerList = find('[role="listbox"]');
 
-    for (const theme of [
-      "dark",
-      "light",
-      "absolutely",
-      "absolutely-light",
-      "phosphor",
-      "phosphor-light",
-      "custom",
-      "custom-light",
-    ]) {
-      root.dataset.theme = theme;
-      root.dataset.themeMode = theme.endsWith("light") ? "light" : "dark";
-      if (theme.startsWith("custom")) {
-        root.style.setProperty("--muted", "rgb(120, 190, 160)");
-        root.style.setProperty("--text", "rgb(220, 235, 210)");
-        root.style.setProperty("--accent", "rgb(190, 130, 220)");
-        root.style.setProperty("--bg-elevated", "rgb(32, 45, 38)");
-        root.style.setProperty("--bg-hover", "rgb(45, 62, 51)");
-      }
-      if (!menu.matches(":popover-open")) {
-        find(".oc-menu-trigger").click();
-      }
-      await expect.poll(() => menu.getAttribute("data-phase")).toBe("open");
-      expectThemeDefaults();
-      expectColor(find(".sidebar-identity-menu__help .oc-menu-item__submenu-icon"), "muted", theme);
-      expectColor(find('[data-value="command:settings"] .oc-menu-item__details'), "muted", theme);
-      expectColor(menu, "bg-elevated", theme, "backgroundColor");
-      expectColor(find("#theme-first-tab"), "text", theme);
-      expectColor(find("#theme-first-tab"), "bg-hover", theme, "backgroundColor");
-      expectColor(find("#theme-second-tab"), "muted", theme);
-      expectColor(find("#theme-first-tab .tabstrip-tab__icon"), "accent", theme);
-
-      pickerTrigger.click();
-      await expect.poll(() => pickerMenu.getAttribute("data-phase")).toBe("open");
-      await expect.element(menu).not.toBeVisible();
-      await expect.element(pickerList).toHaveFocus();
-      await userEvent.keyboard("{End}");
-      const currentOption = find('[role="option"][data-value="fr"]');
-      await expect
-        .poll(() => pickerList.getAttribute("aria-activedescendant"))
-        .toBe(currentOption.id);
-      expectColor(pickerMenu, "bg-elevated", theme, "backgroundColor");
-      expectColor(find(".picker-select__trigger .picker-select__label"), "text", theme);
-      expectColor(find(".picker-select__trigger .picker-select__chevron"), "muted", theme);
-      expectColor(currentOption, "text", theme);
-      expectColor(currentOption, "text", theme, "outlineColor");
-      expect(settledStyle(currentOption).outlineStyle, theme).toBe("solid");
-      await userEvent.keyboard("{Escape}");
-      await expect.poll(() => pickerMenu.getAttribute("data-phase")).toBe("hidden");
+  for (const theme of [
+    "dark",
+    "light",
+    "absolutely",
+    "absolutely-light",
+    "phosphor",
+    "phosphor-light",
+    "custom",
+    "custom-light",
+  ]) {
+    root.dataset.theme = theme;
+    root.dataset.themeMode = theme.endsWith("light") ? "light" : "dark";
+    if (theme.startsWith("custom")) {
+      root.style.setProperty("--muted", "rgb(120, 190, 160)");
+      root.style.setProperty("--text", "rgb(220, 235, 210)");
+      root.style.setProperty("--accent", "rgb(190, 130, 220)");
+      root.style.setProperty("--bg-elevated", "rgb(32, 45, 38)");
+      root.style.setProperty("--bg-hover", "rgb(45, 62, 51)");
     }
-  });
+    if (!menu.matches(":popover-open")) {
+      find(".oc-menu-trigger").click();
+    }
+    await expect.poll(() => menu.getAttribute("data-phase")).toBe("open");
+    expectThemeDefaults();
+    expectColor(find(".sidebar-identity-menu__help .oc-menu-item__submenu-icon"), "muted", theme);
+    expectColor(find('[data-value="command:settings"] .oc-menu-item__details'), "muted", theme);
+    expectColor(menu, "bg-elevated", theme, "backgroundColor");
+    expectColor(find("#theme-first-tab"), "text", theme);
+    expectColor(find("#theme-first-tab"), "bg-hover", theme, "backgroundColor");
+    expectColor(find("#theme-second-tab"), "muted", theme);
+    expectColor(find("#theme-first-tab .tabstrip-tab__icon"), "accent", theme);
+
+    pickerTrigger.click();
+    await expect.poll(() => pickerMenu.getAttribute("data-phase")).toBe("open");
+    await expect.element(menu).not.toBeVisible();
+    await expect.element(pickerList).toHaveFocus();
+    await userEvent.keyboard("{End}");
+    const currentOption = find('[role="option"][data-value="fr"]');
+    await expect
+      .poll(() => pickerList.getAttribute("aria-activedescendant"))
+      .toBe(currentOption.id);
+    expectColor(pickerMenu, "bg-elevated", theme, "backgroundColor");
+    expectColor(find(".picker-select__trigger .picker-select__label"), "text", theme);
+    expectColor(find(".picker-select__trigger .picker-select__chevron"), "muted", theme);
+    expectColor(currentOption, "text", theme);
+    expectColor(currentOption, "text", theme, "outlineColor");
+    expect(settledStyle(currentOption).outlineStyle, theme).toBe("solid");
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => pickerMenu.getAttribute("data-phase")).toBe("hidden");
+  }
 });

@@ -45,24 +45,23 @@ describe("config form draft lifetimes", () => {
         "input, textarea",
       )!;
       const invalid = kind === "scalar" ? "x" : '{"enabled":';
+      const invalidDraft = { value: invalid, validity: { valid: false } };
       field.focus();
       field.value = invalid;
       field.setSelectionRange(1, 1);
       field.dispatchEvent(new Event("input", { bubbles: true }));
       flush();
-      expect(field.checkValidity()).toBe(false);
+      expect(field).toMatchObject(invalidDraft);
       expect(onPatch).not.toHaveBeenCalled();
 
       render(false);
       expect(container.querySelector("input, textarea")).toBe(field);
-      expect(field).toMatchObject({ value: invalid, selectionStart: 1 });
-      expect(field.checkValidity()).toBe(false);
+      expect(field).toMatchObject({ ...invalidDraft, selectionStart: 1 });
       expect(container.querySelector<HTMLElement>(".cfg-field__error")?.hidden).toBe(false);
 
       render(true);
       if (kind === "scalar") {
-        expect(field.value).toBe(invalid);
-        expect(field.checkValidity()).toBe(false);
+        expect(field).toMatchObject(invalidDraft);
         field.blur();
         render(true);
         expect(field.value).toBe("remote");
@@ -129,8 +128,7 @@ describe("config form draft lifetimes", () => {
     value = initial?.slice();
     render();
     field = input(container, "[data-collection-draft-value]");
-    expect(field.value).toBe("x");
-    expect(field.checkValidity()).toBe(false);
+    expect(field).toMatchObject({ value: "x", validity: { valid: false } });
     fill(field, "local");
     expect(field.checkValidity()).toBe(true);
 
@@ -139,8 +137,7 @@ describe("config form draft lifetimes", () => {
     expect(container.querySelector(".cfg-collection-draft")).toBeNull();
     open();
     field = input(container, "[data-collection-draft-value]");
-    expect(field.value).toBe("");
-    expect(field.checkValidity()).toBe(true);
+    expect(field).toMatchObject({ value: "", validity: { valid: true } });
     expect(document.activeElement).toBe(field);
   });
 

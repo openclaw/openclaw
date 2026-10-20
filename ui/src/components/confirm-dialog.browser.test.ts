@@ -16,13 +16,9 @@ beforeEach(() => {
   trigger.focus();
 });
 function button(label: string) {
-  const result = [...document.querySelectorAll("openclaw-modal-dialog button")].find(
+  return [...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
     (candidate) => candidate.textContent?.trim() === label,
-  );
-  if (!(result instanceof HTMLButtonElement)) {
-    throw new Error(`Missing ${label} button`);
-  }
-  return result;
+  )!;
 }
 
 afterEach(async () => {
@@ -81,43 +77,42 @@ describe("promise dialog native focus and dismissal", () => {
     },
   );
 
-  it("keeps Cancel focused in a three-way choice and restores its opener", async () => {
-    const pending = showConfirmChoiceDialog({
-      title: "Archive session?",
-      message: '"Synthetic session" has a nested session.',
-      confirmLabel: "Archive this session",
-      alternativeLabel: "Archive 2 sessions",
-      signal: controller.signal,
-    });
-    await getRenderedModalDialog(document.body);
-    expect(document.activeElement).toBe(button("Cancel"));
-    button("Archive 2 sessions").click();
-    expect(document.activeElement).toBe(trigger);
-    await expect(pending).resolves.toBe("alternative");
-  });
-
-  it("focuses the safe confirmation action, requires acknowledgement, and restores focus synchronously", async () => {
-    const result = showConfirmDialog({
-      title: "Delete synthetic session?",
-      message: "This removes the synthetic session from your list.",
-      details: "synthetic-session",
-      requiredAcknowledgement: "I understand this cannot be undone",
-      danger: true,
-      confirmLabel: "Delete",
-      signal: controller.signal,
-    });
-    const { dialog } = await getRenderedModalDialog(document.body);
-    expect(dialog.open).toBe(true);
-    expect(document.activeElement).toBe(button("Cancel"));
-    expect(button("Delete").disabled).toBe(true);
-    const acknowledgement = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-    acknowledgement.click();
-    flush();
-    expect(button("Delete").disabled).toBe(false);
-    button("Cancel").click();
-    expect(document.activeElement).toBe(trigger);
-    await expect(result).resolves.toBe(false);
-  });
+  it.each(["acknowledgement", "alternative"] as const)(
+    "focuses Cancel and restores the opener: %s",
+    async (kind) => {
+      const options = {
+        title: "Synthetic session",
+        message: "Change this session?",
+        signal: controller.signal,
+      };
+      const result =
+        kind === "alternative"
+          ? showConfirmChoiceDialog({
+              ...options,
+              confirmLabel: "Archive this session",
+              alternativeLabel: "Archive 2 sessions",
+            })
+          : showConfirmDialog({
+              ...options,
+              details: "synthetic-session",
+              requiredAcknowledgement: "I understand this cannot be undone",
+              danger: true,
+              confirmLabel: "Delete",
+            });
+      const { dialog } = await getRenderedModalDialog(document.body);
+      expect(dialog.open).toBe(true);
+      expect(document.activeElement).toBe(button("Cancel"));
+      if (kind === "acknowledgement") {
+        expect(button("Delete").disabled).toBe(true);
+        document.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+        flush();
+        expect(button("Delete").disabled).toBe(false);
+      }
+      button(kind === "alternative" ? "Archive 2 sessions" : "Cancel").click();
+      expect(document.activeElement).toBe(trigger);
+      await expect(result).resolves.toBe(kind === "alternative" ? "alternative" : false);
+    },
+  );
 
   it("keeps a pending input operation visible through native cancellation and preserves its text after rejection", async () => {
     const pending = createDeferred<string | null>();

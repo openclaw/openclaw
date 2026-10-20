@@ -1,5 +1,5 @@
 import { createSignal, flush } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { WorkspaceConflictNotice } from "../pages/chat/components/chat-workspace-conflict.tsx";
 import { DevicePairSetup } from "../pages/devices/view-pairing.tsx";
@@ -93,32 +93,30 @@ const surfaces = [
   },
 ];
 
-describe("copy payload lifetime", () => {
-  it.each(surfaces)("retires pending $name copying when its payload changes", async (surface) => {
-    const pending = createDeferred();
-    writeText.mockReturnValueOnce(pending.promise);
-    const [text, setText] = createSignal("first");
-    const { container } = mountSolid(() => <surface.View text={text()} />);
-    const button = container.querySelector<HTMLButtonElement>(surface.selector)!;
-    button.click();
-    expect(writeText).toHaveBeenCalledOnce();
-    setText("second");
-    flush();
-    const current = container.querySelector<HTMLButtonElement>(surface.selector)!;
-    const label = current.querySelector("[data-copy-label]")!;
-    const idleLabel = label.textContent;
-    expect(current.disabled).toBe(false);
-    pending.reject(new Error("Synthetic clipboard rejection"));
-    await vi.advanceTimersByTimeAsync(0);
+it.each(surfaces)("retires pending $name copying when its payload changes", async (surface) => {
+  const pending = createDeferred();
+  writeText.mockReturnValueOnce(pending.promise);
+  const [text, setText] = createSignal("first");
+  const { container } = mountSolid(() => <surface.View text={text()} />);
+  const button = container.querySelector<HTMLButtonElement>(surface.selector)!;
+  button.click();
+  expect(writeText).toHaveBeenCalledOnce();
+  setText("second");
+  flush();
+  const current = container.querySelector<HTMLButtonElement>(surface.selector)!;
+  const label = current.querySelector("[data-copy-label]")!;
+  const idleLabel = label.textContent;
+  expect(current.disabled).toBe(false);
+  pending.reject(new Error("Synthetic clipboard rejection"));
+  await vi.advanceTimersByTimeAsync(0);
 
-    expect(fallback).not.toHaveBeenCalled();
-    expect(current.dataset.copyState).toBeUndefined();
-    current.click();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(writeText.mock.lastCall?.[0]).toContain("second");
-    expect(current.dataset.copyState).toBe("copied");
-    expect(label.textContent).toBe("Copied!");
-    await vi.advanceTimersByTimeAsync(1500);
-    expect(label.textContent).toBe(idleLabel);
-  });
+  expect(fallback).not.toHaveBeenCalled();
+  expect(current.dataset.copyState).toBeUndefined();
+  current.click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(writeText.mock.lastCall?.[0]).toContain("second");
+  expect(current.dataset.copyState).toBe("copied");
+  expect(label.textContent).toBe("Copied!");
+  await vi.advanceTimersByTimeAsync(1500);
+  expect(label.textContent).toBe(idleLabel);
 });
