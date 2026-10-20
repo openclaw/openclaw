@@ -5,43 +5,23 @@ import type {
   SessionsPatchResult,
 } from "../api/types.ts";
 
-const OPENAI_GPT5_MODEL: ModelCatalogEntry = {
-  id: "gpt-5",
-  name: "GPT-5",
-  provider: "openai",
-};
+const catalogModel = (id: string, name: string, provider = "openai"): ModelCatalogEntry => ({
+  id,
+  name,
+  provider,
+});
 
-export const OPENAI_GPT5_MINI_MODEL: ModelCatalogEntry = {
-  id: "gpt-5-mini",
-  name: "GPT-5 Mini",
-  provider: "openai",
-};
-
-export const DEEPSEEK_CHAT_MODEL: ModelCatalogEntry = {
-  id: "deepseek-chat",
-  name: "DeepSeek Chat",
-  provider: "deepseek",
-};
+export const OPENAI_GPT5_MINI_MODEL = catalogModel("gpt-5-mini", "GPT-5 Mini");
+export const DEEPSEEK_CHAT_MODEL = catalogModel("deepseek-chat", "DeepSeek Chat", "deepseek");
 
 export const DEFAULT_CHAT_MODEL_CATALOG = [
-  OPENAI_GPT5_MODEL,
+  catalogModel("gpt-5", "GPT-5"),
   OPENAI_GPT5_MINI_MODEL,
 ] satisfies ModelCatalogEntry[];
 
-export function createModelCatalog(...entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  return [...entries];
-}
-
-export function createAmbiguousModelCatalog(
-  id: string,
-  ...providers: string[]
-): ModelCatalogEntry[] {
-  return providers.map((provider) => ({
-    id,
-    name: id,
-    provider,
-  }));
-}
+export const createModelCatalog = (...entries: ModelCatalogEntry[]) => entries;
+export const createAmbiguousModelCatalog = (id: string, ...providers: string[]) =>
+  providers.map((provider) => catalogModel(id, id, provider));
 
 export function createSessionsListResult({
   model = null,
@@ -105,12 +85,7 @@ export function createResolvedModelPatch(
     ok: true,
     path: "",
     key: "main",
-    entry: {
-      sessionId: "main",
-    },
-    resolved: {
-      model,
-      modelProvider: modelProvider ?? undefined,
-    },
+    entry: { sessionId: "main" },
+    resolved: { model, modelProvider: modelProvider ?? undefined },
   };
 }

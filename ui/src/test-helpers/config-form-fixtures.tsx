@@ -11,11 +11,9 @@ import type { ConfigFormProps } from "../components/config-form.shared.ts";
 import { mountSolid } from "./mount-solid.ts";
 import { flush } from "./solid-settle.ts";
 
-type FixtureOptions<Extra = object> = Omit<
-  ConfigNodeRenderParams,
-  "hints" | "unsupported" | "disabled"
-> &
-  Partial<Pick<ConfigNodeRenderParams, "hints" | "unsupported" | "disabled">> &
+type NodeDefaults = Pick<ConfigNodeRenderParams, "hints" | "unsupported" | "disabled">;
+type FixtureOptions<Extra = object> = Omit<ConfigNodeRenderParams, keyof NodeDefaults> &
+  Partial<NodeDefaults> &
   Extra;
 
 function nodeOptions<Options extends FixtureOptions>(options: Options) {
@@ -23,9 +21,7 @@ function nodeOptions<Options extends FixtureOptions>(options: Options) {
 }
 
 const activeMounts = new WeakMap<HTMLElement, () => void>();
-export function disposeConfigFormFixture(container: HTMLElement) {
-  activeMounts.get(container)?.();
-}
+export const disposeConfigFormFixture = (container: HTMLElement) => activeMounts.get(container)?.();
 function fixture<Props>(component: (props: Accessor<Props>) => JSX.Element) {
   const mounted = new WeakMap<HTMLElement, (props: Props) => void>();
   return (container: HTMLElement, props: Props) => {

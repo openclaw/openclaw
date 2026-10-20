@@ -27,8 +27,30 @@ const readJson = (root: string, name: string) =>
 const readFiles = (root: string) =>
   readdirSync(root).map((name) => [name, readFileSync(path.join(root, name), "utf8")]);
 
+// This is the same minimal Page boundary for each capture; cases override only their failing I/O.
+function pageFixture(overrides: object) {
+  return {
+    frames: () => [],
+    context: () => ({ browser: () => ({ isConnected: () => true }) }),
+    isClosed: () => false,
+    url: () => "http://fixture.invalid/chat",
+    ...overrides,
+  } as unknown as Page;
+}
+
 describe("shared proof capture", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  function diagnosticFixture(blocked = false) {
+    vi.useFakeTimers();
+    const parent = tempDirs.make("control-ui-diagnostics-");
+    const diagnosticParent = blocked ? path.join(parent, "blocked") : parent;
+    if (blocked) {
+      writeFileSync(diagnosticParent, "not a directory");
+    }
+    vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", diagnosticParent);
+    const logs = vi.spyOn(console, "error").mockImplementation(() => {});
+    return { parent, diagnosticParent, logs };
+  }
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllEnvs();
@@ -45,16 +67,12 @@ describe("shared proof capture", () => {
   ])(
     "preserves the original failure when diagnostic $stage stalls then $late arrives late",
     async ({ stage, late }) => {
-      vi.useFakeTimers();
-      const parent = tempDirs.make("control-ui-stalled-proof-");
-      vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
-      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { parent } = diagnosticFixture();
       const pending = createDeferredCore<Buffer>();
       const screenshot = vi.fn(() =>
         stage === "screenshot" ? pending.promise : Promise.resolve(Buffer.from("proof")),
       );
-      // SAFETY: deferred browser replies model an unavailable renderer at the Page boundary.
-      const page = {
+      const page = pageFixture({
         evaluate: () =>
           stage === "evaluation"
             ? pending.promise
@@ -63,11 +81,7 @@ describe("shared proof capture", () => {
                 setTimeout(() => resolve({ failureSummary: { available: true } }), 4_000);
               }),
         screenshot,
-        frames: () => [],
-        context: () => ({ browser: () => ({ isConnected: () => true }) }),
-        isClosed: () => false,
-        url: () => "http://fixture.invalid/chat",
-      } as unknown as Page;
+      });
       const original = new Error("original request failure");
       original.name = "TimeoutError";
       recordControlUiE2eFailureFacts(page, { avatarPresent: false, avatarRequests: 1 });
@@ -96,12 +110,11 @@ describe("shared proof capture", () => {
           rendererRead: stage === "evaluation" ? "deadline" : "completed",
           scenarioFacts: { avatarPresent: false, avatarRequests: 1 },
         });
-        expect(report.failure).toMatchObject({
-          name: "TimeoutError",
-          message: original.message,
+        expect(report).toMatchObject({
+          failure: { name: "TimeoutError", message: original.message },
+          screenshot: null,
+          captureErrors: [expect.stringContaining("timed out")],
         });
-        expect(report.screenshot).toBeNull();
-        expect(report.captureErrors).toEqual([expect.stringContaining("timed out")]);
         if (stage === "evaluation") {
           expect(screenshot).not.toHaveBeenCalled();
         }
@@ -127,10 +140,7 @@ describe("shared proof capture", () => {
   ])(
     "publishes $stall renderer stall evidence without page origins",
     async ({ paused, metrics }) => {
-      vi.useFakeTimers();
-      const parent = tempDirs.make("control-ui-renderer-stall-");
-      vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
-      vi.spyOn(console, "error").mockImplementation(() => {});
+      const { parent } = diagnosticFixture();
       const sent: string[] = [];
       let samples = 0;
       const session = Object.assign(new EventEmitter(), {
@@ -162,23 +172,17 @@ describe("shared proof capture", () => {
           if (method === "Debugger.pause" && paused) {
             queueMicrotask(() =>
               session.emit("Debugger.paused", {
-                callFrames: [
-                  {
-                    functionName: "layoutPins",
-                    url: "",
-                    location: { scriptId: "bundle", lineNumber: 9, columnNumber: 3 },
-                  },
-                  {
-                    functionName: "",
-                    url: "blob:https://private.invalid/id",
-                    location: { scriptId: "blob", lineNumber: 0, columnNumber: 0 },
-                  },
-                  {
-                    functionName: "privatePath",
-                    url: "",
-                    location: { scriptId: "private-path", lineNumber: 0, columnNumber: 0 },
-                  },
-                ],
+                callFrames: (
+                  [
+                    ["layoutPins", "bundle", "", 9, 3],
+                    ["", "blob", "blob:https://private.invalid/id", 0, 0],
+                    ["privatePath", "private-path", "", 0, 0],
+                  ] as const
+                ).map(([functionName, scriptId, url, lineNumber, columnNumber]) => ({
+                  functionName,
+                  url,
+                  location: { scriptId, lineNumber, columnNumber },
+                })),
               }),
             );
           }
@@ -189,19 +193,15 @@ describe("shared proof capture", () => {
         },
       });
       const stalled = createDeferredCore<unknown>();
-      // SAFETY: a never-settling read models a renderer whose main thread stays busy.
-      const page = {
+      const page = pageFixture({
         addInitScript: async () => {},
         evaluate: () => stalled.promise,
         screenshot: async () => Buffer.from("proof"),
-        frames: () => [],
         context: () => ({
           browser: () => ({ isConnected: () => true }),
           newCDPSession: async () => session,
         }),
-        isClosed: () => false,
-        url: () => "http://127.0.0.1:4173/chat",
-      } as unknown as Page;
+      });
       await installControlUiE2eRendererStallProbe(page);
       const capture = captureControlUiE2eFailureDiagnostics(page, {
         error: new Error("click timed out"),
@@ -250,10 +250,7 @@ describe("shared proof capture", () => {
     async ({ observed, closed: initiallyClosed, connected: initiallyConnected }) => {
       let closed = initiallyClosed;
       let connected = initiallyConnected;
-      vi.useFakeTimers();
-      const parent = tempDirs.make("control-ui-lifecycle-proof-");
-      vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
-      const logs = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { parent, logs } = diagnosticFixture();
       const browserEvents = new EventEmitter();
       const reads: string[] = [];
       const browser = Object.assign(browserEvents, {
@@ -355,16 +352,8 @@ describe("shared proof capture", () => {
   ] as const)(
     "retains safe failure state despite %s failure (%s; %s catalog; %s/%s)",
     async (failure, sendLabel, catalogSource, shardIndex, shardCount) => {
-      vi.useFakeTimers();
-      const parent = tempDirs.make("control-ui-failure-proof-");
-      const diagnosticParent = failure === "storage" ? path.join(parent, "blocked") : parent;
-      if (failure === "storage") {
-        writeFileSync(diagnosticParent, "not a directory");
-      }
-      vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", diagnosticParent);
-      const logs = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { parent, diagnosticParent, logs } = diagnosticFixture(failure === "storage");
       vi.spyOn(performance, "getEntriesByType").mockReturnValue([]);
-      const app = document.createElement("openclaw-app");
       vi.stubGlobal("openclawControlUi", {
         snapshot: (): ReturnType<ControlUiReadiness["hook"]["snapshot"]> => ({
           generation: 7,
@@ -408,55 +397,29 @@ describe("shared proof capture", () => {
           },
         }),
       });
-      const composer = document.createElement("div");
-      composer.className = "agent-chat__composer-combobox";
-      const textarea = document.createElement("textarea");
-      textarea.value = failure === "storage" ? "" : "private-draft";
-      textarea.disabled = failure === "storage";
-      composer.append(textarea);
-      const send = document.createElement("button");
-      send.className = "chat-send-btn--send";
-      send.setAttribute("aria-label", sendLabel);
-      send.setAttribute("aria-busy", failure === "storage" ? "true" : "false");
-      send.disabled = failure !== "none" || sendLabel === "Loading chat";
-      const providerHead = document.createElement("div");
-      providerHead.className = "model-providers__head";
-      const badge = document.createElement("span");
-      badge.className = "settings-status";
-      badge.textContent = failure === "none" ? "Ready" : "private-badge";
-      providerHead.append(badge);
-      const agentPage = document.createElement("openclaw-agents-page");
-      Object.assign(agentPage, {
+      const storageFailed = failure === "storage";
+      const screenshotFailed = failure === "screenshot";
+      const sendDisabled = failure !== "none" || sendLabel === "Loading chat";
+      const badgeText = failure === "none" ? "Ready" : "private-badge";
+      const fileText = "private-file-content";
+      const dom = document.createElement("div");
+      dom.innerHTML = `
+        <openclaw-app></openclaw-app>
+        <div class="agent-chat__composer-combobox"><textarea ${storageFailed ? "disabled" : ""}>${storageFailed ? "" : "private-draft"}</textarea></div>
+        <button class="chat-send-btn--send" aria-label="${sendLabel}" aria-busy="${storageFailed}" ${sendDisabled ? "disabled" : ""}></button>
+        <div class="model-providers__head"><span class="settings-status">${badgeText}</span></div>
+        <openclaw-agents-page>${screenshotFailed ? "" : `<textarea class="agent-file-textarea" ${storageFailed ? "disabled" : ""}>${fileText}</textarea>`}</openclaw-agents-page>
+        <openclaw-canvas-widget-view doc-id="private-document"><div class="skeleton">private-widget-content</div></openclaw-canvas-widget-view>
+        <openclaw-canvas-widget-view doc-id="private-document"><div role="alert">private-widget-content</div></openclaw-canvas-widget-view>
+        <openclaw-canvas-widget-view doc-id="private-document"><iframe class="chat-tool-card__preview-frame" title="private-widget-title">private-widget-content</iframe></openclaw-canvas-widget-view>`;
+      Object.assign(dom.querySelector("openclaw-agents-page")!, {
         agentsSelectedId: "private-agent",
         agentsPanel: "files",
         agentFileActive: failure === "none" ? "AGENTS.md" : "private-file",
         agentFilesLoading: false,
         agentFilesList: { agentId: "private-agent", workspace: "private-path" },
       });
-      const fileEditor = document.createElement("textarea");
-      fileEditor.className = "agent-file-textarea";
-      fileEditor.value = "private-file-content";
-      fileEditor.disabled = failure === "storage";
-      if (failure !== "screenshot") {
-        agentPage.append(fileEditor);
-      }
-      const canvasWidgets = ["loading", "error", "frame"].map((stage) => {
-        const widget = document.createElement("openclaw-canvas-widget-view");
-        widget.setAttribute("doc-id", "private-document");
-        const content = document.createElement(stage === "frame" ? "iframe" : "div");
-        content.textContent = "private-widget-content";
-        if (stage === "loading") {
-          content.className = "skeleton";
-        } else if (stage === "error") {
-          content.setAttribute("role", "alert");
-        } else {
-          content.className = "chat-tool-card__preview-frame";
-          content.setAttribute("title", "private-widget-title");
-        }
-        widget.append(content);
-        return widget;
-      });
-      document.body.append(app, composer, send, providerHead, agentPage, ...canvasWidgets);
+      document.body.append(...dom.childNodes);
       const snapshot =
         catalogSource === "snapshot"
           ? {
@@ -513,14 +476,12 @@ describe("shared proof capture", () => {
       vi.stubEnv("GITHUB_RUN_ID", "123456");
       vi.stubEnv("GITHUB_RUN_ATTEMPT", "2");
       writeFileSync(path.join(parent, "prior.png"), "prior-proof");
-      // SAFETY: this fixture implements the Page boundary used by failure diagnostics.
       const pageEvents = new EventEmitter();
       const rootFrame = { parentFrame: () => null };
       const outerFrame = { parentFrame: () => rootFrame };
       const innerFrame = { parentFrame: () => outerFrame };
-      const page = {
+      const page = pageFixture({
         on: pageEvents.on.bind(pageEvents),
-        context: () => ({ browser: () => ({ isConnected: () => true }) }),
         frames: () => [rootFrame, outerFrame, innerFrame],
         evaluate: async (read: () => unknown) => {
           if (failure === "evaluation") {
@@ -528,8 +489,6 @@ describe("shared proof capture", () => {
           }
           return read();
         },
-        isClosed: () => false,
-        url: () => "http://127.0.0.1/chat",
         screenshot: async () => {
           expect(
             logs.mock.calls.some(([message]) => message === "[control-ui-e2e] failure state"),
@@ -544,7 +503,7 @@ describe("shared proof capture", () => {
           }
           return Buffer.from("failure-proof");
         },
-      } as unknown as Page;
+      });
       installControlUiRpcDiagnostics(page);
       const socket = new EventEmitter();
       pageEvents.emit("websocket", socket);
@@ -583,20 +542,12 @@ describe("shared proof capture", () => {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const original = new Error("private-original-error");
         original.name = attempt === 0 ? "TimeoutError" : "private-error-name";
-        const failedAction = async () => {
-          try {
-            throw original;
-          } catch (error) {
-            await captureControlUiE2eFailureDiagnostics(page, {
-              error: original,
-              label: "private-capture-label",
-              modelResponses,
-              pageEvents: [frameEvent],
-            });
-            throw error;
-          }
-        };
-        await expect(failedAction()).rejects.toBe(original);
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: original,
+          label: "private-capture-label",
+          modelResponses,
+          pageEvents: [frameEvent],
+        });
         expect(vi.getTimerCount()).toBe(0);
       }
       const directories = readdirSync(parent, { withFileTypes: true }).filter((entry) =>
@@ -670,14 +621,14 @@ describe("shared proof capture", () => {
                     activeFile: failure === "none" ? "AGENTS.md" : "unknown",
                     loading: false,
                     editorPresent: failure !== "screenshot",
-                    editorLength: failure === "screenshot" ? null : fileEditor.value.length,
-                    editorDisabled: failure === "screenshot" ? null : fileEditor.disabled,
+                    editorLength: screenshotFailed ? null : fileText.length,
+                    editorDisabled: screenshotFailed ? null : storageFailed,
                   },
                   documentReadyState: expect.stringMatching(/^(?:loading|interactive|complete)$/u),
                   providerStatuses: [
                     {
                       status: failure === "none" ? "Ready" : "unknown",
-                      length: badge.textContent.length,
+                      length: badgeText.length,
                     },
                   ],
                   composer: {

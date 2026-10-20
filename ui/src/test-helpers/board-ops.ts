@@ -1,9 +1,11 @@
 import type { BoardOp, BoardSnapshot } from "@openclaw/gateway-protocol";
 
+const ordered = <Item extends { position: number }>(items: Item[]) =>
+  items.toSorted((left, right) => left.position - right.position);
+const positioned = <Item>(items: Item[]) => items.map((item, position) => ({ ...item, position }));
+
 export function normalizeMockBoardSnapshot(snapshot: BoardSnapshot): BoardSnapshot {
-  const tabs = snapshot.tabs
-    .toSorted((left, right) => left.position - right.position)
-    .map((tab, position) => Object.assign({}, tab, { position }));
+  const tabs = positioned(ordered(snapshot.tabs));
   const tabPositions = new Map(tabs.map((tab) => [tab.tabId, tab.position]));
   const nextWidgetPosition = new Map<string, number>();
   const widgets = snapshot.widgets
@@ -22,25 +24,24 @@ export function normalizeMockBoardSnapshot(snapshot: BoardSnapshot): BoardSnapsh
 }
 
 export function applyMockBoardOp(snapshot: BoardSnapshot, op: BoardOp): BoardSnapshot {
+  const withTabs = (tabs: BoardSnapshot["tabs"]) => ({ ...snapshot, tabs });
+  const withWidgets = (widgets: BoardSnapshot["widgets"]) => ({ ...snapshot, widgets });
   switch (op.kind) {
     case "tab_create":
       if (snapshot.tabs.some((tab) => tab.tabId === op.tabId)) {
         return snapshot;
       }
-      return {
-        ...snapshot,
-        tabs: [
-          ...snapshot.tabs,
-          {
-            tabId: op.tabId,
-            title: op.title,
-            position: snapshot.tabs.length,
-            chatDock: op.chatDock ?? "right",
-          },
-        ],
-      };
+      return withTabs([
+        ...snapshot.tabs,
+        {
+          tabId: op.tabId,
+          title: op.title,
+          position: snapshot.tabs.length,
+          chatDock: op.chatDock ?? "right",
+        },
+      ]);
     case "tab_update": {
-      const orderedTabs = snapshot.tabs.toSorted((left, right) => left.position - right.position);
+      const orderedTabs = ordered(snapshot.tabs);
       const tabIndex = orderedTabs.findIndex((tab) => tab.tabId === op.tabId);
       if (tabIndex < 0) {
         return snapshot;
@@ -59,12 +60,7 @@ export function applyMockBoardOp(snapshot: BoardSnapshot, op: BoardOp): BoardSna
         ),
       );
       orderedTabs.splice(position, 0, updated);
-      return {
-        ...snapshot,
-        tabs: orderedTabs.map((candidate, nextPosition) =>
-          Object.assign({}, candidate, { position: nextPosition }),
-        ),
-      };
+      return withTabs(positioned(orderedTabs));
     }
     case "tab_delete": {
       const remainingTabs = snapshot.tabs.filter((tab) => tab.tabId !== op.tabId);
@@ -91,13 +87,12 @@ export function applyMockBoardOp(snapshot: BoardSnapshot, op: BoardOp): BoardSna
       ) {
         return snapshot;
       }
-      return {
-        ...snapshot,
-        tabs: op.tabIds.flatMap((tabId, position) => {
+      return withTabs(
+        op.tabIds.flatMap((tabId, position) => {
           const tab = snapshot.tabs.find((candidate) => candidate.tabId === tabId);
           return tab ? [{ ...tab, position }] : [];
         }),
-      };
+      );
     }
     case "widget_move": {
       const moving = snapshot.widgets.find((widget) => widget.name === op.name);
@@ -116,9 +111,7 @@ export function applyMockBoardOp(snapshot: BoardSnapshot, op: BoardOp): BoardSna
         return snapshot;
       }
       const remaining = snapshot.widgets.filter((widget) => widget.name !== moving.name);
-      const targetWidgets = remaining
-        .filter((widget) => widget.tabId === targetTabId)
-        .toSorted((left, right) => left.position - right.position);
+      const targetWidgets = ordered(remaining.filter((widget) => widget.tabId === targetTabId));
       const anchorIndex = anchor
         ? targetWidgets.findIndex((widget) => widget.name === anchor.name)
         : -1;
@@ -126,22 +119,19 @@ export function applyMockBoardOp(snapshot: BoardSnapshot, op: BoardOp): BoardSna
         ? anchorIndex + 1
         : Math.max(0, Math.min(op.position ?? targetWidgets.length, targetWidgets.length));
       targetWidgets.splice(insertionIndex, 0, { ...moving, tabId: targetTabId });
-      return {
-        ...snapshot,
-        widgets: snapshot.tabs.flatMap((tab) =>
-          (tab.tabId === targetTabId
-            ? targetWidgets
-            : remaining
-                .filter((widget) => widget.tabId === tab.tabId)
-                .toSorted((left, right) => left.position - right.position)
-          ).map((widget, position) => Object.assign({}, widget, { position })),
+      return withWidgets(
+        snapshot.tabs.flatMap((tab) =>
+          positioned(
+            tab.tabId === targetTabId
+              ? targetWidgets
+              : ordered(remaining.filter((widget) => widget.tabId === tab.tabId)),
+          ),
         ),
-      };
+      );
     }
     case "widget_resize":
-      return {
-        ...snapshot,
-        widgets: snapshot.widgets.map((widget) =>
+      return withWidgets(
+        snapshot.widgets.map((widget) =>
           widget.name === op.name
             ? {
                 ...widget,
@@ -151,9 +141,9 @@ export function applyMockBoardOp(snapshot: BoardSnapshot, op: BoardOp): BoardSna
               }
             : widget,
         ),
-      };
+      );
     case "widget_remove":
-      return { ...snapshot, widgets: snapshot.widgets.filter((widget) => widget.name !== op.name) };
+      return withWidgets(snapshot.widgets.filter((widget) => widget.name !== op.name));
   }
   return snapshot;
 }
