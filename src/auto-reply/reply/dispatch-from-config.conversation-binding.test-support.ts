@@ -8,13 +8,8 @@ export function createDispatchConversationBindingMocks(mock: Pick<typeof vi, "fn
     AccountId?: string | null;
     MessageThreadId?: string | number | null;
     ThreadParentId?: string | null;
-    SenderId?: string | null;
-    SessionKey?: string | null;
-    ParentSessionKey?: string | null;
     OriginatingTo?: string | null;
     To?: string | null;
-    From?: string | null;
-    NativeChannelId?: string | null;
   };
   type BindingConfig = {
     channels?: Record<string, { defaultAccount?: string | null } | undefined>;
@@ -97,9 +92,6 @@ export function createDispatchConversationBindingMocks(mock: Pick<typeof vi, "fn
         cfg: params.cfg,
         ctx: {
           ...params.ctx,
-          SenderId: params.command?.senderId ?? params.ctx.SenderId,
-          SessionKey: params.sessionKey ?? params.ctx.SessionKey,
-          ParentSessionKey: params.parentSessionKey ?? params.ctx.ParentSessionKey,
           To: params.command?.to ?? params.ctx.To,
         },
       }),

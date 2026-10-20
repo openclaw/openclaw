@@ -127,48 +127,45 @@ describe("restart tombstone channel feedback", () => {
     await dispatcher.waitForIdle();
   }
 
-  it.each(["message_tool"] as const)(
-    "delivers one room notice under %s and warns for every rejected inbound",
-    async (visibleReplies) => {
-      let elapsedMs = 0;
-      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
-      const diagnosticsWereEnabled = areDiagnosticsEnabledForProcess();
-      setDiagnosticsEnabledForProcess(true);
-      onTestFinished(() => {
-        clock.mockRestore();
-        setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
-      });
-      sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
-        elapsedMs += 1_500;
-        return sessionStoreMocks.currentEntry;
-      });
-      // Slow lifecycle diagnostics must not count as duplicate rejection warnings.
-      const rejectionWarnings = () =>
-        warn.mock.calls.filter(([line]) => line.includes("[auto-reply/reply-turn-admission]"));
-      await rejectInbound({ visibleReplies });
-      expect(rejectionWarnings()).toHaveLength(1);
-      expect(deliver).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ text: notice }),
-        expect.objectContaining({ kind: "final" }),
-      );
-      await rejectInbound({ visibleReplies });
-      expect(deliver).toHaveBeenCalledOnce();
-      expect(replyResolver).not.toHaveBeenCalled();
-      expect(rejectionWarnings()).toHaveLength(2);
-      for (const [line] of rejectionWarnings()) {
-        expect(line).toContain(sessionKey);
-        expect(line).toContain("automatic recovery exhausted");
-        expect(line).toContain("/reset");
-      }
-      expect(warn.mock.calls.map(([line]) => stripVTControlCharacters(line))).toContainEqual(
-        expect.stringContaining("[sessions/lifecycle] slow session lifecycle operation"),
-      );
-      expect(sessionStoreMocks.currentEntry).toMatchObject({
-        sessionId: "failed-session",
-        mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
-      });
-    },
-  );
+  it("delivers one message-tool room notice and warns for every rejected inbound", async () => {
+    let elapsedMs = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+    const diagnosticsWereEnabled = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    onTestFinished(() => {
+      clock.mockRestore();
+      setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
+    });
+    sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
+      elapsedMs += 1_500;
+      return sessionStoreMocks.currentEntry;
+    });
+    // Slow lifecycle diagnostics must not count as duplicate rejection warnings.
+    const rejectionWarnings = () =>
+      warn.mock.calls.filter(([line]) => line.includes("[auto-reply/reply-turn-admission]"));
+    await rejectInbound({ visibleReplies: "message_tool" });
+    expect(rejectionWarnings()).toHaveLength(1);
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: notice }),
+      expect.objectContaining({ kind: "final" }),
+    );
+    await rejectInbound({ visibleReplies: "message_tool" });
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(rejectionWarnings()).toHaveLength(2);
+    for (const [line] of rejectionWarnings()) {
+      expect(line).toContain(sessionKey);
+      expect(line).toContain("automatic recovery exhausted");
+      expect(line).toContain("/reset");
+    }
+    expect(warn.mock.calls.map(([line]) => stripVTControlCharacters(line))).toContainEqual(
+      expect.stringContaining("[sessions/lifecycle] slow session lifecycle operation"),
+    );
+    expect(sessionStoreMocks.currentEntry).toMatchObject({
+      sessionId: "failed-session",
+      mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },
+    });
+  });
 
   it.each(["session", "cycle"] as const)("notifies again for a new recovery %s", async (change) => {
     await rejectInbound();
@@ -176,10 +173,8 @@ describe("restart tombstone channel feedback", () => {
       sessionStoreMocks.currentEntry!.sessionId = "replacement-session";
     } else {
       sessionStoreMocks.currentEntry!.mainRestartRecovery = {
+        ...sessionStoreMocks.currentEntry!.mainRestartRecovery!,
         cycleId: "replacement-cycle",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
       };
     }
     await rejectInbound();
@@ -197,13 +192,10 @@ describe("restart tombstone channel feedback", () => {
     );
   });
 
-  it.each([{ label: "unauthorized inbound", context: { InboundAccessAuthorized: false } }])(
-    "does not notify for $label",
-    async ({ context }) => {
-      await rejectInbound({ context });
-      expect(deliver).not.toHaveBeenCalled();
-    },
-  );
+  it("does not notify for unauthorized inbound", async () => {
+    await rejectInbound({ context: { InboundAccessAuthorized: false } });
+    expect(deliver).not.toHaveBeenCalled();
+  });
 
   it("honors explicit send-policy denial", async () => {
     await rejectInbound({ sendPolicy: "deny" });

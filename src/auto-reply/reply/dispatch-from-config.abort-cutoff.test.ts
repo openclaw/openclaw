@@ -13,7 +13,7 @@ import {
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { buildTestCtx } from "./test-ctx.js";
-import type { TypingController } from "./typing.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 beforeAll(globalBeforeAll0);
 beforeEach(() => {
@@ -36,16 +36,7 @@ it.each([
     abortedLastRun: true,
   };
   const sessionStore = { [sessionKey]: sessionEntry };
-  const typing: TypingController = {
-    onReplyStart: async () => {},
-    startTypingLoop: async () => {},
-    startTypingOnText: async () => {},
-    refreshTypingTtl: () => {},
-    isActive: () => false,
-    markRunComplete: () => {},
-    markDispatchIdle: () => {},
-    cleanup: vi.fn(),
-  };
+  const typing = createMockTypingController();
   const dispatcher = createDispatcher();
   const continueTurn = vi.fn(async () => undefined);
   const ctx = buildTestCtx({

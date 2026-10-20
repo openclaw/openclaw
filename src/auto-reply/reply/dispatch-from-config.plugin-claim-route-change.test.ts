@@ -34,11 +34,12 @@ function createBinding(
   };
 }
 
-async function createClaimHarness(params: { label: string; messageId: string }) {
+async function createClaimHarness(label: string) {
   let phase = "first";
   const claimEffects: string[] = [];
   const harness = await createHookHarness({
-    ...params,
+    label,
+    messageId: label,
     pluginId,
     agentIds: ["main"],
     authorizeCommands: true,
@@ -56,19 +57,34 @@ async function createClaimHarness(params: { label: string; messageId: string }) 
   };
 }
 
+type ClaimHarness = Awaited<ReturnType<typeof createClaimHarness>>;
+type ClaimContext = Awaited<ReturnType<ClaimHarness["buildContext"]>>;
+
+function expectRoute(context: ClaimContext, bindingId?: string) {
+  const observation = readConversationBindingRouteFacts(context);
+  expect(observation).toMatchObject(bindingId ? { kind: "plugin", bindingId } : { kind: "none" });
+  expect(Object.isFrozen(observation)).toBe(true);
+}
+
+async function retryClaim(harness: ClaimHarness, context: ClaimContext, bindingId: string) {
+  expect.soft(harness.claimEffects).toEqual([]);
+  releaseDedupeForRetry(context);
+  harness.setPhase("retry");
+  const retryContext = await harness.buildContext();
+  expectRoute(retryContext, bindingId);
+  await harness.invoke(retryContext);
+  expect(harness.claimEffects).toEqual([`retry:${bindingId}`]);
+  expect(claimInboundDedupe(retryContext).status).toBe("duplicate");
+}
+
 it("refuses an early none-to-plugin claim after the real runtime loader barrier", async () => {
   let current: SessionBindingRecord | null = null;
-  const harness = await createClaimHarness({
-    label: "plugin-claim-none-to-plugin",
-    messageId: "plugin-claim-none-to-plugin",
-  });
+  const harness = await createClaimHarness("plugin-claim-none-to-plugin");
   const preparedPluginBinding = createBinding(harness.pluginRoot, "claim-prepared", 1);
   registerCurrentAdapter(() => current);
 
   const firstContext = await harness.buildContext();
-  const firstObservation = readConversationBindingRouteFacts(firstContext);
-  expect(firstObservation?.kind).toBe("none");
-  expect(Object.isFrozen(firstObservation)).toBe(true);
+  expectRoute(firstContext);
 
   const entered = createDeferred();
   const release = createRouteChangeBarrier();
@@ -94,25 +110,11 @@ it("refuses an early none-to-plugin claim after the real runtime loader barrier"
   const firstOutcome = await first;
 
   expect.soft(firstOutcome.error).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-  expect.soft(harness.claimEffects).toEqual([]);
-  releaseDedupeForRetry(firstContext);
-
-  harness.setPhase("retry");
-  const retryContext = await harness.buildContext();
-  const retryObservation = readConversationBindingRouteFacts(retryContext);
-  expect(retryObservation).toMatchObject({ kind: "plugin", bindingId: "claim-prepared" });
-  expect(Object.isFrozen(retryObservation)).toBe(true);
-  await harness.invoke(retryContext);
-
-  expect(harness.claimEffects).toEqual(["retry:claim-prepared"]);
-  expect(claimInboundDedupe(retryContext).status).toBe("duplicate");
+  await retryClaim(harness, firstContext, "claim-prepared");
 });
 
 it("refuses a late plugin replacement after the real binding activity read", async () => {
-  const harness = await createClaimHarness({
-    label: "plugin-claim-plugin-replacement",
-    messageId: "plugin-claim-plugin-replacement",
-  });
+  const harness = await createClaimHarness("plugin-claim-plugin-replacement");
   const preparedPluginBinding = createBinding(harness.pluginRoot, "claim-prepared", 1);
   const replacementPluginBinding = createBinding(harness.pluginRoot, "claim-replacement", 2);
   let current: SessionBindingRecord | null = preparedPluginBinding;
@@ -138,9 +140,7 @@ it("refuses a late plugin replacement after the real binding activity read", asy
   });
 
   const firstContext = await harness.buildContext();
-  const firstObservation = readConversationBindingRouteFacts(firstContext);
-  expect(firstObservation).toMatchObject({ kind: "plugin", bindingId: "claim-prepared" });
-  expect(Object.isFrozen(firstObservation)).toBe(true);
+  expectRoute(firstContext, "claim-prepared");
   armReplacementOnTouch = true;
 
   const firstOutcome = await harness.invoke(firstContext).then(
@@ -148,16 +148,5 @@ it("refuses a late plugin replacement after the real binding activity read", asy
     (error: unknown) => ({ error }),
   );
   expect.soft(firstOutcome.error).toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-  expect.soft(harness.claimEffects).toEqual([]);
-  releaseDedupeForRetry(firstContext);
-
-  harness.setPhase("retry");
-  const retryContext = await harness.buildContext();
-  const retryObservation = readConversationBindingRouteFacts(retryContext);
-  expect(retryObservation).toMatchObject({ kind: "plugin", bindingId: "claim-replacement" });
-  expect(Object.isFrozen(retryObservation)).toBe(true);
-  await harness.invoke(retryContext);
-
-  expect(harness.claimEffects).toEqual(["retry:claim-replacement"]);
-  expect(claimInboundDedupe(retryContext).status).toBe("duplicate");
+  await retryClaim(harness, firstContext, "claim-replacement");
 });
