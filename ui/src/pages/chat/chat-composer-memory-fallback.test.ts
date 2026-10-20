@@ -8,7 +8,11 @@ import {
   registerChatAttachmentPayload,
 } from "./attachment-payload-store.ts";
 import { retainChatComposerMemoryFallback } from "./chat-composer-memory-fallback.ts";
-import type { ChatComposerMemoryFallback, ChatPageHost } from "./chat-state-host.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
+
+const scope = { sessionKey: "global", agentId: "main" } as const;
+const scopeKey = storedChatOutboxScopeKey(scope);
+const bareGlobalKey = storedChatOutboxScopeKey({ sessionKey: "global" });
 
 function storedAttachment(id: string, mimeType = "image/png"): ChatAttachment {
   return registerChatAttachmentPayload({
@@ -19,14 +23,29 @@ function storedAttachment(id: string, mimeType = "image/png"): ChatAttachment {
 }
 
 function globalHost(
-  fallbacks: Record<string, ChatComposerMemoryFallback>,
+  sibling: ChatAttachment,
+  winning: ChatAttachment[] = [],
   attachments: ChatAttachment[] = [],
 ): ChatPageHost {
   return {
     agentsList: { defaultId: "main", mainKey: "main" },
     assistantAgentId: "main",
     chatAttachments: attachments,
-    chatComposerFallbackByScope: fallbacks,
+    chatComposerFallbackByScope: {
+      [bareGlobalKey]: {
+        awaitingDefaults: true,
+        message: "older sibling draft",
+        attachments: [sibling],
+        storageFailed: true,
+        sequence: 1,
+      },
+      [scopeKey]: {
+        message: "newest draft",
+        attachments: winning,
+        storageFailed: true,
+        sequence: 2,
+      },
+    },
     hello: null,
     sessionKey: "global",
     settings: { gatewayUrl: "ws://example.test" },
@@ -37,24 +56,7 @@ describe("chat composer memory fallback adoption", () => {
   it("releases losing sibling fallback payloads when adoption drops them", () => {
     const losing = storedAttachment("losing-sibling-attachment");
     const winning = storedAttachment("winning-attachment");
-    const scope = { sessionKey: "global", agentId: "main" } as const;
-    const scopeKey = storedChatOutboxScopeKey(scope);
-    const bareGlobalKey = storedChatOutboxScopeKey({ sessionKey: "global" });
-    const host = globalHost({
-      [bareGlobalKey]: {
-        awaitingDefaults: true,
-        message: "older sibling draft",
-        attachments: [losing],
-        storageFailed: true,
-        sequence: 1,
-      },
-      [scopeKey]: {
-        message: "newest draft",
-        attachments: [winning],
-        storageFailed: true,
-        sequence: 2,
-      },
-    });
+    const host = globalHost(losing, [winning]);
 
     const ownership = retainChatComposerMemoryFallback(host, scope, {
       message: "newest draft",
@@ -63,8 +65,6 @@ describe("chat composer memory fallback adoption", () => {
 
     expect(ownership).toEqual({ sequence: 2 });
     expect(Object.keys(host.chatComposerFallbackByScope)).toEqual([scopeKey]);
-    // The losing sibling was dropped for good: its payload-store entry must be
-    // released with it, while the adopted fallback's payload stays available.
     expect(getChatAttachmentDataUrl({ id: losing.id, mimeType: losing.mimeType })).toBeNull();
     expect(getChatAttachmentDataUrl({ id: winning.id, mimeType: winning.mimeType })).toBe(
       "data:image/png;base64,winning-attachment",
@@ -73,27 +73,7 @@ describe("chat composer memory fallback adoption", () => {
 
   it("keeps payloads shared with the live composer when a sibling is dropped", () => {
     const shared = storedAttachment("shared-with-composer");
-    const scope = { sessionKey: "global", agentId: "main" } as const;
-    const scopeKey = storedChatOutboxScopeKey(scope);
-    const bareGlobalKey = storedChatOutboxScopeKey({ sessionKey: "global" });
-    const host = globalHost(
-      {
-        [bareGlobalKey]: {
-          awaitingDefaults: true,
-          message: "older sibling draft",
-          attachments: [shared],
-          storageFailed: true,
-          sequence: 1,
-        },
-        [scopeKey]: {
-          message: "newest draft",
-          attachments: [],
-          storageFailed: true,
-          sequence: 2,
-        },
-      },
-      [shared],
-    );
+    const host = globalHost(shared, [], [shared]);
 
     retainChatComposerMemoryFallback(host, scope, {
       message: "newest draft",

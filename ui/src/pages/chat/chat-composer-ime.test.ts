@@ -2,8 +2,6 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  createComposerContainer,
-  createComposerProps,
   renderComposerFixture,
   resetComposerFixture,
   renderComposerInto,
@@ -19,6 +17,16 @@ function getComposerTextarea(container: HTMLElement): HTMLTextAreaElement {
   return textarea;
 }
 
+function keyEvent(type = "keydown", options: KeyboardEventInit = {}) {
+  return new KeyboardEvent(type, { key: "Enter", bubbles: true, cancelable: true, ...options });
+}
+
+function timedEnter(end: Event, offset: number, options: KeyboardEventInit = {}): KeyboardEvent {
+  return Object.defineProperty(keyEvent("keydown", options), "timeStamp", {
+    value: end.timeStamp + offset,
+  });
+}
+
 describe("chat composer IME composition", () => {
   it.each(["keyup", "blur", "keydown"])(
     "allows an immediate deliberate Enter after %s without affecting another composer",
@@ -28,11 +36,7 @@ describe("chat composer IME composition", () => {
       const textarea = getComposerTextarea(first.container);
       const end = new CompositionEvent("compositionend", { bubbles: true });
       textarea.dispatchEvent(end);
-      const enter = () => {
-        const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true });
-        Object.defineProperty(event, "timeStamp", { value: end.timeStamp + 1 });
-        return event;
-      };
+      const enter = () => timedEnter(end, 1, { cancelable: false });
       getComposerTextarea(second.container).dispatchEvent(enter());
       expect(second.props.onSend).toHaveBeenCalledOnce();
       expect(first.props.onSend).not.toHaveBeenCalled();
@@ -40,7 +44,7 @@ describe("chat composer IME composition", () => {
       textarea.dispatchEvent(
         type === "blur"
           ? new FocusEvent("blur")
-          : new KeyboardEvent(type, { key: type === "keydown" ? "Meta" : "Enter", bubbles: true }),
+          : keyEvent(type, { key: type === "keydown" ? "Meta" : "Enter", cancelable: false }),
       );
       textarea.dispatchEvent(enter());
       expect(first.props.onSend).toHaveBeenCalledOnce();
@@ -55,11 +59,8 @@ describe("chat composer IME composition", () => {
   ] as const)(
     "keeps a Safari composition-confirm Enter in the draft: %j",
     ({ sendShortcut, modifiers, confirmOffset }) => {
-      const onSend = vi.fn();
-      const onDraftChange = vi.fn();
-      const props = createComposerProps({ onSend, onDraftChange, sendShortcut });
-      const container = createComposerContainer();
-      renderComposerInto(container, props);
+      const { container, props } = renderComposerFixture({ sendShortcut });
+      const { onSend, onDraftChange } = props;
       const textarea = getComposerTextarea(container);
       textarea.style.height = "42px";
       textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
@@ -76,14 +77,7 @@ describe("chat composer IME composition", () => {
       renderComposerInto(container, { ...props, draft: "日本語" });
 
       for (const offset of [confirmOffset, 99, 100]) {
-        const enter = new KeyboardEvent("keydown", {
-          key: "Enter",
-          keyCode: 13,
-          bubbles: true,
-          cancelable: true,
-          ...modifiers,
-        });
-        Object.defineProperty(enter, "timeStamp", { value: end.timeStamp + offset });
+        const enter = timedEnter(end, offset, { keyCode: 13, ...modifiers });
         textarea.dispatchEvent(enter);
         expect(enter.defaultPrevented).toBe(offset === 100);
         expect(onSend).toHaveBeenCalledTimes(offset === 100 ? 1 : 0);
@@ -96,9 +90,7 @@ describe("chat composer IME composition", () => {
   );
 
   it("leaves active IME keys to the browser and recovers Enter-send after blur", () => {
-    // Browsers can drop compositionend (detach/blur mid-IME). The composing
-    // flag persists across renders, so without the blur reset Enter, history
-    // keys, and command menus stay dead until the Send button is clicked.
+    // A dropped compositionend must not leave Enter and history keys stuck after blur.
     const onHistoryKeydown = vi.fn(() => ({
       handled: true,
       preventDefault: true,
@@ -111,7 +103,7 @@ describe("chat composer IME composition", () => {
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     textarea.value = "dangqian";
     for (const key of ["Enter", "ArrowUp"]) {
-      const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+      const event = keyEvent("keydown", { key });
       textarea.dispatchEvent(event);
       expect(event.defaultPrevented).toBe(false);
     }
@@ -121,11 +113,7 @@ describe("chat composer IME composition", () => {
 
     textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
 
-    const enterEvent = new KeyboardEvent("keydown", {
-      key: "Enter",
-      bubbles: true,
-      cancelable: true,
-    });
+    const enterEvent = keyEvent();
     textarea.dispatchEvent(enterEvent);
 
     expect(enterEvent.defaultPrevented).toBe(true);
