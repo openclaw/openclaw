@@ -120,7 +120,7 @@ it.each([false, true])(
     const scenario = createScenario(`concurrent-${different}`, false);
     const wrapped = scenario.wrap();
     await Promise.all(
-      ["first", different ? "second" : "first"].map((route) =>
+      ["first", different ? "second" : "first"].map(async (route) =>
         wrapped(
           { ...scenario.model, headers: { "X-Route": route } },
           { messages: [] },
