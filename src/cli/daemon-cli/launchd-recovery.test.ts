@@ -4,6 +4,7 @@ const launchAgentPlistExists = vi.hoisted(() => vi.fn());
 const repairLaunchAgentBootstrap = vi.hoisted(() => vi.fn());
 const assertNoSystemLaunchDaemonOwnership = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Recovery scenarios must not query or mutate the host's launchd services.
 vi.mock("../../daemon/launchd.js", () => ({
   formatLaunchAgentGuiSessionError: (params: {
     detail: string;
@@ -20,6 +21,7 @@ vi.mock("../../daemon/launchd.js", () => ({
     env.OPENCLAW_LAUNCHD_LABEL ?? "ai.openclaw.gateway",
 }));
 
+// mock-isolation: System-service ownership is an injected scenario, not the host's state.
 vi.mock("../../daemon/launchd-system.js", () => ({
   assertNoSystemLaunchDaemonOwnership,
 }));

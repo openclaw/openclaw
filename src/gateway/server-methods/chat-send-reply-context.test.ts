@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { resolveChatSendReplyContext } from "./chat-send-reply-context.js";
 
 const read = vi.hoisted(() => vi.fn());
+// mock-isolation: Reply projection uses supplied messages and read failures, not a live transcript.
 vi.mock("../session-transcript-readers.js", () => ({ readSessionMessageByIdAsync: read }));
 const base = {
   replyToId: "msg-1",

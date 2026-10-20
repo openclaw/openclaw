@@ -29,6 +29,7 @@ const fixture = vi.hoisted(() => ({
   gatewayContext: {},
 }));
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+// mock-isolation: The fixture owns dispatch and continuation custody without booting a Gateway.
 vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   getInProcessGatewayRequestContext: () => fixture.gatewayContext,
   dispatchGatewayMethodInProcess: (

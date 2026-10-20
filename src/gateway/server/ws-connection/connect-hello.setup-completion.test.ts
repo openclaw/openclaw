@@ -17,6 +17,7 @@ import {
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createPresencePublisher } from "../presence-events.js";
 
+// mock-isolation: Hello completion uses a fixed health snapshot without starting health refreshes.
 vi.mock("../health-state.js", () => ({
   buildGatewaySnapshot: vi.fn(() => ({
     presence: [],
@@ -38,6 +39,7 @@ vi.mock("../../control-ui-plugin-tabs.js", () => ({
   listControlUiPluginWidgetKinds: vi.fn(() => []),
 }));
 
+// mock-isolation: Synthetic bootstrap attempts must not write to the security event journal.
 vi.mock("./connect-auth-security.js", () => ({ emitGatewayAuthSecurityEvent: vi.fn() }));
 
 import { sendGatewayHello } from "./connect-hello.js";
