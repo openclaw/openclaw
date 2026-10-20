@@ -328,9 +328,12 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return resetResult !== "failed";
     }
     this.sessionCreation.creatingIncognito = expiredIncognito;
+    const signal = this.headerSessionMutationAbortController.signal;
     try {
-      const nextSessionKey = await sessions.create(createParams);
-      if (!isCurrent()) {
+      const nextSessionKey = await sessions.create(createParams, {
+        signal,
+      });
+      if (signal.aborted || !isCurrent()) {
         return false;
       }
       if (

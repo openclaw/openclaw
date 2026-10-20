@@ -33,7 +33,6 @@ import {
 
 type SocketReadResult<T extends PortListener> = {
   entries: T[];
-  detail?: string;
   errors: string[];
 };
 
@@ -220,10 +219,8 @@ async function readUnixSocketEntries<T extends PortListener>(
 ) {
   const result = await readUnixSocketOutput(argv, signal);
   const entries = result.stdout === undefined ? [] : parse(result.stdout);
-  const detail = result.stdout?.trim() || undefined;
   return {
     entries,
-    detail: fallbackErrors && entries.length === 0 ? undefined : detail,
     errors:
       fallbackErrors && entries.length === 0
         ? [...fallbackErrors, ...result.errors]
@@ -305,8 +302,8 @@ async function readUnixListeners(
 ): Promise<SocketReadResult<PortListener>> {
   const listenerSnapshot = snapshot ?? (await readUnixListenerSnapshot(port, signal));
   if (!listenerSnapshot.lsofUnavailable) {
-    const { listeners, detail } = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
-    return { entries: listeners, detail, errors: listenerSnapshot.errors };
+    const listeners = readLsofListenersForPort(listenerSnapshot.recordsByPort, port);
+    return { entries: listeners, errors: listenerSnapshot.errors };
   }
   return await readUnixSocketEntries(
     ["ss", "-H", "-ltnp", `sport = :${port}`],
@@ -459,7 +456,7 @@ async function readWindowsNetstatEntries<T extends PortListener>(
     },
     { concurrency: PORT_PROCESS_ENRICHMENT_CONCURRENCY, signal },
   );
-  return { entries, detail: res.stdout.trim() || undefined, errors };
+  return { entries, errors };
 }
 
 export async function inspectPortUsage(
@@ -512,7 +509,6 @@ async function buildPortUsage(
     status,
     listeners,
     hints,
-    detail: result.detail,
     errors: result.errors.length > 0 ? [...result.errors] : undefined,
   };
 }
@@ -592,7 +588,5 @@ export async function inspectPortConnections(port: number): Promise<PortConnecti
   return {
     port,
     connections: result.entries,
-    detail: result.detail,
-    errors: result.errors.length > 0 ? result.errors : undefined,
   };
 }

@@ -19,7 +19,7 @@ import {
 import { withTimeout } from "../../infra/fs-safe.js";
 import * as commandRunner from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
-import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../../sessions/session-lifecycle-admission.js";
+import { SESSION_CONTROLLER_DRAIN_TIMEOUT_MS } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { killPidIfAlive } from "../../test-utils/process-tree.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
@@ -294,11 +294,7 @@ describe("ManagedWorktreeService repository code isolation", () => {
         throw new Error("Worktree creation completed before setup readiness");
       });
       const waitForSetupSignal = (ready: Promise<void>, label: string) =>
-        withTimeout(
-          Promise.race([ready, premature]),
-          SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-          label,
-        );
+        withTimeout(Promise.race([ready, premature]), SESSION_CONTROLLER_DRAIN_TIMEOUT_MS, label);
       try {
         await waitForSetupSignal(dispatched.promise, "setup dispatch");
         await waitForSetupSignal(released.promise, "setup source release");

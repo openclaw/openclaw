@@ -222,6 +222,18 @@ describe("token efficiency report", () => {
     ]);
   });
 
+  it("keeps completed measurements but fails a live report with an incomplete pair", () => {
+    const cell = makeCell(usage(100, 20, 120, 0, 0));
+    const summary = makeSummary([makeRuntimeParity("completed", cell, cell)]);
+    expect(buildTokenEfficiencyReport({ summary }).pass).toBe(true);
+
+    summary.scenarios.push({ name: "incomplete", status: "fail" });
+    const report = buildTokenEfficiencyReport({ summary });
+    expect(report.rows.map((row) => row.scenarioId)).toEqual(["completed"]);
+    expect(report.pass).toBe(false);
+    expect(report.failures).toEqual(["incomplete: runtime parity capture missing"]);
+  });
+
   it("fails live reports with only usage-not-applicable captures", () => {
     const report = liveReport("local-fixture", makeCell(usage(0)), makeCell(usage(0)), {
       expectation: "not-applicable",

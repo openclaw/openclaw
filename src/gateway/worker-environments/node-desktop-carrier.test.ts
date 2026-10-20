@@ -514,7 +514,8 @@ it.each([
 it("deduplicates one exact launch and aborts it on owner teardown", async () => {
   const record = await support.seedReadyNodeDesktop("worker-node-desktop-launch");
   const { carrier, invoke, waitInvoked } = desktopHarness(record);
-  const app = support.DESKTOP.apps![0]!;
+  const app = structuredClone(support.DESKTOP.apps![0]!);
+  const expectedApp = structuredClone(app);
 
   await expect(
     carrier.launchApp({
@@ -527,8 +528,12 @@ it("deduplicates one exact launch and aborts it on owner teardown", async () => 
   const first = carrier.launchApp({ record, app });
   const second = carrier.launchApp({ record, app });
   expect(second).toBe(first);
+  app.executablePath = "/changed-request-app";
+  record.desktop!.apps![0]!.executablePath = "/changed-record-app";
   await waitInvoked();
-  expect(invoke).toHaveBeenCalledWith(expect.objectContaining({ params: app, timeoutMs: 30_000 }));
+  expect(invoke).toHaveBeenCalledWith(
+    expect.objectContaining({ params: expectedApp, timeoutMs: 30_000 }),
+  );
 
   await carrier.stop(record.environmentId, record.ownerEpoch);
   await expect(first).rejects.toThrow("invoke aborted");

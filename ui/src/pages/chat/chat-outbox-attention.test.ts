@@ -8,7 +8,7 @@ import { chatOutboxOwner, listChatOutboxAttention } from "./chat-outbox-owner.ts
 import {
   admitStoredChatComposerQueueItem,
   loadChatComposerState,
-  removeStoredChatComposerQueueItem,
+  updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
 
 const scope = { sessionKey: "agent:writer:review", agentId: "writer" };
@@ -137,11 +137,15 @@ it("retains incidents through failed removal and clears them only after canonica
   const remove = vi.spyOn(sessionStorage, "removeItem").mockImplementation(() => {
     throw new Error("storage unavailable");
   });
-  expect(removeStoredChatComposerQueueItem(host, scope.sessionKey, row.id, row)).toBe(false);
+  expect(
+    updateStoredChatComposerQueueItems(host, scope.sessionKey, [{ expected: row, next: null }]),
+  ).toBe(false);
   expect(listChatOutboxAttention(host)).toHaveLength(1);
   write.mockRestore();
   remove.mockRestore();
-  expect(removeStoredChatComposerQueueItem(host, scope.sessionKey, row.id, row)).toBe(true);
+  expect(
+    updateStoredChatComposerQueueItems(host, scope.sessionKey, [{ expected: row, next: null }]),
+  ).toBe(true);
   expect(listChatOutboxAttention(host)).toEqual([]);
 });
 

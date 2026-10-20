@@ -12,7 +12,7 @@ import {
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { captureSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -509,7 +509,7 @@ export function readCurrentProjectionSnapshot<T>(
   };
   return database.db.isTransaction
     ? readSnapshot()
-    : runSqliteDeferredTransactionSync(database.db, readSnapshot, {
+    : runSqliteReadSnapshotSync(database.db, readSnapshot, {
         databaseLabel: database.path,
         operationLabel: "sessions.history.read",
         diagnosticContext: diagnostics,

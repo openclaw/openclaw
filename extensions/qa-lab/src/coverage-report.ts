@@ -30,27 +30,6 @@ type QaCoverageIdSummary = {
 
 type QaCoverageInventory = ReturnType<typeof buildQaCoverageInventory>;
 
-function assertUniqueQaScenarioIds(
-  scenarios: readonly QaSeedScenarioWithSource[],
-  nonYamlScenarios: readonly { id: string; sourcePath: string }[],
-): void {
-  const sourcePathsById = new Map<string, string[]>();
-  for (const { id, sourcePath } of [...scenarios, ...nonYamlScenarios]) {
-    const sourcePaths = sourcePathsById.get(id) ?? [];
-    sourcePaths.push(sourcePath);
-    sourcePathsById.set(id, sourcePaths);
-  }
-  const duplicates = [...sourcePathsById.entries()]
-    .filter(([, sourcePaths]) => sourcePaths.length > 1)
-    .toSorted(([left], [right]) => left.localeCompare(right));
-  if (duplicates.length > 0) {
-    const details = duplicates
-      .map(([id, sourcePaths]) => `${id} (${sourcePaths.join(", ")})`)
-      .join("; ");
-    throw new Error(`duplicate qa scenario id(s): ${details}`);
-  }
-}
-
 function summarizeScenario(scenario: QaSeedScenarioWithSource) {
   return {
     id: scenario.id,
@@ -171,11 +150,7 @@ function groupCoverageIds(
   return groups;
 }
 
-export function buildQaCoverageInventory(
-  scenarios: readonly QaSeedScenarioWithSource[],
-  params?: { nonYamlScenarios?: readonly { id: string; sourcePath: string }[] },
-) {
-  assertUniqueQaScenarioIds(scenarios, params?.nonYamlScenarios ?? []);
+export function buildQaCoverageInventory(scenarios: readonly QaSeedScenarioWithSource[]) {
   const byCoverageId = new Map<string, QaCoverageIdSummary>();
   const primaryCoverageIds = new Set<string>();
   const secondaryCoverageIds = new Set<string>();

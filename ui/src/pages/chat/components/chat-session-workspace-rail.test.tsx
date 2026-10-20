@@ -5,10 +5,10 @@ import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
 import { getSessionWorkspace, loadSessionWorkspace } from "./chat-session-workspace-state.ts";
-import type { SessionWorkspaceProps } from "./chat-session-workspace-types.ts";
 import {
   createSessionWorkspaceProps,
   type SessionWorkspaceHost,
+  type SessionWorkspaceProps,
 } from "./chat-session-workspace.ts";
 
 type List = NonNullable<SessionWorkspaceProps["list"]>;
@@ -26,6 +26,7 @@ function createWorkspace(overrides: WorkspaceFixture = {}): SessionWorkspaceProp
     browserPath: "",
     browserSearch: "",
     onBrowsePath: vi.fn(),
+    onRetry: vi.fn(),
     onOpenFile: vi.fn(),
     onSearch: vi.fn(),
     onSetFilter: vi.fn(),

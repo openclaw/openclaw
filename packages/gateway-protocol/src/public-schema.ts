@@ -5,6 +5,7 @@ export * from "./schema/sessions-provider-review.js";
 export * from "./schema/human-mentions.js";
 export * from "./schema/presence.js";
 export * from "./schema/claws.js";
+export * from "./schema/claw-drafts.js";
 export * from "./public-schema-push.js";
 export * from "./public-schema-users.js";
 export * from "./public-schema-plugins.js";
@@ -146,6 +147,7 @@ export {
   NodePendingEnqueueParamsSchema,
   NodePendingEnqueueResultSchema,
   SessionsListParamsSchema,
+  SessionsSubscribeParamsSchema,
   SessionCatalogCapabilitiesSchema,
   SessionCatalogDescriptorSchema,
   SessionCatalogPullRequestSummarySchema,
@@ -603,6 +605,8 @@ export {
   SessionApprovalReplaySchema,
   ExecApprovalsGetParamsSchema,
   ExecApprovalsSetParamsSchema,
+  ExecApprovalsNativeCommitParamsSchema,
+  ExecApprovalsNativeRequestSchema,
   ExecApprovalGetParamsSchema,
   ExecApprovalRequestParamsSchema,
   ExecApprovalResolveParamsSchema,

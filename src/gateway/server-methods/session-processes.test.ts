@@ -15,41 +15,21 @@ afterEach(resetProcessRegistryForTests);
 const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
 it.each([
-  {
-    role: "view" as const,
-    scopes: ["operator.read", "operator.write"],
-    own: false,
-    allowed: false,
-  },
-  { role: "write" as const, scopes: ["operator.read"], own: false, allowed: false },
-  {
-    role: "write" as const,
-    scopes: ["operator.read", "operator.write"],
-    own: false,
-    allowed: true,
-  },
-  {
-    role: "write" as const,
-    scopes: ["operator.read", "operator.sessions.write"],
-    own: false,
-    allowed: false,
-  },
-  {
-    role: "write" as const,
-    scopes: ["operator.read", "operator.sessions.write"],
-    own: true,
-    allowed: true,
-  },
-])(
-  "projects and enforces process controls for $role with $scopes (own=$own)",
-  async ({ role, scopes, own, allowed }) => {
+  ["view", "operator.write", false, false],
+  ["write", undefined, false, false],
+  ["write", "operator.write", false, true],
+  ["write", "operator.sessions.write", false, false],
+  ["write", "operator.sessions.write", true, true],
+] as const)(
+  "projects and enforces process controls for %s with %s (own=%s, allowed=%s)",
+  async (role, writeScope, own, allowed) => {
     await withOpenClawTestState(stateOptions, async (state) => {
       const cfg = rolePolicyConfig();
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
       const owner = roleClient("write", "process-owner");
       const viewer = roleClient(role, "process-viewer");
-      viewer.connect.scopes = scopes;
+      viewer.connect.scopes = ["operator.read", ...(writeScope ? [writeScope] : [])];
       const key = "agent:main:process-test";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: key },

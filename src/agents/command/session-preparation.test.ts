@@ -9,7 +9,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { deleteSessionEntryLifecycle } from "../../config/sessions/session-accessor.sqlite-lifecycle.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
 import { resolveVisibleActiveSessionRunState } from "../../gateway/server-methods/session-active-runs.js";
 import { registerAgentRunCapacityWait } from "../../infra/agent-run-capacity-wait.js";
 import {
@@ -26,15 +26,11 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
-import { prepareCommandConversationContext } from "./conversation-context.js";
 import {
   prepareCommandSessionRecoveryEntry,
   prepareEmbeddedSessionState,
 } from "./session-preparation.js";
 
-vi.mock("../embedded-agent-runner/runs.js", () => ({
-  resolveEmbeddedAgentSessionProgressState: () => undefined,
-}));
 vi.mock("../subagents/registry/subagent-registry-read.js", () => ({
   getLatestLiveSubagentRunByChildSessionKey: () => undefined,
   isSubagentRunQueued: () => false,
@@ -179,9 +175,15 @@ it.each([
   },
 );
 
-it.each(["subagent_settle", "subagent_announce", "sessions_send"])(
-  "retains original operator recovery custody only for the exact requester settle source: %s",
-  (sourceTool) => {
+it.each([
+  { sourceTool: "subagent_settle", requesterProfileId: undefined, retained: true },
+  { sourceTool: "subagent_announce", requesterProfileId: undefined, retained: false },
+  { sourceTool: "sessions_send", requesterProfileId: undefined, retained: false },
+  { sourceTool: "subagent_settle", requesterProfileId: "another-operator", retained: false },
+  { sourceTool: "sessions_send", requesterProfileId: "original-operator", retained: true },
+])(
+  "binds operator recovery custody for $sourceTool from $requesterProfileId",
+  ({ sourceTool, requesterProfileId, retained }) => {
     const runId = "announce:requester-settle:main:agent:main:main:child-run";
     const operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "original-operator",
@@ -221,15 +223,23 @@ it.each(["subagent_settle", "subagent_announce", "sessions_send"])(
       opts: {
         message: "Child completed",
         operatorAuthority,
+        ...(requesterProfileId
+          ? {
+              requesterOrigin: {
+                sessionKey: "agent:main:main",
+                operatorProfileId: requesterProfileId,
+              },
+            }
+          : {}),
         inputProvenance: {
           kind: "inter_session",
           sourceTool,
-          sourceChannel: "internal",
+          sourceChannel: sourceTool === "sessions_send" ? "webchat" : "internal",
           sourceSessionKey: "agent:main:subagent:child",
         },
       },
     });
-    if (sourceTool !== "subagent_settle") {
+    if (!retained) {
       expect(nextEntry.restartRecoveryOperatorSource).toBeUndefined();
       return;
     }
@@ -252,6 +262,76 @@ it.each(["subagent_settle", "subagent_announce", "sessions_send"])(
   },
 );
 
+it.each(["channel", "delegate", "generated-media", "recovery"] as const)(
+  "binds requester facts to the existing %s command recovery claim",
+  (kind) => {
+    const requesterOrigin = {
+      sessionKey: "agent:research:telegram:group:requesters",
+      messageProvider: "telegram",
+      senderId: "bob",
+    };
+    const entry: InternalSessionEntry = {
+      sessionId: "destination-session",
+      lifecycleRevision: "destination-lifecycle",
+      updatedAt: 1,
+      ...(kind === "recovery"
+        ? {
+            restartRecoveryDeliveryRunId: "current-run",
+            restartRecoveryDeliverySourceRunId: "original-run",
+            restartRecoverySourceIngress: "internal" as const,
+            restartRecoveryRequesterSource: {
+              agentId: "main",
+              sessionKey: "agent:main:destination",
+              sessionId: "destination-session",
+              lifecycleRevision: "destination-lifecycle",
+              sourceRunId: "original-run",
+              requesterOrigin: { ...requesterOrigin, senderId: "original-requester" },
+            },
+          }
+        : {}),
+    };
+    const prepared = prepareCommandSessionRecoveryEntry({
+      agentId: "main",
+      sessionKey: "agent:main:destination",
+      sessionId: entry.sessionId,
+      entry,
+      runId: "current-run",
+      now: 2,
+      lifecycleGeneration: getAgentRunLifecycleGeneration(),
+      isSessionRollover: false,
+      opts: {
+        message: "continue accepted work",
+        requesterOrigin,
+        ...(kind === "channel"
+          ? {}
+          : {
+              inputProvenance: {
+                kind: "inter_session" as const,
+                sourceTool: kind === "generated-media" ? "subagent_settle" : "sessions_send",
+              },
+            }),
+        ...(kind === "generated-media"
+          ? { internalDeliveryMediaUrls: ["/synthetic/result.png"] }
+          : {}),
+      },
+    });
+    requesterOrigin.senderId = "replacement";
+    expect(prepared.nextEntry).toMatchObject({
+      restartRecoveryDeliveryRunId: "current-run",
+      restartRecoveryDeliverySourceRunId: kind === "recovery" ? "original-run" : "current-run",
+      restartRecoverySourceIngress: kind === "channel" ? "channel" : "internal",
+      restartRecoveryRequesterSource: {
+        agentId: "main",
+        sessionKey: "agent:main:destination",
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+        sourceRunId: kind === "recovery" ? "original-run" : "current-run",
+        requesterOrigin: { senderId: kind === "recovery" ? "original-requester" : "bob" },
+      },
+    });
+  },
+);
+
 it.each([
   { internal: false, coordination: false },
   { internal: true, coordination: false },
@@ -265,7 +345,7 @@ it.each([
     const lifecycleGeneration = getAgentRunLifecycleGeneration();
     const state = () =>
       resolveVisibleActiveSessionRunState({
-        context: {},
+        storePath: "/unused/command.sqlite",
         requestedKey: sessionKey,
         canonicalKey: sessionKey,
         sessionId,
@@ -319,25 +399,40 @@ it.each([
 it.each(["agent:main:cron:nightly:run:123", "agent:main:subagent:123"])(
   "retains the isolated task's prompt for %s",
   async (sessionKey) => {
-    const opts = await prepareCommandConversationContext({
-      cfg: {},
-      opts: {
-        message: "Child finished.",
-        extraSystemPrompt: "Continue the isolated task.",
-        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
-      },
-      runContext: { messageChannel: "webchat" },
-      sessionKey,
-      sessionAgentId: "main",
-      sessionEntry: {
+    const runId = `isolated-prompt:${sessionKey}`;
+    try {
+      const { opts } = await prepareEmbeddedSessionState({
+        cfg: {},
+        opts: {
+          message: "Child finished.",
+          extraSystemPrompt: "Continue the isolated task.",
+          inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+          runContext: { messageChannel: "webchat" },
+        },
+        sessionKey,
+        sessionAgentId: "main",
         sessionId: "isolated-id",
-        updatedAt: 1,
-        chatType: "direct",
-        delivery: { kind: "internal" },
-      },
-    });
-    expect(opts.extraSystemPrompt).toBe("Continue the isolated task.");
-    expect(opts.silentReplyPromptMode).toBeUndefined();
+        storePath: "/unused/command.sqlite",
+        lifecycleGeneration: getAgentRunLifecycleGeneration(),
+        runId,
+        executionWorkspaceDir: "/workspace",
+        watchSkills: false,
+        isNewSession: false,
+        isSubagentLaneTurn: sessionKey.includes(":subagent:"),
+        suppressVisibleSessionEffects: true,
+        sessionStateActor: { actorType: "agent" },
+        sessionEntry: {
+          sessionId: "isolated-id",
+          updatedAt: 1,
+          chatType: "direct",
+          delivery: { kind: "internal" },
+        },
+      });
+      expect(opts.extraSystemPrompt).toBe("Continue the isolated task.");
+      expect(opts.silentReplyPromptMode).toBeUndefined();
+    } finally {
+      clearAgentRunContext(runId);
+    }
   },
 );
 
@@ -432,6 +527,7 @@ it.each([
   { deliver: true, replyAccountId: "plain", markup: "markdown" },
   { deliver: false, replyAccountId: undefined, markup: undefined },
 ])("uses the delivering account's format once ($deliver, $replyAccountId)", async (testCase) => {
+  const runId = "delivery-format-context";
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -461,17 +557,27 @@ it.each([
       AccountId: "rich",
       ChatType: "direct",
     };
-    const prepared = await prepareCommandConversationContext({
+    const { opts: prepared } = await prepareEmbeddedSessionState({
       cfg: {},
       opts: {
         message: "Child finished.",
         deliver: testCase.deliver,
         replyAccountId: testCase.replyAccountId,
         inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        runContext: { messageChannel: "telegram", currentChannelId: "1222", accountId: "rich" },
       },
-      runContext: { messageChannel: "telegram", currentChannelId: "1222", accountId: "rich" },
       sessionKey: "agent:main:telegram:direct:1222",
       sessionAgentId: "main",
+      sessionId: "conversation-id",
+      storePath: "/unused/command.sqlite",
+      lifecycleGeneration: getAgentRunLifecycleGeneration(),
+      runId,
+      executionWorkspaceDir: "/workspace",
+      watchSkills: false,
+      isNewSession: false,
+      isSubagentLaneTurn: false,
+      suppressVisibleSessionEffects: true,
+      sessionStateActor: { actorType: "agent" },
       sessionEntry: {
         sessionId: "conversation-id",
         updatedAt: 1,
@@ -497,6 +603,7 @@ it.each([
       );
     }
   } finally {
+    clearAgentRunContext(runId);
     resetPluginRuntimeStateForTest();
   }
 });

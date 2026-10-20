@@ -14,7 +14,7 @@ import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/se
 import { getRuntimeConfig } from "../config/io.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
+import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -72,7 +72,7 @@ function expectInvalid(result: Awaited<ReturnType<typeof directSessionReq>>, mes
 async function openWorkspaceClient(root: string, scope = "operator.admin", name = "device") {
   const client = await openClient({
     scopes: [scope],
-    deviceIdentityPath: path.join(root, `${name}.json`),
+    deviceIdentityPath: path.join(root, name, "client", "credentials.sqlite"),
   });
   return {
     ...client,
@@ -366,7 +366,7 @@ test("sessions.create reset-in-place detaches the prior worktree permission boun
           reason: "session-reset",
         });
         markRemovalStarted();
-        expect(isSessionLifecycleMutationActive(storePath, ["agent:main:main"])).toBe(true);
+        expect(isSessionMutationActive(storePath, ["agent:main:main"])).toBe(true);
         await removalGate.promise;
       }
       return await originalRemoveIfLossless(this, id);

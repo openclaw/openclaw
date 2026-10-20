@@ -1,7 +1,7 @@
 // Doctor contract closure guard tests keep enumeration paths dependency-light.
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { afterAll, describe, expect, it } from "vitest";
 import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";

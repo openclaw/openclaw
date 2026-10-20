@@ -32,8 +32,7 @@ type RuntimeModule = Awaited<
 
 function createFakeRuntime() {
   let status: ApplicationPlacementStartupStatus | null = null;
-  const listeners = new Set<() => void>();
-  const publish = () => listeners.forEach((listener) => listener());
+  let publish = () => {};
   const runtime: ApplicationPlacementStartupRuntime = {
     get: () => status,
     hasPendingTurn: () => status !== null,
@@ -49,14 +48,14 @@ function createFakeRuntime() {
     }),
     retry: vi.fn(),
     pause: vi.fn(),
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
     dispose: vi.fn(),
   };
   return {
     runtime,
+    factory: vi.fn<RuntimeModule["default"]>((_dependencies, onChange) => {
+      publish = onChange;
+      return runtime;
+    }),
   };
 }
 
@@ -73,7 +72,7 @@ describe("application session placement startup", () => {
   it("does not install a runtime that finishes loading after disposal", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
+    const factory = fake.factory;
     const { startup, input } = createPlacementStartupHarness(vi.fn(), {
       loadRuntime: () => moduleLoad.promise,
     });
@@ -119,7 +118,7 @@ describe("application session placement startup", () => {
 
     expect(loader).toHaveBeenCalledOnce();
     expect(startup.get(starts[0]!.recovery.sessionKey)).toBeNull();
-    moduleLoad.resolve({ default: () => fake.runtime });
+    moduleLoad.resolve({ default: fake.factory });
     await flushStartupMicrotasks();
 
     expect(fake.runtime.start).toHaveBeenCalledTimes(32);
@@ -131,7 +130,7 @@ describe("application session placement startup", () => {
   it("lets Start own recovery when it arrives during connection prewarm", async () => {
     const moduleLoad = createDeferred<RuntimeModule>();
     const fake = createFakeRuntime();
-    const factory = vi.fn(() => fake.runtime);
+    const factory = fake.factory;
     const loader = vi.fn(() => moduleLoad.promise);
     const { startup, input } = createPlacementStartupHarness(vi.fn(), { loadRuntime: loader });
 
@@ -141,7 +140,7 @@ describe("application session placement startup", () => {
     await flushStartupMicrotasks();
 
     expect(loader).toHaveBeenCalledOnce();
-    expect(factory).toHaveBeenCalledWith(expect.anything());
+    expect(factory).toHaveBeenCalledWith(expect.anything(), expect.any(Function));
     expect(fake.runtime.start).toHaveBeenCalledWith(expect.objectContaining(input));
     startup.dispose();
   });
@@ -150,7 +149,7 @@ describe("application session placement startup", () => {
     "shows a failed restored startup and reloads its runtime through Retry (required=%s)",
     async (required) => {
       const fake = createFakeRuntime();
-      const factory = vi.fn(() => fake.runtime);
+      const factory = fake.factory;
       const loader = vi
         .fn<NonNullable<Parameters<typeof createApplicationPlacementStartup>[1]>>()
         .mockRejectedValueOnce(new Error("cloud startup chunk unavailable"))
@@ -297,20 +296,24 @@ describe("application session placement startup", () => {
           phase,
           targetKind: target.kind,
         });
-        expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+        expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
       }
       expect(published).toHaveBeenCalledTimes(publishedBeforePlacementChanges);
       expect(request).not.toHaveBeenCalledWith("sessions.describe", expect.anything());
 
       dispatch.resolve({ placement: createStartupPlacement("active", 5) });
       await vi.waitFor(() => {
-        expect(request).toHaveBeenCalledWith("sessions.send", {
-          key: input.recovery.sessionKey,
-          agentId: input.recovery.agentId,
-          message: input.recovery.message,
-          attachments: undefined,
-          idempotencyKey: input.recovery.messageId,
-        });
+        expect(request).toHaveBeenCalledWith(
+          "sessions.send",
+          {
+            key: input.recovery.sessionKey,
+            agentId: input.recovery.agentId,
+            message: input.recovery.message,
+            attachments: undefined,
+            idempotencyKey: input.recovery.messageId,
+          },
+          expect.anything(),
+        );
       });
       expect(startup.get(input.recovery.sessionKey)).toBeNull();
       expect(chatSubmissions.readInitial(input.recovery.sessionKey, client)).toMatchObject({
@@ -521,7 +524,7 @@ describe("application session placement startup", () => {
       });
       expect(sessions.invalidate).toHaveBeenCalledOnce();
       expect(sessions.refresh).not.toHaveBeenCalled();
-      expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+      expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
       startup.dispose();
       const reloaded = createApplicationPlacementStartup(dependencies);
       reloaded.resumeRecovery();
@@ -541,17 +544,21 @@ describe("application session placement startup", () => {
         agentId: input.recovery.agentId,
         ...wire,
       });
-      expect(request).not.toHaveBeenCalledWith("sessions.send", expect.anything());
+      expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(0);
       retryDispatch.resolve({ placement: createStartupPlacement("active", 2) });
       await vi.waitFor(() => expect(reloaded.get(input.recovery.sessionKey)).toBeNull());
       expect(request.mock.calls.filter(([method]) => method === "sessions.send")).toHaveLength(1);
-      expect(request).toHaveBeenLastCalledWith("sessions.send", {
-        key: input.recovery.sessionKey,
-        agentId: input.recovery.agentId,
-        message,
-        attachments,
-        idempotencyKey: input.recovery.messageId,
-      });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.send",
+        {
+          key: input.recovery.sessionKey,
+          agentId: input.recovery.agentId,
+          message,
+          attachments,
+          idempotencyKey: input.recovery.messageId,
+        },
+        expect.anything(),
+      );
       expect(chatSubmissions.readInitial(input.recovery.sessionKey, client)).not.toBeNull();
       expect(
         readSessionPlacementRecovery(
@@ -723,6 +730,7 @@ describe("application session placement startup", () => {
       expect(newRequest).toHaveBeenCalledWith(
         "sessions.send",
         expect.objectContaining({ idempotencyKey: input.recovery.messageId }),
+        expect.anything(),
       );
     });
     expect(startup.get(input.recovery.sessionKey)).toBeNull();

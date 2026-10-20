@@ -15,10 +15,10 @@ import {
 } from "../../scripts/build-all.mts";
 import {
   hashInputFiles,
-  resolveBuildStepCacheState,
-  writeBuildStepCacheStamp,
-  resolveBuildStepCacheStampState,
-  restoreBuildStepCacheOutputs,
+  resolveBuildStepCacheState as cacheState,
+  writeBuildStepCacheStamp as stampCache,
+  resolveBuildStepCacheStampState as stampState,
+  restoreBuildStepCacheOutputs as restoreOutputs,
   finalizeBuildStepCache,
   resetBuildCacheInputs,
   writeBuildCacheInputs,
@@ -60,12 +60,42 @@ const buildArtifactCacheUrl = resolveRuntimeWorkerUrl(
   toolingProbeRuntimeEntrypoints.buildArtifactCache,
 );
 
+const STEP = {
+  compile: "tsdown",
+  external: "external-plugins:local-dist",
+  bootstrap: "check-cli-bootstrap-imports",
+  ui: "ui:build",
+  info: "write-build-info",
+  unified: "write-unified-entry-dts",
+  sdk: "write-plugin-sdk-entry-dts",
+  copy: "plugins:assets:copy",
+  postbuild: "runtime-postbuild",
+};
+
 function getBuildAllStep(label: string) {
   const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
   if (!step) {
     throw new Error(`Missing build-all step ${label}`);
   }
   return step;
+}
+
+function expectWindowsStep(
+  step: Parameters<typeof resolveBuildAllStep>[0],
+  options: Parameters<typeof resolveBuildAllStep>[1],
+  args: string[],
+) {
+  const command = "C:\\Program Files\\nodejs\\node.exe";
+  const result = resolveBuildAllStep(step, { nodeExecPath: command, ...options });
+  expect(
+    createManagedCommandInvocation({
+      bin: result.command,
+      args: result.args,
+      ...result.options,
+      platform: "win32",
+    }),
+  ).toEqual({ command, args, shell: false, windowsVerbatimArguments: undefined });
+  return result;
 }
 
 function buildMemoryLimit(cgroupGiB: number) {
@@ -80,7 +110,7 @@ function buildMemoryLimit(cgroupGiB: number) {
 }
 
 function buildRunner() {
-  return {
+  const runner = {
     env: {},
     logger: { error: vi.fn(), warn: vi.fn() },
     memoryLimit: buildMemoryLimit(5),
@@ -88,6 +118,12 @@ function buildRunner() {
     runStep: vi.fn<(invocation: ReturnType<typeof resolveBuildAllStep>) => { status: number }>(
       () => ({ status: 0 }),
     ),
+  };
+  return {
+    ...runner,
+    calls: () => runner.runStep.mock.calls.map(([invocation]) => invocation),
+    run: (profile: string, options: Parameters<typeof runBuildAllSteps>[1] = {}) =>
+      runBuildAllSteps(profile, { ...runner, ...options }),
   };
 }
 
@@ -98,16 +134,48 @@ function writeFixture(root: string, file: string, contents: string) {
   return target;
 }
 
+const readText = (file: string) => fs.readFileSync(file, "utf8");
+const readJson = (file: string) => JSON.parse(readText(file));
+const labeledSteps = (labels: string[]) => labels.map((label) => ({ label, args: [label] }));
+function pausedStep() {
+  const started = Promise.withResolvers<void>();
+  const finished = Promise.withResolvers<{ status: number }>();
+  return {
+    started: started.promise,
+    finish: (status = 0) => finished.resolve({ status }),
+    run: () => {
+      started.resolve();
+      return finished.promise;
+    },
+  };
+}
+
+function runPipeline(
+  profile: string,
+  labels: string[],
+  handlers: Record<string, () => { status: number } | Promise<{ status: number }>>,
+) {
+  const calls: string[] = [];
+  const build = buildRunner().run(profile, {
+    steps: labeledSteps(labels),
+    runStep({ args: [label] }) {
+      calls.push(label!);
+      return handlers[label!]?.() ?? { status: 0 };
+    },
+  });
+  return { calls, build };
+}
+
 function buildCacheFixture(cache: Partial<BuildCache> = {}, label = "cached") {
   const rootDir = tempDirs.make("openclaw-build-cache-");
   const inputPath = writeFixture(rootDir, "src/input.ts", "input");
   const outputPath = writeFixture(rootDir, "dist/output.js", "output");
   const step = { label, cache: { inputs: ["src"], outputs: ["dist"], ...cache } };
   const params = { rootDir };
-  const lookup = () => resolveBuildStepCacheState(step, params);
+  const lookup = () => cacheState(step, params);
   const publish = () => {
     const state = lookup();
-    writeBuildStepCacheStamp(step, state, params);
+    stampCache(step, state, params);
     return state;
   };
   return { rootDir, inputPath, outputPath, step, params, lookup, publish };
@@ -121,10 +189,10 @@ describe("resolveBuildAllStep", () => {
       () => new Date("2026-07-10T12:34:56.789Z"),
       () => commit,
     );
-    const uiInvocation = resolveBuildAllStep(getBuildAllStep("ui:build"), {
+    const uiInvocation = resolveBuildAllStep(getBuildAllStep(STEP.ui), {
       env: buildEnv,
     });
-    const buildInfoInvocation = resolveBuildAllStep(getBuildAllStep("write-build-info"), {
+    const buildInfoInvocation = resolveBuildAllStep(getBuildAllStep(STEP.info), {
       env: buildEnv,
     });
     expect(uiInvocation.options.env).toMatchObject({
@@ -144,30 +212,16 @@ describe("resolveBuildAllStep", () => {
     "passes encoded import URLs literally to managed Node on Windows (heap $heapMb)",
     ({ heapMb, concurrency }) => {
       const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
-      const result = resolveBuildAllStep(
+      expectWindowsStep(
         {
-          ...getBuildAllStep("tsdown"),
-          args: ["--import", importUrl, ...getBuildAllStep("tsdown").args.slice(2)],
+          ...getBuildAllStep(STEP.compile),
+          args: ["--import", importUrl, ...getBuildAllStep(STEP.compile).args.slice(2)],
         },
         {
-          nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
           env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: heapMb },
         },
+        ["--import", importUrl, "scripts/tsdown-build.mts", "--concurrency", concurrency],
       );
-
-      expect(
-        createManagedCommandInvocation({
-          bin: result.command,
-          args: result.args,
-          ...result.options,
-          platform: "win32",
-        }),
-      ).toEqual({
-        command: "C:\\Program Files\\nodejs\\node.exe",
-        args: ["--import", importUrl, "scripts/tsdown-build.mts", "--concurrency", concurrency],
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      });
     },
   );
 
@@ -182,24 +236,14 @@ describe("resolveBuildAllStep", () => {
         "build",
         ...(deferIsolatedAssets ? ["--defer-isolated"] : []),
       ];
-      const result = resolveBuildAllStep(getBuildAllStep("plugins:assets:build"), {
-        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
-        deferIsolatedAssets,
-      });
-      expect(
-        createManagedCommandInvocation({
-          bin: result.command,
-          args: result.args,
-          ...result.options,
-          platform: "win32",
-        }),
-      ).toEqual({
-        command: "C:\\Program Files\\nodejs\\node.exe",
+      const result = expectWindowsStep(
+        getBuildAllStep("plugins:assets:build"),
+        {
+          env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+          deferIsolatedAssets,
+        },
         args,
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      });
+      );
       expect(result.options).toEqual({
         stdio: "inherit",
         env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
@@ -238,7 +282,7 @@ describe("resolveBuildAllSteps", () => {
         return { status: 0 };
       });
       for (let build = 0; build < 2; build++) {
-        expect((await runBuildAllSteps(profile, { ...runner, cwd })).exitCode).toBe(0);
+        expect((await runner.run(profile, { cwd })).exitCode).toBe(0);
       }
       expect(signatures).toHaveLength(2);
       expect(signatures[1]).toBe(signatures[0]);
@@ -255,13 +299,12 @@ describe("resolveBuildAllSteps", () => {
     "generates native protocol models before compiling %s with skip-dts=%s",
     async (profile, skipDts) => {
       const runner = buildRunner();
-      const result = await runBuildAllSteps(profile, {
-        ...runner,
+      const result = await runner.run(profile, {
         cacheEnabled: false,
         env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts },
       });
       expect(result.exitCode).toBe(0);
-      const invocations = runner.runStep.mock.calls.map(([invocation]) => invocation);
+      const invocations = runner.calls();
       const generation = invocations.findIndex(({ args }) =>
         args.includes("scripts/prepare-native-protocol.mjs"),
       );
@@ -277,12 +320,12 @@ describe("resolveBuildAllSteps", () => {
     const steps = resolveBuildAllSteps("full");
     const labels = steps.map(({ label }) => label);
     const ui = expectDefined(
-      steps.find(({ label }) => label === "ui:build"),
+      steps.find(({ label }) => label === STEP.ui),
       "UI build",
     );
     expect(ui.cache).toBeUndefined();
-    expect(labels.indexOf("ui:build")).toBeGreaterThan(labels.indexOf("runtime-postbuild-stamp"));
-    expect(labels.indexOf("ui:build")).toBeLessThan(labels.indexOf("write-build-info"));
+    expect(labels.indexOf(STEP.ui)).toBeGreaterThan(labels.indexOf("runtime-postbuild-stamp"));
+    expect(labels.indexOf(STEP.ui)).toBeLessThan(labels.indexOf(STEP.info));
   });
 
   it("parses build-all CLI args before any build work", () => {
@@ -344,9 +387,9 @@ describe("resolveBuildAllSteps", () => {
     async (profile) => {
       const cwd = tempDirs.make("openclaw-phase-stamp-");
       const steps = resolveBuildAllSteps(profile, {})
-        .filter((step) => ["runtime-postbuild", "runtime-postbuild-stamp"].includes(step.label))
+        .filter((step) => [STEP.postbuild, "runtime-postbuild-stamp"].includes(step.label))
         .map((step) =>
-          step.label === "runtime-postbuild"
+          step.label === STEP.postbuild
             ? Object.assign({}, step, { args: ["-e", "process.exit(0)"] })
             : step,
         );
@@ -408,28 +451,20 @@ describe("resolveBuildAllSteps", () => {
   it("admits package once and freezes its heap for every child", async () => {
     const profile = "package";
     const tsdownSteps = resolveBuildAllSteps(profile).filter(
-      (step) =>
-        step.args.includes("scripts/tsdown-build.mts") || step.label === "write-unified-entry-dts",
+      (step) => step.args.includes("scripts/tsdown-build.mts") || step.label === STEP.unified,
     );
     const tsdownInvocations: ReturnType<typeof resolveBuildAllStep>[] = [];
     const executionOrder: string[] = [];
     const restoreCache = vi.fn(() => true);
     const result = await runBuildAllSteps(profile, {
       cacheEnabled: true,
-      env: {},
+      ...buildRunner(),
       finalizeCache: vi.fn(() => true),
-      logger: { error: vi.fn(), warn: vi.fn() },
-      memoryLimit: buildMemoryLimit(5),
       now: () => 0,
       resolveCacheState(step) {
         executionOrder.push(`cache:${step.label}`);
         return step.label === "tsdown-packages"
-          ? {
-              cacheable: true,
-              fresh: true,
-              restorable: true,
-              reason: "fresh-cache",
-            }
+          ? { cacheable: true, fresh: true, restorable: true, reason: "fresh-cache" }
           : { cacheable: false, fresh: false, reason: "no-cache" };
       },
       restoreCache,
@@ -487,13 +522,12 @@ describe("resolveBuildAllSteps", () => {
     async ({ env, cgroupGiB, heapMb, nodeOptions, warns }) => {
       const runner = buildRunner();
       const { logger } = runner;
-      const result = await runBuildAllSteps("ciArtifacts", {
-        ...runner,
+      const result = await runner.run("ciArtifacts", {
         env,
         memoryLimit: buildMemoryLimit(cgroupGiB),
         resolveCacheState: () => ({ cacheable: true, fresh: false, reason: "missing-inputs" }),
       });
-      const invocations = runner.runStep.mock.calls.map(([invocation]) => invocation);
+      const invocations = runner.calls();
       expect(result.exitCode).toBe(0);
       const writer = expectDefined(
         invocations.find((invocation) =>
@@ -532,10 +566,7 @@ describe("resolveBuildAllSteps", () => {
     "does not validate %s after declaration publication fails",
     async (profile) => {
       const result = await runBuildAllSteps(profile, {
-        env: {},
-        logger: { error: vi.fn(), warn: vi.fn() },
-        memoryLimit: buildMemoryLimit(5),
-        resolveCacheState: () => ({ cacheable: false, fresh: false, reason: "no-cache" }),
+        ...buildRunner(),
         runStep: (invocation) => ({
           status: invocation.args.includes("scripts/write-unified-entry-dts.ts") ? 23 : 0,
         }),
@@ -544,16 +575,11 @@ describe("resolveBuildAllSteps", () => {
 
       expect(result.exitCode).toBe(23);
       expect(labels).toEqual(
-        expect.arrayContaining([
-          "tsdown-ai",
-          "tsdown-packages",
-          "tsdown",
-          "write-unified-entry-dts",
-        ]),
+        expect.arrayContaining(["tsdown-ai", "tsdown-packages", STEP.compile, STEP.unified]),
       );
-      expect(labels.at(-1)).toBe("write-unified-entry-dts");
+      expect(labels.at(-1)).toBe(STEP.unified);
       expect(labels).not.toContain("check-plugin-sdk-exports");
-      for (const step of ["write-build-info", "write-cli-startup-metadata"]) {
+      for (const step of [STEP.info, "write-cli-startup-metadata"]) {
         expect(resolveBuildAllSteps(profile).some(({ label }) => label === step)).toBe(false);
       }
     },
@@ -568,44 +594,28 @@ describe("resolveBuildAllSteps", () => {
     async ({ runtimeExit, uiExit, expectedExit, throws }) => {
       const ui = Promise.withResolvers<{ status: number }>();
       const runtimeReached = Promise.withResolvers<void>();
-      const calls: string[] = [];
       let settled = false;
-      const build = runBuildAllSteps("runtime", {
-        ...buildRunner(),
-        steps: [
-          "tsdown",
-          "external-plugins:local-dist",
-          "check-cli-bootstrap-imports",
-          "ui:build",
-          "write-build-info",
-        ].map((label) => ({ label, args: [label] })),
-        runStep({ args: [label] }) {
-          calls.push(label!);
-          if (label === "ui:build") {
-            return ui.promise;
-          }
-          if (label === "check-cli-bootstrap-imports") {
+      const { calls, build } = runPipeline(
+        "runtime",
+        [STEP.compile, STEP.external, STEP.bootstrap, STEP.ui, STEP.info],
+        {
+          [STEP.ui]: () => ui.promise,
+          [STEP.bootstrap]: () => {
             runtimeReached.resolve();
             if (throws) {
               throw new Error("runtime writer failed");
             }
             return { status: runtimeExit };
-          }
-          return { status: 0 };
+          },
         },
-      });
+      );
       void build.then(
         () => (settled = true),
         () => (settled = true),
       );
       try {
         await runtimeReached.promise;
-        expect(calls).toEqual([
-          "tsdown",
-          "external-plugins:local-dist",
-          "check-cli-bootstrap-imports",
-          "ui:build",
-        ]);
+        expect(calls).toEqual([STEP.compile, STEP.external, STEP.bootstrap, STEP.ui]);
         expect(settled).toBe(false);
       } finally {
         ui.resolve({ status: uiExit });
@@ -615,95 +625,52 @@ describe("resolveBuildAllSteps", () => {
       } else {
         expect((await build).exitCode).toBe(expectedExit);
       }
-      expect(calls.includes("write-build-info")).toBe(!throws && expectedExit === 0);
+      expect(calls.includes(STEP.info)).toBe(!throws && expectedExit === 0);
     },
   );
-  it.each(["write-unified-entry-dts", "write-plugin-sdk-entry-dts"])(
+  it.each([STEP.unified, STEP.sdk])(
     "finishes late %s compiler work before starting the independent UI build",
     async (compiler) => {
-      const started = Promise.withResolvers<void>();
-      const finished = Promise.withResolvers<{ status: number }>();
-      const calls: string[] = [];
-      const build = runBuildAllSteps("full", {
-        ...buildRunner(),
-        steps: [
-          "tsdown",
-          "external-plugins:local-dist",
-          compiler,
-          "check-cli-bootstrap-imports",
-          "ui:build",
-        ].map((label) => ({ label, args: [label] })),
-        runStep({ args: [label] }) {
-          calls.push(label!);
-          if (label === compiler) {
-            started.resolve();
-            return finished.promise;
-          }
-          return { status: 0 };
-        },
-      });
+      const compilerStep = pausedStep();
+      const { calls, build } = runPipeline(
+        "full",
+        [STEP.compile, STEP.external, compiler, STEP.bootstrap, STEP.ui],
+        { [compiler]: compilerStep.run },
+      );
       try {
-        await started.promise;
-        expect(calls).toEqual(["tsdown", "external-plugins:local-dist", compiler]);
+        await compilerStep.started;
+        expect(calls).toEqual([STEP.compile, STEP.external, compiler]);
       } finally {
-        finished.resolve({ status: 0 });
+        compilerStep.finish();
       }
       expect((await build).exitCode).toBe(0);
-      expect(calls).toEqual([
-        "tsdown",
-        "external-plugins:local-dist",
-        compiler,
-        "check-cli-bootstrap-imports",
-        "ui:build",
-      ]);
+      expect(calls).toEqual([STEP.compile, STEP.external, compiler, STEP.bootstrap, STEP.ui]);
     },
   );
   it("waits for copied assets and emitted runtime metadata before UI, then joins independent checks", async () => {
-    const copied = Promise.withResolvers<{ status: number }>();
-    const metadata = Promise.withResolvers<{ status: number }>();
-    const copyStarted = Promise.withResolvers<void>();
-    const metadataStarted = Promise.withResolvers<void>();
-    const checkStarted = Promise.withResolvers<void>();
-    const check = Promise.withResolvers<{ status: number }>();
-    const calls: string[] = [];
-    const build = runBuildAllSteps("full", {
-      ...buildRunner(),
-      steps: [
-        "tsdown",
-        "plugins:assets:copy",
-        "runtime-postbuild",
-        "check-plugin-sdk-exports",
-        "ui:build",
-        "write-build-info",
-      ].map((label) => ({ label, args: [label] })),
-      runStep({ args: [label] }) {
-        calls.push(label!);
-        if (label === "plugins:assets:copy") {
-          copyStarted.resolve();
-          return copied.promise;
-        }
-        if (label === "runtime-postbuild") {
-          metadataStarted.resolve();
-          return metadata.promise;
-        }
-        if (label === "check-plugin-sdk-exports") {
-          checkStarted.resolve();
-          return check.promise;
-        }
-        return { status: 0 };
+    const copied = pausedStep();
+    const metadata = pausedStep();
+    const check = pausedStep();
+    const { calls, build } = runPipeline(
+      "full",
+      [STEP.compile, STEP.copy, STEP.postbuild, "check-plugin-sdk-exports", STEP.ui, STEP.info],
+      {
+        [STEP.copy]: copied.run,
+        [STEP.postbuild]: metadata.run,
+        "check-plugin-sdk-exports": check.run,
       },
-    });
-    await copyStarted.promise;
-    expect(calls).not.toContain("ui:build");
-    copied.resolve({ status: 0 });
-    await metadataStarted.promise;
-    expect(calls).not.toContain("ui:build");
-    metadata.resolve({ status: 0 });
-    await checkStarted.promise;
+    );
+    await copied.started;
+    expect(calls).not.toContain(STEP.ui);
+    copied.finish();
+    await metadata.started;
+    expect(calls).not.toContain(STEP.ui);
+    metadata.finish();
+    await check.started;
     await Promise.resolve();
-    expect(calls).toContain("ui:build");
-    expect(calls).not.toContain("write-build-info");
-    check.resolve({ status: 0 });
+    expect(calls).toContain(STEP.ui);
+    expect(calls).not.toContain(STEP.info);
+    check.finish();
     expect((await build).exitCode).toBe(0);
   });
   it.each([undefined, "0"])(
@@ -746,8 +713,8 @@ describe("resolveBuildAllSteps", () => {
       ]);
       const env = spawn.mock.calls[0]![2].env!;
       const runner = buildRunner();
-      const result = await runBuildAllSteps("qaRuntime", { ...runner, env });
-      const invocations = runner.runStep.mock.calls.map(([invocation]) => invocation);
+      const result = await runner.run("qaRuntime", { env });
+      const invocations = runner.calls();
       expect(result.exitCode).toBe(0);
       const compiler = invocations.find((call) => call.args.includes("scripts/tsdown-build.mts"))!;
       expect(compiler.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts ?? "1");
@@ -756,11 +723,11 @@ describe("resolveBuildAllSteps", () => {
       );
       expect(result.timings.map(({ label }) => label)).toEqual([
         "plugins:assets:build",
-        "tsdown",
-        "external-plugins:local-dist",
-        "check-cli-bootstrap-imports",
-        "plugins:assets:copy",
-        "runtime-postbuild",
+        STEP.compile,
+        STEP.external,
+        STEP.bootstrap,
+        STEP.copy,
+        STEP.postbuild,
         "build-stamp",
         "runtime-postbuild-stamp",
       ]);
@@ -807,8 +774,8 @@ describe("resolveBuildAllSteps", () => {
       const env = { OPENCLAW_DEV_SOURCE_ROOT: "/serving-checkout", ...overrides };
       const originalEnv = { ...env };
       const runner = buildRunner();
-      const result = await runBuildAllSteps(profile, { ...runner, cacheEnabled: false, env });
-      const invocations = runner.runStep.mock.calls.map(([invocation]) => invocation);
+      const result = await runner.run(profile, { cacheEnabled: false, env });
+      const invocations = runner.calls();
 
       expect(result.exitCode).toBe(0);
       const labels = result.timings.map((timing) => timing.label);
@@ -817,8 +784,8 @@ describe("resolveBuildAllSteps", () => {
           OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: runtimeOnly ? "1" : "0",
         }).map((step) => step.label),
       );
-      expect(labels).not.toContain("write-plugin-sdk-entry-dts");
-      expect(labels.includes("write-unified-entry-dts")).toBe(!runtimeOnly);
+      expect(labels).not.toContain(STEP.sdk);
+      expect(labels.includes(STEP.unified)).toBe(!runtimeOnly);
       expect(labels.includes("check-plugin-sdk-exports")).toBe(!runtimeOnly);
       expect(labels.includes("clean:dist")).toBe(profile === "package");
       const compilers = invocations.filter((call) =>
@@ -846,9 +813,9 @@ describe("build-all timing output", () => {
   it("summarizes phases slowest first with total time and status", () => {
     expect(
       formatBuildAllTimingSummary([
-        { label: "tsdown", status: "ran", durationMs: 99000 },
-        { label: "plugins:assets:copy", status: "cached", durationMs: 12 },
-        { label: "write-plugin-sdk-entry-dts", status: "ran", durationMs: 34567 },
+        { label: STEP.compile, status: "ran", durationMs: 99000 },
+        { label: STEP.copy, status: "cached", durationMs: 12 },
+        { label: STEP.sdk, status: "ran", durationMs: 34567 },
       ]),
     ).toBe(
       "[build-all] phase timings: total 2m 13.6s; slowest tsdown 1m 39s; write-plugin-sdk-entry-dts 34.6s; plugins:assets:copy (cached) 12ms",
@@ -860,20 +827,16 @@ describe("resolveBuildStepCacheState", () => {
   it("validates the saved snapshot only when live outputs need restoration", () => {
     const f = buildCacheFixture();
     const cached = f.publish();
-    let savedReads = 0;
-    const readFile = fs.readFileSync.bind(fs);
-    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      if (String(file).startsWith(`${cached.outputRoot}${path.sep}`)) {
-        savedReads++;
-      }
-      return readFile(file, options);
-    });
+    const read = vi.spyOn(fs, "readFileSync");
+    const savedReads = () =>
+      read.mock.calls.filter(([file]) => String(file).startsWith(`${cached.outputRoot}${path.sep}`))
+        .length;
     try {
       expect(f.lookup()).toMatchObject({ fresh: true, restorable: false });
-      expect(savedReads).toBe(0);
+      expect(savedReads()).toBe(0);
       fs.writeFileSync(f.outputPath, "changed live bytes");
       expect(f.lookup()).toMatchObject({ fresh: true, restorable: true });
-      expect(savedReads).toBeGreaterThan(0);
+      expect(savedReads()).toBeGreaterThan(0);
       fs.writeFileSync(path.join(cached.outputRoot!, "dist/output.js"), "changed saved bytes");
       expect(f.lookup()).toMatchObject({ fresh: false, restorable: false });
     } finally {
@@ -893,10 +856,10 @@ describe("resolveBuildStepCacheState", () => {
           fs,
         ),
     };
-    const lookup = () => resolveBuildStepCacheState(f.step, params);
+    const lookup = () => cacheState(f.step, params);
     expect(lookup().fresh).toBe(false);
     const inputs = ["shared/consumed.ts"];
-    writeBuildStepCacheStamp(
+    stampCache(
       f.step,
       {
         ...lookup(),
@@ -905,18 +868,10 @@ describe("resolveBuildStepCacheState", () => {
       },
       params,
     );
-    let staticBytesRead = 0;
-    const readFile = fs.readFileSync.bind(fs);
-    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      const bytes = readFile(file, options);
-      if (file === f.inputPath) {
-        staticBytesRead += Buffer.byteLength(bytes);
-      }
-      return bytes;
-    });
+    const read = vi.spyOn(fs, "readFileSync");
     try {
       expect(lookup()).toMatchObject({ fresh: true, consumedInputs: inputs });
-      expect(staticBytesRead).toBe(Buffer.byteLength("input"));
+      expect(read.mock.calls.filter(([file]) => file === f.inputPath)).toHaveLength(1);
     } finally {
       read.mockRestore();
     }
@@ -978,8 +933,8 @@ describe("resolveBuildStepCacheState", () => {
     expect(pending.restorable).toBe(true);
     fs.writeFileSync(f.outputPath, "next complete generation");
     f.publish();
-    expect(restoreBuildStepCacheOutputs(pending, f.params)).toBe(false);
-    expect(fs.readFileSync(f.outputPath, "utf8")).toBe("next complete generation");
+    expect(restoreOutputs(pending, f.params)).toBe(false);
+    expect(readText(f.outputPath)).toBe("next complete generation");
   });
 
   it("invalidates publication before copying and never accepts a partial cached tree", () => {
@@ -1023,16 +978,12 @@ describe("resolveBuildStepCacheState", () => {
     const removedJs = writeFixture(target.rootDir, "dist/plugin-sdk/removed.js", "runtime");
     const sourceParams = { ...source.params, env };
     const targetParams = { ...target.params, env };
-    const state = resolveBuildStepCacheState(source.step, sourceParams);
-    writeBuildStepCacheStamp(
-      source.step,
-      resolveBuildStepCacheStampState(source.step, state, sourceParams),
-      sourceParams,
-    );
-    const restore = resolveBuildStepCacheState(source.step, targetParams);
+    const state = cacheState(source.step, sourceParams);
+    stampCache(source.step, stampState(source.step, state, sourceParams), sourceParams);
+    const restore = cacheState(source.step, targetParams);
     expect(restore).toMatchObject({ fresh: true, restorable: true });
     expect(restore.outputRoot).toBe(path.join(cacheRoot, "tsdown-unified", "outputs"));
-    expect(restoreBuildStepCacheOutputs(restore, targetParams)).toBe(true);
+    expect(restoreOutputs(restore, targetParams)).toBe(true);
     const cachedFile = path.join(restore.outputRoot!, "dist/plugin-sdk/current.d.ts");
     const restoredFile = path.join(target.rootDir, "dist/plugin-sdk/current.d.ts");
     expect(fs.statSync(restoredFile).ino).not.toBe(fs.statSync(cachedFile).ino);
@@ -1040,25 +991,20 @@ describe("resolveBuildStepCacheState", () => {
       "export declare const current: true;",
     );
     expect(fs.existsSync(removedDts)).toBe(false);
-    expect(fs.readFileSync(removedJs, "utf8")).toBe("runtime");
+    expect(readText(removedJs)).toBe("runtime");
     writeBuildCacheInputs(target.rootDir);
-    expect(
-      JSON.parse(
-        fs.readFileSync(path.join(target.rootDir, "dist/build-cache-inputs.json"), "utf8"),
-      ),
-    ).toEqual({
+    expect(readJson(path.join(target.rootDir, "dist/build-cache-inputs.json"))).toEqual({
       version: 1,
       steps: { "tsdown-unified": state.signature },
     });
     resetBuildCacheInputs(target.rootDir);
     writeBuildCacheInputs(target.rootDir);
-    expect(
-      JSON.parse(
-        fs.readFileSync(path.join(target.rootDir, "dist/build-cache-inputs.json"), "utf8"),
-      ),
-    ).toEqual({ version: 1, steps: {} });
+    expect(readJson(path.join(target.rootDir, "dist/build-cache-inputs.json"))).toEqual({
+      version: 1,
+      steps: {},
+    });
     fs.writeFileSync(cachedFile, "changed writable cache");
-    expect(fs.readFileSync(restoredFile, "utf8")).toBe("export declare const current: true;");
+    expect(readText(restoredFile)).toBe("export declare const current: true;");
   });
 
   it("keys workspace declarations by their producer closure and package sources", () => {
@@ -1104,22 +1050,19 @@ describe("resolveBuildStepCacheState", () => {
         collectBundledPluginBuildEntries({ cwd: rootDir, env: before }),
       );
       for (const step of steps) {
-        expect(resolveBuildStepCacheState(step, { rootDir, env: after }).signature, name).toBe(
-          resolveBuildStepCacheState(step, { rootDir, env: before }).signature,
+        expect(cacheState(step, { rootDir, env: after }).signature, name).toBe(
+          cacheState(step, { rootDir, env: before }).signature,
         );
       }
     }
     for (const step of steps) {
-      const state = resolveBuildStepCacheState(step, { rootDir });
-      writeBuildStepCacheStamp(step, resolveBuildStepCacheStampState(step, state, { rootDir }), {
+      const state = cacheState(step, { rootDir });
+      stampCache(step, stampState(step, state, { rootDir }), {
         rootDir,
       });
     }
     writeFixture(rootDir, "src/index.ts", "export const core = 2;");
-    expect(steps.map((step) => resolveBuildStepCacheState(step, { rootDir }).fresh)).toEqual([
-      true,
-      true,
-    ]);
+    expect(steps.map((step) => cacheState(step, { rootDir }).fresh)).toEqual([true, true]);
     for (const file of [
       "scripts/lib/native-declaration-emitter.mts",
       "scripts/lib/native-declaration-filesystem.mts",
@@ -1129,26 +1072,20 @@ describe("resolveBuildStepCacheState", () => {
       const original = fs.readFileSync(path.join(rootDir, file), "utf8");
       writeFixture(rootDir, file, original + "\n// changed generator bytes\n");
       expect(
-        steps.map((step) => resolveBuildStepCacheState(step, { rootDir }).fresh),
+        steps.map((step) => cacheState(step, { rootDir }).fresh),
         file,
       ).toEqual([false, false]);
       writeFixture(rootDir, file, original);
     }
-    expect(steps.map((step) => resolveBuildStepCacheState(step, { rootDir }).fresh)).toEqual([
-      true,
-      true,
-    ]);
+    expect(steps.map((step) => cacheState(step, { rootDir }).fresh)).toEqual([true, true]);
     writeFixture(rootDir, "packages/net-policy/src/index.ts", "export const net = 2;");
-    expect(steps.map((step) => resolveBuildStepCacheState(step, { rootDir }).fresh)).toEqual([
-      false,
-      false,
-    ]);
+    expect(steps.map((step) => cacheState(step, { rootDir }).fresh)).toEqual([false, false]);
   });
 
   it("rejects a matching legacy stamp that omits a required output", () => {
     const f = buildCacheFixture();
     const legacy = f.publish();
-    expect(JSON.parse(fs.readFileSync(legacy.stampPath!, "utf8"))).toMatchObject({
+    expect(readJson(legacy.stampPath!)).toMatchObject({
       version: 6,
       signature: legacy.signature,
       outputs: { "dist/output.js": expect.any(String) },
@@ -1162,7 +1099,7 @@ describe("resolveBuildStepCacheState", () => {
         restore: "always" as const,
       },
     };
-    const stale = resolveBuildStepCacheState(step, f.params);
+    const stale = cacheState(step, f.params);
     expect(stale).toMatchObject({
       fresh: false,
       reason: "required-output-unrecorded",
@@ -1170,26 +1107,24 @@ describe("resolveBuildStepCacheState", () => {
       signature: legacy.signature,
       stampedOutputs: ["dist/output.js"],
     });
-    expect(restoreBuildStepCacheOutputs(stale, f.params)).toBe(false);
+    expect(restoreOutputs(stale, f.params)).toBe(false);
   });
 
   it("does not replace a cache stamp from incomplete current outputs", () => {
     const f = buildCacheFixture();
     const state = f.publish();
-    const stamp = fs.readFileSync(state.stampPath!, "utf8");
+    const stamp = readText(state.stampPath!);
     const cachedOutput = path.join(state.outputRoot!, "dist/output.js");
-    expect(fs.readFileSync(cachedOutput, "utf8")).toBe("output");
+    expect(readText(cachedOutput)).toBe("output");
     fs.writeFileSync(f.outputPath, "incomplete refresh");
     const step = {
       ...f.step,
       cache: { ...f.step.cache, requiredOutputs: ["dist/output.js", "dist/plugin-sdk/core.d.ts"] },
     };
-    expect(finalizeBuildStepCache(step, resolveBuildStepCacheState(step, f.params), f.params)).toBe(
-      true,
-    );
-    expect(fs.readFileSync(state.stampPath!, "utf8")).toBe(stamp);
-    expect(fs.readFileSync(cachedOutput, "utf8")).toBe("output");
-    expect(resolveBuildStepCacheState(step, f.params)).toMatchObject({
+    expect(finalizeBuildStepCache(step, cacheState(step, f.params), f.params)).toBe(true);
+    expect(readText(state.stampPath!)).toBe(stamp);
+    expect(readText(cachedOutput)).toBe("output");
+    expect(cacheState(step, f.params)).toMatchObject({
       fresh: false,
       reason: "required-output-unrecorded",
     });
@@ -1199,7 +1134,7 @@ describe("resolveBuildStepCacheState", () => {
     const f = buildCacheFixture();
     const obsolete = writeFixture(f.rootDir, "dist/obsolete.js", "obsolete output");
     const initial = f.publish();
-    const record = JSON.parse(fs.readFileSync(initial.stampPath!, "utf8"));
+    const record = readJson(initial.stampPath!);
     fs.writeFileSync(initial.stampPath!, JSON.stringify({ ...record, version: 5 }));
     fs.rmSync(obsolete);
     fs.writeFileSync(f.inputPath, "changed input");
@@ -1226,7 +1161,7 @@ describe("resolveBuildStepCacheState", () => {
     }
     const stale = f.lookup();
     expect(stale).toMatchObject({ cacheable: true, fresh: false, reason, restorable: false });
-    expect(restoreBuildStepCacheOutputs(stale, f.params)).toBe(false);
+    expect(restoreOutputs(stale, f.params)).toBe(false);
   });
 
   it("ignores generated and installed directories in broad cache inputs", () => {
@@ -1247,9 +1182,9 @@ describe("resolveBuildStepCacheState", () => {
   it("separates cache generations by output-affecting environment", () => {
     const f = buildCacheFixture({ env: ["OPENCLAW_BUILD_PRIVATE_QA"], restore: "always" });
     const params = { ...f.params, env: { OPENCLAW_BUILD_PRIVATE_QA: "1" } };
-    const state = resolveBuildStepCacheState(f.step, params);
-    writeBuildStepCacheStamp(f.step, state, params);
-    const stale = resolveBuildStepCacheState(f.step, { ...f.params, env: {} });
+    const state = cacheState(f.step, params);
+    stampCache(f.step, state, params);
+    const stale = cacheState(f.step, { ...f.params, env: {} });
     expect(stale).toMatchObject({
       cacheable: true,
       fresh: false,
@@ -1264,7 +1199,7 @@ describe("resolveBuildStepCacheState", () => {
     fs.writeFileSync(f.outputPath, "overwritten by earlier build step");
     const obsolete = writeFixture(f.rootDir, "dist/obsolete.js", "obsolete output");
     const readSpy = vi.spyOn(fs, "readFileSync");
-    let restore: ReturnType<typeof resolveBuildStepCacheState>;
+    let restore: ReturnType<typeof cacheState>;
     try {
       restore = f.lookup();
       expect(readSpy.mock.calls.map(([file]) => file)).not.toContain(f.outputPath);
@@ -1280,8 +1215,8 @@ describe("resolveBuildStepCacheState", () => {
       relativeOutputFiles: ["dist/obsolete.js", "dist/output.js"],
       stampedOutputs: ["dist/output.js"],
     });
-    expect(restoreBuildStepCacheOutputs(restore, f.params)).toBe(true);
-    expect(fs.readFileSync(f.outputPath, "utf8")).toBe("output");
+    expect(restoreOutputs(restore, f.params)).toBe(true);
+    expect(readText(f.outputPath)).toBe("output");
     expect(fs.existsSync(obsolete)).toBe(false);
   });
 
@@ -1291,19 +1226,19 @@ describe("resolveBuildStepCacheState", () => {
     const restore = f.lookup();
     fs.rmSync(f.outputPath);
     expect(finalizeBuildStepCache(f.step, restore, { ...f.params, reusedCache: true })).toBe(true);
-    expect(fs.readFileSync(f.outputPath, "utf8")).toBe("output");
+    expect(readText(f.outputPath)).toBe("output");
   });
 
   it("refreshes validator cache outputs after a cache-hit command updates them", () => {
     const f = buildCacheFixture({ restore: "always", runOnHit: { finalize: "refresh" } });
     f.publish();
-    expect(restoreBuildStepCacheOutputs(f.lookup(), f.params)).toBe(true);
+    expect(restoreOutputs(f.lookup(), f.params)).toBe(true);
     const restore = f.lookup();
     fs.writeFileSync(f.outputPath, "validated refresh");
     expect(finalizeBuildStepCache(f.step, restore, { ...f.params, reusedCache: true })).toBe(true);
     fs.rmSync(f.outputPath);
-    expect(restoreBuildStepCacheOutputs(f.lookup(), f.params)).toBe(true);
-    expect(fs.readFileSync(f.outputPath, "utf8")).toBe("validated refresh");
+    expect(restoreOutputs(f.lookup(), f.params)).toBe(true);
+    expect(readText(f.outputPath)).toBe("validated refresh");
   });
 
   it("can cache only direct directory files for generated flat outputs", () => {

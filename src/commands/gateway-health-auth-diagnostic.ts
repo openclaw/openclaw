@@ -8,7 +8,7 @@ import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 type GatewayProbeReachabilityEvidence = NonNullable<DaemonStatus["rpc"]>;
 
 export const GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE =
-  "Gateway is reachable, but this CLI has no token/password or paired device token for read-scope health RPCs.";
+  "Gateway is reachable, but this CLI lacks credentials with read scope for health RPCs.";
 export const GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE = "Gateway credentials required";
 export const GATEWAY_HEALTH_REACHABLE_LINE = "Gateway: reachable";
 export const GATEWAY_HEALTH_RATE_LIMITED_MESSAGE =

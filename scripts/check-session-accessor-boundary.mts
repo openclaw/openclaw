@@ -2,7 +2,7 @@
 
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { z } from "zod";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import {
@@ -94,17 +94,14 @@ const migratedSessionAccessorFiles = new Set([
   "src/acp/runtime/session-meta.ts",
   "src/agents/subagents/spawn/acp-spawn.ts",
   "src/agents/auth-profiles/session-override.ts",
-  "src/agents/embedded-agent-runner/compaction-successor-transcript.ts",
   "src/agents/embedded-agent-runner/run/attempt.ts",
   "src/agents/embedded-agent-runner/tool-result-truncation.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite.ts",
-  "src/agents/embedded-agent-runner/transcript-runtime-state.ts",
   "src/agents/live-model-switch.ts",
   "src/agents/subagents/registry/subagent-control.ts",
   "src/agents/subagents/registry/subagent-registry-helpers.ts",
   "src/auto-reply/reply/abort.ts",
   "src/auto-reply/reply/agent-runner-helpers.ts",
-  "src/auto-reply/reply/agent-runner.ts",
   "src/auto-reply/reply/commands-subagents/action-info.ts",
   "src/auto-reply/reply/followup-runner.ts",
   "src/auto-reply/reply/queue/drain.ts",
@@ -119,7 +116,6 @@ const migratedSessionAccessorFiles = new Set([
   "src/config/sessions/delivery-info.ts",
   "src/config/sessions/goals.ts",
   "src/cron/isolated-agent/delivery-target.ts",
-  "src/cron/service/timer.ts",
   "src/gateway/session-history-state.ts",
   "src/gateway/sessions-history-http.ts",
   "src/gateway/session-utils.ts",
@@ -132,7 +128,7 @@ const migratedSessionAccessorFiles = new Set([
   ...gatewaySessionServerMethodFiles,
   "src/gateway/server-session-events.ts",
   "src/gateway/session-reset-service.ts",
-  "src/infra/outbound/message-action-tts.ts",
+  "src/infra/outbound/message-action-send.ts",
   "src/agents/tools/embedded-gateway-stub.ts",
   "src/agents/tools/session-status-tool.ts",
   "src/agents/tools/sessions-list-tool.ts",
@@ -187,13 +183,11 @@ const migratedSessionAccessorWriteFiles = new Set([
   "src/auto-reply/reply/agent-runner-cli-dispatch.ts",
   "src/auto-reply/reply/agent-runner-execution.ts",
   "src/auto-reply/reply/agent-runner-memory.ts",
-  "src/auto-reply/reply/agent-runner.ts",
   "src/auto-reply/reply/body.ts",
   "src/auto-reply/reply/commands-acp/lifecycle.ts",
   "src/auto-reply/reply/commands-reset.ts",
   "src/auto-reply/reply/commands-session-store.ts",
   "src/auto-reply/reply/directive-handling.impl.ts",
-  "src/auto-reply/reply/directive-handling.persist.ts",
   "src/auto-reply/reply/followup-runner.ts",
   "src/auto-reply/reply/get-reply.ts",
   "src/auto-reply/reply/model-selection.ts",
@@ -217,7 +211,6 @@ const migratedSessionAccessorWriteFiles = new Set([
 const migratedTranscriptWriterFiles = new Set([
   "src/agents/command/attempt-execution.ts",
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts",
-  "src/auto-reply/reply/session-fork.runtime.ts",
   "src/config/sessions/transcript.ts",
   "src/gateway/server-methods/chat.ts",
   "src/gateway/server-methods/chat-transcript-inject.ts",

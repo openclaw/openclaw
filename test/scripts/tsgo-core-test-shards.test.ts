@@ -571,7 +571,6 @@ if (process.argv[2] === "boundary") {
       );
       const inspectExtension = async (
         mode: "plan" | "core-plan" | "boundary",
-        serial = "",
         extraPaths: string[] = [],
       ) => {
         write("compiler-events.tsv", "");
@@ -584,7 +583,7 @@ if (process.argv[2] === "boundary") {
               mode,
               JSON.stringify(extraPaths),
             ],
-            { ...env, OPENCLAW_CI_TYPE_PLAN_SERIAL: serial },
+            env,
             undefined,
             { cwd: root, signal, requireProcessTreeExit: true },
           ),
@@ -648,33 +647,27 @@ if (process.argv[2] === "boundary") {
       for (const [config, original] of originalConfigs) {
         write(config, original);
       }
-      for (const serial of ["", "1"]) {
-        const extensionPlan = await inspectExtension("plan", serial, deletedNonCompilerPaths);
-        expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
-        expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
-          mode: "changed",
-          names: [
-            "extensions",
-            "extensions-test",
-            "scripts",
-            ...TSGO_ROOT_TEST_SHARDS.map(({ name }) => name),
-          ],
-        });
-        const discovery = compilerEvents();
-        expect(discovery).toHaveLength(serial ? 7 : 1);
-        expect(discovery.every((args) => args.includes(serial ? "--listFilesOnly" : "--api"))).toBe(
-          true,
-        );
-        const corePlan = await inspectExtension("core-plan", serial, deletedNonCompilerPaths);
-        expect(corePlan.status, corePlan.stderr).toBe(0);
-        expect(JSON.parse(corePlan.stdout.trim())).toEqual({
-          mode: "changed",
-          names: ["core-test-agents-other"],
-        });
-      }
-      const deletedCompilerPlan = await inspectExtension("plan", "", [
-        "extensions/example/removed.ts",
-      ]);
+      const extensionPlan = await inspectExtension("plan", deletedNonCompilerPaths);
+      expect(extensionPlan.status, extensionPlan.stderr).toBe(0);
+      expect(JSON.parse(extensionPlan.stdout.trim())).toEqual({
+        mode: "changed",
+        names: [
+          "extensions",
+          "extensions-test",
+          "scripts",
+          ...TSGO_ROOT_TEST_SHARDS.map(({ name }) => name),
+        ],
+      });
+      const discovery = compilerEvents();
+      expect(discovery).toHaveLength(7);
+      expect(discovery.every((args) => args.includes("--listFilesOnly"))).toBe(true);
+      const corePlan = await inspectExtension("core-plan", deletedNonCompilerPaths);
+      expect(corePlan.status, corePlan.stderr).toBe(0);
+      expect(JSON.parse(corePlan.stdout.trim())).toEqual({
+        mode: "changed",
+        names: ["core-test-agents-other"],
+      });
+      const deletedCompilerPlan = await inspectExtension("plan", ["extensions/example/removed.ts"]);
       expect(deletedCompilerPlan.status, deletedCompilerPlan.stderr).toBe(0);
       expect(JSON.parse(deletedCompilerPlan.stdout.trim()).mode).toBe("full");
       expect(compilerEvents()).toEqual([]);

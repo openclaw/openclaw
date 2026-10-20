@@ -30,7 +30,6 @@ export type GlobalRuntimeDotEnvOptions = {
   entryFilter?: (key: string, value: string) => boolean;
   /** Keys whose service-managed inherited values may be replaced by trusted dotenv files. */
   overrideKeys?: Iterable<string>;
-  quiet?: boolean;
   stateEnvPath?: string;
   onWarning?: DotEnvWarning;
 };
@@ -197,7 +196,7 @@ function resolveGlobalDotEnvFiles(opts: GlobalRuntimeDotEnvOptions, env: NodeJS.
     path.resolve(stateEnvPath) !== path.resolve(defaultStateEnvPath);
   const readOptions = {
     entryFilter: opts.entryFilter,
-    quiet: opts.quiet ?? true,
+    quiet: true,
     onWarning: opts.onWarning,
   };
   return {

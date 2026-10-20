@@ -83,6 +83,7 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "mainRestartRecovery",
   "pendingExecNotifications",
   "restartRecoveryOperatorSource",
+  "restartRecoveryRequesterSource",
   "subagentRecovery",
   "pluginOwnerId",
   "systemSent",

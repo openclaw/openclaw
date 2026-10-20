@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createCliTimeoutError } from "../../agents/cli-runner/no-output-timeout-policy.js";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-auto-fallback.js";
 import {
   setupAgentRunnerExecutionTestState,
@@ -16,9 +18,11 @@ import {
   expectRecordFields,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
-import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
+import type {
+  FallbackRunnerParams,
+  EmbeddedAgentParams,
+} from "./agent-runner-execution.test-support.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 const state = await setupAgentRunnerExecutionTestState();
@@ -42,6 +46,23 @@ function lifecycleEvents(runId: string) {
   return emitAgentEvent.mock.calls
     .map(([event]) => event)
     .filter((event) => event.runId === runId && event.stream === "lifecycle");
+}
+
+async function createCliReplyOperation(followupRun: ReturnType<typeof createFollowupRun>) {
+  const sessionKey = followupRun.run.sessionKey;
+  if (!sessionKey) {
+    throw new Error("CLI probe fixture requires its canonical session key");
+  }
+  const replyOperation = createReplyOperation({
+    sessionKey,
+    sessionId: followupRun.run.sessionId,
+    resetTriggered: false,
+  });
+  await replyOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
+  const failMock = vi.spyOn(replyOperation, "fail");
+  const completeMock = vi.spyOn(replyOperation, "complete");
+  onTestFinished(() => replyOperation.complete());
+  return { replyOperation, failMock, completeMock };
 }
 
 describe("executeAgentTurn: primary probe routing", () => {
@@ -338,6 +359,179 @@ describe("executeAgentTurn: primary probe routing", () => {
     expect(rechecked.hasAutoFallbackProvenance).toBeUndefined();
   });
 
+  it("does not clear an auto-fallback pin for an exhausted preserved result", async () => {
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "google",
+      fallbackModel: "gemini-3-pro",
+      fallbackAuthProfileId: "google:fallback",
+      fallbackAuthProfileIdSource: "auto" as const,
+    };
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = probe.provider;
+    followupRun.run.model = probe.model;
+    followupRun.run.autoFallbackPrimaryProbe = probe;
+    const sessionKey = "exhausted-primary-probe";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: probe.fallbackProvider,
+      modelOverride: probe.fallbackModel,
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: probe.provider,
+      modelOverrideFallbackOriginModel: probe.model,
+      authProfileOverride: probe.fallbackAuthProfileId,
+      authProfileOverrideSource: "auto",
+    };
+    const activeSessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const exhaustedResult = {
+      payloads: [{ text: "Terminal tool summary", isError: true }],
+      meta: {
+        error: {
+          kind: "incomplete_turn",
+          message: "All fallback candidates ended incomplete",
+          fallbackSafe: true,
+          terminalPresentation: true,
+        },
+      },
+    };
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "All fallback candidates ended incomplete",
+          livenessState: "blocked",
+          providerStarted: true,
+          replayInvalid: true,
+          timeoutPhase: "provider",
+        },
+      });
+      return exhaustedResult;
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "exhausted",
+      result: await params.run(probe.provider, probe.model, initialFallbackAttemptOptions(params)),
+      provider: probe.provider,
+      model: probe.model,
+      attempts: [
+        { provider: probe.provider, model: probe.model, error: "incomplete" },
+        {
+          provider: probe.fallbackProvider,
+          model: probe.fallbackModel,
+          error: "incomplete",
+        },
+      ],
+    }));
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const completeMock = vi.spyOn(replyOperation, "complete");
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams({ followupRun, replyOperation }),
+      sessionKey,
+      activeSessionStore,
+      getActiveSessionEntry: () => activeSessionStore[sessionKey],
+    });
+
+    expect(result).toMatchObject({
+      kind: "success",
+      fallbackExhausted: true,
+      fallbackProvider: probe.provider,
+      fallbackModel: probe.model,
+      runResult: exhaustedResult,
+    });
+    expect(activeSessionStore[sessionKey]).toMatchObject({
+      providerOverride: probe.fallbackProvider,
+      modelOverride: probe.fallbackModel,
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: probe.provider,
+      modelOverrideFallbackOriginModel: probe.model,
+    });
+    expect(completeMock).not.toHaveBeenCalled();
+    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
+    expect(
+      emitAgentEvent.mock.calls
+        .map((call) => call[0])
+        .find(
+          (event) =>
+            event.stream === "lifecycle" &&
+            event.data.phase === "error" &&
+            event.data.executionSettled === true &&
+            event.data.livenessState === "blocked" &&
+            event.data.providerStarted === true &&
+            event.data.replayInvalid === true &&
+            event.data.timeoutPhase === "provider",
+        ),
+    ).toBeDefined();
+  });
+
+  it("reports a completed non-fallbackable error result as a failure terminal", async () => {
+    const terminalErrorResult = {
+      payloads: [{ text: "Command may have changed state", isError: true }],
+      meta: {
+        replayInvalid: true,
+        error: {
+          kind: "incomplete_turn",
+          message: "raw provider detail should stay private",
+          fallbackSafe: false,
+        },
+      },
+    };
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: {
+          phase: "finishing",
+          error: "Command may have changed state",
+          replayInvalid: true,
+        },
+      });
+      return terminalErrorResult;
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      outcome: "completed",
+      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
+      provider: "anthropic",
+      model: "claude",
+      attempts: [],
+    }));
+    const { replyOperation, failMock } = createMockReplyOperation();
+    const completeMock = vi.spyOn(replyOperation, "complete");
+    const result = await executeAgentTurn(
+      createMinimalRunAgentTurnParams({
+        replyOperation,
+        opts: { runId: "run-non-fallbackable-error" },
+      }),
+    );
+
+    expect(result).toMatchObject({ kind: "success", runResult: terminalErrorResult });
+    expect(completeMock).not.toHaveBeenCalled();
+    expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
+    const terminalLifecycleEvents = emitAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter(
+        (event) => event.runId === "run-non-fallbackable-error" && event.stream === "lifecycle",
+      );
+    expect(terminalLifecycleEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          data: expect.objectContaining({
+            phase: "error",
+            error: "Command may have changed state",
+            executionSettled: true,
+            replayInvalid: true,
+          }),
+        }),
+      ]),
+    );
+    expect(
+      terminalLifecycleEvents.some(
+        (event) => event.data.phase === "end" || event.data.fallbackExhaustedFailure === true,
+      ),
+    ).toBe(false);
+    expect(JSON.stringify(terminalLifecycleEvents)).not.toContain("raw provider detail");
+  });
+
   it("surfaces an empty heartbeat terminal result through the normal reply path", async () => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
@@ -396,13 +590,14 @@ describe("executeAgentTurn: primary probe routing", () => {
       },
     });
     const followupRun = followupWith({ provider: "codex-cli", model: "gpt-5.4" });
-    const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
-    await replyOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
-    const result = await execute({
-      followupRun,
-      replyOperation,
-      opts: { runId: "run-cli-exhausted" },
-    });
+    const { replyOperation, failMock, completeMock } = await createCliReplyOperation(followupRun);
+    const result = await withSessionControllerOwner(replyOperation, () =>
+      execute({
+        followupRun,
+        replyOperation,
+        opts: { runId: "run-cli-exhausted" },
+      }),
+    );
 
     expect(state.runCliAgentMock).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
@@ -411,7 +606,7 @@ describe("executeAgentTurn: primary probe routing", () => {
       fallbackProvider: "codex-cli",
       fallbackModel: "gpt-5.4",
     });
-    expect(retainFailureUntilCompleteMock).toHaveBeenCalledTimes(1);
+    expect(completeMock).not.toHaveBeenCalled();
     expect(failMock).toHaveBeenCalledWith("run_failed", expect.any(Error));
     const events = lifecycleEvents("run-cli-exhausted");
     expect(events).toEqual(
@@ -446,10 +641,14 @@ describe("executeAgentTurn: primary probe routing", () => {
       ),
     );
     const followupRun = followupWith({ provider: "codex-cli", model: "gpt-5.4" });
-    await execute({
-      followupRun,
-      opts: { runId: "run-cli-timeout" },
-    });
+    const { replyOperation } = await createCliReplyOperation(followupRun);
+    await withSessionControllerOwner(replyOperation, () =>
+      execute({
+        followupRun,
+        replyOperation,
+        opts: { runId: "run-cli-timeout" },
+      }),
+    );
 
     expect(
       lifecycleEvents("run-cli-timeout").find((event) => event.data.phase === "error")?.data,

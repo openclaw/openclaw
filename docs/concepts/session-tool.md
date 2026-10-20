@@ -10,12 +10,19 @@ title: "Session tools"
 OpenClaw gives agents tools to work across sessions, inspect status, and orchestrate sub-agents.
 
 `sessions_list`, `sessions_history`, `sessions_search`, `session_status`,
-`sessions_send`, `sessions`, `sessions_create`, and `sessions_spawn` accept optional `user` (the requester's verified `requester_profile.id`).
-It is required when several people have steered the turn. The named person's
-authority determines session access and child execution; unknown or revoked
-participants are rejected. Single-person turns can omit it.
-Scheduled jobs and SDK/plugin runs without turn participants retain their existing
-session access rules.
+`sessions_send`, `sessions`, `sessions_create`, and `sessions_spawn` accept optional
+`user` (an admitted participant's verified `requester_profile.id`). Omit it to use
+the active execution's original requester, even after another person steers the
+turn. Explicit selection uses that participant's authority; unknown or revoked
+participants are rejected. New executions also require the selected person's
+authenticated requester facts and resolve current applicable destination policy.
+The initiating agent and parent execution remain unchanged. Children do not inherit
+the parent's participant roster, and native delegation retains the original requester.
+
+Selecting Bob does not establish that Bob requested or approved the action.
+Message authors, execution authority, initiating agents, and actual approval
+responses remain separate facts. Scheduled jobs and SDK/plugin runs without turn
+participants retain their existing session access rules.
 
 ## Available tools
 
@@ -163,10 +170,13 @@ Explicit tool denies still remove the tool. Standalone HTTP/RPC tool invocation 
 
 - `action: "patch"` changes the current session by default, or another visible session selected by `sessionKey`. It can set the label, persistent sidebar `icon`, custom sidebar `group`, pin/archive state, model, and thinking level. Root sessions, ordinary Home-linked dashboard sessions, and persistent children explicitly moved to the top level in the Control UI can be pinned; hidden subagent runs and still-nested child sessions reject pin requests. Subagent runs appear in session transcripts, outside sidebar navigation. Pass `null` or an empty string to clear `group`; assigning a new name creates the group on first use. The icon accepts one emoji grapheme, one of the named icons `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`, or custom SVG markup/an SVG data URL; pass an empty string to clear it. SVGs must be self-contained, at most 16 KiB decoded, with no scripts, embedded documents, or external references. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`; SVG data URLs may use percent encoding or base64. The Gateway stores a normalized SVG data URL and the Control UI renders it as an image. The Control UI custom-icon picker accepts the same inputs and shows the macOS (Control-Command-Space) or Windows (Windows-period) system emoji picker shortcut. Archiving or restoring another session requires its `sessions_list` `sessionId` as `expectedSessionId`.
 - `action: "reset"` resets another visible session selected by `sessionKey`.
-- `action: "stop"` stops another authorized session without archiving or deleting it. Include `expectedSessionId` from session discovery to reject a replacement, and optionally `runId` to stop only that exact run. Session-wide stop clears queued follow-ups by default; pass `clearQueued: false` to retain them. Exact-run stop cannot clear unrelated queued follow-ups. To stop the calling session, finish its current reply instead. Non-interactive Swarm collectors do not receive Stop; their existing archive and other session operations are unchanged.
+- `action: "stop"` stops another authorized session without archiving or deleting it. Include `expectedSessionId` from session discovery to reject a replacement, and optionally `runId` to stop only that exact run. Session-wide stop clears queued follow-ups by default; pass `clearQueued: false` to retain them. Exact-run stop cannot clear unrelated queued follow-ups. Once admitted, a stop still pending after five seconds returns `status: "settling"`; the Gateway retains the request and continues cancelling the selected work and descendants. This is not confirmation that cancellation or persistence has finished: check the session status before retrying. Deferred failures appear in Gateway logs. To stop the calling session, finish its current reply instead. Non-interactive Swarm collectors do not receive Stop; their existing archive and other session operations are unchanged.
 - `action: "delete"` first archives and then deletes the exact same generation of another visible session selected by `sessionKey`. By default its transcript is retained as a deleted archive; pass `deleteTranscript: false` to leave the transcript state untouched. Resetting or deleting the session currently running the tool is rejected.
-- `action: "assign_owner"` hands session responsibility to a person or agent. Pass `ownerType` (`"human"` or `"agent"`) and `ownerId`; the target is the current session by default, or another visible session via `sessionKey`. Agent owner ids must name a configured agent. The assignment records who reassigned it and when, and the Control UI reflects the new owner immediately. A human assignment also selects that person’s personal instructions on later eligible turns, without changing the requester’s identity or privileges. Ownership is not access control; see [assigning an owner](/concepts/multi-user#assigning-an-owner).
+- `action: "owner_profiles"` reads canonical human owner candidates through the existing Gateway profile directory. It is available on the full owner-authorized session surface, not the restricted non-owner controls. Optional `githubAccountIds` selects verified GitHub account-to-profile mappings; no match returns an empty selection rather than guessing by name. Results omit email addresses and roles and return at most 32 profiles per page; pass the returned `nextOffset` as `offset` to continue. This reads existing identities only; it does not create channel links or grant access.
+- `action: "assign_owner"` hands session responsibility to a person or agent. Pass `ownerType` (`"human"` or `"agent"`) and `ownerId`; the target is the current session by default, or another visible session via `sessionKey`. Human owner IDs must be canonical Gateway profile IDs, preferably the trusted `requester_profile.id`, never Discord or Slack sender IDs. Agent owner IDs must name a configured agent. The assignment records who reassigned it and when, and the Control UI reflects the new owner immediately. A human assignment also selects that person’s personal instructions on later eligible turns, without changing the requester’s identity or privileges. Ownership is not access control; see [assigning an owner](/concepts/multi-user#assigning-an-owner).
 - `group_list`, `group_set`, `group_rename`, and `group_delete` manage the global ordered session-group catalog. `group_set` (`names`) declaratively replaces the catalog: array order becomes sidebar order, new names are created, and existing empty groups left out of the list are deleted — reorder by passing the complete current list in the new order, and prefer `group_delete` to remove a single group. `group_set` never moves sessions; use `action: "patch"` with `group` for selected memberships. `group_rename` updates all member categories, and `group_delete` clears them. `group_set` rejects dropping a group that still has member sessions; use `group_delete` first.
+
+If owner assignment fails, report the unresolved assignee separately from the task outcome. Continue independently authorized work in a successfully prepared workspace; assignment failure neither revokes existing authority nor grants missing access. A completed worker run is not proof that the requested task is complete.
 
 Interrupted group rename/delete operations retain groups needed by remaining
 members. A rename can leave both source and destination groups visible; retry
@@ -240,7 +250,21 @@ Supply the message body in the required `message` argument. Hidden aliases such 
 
 `sessions_send` runs another session on the same Gateway and optionally waits for the response. Its `sessionKey`, `label`, or `agentId` selects local model context, not an external destination. A peer's reply reaches the requester once, either inline or as a later inter-session input. Continue the conversation with another `sessions_send`. To post to a channel, use `message` with an explicit channel and target.
 
+Waiting sends recover long inline replies from the accepted run's stored answer instead
+of returning its 4,096-character lifecycle preview. If that answer is unavailable,
+`replyTruncated: true` and a note identify the possibly incomplete reply. The normal
+model tool-result budget still applies and reports truncation explicitly. Ask the
+target for the missing section or a file containing the full reply; `sessions_history`
+also caps individual messages and cannot always recover their tail. Delayed
+inter-session replies still use the bounded lifecycle preview.
+
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities, visibility, and any per-agent send-only policy before admitting the target turn; target placement does not grant messaging access. Targets outside both the configured visibility scope and an authorized send-only rule, archived targets, and replaced targets remain denied.
+
+Children remain reachable when their parent rotates to a new session ID under the
+same key and its recorded predecessor chain still connects to their original
+parent. The current parent's communication policy applies. If that lineage no
+longer connects, re-spawn the child. Resets that retain the parent's session ID
+keep the existing child link.
 
 An explicit `agents.entries.<agentId>.tools.agentToAgent.send` list can authorize
 `sessions_send` to selected agents without exposing their sessions to list,
@@ -273,17 +297,28 @@ If either exact endpoint is archived, recovery cancels the unconsumed input whil
 retaining its saved receipt, without starting work or adding a failure notice.
 Reset or replacement still produces a blocked-delivery notice; replacement warnings
 use `endpoint-replaced`.
-Inputs saved by older versions without delivery ownership remain available for
-inspection, not automatic retry. In history, `queued` means an input has current
+
+Recovery preserves the original requester and rechecks its captured authentication
+basis. Current destination tool permissions apply to the recovered execution;
+operator restrictions and revocation remain with the operator authority owner.
+Inputs saved by older versions without delivery ownership or a captured requester
+basis remain available for inspection, not automatic retry. Missing or revoked
+requester authority produces a notice asking for a new request. In history,
+`queued` means an input has current
 custody, not that the model is executing it; an input that remains `interrupted`
 is saved but is not being retried. A display-only notice distinguishes changed
 sessions, denied communication, and unavailable admission without feeding those
 diagnostics back to the model. Task continuations and steering retain their
 separate lifecycle owners.
 
-- **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
+Private delivery and authentication facts follow the saved message's existing
+retention, including its transcript copy after consumption. They are excluded from
+display history and model input. A transcript copy cannot authorize recovery;
+only the exact unconsumed pending input can be re-admitted.
+
+- **Fire-and-forget:** set `timeoutSeconds: 0` to return after input admission without waiting for a reply.
 - **Wait for reply:** set a timeout and get the response inline.
-- **Guide your running child:** with no `mode` and `timeoutSeconds: 0`, a send to your own spawned child steers into its active run and acknowledges queue admission, like `mode: "steer"`, not persistence or model consumption. This admission is not restart-durable. Use `mode: "followup"` for a separate child turn with its own completion. An idle child or one whose run rejects the steer starts a new turn. Explicit modes keep their existing behavior.
+- **Guide your running child:** with no `mode` and `timeoutSeconds: 0`, a send to your own spawned child steers into its active run, like `mode: "steer"`. The tool acknowledges only after the input is saved in the target transcript. If the running backend cannot confirm durable steering, the input is queued as a separate durable turn. Use `mode: "followup"` to request that separate turn directly. An idle child or one whose run rejects the steer starts a new turn.
 - **Continue a paused child task:** send the continuation without `mode`. When the caller controls a native child paused by `sessions_yield` with task-owned completion, the runtime resumes that task automatically, preserving its identity and original completion recipient. Use `mode: "resume"` to require this behavior explicitly. An explicit `mode: "followup"` starts a separate turn and leaves the paused task intact.
 
 A separate follow-up to your native child starts only after Gateway admission
@@ -340,10 +375,16 @@ Neither field is a target-completion receipt.
 New turns sent to a busy chat session wait for its active reply and delivery to
 finish. They keep their order behind other agent commands; cancellation or the
 receiver's execution deadline can withdraw a waiting turn before it runs.
-Default zero-wait sends to your own running child acknowledge queue admission,
-like `mode: "steer"`; they do not confirm transcript persistence or model consumption
-and are not restart-durable. They produce no separate completion turn. Use
-`mode: "followup"` when you need that separate child turn and completion.
+Default zero-wait sends to your own running child and `mode: "steer"` wait for
+transcript persistence before acknowledging. The existing two-minute steering
+deadline is independent of `timeoutSeconds`, which controls reply waiting. A
+deadline without confirmed persistence returns an error; it never acknowledges
+volatile input or replays input that might already have been consumed.
+A persisted steer is part of the target's history; acknowledgment does not mean
+that the model has finished processing it. A backend without durable steering
+support uses a queued turn with startup delivery recovery instead, reported as
+`targetDisposition: "queued"`. Successful steering produces no separate
+completion turn; use `mode: "followup"` to request one explicitly.
 
 If a retry with the same request ID finds that the original admission is still pending, the
 tool returns an error with `sentBeforeError: true` and the existing run ID, without
@@ -399,9 +440,9 @@ A child report also goes to its recipient once, without an automatic acknowledgm
 
 Isolated scheduled jobs can wait for an inline reply, but receive no detached reply turns or failure notifications. A send from such a job does not generate a target announcement either; separately registered task completion retains its own delivery owner.
 
-These reply deliveries apply to new or follow-up turns. Default sends with no reply wait to your own running child skip separate reply delivery and leave completion with the active run's owner. `mode: "steer"` returns admission only for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acceptance is not proof of transcript persistence or model consumption, and does not make the in-memory steering queue restart-durable. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
+These reply deliveries apply to new or follow-up turns. Default sends with no reply wait to your own running child skip separate reply delivery and leave completion with the active run's owner. `mode: "steer"` returns after transcript persistence for guidance added to an active run and leaves completion with that run's existing owner. It uses the existing `sessions_send` access checks. Steering also requires the same authenticated requester and compatible permissions under the current destination configuration. If either check fails, the tool refuses the steer and directs the caller to `mode: "followup"` for a separately admitted turn. For the built-in runtime, a busy tool or model response can delay transcript persistence until the next steering boundary; the send's reply-wait deadline does not withdraw admitted guidance. Acknowledgment confirms transcript persistence, not model consumption. The receiving run retains source authority until the input settles or that exact run ends or aborts; a missing backend settlement callback cannot retain it past the run. Existing explicit cancellation, run-lifecycle, and authorization rules still apply. `mode: "notify"` queues context without starting a turn. Registered task completion and paused-task resume keep their existing completion owner and do not add a second reply delivery.
 
-An operator with `operator.sessions.write` can use `mode: "notify"` for an authorized session they own, including an owned child. Notifications retain the requester's current authority and target-session checks before queueing. They remain in memory and do not start a run.
+An operator with `operator.sessions.write` can use `mode: "steer"` or `mode: "notify"` for an authorized session they created, including an owned child. Shared visibility and membership do not grant this creator-bound access. Both modes retain the requester's current authority and target-session checks before queueing. Notifications remain in memory and do not start a run.
 
 Child coordination stays in agent context and raw transcripts. The receiving chat hides child reports and automatic coordination replies, while normal task-completion summaries and direct human answers remain visible. Historical messages without source provenance cannot be classified as child traffic.
 

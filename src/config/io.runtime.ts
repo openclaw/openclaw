@@ -142,7 +142,7 @@ export function captureRuntimeConfigAsyncReader(
       try {
         assertPinned();
         try {
-          await loadDotEnvAsync({ env: stage.env, quiet: true, cwd });
+          await loadDotEnvAsync({ env: stage.env, cwd });
         } finally {
           stage.captureDotEnvBaseline();
         }

@@ -1,5 +1,6 @@
 import { createMemo, Match, Show, Switch } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import { EventStream } from "../../lib/board/provider-signals.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
@@ -8,16 +9,18 @@ import { remainingBoardWidgetTicketTtlMs } from "../../lib/board/widget-ticket-l
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
-import { postWidgetTheme } from "../../lib/widget-theme.ts";
+import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
 import { McpAppConfirmation } from "../mcp-app-confirm-solid.tsx";
 import { createMcpAppConfirm } from "../mcp-app-confirm.ts";
 import { resolveGatewayHttpOrigin, resolveSandboxHostUrl } from "../sandbox-host.ts";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
+
+registerEnglishCatalog(registerBoardEnglish);
 
 // Keep in sync with the identical literal in chat widget-card.ts: a shared
 // module is not worth its startup-bundle cost for one string.
@@ -147,6 +150,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
   const changes = new EventStream<void>();
   let frameError = "";
   let frameElement: HTMLIFrameElement | undefined;
+  let releaseTheme: (() => void) | undefined;
   let waiting = false;
   let renderStalled = false;
   let frameFailureKey = "";
@@ -465,6 +469,8 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
       }
     },
     disconnect(): void {
+      releaseTheme?.();
+      releaseTheme = undefined;
       frameProbeGeneration += 1;
       resetPresentation();
       stopWork();
@@ -585,6 +591,8 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
         });
     },
     postBoardHostState(frame: HTMLIFrameElement): void {
+      releaseTheme?.();
+      releaseTheme = registerWidgetThemeFrame(frame, sandboxOrigin || "*");
       boardHostNonce = generateUUID();
       keyboardHostNonce = sandboxOrigin ? generateUUID() : "";
       postWidgetTheme(frame, sandboxOrigin || "*");
@@ -599,9 +607,12 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
         );
       }
     },
+    // Forward the widget owner's event stream to its projection subscribers.
     subscribe: (listener: () => void) => changes.subscribe(listener),
     confirmation,
     bindFrame(frame: HTMLIFrameElement) {
+      releaseTheme?.();
+      releaseTheme = undefined;
       frameElement = frame;
     },
     prepareView(value: BoardWidget) {

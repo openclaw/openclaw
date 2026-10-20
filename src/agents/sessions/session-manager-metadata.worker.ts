@@ -1,6 +1,7 @@
 import { serialize } from "node:v8";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryInWorker } from "../../config/sessions/session-accessor.sqlite-compaction.js";
+import { readStagedConversationPublications } from "../../config/sessions/session-accessor.sqlite-conversation-publication.js";
 import { ensureSessionEntryInTransaction } from "../../config/sessions/session-accessor.sqlite-initial-entry.js";
 import { readTranscriptMutationAtSync } from "../../config/sessions/session-accessor.sqlite-metadata-read.js";
 import {
@@ -86,7 +87,13 @@ export function bindSqliteWorkerBackend(
           : [];
       const entryPublication =
         stage === "commit" ? captureSessionEntryMetadataReceipts(entryChanges) : [];
-      if (!transcriptPublication.length && !entryPublication.length) {
+      const conversationPublication =
+        stage === "commit" ? readStagedConversationPublications({ db: context.database }) : [];
+      if (
+        !transcriptPublication.length &&
+        !entryPublication.length &&
+        !conversationPublication.length
+      ) {
         withoutSqliteDatabaseWriteScope(context.database, () =>
           nativeContext.admit(stage, restriction),
         );
@@ -96,6 +103,7 @@ export function bindSqliteWorkerBackend(
         kind: "session-manager-authority",
         transcriptPublication,
         entryPublication,
+        conversationPublication,
       };
       boundSessionEntryMetadataReceipts(entryPublication, publication);
       deferSqliteWorkerCommitReceipt(context.database, publication);

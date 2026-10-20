@@ -125,6 +125,30 @@ describe("configureProgramHelp", () => {
     expect(stderr).toContain("Did you mean this?\n  openclaw plugins list\n");
   });
 
+  it.each([
+    ["debug", "debug"],
+    [" trace ", "trace"],
+  ])("accepts allowed --log-level %p through Commander", async (input, expected) => {
+    process.argv = ["node", "openclaw", "--log-level", input];
+    const program = new Command().exitOverride();
+    configureProgramHelp(program, testProgramContext);
+    program.action(() => {});
+    await program.parseAsync(process.argv);
+    expect(program.opts().logLevel).toBe(expected);
+  });
+
+  it("rejects invalid --log-level through Commander", async () => {
+    process.argv = ["node", "openclaw", "--log-level", "loud"];
+    const program = new Command().exitOverride();
+    configureProgramHelp(program, testProgramContext);
+    program.configureOutput({ writeErr: () => {} });
+    await expect(program.parseAsync(process.argv)).rejects.toMatchObject({
+      code: "commander.invalidArgument",
+      exitCode: 1,
+      message: expect.stringContaining("Invalid --log-level"),
+    });
+  });
+
   it("suppresses banner formatting when parent default help requests it", async () => {
     process.argv = ["node", "openclaw", "channels"];
     process.env.OPENCLAW_SUPPRESS_HELP_BANNER = "1";

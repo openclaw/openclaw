@@ -217,6 +217,11 @@ the first pending change. Later changes do not postpone it. Hello snapshots and
 activity age can therefore lag the latest interaction by less than 30 seconds.
 Fresh snapshots and `system-presence` reads include the latest stored timestamp.
 
+The Control UI combines viewer declarations within one browser turn. Replacing a
+chat pane with another owner of the same session does not briefly clear and
+re-add its viewer presence. Leaving the session still publishes an empty
+declaration and waits for acknowledgment.
+
 ## Online and recent activity
 
 A connected person is **Online**. Activity is a separate, recent-interaction hint:
@@ -270,9 +275,11 @@ The Control UI opts into [presence deltas](/gateway/protocol/presence#opt-in-pre
 to send changed fields, including heartbeat timestamps, without retransmitting
 each connection's metadata. Its Gateway
 store reconstructs the same ordered presence list and requests a fresh snapshot
-if an update does not match its current version. Native clients keep full
-presence events. Recipient visibility and the best-effort freshness policy are
-the same for both formats.
+if an update does not match its current version. Current macOS and iOS clients
+also reconstruct full rosters from deltas, reconnecting on a missing baseline.
+Android opts in without consuming roster events. Older native versions retain
+full presence events. Recipient visibility and the best-effort freshness policy
+are the same for both formats.
 
 ### Control UI Devices page
 

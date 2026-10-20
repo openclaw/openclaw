@@ -38,6 +38,7 @@ export function NewSessionModelControlView(props: {
         previous.every(
           ([key, value], index) => key === next[index]?.[0] && value === next[index]?.[1],
         ),
+      // Project only defaults changes; session-row publications must not rebuild controls.
       subscribe: (app, notify) => app?.sessions.subscribe(notify) ?? (() => {}),
     }),
   );

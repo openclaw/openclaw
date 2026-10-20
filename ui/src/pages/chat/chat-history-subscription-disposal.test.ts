@@ -27,7 +27,6 @@ function createSubscriptionState(
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessages: [],
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatSending: false,
     chatMessage: "",
@@ -64,8 +63,15 @@ describe("disposed chat message subscriptions", () => {
       },
     ];
 
+    state.chatSessionApprovalReplay = {
+      complete: true,
+      client: state.client,
+      connectionEpoch: state.connectionEpoch,
+      sessionKey: state.sessionKey,
+    };
     disposeSelectedSessionMessageSubscription(state);
 
+    expect(state.chatSessionApprovalReplay).toBeUndefined();
     expect(unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(subscription);
     expect(state.chatSessionMessageSubscriptionRequestedKey).toBeNull();
     expect(state.chatSessionMessageSubscription).toBeNull();

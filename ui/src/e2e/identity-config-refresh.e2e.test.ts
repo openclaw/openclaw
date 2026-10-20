@@ -1,8 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
-import type { ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -43,12 +40,6 @@ suite.define(() => {
       viewport: { width: 1440, height: 900 },
     });
     const page = await context.newPage();
-    const screenshots: string[] = [];
-    const capture = async (name: string) => {
-      const file = path.join(suite.artifactDir, name);
-      await page.screenshot({ path: file });
-      screenshots.push(file);
-    };
     try {
       const gateway = await installMockGateway(page, {
         assistantName: initialName,
@@ -70,128 +61,58 @@ suite.define(() => {
       await composer.fill(draft);
       const sessionUrl = page.url();
       expect(await page.locator(".chat-group").count()).toBe(0);
-      await capture("initial.png");
 
-      const successfulResponses = await page.evaluateHandle(
-        ({ nextIdentity, nextRoster }) => {
-          const fixture = (
-            window as Window & {
-              openclawControlUiE2eGateway?: ControlUiMockGateway;
-            }
-          ).openclawControlUiE2eGateway;
-          if (!fixture) {
-            throw new Error("Mock Gateway is not installed");
-          }
-          const rows: Array<{ method: string; params: unknown; response: unknown }> = [];
-          for (const [method, response] of [
-            ["agent.identity.get", nextIdentity],
-            ["agents.list", nextRoster],
-          ] as const) {
-            fixture.setRequestHandler(method, ({ params, respond }) => {
-              respond(response);
-              rows.push({ method, params, response });
-            });
-          }
-          return rows;
-        },
-        {
-          nextIdentity: identity(nextName, nextAvatar),
-          nextRoster: roster(nextName, nextAvatar),
-        },
+      const refreshes = [];
+      for (const [method, response] of [
+        ["agent.identity.get", identity(nextName, nextAvatar)],
+        ["agents.list", roster(nextName, nextAvatar)],
+      ] as const) {
+        refreshes.push({ method, after: (await gateway.getRequests(method)).length });
+        await gateway.setMethodResponse(method, response);
+      }
+
+      await gateway.emitGatewayEvent(
+        event,
+        event === "config.changed" ? { hash: "synthetic-identity-change" } : { agentId: "main" },
       );
-      try {
-        await gateway.emitGatewayEvent(
-          event,
-          event === "config.changed" ? { hash: "synthetic-identity-change" } : { agentId: "main" },
-        );
-        await expect
-          .poll(() =>
-            successfulResponses.evaluate(
-              (rows) => rows.filter((row) => row.method === "agents.list").length,
-            ),
-          )
-          .toBeGreaterThanOrEqual(1);
-        await expect
-          .poll(() =>
-            successfulResponses.evaluate(
-              (rows) => rows.filter((row) => row.method === "agent.identity.get").length,
-            ),
-          )
-          .toBeGreaterThanOrEqual(1);
-        await expect.poll(() => heading.textContent()).toBe(nextName);
-        await expect.poll(() => avatarText.getAttribute("data-avatar")).toBe(nextAvatar);
-        await expect.poll(() => page.title()).toContain(nextName);
-        const observed = {
-          name: (await heading.textContent())?.trim(),
-          avatar: await avatarText.getAttribute("data-avatar"),
-          avatarLabel: await avatar.getAttribute("aria-label"),
-          placeholder: await composer.getAttribute("placeholder"),
-        };
-        expect(await composer.inputValue()).toBe(draft);
-        expect(page.url()).toBe(sessionUrl);
-        expect(await page.locator(".chat-group").count()).toBe(0);
-        expect((await gateway.getRequests("chat.send")).length).toBe(0);
-        await capture("settled.png");
+      for (const refresh of refreshes) {
+        await gateway.waitForRequest(refresh.method, { after: refresh.after });
+      }
+      await expect.poll(() => heading.textContent()).toBe(nextName);
+      await expect.poll(() => avatarText.getAttribute("data-avatar")).toBe(nextAvatar);
+      await expect.poll(() => page.title()).toContain(nextName);
+      const observed = {
+        name: (await heading.textContent())?.trim(),
+        avatar: await avatarText.getAttribute("data-avatar"),
+        avatarLabel: await avatar.getAttribute("aria-label"),
+        placeholder: await composer.getAttribute("placeholder"),
+      };
+      expect(await composer.inputValue()).toBe(draft);
+      expect(page.url()).toBe(sessionUrl);
+      expect(await page.locator(".chat-group").count()).toBe(0);
+      expect((await gateway.getRequests("chat.send")).length).toBe(0);
 
-        await page.getByRole("button", { name: "Send message" }).click();
-        const request = await gateway.waitForRequest("chat.send");
-        const params = requireRecord(request.params);
-        expect(params.sessionKey).toBe("agent:main:main");
-        expect(params.message).toBe(draft);
-        const runId = requireString(params.idempotencyKey, "chat run id");
-        await gateway.emitChatFinal({ runId, text: reply });
-        await page.locator(".chat-group.assistant .chat-text", { hasText: reply }).waitFor();
-        const sender = (
-          await page.locator(".chat-group.assistant .chat-sender-name").first().textContent()
-        )?.trim();
-        expect(page.url()).toBe(sessionUrl);
-        expect((await gateway.getRequests("chat.send")).length).toBe(1);
-        await capture("roundtrip.png");
-        const responses = await successfulResponses.jsonValue();
-        await writeFile(
-          path.join(suite.artifactDir, "receipts.json"),
-          JSON.stringify(
-            {
-              initial: {
-                name: initialName,
-                avatar: initialAvatar,
-                sessionUrl,
-                draft,
-                transcriptRows: 0,
-              },
-              observed,
-              sender,
-              responses,
-              screenshots,
-              controls: {
-                sessionPreserved: true,
-                draftPreserved: true,
-                transcriptPreserved: true,
-                sendsBeforeSubmit: 0,
-                sendsAfterSubmit: 1,
-                sentSession: params.sessionKey,
-                sentMessage: params.message,
-                reply,
-                replyVisible: true,
-              },
-            },
-            null,
-            2,
-          ),
-        );
-        expect(
-          { ...observed, sender },
-          "config identity display follows committed identity",
-        ).toEqual({
+      await page.getByRole("button", { name: "Send message" }).click();
+      const request = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(request.params);
+      expect(params).toMatchObject({ sessionKey: "agent:main:main", message: draft });
+      const runId = requireString(params.idempotencyKey, "chat run id");
+      await gateway.emitChatFinal({ runId, text: reply });
+      await page.locator(".chat-group.assistant .chat-text", { hasText: reply }).waitFor();
+      const sender = (
+        await page.locator(".chat-group.assistant .chat-sender-name").first().textContent()
+      )?.trim();
+      expect(page.url()).toBe(sessionUrl);
+      expect((await gateway.getRequests("chat.send")).length).toBe(1);
+      expect({ ...observed, sender }, "config identity display follows committed identity").toEqual(
+        {
           name: nextName,
           avatar: nextAvatar,
           avatarLabel: nextName,
           placeholder: "Message Cedar",
           sender: nextName,
-        });
-      } finally {
-        await successfulResponses.dispose();
-      }
+        },
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }

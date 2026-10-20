@@ -135,6 +135,7 @@ describe("worker provider node teardown", () => {
             start: vi.fn(),
             stop: async () => {},
             stopAll: async () => {},
+            beginClose: vi.fn(),
             observeProcesses: vi.fn(),
           },
         },

@@ -8,6 +8,7 @@ import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { page as usageRoute } from "./route.ts";
 import type { UsageRouteData, UsageSessionEntry } from "./types.ts";
@@ -119,6 +120,13 @@ export function contextWithClient(client: GatewayBrowserClient): ApplicationCont
       ensureList: vi.fn(async () => null),
       subscribe,
     },
+    agentIdentity: {
+      get: () => null,
+      entries: () => [],
+      ensure: async () => undefined,
+      invalidate: () => undefined,
+      subscribe,
+    },
     agentSelection: {
       state: selectionState,
       set: vi.fn(),
@@ -204,13 +212,15 @@ export async function createPage(
           get state() {
             return model.read();
           },
-          context,
           get result() {
             return model.result();
           },
         });
       },
-      { container },
+      {
+        container,
+        wrapper: content ? createSolidApplicationContextProvider(context).wrapper : undefined,
+      },
     ).unmount;
   };
   const page = {
@@ -292,7 +302,6 @@ export function createPendingUsageRouteData(
     },
     result: null,
     costSummary: null,
-    providerUsage: { state: "pending" },
     loadedAtMs: null,
     error: null,
   };

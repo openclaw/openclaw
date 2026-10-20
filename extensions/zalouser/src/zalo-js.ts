@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ChannelMessageSendResult } from "openclaw/plugin-sdk/channel-outbound";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
@@ -98,7 +98,11 @@ type ActiveZaloListener = {
 };
 
 const activeListeners = new Map<string, ActiveZaloListener>();
-const groupContextCache = new Map<string, { value: ZaloGroupContext; expiresAt: number }>();
+const groupContextCache = createStaleWhileRevalidateCache<ZaloGroupContext>({
+  maxEntries: GROUP_CONTEXT_CACHE_MAX_ENTRIES,
+  maxPending: Infinity,
+  ttlMs: GROUP_CONTEXT_CACHE_TTL_MS,
+});
 
 type AccountInfoResponse = Awaited<ReturnType<API["fetchAccountInfo"]>>;
 
@@ -420,11 +424,6 @@ async function ensureApi(
   apiInitByProfile.set(profile, initPromise);
   try {
     return await initPromise;
-  } catch (error) {
-    if (apiInitByProfile.get(profile) === initPromise) {
-      apiByProfile.delete(profile);
-    }
-    throw error;
   } finally {
     if (apiInitByProfile.get(profile) === initPromise) {
       apiInitByProfile.delete(profile);
@@ -497,53 +496,6 @@ async function fetchGroupsByIds(api: API, ids: string[]): Promise<Map<string, Gr
     }
   }
   return result;
-}
-
-function readCachedGroupContext(profile: string, groupId: string): ZaloGroupContext | null {
-  const key = `${profile}:${groupId}`;
-  const cached = groupContextCache.get(key);
-  if (!cached) {
-    return null;
-  }
-  if (cached.expiresAt <= Date.now()) {
-    groupContextCache.delete(key);
-    return null;
-  }
-  // Bump recency so hot groups stay in cache when enforcing max entries.
-  groupContextCache.delete(key);
-  groupContextCache.set(key, cached);
-  return cached.value;
-}
-
-function trimGroupContextCache(now: number): void {
-  for (const [key, value] of groupContextCache) {
-    if (value.expiresAt > now) {
-      continue;
-    }
-    groupContextCache.delete(key);
-  }
-  pruneMapToMaxSize(groupContextCache, GROUP_CONTEXT_CACHE_MAX_ENTRIES);
-}
-
-function writeCachedGroupContext(profile: string, context: ZaloGroupContext): void {
-  const now = Date.now();
-  const key = `${profile}:${context.groupId}`;
-  if (groupContextCache.has(key)) {
-    groupContextCache.delete(key);
-  }
-  groupContextCache.set(key, {
-    value: context,
-    expiresAt: now + GROUP_CONTEXT_CACHE_TTL_MS,
-  });
-  trimGroupContextCache(now);
-}
-
-function clearCachedGroupContext(profile: string): void {
-  for (const key of groupContextCache.keys()) {
-    if (key.startsWith(`${profile}:`)) {
-      groupContextCache.delete(key);
-    }
-  }
 }
 
 function extractGroupMembersFromInfo(groupInfo: GroupInfo | undefined): string[] | undefined {
@@ -818,22 +770,21 @@ export async function resolveZaloGroupContext(
   if (!normalizedGroupId) {
     throw new Error("groupId is required");
   }
-  const cached = readCachedGroupContext(profile, normalizedGroupId);
-  if (cached) {
-    return cached;
-  }
-
-  return await withZaloApi(profile, async (api) => {
-    const response = await api.getGroupInfo(normalizedGroupId);
-    const groupInfo = response.gridInfoMap?.[normalizedGroupId];
-    const context: ZaloGroupContext = {
-      groupId: normalizedGroupId,
-      name: normalizeOptionalString(groupInfo?.name),
-      members: extractGroupMembersFromInfo(groupInfo),
-    };
-    writeCachedGroupContext(profile, context);
-    return context;
-  });
+  const { value } = await groupContextCache.read(
+    `${profile}:${normalizedGroupId}`,
+    () =>
+      withZaloApi(profile, async (api) => {
+        const response = await api.getGroupInfo(normalizedGroupId);
+        const groupInfo = response.gridInfoMap?.[normalizedGroupId];
+        return {
+          groupId: normalizedGroupId,
+          name: normalizeOptionalString(groupInfo?.name),
+          members: extractGroupMembersFromInfo(groupInfo),
+        };
+      }),
+    { allowStale: false },
+  );
+  return value;
 }
 
 export async function sendZaloTextMessage(
@@ -868,31 +819,8 @@ export async function sendZaloTypingEvent(
   });
 }
 
-async function resolveOwnUserId(api: API): Promise<string> {
-  try {
-    const info = await api.fetchAccountInfo();
-    const resolved = toNumberId(normalizeAccountInfoUser(info)?.userId);
-    if (resolved) {
-      return resolved;
-    }
-  } catch {
-    // Fall back to getOwnId when account info shape changes.
-  }
-
-  try {
-    const ownId = toNumberId(api.getOwnId());
-    if (ownId) {
-      return ownId;
-    }
-  } catch {
-    // Ignore fallback probe failures and keep mention detection conservative.
-  }
-
-  return "";
-}
-
 export async function resolveZaloOwnUserId(profileInput?: string | null): Promise<string> {
-  return await withZaloApi(profileInput, resolveOwnUserId);
+  return await withZaloApi(profileInput, async (api) => toNumberId(api.getOwnId()));
 }
 
 export async function sendZaloReaction(params: {
@@ -1226,7 +1154,8 @@ export async function logoutZaloProfile(
   const profile = normalizeProfile(profileInput);
   options?.assertCurrent?.();
   resetQrLogin(profile);
-  clearCachedGroupContext(profile);
+  // Other profiles simply refresh these optional projections on their next lookup.
+  groupContextCache.clear();
 
   const listener = activeListeners.get(profile);
   if (listener) {

@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect } from "vitest";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { resetFileLockStateForTest } from "../../plugin-sdk/file-lock.js";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { captureEnv } from "../../test-utils/env.js";
 import "./oauth-external-auth-passthrough.test-support.js";
@@ -73,24 +74,28 @@ export function useOAuthCoordinationFixture() {
   let mainDir: string;
   let env: ReturnType<typeof captureEnv>;
   let resolver: typeof import("./oauth.js").resolveApiKeyForProfile;
-  let settleWork: (() => Promise<void>) | undefined;
+  let work: AsyncWorkScope;
+  let releaseRefresh: (() => void) | undefined;
+  let settleWork: (() => void | Promise<void>) | undefined;
   const reset = () => {
     resetFileLockStateForTest();
     resetOAuthProviderRuntimeMocks(mocks);
     clearRuntimeAuthProfileStoreSnapshots();
   };
   beforeEach(async () => {
+    work = new AsyncWorkScope();
+    releaseRefresh = undefined;
     env = captureEnv(OAUTH_AGENT_ENV_KEYS);
     reset();
     root = await createOAuthTestTempRoot("openclaw-oauth-shard-");
     mainDir = await createOAuthMainAgentDir(root);
     ({ resolveApiKeyForProfile: resolver } = await import("./oauth.js"));
-    const { resetOAuthRefreshQueuesForTest } = await import("./oauth.test-support.js");
-    resetOAuthRefreshQueuesForTest();
   });
   afterEach(async () => {
+    releaseRefresh?.();
     await settleWork?.();
     settleWork = undefined;
+    await work.drain();
     env.restore();
     reset();
     await removeOAuthTestTempRoot(root);
@@ -103,8 +108,11 @@ export function useOAuthCoordinationFixture() {
     get mainDir() {
       return mainDir;
     },
-    settle(work: () => Promise<void>) {
-      settleWork = work;
+    get work() {
+      return work;
+    },
+    settle(cleanup: () => void | Promise<void>) {
+      settleWork = cleanup;
     },
     async agentDirectory(name: string) {
       const directory = path.join(root, "agents", name, "agent");
@@ -113,11 +121,13 @@ export function useOAuthCoordinationFixture() {
     },
     resolve(agentDir: string | undefined, id = profileId) {
       assert.ok(agentDir, "expected a seeded agent directory");
-      return resolveApiKeyForProfileInTest(resolver, {
-        store: ensureAuthProfileStore(agentDir),
-        profileId: id,
-        agentDir,
-      });
+      return work.track(() =>
+        resolveApiKeyForProfileInTest(resolver, {
+          store: ensureAuthProfileStore(agentDir),
+          profileId: id,
+          agentDir,
+        }),
+      );
     },
     reconnect(agentDir: string, credential: OAuthCredential, id = profileId) {
       return persistAuthProfileBatch({
@@ -130,6 +140,7 @@ export function useOAuthCoordinationFixture() {
     blockRefresh(credential: () => OAuthCredential) {
       const started = createDeferredCore();
       const finish = createDeferredCore();
+      releaseRefresh = finish.resolve;
       refresh.mockImplementation(async () => {
         started.resolve();
         await finish.promise;

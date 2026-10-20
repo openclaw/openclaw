@@ -38,7 +38,6 @@ serveWorkerTasks(async (value, channel, control) => {
     warn: (message, meta) => logs.push({ level: "warn", message, meta }),
     error: (message, meta) => logs.push({ level: "error", message, meta }),
   };
-  const signal = new AbortController().signal;
   const store = new TeamReportsStore({
     async execute<Key extends keyof TeamReportsOperations>(command: {
       type: Key;
@@ -58,7 +57,7 @@ serveWorkerTasks(async (value, channel, control) => {
     return await generateReportPeriods({
       ...input,
       store,
-      runtime: { logger, signal },
+      runtime: { logger },
       sources: (runtime) => createReportSources(runtime, Boolean(input.resolved.discord)),
       llm: {
         complete: async ({ signal: _signal, ...params }) => {

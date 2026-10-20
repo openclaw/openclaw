@@ -1,5 +1,6 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { recordGoalContinuationSettlement } from "../../auto-reply/reply/goal-continuation-return.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { RestartRecoveryTerminalDeliveryEvidenceResult } from "../../config/sessions/restart-recovery-types.js";
@@ -677,6 +678,16 @@ export async function finalizeEmbeddedAgentCommand(params: {
         }),
       )
     : terminal.outcome;
+  recordGoalContinuationSettlement({
+    runId,
+    sessionKey,
+    result,
+    succeeded:
+      result.meta.agentMeta?.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID &&
+      !hasResultError &&
+      classifyAgentRunTerminalOutcome(outcome) === "success" &&
+      (params.opts.deliver !== true || deliveryResult?.deliverySucceeded === true),
+  });
   return {
     maintenance:
       classifyAgentRunTerminalOutcome(outcome) === "success" &&

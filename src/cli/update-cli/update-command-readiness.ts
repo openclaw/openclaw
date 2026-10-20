@@ -36,7 +36,6 @@ import {
   gatewayServiceCommandUsesRoot,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
-import { hasLoadedLaunchdKeepAliveSupervisor } from "./update-command-supervisor.js";
 
 export async function verifyPreviousGatewayForUpdate(params: {
   root: string;
@@ -292,8 +291,12 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
       assertCurrent();
       return inspectedHealth;
     }
-    const supervisorKeepsAlive = await deadline.read("service supervisor", () =>
-      hasLoadedLaunchdKeepAliveSupervisor({ service, env: params.serviceEnv }),
+    // Read the canonical LaunchAgent KeepAlive policy once before polling so an
+    // unloaded agent can still reach the existing recovery path promptly.
+    const supervisorKeepsAlive = await deadline.read("service supervisor", async () =>
+      process.platform === "darwin"
+        ? service.isLoaded({ env: params.serviceEnv }).catch(() => false)
+        : false,
     );
     assertCurrent();
     const observed = await waitForGatewayHealthyRestart({

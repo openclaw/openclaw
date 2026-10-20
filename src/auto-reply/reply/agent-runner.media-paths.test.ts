@@ -1,8 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
+import { createReplyOperation as createRegisteredReplyOperation } from "../../sessions/session-controller.operation.js";
 import type { TemplateContext } from "../templating.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
@@ -10,10 +11,11 @@ import {
   createReplyMediaContextRuntimeMock as mediaContextMock,
   enqueueFollowupRunMock,
   makeRunReplyAgentParams as makeReplyParams,
-  parkSteerCandidateMock,
+  reserveSteerCandidateMock,
   parkedSteerConsumeMock,
   parkedSteerFallbackMock,
-  queueEmbeddedAgentMessageWithOutcomeAsyncMock as queueMessageMock,
+  backendQueueMessageMock as queueMessageMock,
+  resolveOutboundAttachmentFromUrlMock,
   runEmbeddedAgentMock,
   runReplyAgent,
   tempDirs,
@@ -22,7 +24,6 @@ import {
   cleanupAgentRunnerMediaTestState,
 } from "./agent-runner.media-paths.test-harness.js";
 import type { FollowupRun } from "./queue.js";
-import { createReplyOperation as createRegisteredReplyOperation } from "./reply-run-registry.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -130,7 +131,9 @@ describe("runReplyAgent media path normalization", () => {
 
       expect(queueMessageMock).not.toHaveBeenCalled();
       expect(parkedSteerFallbackMock).toHaveBeenCalledOnce();
-      expect(parkSteerCandidateMock).toHaveBeenCalledWith(
+      expect(parkedSteerConsumeMock).not.toHaveBeenCalled();
+      expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+      expect(reserveSteerCandidateMock).toHaveBeenCalledExactlyOnceWith(
         params.queueKey,
         followupRun,
         params.resolvedQueue,
@@ -160,7 +163,7 @@ describe("runReplyAgent media path normalization", () => {
       expect.any(Function),
       false,
     );
-    expect(parkSteerCandidateMock).not.toHaveBeenCalled();
+    expect(reserveSteerCandidateMock).not.toHaveBeenCalled();
     expect(queueMessageMock).not.toHaveBeenCalled();
   });
 
@@ -206,7 +209,7 @@ describe("runReplyAgent media path normalization", () => {
 
     await runReplyAgent(await makeSteerParams({ followupRun }));
 
-    expect(parkSteerCandidateMock).toHaveBeenCalledWith(
+    expect(reserveSteerCandidateMock).toHaveBeenCalledWith(
       "main",
       followupRun,
       expect.objectContaining({ mode: "steer" }),
@@ -256,9 +259,72 @@ describe("runReplyAgent media path normalization", () => {
     );
 
     expect(queueMessageMock).not.toHaveBeenCalled();
-    expect(parkSteerCandidateMock).not.toHaveBeenCalled();
+    expect(reserveSteerCandidateMock).not.toHaveBeenCalled();
     expect(enqueueFollowupRunMock).toHaveBeenCalledOnce();
     expect(enqueueFollowupRunMock.mock.calls[0]?.[1].prompt).toBe("generate chart");
+  });
+
+  it("falls back to a queued followup when active steering is rejected", async () => {
+    queueMessageMock.mockImplementation(async (sessionId: string) => ({
+      queued: false,
+      sessionId,
+      reason: "runtime_rejected",
+      gatewayHealth: "live",
+      errorMessage: "cannot steer a compact turn",
+    }));
+
+    await runReplyAgent(await makeSteerParams({ isRunActive: () => true }));
+
+    expect(queueMessageMock).toHaveBeenCalledOnce();
+    expect(reserveSteerCandidateMock).toHaveBeenCalledWith(
+      "main",
+      expect.objectContaining({ prompt: "generate chart" }),
+      expect.objectContaining({ mode: "steer" }),
+      expect.any(Function),
+    );
+    expect(parkedSteerFallbackMock).toHaveBeenCalledOnce();
+    expect(parkedSteerConsumeMock).not.toHaveBeenCalled();
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+  });
+
+  it("shares one media cache between block accumulation and final payload delivery", async () => {
+    const { createReplyMediaContext } =
+      await vi.importActual<typeof import("./reply-media-paths.js")>("./reply-media-paths.js");
+    const mediaContext = createReplyMediaContext({
+      cfg: {},
+      sessionKey: "main",
+      workspaceDir: testWorkspaceDir,
+      messageProvider: "telegram",
+      accountId: "default",
+    });
+    let stagedIndex = 0;
+    resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => {
+      stagedIndex += 1;
+      return {
+        path: path.join("/tmp/outbound-media", `${stagedIndex}-${path.basename(mediaUrl)}`),
+      };
+    });
+
+    const blockPayload = await mediaContext.normalizePayload({
+      text: "here is the chart",
+      mediaUrl: "./out/chart.png",
+      mediaUrls: ["./out/chart.png"],
+    });
+    const finalPayload = await mediaContext.normalizePayload({
+      text: "here is the chart",
+      mediaUrl: "./out/chart.png",
+      mediaUrls: ["./out/chart.png"],
+    });
+
+    expect(blockPayload).toEqual({
+      text: "here is the chart",
+      mediaUrl: "/tmp/outbound-media/1-chart.png",
+      mediaUrls: ["/tmp/outbound-media/1-chart.png"],
+      attachments: [{ name: "chart.png", mimeType: "image/png", trustedLocalMedia: true }],
+      trustedLocalMedia: true,
+    });
+    expect(finalPayload).toEqual(blockPayload);
+    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
   });
 
   async function runTurn(

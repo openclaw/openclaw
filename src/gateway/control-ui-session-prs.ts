@@ -13,6 +13,10 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
+import {
+  pullRequestMetadataSignature,
+  readSessionPullRequestMetadata,
+} from "./control-ui-session-pr-metadata.js";
 import type { ControlUiSessionPrReadContext } from "./control-ui-session-pr-read.js";
 import {
   createGitHubReadGroup,
@@ -22,6 +26,7 @@ import {
   fetchSessionPullRequestCheckRollup,
   sessionPullRequestRepositoryApiUrl,
 } from "./control-ui-session-prs-checks.js";
+import { readTaskPullRequestReceipts } from "./control-ui-session-task-prs.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 import { resolveGitHubForkParent } from "./github-repository-target.js";
 
@@ -102,7 +107,11 @@ export function readKnownSessionBranchMergedHeads(
     read.assertCurrent,
   );
   const entry = branchCache.get(
-    branchCacheKey(context, access, JSON.stringify([read.target.identity, read.sourceIdentity])),
+    branchCacheKey(
+      context,
+      access,
+      JSON.stringify([read.target.branchIdentity ?? read.target.identity, read.sourceIdentity]),
+    ),
   );
   access.assertCurrent();
   return structuredClone(entry?.lastGood?.mergedHeads ?? []);
@@ -111,10 +120,6 @@ export function readKnownSessionBranchMergedHeads(
 type LoadSessionPullRequestDeps = {
   read: ControlUiSessionPrReadContext;
   cacheSignal?: AbortSignal;
-  resolveGitRoot?: (params: ControlUiSessionPullRequestsParams) => Promise<string | null>;
-  resolveGitContext?: (
-    params: ControlUiSessionPullRequestsParams,
-  ) => Promise<GitCheckoutContext | null>;
 };
 
 // git push's own "create a pull request" hint URL; GitHub resolves the base
@@ -187,7 +192,7 @@ function derivePullState(value: Record<string, unknown>): ControlUiSessionPullRe
   return value.draft === true ? "draft" : "open";
 }
 
-export function parsePullListItem(value: unknown) {
+function parsePullListItem(value: unknown) {
   if (!isRecord(value)) {
     return null;
   }
@@ -278,6 +283,7 @@ async function finishPullRequest(
   item: PullListItem,
   branch: string,
   read: ReturnType<typeof prepareSessionPullRequestGitHubRead>,
+  preparedDetails?: unknown,
 ): Promise<ControlUiSessionPullRequest> {
   const chip = stateOnlyPullRequestChip(item, branch);
   // Merged/closed chips render state only; diff counts and CI rollup are
@@ -287,7 +293,9 @@ async function finishPullRequest(
   }
   const detailUrl = `${sessionPullRequestRepositoryApiUrl({ ...item, apiBaseUrl: read.apiBaseUrl })}/pulls/${item.number}`;
   const [details, checks] = await Promise.all([
-    read.request(detailUrl).catch(rethrowRateLimit),
+    preparedDetails === undefined
+      ? read.request(detailUrl).catch(rethrowRateLimit)
+      : Promise.resolve(preparedDetails),
     fetchSessionPullRequestCheckRollup(
       { ...item, apiBaseUrl: read.apiBaseUrl },
       read.request,
@@ -323,6 +331,7 @@ function mergedHeadsOf(items: readonly PullListItem[]): MergedPullHead[] {
 async function fetchBranchPullRequests(
   context: GitCheckoutContext,
   read: ReturnType<typeof prepareSessionPullRequestGitHubRead>,
+  refresh: boolean,
 ): Promise<BranchPullRequestsSnapshot> {
   const head = `${context.owner}:${context.branch}`;
   let items = parsePullList(
@@ -358,7 +367,17 @@ async function fetchBranchPullRequests(
   let rateLimited = false;
   try {
     pullRequests = await Promise.all(
-      capped.map((item) => finishPullRequest(item, branchOf(item), read)),
+      capped.map((item) =>
+        readSessionPullRequestMetadata(
+          item,
+          read,
+          (transport) => finishPullRequest(item, branchOf(item), transport),
+          {
+            refresh,
+            expected: pullRequestMetadataSignature(stateOnlyPullRequestChip(item, branchOf(item))),
+          },
+        ),
+      ),
     );
   } catch (error) {
     if (!(error instanceof gitHubPublicApi.ControlUiGitHubError && error.statusCode === 429)) {
@@ -387,7 +406,7 @@ async function refreshBranchPullRequests(
   const repository = { owner: context.owner, repo: context.repo };
   try {
     const result = {
-      ...(await fetchBranchPullRequests(context, read)),
+      ...(await fetchBranchPullRequests(context, read, entry.refreshMode === "forced")),
       repository,
     };
     if (result.rateLimited) {
@@ -443,33 +462,126 @@ export async function loadControlUiSessionPullRequests(
   params: ControlUiSessionPullRequestsParams,
   deps: LoadSessionPullRequestDeps,
 ): Promise<ControlUiSessionPullRequests> {
+  // Publication controls deliberately consume the current branch only.
+  if (deps.read.projection === "publication" || !deps.read.target.taskReceipts) {
+    return loadControlUiSessionBranchPullRequests(params, deps);
+  }
+  const branch: ControlUiSessionPullRequests = deps.read.target.taskReceiptsOnly
+    ? (deps.read.branchSnapshot ?? { pullRequests: [], rateLimited: false })
+    : await loadControlUiSessionBranchPullRequests(params, deps).catch(() => ({
+        pullRequests: [],
+        rateLimited: false,
+        status: "unavailable" as const,
+      }));
+  if (!deps.read.target.taskReceiptsOnly) {
+    deps.read.onBranchRead?.(branch);
+  }
+  const task = await readTaskPullRequestReceipts(
+    {
+      ...deps.read.target.taskReceipts,
+      ...(branch.pullRequests.length
+        ? { branchUrls: [...new Set(branch.pullRequests.map((pr) => pr.url))] }
+        : {}),
+    },
+    deps.read.assertCurrent,
+    deps.cacheSignal,
+  );
+  if (deps.read.target.taskReceiptsOnly) {
+    return {
+      ...branch,
+      taskPullRequests: task.taskPullRequests,
+      taskPullRequestCount: task.taskPullRequestCount,
+      ...(deps.read.branchSnapshot ? { pullRequestCount: task.pullRequestCount } : {}),
+      branchRead: false,
+    };
+  }
+  const taskPullRequests = [];
+  let taskMetadataUnavailable = false;
+  // Preview work is bounded by the receipt reader, and the subscription owner supplies concurrency.
+  for (const known of task.taskPullRequests) {
+    const url = new URL(known.url);
+    if (url.hostname !== "github.com" && url.hostname !== deps.read.target.githubHost) {
+      taskPullRequests.push(known);
+      continue;
+    }
+    let pullRequest: ControlUiSessionPullRequest | undefined;
+    try {
+      const read = prepareSessionPullRequestGitHubRead(url.hostname, deps.read.assertCurrent, {
+        signal: deps.cacheSignal,
+      });
+      pullRequest = await readSessionPullRequestMetadata(
+        known,
+        read,
+        async (transport) => {
+          const details = await transport.request(
+            sessionPullRequestRepositoryApiUrl({ ...known, apiBaseUrl: transport.apiBaseUrl }) +
+              "/pulls/" +
+              known.number,
+          );
+          const item = parsePullListItem(details);
+          if (
+            !item ||
+            item.number !== known.number ||
+            item.owner.toLowerCase() !== known.owner.toLowerCase() ||
+            item.repo.toLowerCase() !== known.repo.toLowerCase() ||
+            new URL(item.url).hostname !== url.hostname
+          ) {
+            throw new Error("GitHub returned another task pull request");
+          }
+          return finishPullRequest(item, item.branch ?? known.branch, transport, details);
+        },
+        {
+          refresh: params.refresh,
+          signal: deps.cacheSignal,
+          retainFailure: true,
+          onRetainedFailure: () => {
+            taskMetadataUnavailable = true;
+          },
+        },
+      );
+    } catch {
+      // A durable publication URL remains useful on a cold or rate-limited lookup.
+      taskMetadataUnavailable = true;
+      deps.read.assertCurrent();
+    }
+    taskPullRequests.push({ ...known, ...(pullRequest ? { pullRequest } : {}) });
+  }
+  deps.read.assertCurrent();
+  return {
+    ...branch,
+    taskPullRequests,
+    taskPullRequestCount: task.taskPullRequestCount,
+    pullRequestCount: task.pullRequestCount,
+    ...(taskMetadataUnavailable && !branch.rateLimited ? { status: "unavailable" as const } : {}),
+  };
+}
+
+async function loadControlUiSessionBranchPullRequests(
+  params: ControlUiSessionPullRequestsParams,
+  deps: LoadSessionPullRequestDeps,
+): Promise<ControlUiSessionPullRequests> {
   const { target, assertCurrent, projection } = deps.read;
   try {
     assertCurrent();
     const request = { ...params, ...target.params };
-    let context: GitCheckoutContext | null;
-    if (deps.resolveGitContext) {
-      context = await deps.resolveGitContext(request);
-    } else {
-      const source = deps.resolveGitRoot ? await deps.resolveGitRoot(request) : target.source;
-      context =
-        typeof source === "string"
-          ? await runGitReadOperation(
-              {
-                type: "checkout.context",
-                input: { root: source, githubHost: deps.read.target.githubHost },
-              },
-              { refresh: request.refresh },
-            )
-          : source;
-    }
+    const source = target.source;
+    const context =
+      typeof source === "string"
+        ? await runGitReadOperation(
+            {
+              type: "checkout.context",
+              input: { root: source, githubHost: deps.read.target.githubHost },
+            },
+            { refresh: request.refresh },
+          )
+        : source;
     assertCurrent();
     if (!context) {
       branchCache.release(deps.cacheSignal);
       return { pullRequests: [], rateLimited: false };
     }
-    // Conversation text is not evidence of session work. Only the checkout
-    // selects PRs; publication receipts remain owned by the publication flow.
+    // Publication controls select the current checkout branch only. Task history
+    // is projected separately from the publication owner's receipts.
     if (!context.branch || context.branch === context.defaultBranch) {
       branchCache.release(deps.cacheSignal);
       return {
@@ -482,7 +594,7 @@ export async function loadControlUiSessionPullRequests(
       context,
       deps,
       request.refresh === true,
-      JSON.stringify([target.identity, deps.read.sourceIdentity]),
+      JSON.stringify([target.branchIdentity ?? target.identity, deps.read.sourceIdentity]),
     ).catch(() => null);
     assertCurrent();
     if (!result) {

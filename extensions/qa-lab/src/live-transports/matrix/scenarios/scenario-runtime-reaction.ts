@@ -1,7 +1,6 @@
 import { createMatrixQaClient } from "../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
-  advanceMatrixQaActorCursor,
   assertNoSutReplyWindow,
   type MatrixQaActorId,
   type MatrixQaScenarioContext,
@@ -109,7 +108,6 @@ function observeCanaryReaction(context: MatrixQaScenarioContext, scenarioLabel: 
 export async function runReactionNotificationScenario(context: MatrixQaScenarioContext) {
   const result = await observeCanaryReaction(context, "Matrix reaction scenario");
   return {
-    artifacts: buildMatrixQaReactionArtifacts(result),
     details: buildMatrixQaReactionDetailLines({
       actorUserId: result.actorUserId,
       observedReactionKey: result.event.reaction?.key,
@@ -121,12 +119,10 @@ export async function runReactionNotificationScenario(context: MatrixQaScenarioC
 export async function runReactionNotAReplyScenario(context: MatrixQaScenarioContext) {
   const reaction = await observeCanaryReaction(context, "Matrix reaction no-reply scenario");
   const { noReplyWindowMs } = await assertNoSutReplyWindow({
-    actorId: reaction.actorId,
     client: reaction.client,
     context,
     roomId: context.roomId,
     since: reaction.since,
-    startSince: reaction.startSince,
     unexpectedLines: [
       `reaction target: ${reaction.reactionTargetEventId}`,
       `reaction event: ${reaction.reactionEventId}`,
@@ -134,11 +130,6 @@ export async function runReactionNotAReplyScenario(context: MatrixQaScenarioCont
     unexpectedMessage: `unexpected SUT reply after reaction from ${context.driverUserId}`,
   });
   return {
-    artifacts: {
-      ...(context.driverUserId ? { actorUserId: context.driverUserId } : {}),
-      expectedNoReplyWindowMs: noReplyWindowMs,
-      ...buildMatrixQaReactionArtifacts(reaction),
-    },
     details: [
       ...buildMatrixQaReactionDetailLines(buildMatrixQaReactionArtifacts(reaction)),
       `waited ${noReplyWindowMs}ms with no SUT reply`,
@@ -153,7 +144,7 @@ export async function runReactionRedactionObservedScenario(context: MatrixQaScen
     reason: "matrix qa reaction removal",
     roomId: context.roomId,
   });
-  const redaction = await reaction.client.waitForRoomEvent({
+  await reaction.client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
       event.roomId === context.roomId &&
@@ -164,17 +155,7 @@ export async function runReactionRedactionObservedScenario(context: MatrixQaScen
     since: reaction.since,
     timeoutMs: context.timeoutMs,
   });
-  advanceMatrixQaActorCursor({
-    actorId: reaction.actorId,
-    syncState: context.syncState,
-    nextSince: redaction.since,
-    startSince: reaction.startSince,
-  });
   return {
-    artifacts: {
-      ...buildMatrixQaReactionArtifacts(reaction),
-      redactionEventId,
-    },
     details: [
       ...buildMatrixQaReactionDetailLines(buildMatrixQaReactionArtifacts(reaction)),
       `redaction event: ${redactionEventId}`,

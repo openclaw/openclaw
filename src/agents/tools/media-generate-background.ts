@@ -14,7 +14,7 @@ import {
 } from "../agent-tool-source-execution-guard.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecPolicyOverrides } from "../exec-defaults.js";
-import { recordRecentMediaGenerationTaskStartForSession } from "../media-generation-task-status-shared.js";
+import { updateMediaGenerationOperation } from "../media-generation-activity.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 import { resolveSandboxConfigForAgent } from "../sandbox/config.js";
 import type { ToolFsPolicy } from "../tool-fs-policy.js";
@@ -380,23 +380,14 @@ export async function runMediaGenerationTask(params: {
           return { execution: start() };
         });
       } catch (error) {
-        lifecycle.failTaskRun({ handle, error });
+        lifecycle.failTaskRun({ handle });
         throw error;
       }
     };
 
     if (handle?.detach) {
-      recordRecentMediaGenerationTaskStartForSession({
-        sessionKey: params.sessionKey,
-        agentId: params.requesterAgentId,
-        taskKind: `${generationLabel}_generation`,
-        sourcePrefix: toolName,
-        taskId: handle.taskId,
-        runId: handle.runId,
-        taskLabel: params.prompt,
+      updateMediaGenerationOperation(handle.runId, {
         requestKey: params.requestKey,
-        providerId: params.providerId,
-        progressSummary,
       });
       await admitExecution(() =>
         scheduleMediaGenerationTaskCompletion({
@@ -438,8 +429,6 @@ export async function runMediaGenerationTask(params: {
       const executed = await execution;
       lifecycle.completeTaskRun({
         handle,
-        provider: executed.provider,
-        model: executed.model,
         count: executed.count,
       });
       return {
@@ -447,7 +436,7 @@ export async function runMediaGenerationTask(params: {
         details: executed.details,
       };
     } catch (error) {
-      lifecycle.failTaskRun({ handle, error });
+      lifecycle.failTaskRun({ handle });
       throw error;
     }
   } catch (error) {

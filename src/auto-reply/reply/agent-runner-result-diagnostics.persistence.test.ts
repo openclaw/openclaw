@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -13,7 +14,6 @@ import {
 import { isReplyPayloadTerminalContent } from "../reply-payload.js";
 import { createAgentAccountingPersistenceFixture } from "./agent-runner-result-accounting.persistence.test-support.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const operations: ReplyOperation[] = [];

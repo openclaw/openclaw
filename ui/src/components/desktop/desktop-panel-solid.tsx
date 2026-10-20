@@ -1,18 +1,16 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createSignal, onSettled } from "solid-js";
-import { i18n } from "../../i18n/lib/translate.ts";
+import { merge, onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
-import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { createDesktopFullscreen } from "../desktop-fullscreen.ts";
 import { DockResizer } from "../dock-layout-solid.tsx";
+import { nativeDockPanelCss as dockStyles } from "../dock-panel-styles.ts";
 import { FullscreenButton } from "../fullscreen-solid.tsx";
-import { DESKTOP_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
 import { createDesktopAudio } from "./desktop-audio.ts";
-import { DesktopClient } from "./desktop-client.ts";
+import { desktopCanvas, DesktopClient } from "./desktop-client.ts";
 import { DesktopDocumentView } from "./desktop-document-view.tsx";
 import { openDesktopFocus } from "./desktop-focus-window.ts";
 import { createDesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
@@ -31,7 +29,6 @@ import {
   type DesktopPictureInPicture,
 } from "./desktop-picture-in-picture.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
-import dockStyles from "../dock-panel-solid.css?inline";
 import desktopStyles from "./desktop-panel.css?inline";
 
 type Methods = { handleToggleRequest(event: Event): void };
@@ -41,7 +38,7 @@ const owners = new WeakMap<HTMLElement, DesktopPanelOwner>();
 const ownerFor = (host: DesktopPanelElement) => {
   let owner = owners.get(host);
   if (!owner) {
-    owner = createDesktopPanel(host);
+    owner = createDesktopPanel(host, onSettled);
     owners.set(host, owner);
   }
   return owner;
@@ -51,59 +48,23 @@ defineSolidBridge<DesktopPanelInputs, Methods>(
   (inputs, host) => {
     const retained = owners.has(host);
     const panel = ownerFor(host);
-    const fullscreen = createDesktopFullscreen(host.ownerDocument);
-    const detachPanel = panel.attach({
-      audio: createDesktopAudio(host, panel.audioTarget),
-      mobileKeyboard: createDesktopMobileKeyboard(panel.keyboardTarget),
-      pictureInPicture: createDesktopPictureInPicture(host, () => {
-        const target = panel.launchTarget();
-        return host.available && target.state === "connected" && target.presented
-          ? (panel.surface()?.querySelector<HTMLCanvasElement>("canvas") ?? null)
-          : null;
-      }),
-      launcher: createDesktopAppLauncher(panel.launchTarget),
-      fullscreenMode: fullscreen,
-    });
-    const state = projectOwner(panel, (owner) => owner);
-    const [mounted, setMounted] = createSignal(false);
-    // Prop changes reconcile synchronous transport authority, not copied rendering state.
-    createEffect(
-      () =>
-        mounted()
-          ? { ...inputs, revision: state.revision(), fullscreen: fullscreen.active() }
-          : undefined,
-      (next, previous) => {
-        if (next) {
-          panel.reconcile(next, previous);
-        }
+    const fullscreen = createDesktopFullscreen(host.ownerDocument, panel.notify);
+    panel.attach(
+      {
+        audio: createDesktopAudio(host, panel.audioTarget),
+        mobileKeyboard: createDesktopMobileKeyboard(panel.keyboardTarget),
+        pictureInPicture: createDesktopPictureInPicture(host, () => {
+          const target = panel.launchTarget();
+          return host.available && target.state === "connected" && target.presented
+            ? desktopCanvas(panel.surface())
+            : null;
+        }),
+        launcher: createDesktopAppLauncher(panel.launchTarget),
+        fullscreenMode: fullscreen,
       },
+      retained,
     );
-    createEffect(
-      () => !inputs.embedded,
-      (standalone) =>
-        standalone
-          ? listen(window, DESKTOP_PANEL_TOGGLE_EVENT, panel.handleToggleRequest)
-          : undefined,
-    );
-    createEffect(
-      () => (inputs.available && inputs.suppliedEnvironments === null ? inputs.client : null),
-      (client) => (client ? panel.sessionSource.subscribe(client) : undefined),
-    );
-    onSettled(() => {
-      const open = panel.dockLayout.open;
-      panel.dockLayout.connect();
-      if (retained) {
-        panel.dockLayout.setOpen(open, false);
-      }
-      setMounted(true);
-      const stopLocale = i18n.subscribe(panel.notify);
-      return () => {
-        stopLocale();
-        state.dispose();
-        detachPanel();
-        panel.dockLayout.dispose();
-      };
-    });
+    const state = projectOwner(panel, (owner) => owner);
     return (
       <>
         <style>{`${dockStyles}\n${desktopStyles}`}</style>
@@ -130,10 +91,12 @@ defineSolidBridge<DesktopPanelInputs, Methods>(
       embedded: { default: false, type: Boolean, reflect: true },
       presented: { default: false, type: Boolean },
       refreshOnPresentation: { default: true, type: Boolean },
+      runtimeConfig: { default: null, attribute: false },
       onDocumentClose: { default: null, attribute: false },
       onFocusTargetChange: { default: null, attribute: false },
       desktopClientFactory: { default: () => new DesktopClient(), attribute: false },
     },
+    propertyChanged: (host) => owners.get(host)?.inputsChanged(),
     methods: { handleToggleRequest: (host, event) => ownerFor(host).handleToggleRequest(event) },
   },
 );
@@ -310,17 +273,7 @@ function DesktopPresentation(props: { view: DesktopPanelOwner["view"] }) {
           }}
           onClose={props.view.onClose}
           content={content}
-          connection={{
-            surfaceRef: props.view.surfaceRef,
-            get controlling() {
-              return props.view.controlling;
-            },
-            get desktopApps() {
-              return props.view.desktopApps;
-            },
-            get launchingApp() {
-              return props.view.launchingApp;
-            },
+          connection={merge(() => props.view, {
             get showApps() {
               const target = props.view.focusTarget();
               return (
@@ -328,20 +281,13 @@ function DesktopPresentation(props: { view: DesktopPanelOwner["view"] }) {
                 desktopSourceForEnvironment({ id: target.source }).kind === "environment"
               );
             },
-            get sizing() {
-              return props.view.sizing;
-            },
             get pictureInPictureControl() {
               return pictureInPictureControl();
             },
             get audioControl() {
               return audioControl();
             },
-            onLaunch: (app) => props.view.onLaunch(app),
-            onTakeControl: () => props.view.onTakeControl(),
-            onControlToggle: () => props.view.onControlToggle(),
-            onDisconnect: () => props.view.onDisconnect(),
-          }}
+          })}
         />
       )}
     </>

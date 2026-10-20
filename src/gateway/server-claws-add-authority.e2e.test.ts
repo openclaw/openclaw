@@ -349,7 +349,9 @@ describe("Claw Add dependency consent authority (real Gateway RPC)", () => {
       const revokedPlan = await plan(admin.client, revokedFixture);
       expect(revokedPlan.pluginReviews).toHaveLength(1);
       expect(revokedPlan.blockers).toEqual([]);
-      const identity = loadOrCreateDeviceIdentity({ path: state.path("revoked-identity.sqlite") });
+      const identity = loadOrCreateDeviceIdentity({
+        path: state.path("revoked-identity", "client", "credentials.sqlite"),
+      });
       const pendingPairing = await requestDevicePairing({
         deviceId: identity.deviceId,
         publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),

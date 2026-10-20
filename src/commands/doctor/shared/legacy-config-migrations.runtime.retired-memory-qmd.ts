@@ -46,7 +46,7 @@ function migrateRetiredQmdExternalPaths(params: {
   }
   const memory = ensureRecord(params.scope, "memory");
   const search = ensureRecord(memory, "search");
-  const existingPaths = normalizeConfiguredMemoryExtraPaths(
+  const nextPaths = normalizeConfiguredMemoryExtraPaths(
     Array.isArray(search.extraPaths)
       ? search.extraPaths.filter(
           (entry): entry is MemoryExtraPath =>
@@ -54,10 +54,9 @@ function migrateRetiredQmdExternalPaths(params: {
         )
       : [],
   );
-  const nextPaths: MemoryExtraPath[] = [...existingPaths];
   const entryKey = (entry: MemoryExtraPath) =>
     typeof entry === "string" ? `${entry}\0` : `${entry.path}\0${entry.pattern?.trim() ?? ""}`;
-  const seen = new Set(existingPaths.map(entryKey));
+  const seen = new Set(nextPaths.map(entryKey));
   let added = 0;
   for (const entry of params.entries) {
     const nextEntry: MemoryExtraPath = entry.pattern ? entry : entry.path;

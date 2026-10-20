@@ -192,7 +192,7 @@ async function acquireProviderLocalService(
       return;
     }
     released = true;
-    managed.active = Math.max(0, managed.active - 1);
+    managed.active -= 1;
     scheduleIdleStop(key, managed, service);
   };
 
@@ -409,9 +409,7 @@ async function startAndWaitForLocalService(params: {
 
   const startedAt = Date.now();
   const diagnostics: LocalServiceDiagnostics = {
-    providerId: provider,
     healthUrl,
-    startedAt,
     stderrTail: "",
   };
   managed.diagnostics = diagnostics;
@@ -448,7 +446,6 @@ async function startAndWaitForLocalService(params: {
   child.unref();
   child.once("exit", (code, signalLocal) => {
     const exit = { code, signal: signalLocal };
-    diagnostics.lastExit = exit;
     log.info(
       `${provider} local service exited: ${signalLocal ? `signal=${signalLocal}` : `code=${code ?? 0}`}`,
     );
@@ -472,7 +469,6 @@ async function startAndWaitForLocalService(params: {
   for (;;) {
     if (await probeHealth(healthUrl, healthHeaders, signal, assertAuthCurrent)) {
       diagnostics.readyAt = Date.now();
-      diagnostics.lastHealthyAt = diagnostics.readyAt;
       // Drain readiness diagnostics so pipes cannot pin one-shot hosts.
       diagnostics.stderrTail = "";
       drainLocalServiceOutput(child);

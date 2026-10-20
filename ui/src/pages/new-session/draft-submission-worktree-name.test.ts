@@ -64,7 +64,10 @@ it.each([true, false])("consumes accepted names, explicit base=%s", async (expli
         worktreeName: "first-task",
         worktreeBaseRef: "main",
       }),
-      { reconciliation: "background" },
+      {
+        reconciliation: "background",
+        signal: expect.any(AbortSignal),
+      },
     );
     expect(place).toMatchObject({ worktree: true, baseRef: "main" });
     expect(browserPreference()).toMatchObject({ worktree: true, baseRef: "main" });
@@ -155,7 +158,10 @@ it.each([false, true])("retries frozen placement, restored=%s", async (restored)
   expect(retry.flow.submitDisabledReason()).toBeUndefined();
   await retry.flow.submit(undefined, true);
   expect(retry.create).toHaveBeenCalledTimes(restored ? 1 : 2);
-  expect(retry.create).toHaveBeenLastCalledWith(original, { reconciliation: "background" });
+  expect(retry.create).toHaveBeenLastCalledWith(original, {
+    reconciliation: "background",
+    signal: expect.any(AbortSignal),
+  });
   expect(start).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       recovery: expect.objectContaining({ sessionKey: original!.key, phase: "dispatching" }),

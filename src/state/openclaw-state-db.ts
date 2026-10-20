@@ -217,13 +217,19 @@ export async function prepareOpenClawStateDatabaseSchema(
         needsRepair = true;
       }
     }
-    return needsRepair ||
-      needsOpenClawStateDatabaseSchemaRepair(pathname, scope, options.integrityCheck)
-      ? withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () => {
-          repairStarted = true;
-          return repairStateSchema(pathname, env, scope, options.integrityCheck);
-        })
-      : { changes: [], warnings: [] };
+    if (
+      !needsRepair &&
+      !needsOpenClawStateDatabaseSchemaRepair(pathname, scope, options.integrityCheck)
+    ) {
+      return { changes: [], warnings: [] };
+    }
+    repairStarted = true;
+    // Retire prior writers and publish their native-close receipts before the
+    // private repair handle validates its source and acquires exclusive custody.
+    await closeOpenClawStateDatabaseByPathAsync(pathname);
+    return withStateDatabaseSchemaMaintenance({ databasePath: pathname }, () =>
+      repairStateSchema(pathname, env, scope, options.integrityCheck),
+    );
   } finally {
     // Readiness checks borrow the live generation; only admitted repair retires it.
     if (repairStarted) {
@@ -235,7 +241,11 @@ export async function prepareOpenClawStateDatabaseSchema(
 /** Bootstrap fresh/native-only state canonically before startup checkpoint access. */
 export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
   callback: (db: EngineConnection) => T,
-  options: OpenClawStateDatabaseOptions & { atomic?: boolean; sealOnClose?: boolean } = {},
+  options: OpenClawStateDatabaseOptions & {
+    atomic?: boolean;
+    sealOnClose?: boolean;
+    singleStatement?: true;
+  } = {},
 ): T {
   assertOpenClawStateSchemaRepairAllowed(resolveDatabasePath(options));
   if (isStatePostgres()) {
@@ -268,7 +278,10 @@ export function withOpenClawStateStartupMigrationCheckpointDatabase<T>(
         return callback(db);
       },
       { env: options.env, path: database.path },
-      { operationLabel: "state.startup-checkpoint.write" },
+      {
+        operationLabel: "state.startup-checkpoint.write",
+        singleStatement: options.singleStatement,
+      },
     );
     if (options.sealOnClose) {
       stateDbCache.closeOpenClawStateDatabaseByPath(database.path);

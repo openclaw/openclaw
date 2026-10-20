@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { WhatsAppConfig } from "../config/types.whatsapp.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   resolveEffectiveToolPolicy,
@@ -33,10 +34,11 @@ vi.mock("../channels/plugins/index.js", () => ({
   }),
 }));
 
-async function storedSession(
+async function storedPolicy(
   entry: Partial<SessionEntry>,
   config: OpenClawConfig = {},
   sessionKey = "agent:main:subagent:limited",
+  kind: "subagent" | "inherited" = "subagent",
 ) {
   const store = path.join(
     os.tmpdir(),
@@ -47,21 +49,39 @@ async function storedSession(
     { sessionKey, storePath: store },
     { sessionId: "limited", updatedAt: Date.now(), ...entry },
   );
-  return { config: { ...config, session: { store } }, sessionKey };
+  return withPreparedSessionCapabilityRead(() =>
+    (kind === "subagent"
+      ? resolveSubagentToolPolicyForSession
+      : resolveInheritedToolPolicyForSession)({ ...config, session: { store } }, sessionKey),
+  );
+}
+
+function expectAllowed(
+  policy: Awaited<ReturnType<typeof storedPolicy>>,
+  allowed: readonly string[],
+  denied: readonly string[] = [],
+) {
+  for (const [names, expected] of [
+    [allowed, true],
+    [denied, false],
+  ] as const) {
+    for (const name of names) {
+      expect(isToolAllowedByPolicyName(name, policy), name).toBe(expected);
+    }
+  }
 }
 
 describe("resolveGroupToolPolicy group context validation", () => {
-  const config: OpenClawConfig = {
-    channels: {
-      whatsapp: {
-        groups: {
-          "safe-room": { tools: { allow: ["read"] } },
-          "trusted-group": { tools: { allow: ["exec", "read", "write", "edit"] } },
-          room: { tools: { allow: ["exec", "read"] } },
-          "room:sender:alice": { tools: { allow: ["read"] } },
-        },
-      },
-    },
+  const whatsapp = (groups: WhatsAppConfig["groups"], accounts?: WhatsAppConfig["accounts"]) => ({
+    channels: { whatsapp: { groups, accounts } },
+  });
+  const config = {
+    ...whatsapp({
+      "safe-room": { tools: { allow: ["read"] } },
+      "trusted-group": { tools: { allow: ["exec", "read", "write", "edit"] } },
+      room: { tools: { allow: ["exec", "read"] } },
+      "room:sender:alice": { tools: { allow: ["read"] } },
+    }),
     tools: { allow: ["read"] },
   };
   function groupPolicy(params: Omit<Parameters<typeof resolveGroupToolPolicy>[0], "config">) {
@@ -102,7 +122,7 @@ describe("resolveGroupToolPolicy group context validation", () => {
     ).toEqual({ allow: ["read"] });
   });
 
-  it("prefers the session-derived channel over caller-supplied messageProvider", () => {
+  it("trusts the session channel, not the caller", () => {
     const channelCfg = {
       channels: {
         discord: { groups: { C123: { tools: { allow: ["exec"] } } } },
@@ -120,7 +140,7 @@ describe("resolveGroupToolPolicy group context validation", () => {
   });
 
   it.each(["agent:main:whatsapp:group:safe-room", "agent:main:main"])(
-    "reports unavailable scheduled authority for %s before tool construction",
+    "rejects unavailable scheduled authority (%s)",
     (sessionKey) => {
       const params = { config, sessionKey, accountId: "removed", requireConfiguredAccount: true };
       expect(() => resolveGroupToolPolicy(params)).toThrow(
@@ -129,17 +149,10 @@ describe("resolveGroupToolPolicy group context validation", () => {
     },
   );
 
-  it("preserves intentional deny-all policy for a configured scheduled account", () => {
+  it("preserves scheduled deny-all", () => {
     expect(
       resolveGroupToolPolicy({
-        config: {
-          channels: {
-            whatsapp: {
-              accounts: { work: {} },
-              groups: { "safe-room": { tools: { deny: ["*"] } } },
-            },
-          },
-        },
+        config: whatsapp({ "safe-room": { tools: { deny: ["*"] } } }, { work: {} }),
         sessionKey: "agent:main:whatsapp:group:safe-room",
         accountId: "work",
         requireConfiguredAccount: true,
@@ -149,37 +162,27 @@ describe("resolveGroupToolPolicy group context validation", () => {
 });
 
 describe("stored subagent tool policies", () => {
-  it("recomputes a persisted leaf as an orchestrator under the recursive default", async () => {
-    const { config, sessionKey } = await storedSession({
-      spawnDepth: 1,
-      subagentRole: "leaf",
-      subagentControlScope: "none",
-    });
-    const policy = await withPreparedSessionCapabilityRead(() =>
-      resolveSubagentToolPolicyForSession(config, sessionKey),
-    );
-    expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
-    expect(isToolAllowedByPolicyName("subagents", policy)).toBe(true);
-  });
+  it.each([
+    [undefined, ["sessions_spawn", "subagents"], []],
+    [
+      1,
+      ["memory_search", "memory_get"],
+      ["gateway", "sessions_spawn", "subagents", "sessions_search"],
+    ],
+  ] as const)(
+    "recomputes a persisted leaf with depth cap %s",
+    async (maxSpawnDepth, allowed, denied) => {
+      const policy = await storedPolicy(
+        { spawnDepth: 1, subagentRole: "leaf", subagentControlScope: "none" },
+        maxSpawnDepth === undefined
+          ? {}
+          : { agents: { defaults: { subagents: { maxSpawnDepth } } } },
+      );
+      expectAllowed(policy, allowed, denied);
+    },
+  );
 
-  it("keeps flat depth-1 sessions as leaves under an explicit finite cap", async () => {
-    const { config, sessionKey } = await storedSession(
-      { spawnDepth: 1, subagentRole: "leaf", subagentControlScope: "none" },
-      { agents: { defaults: { subagents: { maxSpawnDepth: 1 } } } },
-    );
-    const policy = await withPreparedSessionCapabilityRead(() =>
-      resolveSubagentToolPolicyForSession(config, sessionKey),
-    );
-    expect(isToolAllowedByPolicyName("gateway", policy)).toBe(false);
-    for (const tool of ["sessions_spawn", "subagents", "sessions_search"]) {
-      expect(isToolAllowedByPolicyName(tool, policy), tool).toBe(false);
-    }
-    for (const tool of ["memory_search", "memory_get"]) {
-      expect(isToolAllowedByPolicyName(tool, policy), tool).toBe(true);
-    }
-  });
-
-  it("does not let configured allow entries re-enable hard-denied tools", async () => {
+  it("never re-enables hard-denied tools", async () => {
     const denied = [
       "gateway",
       "agents_list",
@@ -194,36 +197,26 @@ describe("stored subagent tool policies", () => {
       "conversations_send",
       "conversations_turn",
     ];
-    const { config, sessionKey } = await storedSession(
+    const policy = await storedPolicy(
       { spawnDepth: 1, subagentRole: "orchestrator", subagentControlScope: "children" },
       { tools: { subagents: { tools: { allow: [...denied, "memory_search"] } } } },
     );
-    const policy = await withPreparedSessionCapabilityRead(() =>
-      resolveSubagentToolPolicyForSession(config, sessionKey),
-    );
-    for (const tool of denied) {
-      expect(isToolAllowedByPolicyName(tool, policy), tool).toBe(false);
-    }
-    expect(isToolAllowedByPolicyName("memory_search", policy)).toBe(true);
+    expectAllowed(policy, ["memory_search"], denied);
   });
 
-  it("applies inherited tool policy from stored ACP sessions without subagent metadata", async () => {
-    const { config, sessionKey } = await storedSession(
+  it("inherits ACP policy without subagent metadata", async () => {
+    const policy = await storedPolicy(
       { inheritedToolAllow: ["custom_plugin_tool"], inheritedToolDeny: ["custom_denied_tool"] },
       {},
       "agent:main:acp:limited",
+      "inherited",
     );
-    const policy = await withPreparedSessionCapabilityRead(() =>
-      resolveInheritedToolPolicyForSession(config, sessionKey),
-    );
-    expect(isToolAllowedByPolicyName("custom_plugin_tool", policy)).toBe(true);
-    expect(isToolAllowedByPolicyName("custom_denied_tool", policy)).toBe(false);
-    expect(isToolAllowedByPolicyName("read", policy)).toBe(false);
+    expectAllowed(policy, ["custom_plugin_tool"], ["custom_denied_tool", "read"]);
   });
 });
 
 describe("resolveEffectiveToolPolicy", () => {
-  it("applies implicit-main defaults tool restrictions to a pre-roster config", () => {
+  it("applies pre-roster implicit-main defaults", () => {
     const config = {
       agents: { defaults: { tools: { deny: ["exec"] } } },
     } as unknown as OpenClawConfig;
@@ -240,14 +233,12 @@ describe("resolveEffectiveToolPolicy", () => {
     expect(resolveEffectiveToolPolicy({ config }).profileAlsoAllow).toBeUndefined();
   });
 
-  it.each<{ name: string; tools: OpenClawConfig["tools"]; warning?: string }>([
-    { name: "provider wildcard deny", tools: { byProvider: { fixture: { deny: ["pro*"] } } } },
-  ])("warns only about actionable grants with $name", async ({ tools, warning }) => {
+  it("does not warn about a provider wildcard deny", async () => {
     const logs = createWarnLogCapture("openclaw-agent-tools-policy-test");
     try {
       const result = resolveEffectiveToolPolicy({
         config: {
-          tools,
+          tools: { byProvider: { fixture: { deny: ["pro*"] } } },
           agents: {
             entries: {
               ops: {
@@ -260,11 +251,7 @@ describe("resolveEffectiveToolPolicy", () => {
         modelProvider: "fixture",
       });
       const logged = await logs.findText('tools policy: profile "messaging"');
-      if (warning) {
-        expect(logged).toContain(warning);
-      } else {
-        expect(logged).toBeUndefined();
-      }
+      expect(logged).toBeUndefined();
       expect(result.profileAlsoAllow).toEqual(["exec"]);
     } finally {
       logs.cleanup();

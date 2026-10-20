@@ -294,13 +294,15 @@ it("retires gateway admission before the next file", async () => {
 import { getAgentRunContext, registerAgentRunContext } from ${sourcePath("infra/agent-run-registry.ts")};
 import { emitAgentEvent, onAgentEvent } from ${sourcePath("infra/agent-events.ts")};
 import { listActiveSessionsForShutdown, noteActiveSessionForShutdown } from ${sourcePath("gateway/active-sessions-shutdown-tracker.ts")};
-import { createReplyOperation, replyRunRegistry } from ${sourcePath("auto-reply/reply/reply-run-registry.ts")};
+import { createReplyOperation } from ${sourcePath("sessions/session-controller.operation.ts")};
+import { waitForSessionRunIdle } from ${sourcePath("sessions/session-controller.wait.ts")};
+import ${sourcePath("sessions/session-controller.stop.ts")};
 import { expect, it } from "vitest";
 it("seeds process-global run contexts", async () => {
   expect(tryBeginGatewayRootWorkAdmission()).not.toBeNull();
   expect(getActiveGatewayRootWorkCount()).toBe(1);
   markGatewayRestartDraining();
-  noteActiveSessionForShutdown({ cfg: {}, sessionKey: "session-a", sessionId: "session-a", storePath: "/tmp/fixture.sqlite", agentId: "main" });
+  noteActiveSessionForShutdown({ sessionKey: "session-a", sessionId: "session-a", storePath: "/tmp/fixture.sqlite", agentId: "main" });
   expect(listActiveSessionsForShutdown()).toHaveLength(1);
   registerAgentRunContext("unrelated-run-a", { sessionKey: "session-a" });
   registerAgentRunContext("unrelated-run-b", { sessionKey: "session-b" });
@@ -313,10 +315,10 @@ it("seeds process-global run contexts", async () => {
   expect(getAgentRunContext("unrelated-run-b")).toBeDefined();
   expect(sequence).toBe(1);
   const operation = createReplyOperation({ sessionKey: "agent:main:runner-waiter", sessionId: "runner-waiter", resetTriggered: false });
-  operation.attachBackend({ kind: "embedded", cancel() {}, isAbortable: () => false });
+  operation.attachBackend({ kind: "embedded", cancel() { operation.complete(); } });
   operation.setPhase("running");
   const outcomes: boolean[] = [];
-  void replyRunRegistry.waitForIdle(operation.key, null).then(ended => outcomes.push(ended));
+  void waitForSessionRunIdle(operation.key, null).then(ended => outcomes.push(ended));
   Reflect.set(globalThis, Symbol.for("fixture.replyRunWaiter"), { operation, outcomes });
   await Promise.resolve();
   expect(outcomes).toEqual([]);
@@ -326,14 +328,14 @@ it("seeds process-global run contexts", async () => {
 import { clearAgentRunContext, getAgentRunContext, registerAgentRunContext, sweepStaleRunContexts } from ${sourcePath("infra/agent-run-registry.ts")};
 import { emitAgentEvent, onAgentEvent } from ${sourcePath("infra/agent-events.ts")};
 import { listActiveSessionsForShutdown } from ${sourcePath("gateway/active-sessions-shutdown-tracker.ts")};
-import { replyRunRegistry } from ${sourcePath("auto-reply/reply/reply-run-registry.ts")};
+import { isSessionRunActiveForKey } from ${sourcePath("sessions/session-controller.queries.ts")};
 import { expect, it } from "vitest";
 it("clears agent run registry state", () => {
   const key = Symbol.for("fixture.replyRunWaiter");
   const prior = Reflect.get(globalThis, key);
   try {
-    expect(prior?.outcomes).toEqual([false]);
-    expect(replyRunRegistry.isActive("agent:main:runner-waiter")).toBe(false);
+    expect(prior?.outcomes).toEqual([true]);
+    expect(isSessionRunActiveForKey("agent:main:runner-waiter")).toBe(false);
   } finally {
     prior?.operation.complete();
     Reflect.deleteProperty(globalThis, key);

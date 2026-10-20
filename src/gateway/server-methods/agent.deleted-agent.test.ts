@@ -51,7 +51,6 @@ async function invoke(
       respond,
       context: {
         dedupe,
-        chatAbortControllers: new Map(),
         getRuntimeConfig: () => ({}),
       } as never,
       client,

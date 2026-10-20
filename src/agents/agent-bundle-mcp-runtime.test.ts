@@ -794,6 +794,107 @@ describe("session MCP runtime", () => {
     }
   });
 
+  it("rejects unrepresentable nested wire fields before SDK result parsing can strip them", async () => {
+    let includeExtension = false;
+    let omitContent = false;
+    const extension = () => (includeExtension ? { "fixture/extension": "must not disappear" } : {});
+    const results = (): Record<string, unknown> => ({
+      "tools/list": {
+        tools: [{ name: "probe", inputSchema: { type: "object" }, annotations: extension() }],
+      },
+      "tools/call": omitContent
+        ? { isError: false }
+        : { content: [{ type: "text", text: "answer", ...extension() }] },
+      "resources/templates/list": {
+        resourceTemplates: [
+          {
+            name: "memo",
+            uriTemplate: "memo://{id}",
+            icons: [{ src: "https://example.com/icon.png", ...extension() }],
+          },
+        ],
+      },
+      "prompts/get": {
+        messages: [{ role: "user", content: { type: "text", text: "prompt", ...extension() } }],
+      },
+    });
+    const server = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        http.createServer((request, response) => {
+          void (async () => {
+            if (request.method !== "POST") {
+              response.writeHead(405).end();
+              return;
+            }
+            let body = "";
+            for await (const chunk of request) {
+              body += chunk;
+            }
+            const message: { id?: number; method: string } = JSON.parse(body);
+            if (message.id === undefined) {
+              response.writeHead(202).end();
+              return;
+            }
+            const values = results();
+            const result =
+              message.method === "initialize"
+                ? {
+                    protocolVersion: "2025-11-25",
+                    capabilities: { tools: {}, resources: {}, prompts: {} },
+                    serverInfo: { name: "wire-proof", version: "1" },
+                  }
+                : values[message.method];
+            // Raw JSON keeps server-side SDK parsing from hiding the client regression.
+            response
+              .writeHead(200, { "content-type": "application/json" })
+              .end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result }));
+          })().catch(() => response.destroy());
+        }),
+    });
+    const runtime = createSessionMcpRuntime({
+      sessionId: "session-lossless-wire",
+      workspaceDir: "/workspace",
+      cfg: {
+        mcp: {
+          servers: {
+            lab: { transport: "streamable-http", url: `http://127.0.0.1:${server.claim.port}/mcp` },
+          },
+        },
+      },
+    });
+    try {
+      await runtime.getCatalog();
+      const operations = [
+        () => runtime.callTool("lab", "probe", {}),
+        () => expectDefined(runtime.listTools, "listTools")("lab"),
+        () => expectDefined(runtime.listResourceTemplates, "listResourceTemplates")("lab"),
+        () => expectDefined(runtime.getPrompt, "getPrompt")("lab", "memo"),
+      ];
+      expect(await Promise.all(operations.map((operation) => operation()))).toEqual([
+        results()["tools/call"],
+        results()["tools/list"],
+        results()["resources/templates/list"],
+        results()["prompts/get"],
+      ]);
+      omitContent = true;
+      expect(await runtime.callTool("lab", "probe", {})).toEqual({ content: [], isError: false });
+      omitContent = false;
+      includeExtension = true;
+      const outcomes = await Promise.allSettled(operations.map((operation) => operation()));
+      expect(outcomes).toEqual(
+        ["tools/call", "tools/list", "resources/templates/list", "prompts/get"].map((method) => ({
+          status: "rejected",
+          reason: expect.objectContaining({ code: "MCP_SDK_RESULT_UNREPRESENTABLE", method }),
+        })),
+      );
+    } finally {
+      await runtime.dispose();
+      await server.releaseListener();
+      await server.claim.release();
+    }
+  });
+
   it("redacts credentials from MCP catalog diagnostics", async () => {
     const secret = "test-diagnostic-token";
     const { runtime } = await stdioRuntime("diagnostic", {
@@ -804,62 +905,6 @@ describe("session MCP runtime", () => {
     expect(diagnostic?.message).toContain("Authorization: Bearer ");
     expect(diagnostic?.message).toContain("***");
     expect(diagnostic?.message).not.toContain(secret);
-  });
-
-  it("retries a failed MCP catalog without stalling healthy siblings", async ({ signal }) => {
-    const { files, servers } = await stdioGroup(
-      {
-        healthyServer: { tools: [toolDefinition("healthy_tool")] },
-        retryServer: { inputSchema: { type: "array", items: { type: "number" } } },
-      },
-      {
-        healthyServer: { connectionTimeoutMs: 2_000 },
-        retryServer: { connectionTimeoutMs: 2_000 },
-      },
-    );
-    const retry = expectDefined(files.retryServer, "retry fixture");
-    const healthy = expectDefined(files.healthyServer, "healthy fixture");
-    const retryReleasePath = retry.file("retry.release");
-    let nowMs = 10_000;
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
-    const staticRuntime = await getSessionRuntime(
-      sessionParams("session-catalog-retry", mcpConfig(servers)),
-    );
-    const scopedRuntime = makeRuntime(
-      [{ toolName: "scoped_tool", description: "Requester-scoped tool" }],
-      "scopedServer",
-    );
-    const scopedCatalog = await scopedRuntime.getCatalog();
-    scopedRuntime.getCatalog = async () => scopedCatalog;
-    scopedRuntime.peekCatalog = () => scopedCatalog;
-    const runtime = createCombinedSessionMcpRuntime({
-      sessionId: "session-catalog-retry",
-      workspaceDir: "/workspace",
-      parts: [staticRuntime, scopedRuntime],
-    });
-    try {
-      const failedCatalog = await runtime.getCatalog();
-      expect(Object.keys(failedCatalog.servers)).toEqual(["healthyServer", "scopedServer"]);
-      expectToolNames(failedCatalog, ["healthy_tool", "scoped_tool"]);
-      expect(failedCatalog.diagnostics?.[0]?.serverName).toBe("retryServer");
-      await retry.write({ listToolsReleasePath: retryReleasePath });
-      await expect(runtime.getCatalog()).resolves.toBe(failedCatalog);
-      nowMs += 5_001;
-      expect(runtime.peekCatalog()).toBe(failedCatalog);
-      const recovery = runtime.getCatalog();
-      await waitForFixture(signal, retry.logPath, "recv tools/list", recovery, 2);
-      await expectHealthyCall(runtime, "healthyServer", "healthy_tool");
-      await fs.writeFile(retryReleasePath, "release", "utf8");
-      const recoveredCatalog = await withinTest(recovery, signal);
-      expect(recoveredCatalog.diagnostics ?? []).toEqual([]);
-      expect(recoveredCatalog.servers.retryServer).toBeDefined();
-      expectToolNames(recoveredCatalog, ["healthy_tool", "slow_tool", "scoped_tool"]);
-      expect((await readText(healthy.logPath)).match(/recv tools\/list/g)).toHaveLength(1);
-      expect((await readText(retry.logPath)).match(/recv tools\/list/g)).toHaveLength(2);
-    } finally {
-      nowSpy.mockRestore();
-      await runtime.dispose();
-    }
   });
 
   it("materializes structured and non-text stdio results", async () => {
@@ -1631,7 +1676,7 @@ describe("session MCP runtime", () => {
         await resolutionStarted.promise;
         const idleTtlMs = 10 * 60 * 1000;
         time.setTime(time.clock.now() + idleTtlMs);
-        expect(await manager.sweepIdleRuntimes()).toBe(0);
+        await manager.sweepIdleRuntimes();
         expect(manager.listRuntimeKeys()).toHaveLength(1);
         releaseResolution.resolve();
         secondTools = expectDefined(await secondRequest, "second requester tools");
@@ -1644,7 +1689,7 @@ describe("session MCP runtime", () => {
         await secondTools.dispose();
         secondTools = undefined;
         time.setTime(time.clock.now() + idleTtlMs);
-        expect(await manager.sweepIdleRuntimes()).toBe(1);
+        await manager.sweepIdleRuntimes();
         expect(manager.listRuntimeKeys()).toEqual([]);
         expect(proof.session.closed).toBe(firstSessionId);
       } finally {
@@ -1750,65 +1795,6 @@ describe("requester-scoped MCP connection resolution", () => {
         await manager.disposeAll();
       }
     });
-  });
-
-  it(
-    "expires idle partitions while preserving reuse and leases",
-    withResolverRegistry(async (register) => {
-      const time = createGatewaySchedulerClock(100_000);
-      const clock = vi.spyOn(Date, "now").mockImplementation(time.clock.now);
-      register(async () => ({ url: "https://mcp.example.test/user" }));
-      const scheduler = createTestGatewayScheduler(time.clock);
-      const manager = createManager({ scheduler });
-      const sessionKey = "agent:test:session-fixed-idle";
-      const params = sessionParams(
-        "session-fixed-idle",
-        mcpConfig(requesterConfig().mcp.servers, { sessionIdleTtlMs: 1_200_000.9 }),
-        { sessionKey, requesterSenderId: "sender-a" },
-      );
-      const getRuntime = () => manager.getOrCreate(params);
-      try {
-        await getRuntime();
-        await time.advanceBy(1_200_000 - 1);
-        expect(await manager.sweepIdleRuntimes()).toBe(0);
-        const reused = expectDefined(await getRuntime(), "admitted MCP runtime");
-        expect(reused.lastUsedAt).toBe(time.clock.now());
-        await time.advanceBy(1_200_000 - 1);
-        expect(await manager.sweepIdleRuntimes()).toBe(0);
-        const release = expectDefined(reused.acquireLease, "MCP runtime lease")();
-        await time.advanceBy(1);
-        expect(await manager.sweepIdleRuntimes()).toBe(0);
-        expect(manager.listSessionIds()).toContain(params.sessionId);
-        release();
-        expect(await manager.sweepIdleRuntimes()).toBe(2);
-        expect(manager.listRuntimeKeys()).toEqual([]);
-        expect(manager.resolveSessionId(sessionKey)).toBeUndefined();
-      } finally {
-        await manager.disposeAll();
-        await scheduler.stop();
-        clock.mockRestore();
-      }
-    }),
-  );
-
-  it("reserves capacity for uncertain child cleanup", async () => {
-    const manager = createManager();
-    const params = sessionParams("uncertain-child", mcpConfig({ child: { command: "true" } }), {
-      sessionKey: undefined,
-    });
-    const previous = await manager.getOrCreate(params);
-    previous.joinCleanup = async () => {
-      throw new Error("child cleanup uncertain");
-    };
-    await expect(manager.getOrCreate({ ...params, workspaceDir: "/replacement" })).rejects.toThrow(
-      "child cleanup uncertain",
-    );
-    for (let index = 0; index < 255; index += 1) {
-      await manager.getOrCreate({ ...params, sessionId: `other-${index}` });
-    }
-    await expect(manager.getOrCreate({ ...params, sessionId: "overflow" })).rejects.toThrow(
-      "live runtime limit (256)",
-    );
   });
 
   it(

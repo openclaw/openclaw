@@ -18,14 +18,11 @@ import type {
   SlackQaCodexApprovalScenarioRun,
   SlackQaApprovalContext,
   SlackQaScenarioMetadata,
-  SlackObservedMessage,
-  SlackApprovalArtifact,
 } from "./slack-live.contracts.js";
 
 export async function runSlackCodexApprovalScenario(params: {
   channelId: string;
   context: SlackQaApprovalContext;
-  observedMessages: SlackObservedMessage[];
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
   scenario: SlackQaScenarioMetadata;
@@ -91,7 +88,6 @@ async function runSlackCodexApprovalScenarioInner(params: {
   channelId: string;
   codexRun: { runId: string; sessionKey: string };
   context: SlackQaApprovalContext;
-  observedMessages: SlackObservedMessage[];
   primaryModel: string;
   run: SlackQaCodexApprovalScenarioRun;
   scenario: SlackQaScenarioMetadata;
@@ -119,10 +115,8 @@ async function runSlackCodexApprovalScenarioInner(params: {
     client: params.context.sutReadClient,
     decision: params.run.decision,
     extraTextMatches: ["codex", expectedTitle],
-    observedMessages: params.observedMessages,
     oldestTs,
     scenarioId: params.scenario.id,
-    scenarioTitle: params.scenario.title,
     sutIdentity: params.context.sutIdentity,
     timeoutMs: params.scenario.timeoutMs,
   };
@@ -144,7 +138,7 @@ async function runSlackCodexApprovalScenarioInner(params: {
     sessionKey: params.codexRun.sessionKey,
     sutAccountId: params.sutAccountId,
   });
-  const completed = await completeSlackApprovalScenario({
+  return completeSlackApprovalScenario({
     approvalId,
     gateway: params.context.gateway,
     observation,
@@ -168,14 +162,4 @@ async function runSlackCodexApprovalScenarioInner(params: {
       });
     },
   });
-  return {
-    ...completed,
-    artifact: {
-      ...completed.artifact,
-      appServerMethod: params.run.appServerMethod,
-      codexModelKey: params.primaryModel,
-      finalCodexTurnStatus: "ok",
-      operationVerified: true,
-    } satisfies SlackApprovalArtifact,
-  };
 }

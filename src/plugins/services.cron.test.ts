@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { CronAgentSelectionRequiredError } from "../cron/agent-id.js";
 import { CronService } from "../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../cron/service.test-harness.js";
 import { loadCronStore } from "../cron/store.js";
@@ -96,6 +97,15 @@ function createJob(name = family.name) {
     payload: { kind: "systemEvent" as const, text: "maintenance" },
   };
 }
+
+it("preserves the cron owner's error object through the service handle", async () => {
+  const { cron } = await createScheduler();
+  const error = new CronAgentSelectionRequiredError();
+  vi.spyOn(cron, "add").mockRejectedValueOnce(error);
+  const { service } = await startService(() => cron);
+
+  await expect(service.add(createJob())).rejects.toBe(error);
+});
 
 it("keeps one handle per scheduler and reconciles through a successor service", async () => {
   const { cron } = await createScheduler();

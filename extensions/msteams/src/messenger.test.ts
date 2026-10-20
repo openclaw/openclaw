@@ -329,9 +329,6 @@ describe("msteams messenger", () => {
           }
           return {
             itemId: "item123",
-            webUrl: "https://sharepoint.example.com/item123",
-            shareUrl: "https://sharepoint.example.com/share/item123",
-            name: "retry.txt",
           };
         });
         graphUploadMockState.getDriveItemProperties.mockResolvedValue({

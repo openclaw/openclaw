@@ -1,39 +1,30 @@
 /* @vitest-environment jsdom */
 
 import { createSignal, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { ConnectionView, type ConnectionProps } from "./view.tsx";
 
-const mountedConnections = new Map<HTMLElement, (props: ConnectionProps) => void>();
-afterEach(() => mountedConnections.clear());
+let container: HTMLDivElement;
+let update: ((props: ConnectionProps) => void) | undefined;
+beforeEach(() => {
+  container = document.createElement("div");
+  update = undefined;
+});
 
-function mountConnection(props: ConnectionProps, container: HTMLElement) {
-  const update = mountedConnections.get(container);
-  if (update) {
-    update(props);
-  } else {
-    mountSolid(
-      () => {
-        const [current, setCurrent] = createSignal(props);
-        mountedConnections.set(container, (next) => setCurrent(next));
-        return <ConnectionView {...current()} />;
-      },
-      { container },
-    );
-  }
-  flush();
-}
-
-function createConnectionProps(overrides: Partial<ConnectionProps> = {}): ConnectionProps {
-  return {
+type ConnectionOptions = Partial<ConnectionProps> & {
+  authMode?: "token" | "password" | "trusted-proxy";
+  gatewayUrl?: string;
+};
+function mountConnection({ authMode, gatewayUrl, ...overrides }: ConnectionOptions = {}) {
+  const props: ConnectionProps = {
     phase: "offline",
-    hello: null,
+    hello: authMode ? ({ snapshot: { authMode } } as GatewayHelloOk) : null,
     liveGatewayUrl: "ws://127.0.0.1:18789",
     settings: {
-      gatewayUrl: "ws://127.0.0.1:18789",
+      gatewayUrl: gatewayUrl ?? "ws://127.0.0.1:18789",
       token: "tok",
       sessionKey: "main",
       lastActiveSessionKey: "main",
@@ -73,390 +64,282 @@ function createConnectionProps(overrides: Partial<ConnectionProps> = {}): Connec
     onDiscardSession: () => undefined,
     ...overrides,
   };
-}
-
-function accessRowTitles(container: HTMLElement): string[] {
-  const accessGroup = container.querySelectorAll(".settings-group")[0];
-  return [...(accessGroup?.querySelectorAll(".settings-row__title") ?? [])].map(
-    (node) => node.textContent?.trim() ?? "",
-  );
-}
-
-function expectStatByLabel(container: Element, text: string): HTMLElement {
-  const stat = Array.from(container.querySelectorAll<HTMLElement>(".config-host__stat")).find(
-    (candidate) =>
-      candidate
-        .querySelector(".config-host__stat-label")
-        ?.textContent?.replace(/\s+/g, " ")
-        .trim() === text,
-  );
-  if (!(stat instanceof HTMLElement)) {
-    throw new Error(`Expected system stat "${text}"`);
-  }
-  return stat;
-}
-
-describe("connection view rendering", () => {
-  it("hides Gateway URL and shared credentials for embedded ingress while preserving recovery", () => {
-    document.documentElement.dataset.openclawRemoteIngress = "true";
-    try {
-      const container = document.createElement("div");
-      mountConnection(createConnectionProps({ lastError: "Ingress unavailable" }), container);
-      expect(container.querySelector('[aria-label="Gateway URL"]')).toBeNull();
-      expect(container.querySelector('[aria-label="Gateway secret"]')).toBeNull();
-      expect(container.textContent).toContain("Ingress unavailable");
-      expect(container.querySelector(".connection-actions button")?.textContent?.trim()).toBe(
-        "Retry connection",
-      );
-    } finally {
-      delete document.documentElement.dataset.openclawRemoteIngress;
-    }
-  });
-
-  it("keeps edited controls and details mounted while diagnostics refresh", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const onConnectionChange = vi.fn();
-    const onSecretChange = vi.fn();
-    const onSessionKeyChange = vi.fn();
-    const onConnect = vi.fn();
-    const props = createConnectionProps({
-      phase: "connected",
-      dirty: true,
-      onConnectionChange,
-      onSecretChange,
-      onSessionKeyChange,
-      onConnect,
-    });
-    mountConnection(props, container);
-    const url = container.querySelector<HTMLInputElement>('input[aria-label="Gateway URL"]')!;
-    const secret = container.querySelector<HTMLInputElement>('input[aria-label="Gateway secret"]')!;
-    const session = container.querySelector<HTMLInputElement>(
-      'input[aria-label="Default session"]',
-    )!;
-    const details = container.querySelector("details")!;
-    details.open = true;
-    url.focus();
-    url.setSelectionRange(4, 7);
-
-    mountConnection(
-      {
-        ...props,
-        ping: { averageMs: 10, p50Ms: 8, p95Ms: 15, p99Ms: 19, count: 3 },
-        pingSamples: [
-          { at: 100, value: 8 },
-          { at: 200, value: 19 },
-        ],
-        statusHistory: [{ at: 200, status: { eventLoop: { cpuCoreRatio: 0.2 } } }],
-        showGatewaySecret: true,
+  if (update) {
+    update(props);
+  } else {
+    mountSolid(
+      () => {
+        const [current, setCurrent] = createSignal(props);
+        update = (next) => setCurrent(next);
+        return <ConnectionView {...current()} />;
       },
-      container,
+      { container },
     );
+  }
+  flush();
+  return props;
+}
 
-    expect(container.querySelector('input[aria-label="Gateway URL"]')).toBe(url);
-    expect(container.querySelector('input[aria-label="Gateway secret"]')).toBe(secret);
-    expect(document.activeElement).toBe(url);
-    expect([url.selectionStart, url.selectionEnd]).toEqual([4, 7]);
-    expect(container.querySelector("details")).toBe(details);
-    expect(details.open).toBe(true);
-    expect(secret.type).toBe("text");
-    expect(container.querySelector(".connection-ping__stats")?.textContent).toContain("19.0");
+function query(selector: string, root: ParentNode = container) {
+  return root.querySelector(selector);
+}
+function text(selector: string, root: ParentNode = container) {
+  return query(selector, root)?.textContent?.trim();
+}
+function texts(selector: string, root: ParentNode = container) {
+  return [...root.querySelectorAll(selector)].map((node) => node.textContent?.trim());
+}
+function attr(selector: string, name: string, root: ParentNode = container) {
+  return query(selector, root)?.getAttribute(name);
+}
+function input(label: string) {
+  return container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+}
 
-    url.value = "wss://next.example";
-    url.dispatchEvent(new Event("input", { bubbles: true }));
-    secret.value = "next-secret";
-    secret.dispatchEvent(new Event("input", { bubbles: true }));
-    session.value = "next-session";
-    session.dispatchEvent(new Event("input", { bubbles: true }));
-    container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary")!.click();
-    expect(onConnectionChange).toHaveBeenCalledWith({ gatewayUrl: "wss://next.example" });
-    expect(onSecretChange).toHaveBeenCalledWith("next-secret");
-    expect(onSessionKeyChange).toHaveBeenCalledWith("next-session");
-    expect(onConnect).toHaveBeenCalledOnce();
+function readStats() {
+  return [...container.querySelectorAll(".config-host__stat")].map((stat) => ({
+    label: text(".config-host__stat-label", stat)?.replace(/\s+/g, " "),
+    value: text(".config-host__stat-value", stat)?.replace(/\s+/g, " "),
+    detail: text(".config-host__stat-detail", stat),
+    title: stat.getAttribute("title"),
+    percent: attr('[role="meter"]', "aria-valuenow", stat),
+    usageLabel: attr('[role="meter"]', "aria-label", stat),
+    tone: query(".config-host__meter-fill", stat)?.classList[1],
+  }));
+}
+
+function diskInfo(path: string, totalBytes: number, availableBytes: number) {
+  return { path, totalBytes, availableBytes };
+}
+
+function createSystemInfo(overrides: Partial<SystemInfoResult> = {}): SystemInfoResult {
+  return {
+    machineName: "Gateway Mac",
+    hostname: "gateway.local",
+    platform: "darwin",
+    release: "25.5.0",
+    arch: "arm64",
+    osLabel: "macOS 26.5.0",
+    nodeVersion: "v24.1.0",
+    pid: 1234,
+    uptimeMs: 3_600_000,
+    cpuCount: 10,
+    loadAverage: [1.2, 1.1, 0.9],
+    memoryTotalBytes: 34_359_738_368,
+    memoryFreeBytes: 17_179_869_184,
+    ...overrides,
+  };
+}
+
+it("hides Gateway URL and shared credentials for embedded ingress while preserving recovery", () => {
+  document.documentElement.dataset.openclawRemoteIngress = "true";
+  try {
+    mountConnection({ lastError: "Ingress unavailable" });
+    expect(query('[aria-label="Gateway URL"]')).toBeNull();
+    expect(query('[aria-label="Gateway secret"]')).toBeNull();
+    expect(container.textContent).toContain("Ingress unavailable");
+    expect(text(".connection-actions button")).toBe("Retry connection");
+  } finally {
+    delete document.documentElement.dataset.openclawRemoteIngress;
+  }
+});
+
+it("keeps edited controls and details mounted while diagnostics refresh", () => {
+  document.body.append(container);
+  const props = mountConnection({
+    phase: "connected",
+    dirty: true,
+    onConnectionChange: vi.fn(),
+    onSecretChange: vi.fn(),
+    onSessionKeyChange: vi.fn(),
+    onConnect: vi.fn(),
   });
+  const url = input("Gateway URL")!;
+  const secret = input("Gateway secret")!;
+  const session = input("Default session")!;
+  const details = container.querySelector<HTMLDetailsElement>("details")!;
+  details.open = true;
+  url.focus();
+  url.setSelectionRange(4, 7);
+  mountConnection({
+    ...props,
+    ping: { averageMs: 10, p50Ms: 8, p95Ms: 15, p99Ms: 19, count: 3 },
+    pingSamples: [8, 19].map((value, index) => ({ at: (index + 1) * 100, value })),
+    statusHistory: [{ at: 200, status: { eventLoop: { cpuCoreRatio: 0.2 } } }],
+    showGatewaySecret: true,
+  });
+  expect(input("Gateway URL")).toBe(url);
+  expect(input("Gateway secret")).toBe(secret);
+  expect(document.activeElement).toBe(url);
+  expect([url.selectionStart, url.selectionEnd]).toEqual([4, 7]);
+  expect(query("details")).toBe(details);
+  expect(details.open).toBe(true);
+  expect(secret.type).toBe("text");
+  expect(text(".connection-ping__stats")).toContain("19.0");
+  url.value = "wss://next.example";
+  url.dispatchEvent(new Event("input", { bubbles: true }));
+  secret.value = "next-secret";
+  secret.dispatchEvent(new Event("input", { bubbles: true }));
+  session.value = "next-session";
+  session.dispatchEvent(new Event("input", { bubbles: true }));
+  container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary")!.click();
+  expect(props.onConnectionChange).toHaveBeenCalledWith({ gatewayUrl: "wss://next.example" });
+  expect(props.onSecretChange).toHaveBeenCalledWith("next-secret");
+  expect(props.onSessionKeyChange).toHaveBeenCalledWith("next-session");
+  expect(props.onConnect).toHaveBeenCalledOnce();
+});
 
-  it.each(["stopped", "reconnecting"] as const)(
-    "offers saved browser sign-in recovery at the bottom while %s",
-    (phase) => {
-      const container = document.createElement("div");
-      const props = createConnectionProps({ phase, canForgetDevice: true });
-      mountConnection(props, container);
-      const section = [...container.querySelectorAll(".settings-section")].at(-1);
-      expect(section?.querySelector("h2")?.textContent?.trim()).toBe("Browser");
-      expect(section?.querySelector(".settings-row__title")?.textContent?.trim()).toBe(
-        "Saved sign-in for this gateway",
-      );
-      expect(section?.querySelector(".settings-row__desc")).toBeNull();
-      const button = section?.querySelector<HTMLButtonElement>("button");
-      expect(button?.textContent?.trim()).toBe("Forget this browser");
-      expect(button?.className).toBe("btn");
-      expect(button?.disabled).toBe(false);
-      mountConnection({ ...props, canForgetDevice: false }, container);
-      expect(container.textContent).not.toContain("Browser");
-    },
+it.each(["stopped", "reconnecting"] as const)("offers browser recovery while %s", (phase) => {
+  const props = mountConnection({ phase, canForgetDevice: true });
+  const section = [...container.querySelectorAll(".settings-section")].at(-1);
+  expect(section).toBeDefined();
+  expect(text("h2", section)).toBe("Browser");
+  expect(text(".settings-row__title", section)).toBe("Saved sign-in for this gateway");
+  expect(section?.querySelector(".settings-row__desc")).toBeNull();
+  const button = section?.querySelector<HTMLButtonElement>("button");
+  expect(button?.textContent?.trim()).toBe("Forget this browser");
+  expect(button).toMatchObject({ className: "btn", disabled: false });
+  mountConnection({ ...props, canForgetDevice: false });
+  expect(container.textContent).not.toContain("Browser");
+});
+
+it("disables connection actions while the Gateway starts", () => {
+  mountConnection({ phase: "starting", lastError: null });
+  expect(text(".connection-actions .btn.primary")).toBe("Connecting…");
+  expect(query(".connection-actions .btn.primary")).toMatchObject({ disabled: true });
+  expect(query("details button")).toMatchObject({ disabled: true });
+});
+
+it("shows setup-code guidance beneath the secret before connecting", () => {
+  const secret = btoa(
+    JSON.stringify({ url: "wss://gateway.example", bootstrapToken: "synthetic-bootstrap-token" }),
+  ).replace(/=+$/g, "");
+  mountConnection({ secret });
+  const control = input("Gateway secret")?.closest(".settings-row__control");
+  expect(control?.querySelector('[role="status"]')?.textContent).toContain(
+    "device setup code for the OpenClaw mobile app",
   );
+  expect(control?.textContent).toContain("openclaw gateway auth-token --show");
+  mountConnection();
+  expect(control?.querySelector('[role="status"]')).toBeNull();
+});
 
-  it("disables connection actions while the Gateway starts", () => {
-    const container = document.createElement("div");
-    mountConnection(createConnectionProps({ phase: "starting", lastError: null }), container);
-    const action = container.querySelector<HTMLButtonElement>(".connection-actions .btn.primary");
-    expect(action?.textContent?.trim()).toBe("Connecting…");
-    expect(action?.disabled).toBe(true);
-    expect(container.querySelector<HTMLButtonElement>("details button")?.disabled).toBe(true);
+it.each(["token", "password"] as const)("labels and reveals a %s secret", (authMode) => {
+  const props = mountConnection({ authMode });
+  expect(input("Gateway secret")).toMatchObject({
+    type: "password",
+    value: "tok",
+    placeholder: "Paste the token or type the password",
   });
+  expect(container.textContent).toContain(`This Gateway expects its ${authMode}.`);
+  expect(query('[role="radiogroup"]')).toBeNull();
+  expect(query('button[aria-label="Toggle secret visibility"]')).not.toBeNull();
+  mountConnection({ ...props, showGatewaySecret: true });
+  expect(input("Gateway secret")).toMatchObject({ type: "text", value: "tok" });
+});
 
-  it("shows a secret for a new target even when the live Gateway uses trusted proxy auth", () => {
-    const props = createConnectionProps({
-      phase: "connected",
-      hello: { snapshot: { authMode: "trusted-proxy" } } as unknown as GatewayHelloOk,
-    });
-    props.settings.gatewayUrl = "wss://other.example";
-    const container = document.createElement("div");
-    mountConnection(props, container);
-    expect(container.querySelector('input[aria-label="Gateway secret"]')).not.toBeNull();
-    expect(container.textContent).not.toContain("Authenticated via trusted proxy.");
-  });
-
-  it("shows setup-code guidance beneath the secret before connecting", () => {
-    const container = document.createElement("div");
-    const secret = btoa(
-      JSON.stringify({ url: "wss://gateway.example", bootstrapToken: "synthetic-bootstrap-token" }),
-    ).replace(/=+$/g, "");
-    mountConnection(createConnectionProps({ secret }), container);
-    const control = container
-      .querySelector('input[aria-label="Gateway secret"]')
-      ?.closest(".settings-row__control");
-    expect(control?.querySelector('[role="status"]')?.textContent).toContain(
-      "device setup code for the OpenClaw mobile app",
-    );
-    expect(control?.textContent).toContain("openclaw gateway auth-token --show");
-    mountConnection(createConnectionProps(), container);
-    expect(control?.querySelector('[role="status"]')).toBeNull();
-  });
-
-  it.each(["token", "password"] as const)(
-    "keeps the secret labeled when revealed in %s mode",
-    (authMode) => {
-      const container = document.createElement("div");
-      const props = createConnectionProps({
-        hello: { snapshot: { authMode } } as unknown as GatewayHelloOk,
-      });
-      const input = () =>
-        container.querySelector<HTMLInputElement>('input[aria-label="Gateway secret"]');
-
-      mountConnection(props, container);
-      expect(input()?.type).toBe("password");
-      expect(input()?.value).toBe("tok");
-      expect(input()?.placeholder).toBe("Paste the token or type the password");
-      expect(container.textContent).toContain(`This Gateway expects its ${authMode}.`);
-      expect(container.querySelector('[role="radiogroup"]')).toBeNull();
-      expect(
-        container.querySelector('button[aria-label="Toggle secret visibility"]'),
-      ).not.toBeNull();
-
-      mountConnection({ ...props, showGatewaySecret: true }, container);
-      expect(input()?.type).toBe("text");
-      expect(input()?.value).toBe("tok");
-    },
-  );
-
-  it("hides token and password fields for trusted-proxy auth", async () => {
-    const container = document.createElement("div");
+it.each([undefined, "wss://other.example"])(
+  "scopes trusted-proxy credentials to the live target (draft: %s)",
+  (gatewayUrl) => {
     const hello = {
       snapshot: { authMode: "trusted-proxy", uptimeMs: 90_000 },
       policy: { tickIntervalMs: 30_000 },
     } as unknown as GatewayHelloOk;
-    mountConnection(createConnectionProps({ phase: "connected", hello }), container);
-    await Promise.resolve();
-
-    expect(accessRowTitles(container)).toEqual(["Gateway URL", "Gateway secret"]);
-    expect(container.querySelector('input[aria-label="Gateway secret"]')).toBeNull();
-    expect(container.querySelector('[role="radiogroup"]')).toBeNull();
-    expect(container.querySelector(".settings-row .settings-status")?.textContent?.trim()).toBe(
-      "Trusted proxy",
-    );
-    expect(container.textContent).toContain("Authenticated via trusted proxy.");
-    expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
-      "Connected to 127.0.0.1:18789",
-    );
-    expect(container.querySelector(".settings-section__actions")?.textContent?.trim()).toBe(
-      "Connected",
-    );
-    expect(container.textContent).not.toContain("Uptime");
-  });
-
-  it("renders Gateway host identity and resources after Connection", async () => {
-    const container = document.createElement("div");
-    const systemInfo = {
-      machineName: "Gateway Mac",
-      hostname: "gateway.local",
-      platform: "darwin",
-      release: "25.5.0",
-      arch: "arm64",
-      osLabel: "macOS 26.5.0",
-      lanAddress: "192.168.1.20",
-      port: 18789,
-      nodeVersion: "v24.1.0",
-      pid: 1234,
-      uptimeMs: 3_600_000,
-      cpuCount: 10,
-      cpuModel: "Apple M4",
-      loadAverage: [1.2, 1.1, 0.9],
-      memoryTotalBytes: 34_359_738_368,
-      memoryFreeBytes: 17_179_869_184,
-      diskTotalBytes: 994_662_584_320,
-      diskAvailableBytes: 497_331_292_160,
-      diskPath: "/Users/operator/.openclaw",
-      disks: [
-        {
-          path: "/",
-          totalBytes: 994_662_584_320,
-          availableBytes: 497_331_292_160,
-        },
-        {
-          path: "/Volumes/Archive",
-          totalBytes: 2_199_023_255_552,
-          availableBytes: 549_755_813_888,
-        },
-      ],
-    } satisfies SystemInfoResult;
-    mountConnection(createConnectionProps({ systemInfo }), container);
-    await Promise.resolve();
-
-    const sections = [...container.querySelectorAll(".settings-section__heading")].map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(sections).toEqual(["Connection", "Gateway activity", "Session", "Gateway Host"]);
-    expect(container.querySelector("#settings-connection-host")).not.toBeNull();
-    const name = container.querySelector(".config-host__name");
-    expect(name?.textContent?.trim()).toBe("Gateway Mac");
-    expect(name?.getAttribute("title")).toBe("gateway.local");
-    expect(container.querySelector(".config-host__address")?.textContent?.trim()).toBe(
-      "192.168.1.20:18789",
-    );
-    const metas = Array.from(container.querySelectorAll(".config-host__meta")).map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(metas).toEqual(["macOS 26.5.0 · arm64", "Node v24.1.0 · PID 1234"]);
-    expect(
-      container
-        .querySelector("#settings-connection-host .settings-section__actions .settings-status")
-        ?.textContent?.trim(),
-    ).toBe("Up 1h");
-
-    const cpu = expectStatByLabel(container, "CPU");
-    expect(
-      cpu.querySelector(".config-host__stat-value")?.textContent?.replace(/\s+/g, " ").trim(),
-    ).toBe("1.2 load");
-    expect(cpu.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe("10 cores");
-    expect(cpu.getAttribute("title")).toBe("Apple M4 · Load average: 1.2 · 1.1 · 0.9");
-    expect(cpu.querySelector(".config-host__meter")?.getAttribute("aria-valuenow")).toBe("12");
-
-    const memory = expectStatByLabel(container, "Memory");
-    expect(
-      memory.querySelector(".config-host__stat-value")?.textContent?.replace(/\s+/g, " ").trim(),
-    ).toBe("50% used");
-    expect(memory.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
-      "16 GB free of 32 GB",
-    );
-
-    const disk = expectStatByLabel(container, "Disk /");
-    expect(
-      disk.querySelector(".config-host__stat-value")?.textContent?.replace(/\s+/g, " ").trim(),
-    ).toBe("50% used");
-    expect(disk.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
-      "463 GB free of 926 GB",
-    );
-    expect(disk.hasAttribute("title")).toBe(false);
-    expect(disk.querySelector('[role="meter"]')?.getAttribute("aria-label")).toBe("Disk / usage");
-    const archive = expectStatByLabel(container, "Disk /Volumes/Archive");
-    expect(archive.querySelector(".config-host__stat-detail")?.textContent?.trim()).toBe(
-      "512 GB free of 2.0 TB",
-    );
-    expect(archive.querySelector('[role="meter"]')?.getAttribute("aria-valuenow")).toBe("75");
-    expect(archive.querySelector('[role="meter"]')?.getAttribute("aria-label")).toBe(
-      "Disk /Volumes/Archive usage",
-    );
-    expect(container.querySelectorAll(".config-host__stat")).toHaveLength(4);
-    expect(container.textContent).not.toContain("Uptime");
-
-    for (const disks of [systemInfo.disks.slice(0, 1), [], undefined]) {
-      mountConnection(createConnectionProps({ systemInfo: { ...systemInfo, disks } }), container);
-      expect(container.querySelectorAll(".config-host__stat")).toHaveLength(
-        2 + (disks?.length ?? 0),
-      );
-      expect(container.textContent).not.toContain("/Volumes/Archive");
-      expect(container.textContent).not.toContain("/Users/operator/.openclaw");
+    mountConnection({ phase: "connected", hello, gatewayUrl });
+    if (gatewayUrl) {
+      expect(input("Gateway secret")).not.toBeNull();
+      expect(container.textContent).not.toContain("Authenticated via trusted proxy.");
+    } else {
+      expect(texts(".settings-row__title", query(".settings-group")!)).toEqual([
+        "Gateway URL",
+        "Gateway secret",
+      ]);
+      expect(input("Gateway secret")).toBeNull();
+      expect(query('[role="radiogroup"]')).toBeNull();
+      expect(text(".settings-row .settings-status")).toBe("Trusted proxy");
+      expect(container.textContent).toContain("Authenticated via trusted proxy.");
+      expect(text(".settings-section__desc")).toBe("Connected to 127.0.0.1:18789");
+      expect(text(".settings-section__actions")).toBe("Connected");
+      expect(container.textContent).not.toContain("Uptime");
     }
+  },
+);
+
+it("renders Gateway host identity and resources after Connection", () => {
+  const systemInfo = createSystemInfo({
+    lanAddress: "192.168.1.20",
+    port: 18789,
+    cpuModel: "Apple M4",
+    diskTotalBytes: 994_662_584_320,
+    diskAvailableBytes: 497_331_292_160,
+    diskPath: "/Users/operator/.openclaw",
+    disks: [
+      diskInfo("/", 994_662_584_320, 497_331_292_160),
+      diskInfo("/Volumes/Archive", 2_199_023_255_552, 549_755_813_888),
+    ],
   });
-
-  it("escalates host meter tones and hides the section when the RPC is unavailable", async () => {
-    const container = document.createElement("div");
-    mountConnection(
-      createConnectionProps({
-        systemInfo: {
-          machineName: "Gateway Mac",
-          hostname: "gateway.local",
-          platform: "darwin",
-          release: "25.5.0",
-          arch: "arm64",
-          osLabel: "macOS 26.5.0",
-          nodeVersion: "v24.1.0",
-          pid: 1234,
-          uptimeMs: 60_000,
-          cpuCount: 10,
-          loadAverage: [9.8, 9.1, 8.4],
-          memoryTotalBytes: 34_359_738_368,
-          memoryFreeBytes: 2_147_483_648,
-          disks: [
-            {
-              path: "/",
-              totalBytes: 994_662_584_320,
-              availableBytes: 198_932_516_864,
-            },
-          ],
-        },
-      }),
-      container,
-    );
-    await Promise.resolve();
-
-    const tone = (label: string) =>
-      expectStatByLabel(container, label).querySelector(".config-host__meter-fill")?.classList[1];
-    expect(tone("CPU")).toBe("config-host__meter-fill--critical");
-    expect(tone("Memory")).toBe("config-host__meter-fill--critical");
-    expect(tone("Disk /")).toBe("config-host__meter-fill--warn");
-
-    mountConnection(
-      createConnectionProps({ systemInfo: null, systemInfoUnavailable: true }),
-      container,
-    );
-    await Promise.resolve();
-    expect(container.querySelector("#settings-connection-host")).toBeNull();
+  mountConnection({ systemInfo });
+  expect(texts(".settings-section__heading")).toEqual([
+    "Connection",
+    "Gateway activity",
+    "Session",
+    "Gateway Host",
+  ]);
+  expect(query("#settings-connection-host")).not.toBeNull();
+  expect(text(".config-host__name")).toBe("Gateway Mac");
+  expect(attr(".config-host__name", "title")).toBe("gateway.local");
+  expect(text(".config-host__address")).toBe("192.168.1.20:18789");
+  expect(texts(".config-host__meta")).toEqual(["macOS 26.5.0 · arm64", "Node v24.1.0 · PID 1234"]);
+  const host = query("#settings-connection-host")!;
+  expect(text(".settings-section__actions .settings-status", host)).toBe("Up 1h");
+  const stats = readStats();
+  expect(stats.map(({ label, value, detail }) => [label, value, detail])).toEqual([
+    ["CPU", "1.2 load", "10 cores"],
+    ["Memory", "50% used", "16 GB free of 32 GB"],
+    ["Disk /", "50% used", "463 GB free of 926 GB"],
+    ["Disk /Volumes/Archive", "75% used", "512 GB free of 2.0 TB"],
+  ]);
+  expect(stats[0]).toMatchObject({
+    percent: "12",
+    title: "Apple M4 · Load average: 1.2 · 1.1 · 0.9",
   });
+  expect(stats[2]).toMatchObject({ title: null, usageLabel: "Disk / usage" });
+  expect(stats[3]).toMatchObject({ percent: "75", usageLabel: "Disk /Volumes/Archive usage" });
+  expect(container.textContent).not.toContain("Uptime");
+  for (const disks of [systemInfo.disks!.slice(0, 1), [], undefined]) {
+    mountConnection({ systemInfo: { ...systemInfo, disks } });
+    expect(container.querySelectorAll(".config-host__stat")).toHaveLength(2 + (disks?.length ?? 0));
+    expect(container.textContent).not.toContain("/Volumes/Archive");
+    expect(container.textContent).not.toContain("/Users/operator/.openclaw");
+  }
+});
 
-  it("surfaces the last connection error only while disconnected", async () => {
-    const container = document.createElement("div");
-    mountConnection(
-      createConnectionProps({ lastError: "connect failed: unauthorized" }),
-      container,
-    );
-    await Promise.resolve();
-
-    const errorStatus = container.querySelector(".settings-status--danger");
-    expect(errorStatus?.textContent).toContain("Last error");
-    expect(errorStatus?.closest(".settings-row")?.textContent).toContain(
-      "connect failed: unauthorized",
-    );
-    expect(
-      errorStatus?.closest(".settings-section")?.querySelector("h2")?.textContent?.trim(),
-    ).toBe("Connection");
-
-    mountConnection(
-      createConnectionProps({ phase: "connected", lastError: "connect failed: unauthorized" }),
-      container,
-    );
-    expect(container.querySelector(".settings-status--danger")).toBeNull();
-    expect(container.textContent).not.toContain("connect failed: unauthorized");
+it("escalates host meter tones and hides the section when the RPC is unavailable", () => {
+  mountConnection({
+    systemInfo: createSystemInfo({
+      uptimeMs: 60_000,
+      loadAverage: [9.8, 9.1, 8.4],
+      memoryFreeBytes: 2_147_483_648,
+      disks: [diskInfo("/", 994_662_584_320, 198_932_516_864)],
+    }),
   });
+  expect(readStats()).toMatchObject([
+    { label: "CPU", tone: "config-host__meter-fill--critical" },
+    { label: "Memory", tone: "config-host__meter-fill--critical" },
+    { label: "Disk /", tone: "config-host__meter-fill--warn" },
+  ]);
+  mountConnection({ systemInfo: null, systemInfoUnavailable: true });
+  expect(query("#settings-connection-host")).toBeNull();
+});
+
+it("surfaces the last connection error only while disconnected", () => {
+  const lastError = "connect failed: unauthorized";
+  mountConnection({ lastError });
+  const error = query(".settings-status--danger");
+  expect(error?.textContent).toContain("Last error");
+  expect(error?.closest(".settings-row")?.textContent).toContain(lastError);
+  expect(text("h2", error!.closest(".settings-section")!)).toBe("Connection");
+  mountConnection({ phase: "connected", lastError });
+  expect(query(".settings-status--danger")).toBeNull();
+  expect(container.textContent).not.toContain(lastError);
 });

@@ -6,6 +6,7 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
   createActiveRun,
@@ -16,7 +17,6 @@ import {
   loadGatewaySessionEntryReadOnlyMock,
   loadGatewaySessionRowMock,
   ownerGoal,
-  resolveEmbeddedAgentSessionProgressStateMock,
   runtimeConfigState,
   sessionRow,
   subscribePluginSessionsChanged,
@@ -27,7 +27,6 @@ import { createSessionRowProjectionFixture } from "./session-row-projection.test
 describe("createLifecycleEventBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveEmbeddedAgentSessionProgressStateMock.mockReturnValue(undefined);
     loadGatewaySessionRowMock.mockReturnValue(sessionRow);
     runtimeConfigState.value = {};
     sessionRow.key = "agent:main:main";
@@ -46,7 +45,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-      chatAbortControllers: new Map(),
     });
     await handler({
       sessionKey: sessionRow.key,
@@ -121,7 +119,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["reader"]) },
-      chatAbortControllers: new Map(),
       getSessionRowProjection: () => (scenario.projection ? projection : undefined),
     });
     const pending = handler({
@@ -199,7 +196,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-      chatAbortControllers: new Map(),
     });
     await handler({ sessionKey: sessionRow.key, reason: "delete" });
     expect(broadcastToConnIds).toHaveBeenCalledWith(
@@ -222,7 +218,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
       const handler = createLifecycleEventBroadcastHandler({
         broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => new Set(["observer"]) },
-        chatAbortControllers: new Map(),
       });
 
       await handler({ sessionKey: sessionRow.key, agentId: "main", reason });
@@ -240,7 +235,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
-      chatAbortControllers: new Map(),
     });
 
     await handler({
@@ -276,7 +270,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set() },
-      chatAbortControllers: new Map(),
     });
 
     try {
@@ -305,16 +298,16 @@ describe("createLifecycleEventBroadcastHandler", () => {
     sessionRow.key = "global";
     const goal = { ...ownerGoal };
     loadGatewaySessionRowMock.mockReturnValue({ ...sessionRow, goal });
-    const activeRun = {
-      ...createActiveRun(true),
+    const activeRun = createActiveRun(true, true, {
       agentId: "ops",
       sessionKey: "global",
-    };
+      sessionId: sessionRow.sessionId,
+    });
     const broadcastToConnIds = vi.fn();
+    rpcSourceTesting.reset([["run-before-finalize", activeRun]]);
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
-      chatAbortControllers: new Map([["run-before-finalize", activeRun]]),
     });
 
     await handler({ sessionKey: "global", ...(agentId ? { agentId } : {}), reason: "updated" });
@@ -376,7 +369,6 @@ describe("createLifecycleEventBroadcastHandler", () => {
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["conn-events"]) },
-      chatAbortControllers: new Map(),
     });
 
     await handler({ sessionKey: "global", reason: "patch", catalogChanged: true });

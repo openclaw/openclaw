@@ -1,4 +1,3 @@
-// Commander registration for channel discovery, setup, status, auth, and diagnostics commands.
 import { Option, type Command } from "commander";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { ChannelSetupFieldMetadata } from "../channels/plugins/setup-contract.js";
@@ -388,7 +387,7 @@ export async function registerChannelsCli(
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsLogsCommand } = await import("../commands/channels.js");
-        await channelsLogsCommand(opts, defaultRuntime);
+        await channelsLogsCommand(opts);
       });
     });
 
@@ -408,10 +407,10 @@ export async function registerChannelsCli(
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsDeadLettersListCommand } =
           await import("../commands/channels/dead-letters.js");
-        await channelsDeadLettersListCommand(
-          { ...opts, account: resolveStringOption(command, "account") },
-          defaultRuntime,
-        );
+        await channelsDeadLettersListCommand({
+          ...opts,
+          account: resolveStringOption(command, "account"),
+        });
       });
     });
 
@@ -426,11 +425,10 @@ export async function registerChannelsCli(
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { channelsDeadLettersResubmitCommand } =
           await import("../commands/channels/dead-letters.js");
-        await channelsDeadLettersResubmitCommand(
-          eventId,
-          { ...opts, account: resolveStringOption(command, "account") },
-          defaultRuntime,
-        );
+        await channelsDeadLettersResubmitCommand(eventId, {
+          ...opts,
+          account: resolveStringOption(command, "account"),
+        });
       });
     });
 

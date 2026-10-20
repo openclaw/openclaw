@@ -11,8 +11,6 @@ import {
   type GoogleProviderOptions,
 } from "./google-shared.js";
 
-const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com";
-
 let packageVersionMemo: string | undefined;
 
 function resolvePackageVersion(): string {
@@ -23,16 +21,15 @@ function resolvePackageVersion(): string {
   return packageVersionMemo;
 }
 
-export function resolveGoogleApiClientHeaders(params?: {
-  api?: string;
-  baseUrl?: string;
-  model?: Model;
+export function resolveGoogleApiClientHeaders(params: {
+  baseUrl: string;
+  model: Model;
 }): Record<string, string> {
   const hostHeaders = getAiTransportHost().resolveProviderRequestHeaders({
     provider: "google",
-    api: params?.api ?? params?.model?.api ?? "google-generative-ai",
-    baseUrl: params?.baseUrl ?? DEFAULT_GOOGLE_API_BASE_URL,
-    model: params?.model,
+    api: "google-generative-ai",
+    baseUrl: params.baseUrl,
+    model: params.model,
   });
   if (hostHeaders?.["x-goog-api-client"]) {
     return hostHeaders;

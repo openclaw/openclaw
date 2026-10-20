@@ -13,7 +13,7 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AuthStorage } from "./auth-storage.js";
-import type { MessageEndEvent, ToolResultEvent } from "./extensions/types.js";
+import type { ExtensionFactory, MessageEndEvent, ToolResultEvent } from "./extensions/types.js";
 import { ModelRegistry } from "./model-registry.js";
 import { createAgentSession } from "./sdk.js";
 import { withSessionState } from "./session-manager-fixtures.test-support.js";
@@ -60,10 +60,9 @@ it.each([false, true])(
         arguments: {},
       }));
       const expected = allOutcomes.map(({ name, isError }) => ({ toolName: name, isError }));
-      const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>();
-      if (withRecovery) {
-        handlers.set("tool_result", [
-          async (event) => {
+      const handlers: ExtensionFactory = (api) => {
+        if (withRecovery) {
+          api.on("tool_result", async (event) => {
             const { toolName } = event as ToolResultEvent;
             if (toolName === "recovered_tool") {
               return { isError: false };
@@ -75,10 +74,8 @@ it.each([false, true])(
               };
             }
             return undefined;
-          },
-        ]);
-        handlers.set("message_end", [
-          async (event) => {
+          });
+          api.on("message_end", async (event) => {
             const { message } = event as MessageEndEvent;
             if (message.role !== "toolResult" || message.toolName !== "successful_tool") {
               return undefined;
@@ -89,9 +86,9 @@ it.each([false, true])(
                 : block,
             );
             return { message: { ...message, content } };
-          },
-        ]);
-      }
+          });
+        }
+      };
       const { session } = await createAgentSession({
         systemPrompt: "Test session prompt",
         sessionManager: await SessionManager.openAsync(target, state.agentDir("main")),
@@ -125,7 +122,7 @@ it.each([false, true])(
               : tool;
           }),
         ),
-        resourceLoader: createResourceLoader(handlers),
+        resourceLoader: await createResourceLoader(handlers),
         settingsManager: SettingsManager.inMemory({ retry: { enabled: false } }),
         modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
       });

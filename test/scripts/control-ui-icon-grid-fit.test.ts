@@ -7,7 +7,10 @@ import {
   collectIconFixtures,
   type IconFixture,
 } from "../../scripts/lib/control-ui-icon-fixtures.mts";
-import { scanIconGridFit } from "../../scripts/lib/control-ui-icon-grid-fit.mts";
+import {
+  createIconStyleContext,
+  scanIconGridFit,
+} from "../../scripts/lib/control-ui-icon-grid-fit.mts";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -137,6 +140,22 @@ describe("fixed icon-grid fit", () => {
         "ui/src/state.ts",
       ),
     );
+  });
+
+  it("expands parsed nesting tokens without changing literal or escaped ampersands", () => {
+    const { root, styles } = createAuditFixture({
+      "other.css": String.raw`
+        .toolbar > .icon {
+          :is([data-label="é&"] &, &.active) { padding: 0; }
+          .literal\& & + & { padding: 0; }
+        }
+      `,
+    });
+    const context = createIconStyleContext(root)(path.join(styles, "control.css"));
+    expect(context.otherRules.flatMap((rule) => rule.selectors)).toEqual([
+      ':is([data-label="é&"] .toolbar > .icon, .toolbar > .icon.active)',
+      String.raw`.literal\& .toolbar > .icon + .toolbar > .icon`,
+    ]);
   });
 
   it("defers cross-sheet ancestor, tag, ID, attribute, and SVG overrides", () => {

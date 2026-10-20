@@ -12,9 +12,13 @@ import { memorySessionActorOwners } from "../config/sessions/session-actor-memor
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginHookSessionContext } from "../plugins/session-end-transcript.js";
 import { readAttachedSessionEndTranscriptSourceForTest } from "../plugins/session-end-transcript.test-support.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
-import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
+import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
   sessionHookMocks,
@@ -438,22 +442,37 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
 });
 
 test("sessions.create waits for the parent run lifecycle before firing hooks", async () => {
-  await createSessionStoreDir();
+  const { storePath } = await createSessionStoreDir();
   await writeStoredSession("sess-active-parent");
-  embeddedRunMock.activeIds.add("sess-active-parent");
+  const operation = createReplyOperation({
+    sessionKey: "agent:main:main",
+    sessionId: "sess-active-parent",
+    agentId: "main",
+    resetTriggered: false,
+    target: captureSessionTarget({
+      storeScope: storePath,
+      sessionKey: "agent:main:main",
+      incarnation: "sess-active-parent",
+      agentId: "main",
+    }),
+  });
+  operation.setPhase("running");
+  try {
+    const result = await createFromMainSession({ key: "tui-next", emitCommandHooks: true });
 
-  const result = await createFromMainSession({ key: "tui-next", emitCommandHooks: true });
-
-  expect(result.ok).toBe(false);
-  expect(result.error).toMatchObject({ code: "UNAVAILABLE" });
-  expect(result.error?.message).toMatch(/parent session.*still active/i);
-  expectNoCreationHooks();
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ code: "UNAVAILABLE" });
+    expect(result.error?.message).toMatch(/parent session.*still active/i);
+    expectNoCreationHooks();
+  } finally {
+    operation.complete();
+  }
 });
 
 test("sessions.create waits for the parent work admission to release", async () => {
   const { storePath } = await createSessionStoreDir();
   await writeStoredSession("sess-finishing-parent");
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     scope: storePath,
     identities: ["agent:main:main", "sess-finishing-parent"],
     assertAllowed: () => {},
@@ -476,7 +495,7 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
   const hookEntered = createDeferred();
   const releaseHook = createDeferred();
   const admissionController = new AbortController();
-  let admission: ReturnType<typeof beginSessionWorkAdmission> | undefined;
+  let admission: ReturnType<typeof beginSessionEffect> | undefined;
   sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
     hookEntered.resolve();
     await releaseHook.promise;
@@ -509,7 +528,7 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
     expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
 
     let admissionStarted = false;
-    admission = beginSessionWorkAdmission({
+    admission = beginSessionEffect({
       scope: storePath,
       identities: ["agent:main:main", "sess-parent-fenced"],
       signal: admissionController.signal,
@@ -537,8 +556,6 @@ test("sessions.create with emitCommandHooks=true resets parent in place when ses
     await writeStoredSession("sess-parent-dms", {
       content: "hello before /new",
     });
-    embeddedRunMock.activeIds.add("sess-parent-dms");
-
     const result = await createFromMainSession({ emitCommandHooks: true });
     expect(result.ok).toBe(true);
     // Reset-in-place: response key matches the parent main key, NOT a dashboard child.

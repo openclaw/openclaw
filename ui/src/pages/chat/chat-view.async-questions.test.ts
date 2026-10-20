@@ -15,7 +15,7 @@ import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import { createChatViewFrame } from "./chat-view-frame.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import {
@@ -185,11 +185,11 @@ it("reads confirmed discard from the outbox before the next queue frame arrives"
     }),
     getQueue: () => queue,
   };
-  const before = createChatViewFrame(props);
+  const before = createChatViewFrame(props, () => undefined);
   expect(before.asyncQuestions.pending).toEqual([]);
   queue = [];
   before.asyncQuestions.discard(row);
-  const after = createChatViewFrame(props);
+  const after = createChatViewFrame(props, () => undefined);
   expect(after.asyncQuestions.pending.map((question) => question.itemId)).toEqual(["audience"]);
   expect(after.asyncQuestions.delivery.size).toBe(0);
   expect(props.onAsyncQuestionSubmit).not.toHaveBeenCalled();

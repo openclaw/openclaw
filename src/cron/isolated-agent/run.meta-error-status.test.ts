@@ -325,7 +325,7 @@ describe("delivered report outcome", () => {
       },
     });
 
-    const cfg = {};
+    const cfg = { session: { store: "/tmp/store.json" } };
     setRuntimeConfigSnapshot(cfg);
     const result = await runCronIsolatedAgentTurn({
       deliveryAttemptFence: null,

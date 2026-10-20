@@ -536,7 +536,7 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("keeps tool status while yielding commentary and narration to the durable verbose owner", async () => {
+  it("keeps quiet progress empty while yielding commentary and narration to the durable verbose owner", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
@@ -560,7 +560,7 @@ describe("processDiscordMessage draft streaming progress", () => {
 
     await runProgressScenario({ toolProgress: false, label: false, commentary: true });
 
-    expect(draftStream.update.mock.calls.map((call) => call[0])).toEqual(["Exec: running"]);
+    expect(draftStream.update).not.toHaveBeenCalled();
   });
 
   it("re-arms progress collapse for a queued assistant turn", async () => {

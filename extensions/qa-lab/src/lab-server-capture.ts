@@ -7,9 +7,10 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import {
+  asNullableObjectRecord,
   normalizeOptionalString,
-  readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseQaJson } from "./json.js";
 
 export function createQaCaptureLifecycle() {
   const captureEnv = {
@@ -75,15 +76,7 @@ export function isCaptureQueryPreset(value: string): value is CaptureQueryPreset
 }
 
 function parseCaptureMeta(metaJson: unknown): Record<string, unknown> | null {
-  if (typeof metaJson !== "string" || metaJson.trim().length === 0) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(metaJson) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
+  return typeof metaJson === "string" ? asNullableObjectRecord(safeParseQaJson(metaJson)) : null;
 }
 
 export function mapCaptureEventForQa(row: Record<string, unknown>) {
@@ -91,10 +84,10 @@ export function mapCaptureEventForQa(row: Record<string, unknown>) {
   return {
     ...row,
     payloadPreview: typeof row.dataText === "string" ? row.dataText : undefined,
-    provider: normalizeOptionalString(readStringField(meta, "provider")),
-    api: normalizeOptionalString(readStringField(meta, "api")),
-    model: normalizeOptionalString(readStringField(meta, "model")),
-    captureOrigin: normalizeOptionalString(readStringField(meta, "captureOrigin")),
+    provider: normalizeOptionalString(meta?.provider),
+    api: normalizeOptionalString(meta?.api),
+    model: normalizeOptionalString(meta?.model),
+    captureOrigin: normalizeOptionalString(meta?.captureOrigin),
   };
 }
 

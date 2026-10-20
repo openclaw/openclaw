@@ -511,7 +511,7 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
   await applySessionEntryOperation(
     toSessionAccessScope(params),
     { kind: "public-fields", patch: publicEntry },
-    { fallbackEntry: publicEntry, replaceEntry: true },
+    { result: "none", fallbackEntry: publicEntry, replaceEntry: true },
   );
 }
 

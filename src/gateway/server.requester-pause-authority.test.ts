@@ -9,9 +9,9 @@ import { subagentRuns as runs } from "../agents/subagents/registry/subagent-regi
 import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import {
+  captureRequesterContinuationCaller,
   revokeRequesterCronAuthority,
   revokeRequesterCronAuthorityBatch,
-  withRequesterCronAuthority,
 } from "../agents/subagents/requester-cron-authority.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -232,29 +232,27 @@ it.for([
     });
     const dispatch = (runId: string, target: string, message: string) =>
       runs.runWithCompletionBatchAuthority([currentChild()], () =>
-        withRequesterCronAuthority(
-          {
-            requesterSessionKey: parent,
-            requesterSessionId: parentId,
-            requesterAgentId: "main",
-            batch: [currentChild()],
-            rearmGeneration: currentChild().requesterSettleWake?.rearmGeneration,
-            runId,
-            isCurrent: () => true,
-          },
-          () =>
-            dispatchGatewayMethodInProcess(
-              "agent",
-              {
-                ...agentInput(runId, target, message),
-                inputProvenance: {
-                  kind: "inter_session",
-                  sourceTool: "subagent_settle",
-                  sourceSessionKey: child.childSessionKey,
-                },
+        captureRequesterContinuationCaller({
+          requesterSessionKey: parent,
+          requesterSessionId: parentId,
+          requesterAgentId: "main",
+          batch: [currentChild()],
+          rearmGeneration: currentChild().requesterSettleWake?.rearmGeneration,
+          runId,
+          isCurrent: () => true,
+        }).run(() =>
+          dispatchGatewayMethodInProcess(
+            "agent",
+            {
+              ...agentInput(runId, target, message),
+              inputProvenance: {
+                kind: "inter_session",
+                sourceTool: "subagent_settle",
+                sourceSessionKey: child.childSessionKey,
               },
-              { expectFinal: true, resolveGatewayContext: () => context },
-            ),
+            },
+            { expectFinal: true, resolveGatewayContext: () => context },
+          ),
         ),
       );
     const sendHuman = async (

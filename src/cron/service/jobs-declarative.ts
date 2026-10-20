@@ -23,6 +23,7 @@ export function normalizeDeclarativeLabel(
 export function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
   return {
     schedule: job.schedule,
+    streamSandbox: job.streamSandbox,
     pacing: job.pacing,
     trigger: job.trigger,
     payload: job.payload,
@@ -30,6 +31,7 @@ export function declarativeFields(job: CronStoredJob, includeEnabled: boolean) {
     toolsAllowProvenance: job.toolsAllowProvenance,
     toolsAllowExecTarget: job.toolsAllowExecTarget,
     runtimeAuthority: job.runtimeAuthority,
+    operatorSource: job.operatorSource,
     runtimeAuthorityRecoveryRequired: job.runtimeAuthorityRecoveryRequired,
     delivery: job.delivery,
     displayName: job.displayName,

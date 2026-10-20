@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { registerStatusHealthSessionsCommands } from "../cli/program/register.status-health-sessions.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import type { UsageSummary } from "../infra/provider-usage.types.js";
 import { createCompatibilityNotice } from "../plugins/status.test-fixtures.js";
 import { defaultRuntime } from "../runtime.js";
@@ -16,7 +17,7 @@ import type { StatusScanOverviewResult } from "./status.scan-overview.js";
 import type { StatusScanResult } from "./status.scan-result.js";
 import type { scanStatus } from "./status.scan.js";
 import { resolveGatewayProbeSnapshot } from "./status.scan.shared.js";
-import { baseStatusServices, createStatusScanResultFixture } from "./status.test-support.js";
+import { createStatusScanResultFixture } from "./status.test-support.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
@@ -40,14 +41,15 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 }));
 vi.mock("./status.scan.js", () => ({ scanStatus: mocks.scan }));
 vi.mock("./status.scan.fast-json.js", () => ({ scanStatusJsonFast: mocks.scan }));
+// mock-isolation: Usage routing consumes fixture scans without local database or Gateway probes.
 vi.mock("./status.scan-overview.js", () => ({
-  resolveStatusSummaryFromOverview: async () => createStatusScanResultFixture().summary,
+  prepareStatusSummaryFromOverview: async () => ({
+    publish: () => ({ summary: createStatusScanResultFixture().summary, sessionStores: undefined }),
+  }),
   collectStatusScanOverview: async ({ opts }: { opts: Parameters<typeof scanStatus>[0] }) => {
     const scan = await mocks.scan(opts);
     return {
       ...scan,
-      coldStart: false,
-      hasConfiguredChannels: false,
       skipColdStartNetworkChecks: false,
       gatewaySnapshot: {
         gatewayConnection: scan.gatewayConnection,
@@ -75,9 +77,17 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 vi.mock("./status.gateway-probe.js", () => ({
   resolveGatewayProbeAuthResolution: async () => ({ auth: { token: "fixture-token" } }),
 }));
-vi.mock("./status.daemon.js", () => ({
-  getDaemonStatusSummary: mocks.gatewayService,
-  getNodeDaemonStatusSummary: mocks.nodeService,
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
+  resolveGatewayService: mocks.gatewayService,
+}));
+vi.mock("../daemon/node-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/node-service.js")>()),
+  resolveNodeService: mocks.nodeService,
+}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
+  resolveOpenClawPackageRoot: async () => null,
 }));
 vi.mock("../config/config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/config.js")>()),
@@ -253,8 +263,21 @@ describe("status commands", () => {
         agents: [],
       },
     });
-    mocks.gatewayService.mockResolvedValue(baseStatusServices.gatewayService);
-    mocks.nodeService.mockResolvedValue(baseStatusServices.nodeService);
+    mocks.gatewayService.mockReturnValue(
+      createMockGatewayService({
+        isLoaded: async () => true,
+        readCommand: async () => ({ programArguments: ["openclaw", "gateway", "run"] }),
+        readRuntime: async () => ({ status: "running" }),
+      }),
+    );
+    mocks.nodeService.mockReturnValue(
+      createMockGatewayService({
+        label: "node",
+        isLoaded: async () => true,
+        readCommand: async () => ({ programArguments: ["openclaw", "node", "run"] }),
+        readRuntime: async () => ({ status: "running", pid: 42 }),
+      }),
+    );
   });
 
   afterEach(() => {
@@ -531,10 +554,7 @@ describe("status commands", () => {
   });
 
   it("shows node-only gateway info when no local gateway service is installed", async () => {
-    mocks.gatewayService.mockResolvedValue({
-      ...baseStatusServices.gatewayService,
-      installed: false,
-    });
+    mocks.gatewayService.mockReturnValue(createMockGatewayService());
     mocks.nodeConfig.mockResolvedValue({
       version: 1,
       nodeId: "node-1",
@@ -560,7 +580,16 @@ describe("status commands", () => {
 
   it("distinguishes service-wrapper secret diagnostics from the CLI context", async () => {
     const wrapperPath = "/usr/local/bin/openclaw-doppler";
-    mocks.gatewayService.mockResolvedValue({ ...baseStatusServices.gatewayService, wrapperPath });
+    mocks.gatewayService.mockReturnValue(
+      createMockGatewayService({
+        isLoaded: async () => true,
+        readCommand: async () => ({
+          programArguments: ["openclaw", "gateway", "run"],
+          environment: { OPENCLAW_WRAPPER: wrapperPath },
+        }),
+        readRuntime: async () => ({ status: "running" }),
+      }),
+    );
     setScan({ secretDiagnostics: ["gateway.auth.token unavailable"] });
     vi.stubEnv("OPENCLAW_WRAPPER", undefined);
     const text = await runStatusOutput();

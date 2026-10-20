@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
@@ -16,11 +17,19 @@ import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.j
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import {
+  releaseSessionControllerClaim,
+  tryClaimSessionControllerTask,
+} from "../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import type { CallGatewayOptions } from "./call.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { buildAgentSessionPatch } from "./server-methods/agent-session-patch.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { createChatAbortContext } from "./server-methods/chat.abort.test-helpers.js";
+import { captureRpcTargetForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { sessionReadHandlers } from "./server-methods/sessions-read.js";
 import type {
@@ -33,12 +42,26 @@ import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 
+const lifecycleRequests = vi.hoisted(() => ({ controller: new AbortController() }));
+
 type Client = GatewayRequestHandlerOptions["client"];
 type RpcParams = Record<string, unknown>;
 
 vi.mock(import("./server-recovery-runtime-context.js"), async (importOriginal) => ({
   ...(await importOriginal()),
-  bindGatewayLifecycleRequest: () => async () => await new Promise<never>(() => {}),
+  bindGatewayLifecycleRequest: () => async (request: CallGatewayOptions) => {
+    const signal = request.signal
+      ? AbortSignal.any([request.signal, lifecycleRequests.controller.signal])
+      : lifecycleRequests.controller.signal;
+    signal.throwIfAborted();
+    return await new Promise<never>((_resolve, reject) => {
+      signal.addEventListener(
+        "abort",
+        () => reject(toErrorObject(signal.reason, "Queued collector lifecycle request aborted")),
+        { once: true },
+      );
+    });
+  },
 }));
 vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: async () => {},
@@ -59,8 +82,14 @@ export function useQueuedCollectorFixture() {
   const parentKey = "agent:main:dashboard:queued-projection";
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let projection: SessionRowProjection;
+  let cachedContext: Context | undefined;
   const launchedRunIds: string[] = [];
   const launchSignals = new Map<string, ReturnType<typeof createDeferred<void>>>();
+  const parentOperations: Array<{
+    cleanup: () => void;
+    operation: ReturnType<typeof createReplyOperation>;
+    release: () => void;
+  }> = [];
 
   function waitForLaunch(runId: string) {
     if (launchedRunIds.includes(runId)) {
@@ -72,6 +101,8 @@ export function useQueuedCollectorFixture() {
   }
 
   beforeEach(async () => {
+    lifecycleRequests.controller = new AbortController();
+    cachedContext = undefined;
     resetGatewayWorkAdmission();
     schedulerTesting.reset();
     await registry.resetSubagentRegistryForTests({ persist: false });
@@ -128,12 +159,19 @@ export function useQueuedCollectorFixture() {
   });
 
   afterEach(async () => {
+    // Settle synthetic lifecycle requests before cleanup joins their producers.
+    lifecycleRequests.controller.abort(new Error("Queued collector fixture closed"));
     // Keep dispatch dependencies and session state alive until owned launch cleanup settles.
     await closeSwarmScheduler();
     await flushPendingSessionsChangedEvents();
     schedulerTesting.reset();
     launchedRunIds.splice(0).forEach((runId) => clearAgentRunContext(runId));
     launchSignals.clear();
+    for (const parent of parentOperations.splice(0)) {
+      parent.operation.complete();
+      parent.release();
+      parent.cleanup();
+    }
     await registry.resetSubagentRegistryForTests({ persist: false });
     spawnTesting.setDepsForTest();
     resetAgentEventsForTest({ preserveListeners: true });
@@ -143,6 +181,9 @@ export function useQueuedCollectorFixture() {
   });
 
   function requestContext() {
+    if (cachedContext) {
+      return cachedContext;
+    }
     const context = createChatAbortContext({
       getRuntimeConfig,
       ...bindSessionRowProjection({}, () => projection),
@@ -152,8 +193,12 @@ export function useQueuedCollectorFixture() {
       getSessionEventSubscriberConnIds: () => new Set(["observer"]),
       broadcastToConnIds: vi.fn(),
     }) as unknown as Context;
-    registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
+    const registration = registerChatAbortController({
+      target: captureRpcTargetForTest({
+        sessionKey: parentKey,
+        sessionId: "parent-session",
+        agentId: "main",
+      }),
       runId: "parent-turn",
       sessionId: "parent-session",
       sessionKey: parentKey,
@@ -161,6 +206,31 @@ export function useQueuedCollectorFixture() {
       ownerConnId: "parent-requester",
       timeoutMs: 60_000,
     });
+    const entry = expectDefined(registration.entry, "parent controller source");
+    const claim = expectDefined(
+      tryClaimSessionControllerTask(entry.input),
+      "parent controller turn",
+    );
+    const operation = createReplyOperation({
+      sessionKey: parentKey,
+      sessionId: "parent-session",
+      agentId: "main",
+      resetTriggered: false,
+      mailboxClaim: claim,
+      target: entry.input.target,
+    });
+    markReplyOperationExecutionStarted(operation);
+    operation.setPhase("running");
+    parentOperations.push({
+      cleanup: registration.cleanup,
+      operation,
+      release: () => {
+        if (!claim.released) {
+          releaseSessionControllerClaim(claim);
+        }
+      },
+    });
+    cachedContext = context;
     return context;
   }
 
@@ -235,10 +305,12 @@ export function useQueuedCollectorFixture() {
     creationPolicy: Parameters<typeof createInitialSubagentSession>[0]["creationPolicy"] = {
       actor: { type: "agent", id: "main" },
     },
+    requesterSessionKey = parentKey,
+    requesterTurnRunId = "parent-turn",
   ) {
     const childSessionKey = `agent:main:subagent:${name}`;
     const runId = `${name}-collector`;
-    const groupId = `swarm:${parentKey}:parent-turn`;
+    const groupId = `swarm:${requesterSessionKey}:${requesterTurnRunId}`;
     reserveSwarmRun({ runId, groupId, maxConcurrent: 1, activeRunIds: [] });
     const created = await createInitialSubagentSession({
       cfg: getRuntimeConfig(),
@@ -246,14 +318,14 @@ export function useQueuedCollectorFixture() {
       targetAgentId: "main",
       childSessionKey,
       incognito: false,
-      requesterInternalKey: parentKey,
+      requesterInternalKey: requesterSessionKey,
       parentTarget: await resolveGatewaySessionStoreTargetInWorker({
         cfg: getRuntimeConfig(),
-        key: parentKey,
+        key: requesterSessionKey,
         agentId: "main",
         projection: "full",
       }),
-      completionOwnerSessionKey: parentKey,
+      completionOwnerSessionKey: requesterSessionKey,
       creationPolicy,
       modelPatch: {},
       swarmGroupId: groupId,
@@ -267,9 +339,9 @@ export function useQueuedCollectorFixture() {
       childSessionKey,
       childAgentId: "main",
       sessionEntry: expectDefined(created.entry, "created reservation identity"),
-      requesterSessionKey: parentKey,
-      requesterTurnRunId: "parent-turn",
-      requesterDisplayKey: parentKey,
+      requesterSessionKey,
+      requesterTurnRunId,
+      requesterDisplayKey: requesterSessionKey,
       task: "Wait for a slot",
       cleanup: "keep" as const,
       collect: true,

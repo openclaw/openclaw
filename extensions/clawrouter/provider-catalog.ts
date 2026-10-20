@@ -345,7 +345,7 @@ export async function buildClawRouterProviderConfig(params: {
   discoveryApiKey?: string;
   baseUrl?: string;
   fetchGuard?: LiveModelCatalogFetchGuard;
-}): Promise<ModelProviderConfig> {
+}): Promise<ModelProviderConfig & { api: "openai-responses"; baseUrl: string }> {
   const rootUrl = normalizeClawRouterRootUrl(params.baseUrl);
   const rows = await getCachedLiveProviderModelRows({
     providerId: PROVIDER_ID,

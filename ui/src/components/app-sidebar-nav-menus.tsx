@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import { createUniqueId, onCleanup } from "solid-js";
-import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import {
   isPluginsHubRoute,
@@ -10,10 +9,16 @@ import {
 } from "../app-navigation.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { iconData, type IconName } from "./icon-data.ts";
+import type { IconName } from "./icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
 import { pointMenuTriggerAttributes } from "./solid/menu-trigger.tsx";
-import { Menu, type MenuEntry, type MenuItem } from "./solid/menu.tsx";
+import {
+  Menu,
+  type MenuControls,
+  type MenuEntry,
+  type MenuHandle,
+  type MenuItem,
+} from "./solid/menu.tsx";
 
 type SidebarMenuPosition = { x: number; y?: number; top?: number; bottom?: number };
 
@@ -40,6 +45,7 @@ export function renderSidebarMenuAction(
 }
 
 export type SidebarDropdownProps = {
+  controls?: MenuControls;
   position: SidebarMenuPosition;
   class: JSX.ClassValue;
   label: string;
@@ -54,6 +60,7 @@ export type SidebarDropdownProps = {
   onPointerLeave?: () => void;
   panelStyle?: JSX.CSSProperties;
   focusOnOpen?: boolean;
+  ref?: (handle: MenuHandle) => void;
 };
 
 export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
@@ -62,6 +69,7 @@ export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
   onCleanup(() => removeListeners.forEach((stop) => stop()));
   return (
     <Menu
+      controls={params.controls}
       id={`sidebar-menu-${id}`}
       panelClass={params.class}
       label={params.label}
@@ -76,6 +84,7 @@ export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
         params.position.bottom === undefined ? "top" : "bottom",
       )}
       ref={(handle) => {
+        params.ref?.(handle);
         const { overlay } = handle;
         overlay.surface.dataset.chatAutotypeExempt = "";
         if (params.anchor) {
@@ -135,6 +144,7 @@ export function sidebarPluginTabs(
 }
 
 export function renderSidebarNavLink(params: {
+  ref?: (element: HTMLAnchorElement) => void;
   href: string;
   active: boolean;
   icon: JSX.Element;
@@ -146,6 +156,7 @@ export function renderSidebarNavLink(params: {
   const onPreload = params.onPreload;
   return (
     <a
+      ref={(element) => params.ref?.(element)}
       draggable="false"
       href={params.href}
       class={["nav-item", { "nav-item--active": params.active }]}
@@ -168,44 +179,5 @@ export function renderSidebarNavLink(params: {
       </span>
       <span class="nav-item__text">{params.label}</span>
     </a>
-  );
-}
-
-export function renderSidebarPluginNavigationMenu(params: {
-  position: SidebarMenuPosition;
-  item: ControlUiNavigationItem;
-  anchor?: HTMLElement;
-  onSelect: (id: string) => Promise<void>;
-  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
-  onClose: (restoreFocus: boolean) => void;
-}): JSX.Element {
-  return (
-    <SidebarDropdown
-      {...params}
-      class="sidebar-customize-menu sidebar-plugin-navigation-menu"
-      label={params.item.label}
-      onSelect={(id) => void params.onSelect(id)}
-      items={(params.item.actions ?? []).map((action): MenuItem => ({
-        id: action.id,
-        label: action.label,
-        class: [
-          "sidebar-customize-menu__item",
-          { "session-menu__item--destructive": action.destructive },
-        ],
-        variant: action.destructive ? "danger" : undefined,
-        icon:
-          action.icon && Object.hasOwn(iconData, action.icon) ? (
-            <span class="nav-item__icon" aria-hidden="true">
-              <Icon
-                name={
-                  // SAFETY: The preceding own-key guard admits only keys of iconData.
-                  action.icon as IconName
-                }
-              />
-            </span>
-          ) : undefined,
-        content: <span class="sidebar-customize-menu__text">{action.label}</span>,
-      }))}
-    />
   );
 }

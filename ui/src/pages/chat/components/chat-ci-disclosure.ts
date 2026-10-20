@@ -14,7 +14,7 @@ export type ChatCiDisclosureProps = {
 export function createCiDisclosure(
   host: HTMLElement & Pick<ChatCiDisclosureProps, "presented">,
   onVisibility: () => void,
-  dispose: () => void,
+  connect: () => () => void,
 ) {
   let disclosure: HTMLDetailsElement | null = null;
   let active = false;
@@ -35,12 +35,13 @@ export function createCiDisclosure(
     };
     const stopToggle = disclosure && listen(disclosure, "toggle", toggle);
     const stopVisibility = listen(document, "visibilitychange", onVisibility);
+    const disconnect = connect();
     onVisibility();
     return () => {
       active = false;
       stopToggle?.();
       stopVisibility();
-      dispose();
+      disconnect();
     };
   });
   return {

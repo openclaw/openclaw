@@ -37,7 +37,6 @@ export function createDiscordMessageActiveThreadRoute(params: {
       peek: () => (adoptedThreadId ? undefined : params.sourceReplyReference.peek()),
       use: () => (adoptedThreadId ? undefined : params.sourceReplyReference.use()),
       markSent: () => params.sourceReplyReference.markSent(),
-      hasReplied: () => Boolean(adoptedThreadId) || params.sourceReplyReference.hasReplied(),
     },
     bindThreadAdoption(callback: (threadId: string) => Promise<void>) {
       onThreadAdopted = callback;

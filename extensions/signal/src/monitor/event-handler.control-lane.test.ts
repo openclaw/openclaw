@@ -286,6 +286,9 @@ describe("Signal active-run control lane", () => {
   it("does not promote or cancel an unauthorized abort", () => {
     const entry = {
       cfg: {},
+      resolveChannelIngress: async () => {
+        throw new Error("control-lane fixture must not resolve ingress");
+      },
       senderName: "Alice",
       senderDisplay: "+15550001111",
       senderRecipient: "+15550001111",
@@ -310,6 +313,9 @@ describe("Signal active-run control lane", () => {
   it("shares one group control lane without merging normal sender batches", () => {
     const entry = {
       cfg: {},
+      resolveChannelIngress: async () => {
+        throw new Error("control-lane fixture must not resolve ingress");
+      },
       senderName: "Alice",
       senderDisplay: "+15550001111",
       senderRecipient: "+15550001111",
@@ -333,6 +339,9 @@ describe("Signal active-run control lane", () => {
   it("cancels each pending sender once and forgets completed entries", () => {
     const entry = {
       cfg: {},
+      resolveChannelIngress: async () => {
+        throw new Error("control-lane fixture must not resolve ingress");
+      },
       senderName: "Alice",
       senderDisplay: "+15550001111",
       senderRecipient: "+15550001111",

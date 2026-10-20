@@ -1,9 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
+import type { ApplicationContext } from "../../app/context-types.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { SecretsPageState } from "./state.ts";
 import { SecretsStore } from "./view.tsx";
-
-type SecretsStoreViewProps = Parameters<typeof SecretsStore>[0];
 
 const mounts: ReturnType<typeof mountSolid>[] = [];
 
@@ -15,41 +21,24 @@ afterEach(() => {
 
 function mount(
   entries: SecretStoreEntry[],
-  overrides: Partial<SecretsStoreViewProps> = {},
+  overrides: Partial<SecretsPageState> = {},
+  methods = ["secrets.store.list", "secrets.store.set", "secrets.store.delete"],
 ): HTMLElement {
-  const noop = vi.fn();
-  const props: SecretsStoreViewProps = {
-    entries,
-    loading: false,
-    busy: false,
-    error: null,
-    notice: null,
-    canList: true,
-    canSet: true,
-    canDelete: true,
-    dialogMode: null,
-    draft: { name: "", value: "", kind: "env", allowedHosts: "" },
-    formError: null,
-    bulkOpen: false,
-    bulkRaw: "",
-    bulkAutoDetect: true,
-    bulkSecretCount: 0,
-    bulkEntryCount: 0,
-    bulkInvalidNames: [],
-    onRefresh: noop,
-    onOpenAdd: noop,
-    onOpenEdit: noop,
-    onCloseDialog: noop,
-    onDraftChange: noop,
-    onSubmitDraft: noop,
-    onOpenBulk: noop,
-    onCloseBulk: noop,
-    onBulkRawChange: noop,
-    onBulkAutoDetectChange: noop,
-    onSubmitBulk: noop,
-    onDelete: noop,
-  };
-  const view = mountSolid(() => <SecretsStore {...props} {...overrides} />);
+  const source = createApplicationGateway();
+  source.publish({
+    ...source.gateway.snapshot,
+    phase: "connected",
+    client: createTestGatewayClient(createGatewayRequestMock()),
+    hello: gatewayHelloForMethods(methods),
+  });
+  // SAFETY: this unbound view owner only reads the Gateway capability for permissions.
+  const context = { gateway: source.gateway } as ApplicationContext;
+  const state = new SecretsPageState(context, vi.fn());
+  state.store.entries = entries;
+  Object.assign(state, overrides);
+  const view = mountSolid(() => (
+    <SecretsStore state={state} bulkSecretCount={0} bulkEntryCount={0} bulkInvalidNames={[]} />
+  ));
   mounts.push(view);
   return view.container;
 }
@@ -104,7 +93,7 @@ describe("secrets store view", () => {
   });
 
   it("hides mutation controls when the gateway does not advertise them", () => {
-    const container = mount([], { canSet: false, canDelete: false });
+    const container = mount([], {}, ["secrets.store.list"]);
 
     expect(container.querySelector("button")).toBeNull();
     expect(container.textContent).toContain("Secrets");

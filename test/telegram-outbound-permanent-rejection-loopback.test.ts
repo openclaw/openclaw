@@ -64,12 +64,19 @@ async function configureTelegram(connection: { apiRoot?: string; proxy?: string 
   } satisfies OpenClawConfig;
 }
 
-function stageDelivery(cfg: OpenClawConfig, deliveryIntentId: string, text: string, cause: string) {
+function stageDelivery(
+  cfg: OpenClawConfig,
+  deliveryIntentId: string,
+  text: string,
+  cause: string,
+  threadId?: number,
+) {
   return sendDurableMessageBatch({
     cfg,
     channel: "telegram",
     to: "123",
     accountId: "default",
+    threadId,
     durability: "required",
     deliveryIntentId,
     completionRetention: { idPrefix: "telegram-loopback-", maxAgeMs: 60_000, maxEntries: 10 },
@@ -182,6 +189,101 @@ describe("Telegram permanent rejection over real Bot API transport", () => {
       await loopback.close();
     }
   });
+});
+
+describe("Telegram rejected topic delivery over real Bot API transport", () => {
+  it.each([
+    { description: "message thread not found", acceptedPrefix: false, reset: false },
+    { description: "chat not found", acceptedPrefix: false, reset: false },
+    { description: "message thread not found", acceptedPrefix: true, reset: false },
+    { description: "socket reset", acceptedPrefix: false, reset: true },
+  ])(
+    "preserves recovery evidence for $description (accepted prefix: $acceptedPrefix)",
+    async ({ description, acceptedPrefix, reset }) => {
+      const requests: Array<Record<string, unknown>> = [];
+      const server = createServer((request, response) => {
+        readBody(request, (body) => {
+          requests.push(JSON.parse(body));
+          if (reset) {
+            request.socket.destroy();
+            return;
+          }
+          if (acceptedPrefix && requests.length === 1) {
+            replyJson(response, {
+              ok: true,
+              result: {
+                message_id: 101,
+                date: 1700000000,
+                chat: { id: 123, type: "private" },
+                message_thread_id: 42,
+                text: requests[0]?.text,
+              },
+            });
+            return;
+          }
+          replyJson(
+            response,
+            { ok: false, error_code: 400, description: `Bad Request: ${description}` },
+            400,
+          );
+        });
+      });
+      const loopback = await listenLoopback(server);
+      try {
+        const cfg = await configureTelegram({ apiRoot: loopback.url });
+        await withStateDirEnv("openclaw-telegram-topic-rejection-", async ({ stateDir }) => {
+          try {
+            const id = "telegram-loopback-topic-rejection";
+            await stageDelivery(cfg, id, "chunked reply ".repeat(500), "awaiting recovery", 42);
+            const retryCount = readQueueRow(stateDir, id)?.retryCount ?? 0;
+            const { drain } = recoveryDrain(cfg, stateDir);
+            await drain("Telegram rejected topic recovery");
+            const firstRequests = acceptedPrefix ? 2 : 1;
+            expect(requests).toHaveLength(firstRequests);
+            const ambiguous = acceptedPrefix || reset;
+            const terminal = description === "chat not found";
+            expect(readQueueRow(stateDir, id)).toMatchObject({
+              status: terminal ? "failed" : "pending",
+              retryCount: ambiguous || terminal ? retryCount : retryCount + 1,
+            });
+            if (ambiguous) {
+              expect(readQueueRow(stateDir, id)?.recoveryState).toBe("unknown_after_send");
+            } else {
+              expect(readQueueRow(stateDir, id)?.recoveryState).not.toBe("unknown_after_send");
+            }
+
+            // Reopening the DB preserves active producer leases. Ambiguous sends
+            // stay protected while a rejected topic can retry its original route.
+            closeDatabases();
+            await drain("Telegram rejected topic database-reopen recovery");
+            expect(requests).toHaveLength(ambiguous || terminal ? firstRequests : 2);
+            if (!ambiguous && !terminal) {
+              expect(readQueueRow(stateDir, id)).toMatchObject({
+                status: "pending",
+                retryCount: retryCount + 2,
+              });
+              expect(readQueueRow(stateDir, id)?.recoveryState).not.toBe("unknown_after_send");
+            } else {
+              expect(readQueueRow(stateDir, id)).toMatchObject({
+                status: terminal ? "failed" : "pending",
+                retryCount,
+              });
+              if (ambiguous) {
+                expect(readQueueRow(stateDir, id)?.recoveryState).toBe("unknown_after_send");
+              }
+            }
+            for (const request of requests) {
+              expect(request).toMatchObject({ chat_id: "123", message_thread_id: 42 });
+            }
+          } finally {
+            closeDatabases();
+          }
+        });
+      } finally {
+        await loopback.close();
+      }
+    },
+  );
 });
 
 const PROXY_TUNNEL_DELIVERY_INTENT_ID = "telegram-loopback-proxy-tunnel-refusal";

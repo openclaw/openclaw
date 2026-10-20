@@ -3,6 +3,7 @@ import {
   GatewayProtocolClient,
   type GatewayProtocolSocketHandlers,
 } from "@openclaw/gateway-client/browser";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 // @vitest-environment node
 import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-list-limits.ts";
@@ -13,6 +14,9 @@ import {
   type GatewayEventFrame,
 } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { SessionCapability } from "./index.ts";
 import {
@@ -165,7 +169,86 @@ const targetedSessionReconciliationCases = [
   },
 ] as const;
 
-it("lets a queued foreground refresh supersede an owner-first bootstrap roster", async () => {
+it.each(["account", "recovery scope"])(
+  "retires observed membership before the same client's %s replacement loads",
+  async (change) => {
+    const retained = sessionsResult([{ key: "agent:main:private", kind: "direct" }], 1);
+    const stale = createDeferred<SessionsListResult>();
+    const fresh = createDeferred<SessionsListResult>();
+    let reads = 0;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "sessions.list") {
+        if (isRecord(params) && params.archived === "all") {
+          reads += 1;
+          return reads === 1 ? retained : reads === 2 ? stale.promise : fresh.promise;
+        }
+        return sessionsResult([], 2);
+      }
+      return method === "sessions.subscribe"
+        ? { subscribed: true }
+        : { groups: [], sectionOrder: [] };
+    });
+    const source = createApplicationGateway();
+    const hello = gatewayHelloForMethods(
+      ["sessions.list", "sessions.subscribe", "sessions.groups.list"],
+      ["operator.read"],
+    );
+    hello.auth!.recoveryScope = "test-recovery-scope";
+    source.publish({
+      ...source.gateway.snapshot,
+      phase: "connected",
+      client: createTestGatewayClient(request),
+      hello,
+      selfUser: { id: "alice", name: "Alice" },
+    });
+    const sessions = createTestSessionCapability(source.gateway);
+    const query = { source: "agent-roster" as const, archivedFilter: "all" as const, limit: 50 };
+    const observed = sessions.observeList(query, () => {});
+    await sessions.refreshList(query);
+    expect(sessions.listSnapshot(query).result?.sessions).toEqual(retained.sessions);
+    source.publish({
+      ...source.gateway.snapshot,
+      phase: "reconnecting",
+      hello: null,
+      selfUser: undefined,
+    });
+    expect(sessions.listSnapshot(query).result?.sessions).toEqual(retained.sessions);
+    source.publish({
+      ...source.gateway.snapshot,
+      phase: "connected",
+      hello,
+      selfUser: undefined,
+    });
+    expect(sessions.listSnapshot(query).result?.sessions).toEqual(retained.sessions);
+    source.publish({ ...source.gateway.snapshot, selfUser: { id: "alice", name: "Alice" } });
+    expect(sessions.listSnapshot(query).result?.sessions).toEqual(retained.sessions);
+    const old = observed.refresh().catch((error: unknown) => error);
+    source.publish({
+      ...source.gateway.snapshot,
+      ...(change === "account"
+        ? { selfUser: { id: "bob", name: "Bob" } }
+        : {
+            selfUser: undefined,
+            hello: { ...hello, auth: { ...hello.auth!, recoveryScope: "bob-scope" } },
+          }),
+    });
+    expect(sessions.listSnapshot(query).result).toBeNull();
+    let replayed: SessionsListResult | null = retained;
+    const replacement = sessions.observeList(query, (snapshot) => {
+      replayed = snapshot.result;
+    });
+    expect(replayed).toBeNull();
+    stale.resolve(retained);
+    await old;
+    expect(sessions.listSnapshot(query).result).toBeNull();
+    fresh.resolve(sessionsResult([], 2));
+    await sessions.refreshList(query);
+    observed.dispose();
+    replacement.dispose();
+  },
+);
+
+it("lets a queued foreground refresh supersede bootstrap during profile hydration", async () => {
   const owned = (key: string, updatedAt: number, id: string) => ({
     key: `agent:main:${key}`,
     kind: "direct" as const,
@@ -192,7 +275,6 @@ it("lets a queued foreground refresh supersede an owner-first bootstrap roster",
   );
   const h = connection(request as unknown as GatewayBrowserClient["request"], "main", {
     sessionKey: "agent:main:mine-new",
-    selfUser: { id: "operator", name: "Operator" },
   });
   const { sessions, client } = h;
   h.update({ client, phase: "connected" });
@@ -202,11 +284,13 @@ it("lets a queued foreground refresh supersede an owner-first bootstrap roster",
       "sessions.list",
       expect.objectContaining({
         agentId: "main",
-        ownerFirst: true,
         limit: SIDEBAR_SESSION_ROSTER_LIMIT,
       }),
     ),
   );
+  expect(
+    request.mock.calls.find(([method]) => method === "sessions.list")?.[1]?.ownerFirst,
+  ).toBeUndefined();
   expect(request).toHaveBeenCalledWith(
     "sessions.subscribe",
     {},
@@ -215,7 +299,7 @@ it("lets a queued foreground refresh supersede an owner-first bootstrap roster",
   expect(listCallsOf(request)).toHaveLength(1);
   expect(sessions.state.result).toBeNull();
   const queuedRefresh = sessions.refresh({ agentId: "other", search: "queued", force: true });
-  h.update({ selfUser: { id: "collaborator", name: "Collaborator" } });
+  h.update({ selfUser: { id: "operator", name: "Operator" } });
 
   bootstrap.resolve(roster);
   await waitForFast(() => expect(listCallsOf(request)).toHaveLength(2));

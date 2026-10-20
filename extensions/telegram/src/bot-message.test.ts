@@ -662,7 +662,7 @@ describe("telegram bot message processor", () => {
           turnAbortSignal?.addEventListener("abort", () => resolve(), { once: true });
         });
       }
-      turnAdoptionLifecycle?.onAbandoned?.();
+      await turnAdoptionLifecycle?.onAbandoned?.();
       return { kind: "completed" };
     });
     const processMessage = createTelegramMessageProcessor(baseDeps);

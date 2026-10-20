@@ -10,11 +10,6 @@ type ClientVoiceSessionTestApi = {
     attemptAbortAfterMs: number;
     failureRetentionMs: number;
   };
-  digestDeliverySnapshot(): {
-    active: number;
-    pending: number;
-    retained: number;
-  };
   reset(): void;
 };
 
@@ -26,9 +21,6 @@ function getTestApi(): ClientVoiceSessionTestApi {
 
 export const clientVoiceSessionTesting = {
   digestDeliveryPolicy: getTestApi().digestDeliveryPolicy,
-  digestDeliverySnapshot(): ReturnType<ClientVoiceSessionTestApi["digestDeliverySnapshot"]> {
-    return getTestApi().digestDeliverySnapshot();
-  },
   readRecord(agentId: string, voiceSessionId: string): ClientVoiceSessionRecord | undefined {
     return getTestApi().readRecord(agentId, voiceSessionId);
   },

@@ -3,11 +3,7 @@ export * from "./subagent-announce-delivery.js";
 import { expect, it, vi } from "vitest";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { mockCallArg } from "../../subagent-test-fixtures.test-helpers.js";
-import {
-  hasAnnounceSendEvidence,
-  runAnnounceDeliveryWithRetry,
-  SourceOwnerChangedError,
-} from "./subagent-announce-delivery-retry.js";
+import { hasAnnounceSendEvidence } from "./subagent-announce-delivery-retry.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
 
 export const testing = {
@@ -16,7 +12,7 @@ export const testing = {
 };
 
 type RunDescendantWake = typeof import("./subagent-announce-descendant-wake.js").runDescendantWake;
-type DescendantWakeDeps = Parameters<RunDescendantWake>[0]["deps"];
+type AnnounceRuntime = typeof import("./subagent-announce.runtime.js");
 
 export function registerDescendantWakeCurrencyTests({
   createRoleRestrictedInProcessGatewayMock,
@@ -25,10 +21,12 @@ export function registerDescendantWakeCurrencyTests({
 }: {
   runDescendantWake: RunDescendantWake;
   createRoleRestrictedInProcessGatewayMock: (response: Record<string, unknown>) => {
-    cfg: ReturnType<DescendantWakeDeps["getRuntimeConfig"]>;
-    dispatchGatewayMethodInProcess: DescendantWakeDeps["dispatchGatewayMethodInProcess"];
+    cfg: ReturnType<AnnounceRuntime["getRuntimeConfig"]>;
+    dispatchGatewayMethodInProcess: AnnounceRuntime["dispatchGatewayMethodInProcess"];
   };
-  createGatewayMock: (response?: Record<string, unknown>) => DescendantWakeDeps["callGateway"];
+  createGatewayMock: (
+    response?: Record<string, unknown>,
+  ) => AnnounceRuntime["callSubagentLifecycleGateway"];
 }) {
   it.each(["current", "changed", "unavailable"] as const)(
     "settles descendant wakes under restrictive gateway roles with %s currency",
@@ -52,6 +50,8 @@ export function registerDescendantWakeCurrencyTests({
         runIds: ["descendant-wake-run"],
       });
       testing.setDepsForTest({
+        callGateway,
+        dispatchGatewayMethodInProcess,
         getRuntimeConfig: () => cfg,
         loadSessionEntryByKey: async () => ({ sessionId: "nested-session", updatedAt: 1 }),
       });
@@ -71,12 +71,7 @@ export function registerDescendantWakeCurrencyTests({
         isChildSessionEffectsAllowed: () => true,
         resolveGatewayContext,
         signal,
-        deps: {
-          callGateway,
-          dispatchGatewayMethodInProcess,
-          getRuntimeConfig: () => cfg,
-          replaceSubagentRunAfterSteer,
-        },
+        replaceSubagentRunAfterSteer,
       });
 
       expect(woke).toBe(currency === "current");
@@ -105,29 +100,6 @@ export function registerDescendantWakeCurrencyTests({
           }),
         );
       }
-    },
-  );
-
-  it.each([1, 3])(
-    "refuses a wake retry after %s attempts when currency changes",
-    async (attempts) => {
-      vi.useFakeTimers();
-      let current = true;
-      let dispatched = 0;
-      const pending = runAnnounceDeliveryWithRetry({
-        operation: "descendant wake agent call",
-        prepareAttempt: async () => current,
-        isAttemptAllowed: () => true,
-        run: async () => {
-          dispatched += 1;
-          current = dispatched < attempts;
-          throw new Error("UNAVAILABLE");
-        },
-      });
-      const rejected = expect(pending).rejects.toBeInstanceOf(SourceOwnerChangedError);
-      await vi.runAllTimersAsync();
-      await rejected;
-      expect(dispatched).toBe(attempts);
     },
   );
 }

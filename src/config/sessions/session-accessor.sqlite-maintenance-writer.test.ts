@@ -6,10 +6,10 @@ import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
-  beginSessionWorkAdmission,
-  isSessionLifecycleMutationActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  isSessionMutationActive,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawAgentDatabase,
@@ -337,7 +337,7 @@ it("resolves protection once before capping aged candidates", async () => {
   const { storePath, key, set, load, prepare } = createPlannerStore(6, Date.now());
   set(3, { parentSessionKey: key(5), updatedAt: Date.now() });
   set(2, { updatedAt: Date.now() - 8 * day });
-  const admission = await beginSessionWorkAdmission({
+  const admission = await beginSessionEffect({
     scope: storePath,
     identities: ["planner-0"],
     assertAllowed: () => {},
@@ -345,7 +345,7 @@ it("resolves protection once before capping aged candidates", async () => {
   const provider = vi.fn(() => [key(2)]);
   const unregister = preserveKeys(provider);
   try {
-    await runExclusiveSessionLifecycleMutation("archive", {
+    await runSessionMutation({
       scope: storePath,
       identities: [key(1)],
       run: async () => {
@@ -436,11 +436,11 @@ it.each(["session-key", "session-id"] as const)(
     const maintain = await prepare();
     const identity = identityKind === "session-key" ? target.sessionKey : target.sessionId;
 
-    await runExclusiveSessionLifecycleMutation("archive", {
+    await runSessionMutation({
       scope: storePath,
       identities: [identity],
       run: async () => {
-        expect(isSessionLifecycleMutationActive(storePath, [identity])).toBe(true);
+        expect(isSessionMutationActive(storePath, [identity])).toBe(true);
         const plan = maintain();
         expect(
           loadSessionEntry(target)?.archivedAt,
@@ -453,7 +453,7 @@ it.each(["session-key", "session-id"] as const)(
       },
     });
 
-    expect(isSessionLifecycleMutationActive(storePath, [identity])).toBe(false);
+    expect(isSessionMutationActive(storePath, [identity])).toBe(false);
     expect(maintain({ forceMaintenance: true }).archived).toBe(1);
     expectArchived(loadSessionEntry(target), "age-retention");
     expect(loadTranscriptEventsSync(target)).toEqual(events);

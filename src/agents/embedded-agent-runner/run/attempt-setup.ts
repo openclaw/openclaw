@@ -166,6 +166,19 @@ export async function prepareEmbeddedAttemptSetup(params: EmbeddedRunAttemptPara
 
 type PromptCacheRetention = Parameters<typeof buildLoopPromptCacheInfo>[0]["retention"];
 
+// Stream completion can retain this callback beyond the attempt's context guards.
+function createCacheTouchRecorder(initialTimestamp: number | null) {
+  let lastCacheTouchAt = initialTimestamp;
+  return {
+    get lastCacheTouchAt() {
+      return lastCacheTouchAt;
+    },
+    recordCacheTouch: (startedAt: number) => {
+      lastCacheTouchAt = startedAt;
+    },
+  };
+}
+
 export function installEmbeddedAttemptContextGuards(input: {
   activeContextEngine?: ContextEngine;
   activeSession: AgentSession;
@@ -219,12 +232,14 @@ export function installEmbeddedAttemptContextGuards(input: {
       ? resolveCacheTtlPruningSettings(contextPruning)
       : undefined;
   const previousCacheTtlTransform = activeSession.agent.transformContext;
-  let lastCacheTouchAt = cacheTtlSettings
-    ? readLastCacheTtlTimestamp(input.sessionManager, {
-        provider: attempt.provider,
-        modelId: attempt.modelId,
-      })
-    : null;
+  const cacheTouch = createCacheTouchRecorder(
+    cacheTtlSettings
+      ? readLastCacheTtlTimestamp(input.sessionManager, {
+          provider: attempt.provider,
+          modelId: attempt.modelId,
+        })
+      : null,
+  );
   if (cacheTtlSettings) {
     activeSession.agent.transformContext = async (messages, signal) => {
       const sourceMessages = previousCacheTtlTransform
@@ -234,7 +249,7 @@ export function installEmbeddedAttemptContextGuards(input: {
         messages: sourceMessages,
         settings: cacheTtlSettings,
         contextWindowTokens: contextTokenBudget,
-        lastCacheTouchAt,
+        lastCacheTouchAt: cacheTouch.lastCacheTouchAt,
         dropThinkingBlocksForEstimate: input.dropThinkingBlocksForEstimate,
         now: Date.now(),
         projectionState: input.toolResultPromptProjectionState,
@@ -243,7 +258,7 @@ export function installEmbeddedAttemptContextGuards(input: {
         pruneNewRounds: !input.getServerToolClearingEnabled(),
         onPruned: () => {
           declarePromptHistoryRewrite({ ...attempt, reason: "pruning" });
-          lastCacheTouchAt = Date.now();
+          cacheTouch.recordCacheTouch(Date.now());
         },
       });
     };
@@ -379,9 +394,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       });
     },
     getAfterTurnCheckpoint: () => afterTurnCheckpoint,
-    recordCacheTouch: (startedAt: number) => {
-      lastCacheTouchAt = startedAt;
-    },
+    recordCacheTouch: cacheTouch.recordCacheTouch,
     remove: () => {
       activeSession.agent.transformContext = previousContextTransform;
       removeToolResultGuard();

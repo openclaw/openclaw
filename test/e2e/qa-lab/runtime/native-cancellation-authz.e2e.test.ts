@@ -75,6 +75,7 @@ async function registerRunningSubagent(
   runId: string,
   childSessionKey: string,
   ownerKey = ROUTE_OWNER,
+  gatewayContextResolver?: Parameters<typeof registerSubagentRun>[0]["gatewayContextResolver"],
 ) {
   writeSession(childSessionKey, `session-${childSessionKey}`, ownerKey);
   await registerSubagentRun({
@@ -87,6 +88,7 @@ async function registerRunningSubagent(
     requesterDisplayKey: ownerKey,
     task: `Running child ${runId}`,
     cleanup: "keep",
+    gatewayContextResolver,
   });
   const generation = getSubagentRunByRunId(runId)?.generation;
   if (typeof generation !== "number") {
@@ -196,6 +198,10 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
       );
       await server.startupSettled;
       await withinTest(activationEntered.promise, signal);
+      const gatewayContextResolver = activation.mock.calls[0]![0]()?.resolveGatewayContext;
+      if (!gatewayContextResolver) {
+        throw new Error("Gateway startup did not provide its registration owner");
+      }
       const acpxServices: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
       const acpxRuntime = createPluginRuntimeMock({
         state: {
@@ -290,10 +296,24 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
               };
             });
           try {
-            await registerRunningSubagent(replacementRunId, childSessionKey);
+            if (!sameId) {
+              expect(
+                await subagentRegistry.replaceSubagentRunAfterSteerCore({
+                  previousRunId: runId,
+                  nextRunId: replacementRunId,
+                }),
+              ).toBe(true);
+              expect(getSubagentRunByRunId(runId)).toBeUndefined();
+            }
+            await registerRunningSubagent(
+              replacementRunId,
+              childSessionKey,
+              ROUTE_OWNER,
+              gatewayContextResolver,
+            );
             expect(released).toBe(true);
             await withinTest(activation.mock.results[0]!.value, signal);
-            expect(getGatewayContextResolver(subagentRuns.get(runId)!)).toBeDefined();
+            expect(getGatewayContextResolver(subagentRuns.get(replacementRunId)!)).toBeDefined();
           } finally {
             releaseActivation.resolve();
             registration.mockRestore();

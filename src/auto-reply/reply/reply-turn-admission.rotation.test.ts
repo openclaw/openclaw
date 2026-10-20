@@ -1,8 +1,8 @@
 import { afterEach, expect, it } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
-import { testing } from "./reply-run-registry.test-support.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
 import { admitTestReplyTurn, createSessionStoreFor } from "./reply-turn-admission.test-support.js";
 
 const operations: ReplyOperation[] = [];
@@ -10,7 +10,7 @@ const operations: ReplyOperation[] = [];
 afterEach(() => {
   operations.forEach((operation) => operation.complete());
   operations.length = 0;
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   resetDiagnosticRunActivityForTest();
 });
 

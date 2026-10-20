@@ -104,7 +104,6 @@ describe("extra-params: provider runtime handoff", () => {
     // must be filtered before plugin runtime hooks receive them.
     const settingsManager = {
       getGlobalSettings: () => ({}),
-      getProjectSettings: () => ({}),
     };
 
     expect(
@@ -123,7 +122,6 @@ describe("extra-params: provider runtime handoff", () => {
       resolveExplicitSettingsTransport({
         settingsManager: {
           getGlobalSettings: () => ({ transport: "auto" }),
-          getProjectSettings: () => ({}),
         },
         sessionTransport: "websocket-cached",
       }),

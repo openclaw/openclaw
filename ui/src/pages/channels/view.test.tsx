@@ -1,10 +1,11 @@
 // Channels page view tests.
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelsStatusSnapshot, WhatsAppStatus } from "../../api/types.ts";
+import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
+import { ChannelConfig } from "./view.config.tsx";
 import { renderChannelDetail } from "./view.detail.tsx";
 import { resolveChannelDisplayState } from "./view.shared.tsx";
 import {
@@ -14,7 +15,6 @@ import {
 } from "./view.test-support.ts";
 import { ChannelsView } from "./view.tsx";
 import type { ChannelsProps } from "./view.types.ts";
-import { WhatsAppCard } from "./view.whatsapp.tsx";
 
 function createProps(snapshot: ChannelsProps["channels"]["channelsSnapshot"]): ChannelsProps {
   return createChannelsViewProps(snapshot, {
@@ -415,43 +415,13 @@ describe("channel status issues", () => {
   });
 });
 
-function createWhatsAppStatus(overrides: Partial<WhatsAppStatus> = {}): WhatsAppStatus {
+function createWhatsAppStatus() {
   return {
     configured: true,
     linked: false,
     running: false,
     connected: false,
     reconnectAttempts: 0,
-    ...overrides,
-  };
-}
-
-function renderWhatsAppButtons(params: {
-  linked?: boolean;
-  qrDataUrl?: string | null;
-  onWhatsAppStart?: ChannelsProps["onWhatsAppStart"];
-}) {
-  const whatsapp = createWhatsAppStatus({ linked: params.linked === true });
-  const props = createProps({
-    ts: Date.now(),
-    channelOrder: ["whatsapp"],
-    channelLabels: { whatsapp: "WhatsApp" },
-    channels: { whatsapp },
-    channelAccounts: {},
-    channelDefaultAccountId: {},
-  });
-  props.channels.whatsappLoginQrDataUrl = params.qrDataUrl ?? null;
-  if (params.onWhatsAppStart) {
-    props.onWhatsAppStart = params.onWhatsAppStart;
-  }
-
-  const container = document.createElement("div");
-  renderChannelView(WhatsAppCard, props, container);
-  const buttons = Array.from(container.querySelectorAll("button"));
-  return {
-    container,
-    buttons,
-    labels: buttons.map((button) => button.textContent?.trim()),
   };
 }
 
@@ -545,7 +515,11 @@ function renderWhatsAppConfigForm(
   props.onShowAdvancedSettings = onShowAdvancedSettings;
 
   const container = document.createElement("div");
-  renderChannelView(WhatsAppCard, props, container);
+  renderChannelView(
+    (viewProps: ChannelsProps) => <ChannelConfig channelId="whatsapp" props={viewProps} />,
+    props,
+    container,
+  );
   return { container, onShowAdvancedSettings };
 }
 
@@ -852,62 +826,6 @@ describe("channel display selectors", () => {
     expect(displayState.running).toBeNull();
     expect(displayState.connected).toBeNull();
     expect(channelSnapshotEntryIsActive(props.channels.channelsSnapshot, "quietchat")).toBe(false);
-  });
-});
-
-describe("WhatsApp status", () => {
-  function renderPhoneFact(self: WhatsAppStatus["self"]): string | undefined {
-    const whatsapp = createWhatsAppStatus({ linked: true, self });
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["whatsapp"],
-      channelLabels: { whatsapp: "WhatsApp" },
-      channels: { whatsapp },
-      channelAccounts: {},
-      channelDefaultAccountId: {},
-    });
-    const container = document.createElement("div");
-    renderChannelView(WhatsAppCard, props, container);
-    const label = Array.from(container.querySelectorAll("dt")).find(
-      (node) => node.textContent?.trim() === "Phone number",
-    );
-    return label?.nextElementSibling?.textContent?.trim();
-  }
-
-  it("renders readable phone identity with raw fallback and no JID fallback", () => {
-    expect(renderPhoneFact({ e164: "+4930123456", jid: "4930123456@s.whatsapp.net" })).toBe(
-      "Germany · +49 30 123456",
-    );
-    expect(renderPhoneFact({ e164: "not-a-phone", jid: "account@s.whatsapp.net" })).toBe(
-      "not-a-phone",
-    );
-    expect(renderPhoneFact({ jid: "account@s.whatsapp.net" })).toBeUndefined();
-  });
-});
-
-describe("WhatsApp card actions", () => {
-  it("shows QR as the primary action before WhatsApp is linked", () => {
-    const onWhatsAppStart = vi.fn();
-    const { buttons, labels } = renderWhatsAppButtons({
-      linked: false,
-      onWhatsAppStart,
-    });
-
-    expect(labels).toEqual(["Save", "Reload", "Show QR", "Logout", "Refresh"]);
-
-    const showQr = buttons.find((button) => button.textContent?.trim() === "Show QR");
-    expect(showQr).toBeInstanceOf(HTMLButtonElement);
-    showQr!.click();
-    expect(onWhatsAppStart).toHaveBeenCalledWith(false);
-  });
-
-  it("shows wait for scan only while a QR is displayed", () => {
-    const { labels } = renderWhatsAppButtons({
-      linked: false,
-      qrDataUrl: "data:image/png;base64,current-qr",
-    });
-
-    expect(labels).toEqual(["Save", "Reload", "Show QR", "Wait for scan", "Logout", "Refresh"]);
   });
 });
 

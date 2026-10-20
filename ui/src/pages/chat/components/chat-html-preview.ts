@@ -6,18 +6,14 @@ import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { readFileDraft } from "./chat-file-drafts.ts";
-import type { PreviewProps, SourceFallbackProps } from "./chat-html-preview-view.tsx";
 import type {
   SidebarContent,
   AttachmentSidebarRuntime,
   FileSidebarNavigation,
 } from "./chat-sidebar-content-types.ts";
-export type FileHtmlPreviewControls = {
-  source: boolean;
-  presentation: PreviewProps | null;
-  sourceFallback?: SourceFallbackProps;
-  onToggle: () => void;
-};
+export type FileHtmlPreviewControls = NonNullable<
+  ReturnType<ReturnType<typeof createFileHtmlPreview>["controls"]>
+>;
 
 registerEnglishCatalog(registerFilePreviewEnglish);
 
@@ -90,7 +86,7 @@ export function createFileHtmlPreview(
       onToggle: () => void;
       runtime: AttachmentSidebarRuntime;
       mode: EmbedSandboxMode;
-    }): FileHtmlPreviewControls | undefined {
+    }) {
       const current = file();
       if (!current) {
         return undefined;

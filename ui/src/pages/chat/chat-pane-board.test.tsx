@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import { loadSettings, patchSettings, saveSettings } from "../../app/settings.ts";
 import {
@@ -132,6 +133,8 @@ function createTestPane(
     chatLoading: false,
     chatHistoryPagination: { hasMore: false },
     chatMessages: [],
+    chatMessagesBySession: new Map(),
+    settings: loadSettings(),
     chatToolMessages: [],
     chatQueue: [],
     chatRunId: null,
@@ -145,8 +148,6 @@ function createTestPane(
     lastError: null,
     renderLifecycle: { afterCommit: () => () => {} },
     sessionKey,
-    sidebarFocusPanelId: "",
-    sidebarFocusVersion: 0,
     sidebarLayout: { columns: [] },
     sessions,
     sessionsError: null,
@@ -155,10 +156,7 @@ function createTestPane(
   pane.state.updateSidebarLayout = (layout) => {
     pane.state.sidebarLayout = layout;
   };
-  pane.state.updateSidebarActivePanel = (panelId) => {
-    pane.state.sidebarFocusPanelId = panelId;
-    pane.state.sidebarFocusVersion += 1;
-  };
+  pane.state.updateSidebarActivePanel = () => {};
   pane.connectedClient = client;
   pane.connectionGeneration = 1;
   Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
@@ -1003,6 +1001,7 @@ describe("chat pane board shell", () => {
       false,
       false,
       true,
+      gatewayPresentationScope(pane.context.gateway),
     );
 
     try {
@@ -1020,19 +1019,11 @@ describe("chat pane board shell", () => {
         canGrant: true,
       });
 
-      pane.context = {
-        ...pane.context,
-        gateway: {
-          snapshot: {
-            client,
-            phase: "connected",
-            hello: {
-              auth: { role: "operator", scopes: ["operator.read"] },
-              features,
-            },
-          },
-        },
-      } as unknown as ApplicationContext;
+      pane.context.gateway.snapshot.hello = {
+        ...pane.context.gateway.snapshot.hello!,
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features,
+      };
 
       expect(pane.resolveBoardProvider()).toBe(chat);
       expect(chat).toMatchObject({

@@ -694,8 +694,6 @@ export function stageUserProfileCatalogChange(db: EngineConnection, profileIds: 
   if (catalog) {
     const rows = selectProfileAccessEntries(db, profileIds);
     stageSqliteTransactionState(db, {
-      stage: () => {},
-      rollback: () => {},
       commit: () => {
         for (const id of profileIds) {
           catalog.delete(id);

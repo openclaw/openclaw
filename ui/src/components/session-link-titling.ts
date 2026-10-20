@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionsResolveParams,
@@ -22,7 +21,6 @@ import {
   markdownSessionPublicOrigin,
   parseLocalMarkdownSessionUrl,
 } from "./markdown-session-links.ts";
-import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
 
 const SUCCESS_CACHE_MS = 5 * 60_000;
 const FAILURE_CACHE_MS = 30_000;
@@ -35,6 +33,8 @@ type SessionTitleTarget = {
 };
 
 type SessionTitle = SessionTitleTarget & { title?: string };
+
+type RegisteredTitle = { element: HTMLElement; label: HTMLElement };
 
 /** A session URL the loaded roster cannot identify; the Gateway resolves it on demand. */
 type SessionReference = {
@@ -56,18 +56,13 @@ type ReferenceEntry = {
   value?: SessionTitleTarget | null;
 };
 
-function titleFromPreview(value: unknown): SessionTitle {
-  if (!isRecord(value) || value.status !== "ok") {
+function titleFromPreview(value: ControlUiSessionPreview): SessionTitle {
+  if (value.status !== "ok") {
     throw new Error("Session title unavailable");
   }
-  const sessionKey = readNonBlankString(value.sessionKey);
-  const agentId = readNonBlankString(value.agentId);
-  if (!sessionKey || !agentId) {
-    throw new Error("Session title response was incomplete");
-  }
   return {
-    sessionKey,
-    agentId,
+    sessionKey: value.sessionKey,
+    agentId: value.agentId,
     namespace: "chat",
     title: readNonBlankString(value.title) ?? readNonBlankString(value.derivedTitle),
   };
@@ -80,19 +75,12 @@ export class SessionLinkTitler {
   private readonly references = new Map<string, ReferenceEntry>();
   private scope = {};
   private presentationScope: number | undefined;
+  private readonly registered = new Map<HTMLElement, RegisteredTitle>();
+  private refreshQueued = false;
   private readonly titledAnchors = new WeakMap<
     HTMLElement,
     { scope: object; key: string; title: string }
   >();
-  private readonly observer = new MutationObserver((records) => {
-    for (const node of records.flatMap((record) => [...record.addedNodes])) {
-      if (node instanceof HTMLElement) {
-        this.refresh(node);
-      }
-    }
-  });
-
-  constructor(private readonly host: HTMLElement) {}
 
   get client() {
     return this.currentClient;
@@ -131,24 +119,37 @@ export class SessionLinkTitler {
     return this.scope;
   }
 
-  connect(): void {
-    this.observer.observe(this.host, { childList: true, subtree: true });
-    this.refresh();
+  register(element: HTMLElement, label: HTMLElement): () => void {
+    const entry = { element, label };
+    this.registered.set(element, entry);
+    if (!this.refreshQueued) {
+      this.refreshQueued = true;
+      queueMicrotask(() => {
+        this.refreshQueued = false;
+        this.refresh();
+      });
+    }
+    return () => {
+      if (this.registered.get(entry.element) === entry) {
+        this.registered.delete(entry.element);
+      }
+    };
   }
 
-  refresh(root = this.host): void {
+  refresh(): void {
     // Share repeated references only within this synchronous roster projection.
     const targets = new Map<string, SessionTitleTarget | SessionReference | null>();
-    if (root.matches(SESSION_TITLE_TARGET_SELECTOR)) {
-      void this.decorate(root, true, targets);
-    }
-    for (const anchor of root.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
-      void this.decorate(anchor, true, targets);
+    // A code link can acquire an anchor, changing its registration key below.
+    const registrations = [...this.registered.values()];
+    for (const entry of registrations) {
+      void this.decorate(entry.element, true, targets);
     }
   }
 
   disconnect(): void {
-    this.observer.disconnect();
+    // Native bridge remounts retain producer-owned DOM and registrations.
+    this.client = null;
+    this.context = null;
   }
 
   async decorate(
@@ -156,6 +157,10 @@ export class SessionLinkTitler {
     load = false,
     targets?: Map<string, SessionTitleTarget | SessionReference | null>,
   ): Promise<void> {
+    const entry = this.registered.get(element);
+    if (!entry) {
+      return;
+    }
     const scope = this.currentScope();
     let target = this.targetForAnchor(element, targets);
     const anchor =
@@ -171,13 +176,15 @@ export class SessionLinkTitler {
       element.removeAttribute("data-session-href");
       element.replaceWith(anchor);
       anchor.append(element);
+      this.registered.delete(element);
+      entry.element = anchor;
+      this.registered.set(anchor, entry);
     }
     const previous = this.titledAnchors.get(anchor);
     if (previous && previous.scope !== scope) {
-      const label = anchor.querySelector<HTMLSpanElement>(":scope > .session-label");
-      if (label?.textContent === previous.title) {
+      if (entry.label.textContent === previous.title) {
         anchor.classList.remove("markdown-session-link--titled");
-        label.textContent = previous.key;
+        entry.label.textContent = previous.key;
       }
       this.titledAnchors.delete(anchor);
     }
@@ -191,7 +198,7 @@ export class SessionLinkTitler {
         // Resolution is decoration; the URL remains navigable.
         return;
       }
-      if (this.currentScope() !== scope) {
+      if (this.currentScope() !== scope || this.registered.get(anchor) !== entry) {
         return;
       }
     }
@@ -199,14 +206,14 @@ export class SessionLinkTitler {
       return;
     }
     const cached = this.cachedOrSeededEntry(target);
-    this.stampAnchor(anchor, target, cached?.value);
+    this.stampAnchor(entry, target, cached?.value);
     if (!load || cached?.value) {
       return;
     }
     try {
       const title = await this.loadTitle(target);
-      if (this.currentScope() === scope) {
-        this.stampAnchor(anchor, target, title);
+      if (this.currentScope() === scope && this.registered.get(anchor) === entry) {
+        this.stampAnchor(entry, target, title);
       }
     } catch {
       // A title is decoration; the session link remains usable with its raw key.
@@ -437,10 +444,11 @@ export class SessionLinkTitler {
   }
 
   private stampAnchor(
-    anchor: HTMLElement,
+    entry: RegisteredTitle,
     target: SessionTitleTarget,
     titleRecord?: SessionTitle,
   ): void {
+    const { element: anchor, label } = entry;
     const title = titleRecord?.title;
     const href = pathForSession(
       target.namespace,
@@ -465,10 +473,7 @@ export class SessionLinkTitler {
     }
     anchor.classList.add("markdown-session-link--titled");
     this.titledAnchors.set(anchor, { scope: this.scope, key: target.sessionKey, title });
-    // Keep a producer's label node so Lit can still update its text binding.
-    const label =
-      anchor.querySelector<HTMLSpanElement>(":scope > .session-label") ??
-      document.createElement("span");
+    // The producer retains this label across later rendering updates.
     label.className = "session-label";
     label.textContent = title;
     anchor.replaceChildren(label);

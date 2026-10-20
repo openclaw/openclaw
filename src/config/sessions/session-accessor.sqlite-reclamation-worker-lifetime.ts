@@ -3,7 +3,7 @@ import { addAbortListener } from "node:events";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { resolveAgentDatabaseIdleHandleTtlMs } from "../../infra/sqlite-handle-lifecycle.js";
 import { publishSqliteWalCheckpointObservation } from "../../infra/sqlite-wal-checkpoint.js";
 import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -80,6 +80,7 @@ type MutationRunParams<Result> = {
   withWriteAdmission: SqliteWorkerWriteAdmission<Result>;
 };
 const log = createSubsystemLogger("session-sqlite");
+const memoryPressure = channel("openclaw.memory.critical");
 
 /** Retains only the admitted connection; each caller owns its plan, claim and commit gate. */
 export class SqliteReclamationWorker {
@@ -127,14 +128,8 @@ export class SqliteReclamationWorker {
     });
     try {
       this.unregisterState = registerOpenClawStateDatabaseAsyncResource({
-        close: async (closingIdentity) => {
-          if (
-            !closingIdentity ||
-            closingIdentity.key === this.stateContext.admission.identity.key
-          ) {
-            await this.close();
-          }
-        },
+        admission: this.stateContext.admission,
+        close: () => this.close(),
       });
     } catch (error) {
       this.unregisterAgent();
@@ -186,7 +181,8 @@ export class SqliteReclamationWorker {
       this.active = undefined;
       if (!this.revoked) {
         this.transport?.channel.unref();
-        this.idle = setTimeout(this.onIdle, SQLITE_IDLE_HANDLE_TTL_MS);
+        // The Worker pins its agent database and lease until it retires.
+        this.idle = setTimeout(this.onIdle, resolveAgentDatabaseIdleHandleTtlMs());
         this.idle.unref();
         if (this.onRetired) {
           const drainSignal = getGatewayRestartDrainSignal();
@@ -478,7 +474,7 @@ export class SqliteReclamationWorker {
     });
     // Only ordinary retained Workers use pressure retirement; validation scopes own their close.
     if (this.onRetired) {
-      channel("openclaw.memory.critical").subscribe(this.onMemoryPressure);
+      memoryPressure.subscribe(this.onMemoryPressure);
     }
     return transport;
   }
@@ -581,7 +577,7 @@ export class SqliteReclamationWorker {
         });
       }
       this.retired = true;
-      channel("openclaw.memory.critical").unsubscribe(this.onMemoryPressure);
+      memoryPressure.unsubscribe(this.onMemoryPressure);
       this.unregisterAgent();
       this.unregisterState();
       process.off("beforeExit", this.beforeExit);

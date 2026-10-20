@@ -85,7 +85,7 @@ openclaw-sidebar-agent-roster {
   flex: 1;
   min-width: 0;
   font-size: 13px;
-  font-weight: 550;
+  font-weight: 500;
   line-height: 16px;
 }
 
@@ -97,7 +97,7 @@ openclaw-sidebar-agent-roster {
 
 .sidebar-agent-roster__preview {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
 }
 
@@ -112,7 +112,7 @@ openclaw-sidebar-agent-roster {
 }
 
 .sidebar-agent-roster__row {
-  grid-area: 1 / 1 / 2 / -1;
+  grid-area: 1 / 1 / 2 / 3;
   display: grid;
   grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr);
   align-items: center;
@@ -157,14 +157,32 @@ openclaw-sidebar-agent-roster {
 }
 
 .sidebar-agent-roster__group {
-  margin-bottom: 12px;
+  margin-bottom: 2px;
+}
+/* Status sits inline after the name, centered on the row. The header only grows
+   a third track when there is a status, so plain rows keep their full width. */
+.sidebar-agent-roster__header:has(> .sidebar-agent-roster__signals .sidebar-session-team-state) {
+  grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr) auto;
 }
 .sidebar-agent-roster__signals {
-  grid-area: 2 / 2;
-  padding-bottom: 6px;
+  grid-area: 1 / 3;
+  display: flex;
+  align-items: center;
 }
 .sidebar-agent-roster__signals:not(:has(.sidebar-session-team-state)) {
   display: none;
+}
+/* Revealed actions overlay the row end; step the status left of them instead of
+   reserving the same space again inside the link. */
+.sidebar-agent-roster__header:is(:hover, :focus-within):has(
+    > .sidebar-agent-roster__signals .sidebar-session-team-state
+  ) {
+  & > .sidebar-agent-roster__row {
+    padding-inline-end: 0;
+  }
+  & > .sidebar-agent-roster__signals {
+    margin-inline-end: 32px;
+  }
 }
 .sidebar-agent-roster__actions {
   position: absolute;
@@ -338,6 +356,14 @@ openclaw-sidebar-agent-roster {
   }
   .sidebar-agent-roster__row {
     padding-inline-end: 32px;
+  }
+  .sidebar-agent-roster__header:has(> .sidebar-agent-roster__signals .sidebar-session-team-state) {
+    & > .sidebar-agent-roster__row {
+      padding-inline-end: 0;
+    }
+    & > .sidebar-agent-roster__signals {
+      margin-inline-end: 32px;
+    }
   }
   .sidebar-agent-roster__actions .sidebar-agent-roster__action {
     min-width: 32px;

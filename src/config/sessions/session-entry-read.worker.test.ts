@@ -8,7 +8,7 @@ import {
 import * as boardStore from "../../boards/sqlite-board-store.kernel.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
@@ -38,6 +38,7 @@ import {
 import { prepareSessionDeliveryGeneration } from "./session-delivery-generation.js";
 import {
   readSessionEntriesFromStoreInWorker,
+  readSessionEntrySummariesInWorker,
   withSessionEntriesFromStoresInWorker,
 } from "./session-entry-read-runtime.js";
 import {
@@ -586,38 +587,50 @@ it.each(["sharing", "list"] as const)(
     }),
 );
 
-it("preserves listing validation of dirty siblings in selected worker reads", () =>
-  withDatabase(async (database, env) => {
-    const sessionKey = "agent:main:selected";
-    const sibling = "agent:main:matrix:channel:!mixed:example.org";
-    for (const key of [sessionKey, sibling]) {
-      writeSessionEntry(database, key, { sessionId: key, updatedAt: 1 });
-    }
-    const read = () =>
-      readSessionEntriesFromStoreInWorker({
-        agentId: "main",
-        storePath: database.path,
-        env,
-        sessionKeys: [sessionKey],
-        projection: "list",
-      });
-    expect((await read()).entries).toHaveLength(1);
-    markCanonicalSessionValidationPending(database, [sibling]);
-    database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-      JSON.stringify({
-        sessionId: sibling,
-        updatedAt: 1,
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "matrix", to: "!Mixed:example.org" },
+it.each(["selected", "orphans"] as const)(
+  "preserves listing validation of dirty siblings in %s worker reads",
+  (mode) =>
+    withDatabase(async (database, env) => {
+      const sessionKey = "agent:main:selected";
+      const sibling = "agent:main:matrix:channel:!mixed:example.org";
+      for (const key of [sessionKey, sibling]) {
+        writeSessionEntry(database, key, { sessionId: key, updatedAt: 1 });
+      }
+      const read = async () =>
+        mode === "orphans"
+          ? readSessionEntrySummariesInWorker({
+              agentId: "main",
+              storePath: database.path,
+              env,
+              mainSessionRecovery: "orphans",
+            })
+          : (
+              await readSessionEntriesFromStoreInWorker({
+                agentId: "main",
+                storePath: database.path,
+                env,
+                sessionKeys: [sessionKey],
+                projection: "list",
+              })
+            ).entries;
+      expect(await read()).toHaveLength(mode === "orphans" ? 0 : 1);
+      markCanonicalSessionValidationPending(database, [sibling]);
+      database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
+        JSON.stringify({
+          sessionId: sibling,
+          updatedAt: 1,
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "matrix", to: "!Mixed:example.org" },
+          }),
         }),
-      }),
-      sibling,
-    );
-    database.db
-      .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
-      .run(sibling);
-    await expect(read()).rejects.toThrow("non-canonical persisted row");
-  }));
+        sibling,
+      );
+      database.db
+        .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+        .run(sibling);
+      await expect(read()).rejects.toThrow("non-canonical persisted row");
+    }),
+);
 
 it("reads retained headers and entries from one committed sharing snapshot", () =>
   withDatabase(async (database, env) => {
@@ -712,7 +725,7 @@ it("keeps durable delivery generations live only through same-generation writes"
     const revoked = expect.objectContaining({ code: "SESSION_DELIVERY_GENERATION_REVOKED" });
     const authority = await prepareSessionDeliveryGeneration(descriptor);
     try {
-      await runExclusiveSessionLifecycleMutation("patch", {
+      await runSessionMutation({
         scope: database.path,
         identities: [sessionKey, entry.sessionId],
         prepare: async () => {

@@ -23,6 +23,7 @@ import { captureSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-oper
 import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { readStagedConversationPublications } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import { projectSessionActorAuthority } from "./session-actor-command.js";
@@ -86,7 +87,9 @@ function transcriptPayloadBytes(command: Command): number | undefined {
         typeof append.input.event === "string"
           ? append.input.event
           : JSON.stringify(append.input.event),
-      ) + Buffer.byteLength(append.input.message?.messageJson ?? "")
+      ) +
+      Buffer.byteLength(append.input.message?.messageJson ?? "") +
+      (append.input.initialModel ? Buffer.byteLength(JSON.stringify(append.input.initialModel)) : 0)
     );
   }
   if ("eventJson" in input) {
@@ -197,8 +200,6 @@ export function createSessionActorWorker(
         working.hot.version = version;
         if (singleStatement) {
           stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
-            stage() {},
-            rollback() {},
             commit() {
               const committedToken = token(
                 database,
@@ -280,7 +281,7 @@ export function createSessionActorWorker(
         captureSessionEntrySnapshot({
           entry: structuredClone(previousEntry),
           row: {
-            ...structuredClone(selected.row),
+            ...selected.row,
             window: before.window ? structuredClone(before.window) : null,
             member_ids_json: JSON.stringify(before.hot.members.map((member) => member.identityId)),
             board_present: before.hasBoard ? 1 : 0,
@@ -339,8 +340,6 @@ export function createSessionActorWorker(
           const mutationRevision = readSqliteNativeMutationRevision(opened.db);
           if (
             !stageSqliteTransactionState(sqlPublicationAnchor(opened.db), {
-              stage() {},
-              rollback() {},
               commit() {
                 // A later nested writer must not install this intermediate transcript.
                 if (readSqliteNativeMutationRevision(opened.db) === mutationRevision) {
@@ -550,12 +549,11 @@ export function createSessionActorWorker(
               after: working.hot,
               payloads: working.transcript.payloads,
               transcriptAuthority: readStagedSessionTranscriptAuthority(opened),
+              conversationPublication: readStagedConversationPublications(opened),
               applied,
             });
             if (
               !stageSqliteTransactionState(sqlPublicationAnchor(opened.db), {
-                stage() {},
-                rollback() {},
                 commit() {
                   committed = true;
                   residents.remember(working);
@@ -615,6 +613,7 @@ export function createSessionActorWorker(
                     transfer: { handle, frames: finalFrames },
                     publication: turn ?? commitPublication,
                   },
+                  conversationPublication: accepted.receipt.conversationPublication,
                   final: true,
                 });
                 return { kind: "committed" as const };
@@ -628,6 +627,7 @@ export function createSessionActorWorker(
               kind: "session-actor-admission",
               snapshot: projectSessionActorAuthority(working.hot),
               publication: turn ?? commitPublication,
+              conversationPublication: accepted.receipt.conversationPublication,
               final: true,
             });
             return { kind: "committed" as const };

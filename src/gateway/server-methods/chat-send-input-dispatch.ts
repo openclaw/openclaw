@@ -4,7 +4,6 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
 import { withoutGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
-import { reserveReplyAdmissionTicket } from "../../auto-reply/reply/reply-admission-ticket.js";
 import { lookupSessionGoalOperation } from "../../config/sessions/goals-operations-read.js";
 import type { SessionGoalOperationResult } from "../../config/sessions/goals-operations.js";
 import {
@@ -179,7 +178,6 @@ export async function handleChatSendWithStorage(
     restartSafeAdmission !== undefined && !restartSafeAdmission.retryExpectedState;
   const commitInitialInput = req.method === "sessions.create" && commitFreshInput;
   let inputAdmissionAttempted = false;
-  let replyAdmissionTicket: ReturnType<typeof reserveReplyAdmissionTicket>;
   let releaseBeforeDispatch: void | (() => void) = undefined;
   let dashboardAuthority: Awaited<ReturnType<typeof createChatSendDashboardAuthority>> | undefined;
   try {
@@ -275,6 +273,7 @@ export async function handleChatSendWithStorage(
       client,
       logGateway: context.logGateway,
       getConfig: context.getRuntimeConfig,
+      assertInputCurrent: assertInputAdmissionCurrent,
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
@@ -285,7 +284,7 @@ export async function handleChatSendWithStorage(
           !userTurnRecorder.isPendingInputConsumed?.();
         const disposition =
           activeRunAbort.controller.signal.aborted &&
-          activeRunAbort.entry?.abortStopReason !== "restart" &&
+          activeRunAbort.entry?.adapter.abortStopReason !== "restart" &&
           !isAgentRunRestartAbortReason(activeRunAbort.controller.signal.reason)
             ? "cancelled"
             : "interrupted";
@@ -293,7 +292,7 @@ export async function handleChatSendWithStorage(
         if (pending && activeRunAbort.controller.signal.aborted) {
           const reason = resolveChatAbortDiagnosticReason(
             activeRunAbort.controller.signal,
-            activeRunAbort.entry,
+            activeRunAbort.entry?.adapter,
           );
           context.logGateway.info(`chat pending input aborted: ${reason} (${disposition})`, {
             runId: clientRunId,
@@ -361,6 +360,7 @@ export async function handleChatSendWithStorage(
       });
       const staged = await userTurnRecorder.stageApproved?.({
         ...pendingAdmission,
+        retryInterrupted: true,
         ...(request.restartResume ? { lifecycleAdmission: request.restartResume } : {}),
       });
       stagePhase?.finish();
@@ -450,7 +450,7 @@ export async function handleChatSendWithStorage(
       }
       if (lifecycleGeneration !== getAgentEventLifecycleGeneration()) {
         if (activeRunAbort.entry) {
-          activeRunAbort.entry.abortStopReason = "restart";
+          activeRunAbort.entry.adapter.abortStopReason = "restart";
         }
         activeRunAbort.controller.abort(createAgentRunRestartAbortError());
       }
@@ -458,7 +458,7 @@ export async function handleChatSendWithStorage(
         // No runtime adopted this durable input; retain its same-ID restart retry.
         if (
           !(await terminalizeRestartSafeAdmission({
-            retryable: activeRunAbort.entry?.abortStopReason === "restart",
+            retryable: activeRunAbort.entry?.adapter.abortStopReason === "restart",
             status: "killed",
           }))
         ) {
@@ -533,6 +533,7 @@ export async function handleChatSendWithStorage(
     const beginCapturedMessageInjection = createChatSendMessageInjectionStarter({
       operatorAuthority: admission.operatorAuthority,
       target: messageInjectionTarget,
+      sourceRef: admission.sourceRef,
       abortSignal: activeRunAbort.controller.signal,
       request,
       session,
@@ -617,11 +618,8 @@ export async function handleChatSendWithStorage(
     // post-ACK cleanupAdmittedRun must not race that persist with a discard.
     assertInputAdmissionCurrent();
     admission.setDiscardAbandonedPreparedMedia(undefined);
-    replyAdmissionTicket = reserveReplyAdmissionTicket([
-      ctx.SessionKey,
-      ctx.CommandTargetSessionKey,
-    ]);
     phase?.mark("response");
+    admission.markInputAccepted();
     if (!admission.workerGoalAdmission) {
       respond(true, ackPayload, undefined, { runId: clientRunId });
     }
@@ -633,7 +631,6 @@ export async function handleChatSendWithStorage(
     releaseBeforeDispatch = undefined;
     const dispatch: StartChatDispatchParams = {
       ...setup,
-      replyAdmissionTicket,
       diagnostics,
       admissionStartedAt,
       attachments: preparedAttachments.value,
@@ -670,6 +667,7 @@ export async function handleChatSendWithStorage(
       injection: {
         beginCapturedMessageInjection,
         messageInjectionAttempt,
+        messageInjectionDisposition: preAckInjection.disposition,
         preAckReplyContextPromise,
         replyContextFieldsPromise,
       },
@@ -703,7 +701,6 @@ export async function handleChatSendWithStorage(
   } catch (err) {
     dashboardAuthority?.release();
     releaseBeforeDispatch?.();
-    replyAdmissionTicket?.release();
     await handleChatSendSetupError({
       // Uncommitted Goal admissions may retry with their original identity. Committed
       // outcomes replay from the durable receipt instead of this transient error cache.

@@ -10,7 +10,7 @@ import {
   iterateSqliteQuerySync,
   prepareSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -170,9 +170,7 @@ function validateDetachedSessionTranscriptContext(
     const validate = () => {
       validateSessionTranscriptContextInDatabase(database, resolved, validation, "prefix");
     };
-    return validation.admission
-      ? validate()
-      : runSqliteDeferredTransactionSync(database.db, validate);
+    return validation.admission ? validate() : runSqliteReadSnapshotSync(database.db, validate);
   }, toDatabaseOptions(resolved));
   if (!result.found && (validation.admission || validation.version)) {
     throw new SessionTranscriptReadFenceError(
@@ -292,7 +290,7 @@ function withTranscriptContextSnapshot<T>(
   const resolved = resolveSqliteTranscriptReadScope(scope);
   return withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(
+      runSqliteReadSnapshotSync(
         database.db,
         () => {
           const db = getSessionKysely(database.db);

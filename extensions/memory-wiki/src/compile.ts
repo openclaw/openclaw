@@ -44,9 +44,7 @@ import {
 import {
   appendMemoryWikiLog,
   hashMemoryWikiVaultSources,
-  loadMemoryWikiValidatedVaultIdentity,
   loadMemoryWikiVaultIdentity,
-  resolveMemoryWikiVaultSourceGeneration,
 } from "./log.js";
 import {
   decodeWikiPageUtf8,
@@ -57,23 +55,25 @@ import {
   scanWikiPageSummary,
   type WikiClaim,
   type WikiClaimEvidence,
-  type WikiPageKind,
   type WikiPageSummary,
   type WikiRelationship,
-  WIKI_PAGE_GROUPS,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { isPersonLikePage } from "./person-page.js";
+import {
+  buildRelatedPageIndex,
+  selectRelatedPages,
+  type RelatedPageIndex,
+} from "./related-pages.js";
 import { readMemoryWikiSourceSyncState } from "./source-sync-state.js";
 import { readExistingWikiPageUtf8, writeManagedMarkdownFile } from "./vault-page-write.js";
 import { activateExistingMemoryWikiVault, initializeMemoryWikiVault } from "./vault.js";
 import { buildMemoryWikiOverview, projectMemoryWikiOverviewItem } from "./wiki-overview.js";
+import { WIKI_PAGE_GROUPS, type WikiPageKind } from "./wiki-page-kinds.js";
 
 const READ_PAGE_SUMMARIES_CONCURRENCY = 16;
-const MAX_RELATED_PAGES_PER_SECTION = 12;
-const MAX_SHARED_SOURCE_FANOUT = 24;
 
 type DashboardPageDefinition = {
   title: string;
@@ -628,29 +628,6 @@ function formatClaimContradictionClusterLine(
   return `- \`${cluster.label}\`: ${entries.join(" | ")}`;
 }
 
-function normalizeComparableTarget(value: string): string {
-  return normalizeLowercaseStringOrEmpty(
-    value
-      .trim()
-      .replace(/\\/g, "/")
-      .replace(/\.md$/i, "")
-      .replace(/^\.\/+/, "")
-      .replace(/\/+$/, ""),
-  );
-}
-
-function uniquePages(pages: WikiPageSummary[]): WikiPageSummary[] {
-  const seen = new Set<string>();
-  return pages.filter((page) => {
-    const key = page.id ?? page.relativePath;
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
-}
-
 function renderWikiPageLinks(params: {
   config: ResolvedMemoryWikiConfig;
   pages: WikiPageSummary[];
@@ -668,48 +645,9 @@ function renderWikiPageLinks(params: {
 function buildRelatedBlockBody(
   config: ResolvedMemoryWikiConfig,
   page: WikiPageSummary,
-  candidates: WikiPageSummary[],
-  pagesById: Map<string, WikiPageSummary>,
+  index: RelatedPageIndex,
 ): string {
-  const otherPages = candidates.filter((candidate) => candidate.relativePath !== page.relativePath);
-  const sourceIds = new Set(page.sourceIds);
-  const sourceFanout = countBy(
-    otherPages.flatMap((candidate) => candidate.sourceIds.filter((id) => sourceIds.has(id))),
-  );
-  const sourcePages = uniquePages(page.sourceIds.flatMap((id) => pagesById.get(id) ?? []));
-  const backlinkKeys = new Set(
-    [
-      page.relativePath,
-      path.posix.basename(page.relativePath),
-      page.title,
-      ...(page.id ? [page.id] : []),
-    ].map(normalizeComparableTarget),
-  );
-  const backlinks = uniquePages(
-    otherPages.filter(
-      (candidate) =>
-        candidate.sourceIds.includes(page.id ?? "") ||
-        candidate.linkTargets.some((target) =>
-          backlinkKeys.has(normalizeComparableTarget(target.split("#")[0] ?? "")),
-        ),
-    ),
-  );
-  const backlinkPages =
-    backlinks.length <= MAX_SHARED_SOURCE_FANOUT
-      ? backlinks.slice(0, MAX_RELATED_PAGES_PER_SECTION)
-      : [];
-  const excluded = new Set([...sourcePages, ...backlinkPages].map((entry) => entry.relativePath));
-  const relatedPages = uniquePages(
-    otherPages.filter(
-      (candidate) =>
-        !excluded.has(candidate.relativePath) &&
-        page.sourceIds.some(
-          (id) =>
-            candidate.sourceIds.includes(id) &&
-            (sourceFanout.get(id) ?? 0) <= MAX_SHARED_SOURCE_FANOUT,
-        ),
-    ),
-  ).slice(0, MAX_RELATED_PAGES_PER_SECTION);
+  const { sourcePages, backlinkPages, relatedPages } = selectRelatedPages(page, index);
   const groups: Array<[string, WikiPageSummary[]]> = [
     ["Sources", sourcePages],
     ["Referenced By", backlinkPages],
@@ -736,10 +674,7 @@ async function refreshPageRelatedBlocks(params: {
   }
   const root = await fsRoot(params.config.vault.path);
   const updatedFiles: string[] = [];
-  const candidates = params.pages.filter((page) => page.kind !== "report");
-  const pagesById = new Map(
-    candidates.flatMap((page) => (page.id ? [[page.id, page] as const] : [])),
-  );
+  const index = buildRelatedPageIndex(params.pages);
   for (const page of params.pages) {
     params.signal?.throwIfAborted();
     if (page.kind === "report") {
@@ -758,7 +693,7 @@ async function refreshPageRelatedBlocks(params: {
         heading: "## Related",
         startMarker: WIKI_RELATED_START_MARKER,
         endMarker: WIKI_RELATED_END_MARKER,
-        body: buildRelatedBlockBody(params.config, page, candidates, pagesById),
+        body: buildRelatedBlockBody(params.config, page, index),
       }),
     );
     if (updated === original) {
@@ -852,11 +787,7 @@ function buildRootIndexBody(params: {
     `- Render mode: \`${params.config.vault.renderMode}\``,
     `- Total pages: ${params.pages.length}`,
     `- Claims: ${claimCount}`,
-    `- Sources: ${params.counts.source}`,
-    `- Entities: ${params.counts.entity}`,
-    `- Concepts: ${params.counts.concept}`,
-    `- Syntheses: ${params.counts.synthesis}`,
-    `- Reports: ${params.counts.report}`,
+    ...WIKI_PAGE_GROUPS.map(({ kind, heading }) => `- ${heading}: ${params.counts[kind]}`),
   ];
 
   for (const group of WIKI_PAGE_GROUPS) {
@@ -988,15 +919,6 @@ async function compileMemoryWikiVaultUnlocked(
       compiledCacheParentPublicationId: compiledInputIdentity.compiledCachePublicationId,
     },
   });
-  const assertCompilationCurrent = (identity: typeof compiledInputIdentity, message: string) => {
-    if (
-      identity.vaultGeneration !== compiledInputIdentity.vaultGeneration ||
-      identity.compiledCacheReservationId !== compiledCacheReservationId ||
-      identity.compiledCachePublicationId !== compiledInputIdentity.compiledCachePublicationId
-    ) {
-      throw new Error(message);
-    }
-  };
   const sourceSyncState = await readMemoryWikiSourceSyncState(rootDir);
   const managedImportedSourcePagePaths = new Set(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
@@ -1029,7 +951,6 @@ async function compileMemoryWikiVaultUnlocked(
   const compiledSnapshot = buildCompiledCacheSnapshot(scan);
   const counts = compiledSnapshot.dashboards.overview.pageCounts;
   const compiledCachePublicationId = randomUUID();
-  let compiledCacheSourceGeneration: string | undefined;
 
   for (const group of [undefined, ...WIKI_PAGE_GROUPS]) {
     const relativePath = group ? path.join(group.dir, "index.md").replace(/\\/g, "/") : "index.md";
@@ -1067,26 +988,6 @@ async function compileMemoryWikiVaultUnlocked(
     compiledInputIdentity.compiledCachePublicationId,
     async () => {
       options?.signal?.throwIfAborted();
-      assertCompilationCurrent(
-        await loadMemoryWikiVaultIdentity(rootDir),
-        "Memory Wiki vault changed while its compiled cache was being built.",
-      );
-      const sourceGenerationAfterScan = await resolveMemoryWikiVaultSourceGeneration(rootDir);
-      if (sourceGenerationAfterScan !== scan.sourceGeneration) {
-        throw new Error("Memory Wiki vault changed while its compiled cache was being published.");
-      }
-      compiledCacheSourceGeneration = sourceGenerationAfterScan;
-      assertCompilationCurrent(
-        await loadMemoryWikiVaultIdentity(rootDir),
-        "Memory Wiki vault changed while its compiled cache was being verified.",
-      );
-      options?.signal?.throwIfAborted();
-    },
-    async () => {
-      options?.signal?.throwIfAborted();
-      if (!compiledCacheSourceGeneration) {
-        throw new Error("Memory Wiki compiled cache source generation is missing.");
-      }
       await appendMemoryWikiLog(rootDir, {
         type: "compile",
         timestamp: new Date().toISOString(),
@@ -1094,12 +995,12 @@ async function compileMemoryWikiVaultUnlocked(
           compiledCachePublicationId,
           compiledCacheParentPublicationId: compiledInputIdentity.compiledCachePublicationId,
           compiledCacheReservationId,
-          compiledCacheSourceGeneration,
+          compiledCacheSourceGeneration: scan.sourceGeneration,
         },
       });
       options?.signal?.throwIfAborted();
     },
-    () => loadMemoryWikiValidatedVaultIdentity(rootDir),
+    () => loadMemoryWikiVaultIdentity(rootDir),
   );
   await appendMemoryWikiLog(rootDir, {
     type: "compile",

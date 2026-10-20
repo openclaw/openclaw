@@ -1,5 +1,6 @@
 import http from "node:http";
 import { URL } from "node:url";
+import { promisify } from "node:util";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -493,19 +494,7 @@ export class VoiceCallWebhookServer {
     }
 
     const server = this.server;
-    const serverClosePromise = new Promise<void>((resolve, reject) => {
-      if (!server) {
-        resolve();
-        return;
-      }
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve();
-      });
-    });
+    const serverClosePromise = server ? promisify(server.close.bind(server))() : Promise.resolve();
     this.startPromise = null;
     this.streamDisconnectGrace.close();
     const reaperStopped = this.stopStaleCallReaper?.();

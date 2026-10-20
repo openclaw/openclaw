@@ -118,6 +118,14 @@ suite.define(() => {
         } else {
           await gateway.resolveDeferred("sessions.patch");
         }
+        if (surface === "sidebar") {
+          const dialog = page.getByRole("dialog", { name: "Rename session", exact: true });
+          await expect
+            .poll(() => dialog.getByRole("alert").textContent())
+            .toContain("changed before patch. Retry.");
+          expect(await input.inputValue()).toBe("Stale rename");
+          await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+        }
         await input.waitFor({ state: "detached" });
         const outcome = page.getByText(/changed before patch\. Retry\.|Stale rename/, {
           exact: false,

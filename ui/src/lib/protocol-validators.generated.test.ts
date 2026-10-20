@@ -7,6 +7,7 @@ import {
   SessionApprovalEventSchema,
   SessionApprovalReplaySchema,
 } from "../../../packages/gateway-protocol/src/schema/approvals.js";
+import { BoardSnapshotSchema } from "../../../packages/gateway-protocol/src/schema/board.js";
 import {
   AgentActivityItemSchema,
   ChatHistoryParamsSchema,
@@ -34,6 +35,7 @@ import { readTranscriptDisplayPosition } from "../../../src/chat/transcript-disp
 import { CHAT_TRANSCRIPT_METADATA_KEYS } from "../pages/chat/chat-transcript-metadata.ts";
 import * as activityChecks from "./protocol-validators.generated/activity.js";
 import * as approvalChecks from "./protocol-validators.generated/approvals.js";
+import * as boardChecks from "./protocol-validators.generated/board.js";
 import * as historyStateChecks from "./protocol-validators.generated/history-state.js";
 import * as sessionInputChecks from "./protocol-validators.generated/session-input.js";
 import * as transcriptChecks from "./protocol-validators.generated/transcript.js";
@@ -41,6 +43,7 @@ import * as transcriptChecks from "./protocol-validators.generated/transcript.js
 const checks = {
   ...activityChecks,
   ...approvalChecks,
+  ...boardChecks,
   ...sessionInputChecks,
   ...transcriptChecks,
   ...historyStateChecks,
@@ -77,6 +80,29 @@ const fixtures: Array<{
   valid: unknown;
   invalid: unknown;
 }> = [
+  {
+    name: "board snapshot",
+    schema: BoardSnapshotSchema,
+    check: checks.isBoardSnapshot,
+    valid: {
+      sessionKey: "agent:main:dashboard",
+      revision: 1,
+      tabs: [{ tabId: "overview", title: "Overview", position: 0, chatDock: "right" }],
+      widgets: [
+        {
+          name: "chart",
+          tabId: "overview",
+          contentKind: "html",
+          sizeW: 12,
+          sizeH: 8,
+          position: 0,
+          grantState: "none",
+          revision: 1,
+        },
+      ],
+    },
+    invalid: { sessionKey: "agent:main:dashboard", revision: 1, tabs: [], widgets: [{}] },
+  },
   {
     name: "sender identity",
     schema: SessionParticipantIdentitySchema,

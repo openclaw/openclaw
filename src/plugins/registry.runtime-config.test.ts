@@ -381,16 +381,13 @@ describe("plugin registry runtime config scope", () => {
     }
   });
 
-  it("keeps adopted hosted-media resolution scoped without changing pure media helpers", async () => {
+  it("keeps adopted media capabilities alive without retaining retired registries", async () => {
     class RetiredRegistry {
       readonly fixtureLabel = "RetiredRegistry";
     }
     const runtime = createPluginRuntime();
     const { builder, record, api } = registered("hosted-media", {}, runtime);
     const instance = expectDefined(getPluginInstance(record), "media instance");
-    api.registerHostedMediaResolver((url) =>
-      url === "hosted:fixture" ? "/synthetic/resolved.txt" : undefined,
-    );
     builder.registry.plugins.push(record);
     const media = api.runtime.media;
     expect(media.detectMime).toBe(runtime.media.detectMime);
@@ -405,7 +402,7 @@ describe("plugin registry runtime config scope", () => {
     })();
     const readFile = vi.fn(async (_filePath: string) => Buffer.from("synthetic media"));
     const load = () =>
-      media.loadWebMedia("hosted:fixture", {
+      media.loadWebMedia("/synthetic/resolved.txt", {
         localRoots: "any",
         optimizeImages: false,
         readFile,
@@ -419,7 +416,7 @@ describe("plugin registry runtime config scope", () => {
       });
       expect(readFile.mock.calls[0]?.[0]).toBe("/synthetic/resolved.txt");
       await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), load);
-      expect(readFile.mock.calls[1]?.[0]).toBe("hosted:fixture");
+      expect(readFile.mock.calls[1]?.[0]).toBe("/synthetic/resolved.txt");
     } finally {
       resource.emitDestroy();
       await instance.dispose();

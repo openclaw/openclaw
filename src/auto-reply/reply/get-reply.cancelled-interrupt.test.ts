@@ -1,11 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { clearCommandLane, enqueueCommandInLane } from "../../process/command-queue.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -68,11 +68,16 @@ it("preserves a queued successor when interrupt input is canceled during runtime
   setRuntimeConfigSnapshot(cfg);
 
   const sessionKey = "agent:main:dashboard:cancelled-interrupt";
-  const lane = resolveEmbeddedSessionLane(sessionKey);
+  const admission = {
+    sessionKey,
+    agentId: "main",
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+  };
+  const queuedCancellation = new AbortController();
   const enteredPreparation = createDeferred();
   const releasePreparation = createDeferred();
-  const enteredLane = createDeferred();
-  const releaseLane = createDeferred();
+  const enteredBlocker = createDeferred();
+  const releaseBlocker = createDeferred();
   const controller = new AbortController();
   preparation.hold = async () => {
     enteredPreparation.resolve();
@@ -100,26 +105,30 @@ it("preserves a queued successor when interrupt input is canceled during runtime
       }),
     ]);
     controller.abort(new Error("Input canceled by the user"));
-    blocker = enqueueCommandInLane(lane, async () => {
-      enteredLane.resolve();
-      await releaseLane.promise;
-    });
-    await enteredLane.promise;
+    blocker = withSessionTurn(
+      { ...admission, abortSignal: queuedCancellation.signal },
+      async () => {
+        enteredBlocker.resolve();
+        await releaseBlocker.promise;
+      },
+    );
+    await enteredBlocker.promise;
     successor = Promise.allSettled([
-      enqueueCommandInLane(lane, async () => "successor completed", {
-        sessionTarget: { agentId: "main", sessionKey, sessionId: "successor-session" },
-      }),
+      withSessionTurn(
+        { ...admission, sessionId: "successor-session", abortSignal: queuedCancellation.signal },
+        async () => "successor completed",
+      ),
     ]);
 
     releasePreparation.resolve();
     await canceledReply;
-    releaseLane.resolve();
+    releaseBlocker.resolve();
     await blocker;
     expect(await successor).toEqual([{ status: "fulfilled", value: "successor completed" }]);
   } finally {
     releasePreparation.resolve();
-    releaseLane.resolve();
-    clearCommandLane(lane);
+    releaseBlocker.resolve();
+    queuedCancellation.abort(new Error("test cleanup"));
     await Promise.allSettled([canceledReply, blocker, successor]);
   }
 });

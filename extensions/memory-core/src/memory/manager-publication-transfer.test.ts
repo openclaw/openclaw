@@ -20,10 +20,13 @@ import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import {
   memoryEmbeddingCacheBatches,
   memoryPublicationBatches,
+  memoryPublicationGroup,
   memoryPublicationInline,
+  releaseMemoryPublication,
 } from "./manager-publication-transfer.js";
 import {
   bindSqliteWorkerBackend,
+  createSqliteWorkerBackend,
   openExistingSqliteWorkerBackend,
 } from "./manager-publication.worker.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
@@ -84,10 +87,7 @@ function publicationInput(owner: MemoryIndexDatabase) {
     fileIdentity: readMemoryShadowIdentity(filename),
     pragmas: {
       busy_timeout: readPragma("busy_timeout"),
-      synchronous: readPragma("synchronous"),
       foreign_keys: readPragma("foreign_keys"),
-      journal_size_limit: readPragma("journal_size_limit"),
-      checkpoint_fullfsync: readPragma("checkpoint_fullfsync"),
     },
   };
 }
@@ -176,6 +176,29 @@ function replacement(text = "Violetmarker transfer text"): MemorySourceIndexRepl
 describe("bounded memory publication transfer", () => {
   afterEach(() => vi.restoreAllMocks());
 
+  it("configures a fresh shadow once and retains only transaction restoration settings", async () => {
+    const databasePath = path.join(tempDirs.make("memory-publication-policy-"), "shadow.sqlite");
+    const observed = observeHostDataSql();
+    try {
+      const backend = await createSqliteWorkerBackend({ allowExtension: false }, { databasePath });
+      backends.push(backend);
+      expect(backend.execute({ type: "connection.inspect", input: undefined })).toEqual({
+        fileIdentity: readMemoryShadowIdentity(databasePath),
+        pragmas: { busy_timeout: 5000, foreign_keys: expect.any(Number) },
+      });
+      expect(
+        observed.queries.filter((sql) => /^PRAGMA journal_size_limit\s*=/i.test(sql)),
+      ).toHaveLength(1);
+      expect(
+        observed.queries.filter((sql) =>
+          /^PRAGMA (synchronous|journal_size_limit|checkpoint_fullfsync)\s*;?$/i.test(sql),
+        ),
+      ).toEqual([]);
+    } finally {
+      observed.restore();
+    }
+  });
+
   it("avoids unused connection work for scalar publications", () => {
     const filename = path.join(tempDirs.make("memory-publication-input-"), "index.sqlite");
     const db = new DatabaseSync(filename);
@@ -204,10 +227,7 @@ describe("bounded memory publication transfer", () => {
         fileIdentity: readMemoryShadowIdentity(filename),
         pragmas: {
           busy_timeout: expect.any(Number),
-          synchronous: expect.any(Number),
           foreign_keys: expect.any(Number),
-          journal_size_limit: expect.any(Number),
-          checkpoint_fullfsync: expect.any(Number),
         },
       });
       scalar.close();
@@ -420,7 +440,7 @@ describe("bounded memory publication transfer", () => {
         sourceIdentity: readMemoryShadowIdentity(sourcePath),
         metaKey: "test-meta",
         expectedRevision: readMemoryDatabaseRevision(owner.db),
-        sourceHasVectors: false,
+        sourceSchema: shadow.searchSchema,
         vectorIndexComplete: false,
         extensionPath: owner.vector.extensionPath,
       },
@@ -833,5 +853,21 @@ describe("bounded memory publication transfer", () => {
       (_, index) => numericCases[index % numericCases.length]![1],
     );
     expect(rows).toEqual(input.chunks.map((row) => ({ chunk: row, embedding: expectedVector })));
+  });
+
+  it("reuses printed fragments per prepared chunks array until it is released", () => {
+    const first = replacement();
+    const printed = memoryPublicationInline(first)?.fragments;
+    expect(printed).toBeDefined();
+    expect(memoryPublicationInline({ ...first })?.fragments).toBe(printed);
+    const other = replacement("second source text");
+    const group = memoryPublicationGroup([first, other])!;
+    const again = memoryPublicationGroup([first, other])!;
+    expect(group[0]?.fragments).toBe(printed);
+    again.forEach((source, index) => expect(source.fragments).toBe(group[index]?.fragments));
+    releaseMemoryPublication(first);
+    const released = memoryPublicationInline(first)?.fragments;
+    expect(released).not.toBe(printed);
+    expect(released).toEqual(printed);
   });
 });

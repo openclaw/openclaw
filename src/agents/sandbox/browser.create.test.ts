@@ -48,8 +48,7 @@ describe("ensureSandboxBrowser create args", () => {
       stdout: "<no value>\n",
       stderr: "",
       code: 0,
-      error:
-        "Sandbox browser image openclaw-sandbox-browser:bookworm-slim is stale or incompatible",
+      error: "Sandbox browser image openclaw-sandbox-browser:trixie-slim is stale or incompatible",
     },
     {
       stdout: "",

@@ -20,7 +20,6 @@ import {
 } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 
 function collectConfiguredChannelIds(
@@ -49,61 +48,6 @@ function collectConfiguredChannelIds(
       return !disabled.has(channelId);
     })
     .toSorted((left, right) => left.localeCompare(right));
-}
-
-function addBundledChannelOwnerPluginIds(params: {
-  pluginIds: Set<string>;
-  config: OpenClawConfig;
-  channelIds: readonly string[];
-  env: NodeJS.ProcessEnv;
-  workspaceDir?: string;
-  bundledPluginsDir?: string;
-  manifestRecords?: readonly PluginManifestRecord[];
-}): void {
-  // Channel state callbacks run before this pass and may update config.
-  const plugins = normalizePluginsConfig(params.config.plugins);
-  const channelIds = new Set(params.channelIds);
-  if (channelIds.size === 0) {
-    return;
-  }
-  const env = params.bundledPluginsDir
-    ? {
-        ...params.env,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: params.bundledPluginsDir,
-        ...(isVitestRuntimeEnv(params.env) || isVitestRuntimeEnv()
-          ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" }
-          : {}),
-      }
-    : params.env;
-  const records =
-    params.manifestRecords ??
-    loadManifestMetadataSnapshot({
-      config: params.config,
-      env,
-      workspaceDir: params.workspaceDir,
-    }).plugins;
-  for (const plugin of records) {
-    if (plugin.origin !== "bundled") {
-      continue;
-    }
-    if (
-      plugin.channels.some((channelId) =>
-        channelIds.has(normalizeOptionalLowercaseString(channelId) ?? ""),
-      )
-    ) {
-      const pluginId = normalizeOptionalLowercaseString(plugin.id);
-      if (
-        pluginId &&
-        passesManifestOwnerBasePolicy({
-          plugin: { id: pluginId },
-          normalizedConfig: plugins,
-          allowRestrictiveAllowlistBypass: true,
-        })
-      ) {
-        params.pluginIds.add(pluginId);
-      }
-    }
-  }
 }
 
 /** Lists plugin ids that are effectively enabled for a config/discovery context. */
@@ -211,15 +155,53 @@ function resolveEffectivePluginIdsWithChannels(
   for (const pluginId of configuredPluginIds) {
     ids.add(pluginId);
   }
-  addBundledChannelOwnerPluginIds({
-    pluginIds: ids,
-    config: effectiveConfig,
-    channelIds: configuredChannelIds,
-    env: params.env,
-    workspaceDir: params.workspaceDir,
-    manifestRecords: prepared?.plugins,
-    ...(params.bundledPluginsDir ? { bundledPluginsDir: params.bundledPluginsDir } : {}),
-  });
+  const bundledOwnerEnv = params.env;
+  const bundledOwnerWorkspaceDir = params.workspaceDir;
+  const bundledOwnerManifestRecords = prepared?.plugins;
+  const bundledPluginsDir = params.bundledPluginsDir ? params.bundledPluginsDir : undefined;
+  // Channel state callbacks run before this pass and may update config.
+  const bundledOwnerPlugins = normalizePluginsConfig(effectiveConfig.plugins);
+  const channelIds = new Set(configuredChannelIds);
+  if (channelIds.size > 0) {
+    const env = bundledPluginsDir
+      ? {
+          ...bundledOwnerEnv,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+          ...(isVitestRuntimeEnv(bundledOwnerEnv) || isVitestRuntimeEnv()
+            ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" }
+            : {}),
+        }
+      : bundledOwnerEnv;
+    const records =
+      bundledOwnerManifestRecords ??
+      loadManifestMetadataSnapshot({
+        config: effectiveConfig,
+        env,
+        workspaceDir: bundledOwnerWorkspaceDir,
+      }).plugins;
+    for (const plugin of records) {
+      if (plugin.origin !== "bundled") {
+        continue;
+      }
+      if (
+        plugin.channels.some((channelId) =>
+          channelIds.has(normalizeOptionalLowercaseString(channelId) ?? ""),
+        )
+      ) {
+        const pluginId = normalizeOptionalLowercaseString(plugin.id);
+        if (
+          pluginId &&
+          passesManifestOwnerBasePolicy({
+            plugin: { id: pluginId },
+            normalizedConfig: bundledOwnerPlugins,
+            allowRestrictiveAllowlistBypass: true,
+          })
+        ) {
+          ids.add(pluginId);
+        }
+      }
+    }
+  }
   for (const pluginId of loadGatewayStartupPluginPlan({
     config: effectiveConfig,
     activationSourceConfig: params.config,

@@ -10,16 +10,11 @@ import {
   revokeMessageActionTurnCapability,
 } from "../src/gateway/message-action-turn-capability.js";
 import { PlatformMessageNotDispatchedError } from "../src/infra/outbound/deliver-types.js";
-import { runMessageAction } from "../src/infra/outbound/message-action-runner.js";
 import { withServer } from "../src/plugin-sdk/test-helpers/http-test-server.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
-import {
-  commandSecretFixture,
-  readRequestText,
-  respondJson,
-} from "./helpers/gateway-integration-fixtures.js";
+import { readRequestText, respondJson } from "./helpers/gateway-integration-fixtures.js";
 import { createDeferred, withTestTimeout } from "./helpers/promise.js";
 
 const AUTH_PATH = "/open-apis/auth/v3/tenant_access_token/internal";
@@ -195,8 +190,6 @@ async function withFeishuMutation(
           agentSessionKey: identity.sessionKey,
           workspaceDir: state.workspaceDir,
           messageActionTurnCapability: token,
-          ...commandSecretFixture,
-          runMessageAction,
         });
         try {
           await run({

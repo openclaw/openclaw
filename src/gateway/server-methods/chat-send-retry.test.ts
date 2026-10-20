@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import {
   classifyAcceptedChatSendFailure,
-  runAcceptedChatSendDispatch,
+  createAcceptedChatSendRetry,
   shouldRetainAcceptedChatSendRetryIdentity,
 } from "./chat-send-retry.js";
 
@@ -36,14 +36,36 @@ describe("accepted chat-send retry classification", () => {
     const waitForRetry = vi.fn().mockResolvedValue(undefined);
 
     await expect(
-      runAcceptedChatSendDispatch({
-        operation,
+      createAcceptedChatSendRetry({
         waitForRetry,
         classify: (error) => classifyAcceptedChatSendFailure({ error, phase: "post-ack" }),
-      }),
+      })(operation),
     ).rejects.toBe(projectionError);
 
     expect(operation).toHaveBeenCalledTimes(3);
+    expect(waitForRetry).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares the bounded retry budget between setup and the admitted resolver", async () => {
+    const resolver = vi.fn().mockRejectedValue(projectionError);
+    const waitForRetry = vi.fn().mockResolvedValue(undefined);
+    const retry = createAcceptedChatSendRetry({
+      waitForRetry,
+      classify: (error) => classifyAcceptedChatSendFailure({ error, phase: "post-ack" }),
+    });
+    let setupAttempts = 0;
+    await expect(
+      retry(async () => {
+        setupAttempts += 1;
+        if (setupAttempts === 1) {
+          throw projectionError;
+        }
+        return await retry(resolver);
+      }),
+    ).rejects.toBe(projectionError);
+
+    expect(setupAttempts).toBe(2);
+    expect(resolver).toHaveBeenCalledTimes(2);
     expect(waitForRetry).toHaveBeenCalledTimes(2);
   });
 });
@@ -58,8 +80,7 @@ it.each([false, true])(
     const operation = vi.fn().mockRejectedValue(error);
     const waitForRetry = vi.fn();
     await expect(
-      runAcceptedChatSendDispatch({
-        operation,
+      createAcceptedChatSendRetry({
         waitForRetry,
         classify: (failure) =>
           classifyAcceptedChatSendFailure({
@@ -67,7 +88,7 @@ it.each([false, true])(
             phase: "post-ack",
             sideEffectsObserved: effects,
           }),
-      }),
+      })(operation),
     ).rejects.toBe(error);
     expect(operation).toHaveBeenCalledOnce();
     expect(waitForRetry).not.toHaveBeenCalled();

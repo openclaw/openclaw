@@ -157,6 +157,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     activeProjectKeys: [...(attempt.preparedModelRuntime?.activeProjectKeys ?? [])],
     modelProviderId: attempt.model.provider,
     modelId: attempt.model.id,
+    contextTokenBudget: attempt.contextTokenBudget ?? attempt.model.contextWindow,
     inputProvenance: attempt.inputProvenance,
   };
   const promptBuildMessages = input.activeSession.messages;
@@ -212,33 +213,24 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   );
 
   const effectiveToolsAllow = hookResult?.toolsAllow;
-  const guard = preserveExactPrompt
-    ? "exact-prompt"
-    : !assertHostActive || !activeAbortSignal
-      ? "missing-authority"
-      : attempt.supportsTurnScopedToolRestrictions !== true
-        ? "unsupported-harness"
-        : attempt.fallbackActive
-          ? "primary-fallback"
-          : attempt.skipPreparedUserTurnMessage
-            ? "continuation"
-            : attempt.trigger !== "user" || attempt.internalEvents?.length
-              ? "internal-input"
-              : attempt.disableTools
-                ? "tools-disabled"
-                : effectiveToolsAllow !== undefined
-                  ? "hook-tool-policy"
-                  : hasPendingActionInstructions
-                    ? "pending-action-context"
-                    : !input.hasBaselineTools()
-                      ? "no-tools"
-                      : undefined;
+  const skipDecisionPrefilter =
+    preserveExactPrompt ||
+    !assertHostActive ||
+    !activeAbortSignal ||
+    attempt.supportsTurnScopedToolRestrictions !== true ||
+    attempt.fallbackActive ||
+    attempt.skipPreparedUserTurnMessage ||
+    attempt.trigger !== "user" ||
+    attempt.internalEvents?.length ||
+    attempt.disableTools ||
+    effectiveToolsAllow !== undefined ||
+    hasPendingActionInstructions ||
+    !input.hasBaselineTools();
   let decisionPrefilter: DecisionPrefilterResult = {
     shouldPruneTools: false,
     status: "skipped",
-    reason: guard ?? "not-evaluated",
   };
-  if (!guard && assertHostActive && activeAbortSignal) {
+  if (!skipDecisionPrefilter && assertHostActive && activeAbortSignal) {
     decisionPrefilter = await evaluateAttemptDecisionToolPrefilter({
       config: readConfig(),
       agentId: input.sessionAgentId,
@@ -257,16 +249,13 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       assertActive: assertHostActive,
       supportsTurnScopedToolRestrictions: attempt.supportsTurnScopedToolRestrictions,
     });
-    if (decisionPrefilter.shouldPruneTools) {
-      decisionPrefilter.restrictionApplied = true;
-    }
   }
   activeAbortSignal?.throwIfAborted();
   assertHostActive?.();
   logDecisionToolPrefilter({ effect: decisionPrefilter.status });
   const callableToolNames = input.applyPromptBuildToolsAllow(
     effectiveToolsAllow,
-    decisionPrefilter.restrictionApplied,
+    decisionPrefilter.shouldPruneTools,
   );
   // Regenerate owned capability guidance before composing hook additions, without
   // rerunning hooks or altering already-recorded conversation messages.
@@ -390,7 +379,6 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
       : undefined;
 
   return {
-    decisionPrefilter,
     assertHostActive,
     hookCtx,
     effectivePrompt,
@@ -415,6 +403,7 @@ type PromptContextAttempt = Pick<
   | "messageChannel"
   | "messageProvider"
   | "requireExplicitMessageTarget"
+  | "messageToolFinalByDefault"
   | "runtimeContextFragments"
   | "sessionId"
   | "sessionKey"
@@ -512,6 +501,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
       channel: attempt.messageChannel ?? attempt.messageProvider,
       sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
       requireExplicitMessageTarget: attempt.requireExplicitMessageTarget,
+      messageToolFinalByDefault: attempt.messageToolFinalByDefault,
     }),
     ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),

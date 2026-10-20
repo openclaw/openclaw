@@ -444,10 +444,7 @@ async function buildAndPublishUi(
       script,
     ];
     const cache =
-      env.OPENCLAW_BUILD_CACHE !== "0" &&
-      env.BUILD_ALL_CACHE_ROOT?.trim() &&
-      toolCall.args.length === 2 &&
-      toolCall.args[1] === "build"
+      env.OPENCLAW_BUILD_CACHE !== "0" && toolCall.args.length === 2 && toolCall.args[1] === "build"
         ? await import("./lib/build-artifact-cache.mts")
         : undefined;
     const sourcePluginInventory =

@@ -9,6 +9,8 @@ import {
   onAgentEvent as subscribeAgentEvent,
   type AgentEventPayload,
 } from "../../infra/agent-events.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -21,16 +23,12 @@ import {
   tempDirs,
   warnPrivateFinalSpy,
 } from "./agent-runner.misc.runreplyagent.test-support.js";
-import {
-  createTestQueueSettings,
-  createTestQueuedFollowupRun,
-  createTestTemplateContext,
-} from "./agent-runner.test-fixtures.js";
+import { createBaseRun } from "./agent-runner.runreplyagent.test-support.js";
+import { createTestQueueSettings } from "./agent-runner.test-fixtures.js";
 import { deliverFollowupDecision } from "./followup-delivery.js";
 import { createDefaults, createTurn } from "./followup-delivery.test-helpers.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import type { FollowupRun } from "./queue/types.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { routeReply } from "./route-reply.js";
 import type * as RouteReplyModule from "./route-reply.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -72,14 +70,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     return payloads;
   }
 
-  function expectPrivateOriginal(payloads: ReplyPayload[], text: string) {
-    const original = payloads.find((payload) => payload.text === text);
-    expect(original).toBeDefined();
-    expect(getReplyPayloadMetadata(original ?? {})?.deliverDespiteSourceReplySuppression).not.toBe(
-      true,
-    );
-  }
-
   async function runPrivateFinalCase(params: {
     messagingToolSentTargets?: unknown[];
     messagingToolSourceReplyPayloads?: Array<{ text?: string }>;
@@ -88,7 +78,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     finalAssistantRawText?: string;
     stopReason?: string;
     payloads?: ReplyPayload[];
-    payloadText?: string;
     successfulCronAdds?: number;
     inboundEventKind?: InboundEventKind;
     transcriptPrompt?: string;
@@ -120,7 +109,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       // Metadata payloads must not be mistaken for the assistant's final text.
       payloads:
         retryText === undefined
-          ? (params.payloads ?? [{ text: params.payloadText ?? finalAssistantText }])
+          ? (params.payloads ?? [{ text: finalAssistantText }])
           : [{ text: retryText }],
       meta: {
         agentMeta: {},
@@ -142,44 +131,33 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       successfulCronAdds: params.successfulCronAdds,
     });
 
-    const sessionCtx = createTestTemplateContext({
-      Provider: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: "+15550001111",
-      AccountId: "primary",
-      MessageSid: "msg",
-      ChatType: params.chatType ?? "direct",
-      InboundEventKind: params.inboundEventKind,
-    });
-    const followupRun = createTestQueuedFollowupRun({
-      prompt: "hello",
-      summaryLine: params.summaryLine ?? "hello",
-      strandedReplyRetry: params.strandedReplyRetry,
-      enqueuedAt: Date.now(),
-      toolsAllow: ["message", "read"],
-      transcriptPrompt: params.transcriptPrompt,
+    const { sessionCtx, followupRun } = createBaseRun({
+      context: {
+        Provider: "whatsapp",
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "+15550001111",
+        AccountId: "primary",
+        MessageSid: "msg",
+        ChatType: params.chatType ?? "direct",
+        InboundEventKind: params.inboundEventKind,
+      },
+      followup: {
+        summaryLine: params.summaryLine ?? "hello",
+        strandedReplyRetry: params.strandedReplyRetry,
+        toolsAllow: ["message", "read"],
+        transcriptPrompt: params.transcriptPrompt,
+      },
       run: {
         agentId: "main",
         agentDir: path.join(rootDir, "agent"),
-        sessionId: "session",
         sessionKey,
-        messageProvider: "whatsapp",
-        sessionFile: path.join(rootDir, "session.jsonl"),
         workspaceDir: tmp,
         // Carry the canonical tool-only run fact and keep downstream policy aligned,
         // so the private final is never eligible for automatic source delivery.
-        config: { messages: { visibleReplies: "message_tool" } },
-        skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude",
+        config: { session: { store: storePath }, messages: { visibleReplies: "message_tool" } },
         thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
         thinkLevel: "low",
         reasoningLevel: "on",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
         sourceReplyDeliveryMode: "message_tool_only",
         extraSystemPrompt: "Use message(action=send) for all visible replies.",
         terminalReplyExpectation:
@@ -246,6 +224,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     return {
       ...(await execute(followupRun, createRunResult())),
       followupRun,
+      storePath,
       executeRetry: (queuedRun: FollowupRun, delivered: boolean, retryText?: string) =>
         execute(queuedRun, createRunResult(delivered, retryText)),
     };
@@ -285,7 +264,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       name: "reply directives",
       params: {
         finalAssistantText: `[[reply_to_current]] ${visibleFinal}`,
-        payloadText: `[[reply_to_current]] ${visibleFinal}`,
       },
       excluded: ["[[reply_to_current]]"],
     },
@@ -363,7 +341,10 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       });
       expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[3]).toBe("none");
       expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[5]).toBe(false);
-      expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[6]).toEqual({ position: "front" });
+      expect(vi.mocked(enqueueFollowupRun).mock.calls[0]?.[6]).toEqual({
+        position: "front",
+        storePath: initial.storePath,
+      });
 
       const retry = await initial.executeRetry(
         retryRun,
@@ -383,21 +364,18 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       const deliverable = normalizeReplyPayloads(retry.result).filter(
         (payload) => getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression,
       );
-      if (outcome === "retry-silent") {
-        expect(retry.terminalEvent?.data.terminalReply).toEqual({ disposition: "silent" });
+      if (outcome === "delivered" || outcome === "retry-silent") {
         expect(deliverable).toEqual([]);
         expect(normalizeReplyPayloads(retry.result).some((payload) => payload.isError)).toBe(false);
         expect(routeReply).not.toHaveBeenCalled();
-        return;
-      }
-      if (outcome === "delivered") {
-        expect(retry.runResult.messagingToolSourceReplyPayloads).toEqual([
-          { text: "Done — deployed v2 to staging." },
-        ]);
-        expect(deliverable).toEqual([]);
-        expect(normalizeReplyPayloads(retry.result).some((payload) => payload.isError)).toBe(false);
-        expect(retry.terminalEvent?.data.terminalReply).toMatchObject({ disposition: "visible" });
-        expect(routeReply).not.toHaveBeenCalled();
+        if (outcome === "delivered") {
+          expect(retry.runResult.messagingToolSourceReplyPayloads).toEqual([
+            { text: "Done — deployed v2 to staging." },
+          ]);
+          expect(retry.terminalEvent?.data.terminalReply).toMatchObject({ disposition: "visible" });
+        } else {
+          expect(retry.terminalEvent?.data.terminalReply).toEqual({ disposition: "silent" });
+        }
         return;
       }
 
@@ -418,11 +396,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       const delivered = await deliverFollowupDecision({
         decision: { kind: "deliver", payloads: deliverable },
         turn: createTurn({
-          queued: {
-            ...retryRun,
-            originatingChannel: "whatsapp",
-            originatingTo: "+15550001111",
-          },
+          queued: { ...retryRun, originatingChannel: "whatsapp", originatingTo: "+15550001111" },
           config: retryRun.run.config,
         }),
         defaults: createDefaults(vi.fn()),
@@ -432,30 +406,27 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       expect(delivered).toEqual({ kind: "completed", payloads: [] });
       // The real delivery owner disables transcript writes; the mocked model does not persist rows.
       expect(routeReply).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          payload: deliverable[0],
-          mirror: false,
-        }),
+        expect.objectContaining({ payload: deliverable[0], mirror: false }),
       );
     },
   );
 
   it.each([
-    {
-      name: "yielded visible final",
-      params: { pendingContinuation: true },
+    ["yielded visible final", { pendingContinuation: true }],
+    [
+      "implicit continuation with no final",
+      { implicitContinuation: true, finalAssistantText: "", payloads: [] },
+    ],
+  ] satisfies Array<[string, Parameters<typeof runPrivateFinalCase>[0]]>)(
+    "does not strand a %s",
+    async (_name, params) => {
+      const { terminalEvent, runResult, finalAssistantText } = await runPrivateFinalCase(params);
+      const expected = prepareAgentRunTerminalReply({ rawText: finalAssistantText }).terminalReply;
+      expect(terminalEvent?.data.terminalReply).toEqual(expected);
+      expect(runResult.meta.terminalReply).toEqual(expected);
+      expectNoRecovery();
     },
-    {
-      name: "implicit continuation with no final",
-      params: { implicitContinuation: true, finalAssistantText: "", payloads: [] },
-    },
-  ])("does not settle a $name as a stranded terminal reply", async ({ params }) => {
-    const { terminalEvent, runResult, finalAssistantText } = await runPrivateFinalCase(params);
-    const expected = prepareAgentRunTerminalReply({ rawText: finalAssistantText }).terminalReply;
-    expect(terminalEvent?.data.terminalReply).toEqual(expected);
-    expect(runResult.meta.terminalReply).toEqual(expected);
-    expectNoRecovery();
-  });
+  );
 
   it.each([undefined, false, true])(
     "attests only terminal source delivery (sourceReplyFinal=%s)",
@@ -554,12 +525,9 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
         payloads: [{ text: "Auto-compaction complete (count 1).", isStatusNotice: true }],
       });
       const payloads = normalizeReplyPayloads(result);
-      const failures = payloads.filter((payload) => payload.isError === true);
-      expect(failures).toEqual([]);
       expect(payloads).toEqual([]);
       expect(onDeliberateSilentTerminalReply).toHaveBeenCalledOnce();
-      expect(warnPrivateFinalSpy).not.toHaveBeenCalled();
-      expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+      expectNoRecovery();
     },
   );
 
@@ -592,7 +560,11 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     expect(payloads.filter((payload) => payload.text === MISSING_REPLY_NOTICE_TEXT)).toHaveLength(
       1,
     );
-    expectPrivateOriginal(payloads, finalAssistantText);
+    const original = payloads.find((payload) => payload.text === finalAssistantText);
+    expect(original).toBeDefined();
+    expect(getReplyPayloadMetadata(original ?? {})?.deliverDespiteSourceReplySuppression).not.toBe(
+      true,
+    );
   });
 
   it.each([false, true])(
@@ -602,7 +574,6 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
         summaryLine: "stranded-reply-retry",
         strandedReplyRetry: true,
         finalAssistantText: "",
-        payloadText: "",
         messagingToolSourceReplyPayloads: delivered
           ? [{ text: "visible recovered reply" }]
           : undefined,
@@ -625,7 +596,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
 
     vi.mocked(scheduleFollowupDrain).mockImplementation((key) => {
       expect(key).toBe(sessionKey);
-      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
     });
 
     await runPrivateFinalCase({ onReplyOperationOwned });
@@ -633,7 +604,7 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
     assert(replyOperation);
 
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
-    expect(replyRunRegistry.get(sessionKey)).toBe(replyOperation);
+    expect(getSessionControllerOperation(sessionKey)).toBe(replyOperation);
     expect(scheduleFollowupDrain).not.toHaveBeenCalled();
 
     replyOperation.complete();

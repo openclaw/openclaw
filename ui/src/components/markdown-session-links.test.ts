@@ -19,7 +19,7 @@ describe("markdown session links", () => {
       const host = document.createElement("div");
       host.innerHTML = toSanitizedMarkdownHtml(`${href}重新解读`, { sessionLinks: true });
       const anchor = host.querySelector<HTMLAnchorElement>("a")!;
-      const titler = new SessionLinkTitler(host);
+      const titler = new SessionLinkTitler();
       titler.context = {
         basePath: "",
         sessions: {
@@ -33,6 +33,7 @@ describe("markdown session links", () => {
         gateway: { snapshot: {} },
       } as unknown as ApplicationContext;
 
+      titler.register(anchor, document.createElement("span"));
       await titler.decorate(anchor);
       titler.refresh();
 

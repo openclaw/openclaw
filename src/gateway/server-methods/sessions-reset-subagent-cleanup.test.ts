@@ -24,6 +24,7 @@ import {
   settleFailedQueuedSubagentLaunch,
   resetSubagentRegistryForTests,
   testing,
+  withSubagentKillOwner,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { waitForCollectorCompletion } from "../../agents/tools/agents-wait-tool.js";
 import {
@@ -40,7 +41,7 @@ import * as sessionLifecycleOwner from "../../config/sessions/session-accessor.s
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -394,11 +395,11 @@ test("same-turn reset keeps its active continuation unsuppressed", async () => {
   const activeId = "active-continuation";
   await registerCollector(activeId);
   const interrupt = vi.fn();
-  let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   try {
     await emitSubagentStart(activeId);
     await settleSubagentRegistryPersistenceWork();
-    admission = await beginSessionWorkAdmission({
+    admission = await beginSessionEffect({
       scope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       identities: [key, "reset-cleanup-session"],
       assertAllowed: () => {},
@@ -633,51 +634,61 @@ test.each([false, true])(
   async (reset) => {
     const id = "kill-claim-owner";
     await registerCollector(id);
-    const claim = expectDefined(
-      await claimSubagentRunKill({
-        runId: id,
-        expected: expectDefined(subagentRuns.get(id), "registered collector"),
-        sessionId: "reset-cleanup-session",
-        sessionLifecycleRevision: "original",
-      }),
-      "retained cancellation claim",
-    );
-    // Keep the original session available so the no-reset case proves live cleanup authority.
-    registryGateway.mockRejectedValue(new Error("cleanup transport unavailable"));
-    const complete = completionOwner.completeSubagentRunAttempt;
-    const emitKilledCompletion = async (endedAt: number) => {
-      const observed = createDeferredCore<{ completion: Promise<void> }>();
-      vi.spyOn(completionOwner, "completeSubagentRunAttempt").mockImplementationOnce((...args) => {
-        const completion = complete(...args);
-        observed.resolve({ completion });
-        return completion;
-      });
-      emitAgentEvent({
-        runId: id,
-        stream: "lifecycle",
-        data: { phase: "end", aborted: true, stopReason: "aborted", endedAt },
-      });
-      // Row publication precedes terminal effects and the retained session's release.
-      await (
-        await observed.promise
-      ).completion;
-    };
-    await emitKilledCompletion(Date.now());
-    await settleSubagentRegistryPersistenceWork();
-    expect(subagentRuns.get(id)?.killReconciliation?.killedAt).toBe(claim.requestedAt);
-    expect(subagentRuns.get(id)?.killIntent).toBeUndefined();
-    expect(subagentRuns.get(id)?.execution.suppressSessionEffects).not.toBe(true);
-    expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).toBe("original");
-    if (reset) {
-      await request("sessions.reset", { key });
-    }
-    const successor = loadSessionEntry({ sessionKey: key });
-    const lateEndedAt = Date.now();
-    await emitKilledCompletion(lateEndedAt);
-    await settleSubagentRegistryPersistenceWork();
-    const stored = expectDefined(loadSubagentRegistryFromSqlite().get(id), "settled cancellation");
-    expect(stored.killReconciliation).toMatchObject({ killedAt: claim.requestedAt });
-    expect(stored.execution.suppressSessionEffects === true).toBe(reset);
+    let successor: ReturnType<typeof loadSessionEntry>;
+    let lateEndedAt = 0;
+    // The kill owner holds its claim across both completions; the kill confirms when it settles.
+    await withSubagentKillOwner(id, async () => {
+      const claim = expectDefined(
+        await claimSubagentRunKill({
+          runId: id,
+          expected: expectDefined(subagentRuns.get(id), "registered collector"),
+          sessionId: "reset-cleanup-session",
+          sessionLifecycleRevision: "original",
+        }),
+        "retained cancellation claim",
+      );
+      // Keep the original session available so the no-reset case proves live cleanup authority.
+      registryGateway.mockRejectedValue(new Error("cleanup transport unavailable"));
+      const complete = completionOwner.completeSubagentRunAttempt;
+      const emitKilledCompletion = async (endedAt: number) => {
+        const observed = createDeferredCore<{ completion: Promise<void> }>();
+        vi.spyOn(completionOwner, "completeSubagentRunAttempt").mockImplementationOnce(
+          (...args) => {
+            const completion = complete(...args);
+            observed.resolve({ completion });
+            return completion;
+          },
+        );
+        emitAgentEvent({
+          runId: id,
+          stream: "lifecycle",
+          data: { phase: "end", aborted: true, stopReason: "aborted", endedAt },
+        });
+        // Row publication precedes terminal effects and the retained session's release.
+        await (
+          await observed.promise
+        ).completion;
+      };
+      await emitKilledCompletion(Date.now());
+      await settleSubagentRegistryPersistenceWork();
+      expect(subagentRuns.get(id)?.killReconciliation?.killedAt).toBe(claim.requestedAt);
+      expect(subagentRuns.get(id)?.killIntent).toBeUndefined();
+      expect(subagentRuns.get(id)?.execution.suppressSessionEffects).not.toBe(true);
+      expect(loadSessionEntry({ sessionKey: key })?.lifecycleRevision).toBe("original");
+      if (reset) {
+        await request("sessions.reset", { key });
+      }
+      successor = loadSessionEntry({ sessionKey: key });
+      lateEndedAt = Date.now();
+      await emitKilledCompletion(lateEndedAt);
+      await settleSubagentRegistryPersistenceWork();
+      const stored = expectDefined(
+        loadSubagentRegistryFromSqlite().get(id),
+        "settled cancellation",
+      );
+      expect(stored.killReconciliation).toMatchObject({ killedAt: claim.requestedAt });
+      expect(stored.execution.suppressSessionEffects === true).toBe(reset);
+    });
     await testing.sweepOnceForTests();
     expect(loadSessionEntry({ sessionKey: key })).toEqual(
       reset ? successor : { ...successor, endedAt: lateEndedAt },

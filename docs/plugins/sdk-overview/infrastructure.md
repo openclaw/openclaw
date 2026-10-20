@@ -28,9 +28,7 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerMemoryPromptSupplement(builder)`     | Additive memory-adjacent prompt section                                |
 | `api.registerMemoryPromptPreparation(prepare)`    | Async preparation for a memory-adjacent prompt section                 |
 | `api.registerMemoryCorpusSupplement(adapter)`     | Additive memory search/read corpus                                     |
-| `api.registerHostedMediaResolver(resolver)`       | Resolver for browser-style hosted media URLs                           |
 | `api.registerMcpServerConnectionResolver(...)`    | Per-requester MCP transport (`url`/`headers`) for a static server name |
-| `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
 | `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
 | `api.registerAutoEnableProbe(probe)`              | Config check that can auto-enable this plugin                          |
@@ -455,14 +453,8 @@ Use `close` for terminal cleanup or selected-error diagnostics; it does not prov
 delivery. Keep successful-response activity on `finish`, with the caller's
 success-status check, so an aborted request cannot report healthy activity.
 
-Older Bun HTTP transports use native response completion because their raw socket
-operations do not flush the HTTP response. OpenClaw detects the native HTTP
-`destroySoon` implementation introduced by Bun's Node compatibility rework rather
-than relying on version labels shared by different canary builds. Queued HEAD
-rejections on newer Bun wait for response socket assignment, including builds
-without HTTP response-finish diagnostics. Older Bun can still report client
-connection resets during large outstanding uploads, even after delivering the
-complete error.
+Queued HEAD rejections on supported Bun wait for response socket assignment,
+including builds without HTTP response-finish diagnostics.
 
 Gateway HTTP requests run in order on each connection, including their response
 lifetimes. A closing connection cannot admit later requests or upgrades. Queued

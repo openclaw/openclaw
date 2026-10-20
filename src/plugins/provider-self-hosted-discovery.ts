@@ -2,7 +2,10 @@ import {
   findNormalizedProviderValue,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
-import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveSafeInteger,
+  floorPositiveFiniteNumber as readPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
@@ -60,13 +63,6 @@ type DiscoveryResponse =
   | { kind: "response"; ok: boolean; status: number; body?: unknown }
   | { kind: "unreachable"; error: unknown }
   | { kind: "invalid-response"; error: unknown };
-
-function readPositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.trunc(value);
-}
 
 const OPENAI_COMPAT_CONTEXT_WINDOW_FIELDS = [
   "context_length",
@@ -181,9 +177,8 @@ function shouldProbeRuntimeProps(model: Record<string, unknown>): boolean {
 
 function resolveRuntimePropsUrl(params: { serverBaseUrl: string; modelId?: string }): string {
   const url = new URL(`${params.serverBaseUrl.replace(/\/+$/, "")}/props`);
-  const modelId = normalizeOptionalString(params.modelId);
-  if (modelId) {
-    url.searchParams.set("model", modelId);
+  if (params.modelId) {
+    url.searchParams.set("model", params.modelId);
     url.searchParams.set("autoload", "false");
   }
   return url.toString();

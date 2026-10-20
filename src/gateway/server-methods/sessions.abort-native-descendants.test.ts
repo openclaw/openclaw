@@ -5,10 +5,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getRuntimeConfig } from "../../config/config.js";
@@ -16,7 +16,14 @@ import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/ses
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { removeChatAbortControllerEntry } from "../chat-abort.js";
+import {
+  releaseSessionControllerClaim,
+  retireSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
+import {
+  rpcSourceTesting,
+  setRpcSourceIdentityForTest,
+} from "../../sessions/session-lifecycle-admission.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import { abortControlledSubagents } from "./chat-abort-descendants.js";
 import { createActiveRun } from "./chat.abort.test-helpers.js";
@@ -97,6 +104,7 @@ it.each([
       expect(params).toMatchObject({ ...target, sessionId, lifecycleRevision });
       const result = await run(cancel);
       if (race === "retired owner") {
+        // Registry retirement cannot revoke cancellation that already settled.
         setActivePluginRegistry(createEmptyPluginRegistry());
       }
       return result;
@@ -133,7 +141,7 @@ it.each([
       settled.resolve();
       await stop;
       expect(cancel).toHaveBeenCalledOnce();
-      const failures = ["failed settlement", "partial settlement", "retired owner"];
+      const failures = ["failed settlement", "partial settlement"];
       expect(respond.mock.calls[0]?.[0]).toBe(!failures.includes(race));
       if (race === "cancelled" || race === "partial settlement" || race === "retired owner") {
         expect(loadSessionEntry(target)).toMatchObject({
@@ -163,9 +171,9 @@ it.each(["completed", "replaced", "retargeted", "queued successor"] as const)(
       lifecycleRevision,
     });
     const context = abortContext();
-    const parent = createActiveRun(sessionKey, { sessionId, agentId: "main" });
-    const successor = createActiveRun(sessionKey, { sessionId, agentId: "main" });
-    context.chatAbortControllers.set(runId, parent);
+    const parent = createActiveRun(sessionKey, { runId, sessionId, agentId: "main" });
+    rpcSourceTesting.set(runId, parent);
+    let successor: ReturnType<typeof createActiveRun> | undefined;
     const entered = createDeferred();
     const resume = createDeferred();
     const cancel = vi.fn(async () => ({ killed: 0, cancelledRequesters: [] }));
@@ -182,13 +190,24 @@ it.each(["completed", "replaced", "retargeted", "queued successor"] as const)(
       await awaitGateBeforeSettlement(entered.promise, stop, "Stop skipped native preparation");
       expect(respond).not.toHaveBeenCalled();
       if (ending === "retargeted") {
-        parent.sessionId = "replacement-session";
+        setRpcSourceIdentityForTest(parent, { sessionId: "replacement-session" });
       } else {
-        removeChatAbortControllerEntry(context.chatAbortControllers, runId, parent);
-        if (ending === "replaced") {
-          context.chatAbortControllers.set(runId, successor);
-        } else if (ending === "queued successor") {
-          context.chatQueuedTurns.set(runId, successor);
+        const claim = parent.input.claim;
+        claim?.operation?.complete();
+        if (claim) {
+          releaseSessionControllerClaim(claim);
+        }
+        retireSessionControllerInput(parent.input);
+        rpcSourceTesting.deleteExpected(runId, parent);
+        await parent.input.settlement.promise;
+        if (ending === "replaced" || ending === "queued successor") {
+          successor = createActiveRun(sessionKey, {
+            runId,
+            sessionId,
+            agentId: "main",
+            queued: ending === "queued successor",
+          });
+          rpcSourceTesting.set(runId, successor);
         }
       }
       const session = loadSessionEntry(target);
@@ -205,8 +224,8 @@ it.each(["completed", "replaced", "retargeted", "queued successor"] as const)(
         await expect(stop).rejects.toThrow("Run changed before cancellation; retry Stop.");
         expect(respond).not.toHaveBeenCalled();
       }
-      expect(parent.controller.signal.aborted).toBe(false);
-      expect(successor.controller.signal.aborted).toBe(false);
+      expect(parent.input.abortSignal.aborted).toBe(false);
+      expect(successor?.input.abortSignal.aborted ?? false).toBe(false);
       expect(cancel).not.toHaveBeenCalled();
       expect(loadSessionEntry(target)).toEqual(session);
     } finally {
@@ -219,7 +238,7 @@ it.each(["completed", "replaced", "retargeted", "queued successor"] as const)(
 it("stops a captured old embedded run when native preparation rejects after row replacement", async () => {
   await seedYieldedParent();
   const original = expectDefined(loadSessionEntry(target), "original requester");
-  const abort = vi.fn();
+  const abort = vi.fn(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey));
   const handle = createEmbeddedRunHandle({ runId, abort });
   setActiveEmbeddedRun(sessionId, handle, sessionKey);
   await replaceSessionEntry(target, {

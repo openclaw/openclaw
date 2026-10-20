@@ -981,8 +981,8 @@ describe("dispatchReplyFromConfig", () => {
               sessionKey: boundSessionKey,
               storeSessionKey: boundSessionKey,
               cfg: {},
-              storePath: "/tmp/mock-sessions.json",
-              entry: {},
+              storePath: targetStorePath,
+              entry: targetEntry,
               acp: {
                 backend: "acpx",
                 agent: "opencode",
@@ -1069,6 +1069,7 @@ describe("dispatchReplyFromConfig", () => {
       agentId: "main",
       demand: "interactive",
       onRuntimeLease: expect.any(Function),
+      abortSignal: expect.any(AbortSignal),
     });
     expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
       channel: "discord",

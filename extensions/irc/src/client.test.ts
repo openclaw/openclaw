@@ -480,15 +480,6 @@ describe("irc client inbound line bound", () => {
   async function connectToFlood(server: { port: number }) {
     const errors: Error[] = [];
     const lines: string[] = [];
-    const lineWaiters = new Map<string, ReturnType<typeof createDeferred<void>>>();
-    const waitForLine = (expected: string) => {
-      if (lines.includes(expected)) {
-        return Promise.resolve();
-      }
-      const waiter = lineWaiters.get(expected) ?? createDeferred<void>();
-      lineWaiters.set(expected, waiter);
-      return waiter.promise;
-    };
     const disconnected = createDeferred<void>();
     const client = await connectIrcClient({
       host: "127.0.0.1",
@@ -498,13 +489,12 @@ describe("irc client inbound line bound", () => {
       username: "bot",
       realname: "OpenClaw Bot",
       onError: (error) => errors.push(error),
-      onLine: (line) => {
-        lines.push(line);
-        lineWaiters.get(line)?.resolve();
+      onPrivmsg: (event) => {
+        lines.push(event.rawLine);
       },
       onDisconnect: () => disconnected.resolve(),
     });
-    return { client, errors, lines, waitForLine, disconnected: disconnected.promise };
+    return { client, errors, lines, disconnected: disconnected.promise };
   }
 
   it("drops a peer that never terminates a line and reports a disconnect", async () => {
@@ -522,12 +512,14 @@ describe("irc client inbound line bound", () => {
   });
 
   it("drops a peer that sends an oversized terminated line", async () => {
-    const server = await startFloodServer({ payload: () => `${"B".repeat(64 * 1024)}\r\n` });
+    const server = await startFloodServer({
+      payload: () => `:peer!test@example.com PRIVMSG bot :${"B".repeat(64 * 1024)}\r\n`,
+    });
     try {
       const { errors, lines, disconnected } = await connectToFlood(server);
       await withTimeout(disconnected, 2000, "IRC disconnect after oversized line");
       expect(errors.some((error) => error.message.includes("longer than"))).toBe(true);
-      expect(lines.some((line) => line.startsWith("BBBB"))).toBe(false);
+      expect(lines).toEqual([]);
     } finally {
       await server.close();
     }
@@ -535,6 +527,7 @@ describe("irc client inbound line bound", () => {
 
   it("does not retain state across many small chunks of a normal line", async () => {
     const chunks = Array.from({ length: 2000 }, () => "c".repeat(8));
+    const pongReceived = createDeferred<void>();
     const server = await startIrcTestServer((socket) => {
       socket.on("error", () => {});
       onIrcTestLine(socket, (line) => {
@@ -544,12 +537,14 @@ describe("irc client inbound line bound", () => {
             socket.write(`${chunks.slice(0, 100).join("")}\r\n`);
           }
           socket.write(":server PING :done\r\n");
+        } else if (line === "PONG :done") {
+          pongReceived.resolve();
         }
       });
     });
     try {
-      const { client, errors, waitForLine } = await connectToFlood(server);
-      await withTimeout(waitForLine(":server PING :done"), 2000, "IRC repeated normal lines");
+      const { client, errors } = await connectToFlood(server);
+      await withTimeout(pongReceived.promise, 2000, "IRC repeated normal lines");
       expect(errors).toEqual([]);
       client.quit("test complete");
     } finally {
@@ -582,6 +577,7 @@ describe("irc client liveness", () => {
           pingReceived.resolve();
           if (answerPing) {
             socket.write(":server PONG server :openclaw\r\n");
+            socket.write(":observer!test@example.com PRIVMSG bot :pong-observed\r\n");
           }
         }
       });
@@ -600,11 +596,7 @@ describe("irc client liveness", () => {
       abortSignal: abort.signal,
       onError,
       onDisconnect,
-      onLine: (line) => {
-        if (line === ":server PONG server :openclaw") {
-          pongReceived.resolve();
-        }
-      },
+      onPrivmsg: () => pongReceived.resolve(),
     });
     onTestFinished(() => client.close());
     return {
@@ -687,6 +679,7 @@ describe("irc client inbound CTCP", () => {
       ":alice!a@example.com PRIVMSG bot :VERSION",
       ":alice!a@example.com PRIVMSG bot :hello\u0001",
     ];
+    const done = createDeferred<void>();
     const server = await startIrcTestServer((socket) => {
       onIrcTestLine(socket, (line) => {
         if (line.startsWith("USER ")) {
@@ -695,10 +688,11 @@ describe("irc client inbound CTCP", () => {
             socket.write(`${message}\r\n`);
           }
           socket.write(":server PING :done\r\n");
+        } else if (line === "PONG :done") {
+          done.resolve();
         }
       });
     });
-    const done = createDeferred<void>();
     const dispatched: string[] = [];
     try {
       const client = await connectIrcClient({
@@ -710,11 +704,6 @@ describe("irc client inbound CTCP", () => {
         realname: "OpenClaw Bot",
         onPrivmsg: (event) => {
           dispatched.push(event.rawLine);
-        },
-        onLine: (line) => {
-          if (line === ":server PING :done") {
-            done.resolve();
-          }
         },
       });
       await withTimeout(done.promise, 2000, "IRC inbound CTCP lines");

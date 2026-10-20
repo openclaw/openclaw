@@ -11,10 +11,12 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/claws.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { mapNestedStrings } from "../shared/map-nested-strings.js";
 import { digestClawValue } from "./digest.js";
 import { clawActionNeedsEffect, projectClawAddActionEffect } from "./gateway-action-effects.js";
 import { projectClawAddScheduledJobs, projectClawConfiguredAccess } from "./gateway-disclosure.js";
 import { projectClawManifestDisclosure } from "./gateway-manifest-disclosure.js";
+import { collectClawSkillWarningReviews } from "./skill-warning-review.js";
 import type {
   ClawAddPlan,
   ClawDiagnostic,
@@ -97,34 +99,9 @@ function requestedPolicyBlockers(
 }
 
 function projectClawSkillWarningReviews(plan: ClawAddPlan): ClawSkillReview[] {
-  return plan.actions.flatMap((action) => {
-    const details = action.details;
-    if (
-      action.kind !== "package" ||
-      action.blocked ||
-      details?.kind !== "skill" ||
-      details.ownerAction !== "install" ||
-      typeof details.riskWarning !== "string" ||
-      !details.riskWarning
-    ) {
-      return [];
-    }
-    if (
-      typeof details.ref !== "string" ||
-      typeof details.version !== "string" ||
-      typeof details.integrity !== "string"
-    ) {
-      throw new Error("The Claw skill trust review is incomplete.");
-    }
-    const review = {
-      actionId: action.id,
-      ref: details.ref,
-      version: details.version,
-      integrity: details.integrity,
-      riskWarning: details.riskWarning,
-    };
-    return [{ ...review, reviewToken: digestClawValue(review) }];
-  });
+  return collectClawSkillWarningReviews(plan).map((review) =>
+    Object.assign(review, { reviewToken: digestClawValue(review) }),
+  );
 }
 
 function projectReadinessRequirement(requirement: ClawLocalPrerequisite) {
@@ -143,8 +120,8 @@ function sealClawLifecyclePlan(
 
 function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown {
   const root = path.resolve(sourceRoot);
-  const visit = (current: unknown): unknown => {
-    if (typeof current === "string" && path.isAbsolute(current)) {
+  return mapNestedStrings(value, (current) => {
+    if (path.isAbsolute(current)) {
       const relative = path.relative(root, path.resolve(current));
       if (relative === "") {
         return "$CLAW_SOURCE";
@@ -158,15 +135,8 @@ function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown
       }
       return current;
     }
-    if (Array.isArray(current)) {
-      return current.map(visit);
-    }
-    if (current && typeof current === "object") {
-      return Object.fromEntries(Object.entries(current).map(([key, entry]) => [key, visit(entry)]));
-    }
     return current;
-  };
-  return visit(value);
+  });
 }
 
 function sourceStablePlanIntegrity(plan: { planIntegrity: string }, sourceRoot: string): string {

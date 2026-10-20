@@ -59,6 +59,11 @@ import { gatewayFixtureLifetime } from "./gateway-fixture-lifetime.test-support.
 import type { GatewayServerOptions } from "./server.js";
 import { disposeSessionReadContexts } from "./session-read-contexts.test-support.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
+import type {
+  ConnectReqClient,
+  ConnectReqDevice,
+  ConnectReqOptions,
+} from "./test-helpers.connect-types.js";
 import { GATEWAY_TEST_ENV_KEYS } from "./test-helpers.env.js";
 import { getGatewayTestPort, canRetryPort, startClaimedGateway } from "./test-helpers.listener.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
@@ -76,7 +81,10 @@ import {
   testTailnetIPv4,
 } from "./test-helpers.runtime-state.js";
 import { resetGatewayLifecycleTestState } from "./test-helpers.server-lifecycle.js";
-import { closeGatewayTestHomeDatabases } from "./test-helpers.server-storage.js";
+import {
+  closeGatewayTestHomeDatabases,
+  recreateGatewayTestStateDir,
+} from "./test-helpers.server-storage.js";
 
 const getServerModule = createLazyRuntimeModule(() => import("./server.js"));
 // Startup module evaluation belongs to fixture setup, before behavior budgets begin.
@@ -400,13 +408,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   delete process.env.OPENCLAW_GATEWAY_TOKEN;
   const stateDir = process.env.OPENCLAW_STATE_DIR;
   if (stateDir) {
-    await fs.rm(stateDir, {
-      recursive: true,
-      force: true,
-      maxRetries: 20,
-      retryDelay: 25,
-    });
-    await fs.mkdir(stateDir, { recursive: true });
+    await recreateGatewayTestStateDir(tempHome, stateDir);
   }
   tempConfigRoot = options.uniqueConfigRoot
     ? path.join(tempHome, ".openclaw-test-suite", `case-${suiteConfigRootSeq++}`)
@@ -973,7 +975,7 @@ function resolveDefaultTestDeviceIdentityPath(params: {
     ),
   );
   const suiteRoot = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(suiteRoot, "test-device-identities", `${safe}.sqlite`);
+  return path.join(suiteRoot, "test-device-identities", safe, "client", "credentials.sqlite");
 }
 
 export async function readConnectChallengeNonce(
@@ -1000,48 +1002,6 @@ export async function readConnectChallengeNonce(
     return undefined;
   }
 }
-
-type ConnectReqClient = {
-  id: string;
-  displayName?: string;
-  version: string;
-  platform: string;
-  mode: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  instanceId?: string;
-};
-
-type ConnectReqDevice = {
-  id: string;
-  publicKey: string;
-  signature: string;
-  signedAt: number;
-  nonce?: string;
-};
-
-type ConnectReqOptions = {
-  token?: string;
-  bootstrapToken?: string;
-  deviceToken?: string;
-  password?: string;
-  skipDefaultAuth?: boolean;
-  minProtocol?: number;
-  maxProtocol?: number;
-  client?: ConnectReqClient;
-  role?: string;
-  scopes?: string[];
-  caps?: string[];
-  commands?: string[];
-  permissions?: Record<string, boolean>;
-  device?: ConnectReqDevice | null;
-  deviceIdentityPath?: string;
-  skipConnectChallengeNonce?: boolean;
-  prePairDevice?: boolean;
-  browserOrigin?: string;
-  timeoutMs?: number;
-  traceparent?: string;
-};
 
 function shouldPrePairTestDevice(params: {
   client: ConnectReqClient;
@@ -1232,6 +1192,7 @@ export async function connectReq(
         maxProtocol: opts?.maxProtocol ?? PROTOCOL_VERSION,
         client,
         caps: opts?.caps ?? [],
+        includeSessionMessageBodies: opts?.includeSessionMessageBodies,
         commands: opts?.commands ?? [],
         permissions: opts?.permissions ?? undefined,
         role,

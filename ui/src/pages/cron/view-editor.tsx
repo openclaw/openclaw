@@ -1,6 +1,7 @@
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createMemo, For, Show } from "solid-js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
+import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
@@ -91,8 +92,9 @@ export function Editor(
       <Show when={props.canManage && !systemOwned()}>
         {(_visible) => {
           const footer = createCronEditorClearance();
+          const footerControl = createFooterControlRef();
           return (
-            <div ref={footer} class="cron-editor-actions">
+            <div ref={[footer, footerControl]} class="cron-editor-actions">
               <button
                 class="btn primary"
                 data-test-id="cron-submit"

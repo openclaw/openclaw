@@ -14,7 +14,7 @@ import {
   SESSION_MUTATION_TEST_METHODS,
 } from "../test-helpers/gateway-methods.ts";
 
-it("pins an agent above the roster, preserves the other agents, and unpins through its menu", async () => {
+it("pins an agent into a menu-less gallery above the roster and preserves the other agents", async () => {
   const { sidebar, context, provider } = await mountRoster(roster, [
     session("main", 30, {
       lastMessagePreview: "A newer user question",
@@ -62,18 +62,11 @@ it("pins an agent above the roster, preserves the other agents, and unpins throu
   );
   await vi.waitFor(() => expect(tooltip.hasAttribute("open")).toBe(false));
   expect(document.activeElement).toBe(link);
-  const options = pin.querySelector<HTMLButtonElement>('button[aria-label="Options for Harbor"]')!;
-  options.focus();
-  options.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
-  await vi.waitFor(() =>
-    expect(remounted.sidebar.querySelector('[data-value="pin"]')?.textContent).toContain("Unpin"),
-  );
-  remounted.sidebar.querySelector<HTMLElement>('[data-value="pin"]')!.click();
+  expect(pin.querySelector("button")).toBeNull();
+  remounted.context.navigation.update({ pinnedAgentIds: [] });
   await vi.waitFor(() => {
     expect(remounted.sidebar.querySelector("[data-pinned-agent]")).toBeNull();
     expect(agentIds(remounted.sidebar)).toEqual(["main", "recent", "working"]);
-    expect(loadSettings().pinnedAgentIds).toEqual([]);
-    expect(document.activeElement).toBe(remounted.sidebar.querySelector('[data-agent-id="main"]'));
   });
 });
 
@@ -106,34 +99,37 @@ it("keeps every configured pin available and ignores unavailable saved agents", 
   expect(context.navigation.snapshot.pinnedAgentIds).toContain("missing");
 });
 
-it("keeps provisional session feedback visible below the pinned agent gallery", async () => {
-  const { sidebar, context } = await mountRoster(roster, []);
-  context.navigation.update({ pinnedAgentIds: ["main"] });
-  sidebar.sidebarAgentsMode = "roster";
-  sidebar.activeRouteId = "chat";
-  sidebar.sessionKey = "agent:main:creating";
-  await vi.waitFor(() =>
-    expect(sidebar.querySelector('[data-pinned-agent="main"]')).not.toBeNull(),
-  );
-  const release = context.chatSubmissions.beginCreate({
-    creation: { sessionKey: "agent:main:creating", admitted: false },
-    displayName: "Preparing new conversation",
-    message: null,
-    canDisplay: () => true,
-  });
-  try {
-    await settleRoster(sidebar);
-    const pending = sidebar.querySelector(
-      ".sidebar-agent-roster > .sidebar-recent-session--creating",
+// The agent-only roster has no row for an admitted new session, so a provisional
+// row would appear under the agent and vanish on admission.
+it.each(["main", "recent"])(
+  "renders no provisional session row for a %s-agent create in the agent roster",
+  async (agentId) => {
+    const { sidebar, context } = await mountRoster(roster, []);
+    context.navigation.update({ pinnedAgentIds: ["main"] });
+    sidebar.sidebarAgentsMode = "roster";
+    sidebar.activeRouteId = "chat";
+    const sessionKey = `agent:${agentId}:creating`;
+    sidebar.sessionKey = sessionKey;
+    await vi.waitFor(() =>
+      expect(sidebar.querySelector('[data-pinned-agent="main"]')).not.toBeNull(),
     );
-    expect(pending?.textContent).toContain("Preparing new conversation");
-    expect(sidebar.querySelectorAll(".sidebar-recent-session--creating")).toHaveLength(1);
-  } finally {
-    release();
-  }
-  await settleRoster(sidebar);
-  expect(sidebar.querySelector(".sidebar-recent-session--creating")).toBeNull();
-});
+    const release = context.chatSubmissions.beginCreate({
+      creation: { sessionKey, admitted: false },
+      displayName: "Preparing new conversation",
+      message: null,
+      canDisplay: () => true,
+    });
+    try {
+      await settleRoster(sidebar);
+      expect(sidebar.getRouteSessionKey()).toBe(sessionKey);
+      expect(sidebar.querySelector(".sidebar-recent-session--creating")).toBeNull();
+      expect(sidebar.textContent).not.toContain("Preparing new conversation");
+      expect(agentIds(sidebar)).toEqual(["recent", "working"]);
+    } finally {
+      release();
+    }
+  },
+);
 
 it("offers agent sessions and settings without a create action, and confirms agent deletion", async () => {
   const { sidebar, context, gatewayHarness, request } = await mountRoster(roster, []);

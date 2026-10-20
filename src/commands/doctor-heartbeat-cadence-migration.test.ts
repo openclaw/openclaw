@@ -1,13 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, resolveCronJobsStorePathFromConfig } from "../cron/store.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import {
+  loadDeviceIdentityIfPresent,
+  loadOrCreateDeviceIdentity,
+} from "../infra/device-identity.js";
 import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   collectHeartbeatCadenceMigrationFindings,
+  ensureHeartbeatMonitorJobs,
   maybeMigrateHeartbeatCadenceToCron,
 } from "./doctor-heartbeat-cadence-migration.js";
 import { useHeartbeatMigrationRoots } from "./doctor-heartbeat-migration.test-support.js";
@@ -153,7 +157,27 @@ it("keeps ownerless multi-agent updates scoped to their declared monitors", asyn
   expect(await f.monitor("beta")).toBeUndefined();
 });
 
-it("uses the supplied environment for the writable scheduler seed", async () => {
+it.each(["migrate", "ensure"])(
+  "%s creates heartbeat monitors without minting a primary device identity",
+  async (operation) => {
+    const f = await createFixture();
+    const nodeIdentity = loadOrCreateDeviceIdentity({ env: f.env, identityKey: "node" });
+    if (operation === "migrate") {
+      expect((await f.migrate()).warnings).toEqual([]);
+    } else {
+      await ensureHeartbeatMonitorJobs(f.cfg, f.storePath, f.env);
+    }
+    expect(Boolean(loadDeviceIdentityIfPresent({ env: f.env }))).toBe(false);
+    expect(loadDeviceIdentityIfPresent({ env: f.env, identityKey: "node" })).toEqual(nodeIdentity);
+    const monitor = await f.monitor();
+    expect(monitor).toEqual(expect.objectContaining({ payload: { kind: "heartbeat" } }));
+    vi.spyOn(process, "cwd").mockReturnValue(await makeRoot());
+    expect(await f.migrate()).toEqual({ changes: [], warnings: [] });
+    expect((await f.monitor())?.schedule).toEqual(monitor?.schedule);
+  },
+);
+
+it("uses the supplied environment's existing identity for the scheduler seed", async () => {
   const ambientRoot = await makeRoot();
   const suppliedRoot = await makeRoot();
   process.env.HOME = path.join(ambientRoot, "home");

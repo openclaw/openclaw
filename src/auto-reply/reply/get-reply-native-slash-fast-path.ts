@@ -57,9 +57,10 @@ function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
     !commandName ||
     commandName === "new" ||
     commandName === "reset" ||
-    // Dashboard creates an agent prompt with exact skill selections. The full
-    // reply pipeline must consume that command once, without re-resolving its text.
-    commandName === "dashboard"
+    // Prompt-producing commands must be consumed once by the full reply pipeline;
+    // their resulting text is not another command or directive invocation.
+    commandName === "dashboard" ||
+    commandName === "followup"
   ) {
     return false;
   }

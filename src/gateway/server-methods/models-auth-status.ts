@@ -30,6 +30,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { providerUsageLabel, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { refreshActiveProviderAuthRuntimeSnapshot } from "../../secrets/runtime.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunsForProvider } from "../chat-abort.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
@@ -311,22 +312,12 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       const { runIds: abortedRunIds } =
         selection.profileIds || apiKeyOnly
           ? { runIds: [] as string[] }
-          : abortChatRunsForProvider(
-              {
-                chatAbortControllers: context.chatAbortControllers,
-                chatRunState: context.chatRunState,
-                removeChatRun: context.removeChatRun,
-                agentRunSeq: context.agentRunSeq,
-                broadcast: context.broadcast,
-                nodeSendToSession: context.nodeSendToSession,
-              },
-              {
-                cfg,
-                providerId: authProvider,
-                agentId: scope.agentId,
-                stopReason: "auth-revoked",
-              },
-            );
+          : abortChatRunsForProvider(createChatAbortOps(context), {
+              cfg,
+              providerId: authProvider,
+              agentId: scope.agentId,
+              stopReason: "auth-revoked",
+            });
       const refreshWarning = await refreshAfterCredentialMutation(context, scope.agentId);
       const warning = [configWarning, refreshWarning].filter(Boolean).join(" ");
       const result: ModelAuthLogoutResult = {

@@ -1,4 +1,3 @@
-import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import {
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
@@ -16,6 +15,7 @@ import {
   type ContextEngine,
   type ContextEngineSessionTarget,
 } from "../../../context-engine/types.js";
+import { acknowledgeReplySessionTransition } from "../../../sessions/session-controller.session-reader.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-manager-api.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";

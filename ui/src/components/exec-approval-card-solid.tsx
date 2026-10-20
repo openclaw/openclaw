@@ -18,6 +18,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
+import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 
 declare module "@solidjs/web" {
@@ -39,6 +40,7 @@ export type ExecApprovalCardProps = {
   approval: ExecApprovalRequest;
   sourceSession?: GatewaySessionRow;
   busy: boolean;
+  connected: boolean;
   canGrant: boolean;
   error: string | null;
   variant: "inline" | "modal";
@@ -50,6 +52,7 @@ export type ExecApprovalCardProps = {
 export type SidebarApprovalRowProps = {
   approval: ExecApprovalRequest;
   busy: boolean;
+  connected: boolean;
   canGrant: boolean;
   error: string | null;
   openSessionHref?: string;
@@ -166,6 +169,22 @@ function renderExecBody(
   return (
     <>
       {" "}
+      {request.streamProposal ? (
+        <p class="exec-approval-summary">
+          {t(
+            request.host === "sandbox"
+              ? "execApproval.watcherSandboxSummary"
+              : request.host === "gateway"
+                ? "execApproval.watcherGatewaySummary"
+                : "execApproval.watcherSummary",
+          )}
+        </p>
+      ) : null}
+      {request.warningText ? (
+        <div class="exec-approval-warning" role="note">
+          {request.warningText}
+        </div>
+      ) : null}
       {renderCommandWithSpans(request)}
       {request.scope ? (
         <div class="exec-approval-scope">{summarizeApprovalScopeLabel(request.scope)}</div>
@@ -208,6 +227,16 @@ function renderPluginBody(active: ExecApprovalRequest, variant: ExecApprovalCard
 }
 
 function approvalDecisionLabel(decision: ExecApprovalDecision, approval: ExecApprovalRequest) {
+  const proposal = approval.kind === "exec" ? approval.request.streamProposal : undefined;
+  if (proposal && decision !== "allow-always") {
+    return t(
+      decision === "deny"
+        ? "execApproval.cancelWatcher"
+        : proposal.operation === "add"
+          ? "execApproval.startWatcher"
+          : "execApproval.saveWatcher",
+    );
+  }
   if (approval.kind === "plugin" && Array.isArray(approval.pluginActions)) {
     for (const action of approval.pluginActions) {
       if (isRecord(action) && action.kind === "decision" && action.decision === decision) {
@@ -253,6 +282,9 @@ export function resolveApprovalDecisions(
 }
 
 export function approvalTitle(active: ExecApprovalRequest): string {
+  if (active.kind === "exec" && active.request.streamProposal) {
+    return active.request.streamProposal.name;
+  }
   return active.kind !== "exec"
     ? (active.pluginTitle ?? t("execApproval.pluginApprovalNeeded"))
     : t("execApproval.execApprovalNeeded");
@@ -261,7 +293,7 @@ export function approvalTitle(active: ExecApprovalRequest): string {
 export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
   const approval = createMemo(() => props.approval);
   const nowMs = useApprovalClock();
-  const expired = createMemo(() => approval().expiresAtMs <= nowMs());
+  const expired = () => approval().expiresAtMs <= nowMs();
   const command = createMemo(() => compactApprovalCommand(approval().request.command));
   const sessionTitle = createMemo(() => {
     const sessionKey = approval().request.sessionKey?.trim();
@@ -270,10 +302,10 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
       (sessionKey ? resolveSessionDisplayName(sessionKey) : approvalTitle(approval()))
     );
   });
-  const expiryUrgent = createMemo(() => expired() || approval().expiresAtMs - nowMs() < 2 * 60_000);
-  const expiryLabel = createMemo(() => approvalRemainingLabel(approval().expiresAtMs, nowMs()));
-  const reviewOnlyMessage = createMemo(() => t("execApproval.reviewOnly"));
-  const grantError = createMemo(() => !props.canGrant && props.error === reviewOnlyMessage());
+  const expiryUrgent = () => expired() || approval().expiresAtMs - nowMs() < 2 * 60_000;
+  const expiryLabel = () => approvalRemainingLabel(approval().expiresAtMs, nowMs());
+  const reviewOnlyMessage = () => t("execApproval.reviewOnly");
+  const grantError = () => !props.canGrant && props.error === reviewOnlyMessage();
   return (
     <openclaw-sidebar-approval-row style={{ display: "contents" }}>
       <article
@@ -285,7 +317,12 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
           <Icon name="shieldQuestion" />
         </span>
         <div class="sidebar-approval-row__content">
-          <div class="sidebar-approval-row__header" data-issue-row-focus tabindex="-1">
+          <div
+            ref={sidebarAttentionFocusRef("row-only")}
+            class="sidebar-approval-row__header"
+            data-issue-row-focus
+            tabindex="-1"
+          >
             <span class="sidebar-issues-panel__entity" title={sessionTitle()}>
               {sessionTitle()}
             </span>
@@ -310,6 +347,13 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
               <div class="exec-approval-scope">{summarizeApprovalScopeLabel(scope())}</div>
             )}
           </Show>
+          <Show when={approval().request.warningText}>
+            {(warning) => (
+              <div class="sidebar-approval-row__message" role="note">
+                {warning()}
+              </div>
+            )}
+          </Show>
           <div
             class="sidebar-approval-row__actions"
             role="group"
@@ -320,6 +364,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
                 const label = createMemo(() => approvalDecisionLabel(decision, approval()));
                 return (
                   <button
+                    ref={sidebarAttentionFocusRef()}
                     type="button"
                     class={[
                       "btn btn--xs sidebar-approval-row__action",
@@ -330,7 +375,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
                       decision: label(),
                       command: command(),
                     })}
-                    disabled={props.busy || !props.canGrant || expired()}
+                    disabled={!props.connected || props.busy || !props.canGrant || expired()}
                     onClick={(event: Event) => props.onDecision(event, approval().id, decision)}
                   >
                     {label()}
@@ -340,6 +385,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
             </For>
             {props.openSessionHref && props.onOpenSession ? (
               <a
+                ref={sidebarAttentionFocusRef()}
                 class="sidebar-approval-row__open-session"
                 href={props.openSessionHref}
                 aria-label={t("sessionsView.openSession")}
@@ -350,7 +396,7 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
               </a>
             ) : undefined}
           </div>
-          {!props.canGrant ? (
+          {props.connected && !props.canGrant ? (
             <div class="sidebar-approval-row__message" role={grantError() ? "alert" : "note"}>
               {reviewOnlyMessage()}
             </div>
@@ -372,22 +418,17 @@ export function SidebarApprovalRow(props: SidebarApprovalRowProps) {
 function ExecApprovalCardContent(props: ExecApprovalCardProps) {
   const active = createMemo(() => props.approval);
   const decisions = createMemo(() => resolveApprovalDecisions(active()));
-  const reviewOnlyMessage = createMemo(() => t("execApproval.reviewOnly"));
-  const grantError = createMemo(() => !props.canGrant && props.error === reviewOnlyMessage());
-  const rawSeverity = createMemo(() => active().pluginSeverity?.trim().toLowerCase());
-  const severity = createMemo(() =>
+  const reviewOnlyMessage = () => t("execApproval.reviewOnly");
+  const grantError = () => !props.canGrant && props.error === reviewOnlyMessage();
+  const rawSeverity = () => active().pluginSeverity?.trim().toLowerCase();
+  const severity = () =>
     active().kind === "exec" || rawSeverity() === "warning" || rawSeverity() === "warn"
       ? "warning"
       : rawSeverity() === "danger" || rawSeverity() === "critical" || rawSeverity() === "error"
         ? "danger"
-        : "info",
-  );
-  const pluginId = createMemo(() =>
-    active().kind === "plugin" ? active().pluginId?.trim() : null,
-  );
-  const agentId = createMemo(() =>
-    props.variant === "modal" ? active().request.agentId?.trim() : null,
-  );
+        : "info";
+  const pluginId = () => (active().kind === "plugin" ? active().pluginId?.trim() : null);
+  const agentId = () => (props.variant === "modal" ? active().request.agentId?.trim() : null);
   const content = () => (
     <>
       <div class="exec-approval-header">
@@ -423,9 +464,15 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
         ? renderExecBody(active().request, props.variant)
         : renderPluginBody(active(), props.variant)}
       {active().kind === "exec" && !decisions().includes("allow-always") ? (
-        <div class="exec-approval-warning">{t("execApproval.allowAlwaysUnavailable")}</div>
+        <div class="exec-approval-warning">
+          {t(
+            active().request.streamProposal
+              ? "execApproval.watcherApprovalScope"
+              : "execApproval.allowAlwaysUnavailable",
+          )}
+        </div>
       ) : undefined}
-      {!props.canGrant ? (
+      {props.connected && !props.canGrant ? (
         <div
           class={grantError() ? "exec-approval-error" : "exec-approval-warning"}
           role={grantError() ? "alert" : "note"}
@@ -450,9 +497,9 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
             class={decisionClass(decision)}
             type="button"
             aria-label={label()}
-            disabled={props.busy || !props.canGrant}
+            disabled={!props.connected || props.busy || !props.canGrant}
             title={
-              props.variant === "modal" && props.canGrant
+              props.variant === "modal" && props.connected && props.canGrant
                 ? `${label()} (${decisionShortcut(decision)})`
                 : label()
             }

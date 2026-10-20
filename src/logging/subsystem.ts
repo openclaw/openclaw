@@ -1,3 +1,4 @@
+import util from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
@@ -39,27 +40,8 @@ export type SubsystemLogger = {
 
 type ChalkInstance = InstanceType<typeof Chalk>;
 
-const inspectValue: ((value: unknown) => string) | null = (() => {
-  try {
-    const inspect = process.getBuiltinModule?.("util").inspect;
-    return typeof inspect === "function" ? inspect : null;
-  } catch {
-    return null;
-  }
-})();
-
 function formatRuntimeArg(arg: unknown): string {
-  if (typeof arg === "string") {
-    return arg;
-  }
-  if (inspectValue) {
-    return inspectValue(arg);
-  }
-  try {
-    return JSON.stringify(arg);
-  } catch {
-    return String(arg);
-  }
+  return typeof arg === "string" ? arg : util.inspect(arg);
 }
 
 function isRichConsoleEnv(): boolean {
