@@ -3,12 +3,7 @@
 import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayEventListener } from "../../api/gateway.ts";
-import type {
-  AgentIdentityResult,
-  AgentsListResult,
-  GatewaySessionRow,
-  SessionsListResult,
-} from "../../api/types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
@@ -25,82 +20,29 @@ import {
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import {
+  initialSessions,
+  listSessions,
+  roster,
+  rosterIdentity,
+  session,
+} from "./agents-home-page.test-helpers.ts";
 import { AgentsHomePage } from "./agents-home-page.tsx";
 
-const roster: AgentsListResult = {
-  defaultId: "harbor",
-  mainKey: "team-room",
-  scope: "per-sender",
-  agents: [
-    { id: "harbor", name: "Harbor", identity: { theme: "Keeps the team organized", emoji: "⚓" } },
-    {
-      id: "ember",
-      identity: { theme: "Builds small tools" },
-      model: { primary: "example/model-small" },
-    },
-    { id: "system", kind: "system", name: "System helper" },
-  ],
-};
-
 function createPage() {
-  let sessions: GatewaySessionRow[] = [
-    {
-      key: "agent:harbor:team-room",
-      agentId: "harbor",
-      kind: "direct",
-      isMain: true,
-      updatedAt: 5_000,
-      lastMessagePreview: "The schedule is ready.",
-    },
-    {
-      key: "agent:ember:team-room",
-      agentId: "ember",
-      kind: "direct",
-      isMain: true,
-      updatedAt: 1_000,
-      lastMessagePreview: "The main chat summary.",
-    },
-    {
-      key: "agent:ember:side-task",
-      agentId: "ember",
-      kind: "direct",
-      updatedAt: 2_000,
-      lastMessagePreview: "A newer side-task message.",
-      hasActiveRun: true,
-    },
-  ];
+  let sessions = initialSessions();
   const request = createGatewayRequestMock(async (method, params) => {
     if (method === "agents.list") {
       return roster;
     }
     if (method === "agent.identity.get") {
-      const agentId =
-        params && typeof params === "object" && "agentId" in params ? String(params.agentId) : "";
-      return {
-        agentId,
-        name: agentId === "ember" ? "Ember" : "Harbor",
-        avatar: "",
-        emoji: agentId === "harbor" ? "⚓" : "",
-      } satisfies AgentIdentityResult;
+      return rosterIdentity(params);
     }
     if (method === "sessions.subscribe") {
       return { subscribed: true };
     }
     if (method === "sessions.list") {
-      const offset =
-        params && typeof params === "object" && "offset" in params ? Number(params.offset) : 0;
-      const limit =
-        params && typeof params === "object" && "limit" in params ? Number(params.limit) : 300;
-      const rows = sessions.slice(offset, offset + limit);
-      return {
-        ts: 6_000,
-        path: "",
-        count: rows.length,
-        sessions: rows,
-        defaults: { model: null, modelProvider: null, contextTokens: null },
-        hasMore: offset + rows.length < sessions.length,
-        nextOffset: offset + rows.length,
-      } satisfies SessionsListResult;
+      return listSessions(sessions, params);
     }
     throw new Error(`Unexpected RPC: ${method}`);
   });
@@ -324,16 +266,7 @@ describe("AgentsHomePage", () => {
     vi.useFakeTimers();
     const { page, updateSessions, emitChange, setPhase } = createPage();
     await waitForSolid(() => expect(page.textContent).toContain("The main chat summary."));
-    updateSessions([
-      {
-        key: "agent:ember:team-room",
-        agentId: "ember",
-        kind: "direct",
-        isMain: true,
-        updatedAt: 7_000,
-        lastMessagePreview: "The tool is finished.",
-      },
-    ]);
+    updateSessions([session("ember", "The tool is finished.", 7_000)]);
     emitChange();
     emitChange();
     await vi.advanceTimersByTimeAsync(5_000);
@@ -342,15 +275,7 @@ describe("AgentsHomePage", () => {
     setPhase("reconnecting");
     await waitForSolid(() => expect(page.textContent).toContain("Connect to the Gateway"));
     updateSessions([
-      {
-        key: "agent:harbor:team-room",
-        agentId: "harbor",
-        kind: "direct",
-        isMain: true,
-        updatedAt: 8_000,
-        lastMessagePreview: "The next schedule is ready.",
-        hasActiveRun: true,
-      },
+      session("harbor", "The next schedule is ready.", 8_000, { hasActiveRun: true }),
     ]);
     setPhase("connected");
     await waitForSolid(() => expect(page.textContent).toContain("The next schedule is ready."));
