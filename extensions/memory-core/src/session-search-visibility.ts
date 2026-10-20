@@ -140,11 +140,16 @@ function filterSessionKeysByScopedAgent(params: {
     if (isGlobalSessionKeyForSharedScope(params.cfg, key)) {
       return true;
     }
-    const ownerAgentId = resolveSessionAgentIdStrict({
-      sessionKey: key,
-      config: params.cfg,
-    });
-    return normalizeAgentIdForCompare(ownerAgentId) === scopedAgentId;
+    try {
+      const ownerAgentId = resolveSessionAgentIdStrict({
+        sessionKey: key,
+        config: params.cfg,
+        fallbackAgentId: scopedAgentId,
+      });
+      return normalizeAgentIdForCompare(ownerAgentId) === scopedAgentId;
+    } catch {
+      return false;
+    }
   });
 }
 
@@ -226,9 +231,18 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     params.trustedAgentScope && scopedAgentId && !params.requesterSessionKey && !conversationRecall,
   );
   const anchorSessionKey = conversationRecall?.anchorSessionKey.trim();
-  const recallAgentId = anchorSessionKey
-    ? resolveSessionAgentIdStrict({ sessionKey: anchorSessionKey, config: params.cfg })
-    : undefined;
+  let recallAgentId: string | undefined;
+  try {
+    recallAgentId = anchorSessionKey
+      ? resolveSessionAgentIdStrict({
+          sessionKey: anchorSessionKey,
+          config: params.cfg,
+          fallbackAgentId: scopedAgentId,
+        })
+      : undefined;
+  } catch {
+    recallAgentId = undefined;
+  }
   const anchorEntry = anchorSessionKey ? combinedSessionStore[anchorSessionKey] : undefined;
   let anchorResetCutoffPromise: Promise<SessionResetRecallCutoff> | undefined;
   const resolveAnchorResetCutoff = () => {
@@ -296,7 +310,16 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     ) {
       return false;
     }
-    const candidateAgentId = resolveSessionAgentIdStrict({ sessionKey: key, config: params.cfg });
+    let candidateAgentId: string;
+    try {
+      candidateAgentId = resolveSessionAgentIdStrict({
+        sessionKey: key,
+        config: params.cfg,
+        fallbackAgentId: scopedAgentId,
+      });
+    } catch {
+      return false;
+    }
     if (
       normalizeAgentIdForCompare(candidateAgentId) !== normalizeAgentIdForCompare(recallAgentId)
     ) {

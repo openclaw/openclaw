@@ -33,6 +33,51 @@ describe("filterMemorySearchHitsBySessionVisibility across agents", () => {
     combinedSessionStore = crossAgentStore;
   });
 
+  it("uses the known scoped owner for a bare session alias", async () => {
+    combinedSessionStore = {
+      "legacy-main-alias": sessionEntry("w1", 1, "/tmp/sessions/w1.jsonl"),
+    };
+    const hit: MemorySearchResult = searchHit("sessions/main/w1.jsonl", "sessions", "x");
+    const cfg = asOpenClawConfig({
+      agents: { ownership: "explicit", entries: { main: {}, librarian: {} } },
+      tools: { sessions: { visibility: "all" } },
+    });
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      agentId: "main",
+      requesterSessionKey: undefined,
+      sandboxed: false,
+      hits: [hit],
+      trustedAgentScope: true,
+    });
+    expect(filtered).toEqual([hit]);
+  });
+
+  it("drops a bare alias that conflicts with persisted ownership", async () => {
+    combinedSessionStore = {
+      global: sessionEntry("shared", 1, "/tmp/sessions/shared.jsonl"),
+    };
+    const hit: MemorySearchResult = searchHit("sessions/shared.jsonl", "sessions", "x");
+    const cfg = asOpenClawConfig({
+      session: { store: "/tmp/shared.sqlite" },
+      agents: {
+        ownership: "explicit",
+        defaults: { sessionStore: { agentId: "librarian" } },
+        entries: { main: {}, librarian: {} },
+      },
+      tools: { sessions: { visibility: "all" } },
+    });
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      agentId: "main",
+      requesterSessionKey: undefined,
+      sandboxed: false,
+      hits: [hit],
+      trustedAgentScope: true,
+    });
+    expect(filtered).toStrictEqual([]);
+  });
+
   it("keeps global-scope session hits for non-default agents", async () => {
     combinedSessionStore = {
       global: sessionEntry("w1", 1, "/tmp/sessions/w1.jsonl"),

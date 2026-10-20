@@ -4,6 +4,7 @@ import {
   assertMemoryAudienceCurrent,
   assertMemoryAudienceSession,
 } from "../plugins/memory-audience.js";
+import { classifySessionKeyShape, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import { modelKey } from "./model-ref-shared.js";
@@ -53,6 +54,24 @@ export type OpenClawPluginToolOptions = Pick<
   | "pluginExecutionAuthority"
 > & { activeProjectKeys?: readonly string[]; approvalReviewerDeviceId?: string };
 
+function resolvePluginSessionKey(
+  options: Pick<OpenClawPluginToolOptions, "agentSessionKey" | "runSessionKey">,
+) {
+  const runSessionKey = options.runSessionKey?.trim();
+  const agentSessionKey = options.agentSessionKey?.trim();
+  if (
+    classifySessionKeyShape(runSessionKey) === "malformed_agent" ||
+    classifySessionKeyShape(agentSessionKey) === "malformed_agent"
+  ) {
+    throw new Error("Malformed agent session key; refusing default-agent resolution.");
+  }
+  return parseAgentSessionKey(runSessionKey)
+    ? runSessionKey
+    : parseAgentSessionKey(agentSessionKey)
+      ? agentSessionKey
+      : runSessionKey || agentSessionKey;
+}
+
 export function resolveOpenClawPluginToolInputs(params: {
   options?: OpenClawPluginToolOptions;
   resolvedConfig?: OpenClawConfig;
@@ -60,7 +79,7 @@ export function resolveOpenClawPluginToolInputs(params: {
   getRuntimeConfig?: () => OpenClawConfig | undefined;
 }) {
   const { options, resolvedConfig, runtimeConfig, getRuntimeConfig } = params;
-  const sessionKey = options?.runSessionKey ?? options?.agentSessionKey;
+  const sessionKey = options ? resolvePluginSessionKey(options) : undefined;
   if (options?.memoryAudience) {
     assertMemoryAudienceSession(options.memoryAudience, sessionKey);
   }

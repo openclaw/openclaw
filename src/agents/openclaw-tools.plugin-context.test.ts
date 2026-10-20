@@ -78,6 +78,72 @@ it("uses requester agent override for synthetic embedded session keys", () => {
   expect(result).toMatchObject({ agentId: "recall", workspaceDir: recallWorkspace });
 });
 
+it("uses a scoped agent session key when the run key is unscoped", () => {
+  const config = {
+    agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+  } as never;
+  expect(
+    resolve({
+      config,
+      agentSessionKey: "agent:research:dashboard:control",
+      runSessionKey: "global",
+    }),
+  ).toMatchObject({ agentId: "research", sessionKey: "agent:research:dashboard:control" });
+});
+
+it("keeps the durable run owner when the agent session key is unscoped", () => {
+  const config = {
+    agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+  } as never;
+  expect(
+    resolve({ agentSessionKey: "global", runSessionKey: "agent:research:main", config }),
+  ).toMatchObject({ agentId: "research", sessionKey: "agent:research:main" });
+});
+
+it("keeps the durable run owner when both scoped keys disagree", () => {
+  const config = {
+    agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+  } as never;
+  expect(
+    resolve({
+      config,
+      agentSessionKey: "agent:main:policy",
+      runSessionKey: "agent:research:main",
+    }),
+  ).toMatchObject({ agentId: "research", sessionKey: "agent:research:main" });
+});
+
+it("rejects a malformed agent key even when the other key is scoped", () => {
+  const config = {
+    agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+  } as never;
+  expect(() =>
+    resolve({ config, agentSessionKey: "agent:research", runSessionKey: "agent:research:main" }),
+  ).toThrow("Malformed agent session key");
+});
+
+it("fails closed when neither session key establishes an owner", () => {
+  const config = {
+    agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+  } as never;
+  expect(() => resolve({ config, agentSessionKey: "global", runSessionKey: "global" })).toThrow(
+    "no explicit owner",
+  );
+});
+
+it("does not let a forged other-agent key override the run owner", () => {
+  const config = {
+    agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+  } as never;
+  expect(
+    resolve({
+      config,
+      agentSessionKey: "agent:main:forged-policy",
+      runSessionKey: "agent:research:delegated-run",
+    }),
+  ).toMatchObject({ agentId: "research", sessionKey: "agent:research:delegated-run" });
+});
+
 it("keeps the routable conversation target ahead of the native channel id", () => {
   const result = resolve({
     agentChannel: "slack",
