@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as startupTiming from "../../commands/gateway-startup-timing.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
@@ -15,6 +15,7 @@ import { toPublicUpdateRun } from "../../infra/update-run-record.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
 import { verifyPreviousGatewayForUpdate } from "./update-command-readiness.js";
 
 const resolveGatewayStartupTiming = startupTiming.resolveGatewayStartupTiming;
@@ -42,15 +43,9 @@ vi.mock("../../infra/ports-inspect.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/ports-inspect.js")>();
   return {
     ...actual,
-    inspectPortUsage: async (...args: Parameters<typeof actual.inspectPortUsage>) => {
+    inspectPortUsage: (...args: Parameters<typeof actual.inspectPortUsage>) =>
       // SQLite keeps host paths; only native listener collection replays Windows.
-      const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      try {
-        return await actual.inspectPortUsage(...args);
-      } finally {
-        platform.mockRestore();
-      }
-    },
+      withMockedWindowsPlatform(() => actual.inspectPortUsage(...args)),
   };
 });
 vi.mock("../../infra/package-json.js", () => ({ readPackageVersion: async () => "2026.9.5" }));
@@ -77,6 +72,7 @@ vi.mock("./update-command-service-plan.js", () => ({
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+const cleanups: (() => Promise<void>)[] = [];
 const startedAt = Date.parse("2026-09-24T00:49:43Z");
 const serviceRuntime = { status: "running", pid: 4242 } as const;
 const unreachable = {
@@ -121,7 +117,10 @@ beforeEach(() => {
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) {
+    await cleanup();
+  }
   vi.restoreAllMocks();
   vi.useRealTimers();
   closeOpenClawStateDatabaseForTest();
@@ -137,17 +136,33 @@ function fixture() {
     { env },
   );
   const read = () => getUpdateRun(run.runId, { env })!;
-  const wait = () => read().steps.find((step) => step.step === "previous gateway verification");
+  const wait = (prefix = "") =>
+    read().steps.find((step) => step.step === `${prefix}previous gateway verification`);
   return {
     read,
     wait,
-    params: {
-      root: "C:\\openclaw",
-      config: {},
-      env,
-      opts: { run },
-      gatewayPort: 18789,
-      waitForStartup: false,
+    observe(
+      release: () => void,
+      options: Partial<Parameters<typeof verifyPreviousGatewayForUpdate>[0]> = {},
+      json = false,
+    ) {
+      const abort = new AbortController();
+      const pending = verifyPreviousGatewayForUpdate({
+        root: "C:\\openclaw",
+        config: {},
+        env,
+        gatewayPort: 18789,
+        waitForStartup: false,
+        ...options,
+        opts: { run, json },
+        signal: abort.signal,
+      });
+      cleanups.push(async () => {
+        abort.abort(new Error("fixture completed"));
+        release();
+        await Promise.allSettled([pending]);
+      });
+      return { pending, abort };
     },
   };
 }
@@ -163,174 +178,131 @@ function holdRuntimeProbe() {
 }
 
 async function awaitProbe<T>(entered: Promise<T>, verification: Promise<boolean>): Promise<T> {
-  return await Promise.race([
+  return awaitGateBeforeSettlement(
     entered,
-    verification.then(() => {
-      throw new Error("Readiness verification completed before the held probe was reached");
-    }),
-  ]);
+    verification,
+    "Readiness verification completed before the held probe was reached",
+  );
 }
 
-describe("managed Windows update after the startup canary", () => {
-  it.each([
-    { json: false, observedStartupMs: 300_000, timeoutMs: undefined },
-    { json: true, observedStartupMs: 300_000, timeoutMs: undefined },
-    { json: false, observedStartupMs: 600_000, timeoutMs: 7_200_000 },
-  ])(
-    "records the bounded observation budget (json=$json, startup=$observedStartupMs, timeout=$timeoutMs)",
-    async ({ json, observedStartupMs, timeoutMs }) => {
-      const { deadlineMs: budgetMs, derivation } = resolveGatewayStartupTiming("win32", {
-        observedStartupMs,
-        timeoutMs,
-        migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
-        previousGateway: true,
-      });
-      const f = fixture();
-      const probe = holdRuntimeProbe();
-      const abort = new AbortController();
-      const pending = verifyPreviousGatewayForUpdate({
-        ...f.params,
-        observedStartupMs,
-        timeoutMs,
-        opts: { ...f.params.opts, json },
-        signal: abort.signal,
-      });
-      try {
-        await awaitProbe(probe.entered, pending);
-        expect(f.read()).toMatchObject({ phase: "validating", status: "running" });
-        expect(f.wait()).toMatchObject({ status: "in_progress", startedAtMs: startedAt });
-        expect(f.wait()?.detail).toMatch(/previous.Gateway readiness verification/i);
-        expect(f.wait()?.detail).toContain(`Budget ${budgetMs}ms`);
-        expect(f.wait()?.detail).toContain(derivation);
-        if (timeoutMs === undefined) {
-          expect(f.wait()?.detail).toMatch(
-            new RegExp(`${observedStartupMs}.*10|10.*${observedStartupMs}`),
-          );
-        }
-        expect(f.wait()?.detail).toMatch(/service|Scheduled Task/i);
-        expect(f.wait()?.detail).toMatch(/listener|identity/i);
-
-        await vi.advanceTimersByTimeAsync(30_000);
-        probe.release();
-        await expect(pending).resolves.toBe(false);
-
-        const waiting = f
-          .read()
-          .steps.find((step) => step.step === "warning:previous gateway verification")!;
-        expect(waiting.status).toBe("completed");
-        expect(waiting.detail).toContain("Gateway RPC health probe timed out");
-        expect(waiting.detail).toContain("continuing with readiness unverified");
-        expect(waiting.startedAtMs).toBe(startedAt);
-        expect(waiting.endedAtMs).toBe(startedAt + 30_000);
-        expect(renderUpdateRunReport(f.read()).markdown).toContain(waiting.detail);
-        expect(toPublicUpdateRun(f.read()).steps).toContainEqual(waiting);
-        expect(defaultRuntime[json ? "error" : "log"]).toHaveBeenCalledWith(
-          expect.stringContaining(waiting.detail!),
-        );
-        expect(defaultRuntime[json ? "log" : "error"]).not.toHaveBeenCalled();
-        for (const command of ["tasklist.exe", "powershell.exe"]) {
-          expect(native.command.mock.calls.some(([argv]) => argv[0].endsWith(command))).toBe(true);
-        }
-      } finally {
-        abort.abort(new Error("fixture completed"));
-        probe.release();
-        await Promise.allSettled([pending]);
-      }
-    },
-  );
-
-  it("keeps HTTP endpoint results visible while readiness remains pending", async () => {
-    const f = fixture();
-    const abort = new AbortController();
-    native.reachable.mockResolvedValue({
-      ...unreachable,
-      reachable: true,
-      gatewayVersion: "2026.9.5",
-      gatewayBootId: "previous-gateway-boot",
-      probeError: undefined,
+it.each([
+  { json: false, observedStartupMs: 300_000, timeoutMs: undefined },
+  { json: true, observedStartupMs: 300_000, timeoutMs: undefined },
+  { json: false, observedStartupMs: 600_000, timeoutMs: 7_200_000 },
+  { json: false, observedStartupMs: undefined, timeoutMs: 1_000 },
+])(
+  "records the bounded observation budget (json=$json, startup=$observedStartupMs, timeout=$timeoutMs)",
+  async ({ json, observedStartupMs, timeoutMs }) => {
+    const { deadlineMs: budgetMs, derivation } = resolveGatewayStartupTiming("win32", {
+      observedStartupMs,
+      timeoutMs,
+      migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
+      previousGateway: true,
     });
-    type HttpParams = Parameters<typeof native.http>[0];
-    const entered = createDeferred<HttpParams>();
-    const result = createDeferred<{ healthz: number; readyz: number }>();
-    native.http.mockImplementationOnce((params) => {
-      entered.resolve(params);
-      return result.promise;
-    });
-    const pending = verifyPreviousGatewayForUpdate({ ...f.params, signal: abort.signal });
-    try {
-      const http = await awaitProbe(entered.promise, pending);
-      await vi.advanceTimersByTimeAsync(30_000);
-      http.onObservation?.({ healthz: 200, readyz: 503 });
-      const waiting = f.wait()!;
-      expect(waiting.status).toBe("in_progress");
-      expect(waiting.detail).toContain("HTTP healthz=200; readyz=503");
-      const { deadlineMs } = resolveGatewayStartupTiming("win32", {
-        migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
-        previousGateway: true,
-      });
-      expect(waiting.detail).toContain(`Remaining ${deadlineMs - 30_000}ms`);
-      expect(renderUpdateRunReport(f.read()).markdown).toContain("HTTP healthz=200; readyz=503");
-    } finally {
-      abort.abort(new Error("fixture completed"));
-      result.resolve({ healthz: 200, readyz: 200 });
-      await Promise.allSettled([pending]);
-    }
-  });
-
-  it("bounds a stalled native observation and records the operator next step", async () => {
     const f = fixture();
     const probe = holdRuntimeProbe();
-    const pending = verifyPreviousGatewayForUpdate({ ...f.params, timeoutMs: 1_000 });
+    const { pending } = f.observe(probe.release, { observedStartupMs, timeoutMs }, json);
     await awaitProbe(probe.entered, pending);
-    await vi.advanceTimersByTimeAsync(1_000);
+    expect(f.read()).toMatchObject({ phase: "validating", status: "running" });
+    expect(f.wait()).toMatchObject({ status: "in_progress", startedAtMs: startedAt });
+    expect(f.wait()?.detail).toMatch(/previous.Gateway readiness verification/i);
+    expect(f.wait()?.detail).toContain(`Budget ${budgetMs}ms`);
+    expect(f.wait()?.detail).toContain(derivation);
+    if (timeoutMs === undefined) {
+      expect(f.wait()?.detail).toMatch(
+        new RegExp(`${observedStartupMs}.*10|10.*${observedStartupMs}`),
+      );
+    }
+    expect(f.wait()?.detail).toMatch(/service|Scheduled Task/i);
+    expect(f.wait()?.detail).toMatch(/listener|identity/i);
+
+    const elapsedMs = timeoutMs === 1_000 ? 1_000 : 30_000;
+    await vi.advanceTimersByTimeAsync(elapsedMs);
     probe.release();
     await expect(pending).resolves.toBe(false);
 
-    const warning = f
-      .read()
-      .steps.find((step) => step.step === "warning:previous gateway verification");
-    expect(warning).toMatchObject({ status: "completed" });
-    expect(warning?.detail).toMatch(/1000/);
-    expect(warning?.detail).toMatch(/openclaw gateway status/);
-    expect(f.read().status).toBe("running");
-    expect(renderUpdateRunReport(f.read()).markdown).toContain(warning?.detail);
-  });
-
-  it.each(["cancellation", "execution ownership loss"])(
-    "does not publish more progress after %s during a native probe",
-    async (cause) => {
-      const f = fixture();
-      const abort = new AbortController();
-      const probe = holdRuntimeProbe();
-      let owned = true;
-      const pending = verifyPreviousGatewayForUpdate({
-        ...f.params,
-        signal: abort.signal,
-        assertCurrent: () => {
-          if (!owned) {
-            throw new Error("execution ownership lost");
-          }
-        },
-      });
-      try {
-        await awaitProbe(probe.entered, pending);
-        const before = f.read();
-        expect(f.wait()).toMatchObject({ status: "in_progress" });
-        if (cause === "cancellation") {
-          abort.abort(new Error("observation canceled"));
-        } else {
-          owned = false;
-        }
-        probe.release();
-        await expect(pending).rejects.toThrow(
-          cause === "cancellation" ? "observation canceled" : "execution ownership lost",
-        );
-        expect(f.read()).toEqual(before);
-      } finally {
-        abort.abort(new Error("fixture completed"));
-        probe.release();
-        await Promise.allSettled([pending]);
+    const waiting = f.wait("warning:")!;
+    expect(waiting).toMatchObject({
+      status: "completed",
+      startedAtMs: startedAt,
+      endedAtMs: startedAt + elapsedMs,
+    });
+    if (timeoutMs === 1_000) {
+      expect(waiting.detail).toMatch(/1000/);
+      expect(waiting.detail).toMatch(/openclaw gateway status/);
+    } else {
+      expect(waiting.detail).toContain("Gateway RPC health probe timed out");
+      for (const command of ["tasklist.exe", "powershell.exe"]) {
+        expect(native.command.mock.calls.some(([argv]) => argv[0].endsWith(command))).toBe(true);
       }
-    },
-  );
+    }
+    expect(waiting.detail).toContain("continuing with readiness unverified");
+    expect(f.read().status).toBe("running");
+    expect(renderUpdateRunReport(f.read()).markdown).toContain(waiting.detail);
+    expect(toPublicUpdateRun(f.read()).steps).toContainEqual(waiting);
+    expect(defaultRuntime[json ? "error" : "log"]).toHaveBeenCalledWith(
+      expect.stringContaining(waiting.detail!),
+    );
+    expect(defaultRuntime[json ? "log" : "error"]).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps HTTP endpoint results visible while readiness remains pending", async () => {
+  const f = fixture();
+  native.reachable.mockResolvedValue({
+    ...unreachable,
+    reachable: true,
+    gatewayVersion: "2026.9.5",
+    gatewayBootId: "previous-gateway-boot",
+    probeError: undefined,
+  });
+  type HttpParams = Parameters<typeof native.http>[0];
+  const entered = createDeferred<HttpParams>();
+  const result = createDeferred<{ healthz: number; readyz: number }>();
+  native.http.mockImplementationOnce((params) => {
+    entered.resolve(params);
+    return result.promise;
+  });
+  const { pending } = f.observe(() => result.resolve({ healthz: 200, readyz: 200 }));
+  const http = await awaitProbe(entered.promise, pending);
+  await vi.advanceTimersByTimeAsync(30_000);
+  http.onObservation?.({ healthz: 200, readyz: 503 });
+  const waiting = f.wait()!;
+  expect(waiting.status).toBe("in_progress");
+  expect(waiting.detail).toContain("HTTP healthz=200; readyz=503");
+  const { deadlineMs } = resolveGatewayStartupTiming("win32", {
+    migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
+    previousGateway: true,
+  });
+  expect(waiting.detail).toContain(`Remaining ${deadlineMs - 30_000}ms`);
+  expect(renderUpdateRunReport(f.read()).markdown).toContain("HTTP healthz=200; readyz=503");
 });
+
+it.each(["cancellation", "execution ownership loss"])(
+  "does not publish more progress after %s during a native probe",
+  async (cause) => {
+    const f = fixture();
+    const probe = holdRuntimeProbe();
+    let owned = true;
+    const { pending, abort } = f.observe(probe.release, {
+      assertCurrent: () => {
+        if (!owned) {
+          throw new Error("execution ownership lost");
+        }
+      },
+    });
+    await awaitProbe(probe.entered, pending);
+    const before = f.read();
+    expect(f.wait()).toMatchObject({ status: "in_progress" });
+    if (cause === "cancellation") {
+      abort.abort(new Error("observation canceled"));
+    } else {
+      owned = false;
+    }
+    probe.release();
+    await expect(pending).rejects.toThrow(
+      cause === "cancellation" ? "observation canceled" : "execution ownership lost",
+    );
+    expect(f.read()).toEqual(before);
+  },
+);

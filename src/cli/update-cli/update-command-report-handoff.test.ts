@@ -62,8 +62,8 @@ it.each(["runtime", "missing updater"] as const)(
         ? "Target package: openclaw@2026.9.4; Minimum Node engine: 24.16.0; Running Node: 22.23.2"
         : "Cannot locate the installed updater; run `openclaw doctor` before retrying.";
 
-    await withTriageTerminal(true, async () => {
-      await expect(
+    await withTriageTerminal(true, () =>
+      expect(
         withUpdateFailureTriage({}, { root, env: { ...process.env } }, async () => {
           metadata.unavailable = true;
           if (failure === "missing updater") {
@@ -93,19 +93,14 @@ it.each(["runtime", "missing updater"] as const)(
               if (!(cause instanceof UpdatePreMutationError)) {
                 throw cause;
               }
-              throw new UpdateCommandFailure(
-                (
-                  await resolveMutableUpdateFailure({
-                    root,
-                    mode: "npm",
-                    durationMs: 0,
-                    cause,
-                    originalRecovery: async () => undefined,
-                  })
-                ).result,
-                1,
-                cause.message,
-              );
+              const { result } = await resolveMutableUpdateFailure({
+                root,
+                mode: "npm",
+                durationMs: 0,
+                cause,
+                originalRecovery: async () => undefined,
+              });
+              throw new UpdateCommandFailure(result, 1, cause.message);
             }
             return;
           }
@@ -131,15 +126,14 @@ it.each(["runtime", "missing updater"] as const)(
             controlPlaneUpdateSentinelMeta: null,
           });
         }),
-      ).rejects.toBeInstanceOf(ExitError);
-    });
+      ).rejects.toBeInstanceOf(ExitError),
+    );
 
-    const previews = output.mock.calls
-      .map(([value]) => value)
-      .filter(
-        (value): value is string =>
-          typeof value === "string" && value.startsWith("# OpenClaw update failure report\n"),
-      );
+    const previews = output.mock.calls.flatMap(([value]) =>
+      typeof value === "string" && value.startsWith("# OpenClaw update failure report\n")
+        ? [value]
+        : [],
+    );
     expect(previews).toHaveLength(1);
     expect(previews[0]).toContain(message);
     if (failure === "runtime") {

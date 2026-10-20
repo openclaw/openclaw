@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../../config/io.js";
 import { createRetainedCheckpointFixture } from "../../infra/update-retained-checkpoint.test-support.js";
@@ -17,6 +17,10 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+function refuse(message: string): never {
+  throw new Error(message);
+}
+
 async function fixture() {
   const f = createRetainedCheckpointFixture(fs.realpathSync(dirs.make("rollback-retained-")), true);
   const configSnapshot = await createConfigIO({
@@ -27,23 +31,13 @@ async function fixture() {
     run: f.run,
     recovery: {
       options: f.options,
-      fence: {
-        assertCurrent() {
-          throw new Error("retained owner is no longer live");
-        },
-      },
+      fence: { assertCurrent: () => refuse("retained owner is no longer live") },
       getRecord: () => f.record,
-      onRecord() {
-        throw new Error("retained record must remain read-only");
-      },
-      assertReady() {
-        throw new Error("no live readiness authority");
-      },
+      onRecord: () => refuse("retained record must remain read-only"),
+      assertReady: () => refuse("no live readiness authority"),
     },
   };
-  const rollback = vi.fn(async () => {
-    throw new Error("legacy rollback must not run");
-  });
+  const rollback = vi.fn(async () => refuse("legacy rollback must not run"));
   const complete = vi.fn();
   const invoke = async (
     preManagedServiceStop?: Parameters<typeof rollbackFailedUpdate>[0]["preManagedServiceStop"],
@@ -83,62 +77,58 @@ const deferred = {
   result: { reason: "candidate-failed", recovery: { serviceRestartSafe: false } },
 };
 
-describe("retained full-state recovery is read-only", () => {
-  it("refuses checkpoint recovery before package mutation and preserves the primary failure", async () => {
-    const f = await fixture();
-    expect(
-      await f.invoke(undefined, [
-        f.file,
-        f.record.checkpoint!.ref.manifestPath,
-        f.record.restore!.planPath,
-      ]),
-    ).toMatchObject({
-      ...deferred,
-      pendingRecoveryReason: expect.stringContaining("deferred"),
-    });
-    expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
-    expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
+it("refuses checkpoint recovery before package mutation and preserves the primary failure", async () => {
+  const f = await fixture();
+  expect(
+    await f.invoke(undefined, [
+      f.file,
+      f.record.checkpoint!.ref.manifestPath,
+      f.record.restore!.planPath,
+    ]),
+  ).toMatchObject({
+    ...deferred,
+    pendingRecoveryReason: expect.stringContaining("deferred"),
   });
-
-  it.each(["lost context", "lost run"] as const)(
-    "does not reinterpret %s as permission for package rollback",
-    async (change) => {
-      const f = await fixture();
-      f.opts.recovery = undefined;
-      if (change === "lost run") {
-        f.opts.run = undefined;
-        vi.stubEnv("OPENCLAW_STATE_DIR", f.root);
-      }
-      expect(await f.invoke(undefined, [f.file, f.configPath])).toMatchObject(deferred);
-    },
-  );
-
-  it("refuses an interrupted displacement without live context or recreating canonical state", async () => {
-    const f = await fixture();
-    f.displace();
-    f.opts.recovery = undefined;
-    await f.invoke(undefined, [f.displaced]);
-    expect(fs.existsSync(f.file)).toBe(false);
-  });
-
-  it.each(["service", "admitted"] as const)(
-    "checks pending recovery in the %s root when service and history differ",
-    async (pendingRoot) => {
-      const f = await fixture();
-      f.opts.recovery = undefined;
-      const cleanEnv = { OPENCLAW_STATE_DIR: dirs.make("rollback-other-root-") };
-      f.opts.run = { ...f.run, env: pendingRoot === "admitted" ? f.env : cleanEnv };
-      expect(
-        await f.invoke({
-          stopped: false,
-          inspected: true,
-          runtimeInspected: true,
-          running: false,
-          serviceEnv: pendingRoot === "service" ? f.env : cleanEnv,
-        }),
-      ).toMatchObject({
-        result: { reason: "candidate-failed" },
-      });
-    },
-  );
+  expect(loadUpdateRecovery(f.run.runId, f.options)).toEqual(f.record);
+  expect(getUpdateRun(f.run.runId, f.options)?.status).toBe("running");
 });
+
+it.each(["lost context", "lost run", "interrupted displacement"] as const)(
+  "does not reinterpret %s as permission for package rollback",
+  async (change) => {
+    const f = await fixture();
+    f.opts.recovery = undefined;
+    if (change === "lost run") {
+      f.opts.run = undefined;
+      vi.stubEnv("OPENCLAW_STATE_DIR", f.root);
+    }
+    if (change === "interrupted displacement") {
+      f.displace();
+      await f.invoke(undefined, [f.displaced]);
+      expect(fs.existsSync(f.file)).toBe(false);
+    } else {
+      expect(await f.invoke(undefined, [f.file, f.configPath])).toMatchObject(deferred);
+    }
+  },
+);
+
+it.each(["service", "admitted"] as const)(
+  "checks pending recovery in the %s root when service and history differ",
+  async (pendingRoot) => {
+    const f = await fixture();
+    f.opts.recovery = undefined;
+    const cleanEnv = { OPENCLAW_STATE_DIR: dirs.make("rollback-other-root-") };
+    f.opts.run = { ...f.run, env: pendingRoot === "admitted" ? f.env : cleanEnv };
+    expect(
+      await f.invoke({
+        stopped: false,
+        inspected: true,
+        runtimeInspected: true,
+        running: false,
+        serviceEnv: pendingRoot === "service" ? f.env : cleanEnv,
+      }),
+    ).toMatchObject({
+      result: { reason: "candidate-failed" },
+    });
+  },
+);

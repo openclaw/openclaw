@@ -10,6 +10,7 @@ import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import * as processExec from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { createPackageRuntimeRecovery } from "./update-command-node-runtime.js";
@@ -24,11 +25,7 @@ it.skipIf(process.platform === "win32").each(
     { code: 0, cleanup: "forced" as const },
     { code: 7, cleanup: "uncertain" as const },
   ].flatMap((outcome) =>
-    ["native", "installer", "receiver"].map((kind) => ({
-      code: outcome.code,
-      cleanup: outcome.cleanup,
-      kind,
-    })),
+    ["native", "installer", "receiver"].map((kind) => Object.assign({ kind }, outcome)),
   ),
 )(
   "retains A and B custody for $kind code=$code cleanup=$cleanup",
@@ -41,8 +38,7 @@ it.skipIf(process.platform === "win32").each(
       fs.mkdirSync(dir);
     }
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
-    // A real bound child establishes persistent custody. The result injection
-    // exercises cleanup classifications without leaving any live test process.
+    // Bind a real child for custody, then inject cleanup status after it exits.
     vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (_argv, options) => {
       const child = spawn(process.execPath, ["-e", "process.stdin.resume()"], {
         stdio: ["pipe", "ignore", "ignore"],
@@ -57,15 +53,7 @@ it.skipIf(process.platform === "win32").each(
         child.stdin.end();
         await closed;
       }
-      return {
-        code,
-        cleanup,
-        termination: "exit",
-        signal: null,
-        killed: cleanup === "forced",
-        stdout: "",
-        stderr: "",
-      };
+      return createCommandResult({ code, cleanup, killed: cleanup === "forced" });
     });
     const run: NonNullable<UpdateCommandOptions["run"]> = { runId: randomUUID(), env: {} };
     const operation = withUpdateCommandExecutor(run.runId, async (executor) => {
