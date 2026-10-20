@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it as baseIt, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -13,6 +13,7 @@ import {
   getProviderAuthAuthority,
 } from "../plugins/provider-auth-authority.js";
 import { createProviderAuthAvailability } from "../plugins/provider-auth-availability-core.js";
+import type { ProviderSyntheticAuthResult } from "../plugins/provider-external-auth.types.js";
 import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
 import {
   resolveProviderSyntheticAuthWithPlugin,
@@ -81,6 +82,22 @@ afterEach(async () => {
   }
 });
 
+function pluginConfig(pluginSecretRef: unknown, enabled = true) {
+  return { entries: { [id]: { enabled, config: { pluginSecretRef } } } };
+}
+
+function metadataFixture(owner = id, authScope: "agent" | "plugin" = "plugin") {
+  return createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: owner,
+        providers: [id],
+        modelCatalog: { providers: { [id]: { authScope, models: [] } } },
+      },
+    ],
+  });
+}
+
 function fixture(
   options: {
     wrapped?: boolean;
@@ -93,24 +110,12 @@ function fixture(
   } = {},
 ) {
   const cfg: OpenClawConfig = {
-    plugins: {
-      entries: {
-        [id]: { enabled: !options.disabled, config: { pluginSecretRef: "resolved-plugin-key" } },
-      },
-    },
+    plugins: pluginConfig("resolved-plugin-key", !options.disabled),
     models: {
       providers: { [id]: { baseUrl: "http://127.0.0.1:8080", apiKey: "models-key", models: [] } },
     },
   };
-  const metadata = createPluginMetadataSnapshotFixture({
-    plugins: [
-      {
-        id,
-        providers: [id],
-        modelCatalog: { providers: { [id]: { authScope: options.scope ?? "plugin", models: [] } } },
-      },
-    ],
-  });
+  const metadata = metadataFixture(id, options.scope);
   const registry = createEmptyPluginRegistry();
   const record = createPluginRecord({ id });
   registry.plugins.push(record);
@@ -154,16 +159,7 @@ function fixture(
     activateSecretsRuntimeSnapshotState({
       snapshot: {
         sourceConfig: {
-          plugins: {
-            entries: {
-              [id]: {
-                enabled: true,
-                config: {
-                  pluginSecretRef: { source: "store", provider: "default", id: "FIXTURE_KEY" },
-                },
-              },
-            },
-          },
+          plugins: pluginConfig({ source: "store", provider: "default", id: "FIXTURE_KEY" }),
         },
         config: cfg,
         authStores: [],
@@ -205,6 +201,14 @@ function project(
     ...overrides,
   });
 }
+
+const it = baseIt.extend<{ f: ReturnType<typeof fixture> }>({
+  f: async ({ signal: _signal }, use) => {
+    const f = fixture();
+    f.activate();
+    await use(f);
+  },
+});
 
 describe("plugin physical credential ownership through common auth", () => {
   it("plans plugin-owned auth before agent stores, configured bindings and cooldowns", () => {
@@ -261,18 +265,8 @@ describe("plugin physical credential ownership through common auth", () => {
     },
   );
 
-  it("uses prepared metadata ownership instead of an unrelated ambient declaration", async () => {
-    const f = fixture();
-    f.activate();
-    const foreign = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "foreign-owner",
-          providers: [id],
-          modelCatalog: { providers: { [id]: { authScope: "plugin", models: [] } } },
-        },
-      ],
-    });
+  it("uses prepared metadata ownership over ambient declarations", async ({ f }) => {
+    const foreign = metadataFixture("foreign-owner");
     const modelPolicy = await import("./model-auth-policy.js");
     const policy = vi.spyOn(modelPolicy, "isAuthModeAllowedForModel").mockImplementation(
       () =>
@@ -322,15 +316,13 @@ describe("plugin physical credential ownership through common auth", () => {
     },
   );
 
-  it.each([
+  it.for([
     { prepared: "empty", ambient: "live", expected: false },
     { prepared: "absent", ambient: "live", expected: undefined },
     { prepared: "live", ambient: "empty", expected: true },
   ] as const)(
-    "binds catalog readiness to prepared $prepared instead of ambient $ambient",
-    async ({ prepared, ambient, expected }) => {
-      const f = fixture();
-      f.activate();
+    "binds catalog readiness to prepared $prepared, not ambient $ambient",
+    async ({ prepared, ambient, expected }, { f }) => {
       const empty = createEmptyPluginRegistry();
       await f.run(() =>
         withPluginRuntimeGenerationRegistryScope(
@@ -351,9 +343,7 @@ describe("plugin physical credential ownership through common auth", () => {
     },
   );
 
-  it("projects live plugin readiness without profile fallback or a stale positive cache", async () => {
-    const f = fixture();
-    f.activate();
+  it("invalidates catalog readiness when protected input is revoked", async ({ f }) => {
     await f.run(async () => {
       const projection = project(f);
       expect(projection.evaluateEntry(entry)).toMatchObject({
@@ -369,33 +359,42 @@ describe("plugin physical credential ownership through common auth", () => {
     });
   });
 
-  it("keeps native presence scoped to its declared runtime and rejects HTTP credential lookup", async () => {
-    const f = fixture({
-      hook: () => ({
+  it.each(["native", "no-auth"])(
+    "keeps %s marker eligibility scoped to its owner",
+    async (kind) => {
+      const native = kind === "native";
+      const result: ProviderSyntheticAuthResult = {
         apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-        mode: "oauth",
-        source: "plugin:native",
-        nativeAuth: { runtime: "native-fixture", mode: "oauth" },
-      }),
-    });
-    await f.run(async () => {
-      const projection = project(f);
-      expect(projection.evaluateEntry(entry, undefined, "other-runtime").availability).toBe(false);
-      expect(projection.evaluateEntry(entry, undefined, "native-fixture")).toMatchObject({
-        availability: true,
-        runtimeAuth: { id: "native-fixture", source: "native" },
-        selectedCredential: { source: "harness" },
+        mode: native ? "oauth" : "api-key",
+        source: native ? "plugin:native" : "local-no-auth",
+        ...(native ? { nativeAuth: { runtime: "native-fixture", mode: "oauth" as const } } : {}),
+      };
+      const f = fixture({ hook: () => result });
+      await f.run(async () => {
+        if (native) {
+          const projection = project(f);
+          expect(projection.evaluateEntry(entry, undefined, "other-runtime").availability).toBe(
+            false,
+          );
+          expect(projection.evaluateEntry(entry, undefined, "native-fixture")).toMatchObject({
+            availability: true,
+            runtimeAuth: { id: "native-fixture", source: "native" },
+            selectedCredential: { source: "harness" },
+          });
+          await expect(resolveApiKeyForProviderCore(f.params)).rejects.toMatchObject({
+            code: "missing-provider-auth",
+            provider: id,
+          });
+        } else {
+          expect(await resolveApiKeyForProviderCore(f.params)).toMatchObject(result);
+          expect(hasRuntimeAvailableProviderAuth(f.params)).toBe(true);
+        }
       });
-      await expect(resolveApiKeyForProviderCore(f.params)).rejects.toMatchObject({
-        code: "missing-provider-auth",
-        provider: id,
-      });
-    });
-  });
+      expect(f.prepare).not.toHaveBeenCalled();
+    },
+  );
 
-  it("refuses a catalog account pin before reading the protected plugin credential", async () => {
-    const f = fixture();
-    f.activate();
+  it("refuses catalog profile pins before reading plugin credentials", async ({ f }) => {
     await f.run(async () => {
       const projection = project(f, {
         pinnedProfileId: id + ":implicit",
@@ -406,9 +405,7 @@ describe("plugin physical credential ownership through common auth", () => {
     expect(f.hook).not.toHaveBeenCalled();
   });
 
-  it("keeps a prepared protected credential opaque until the normal provider egress boundary", async () => {
-    const f = fixture();
-    f.activate();
+  it("keeps protected credentials opaque until provider egress", async ({ f }) => {
     const { unwrapSecretSentinelsForProviderEgress } = await import("./provider-secret-egress.js");
     const auth = await f.run(() =>
       resolveApiKeyForProviderCore({ ...f.params, secretSentinels: true }),
@@ -420,9 +417,7 @@ describe("plugin physical credential ownership through common auth", () => {
     );
   });
 
-  it("checks SDK credential availability against the live owner without reading agent storage", async () => {
-    const f = fixture();
-    f.activate();
+  it("checks SDK availability without reading agent storage", async ({ f }) => {
     const readAgentStore = vi.fn(() => {
       throw new Error("agent storage must not be read");
     });
@@ -480,9 +475,7 @@ describe("plugin physical credential ownership through common auth", () => {
     },
   );
 
-  it("does not read a live credential after preparation is cancelled", async () => {
-    const f = fixture();
-    f.activate();
+  it("does not read a live credential after preparation is cancelled", async ({ f }) => {
     await f.run(() =>
       expect(
         prepareRuntimeAvailableProviderAuth({ ...f.params, signal: AbortSignal.abort() }),
@@ -504,36 +497,47 @@ describe("plugin physical credential ownership through common auth", () => {
     });
   });
 
-  it("uses the live protected owner, not implicit profiles, models keys, prepare hooks or restored bearer facts", async () => {
-    const f = fixture();
-    f.activate();
-    restorePreparedSyntheticAuthFacts(f.cfg, [
-      { providerRef: id, result: { apiKey: "restored-key", mode: "api-key", source: "restored" } },
-    ]);
-    await f.run(async () => {
-      expect(await resolveApiKeyForProviderCore(f.params)).toMatchObject({
-        apiKey: "resolved-plugin-key",
-        source: "plugin:fixture",
-      });
-      expect(hasRuntimeAvailableProviderAuth(f.params)).toBe(true);
-      expect(await prepareRuntimeAvailableProviderAuth(f.params)).toBe(true);
-      expect(await hasAvailableAuthForProvider(f.params)).toBe(true);
-      expect(await prepareProviderSyntheticAuthWithPlugin(f.lookup)).toMatchObject({
-        apiKey: "resolved-plugin-key",
-      });
-      expect(
-        await captureProviderSyntheticAuthFacts({ config: f.cfg, providerRefs: [id] }),
-      ).toEqual([]);
-    });
-    expect(f.prepare).not.toHaveBeenCalled();
-    expect(f.hook).toHaveBeenCalledWith(expect.objectContaining({ providerConfig: undefined }));
-  });
-
-  it.each(["profileId", "preferredProfile"] as const)(
-    "rejects %s before invoking plugin auth",
-    async (pin) => {
+  it.each(["literal", "SecretRef"])(
+    "uses plugin auth over %s model keys and saved facts",
+    async (keyKind) => {
       const f = fixture();
+      if (keyKind === "SecretRef") {
+        f.cfg.models!.providers![id]!.apiKey = {
+          source: "env",
+          provider: "default",
+          id: "UNRELATED_KEY",
+        };
+      }
       f.activate();
+      restorePreparedSyntheticAuthFacts(f.cfg, [
+        {
+          providerRef: id,
+          result: { apiKey: "restored-key", mode: "api-key", source: "restored" },
+        },
+      ]);
+      await f.run(async () => {
+        expect(await resolveApiKeyForProviderCore(f.params)).toMatchObject({
+          apiKey: "resolved-plugin-key",
+          source: "plugin:fixture",
+        });
+        expect(hasRuntimeAvailableProviderAuth(f.params)).toBe(true);
+        expect(await prepareRuntimeAvailableProviderAuth(f.params)).toBe(true);
+        expect(await hasAvailableAuthForProvider(f.params)).toBe(true);
+        expect(await prepareProviderSyntheticAuthWithPlugin(f.lookup)).toMatchObject({
+          apiKey: "resolved-plugin-key",
+        });
+        expect(
+          await captureProviderSyntheticAuthFacts({ config: f.cfg, providerRefs: [id] }),
+        ).toEqual([]);
+      });
+      expect(f.prepare).not.toHaveBeenCalled();
+      expect(f.hook).toHaveBeenCalledWith(expect.objectContaining({ providerConfig: undefined }));
+    },
+  );
+
+  it.for(["profileId", "preferredProfile"] as const)(
+    "rejects %s before invoking plugin auth",
+    async (pin, { f }) => {
       await f.run(() =>
         expect(
           resolveApiKeyForProviderCore({ ...f.params, [pin]: id + ":implicit" }),
@@ -543,13 +547,16 @@ describe("plugin physical credential ownership through common auth", () => {
     },
   );
 
-  it.each(["missing", "disabled", "retired"] as const)(
+  it.each(["missing", "disabled", "retired", "disabled-instance"] as const)(
     "never falls back for a %s selected provider",
     async (state) => {
       const f = fixture({ missing: state === "missing", disabled: state === "disabled" });
       f.activate();
       if (state === "retired") {
         await f.instance.dispose();
+      }
+      if (state === "disabled-instance") {
+        f.instance.owner!.record.enabled = false;
       }
       await f.run(async () => {
         await expect(resolveApiKeyForProviderCore(f.params)).rejects.toMatchObject({
@@ -563,9 +570,7 @@ describe("plugin physical credential ownership through common auth", () => {
     },
   );
 
-  it("refuses revoked protected secret input rather than reusing a prior bearer", async () => {
-    const f = fixture();
-    f.activate();
+  it("refuses revoked protected secret input rather than reusing a prior bearer", async ({ f }) => {
     await f.run(async () => {
       expect(await resolveApiKeyForProviderCore(f.params)).toMatchObject({
         apiKey: "resolved-plugin-key",
@@ -578,57 +583,23 @@ describe("plugin physical credential ownership through common auth", () => {
     });
   });
 
-  it("does not use a models.providers SecretRef as plugin credentials", async () => {
-    const f = fixture();
-    f.cfg.models!.providers![id]!.apiKey = {
-      source: "env",
-      provider: "default",
-      id: "UNRELATED_KEY",
-    };
-    f.activate();
-    await f.run(async () => {
-      expect(await resolveApiKeyForProviderCore(f.params)).toMatchObject({
-        apiKey: "resolved-plugin-key",
-      });
-      expect(hasRuntimeAvailableProviderAuth(f.params)).toBe(true);
-    });
-  });
-
-  it("refuses a disabled actual instance even if a retained registry still contains its hook", async () => {
-    const f = fixture();
-    f.activate();
-    f.instance.owner!.record.enabled = false;
-    await f.run(() =>
-      expect(resolveApiKeyForProviderCore(f.params)).rejects.toMatchObject({
-        code: "missing-provider-auth",
-      }),
-    );
-    expect(f.hook).not.toHaveBeenCalled();
-  });
-
-  it("rejects a hook replaced during auth instead of returning its obsolete result", () => {
+  it.each(["hook", "secret"])("rejects %s authority replacement during auth", (owner) => {
     const f = fixture({
       hook: () => {
-        f.registry.providers[0]!.provider = {
-          ...f.registry.providers[0]!.provider,
-          resolveSyntheticAuth: () => ({ apiKey: "new", mode: "api-key", source: "new" }),
-        };
+        if (owner === "hook") {
+          f.registry.providers[0]!.provider = {
+            ...f.registry.providers[0]!.provider,
+            resolveSyntheticAuth: () => ({ apiKey: "new", mode: "api-key", source: "new" }),
+          };
+        } else {
+          clearSecretsRuntimeSnapshotState();
+        }
         return { apiKey: "obsolete", mode: "api-key", source: "obsolete" };
       },
     });
-    f.run(() =>
-      expect(() => resolveProviderSyntheticAuthWithPlugin(f.lookup)).toThrow("retired or replaced"),
-    );
-  });
-
-  it("rejects replacement of secret authority during the synchronous hook", () => {
-    const f = fixture({
-      hook: () => {
-        clearSecretsRuntimeSnapshotState();
-        return { apiKey: "obsolete", mode: "api-key", source: "obsolete" };
-      },
-    });
-    f.activate();
+    if (owner === "secret") {
+      f.activate();
+    }
     f.run(() =>
       expect(() => resolveProviderSyntheticAuthWithPlugin(f.lookup)).toThrow("retired or replaced"),
     );
@@ -691,21 +662,6 @@ describe("plugin physical credential ownership through common auth", () => {
       });
     },
   );
-
-  it("accepts a no-auth marker only as auth eligibility, without preparing artifacts or health", async () => {
-    const f = fixture({
-      hook: () => ({ apiKey: CUSTOM_LOCAL_AUTH_MARKER, mode: "api-key", source: "local-no-auth" }),
-    });
-    await f.run(async () => {
-      expect(await resolveApiKeyForProviderCore(f.params)).toMatchObject({
-        apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-        mode: "api-key",
-        source: "local-no-auth",
-      });
-      expect(hasRuntimeAvailableProviderAuth(f.params)).toBe(true);
-    });
-    expect(f.prepare).not.toHaveBeenCalled();
-  });
 
   it.each([
     ["plugin", "agent"],
