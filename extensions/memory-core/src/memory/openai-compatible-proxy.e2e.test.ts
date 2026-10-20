@@ -12,22 +12,11 @@ import { afterEach, expect, it } from "vitest";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const execFileAsync = promisify(execFile);
-const servers: Server[] = [];
-const sockets = new Set<Duplex>();
-
-afterEach(async () => {
-  for (const socket of sockets) {
-    socket.destroy();
-  }
-  sockets.clear();
-  await Promise.all(servers.splice(0).map((server) => promisify(server.close.bind(server))()));
-});
 
 async function listen(server: Server): Promise<number> {
   const listening = once(server, "listening");
   server.listen(0, "127.0.0.1");
   await listening;
-  servers.push(server);
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("server did not expose a TCP address");
@@ -37,7 +26,7 @@ async function listen(server: Server): Promise<number> {
 
 it("routes a deep memory status probe through the OpenAI-compatible environment proxy", async () => {
   const requests: Array<Record<string, unknown>> = [];
-  const endpoint = createServer((request, response) => {
+  await using endpoint = createServer((request, response) => {
     void (async () => {
       requests.push(JSON.parse(await text(request)) as Record<string, unknown>);
       response.writeHead(200, { "content-type": "application/json" });
@@ -47,20 +36,23 @@ it("routes a deep memory status probe through the OpenAI-compatible environment 
   const endpointPort = await listen(endpoint);
 
   const authorities: string[] = [];
-  const proxy = createServer();
+  await using proxy = createServer();
+  using connections = {
+    sockets: new Set<Duplex>(),
+    [Symbol.dispose]() {
+      this.sockets.forEach((socket) => socket.destroy());
+    },
+  };
   proxy.on("connect", (request, clientSocket, head) => {
     authorities.push(request.url ?? "");
     const targetSocket = connect(endpointPort, "127.0.0.1", () => {
       clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
-      if (head.length > 0) {
-        targetSocket.write(head);
-      }
-      clientSocket.pipe(targetSocket);
-      targetSocket.pipe(clientSocket);
+      targetSocket.write(head);
+      clientSocket.pipe(targetSocket).pipe(clientSocket);
     });
     for (const socket of [clientSocket, targetSocket]) {
-      sockets.add(socket);
-      socket.on("close", () => sockets.delete(socket));
+      connections.sockets.add(socket);
+      socket.on("close", () => connections.sockets.delete(socket));
     }
   });
   const proxyPort = await listen(proxy);
@@ -74,13 +66,8 @@ it("routes a deep memory status probe through the OpenAI-compatible environment 
     apiKey: "proof-key",
   };
   const search = { provider: "openai-compatible", model: "proxy-proof-model", remote };
-  await fs.writeFile(
-    configPath,
-    JSON.stringify({
-      memory: { search },
-      plugins: { slots: { memory: "memory-core" } },
-    }),
-  );
+  const config = { memory: { search }, plugins: { slots: { memory: "memory-core" } } };
+  await fs.writeFile(configPath, JSON.stringify(config));
 
   const result = await execFileAsync(
     process.execPath,

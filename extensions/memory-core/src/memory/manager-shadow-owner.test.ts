@@ -24,20 +24,18 @@ async function createShadow(filename: string) {
   return owner;
 }
 
-function sessionReplacement(sessionId: string, text: string): MemorySourceIndexReplacement {
-  const chunk = { startLine: 1, endLine: 1, text, hash: "chunk" };
-  return {
-    source: "sessions",
-    agentId: "main",
-    sessionId,
-    model: "fts-only",
-    now: 1,
-    vectorReady: false,
-    entry: { path: `sessions/${sessionId}`, hash: "source", mtimeMs: 1, size: 1 },
-    embeddings: [],
-    chunks: [{ ...chunk, importance: null, triggers: null, projectKey: null }],
-  };
-}
+const chunk = { startLine: 1, endLine: 1, text: "retained text", hash: "chunk" };
+const replacement: MemorySourceIndexReplacement = {
+  source: "sessions",
+  agentId: "main",
+  sessionId: "one",
+  model: "fts-only",
+  now: 1,
+  vectorReady: false,
+  entry: { path: "sessions/one", hash: "source", mtimeMs: 1, size: 1 },
+  embeddings: [],
+  chunks: [{ ...chunk, importance: null, triggers: null, projectKey: null }],
+};
 
 function interceptWorkerClose(intercept: (close: () => Promise<void>) => Promise<void>) {
   const open = sqliteRuntime.openSqliteWorkerStore;
@@ -50,12 +48,10 @@ function interceptWorkerClose(intercept: (close: () => Promise<void>) => Promise
     return store;
   });
 }
-const replace = (owner: MemoryIndexDatabase, replacement: MemorySourceIndexReplacement) =>
-  owner.replaceSource(
-    replacement,
-    () => undefined,
-    async () => true,
-  );
+const assertCurrent = () => undefined;
+const prepare = async () => true;
+const replace = (owner: MemoryIndexDatabase) =>
+  owner.replaceSource(replacement, assertCurrent, prepare);
 
 describe("private shadow admission", () => {
   it("joins its retained worker before releasing the read-only shadow handle", async () => {
@@ -67,8 +63,7 @@ describe("private shadow admission", () => {
       await close();
     });
     const owner = await createShadow("retiring.sqlite");
-    const db = owner.db;
-    expect(() => db.exec("DELETE FROM memory_index_chunks")).toThrow(/readonly/i);
+    expect(() => owner.db.exec("DELETE FROM memory_index_chunks")).toThrow(/readonly/i);
     const closing = owner.closeShadow();
     try {
       await entered.promise;
@@ -114,12 +109,11 @@ describe("private shadow admission", () => {
     writer.exec(
       "CREATE TRIGGER refuse_source BEFORE INSERT ON memory_index_sources BEGIN SELECT RAISE(ABORT, 'source refused'); END",
     );
-    const replacement = sessionReplacement("one", "retained text");
     await owner.closePublicationWorker();
     const refusedOpen = new Error("controlled publication open refusal");
     vi.spyOn(sqliteRuntime, "openSqliteWorkerStore").mockRejectedValueOnce(refusedOpen);
-    await expect(replace(owner, replacement)).rejects.toBe(refusedOpen);
-    await expect(replace(owner, replacement)).rejects.toMatchObject({
+    await expect(replace(owner)).rejects.toBe(refusedOpen);
+    await expect(replace(owner)).rejects.toMatchObject({
       code: "ERR_SQLITE_ERROR",
       errcode: 1811,
       entered: true,
@@ -128,7 +122,7 @@ describe("private shadow admission", () => {
     expect(owner.db.prepare("SELECT * FROM memory_index_chunks").all()).toEqual([]);
     expect(owner.db.prepare("SELECT * FROM memory_index_sources").all()).toEqual([]);
     writer.exec("DROP TRIGGER refuse_source");
-    await expect(replace(owner, replacement)).resolves.toBe(true);
+    await expect(replace(owner)).resolves.toBe(true);
     expect(owner.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
       { text: "retained text" },
     ]);
@@ -140,10 +134,10 @@ describe("private shadow admission", () => {
       throw new Error("controlled native close failure");
     });
     const owner = await createShadow("shadow # committed.sqlite");
-    await replace(owner, sessionReplacement("committed", "committed text"));
+    await replace(owner);
     await expect(owner.closePublicationWorker()).rejects.toThrow("controlled native close failure");
     expect(owner.db.prepare("SELECT text FROM memory_index_chunks").all()).toEqual([
-      { text: "committed text" },
+      { text: "retained text" },
     ]);
     await owner.closePublicationWorker();
   });

@@ -69,33 +69,29 @@ describe("memory vector dedupe", () => {
     expectVectors(["chunk-1", [0, 2, -0.5]]);
   });
 
-  it("propagates DELETE step failure and reuses the writer after recovery", () => {
+  it.each(["DELETE", "INSERT"] as const)("recovers after a %s step failure", (event) => {
+    const deleting = event === "DELETE";
     write("chunk-1", [1, 0, 0]);
-    db.exec("CREATE TABLE delete_attempts (id TEXT)");
+    if (deleting) {
+      db.exec("CREATE TABLE delete_attempts (id TEXT)");
+    }
     trigger(
-      "fail_vector_delete",
-      "DELETE",
-      "INSERT INTO delete_attempts VALUES (OLD.id); SELECT RAISE(FAIL, 'delete-step');",
+      "refuse_write",
+      event,
+      `${deleting ? "INSERT INTO delete_attempts VALUES (OLD.id);" : ""} SELECT RAISE(FAIL, 'write refused');`,
+      deleting ? "" : "WHEN NEW.id = 'chunk-1'",
     );
-    expect(() => write("chunk-1", [0, 1, 0])).toThrow("delete-step");
-    expect(db.prepare("SELECT id FROM delete_attempts").all()).toEqual([{ id: "chunk-1" }]);
-    expectVectors(["chunk-1", [1, 0, 0]]);
-    db.exec("DROP TRIGGER fail_vector_delete");
-    write("chunk-1", [0, 1, 0]);
-    expectVectors(["chunk-1", [0, 1, 0]]);
-  });
-
-  it("propagates INSERT failure after deletion without retaining stale bindings", () => {
-    write("chunk-1", [1, 0, 0]);
-    trigger(
-      "refuse_vector_insert",
-      "INSERT",
-      "SELECT RAISE(FAIL, 'insert refused');",
-      "WHEN NEW.id = 'chunk-1'",
-    );
-    expect(() => write("chunk-1", [0, 1, 0])).toThrow("insert refused");
-    expectVectors();
-    write("chunk-2", [0.25, -2, 3]);
-    expectVectors(["chunk-2", [0.25, -2, 3]]);
+    expect(() => write("chunk-1", [0, 1, 0])).toThrow("write refused");
+    if (deleting) {
+      expect(db.prepare("SELECT id FROM delete_attempts").all()).toEqual([{ id: "chunk-1" }]);
+      expectVectors(["chunk-1", [1, 0, 0]]);
+      db.exec("DROP TRIGGER refuse_write");
+    } else {
+      expectVectors();
+    }
+    const id = deleting ? "chunk-1" : "chunk-2";
+    const embedding = deleting ? [0, 1, 0] : [0.25, -2, 3];
+    write(id, embedding);
+    expectVectors([id, embedding]);
   });
 });
