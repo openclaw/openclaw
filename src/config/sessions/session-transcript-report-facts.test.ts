@@ -88,7 +88,7 @@ it.each<ProjectionCase>([
   ...[
     {
       type: "message",
-      message: { ...assistant, content: [{}], responseId: "must-not-suppress" },
+      message: { role: "assistant", content: [{}], responseId: "must-not-suppress" },
     },
     { type: "future", payload: "body" },
   ].map((raw): ProjectionCase => ({
