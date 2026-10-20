@@ -89,11 +89,11 @@ vi.mock("@twurple/auth", () => ({
   },
 }));
 
-vi.mock("./token.js", () => ({
+vi.mock("./token.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./token.js")>()),
   resolveTwitchToken: vi.fn(() => ({
     token: "oauth:mock-token-from-tests",
   })),
-  DEFAULT_ACCOUNT_ID: "default",
 }));
 
 describe("TwitchClientManager", () => {
