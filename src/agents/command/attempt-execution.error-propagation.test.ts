@@ -64,6 +64,15 @@ function end(
   });
 }
 
+function expectCompletedTools(offset = 0) {
+  expect(capturedTools.slice(offset).map((event) => event.type)).toEqual([
+    "tool.execution.started",
+    "tool.execution.completed",
+  ]);
+}
+
+const toolIdentity = { toolCallId: "call", toolName: "acp_read" };
+
 beforeEach(() => {
   resetAgentEventsForTest();
   resetDiagnosticEventsForTest();
@@ -173,55 +182,37 @@ describe("ACP diagnostic events", () => {
     emitTool(event, identity);
     emitTool({ ...event, tag: "tool_call_update", status: "completed" }, identity);
     expect(capturedTools).toMatchObject([
-      {
-        type: "tool.execution.started",
-        runId,
-        ...identity,
-        toolCallId: "call",
-        toolName: "acp_read",
-      },
-      {
-        type: "tool.execution.completed",
-        runId,
-        ...identity,
-        toolCallId: "call",
-        toolName: "acp_read",
-      },
+      { type: "tool.execution.started", runId, ...identity, ...toolIdentity },
+      { type: "tool.execution.completed", runId, ...identity, ...toolIdentity },
     ]);
     expect(JSON.stringify(capturedTools)).not.toContain(event.text);
   });
 
-  it.each([
-    { status: "failed", type: "tool.execution.error", terminalReason: "failed" },
-    { status: "cancelled", type: "tool.execution.error", terminalReason: "cancelled" },
-  ] as const)("finishes audit tracking for terminal tool status $status", (expected) => {
-    emitTool();
-    emitTool({ tag: "tool_call_update", text: expected.status, status: expected.status });
-    end();
-    expect(capturedTools).toHaveLength(2);
-    expect(capturedTools[1]).toMatchObject({
-      type: expected.type,
-      toolCallId: "call",
-      ...(expected.terminalReason ? { terminalReason: expected.terminalReason } : {}),
-      ...(expected.status === "cancelled" ? { errorCategory: "aborted" } : {}),
-    });
-  });
+  it.each(["failed", "cancelled"] as const)(
+    "finishes audit tracking for terminal tool status %s",
+    (status) => {
+      emitTool();
+      emitTool({ tag: "tool_call_update", text: status, status });
+      end();
+      expect(capturedTools).toHaveLength(2);
+      expect(capturedTools[1]).toMatchObject({
+        type: "tool.execution.error",
+        toolCallId: "call",
+        terminalReason: status,
+        ...(status === "cancelled" ? { errorCategory: "aborted" } : {}),
+      });
+    },
+  );
 
   it("deduplicates repeated terminal tool updates until the ACP run ends", () => {
     emitTool();
     emitTool({ tag: "tool_call_update", status: "completed" });
     emitTool({ tag: "tool_call_update", status: "completed" });
     emitTool({ tag: "tool_call_update" });
-    expect(capturedTools.map((event) => event.type)).toEqual([
-      "tool.execution.started",
-      "tool.execution.completed",
-    ]);
+    expectCompletedTools();
     end();
     emitTool({ tag: "tool_call_update", status: "completed" });
-    expect(capturedTools.slice(2).map((event) => event.type)).toEqual([
-      "tool.execution.started",
-      "tool.execution.completed",
-    ]);
+    expectCompletedTools(2);
     end();
   });
 
@@ -240,10 +231,7 @@ describe("ACP diagnostic events", () => {
     expect(capturedTools).toHaveLength(8192);
     const unrelatedTracker = createAcpToolLifecycleTracker();
     emitTool(terminal("call-unrelated"), { runId: "unrelated", toolTracker: unrelatedTracker });
-    expect(capturedTools.slice(8192).map((event) => event.type)).toEqual([
-      "tool.execution.started",
-      "tool.execution.completed",
-    ]);
+    expectCompletedTools(8192);
     emitAcpLifecycleEnd({
       runId: "unrelated",
       toolTracker: unrelatedTracker,
@@ -251,10 +239,7 @@ describe("ACP diagnostic events", () => {
     });
     end();
     emitTool(terminal("call-overflow"));
-    expect(capturedTools.slice(8194).map((event) => event.type)).toEqual([
-      "tool.execution.started",
-      "tool.execution.completed",
-    ]);
+    expectCompletedTools(8194);
     end();
   });
 
@@ -264,35 +249,26 @@ describe("ACP diagnostic events", () => {
     emitTool({ toolCallId: undefined, tag: "tool_call_update" });
     expect(capturedTools).toEqual([]);
     emitTool({ toolCallId: undefined, tag: "tool_call_update", status: "completed" });
-    expect(capturedTools.map((event) => event.type)).toEqual([
-      "tool.execution.started",
-      "tool.execution.completed",
-    ]);
+    expectCompletedTools();
   });
 
   it.each([
-    {
-      status: "cancelled",
-      stopReason: undefined,
-      terminalReason: "cancelled",
-      errorCategory: "aborted",
-    },
-    {
-      status: "cancelled",
-      stopReason: "timeout",
-      terminalReason: "timed_out",
-      errorCategory: "acp_tool_incomplete",
-    },
+    [undefined, "cancelled", "aborted"],
+    ["timeout", "timed_out", "acp_tool_incomplete"],
   ] as const)(
-    "settles outstanding tools on $terminalReason termination",
-    ({ status, stopReason, terminalReason, errorCategory }) => {
+    "settles outstanding tools on %s / %s termination",
+    (stopReason, terminalReason, errorCategory) => {
       const controller = new AbortController();
       emitTool({}, { sessionKey: "agent:main:acp:child" });
       if (stopReason === "timeout") {
         controller.abort(Object.assign(new Error("timed out"), { name: "TimeoutError" }));
       }
-      emitAcpRuntimeEvent({ runId, toolTracker, event: { type: "done", status, stopReason } });
-      end(status, controller.signal, stopReason);
+      emitAcpRuntimeEvent({
+        runId,
+        toolTracker,
+        event: { type: "done", status: "cancelled", stopReason },
+      });
+      end("cancelled", controller.signal, stopReason);
       expect(capturedTools).toMatchObject([
         { type: "tool.execution.started", toolCallId: "call" },
         { type: "tool.execution.error", toolCallId: "call", terminalReason, errorCategory },

@@ -34,7 +34,6 @@ export function registerCommandReplyPolicyTests({
   runEmbeddedAgentMock,
   runCliAgentMock,
   executePreparedCliRunMock,
-  expectMockArgFields,
 }: {
   runStoredAttempt: (
     overrides: Omit<RunAgentAttemptOverrides, "agentDir" | "storePath" | "workspaceDir">,
@@ -46,16 +45,12 @@ export function registerCommandReplyPolicyTests({
   runEmbeddedAgentMock: ReturnType<typeof vi.fn>;
   runCliAgentMock: Mock<typeof runPreparedCommandCliAttempt>;
   executePreparedCliRunMock: ReturnType<typeof vi.fn>;
-  expectMockArgFields: (
-    mock: ReturnType<typeof vi.fn>,
-    fields: Record<string, unknown>,
-    callIndex?: number,
-  ) => void;
 }) {
   it.each(["openai", "claude-cli"])(
     "applies %s inter-session reply policy to internal, direct, and group sessions",
     async (providerOverride) => {
-      const selectedRunner = providerOverride === "openai" ? runEmbeddedAgentMock : runCliAgentMock;
+      const cli = providerOverride === "claude-cli";
+      const selectedRunner = cli ? runCliAgentMock : runEmbeddedAgentMock;
       for (const [
         sessionKey,
         messageChannel,
@@ -73,7 +68,6 @@ export function registerCommandReplyPolicyTests({
               ? "result-required"
               : (replyExpectation ?? (allowSilence ? "optional" : "required"));
         const resultRequired = expectation === "result-required";
-        const cli = providerOverride === "claude-cli";
         if (cli) {
           runCliAgentMock.mockImplementationOnce(runPreparedCommandCliAttempt);
           executePreparedCliRunMock.mockResolvedValueOnce({
@@ -119,14 +113,10 @@ export function registerCommandReplyPolicyTests({
           }
         }
 
-        expectMockArgFields(
-          selectedRunner,
-          {
-            terminalReplyExpectation: expectation,
-            silentReplyPromptMode: resultRequired ? "none" : undefined,
-          },
-          selectedRunner.mock.calls.length - 1,
-        );
+        expect(selectedRunner.mock.calls.at(-1)?.[0]).toMatchObject({
+          terminalReplyExpectation: expectation,
+          silentReplyPromptMode: resultRequired ? "none" : undefined,
+        });
       }
     },
   );

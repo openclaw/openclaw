@@ -1172,76 +1172,59 @@ describe("CLI attempt execution", () => {
     expect(claudeBinding(readSessionStore()[sessionKey])?.sessionId).toBe(cliSessionId);
   });
 
-  it("clears a persisted fork successor when fresh recovery is authorized", async () => {
-    const sessionKey = "agent:main:direct:cli-fork-timeout";
-    const cliSessionId = "timeout-parent-session";
-    const forkedCliSessionId = "timeout-stalled-fork";
-    await writeClaudeCliAssistantTranscript(cliSessionId);
-    const sessionEntry = makeClaudeCliSessionEntry("session-cli-fork-timeout", cliSessionId);
-    sessionEntry.cliSessionBindings!["claude-cli"]!.forkNextResume = true;
-    const { sessionStore, runCli } = await createCliSession(sessionKey, sessionEntry);
-    runCliAgentMock.mockImplementationOnce(async (runArgs: RunCliAgentParams) => {
-      const claimFork = runArgs.claimCliSessionFork;
-      const persistFork = runArgs.persistCliSessionForkSuccessor;
-      const clearFork = runArgs.onBeforeFreshCliSessionRetry;
-      expect(runArgs.forkCliSessionOnResume).toBe(true);
-      expect(runArgs.onBeforeForkedCliSessionRetry).toBeUndefined();
-      expect(clearFork).toBeTypeOf("function");
-      await expectDefined(claimFork, "fork claim")();
-      await expectDefined(persistFork, "fork persistence")(forkedCliSessionId);
-      await expect(
-        expectDefined(
-          clearFork,
-          "fresh recovery",
-        )({
-          provider: "claude-cli",
-          reason: "timeout",
-          sessionId: forkedCliSessionId,
-        }),
-      ).resolves.toBe(true);
-      expect(claudeBinding(sessionStore[sessionKey])).toBeUndefined();
-      return makeCliResult("hello after fork timeout");
-    });
+  it.each(["fresh recovery", "finalization failure"])(
+    "clears a persisted fork successor after %s",
+    async (outcome) => {
+      const recover = outcome === "fresh recovery";
+      const sessionKey = "agent:main:direct:cli-fork-recovery";
+      const cliSessionId = "recovery-parent-session";
+      const forkedCliSessionId = "recovery-fork-session";
+      await writeClaudeCliAssistantTranscript(cliSessionId);
+      const sessionEntry = makeClaudeCliSessionEntry("session-cli-fork-recovery", cliSessionId);
+      sessionEntry.cliSessionBindings!["claude-cli"]!.forkNextResume = true;
+      const { sessionStore, runCli } = await createCliSession(sessionKey, sessionEntry);
+      const finalizationError = Object.assign(new Error("fork finalization failed"), {
+        name: "AbortError",
+      });
+      runCliAgentMock.mockImplementationOnce(async (runArgs: RunCliAgentParams) => {
+        if (recover) {
+          expect(runArgs.forkCliSessionOnResume).toBe(true);
+          expect(runArgs.onBeforeForkedCliSessionRetry).toBeUndefined();
+          expect(runArgs.onBeforeFreshCliSessionRetry).toBeTypeOf("function");
+        }
+        await expectDefined(runArgs.claimCliSessionFork, "fork claim")();
+        await expectDefined(
+          runArgs.persistCliSessionForkSuccessor,
+          "fork persistence",
+        )(forkedCliSessionId);
+        if (!recover) {
+          throw finalizationError;
+        }
+        await expect(
+          expectDefined(
+            runArgs.onBeforeFreshCliSessionRetry,
+            "fresh recovery",
+          )({
+            provider: "claude-cli",
+            reason: "timeout",
+            sessionId: forkedCliSessionId,
+          }),
+        ).resolves.toBe(true);
+        expect(claudeBinding(sessionStore[sessionKey])).toBeUndefined();
+        return makeCliResult("hello after fork timeout");
+      });
 
-    await runCli();
-
-    expect(claudeBinding(sessionStore[sessionKey])).toEqual({
-      sessionId: "session-cli",
-    });
-    const persisted = readSessionStore();
-    expect(claudeBinding(persisted[sessionKey])).toEqual({
-      sessionId: "session-cli",
-    });
-  });
-
-  it("clears a persisted fork successor when recovery fails after rebinding", async () => {
-    const sessionKey = "agent:main:direct:cli-fork-finalization-failure";
-    const cliSessionId = "finalization-parent-session";
-    const forkedCliSessionId = "partial-fork-successor";
-    await writeClaudeCliAssistantTranscript(cliSessionId);
-    const sessionEntry = makeClaudeCliSessionEntry(
-      "session-cli-fork-finalization-failure",
-      cliSessionId,
-    );
-    sessionEntry.cliSessionBindings!["claude-cli"]!.forkNextResume = true;
-    const { sessionStore, runCli } = await createCliSession(sessionKey, sessionEntry);
-    const finalizationError = Object.assign(new Error("fork finalization failed"), {
-      name: "AbortError",
-    });
-    runCliAgentMock.mockImplementationOnce(async (runArgs: RunCliAgentParams) => {
-      await expectDefined(runArgs.claimCliSessionFork, "fork claim")();
-      await expectDefined(
-        runArgs.persistCliSessionForkSuccessor,
-        "fork successor persistence",
-      )(forkedCliSessionId);
-      throw finalizationError;
-    });
-
-    await expect(runCli()).rejects.toBe(finalizationError);
-
-    expect(claudeBinding(sessionStore[sessionKey])).toBeUndefined();
-    expect(claudeBinding(readSessionStore()[sessionKey])).toBeUndefined();
-  });
+      if (recover) {
+        await runCli();
+        expect(claudeBinding(sessionStore[sessionKey])).toEqual({ sessionId: "session-cli" });
+        expect(claudeBinding(readSessionStore()[sessionKey])).toEqual({ sessionId: "session-cli" });
+      } else {
+        await expect(runCli()).rejects.toBe(finalizationError);
+        expect(claudeBinding(sessionStore[sessionKey])).toBeUndefined();
+        expect(claudeBinding(readSessionStore()[sessionKey])).toBeUndefined();
+      }
+    },
+  );
 
   it("preserves a restored fork marker before a successor after catalog cancellation", async () => {
     const sessionKey = "agent:main:direct:cli-fork-before-successor-failure";
@@ -2161,7 +2144,6 @@ describe("CLI attempt execution", () => {
     runEmbeddedAgentMock,
     runCliAgentMock,
     executePreparedCliRunMock,
-    expectMockArgFields,
   });
 
   it("suppresses live stream output for hidden internal runs", async () => {
