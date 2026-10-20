@@ -1,10 +1,7 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadPersistedPluginModelCatalogs } from "../../agents/plugin-model-catalog-execution.js";
-import {
-  encodePluginModelCatalogRelativePath,
-  replacePersistedPluginModelCatalogs,
-} from "../../agents/plugin-model-catalog.js";
+import * as catalogs from "../../agents/plugin-model-catalog.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CronService } from "../../cron/service.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../../cron/store.js";
@@ -18,7 +15,7 @@ import { createProfileAvatarReader } from "../../state/user-profiles-avatar.js";
 import { ensureUserProfileRoleSchema } from "../../state/user-profiles-schema.js";
 import { ensureGatewayOwnerProfile } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { withEngineStoreAdmission } from "./admission-scope.js";
+import { withEngineStoreAdmission as admit } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
 describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
@@ -27,7 +24,7 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
     const fixture = useMixedAgentPair(engine, engine);
 
     it("reads operator preferences with absent and binary profile avatars", async () => {
-      const profile = withEngineStoreAdmission(() => {
+      const profile = admit(() => {
         const owner = ensureGatewayOwnerProfile("Synthetic operator");
         ensureUserProfileRoleSchema({});
         return owner;
@@ -35,16 +32,14 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       const preferences = { profileId: profile.id, entries: {} };
       await expect(getCanonicalUserPreferences(profile.id)).resolves.toEqual(preferences);
       const bytes = new Uint8Array([0, 1, 127, 128, 255]);
-      expect(withEngineStoreAdmission(() => setAvatar(profile.id, bytes, "image/png")).ok).toBe(
-        true,
-      );
+      expect(admit(() => setAvatar(profile.id, bytes, "image/png")).ok).toBe(true);
       await expect(getCanonicalUserPreferences(profile.id)).resolves.toEqual(preferences);
       const avatar = await createProfileAvatarReader(profile.id).inspect();
       await expect(avatar.loadBytes()).resolves.toMatchObject({ bytes, mime: "image/png" });
     });
 
     it("reads cold placement projections and committed turn claims", async () => {
-      withEngineStoreAdmission(() => openOpenClawStateDatabase());
+      admit(() => openOpenClawStateDatabase());
       const store = createWorkerSessionPlacementStore();
       const claimInput = {
         agentId: "main",
@@ -72,28 +67,23 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
     });
 
     it("reads refreshed provider catalogs through the selected agent owner", async () => {
-      const database = withEngineStoreAdmission(() =>
-        openOpenClawAgentDatabase({ agentId: "main" }),
-      );
+      const database = admit(() => openOpenClawAgentDatabase({ agentId: "main" }));
       const agentDir = path.dirname(database.path);
-      const write = (contents: string) =>
-        replacePersistedPluginModelCatalogs({
+      for (const [contents, ids] of [
+        ['{"marker":"first catalog"}', ["fixture", "missing"]],
+        ['{"marker":"refreshed catalog"}', ["fixture"]],
+      ] satisfies [string, string[]][]) {
+        await catalogs.replacePersistedPluginModelCatalogs({
           agentDir,
           pluginCatalogWrites: {
-            [encodePluginModelCatalogRelativePath("fixture")]: contents,
-            [encodePluginModelCatalogRelativePath("other")]: '{"marker":"other"}',
+            [catalogs.encodePluginModelCatalogRelativePath("fixture")]: contents,
+            [catalogs.encodePluginModelCatalogRelativePath("other")]: '{"marker":"other"}',
           },
         });
-      const first = '{"marker":"first catalog"}';
-      const refreshed = '{"marker":"refreshed catalog"}';
-      await write(first);
-      expect(await loadPersistedPluginModelCatalogs(agentDir, ["fixture", "missing"])).toEqual([
-        { pluginId: "fixture", contents: first },
-      ]);
-      await write(refreshed);
-      expect(await loadPersistedPluginModelCatalogs(agentDir, ["fixture"])).toEqual([
-        { pluginId: "fixture", contents: refreshed },
-      ]);
+        expect(await loadPersistedPluginModelCatalogs(agentDir, ids)).toEqual([
+          { pluginId: "fixture", contents },
+        ]);
+      }
     });
 
     it("persists cron authority and recovery on the first authority write", async () => {
@@ -138,26 +128,24 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         });
       const original = createCron();
       const restarted = createCron();
+      const retained = {
+        name: "post-ready durable job",
+        enabled: false,
+        payload: { kind: "systemEvent" as const, text: "synthetic cron marker" },
+      };
       try {
         await original.start();
         const job = await original.add({
-          name: "post-ready durable job",
-          enabled: false,
+          ...structuredClone(retained),
           schedule: { kind: "every", everyMs: 60_000 },
           sessionTarget: "main",
           wakeMode: "next-heartbeat",
-          payload: { kind: "systemEvent", text: "synthetic cron marker" },
         });
         original.stop();
         await original.waitForIdle();
         await restarted.start();
         expect(await restarted.list({ includeDisabled: true })).toMatchObject([
-          {
-            id: job.id,
-            name: "post-ready durable job",
-            enabled: false,
-            payload: { kind: "systemEvent", text: "synthetic cron marker" },
-          },
+          { id: job.id, ...retained },
         ]);
       } finally {
         original.stop();

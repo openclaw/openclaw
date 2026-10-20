@@ -3,10 +3,8 @@ import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
-import type { WorkboardDatabasePortApi } from "@openclaw/workboard-contract";
 import { Client } from "pg";
 import { expect, vi } from "vitest";
-import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
 import {
   withOpenClawTestState,
@@ -15,6 +13,7 @@ import {
 import * as recovery from "../database-port-recovery.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
+import { workboardPortProvider } from "./workboard-port.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 export const connection = typeof configured === "string" ? configured : undefined;
@@ -34,6 +33,10 @@ function selectTable(table: (typeof metadata.tables)[number], namespace?: string
   const quote = (name: string) => `"${name}"`;
   const from = namespace ? `${quote(namespace)}.${quote(table.name)}` : quote(table.name);
   return `SELECT ${table.columns.map(({ name }) => quote(name)).join(",")} FROM ${from} ORDER BY ${table.pk.map(quote).join(",")}`;
+}
+export function seedPortSqlite(file: string, sql: string) {
+  using db = openNodeSqliteDatabase(file);
+  db.exec(sql);
 }
 
 function canonicalCells(
@@ -68,21 +71,29 @@ export async function canonicalPostgres(client: Client, namespace: string) {
 }
 
 export function manifest(state: OpenClawTestState) {
-  return JSON.parse(
-    fs.readFileSync(recovery.databasePortManifestPath(state.stateDir), "utf8"),
-  ) as recovery.DatabasePortManifest;
+  return readPortManifest(recovery.databasePortManifestPath(state.stateDir));
+}
+function readPortManifest(file: string) {
+  return JSON.parse(fs.readFileSync(file, "utf8")) as recovery.DatabasePortManifest;
+}
+export async function dropPortSchemas(client: Client, manifests: string[], extra: string[] = []) {
+  const targets = manifests.flatMap((file) => readPortManifest(file).targets ?? []);
+  const locations = targets.flatMap(({ original, intended }) => [original, intended]);
+  const namespaces = new Set([
+    ...extra,
+    ...locations.flatMap((location) =>
+      location.engine === "postgres" ? [location.namespace] : [],
+    ),
+  ]);
+  for (const namespace of namespaces) {
+    assert.match(namespace, /^(port|restore)_[a-f0-9]+$/);
+    await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
+  }
 }
 export async function files(directory: string): Promise<string[]> {
-  const entries = await fsp.readdir(directory, { withFileTypes: true });
-  return (
-    await Promise.all(
-      entries.map(async (entry) => {
-        const file = path.join(directory, entry.name);
-        return entry.isDirectory() ? await files(file) : [file];
-      }),
-    )
-  )
-    .flat()
+  return (await fsp.readdir(directory, { recursive: true, withFileTypes: true }))
+    .filter((entry) => !entry.isDirectory())
+    .map((entry) => path.join(entry.parentPath, entry.name))
     .toSorted();
 }
 export async function fixture(
@@ -106,15 +117,9 @@ export async function fixture(
         JSON.stringify({ entries: { workboard: { enabled: false } } }),
       );
       await state.writeConfig(portConfig);
-      loadBundledPluginPublicArtifactModuleSync<{
-        workboardDatabasePortApi: WorkboardDatabasePortApi<
-          ReturnType<typeof openNodeSqliteDatabase>,
-          never
-        >;
-      }>({
-        dirName: "workboard",
-        artifactBasename: "database-port-api.js",
-      }).workboardDatabasePortApi.admitWorkboardPort(source);
+      const { admit } = await workboardPortProvider.loadDescriptor();
+      assert(admit);
+      await admit(source);
       {
         using db = openNodeSqliteDatabase(source);
         db.exec(`UPDATE workboard_schema_migrations SET applied_at = 17;
@@ -149,31 +154,15 @@ export async function fixture(
         if (client) {
           const directory = state.statePath("recovery", "database-port");
           if (fs.existsSync(directory)) {
-            const owned = new Set<string>();
-            for (const file of await files(directory)) {
-              if (path.basename(file) !== "manifest.json") {
-                continue;
-              }
-              const saved = JSON.parse(
-                fs.readFileSync(file, "utf8"),
-              ) as recovery.DatabasePortManifest;
-              for (const target of saved.targets ?? []) {
-                if (target.intended.engine === "postgres") {
-                  owned.add(target.intended.namespace);
-                }
-                if (target.original.engine === "postgres") {
-                  owned.add(target.original.namespace);
-                }
-              }
-            }
             const current = readBackupEngine(source);
-            if (current.engine === "postgres") {
-              owned.add(current.namespace);
-            }
-            for (const namespace of owned) {
-              assert.match(namespace, /^(port|restore)_[a-f0-9]+$/);
-              await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
-            }
+            const manifests = (await files(directory)).filter(
+              (file) => path.basename(file) === "manifest.json",
+            );
+            await dropPortSchemas(
+              client,
+              manifests,
+              current.engine === "postgres" ? [current.namespace] : [],
+            );
           }
           await client.end();
         }

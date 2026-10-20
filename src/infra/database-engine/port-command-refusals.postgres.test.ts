@@ -4,11 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import "./database-suite-workers.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { seedPortSqlite } from "./port-command.integration.test-support.js";
 import { runDatabasePortTask, type DatabasePortTask } from "./port-command.worker.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
@@ -20,15 +20,16 @@ const hash = async (file: string) =>
     .update(await fs.readFile(file))
     .digest("hex");
 
-describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () => {
-  it("probes real privileges, refuses occupied/wrong-owner/RLS sources, and resumes verified staging", async (context) => {
+it.skipIf(!connection)(
+  "refuses PostgreSQL privilege, ownership, RLS and catalog violations",
+  async (context) => {
     const client = new Client({ connectionString: connection });
     await client.connect();
-    const admin = (
-      await client.query(
-        "SELECT current_setting('is_superuser') AS superuser, current_database() AS database",
-      )
-    ).rows[0];
+    const {
+      rows: [admin],
+    } = await client.query(
+      "SELECT current_setting('is_superuser') AS superuser, current_database() AS database",
+    );
     if (admin.superuser !== "on") {
       await client.end();
       context.skip("Temporary role proof requires the conformance cluster superuser");
@@ -51,13 +52,12 @@ describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () 
       runDatabasePortTask(task, { assertCurrent() {} });
     const inspect = () =>
       run({ operation: "inspect", sourcePath: targetPath, config, to: "sqlite" });
-    {
-      using db = openNodeSqliteDatabase(sourcePath);
-      db.exec(metadata.sqlite);
-      db.exec(
-        "INSERT INTO workboard_schema_migrations VALUES ('schema-3', 1); INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', 'private-payload', 1, 1)",
-      );
-    }
+    seedPortSqlite(
+      sourcePath,
+      `${metadata.sqlite};
+      INSERT INTO workboard_schema_migrations VALUES ('schema-3', 1);
+      INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', 'private-payload', 1, 1)`,
+    );
     const original = await hash(sourcePath);
     await client.query(`CREATE ROLE "${role}" LOGIN PASSWORD 'synthetic-port-fixture'`);
     try {
@@ -88,9 +88,7 @@ describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () 
         `ALTER SCHEMA "${namespace}" OWNER TO "${role}"; ALTER TABLE "${namespace}".workboard_boards ENABLE ROW LEVEL SECURITY; ALTER TABLE "${namespace}".workboard_boards FORCE ROW LEVEL SECURITY; CREATE POLICY deny_port ON "${namespace}".workboard_boards USING (false)`,
       );
       const refused = await inspect().catch((error: unknown) => error);
-      if (!(refused instanceof Error)) {
-        throw new Error("Expected an RLS refusal");
-      }
+      assert(refused instanceof Error, "Expected an RLS refusal");
       expect(refused.message).toContain("database validation");
       expect(refused.message).not.toContain("private-payload");
       expect(refused.message).not.toContain(restricted.toString());
@@ -131,5 +129,6 @@ describe.skipIf(!connection)("workboard port PostgreSQL refusal boundaries", () 
       await client.query(`DROP OWNED BY "${role}" CASCADE; DROP ROLE "${role}"`);
       await client.end();
     }
-  }, 60_000);
-});
+  },
+  60_000,
+);
