@@ -29,7 +29,7 @@ type IrcIngressBody = Omit<IrcIngressPayload, "version">;
 
 export type IrcIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
-export type IrcIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
+type IrcIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
 type IrcIngressDispatch = (
   message: IrcInboundMessage,

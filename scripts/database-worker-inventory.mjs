@@ -445,7 +445,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "readTranscriptExportSnapshotReadOnlySync",
-          "readTranscriptExportSnapshotFromDatabase",
+          "readTranscriptExportSnapshotReadOnlySync.transaction",
           "readTranscriptExportSnapshotsFromDatabase",
         ],
         evidence:

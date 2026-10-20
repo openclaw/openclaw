@@ -190,7 +190,6 @@ export function openEngineStore(ref: {
   const db = adapter.openConnection(store);
   const admit = (fresh: boolean) => {
     admitPostgresPhysicalFacts({
-      anchor,
       db,
       namespace: identity.namespace,
       storeId: identity.storeId,

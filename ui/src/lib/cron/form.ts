@@ -8,8 +8,6 @@ import {
   durationMsToSecondsString,
   parseStaggerSchedule,
 } from "./form-schedule.ts";
-import { getCronJobPayload } from "./payload.ts";
-import { DEFAULT_CRON_FORM } from "./state.ts";
 import type { CronFormState } from "./types.ts";
 
 const CRON_CHANNEL_LAST = "last";
@@ -67,8 +65,8 @@ export function isReadOnlyCronPayload(
 
 export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
-  const payload = getCronJobPayload(job);
-  const agentTurn = payload?.kind === "agentTurn" ? payload : undefined;
+  const payload = job.payload;
+  const agentTurn = payload.kind === "agentTurn" ? payload : undefined;
   const payloadLocked = isReadOnlyCronPayload(payload, job.declarationKey);
   if (!isCronFormSessionTarget(job.sessionTarget)) {
     throw new TypeError(`Invalid cron session target: ${job.sessionTarget}`);
@@ -97,16 +95,16 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     triggerOnce: job.trigger?.once === true,
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
+    payloadKind: payload.kind,
     payloadLocked,
     payloadText:
-      payload?.kind === "systemEvent"
+      payload.kind === "systemEvent"
         ? payload.text
-        : payload?.kind === "agentTurn"
+        : payload.kind === "agentTurn"
           ? payload.message
-          : payload?.kind === "command"
+          : payload.kind === "command"
             ? payload.argv.join(" ")
-            : payload?.kind === "script"
+            : payload.kind === "script"
               ? payload.script
               : "",
     payloadModel: agentTurn?.model ?? "",

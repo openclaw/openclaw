@@ -15,7 +15,7 @@ import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts"
 import { isReadOnlyCronPayload, jobToForm, normalizeCronFormState } from "./form.ts";
 import { loadCronJobsPage } from "./jobs-full.ts";
 import { retireCronJobsRequest } from "./jobs.ts";
-import { buildCronPayload, getCronJobPayload } from "./payload.ts";
+import { buildCronPayload } from "./payload.ts";
 import { cronRunNotStartedMessage } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
 import {
@@ -32,7 +32,6 @@ export { normalizeCronFormState } from "./form.ts";
 export { createInitialCronState, loadCronStatus } from "./state.ts";
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs-full.ts";
-export { getCronJobPayload } from "./payload.ts";
 export { resolveConfiguredCronModelSuggestions } from "./model-suggestions.ts";
 
 const CRON_CHANNEL_LAST = "last";
@@ -309,7 +308,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
 
     const editingJob = state.cronEditingJob;
     const sourceJob = editingJob ?? state.cronCloningJob;
-    const sourcePayload = sourceJob ? getCronJobPayload(sourceJob) : null;
+    const sourcePayload = sourceJob?.payload ?? null;
     // Form fields cannot represent process commands, anchors, or full timestamp precision.
     const schedule =
       sourceJob && hasUnchangedCronSchedule(form, sourceJob)

@@ -2194,6 +2194,7 @@ packages/agent-core/src/harness/session/session.ts
 packages/ai/src/transports/provider-compaction-checkpoint.ts
 src/config/sessions/restart-recovery-state.ts
 src/config/sessions/session-accessor.sqlite-delete-snapshot.ts
+src/config/sessions/session-accessor.sqlite-export-slices.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-projection.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-publication-state.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-publication.ts
