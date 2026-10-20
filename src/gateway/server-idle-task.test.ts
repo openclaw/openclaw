@@ -24,20 +24,25 @@ afterEach(async () => {
   resetGatewayWorkAdmission();
 });
 
+type IdleTaskOptions = Parameters<typeof scheduleGatewayIdleTask>[0];
+function schedule(overrides: Pick<IdleTaskOptions, "run"> & Partial<IdleTaskOptions>) {
+  return scheduleGatewayIdleTask({
+    id: "test:idle",
+    scheduler,
+    delayMs: 10,
+    retryDelayMs: 5,
+    isClosing: () => false,
+    isBusy: () => false,
+    log: { warn: vi.fn() },
+    errorMessage: "idle task failed",
+    ...overrides,
+  });
+}
+
 describe("scheduleGatewayIdleTask", () => {
   it("still completes ordinary idle work", async () => {
     const run = vi.fn(async () => {});
-    const handle = scheduleGatewayIdleTask({
-      id: "test:idle",
-      scheduler,
-      delayMs: 10,
-      retryDelayMs: 5,
-      isClosing: () => false,
-      isBusy: () => false,
-      run,
-      log: { warn: vi.fn() },
-      errorMessage: "idle task failed",
-    });
+    const handle = schedule({ run });
 
     await clock.advanceBy(10);
     await Promise.resolve();
@@ -49,17 +54,7 @@ describe("scheduleGatewayIdleTask", () => {
   it("quietly cancels idle work rejected by an active restart drain", async () => {
     const run = vi.fn(async () => {});
     const warn = vi.fn();
-    const handle = scheduleGatewayIdleTask({
-      id: "test:idle",
-      scheduler,
-      delayMs: 10,
-      retryDelayMs: 5,
-      isClosing: () => false,
-      isBusy: () => false,
-      run,
-      log: { warn },
-      errorMessage: "idle task failed",
-    });
+    const handle = schedule({ run, log: { warn } });
 
     markGatewayRestartDraining();
     await clock.advanceBy(10);
@@ -73,18 +68,11 @@ describe("scheduleGatewayIdleTask", () => {
   it("warns when idle work throws a draining error without an active restart", async () => {
     const error = new GatewayDrainingError("unexpected task failure");
     const warn = vi.fn();
-    const handle = scheduleGatewayIdleTask({
-      id: "test:idle",
-      scheduler,
-      delayMs: 10,
-      retryDelayMs: 5,
-      isClosing: () => false,
-      isBusy: () => false,
+    const handle = schedule({
       run: async () => {
         throw error;
       },
       log: { warn },
-      errorMessage: "idle task failed",
     });
 
     await clock.advanceBy(10);
@@ -104,18 +92,7 @@ it("repeats only after completion, defers busy work once, and joins stop", async
     }
   });
   const isBusy = vi.fn(() => false);
-  const handle = scheduleGatewayIdleTask({
-    id: "test:idle",
-    scheduler,
-    delayMs: 10,
-    retryDelayMs: 5,
-    repeatDelayMs: 20,
-    isClosing: () => false,
-    isBusy,
-    run,
-    log: { warn: vi.fn() },
-    errorMessage: "idle task failed",
-  });
+  const handle = schedule({ repeatDelayMs: 20, isBusy, run });
   try {
     await clock.advanceBy(10);
     expect(run).toHaveBeenCalledTimes(1);
@@ -156,18 +133,7 @@ it("does not rearm a periodic task when restart drain begins during its run", as
     started.resolve();
     return released.promise;
   });
-  const handle = scheduleGatewayIdleTask({
-    id: "test:idle",
-    scheduler,
-    delayMs: 0,
-    retryDelayMs: 5,
-    repeatDelayMs: 20,
-    isClosing: () => false,
-    isBusy: () => false,
-    run,
-    log: { warn: vi.fn() },
-    errorMessage: "idle task failed",
-  });
+  const handle = schedule({ delayMs: 0, repeatDelayMs: 20, run });
   try {
     const pendingWake = clock.advanceBy(0);
     await started.promise;

@@ -1,8 +1,6 @@
-// Proves standalone MCP App HTTP work participates in Gateway suspension admission.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -22,17 +20,11 @@ import {
   createRequest,
   createResponse,
   dispatchRequest,
+  sendRequest,
   withGatewayServer,
 } from "./server-http.test-harness.js";
 
 const MCP_APP_PATH = "/__openclaw__/mcp-app";
-
-function mcpAppsConfig(): OpenClawConfig {
-  return {
-    gateway: { trustedProxies: [] },
-    mcp: { apps: { enabled: true } },
-  };
-}
 
 async function withMcpAppServer(
   run: (server: Parameters<typeof dispatchRequest>[0]) => Promise<void>,
@@ -40,7 +32,12 @@ async function withMcpAppServer(
   await withGatewayServer({
     prefix: "mcp-app-http-admission",
     resolvedAuth: AUTH_NONE,
-    overrides: { getRuntimeConfig: mcpAppsConfig },
+    overrides: {
+      getRuntimeConfig: () => ({
+        gateway: { trustedProxies: [] },
+        mcp: { apps: { enabled: true } },
+      }),
+    },
     run,
   });
 }
@@ -94,8 +91,7 @@ describe("standalone MCP App HTTP admission", () => {
     mocks.handleMcpAppStandaloneHttpRequest.mockRejectedValue(new Error("standalone failed"));
 
     await withMcpAppServer(async (server) => {
-      const response = createResponse();
-      await dispatchRequest(server, createRequest({ path: MCP_APP_PATH }), response.res);
+      const response = await sendRequest(server, { path: MCP_APP_PATH });
 
       expect(response.res.statusCode).toBe(500);
       expect(response.getBody()).toBe("Internal Server Error");

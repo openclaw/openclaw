@@ -95,22 +95,10 @@ describe("remote Control UI HTTP owner", () => {
       },
     });
     withPluginRuntimeRegistryScope(registry, () => {
-      expect(
-        resolveRemoteControlUiHttpRoute(remoteRequest("/reports/asset.js"), "/claw", [
-          "operator.read",
-        ]),
-      ).toBe("plugin-panel");
-      expect(
-        resolveRemoteControlUiHttpRoute(remoteRequest("/webhook/event"), "/claw", [
-          "operator.read",
-        ]),
-      ).toBeUndefined();
-      expect(
-        resolveRemoteControlUiHttpRoute(remoteRequest("/claw/settings/plugins"), "/claw", [
-          "operator.read",
-        ]),
-      ).toBe("document");
       for (const [path, owner] of [
+        ["/reports/asset.js", "plugin-panel"],
+        ["/webhook/event", undefined],
+        ["/claw/settings/plugins", "document"],
         ["/claw/assets/app.js", "document"],
         ["/api/chat/media/outgoing/file", "outgoing-media"],
         ["/api/artifacts/download/connection/ticket", "artifact"],

@@ -49,13 +49,11 @@ describe("Gateway shared-state integrity readiness", () => {
 
     fs.renameSync(pathname, `${pathname}.template`);
     fs.copyFileSync(`${pathname}.template`, pathname, fs.constants.COPYFILE_EXCL);
-    const database = new DatabaseSync(pathname);
-    try {
+    {
+      using database = new DatabaseSync(pathname);
       database.exec(`INSERT INTO audit_events
         (event_id, source_id, source_sequence, occurred_at, kind, action, status, actor_type, actor_id)
         VALUES ('alpha', 'source', 1, 1, 'agent_run', 'agent.run.started', 'started', 'agent', 'main')`);
-    } finally {
-      database.close();
     }
     corruptSqliteIndexKey(pathname, "sqlite_autoindex_audit_events_1", "alpha", "bravo");
 
@@ -162,14 +160,10 @@ describe("Gateway shared-state integrity readiness", () => {
     } finally {
       mainSql.restore();
     }
-    const preserved = new DatabaseSync(pathname, { readOnly: true });
-    try {
-      expect(preserved.prepare("SELECT event_id FROM audit_events NOT INDEXED").all()).toEqual([
-        { event_id: "alpha" },
-      ]);
-      expect(preserved.prepare("PRAGMA integrity_check").get()?.integrity_check).not.toBe("ok");
-    } finally {
-      preserved.close();
-    }
+    using preserved = new DatabaseSync(pathname, { readOnly: true });
+    expect(preserved.prepare("SELECT event_id FROM audit_events NOT INDEXED").all()).toEqual([
+      { event_id: "alpha" },
+    ]);
+    expect(preserved.prepare("PRAGMA integrity_check").get()?.integrity_check).not.toBe("ok");
   });
 });

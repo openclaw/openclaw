@@ -1,10 +1,10 @@
-import { get } from "node:http";
 import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { readHttp } from "./control-ui-fixture.test-support.js";
 import { AUTH_NONE, withGatewayServer } from "./server-http.test-harness.js";
 import { createGatewayEventLoopHealthMonitor } from "./server/event-loop-health.js";
 
@@ -27,24 +27,9 @@ vi.mock("node:perf_hooks", async (importOriginal) => ({
 afterEach(() => vi.restoreAllMocks());
 
 async function readJson(url: string): Promise<Record<string, unknown>> {
-  const { statusCode, body: responseBody } = await new Promise<{
-    statusCode: number | undefined;
-    body: string;
-  }>((resolve, reject) => {
-    const request = get(url, { agent: false }, (response) => {
-      let body = "";
-      response.setEncoding("utf8");
-      response.on("data", (chunk: string) => {
-        body += chunk;
-      });
-      response.once("end", () => {
-        resolve({ statusCode: response.statusCode, body });
-      });
-    });
-    request.once("error", reject);
-  });
-  expect(statusCode).toBe(200);
-  return JSON.parse(responseBody);
+  const response = await readHttp(url);
+  expect(response.status).toBe(200);
+  return JSON.parse(response.text);
 }
 
 describe("Gateway HTTP event-loop sampling", () => {
