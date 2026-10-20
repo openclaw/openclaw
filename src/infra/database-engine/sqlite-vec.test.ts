@@ -1,9 +1,9 @@
-// Memory Host SDK tests cover sqlite vec behavior.
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 
 const platformPackage = `sqlite-vec-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`;
+const variantPath = `/install/node_modules/${platformPackage}/vec0.so`;
 
 function mockMissingSqliteVecPackage(): void {
   vi.doMock("sqlite-vec", () => {
@@ -21,9 +21,7 @@ function mockFailingSqliteVecPackage(): void {
   }));
 }
 
-function mockPlatformVariantResolver(
-  value: { pkg: string; extensionPath: string } | undefined,
-): void {
+function mockPlatformVariantResolver(extensionPath: string | undefined): void {
   vi.doMock("node:module", async (importOriginal) => {
     const actual = await importOriginal<typeof import("node:module")>();
     return {
@@ -34,19 +32,15 @@ function mockPlatformVariantResolver(
           if (!id.startsWith("sqlite-vec-")) {
             return resolve(id, options);
           }
-          if (!value) {
+          if (!extensionPath) {
             throw new Error("native package absent");
           }
-          return value.extensionPath;
+          return extensionPath;
         }, resolve);
         return require;
       },
     };
   });
-}
-
-async function importLoader() {
-  return import("./sqlite-vec.js");
 }
 
 function createDbMock(params?: { readonly healthError?: Error }) {
@@ -64,9 +58,25 @@ function createDbMock(params?: { readonly healthError?: Error }) {
       loadExtension: vi.fn(),
       prepare,
     },
-    get,
     prepare,
   };
+}
+
+async function loadMock(
+  options: { healthError?: Error; loadError?: Error; extensionPath?: string } = {},
+) {
+  const { loadSqliteVecExtension } = await import("./sqlite-vec.js");
+  const { db, prepare } = createDbMock(options);
+  if (options.loadError) {
+    db.loadExtension.mockImplementation(() => {
+      throw options.loadError;
+    });
+  }
+  const result = await loadSqliteVecExtension({
+    db: db as never,
+    extensionPath: options.extensionPath,
+  });
+  return { db, prepare, result };
 }
 
 afterEach(() => {
@@ -85,7 +95,7 @@ describe("loadSqliteVecExtension", () => {
       return { getLoadablePath: () => "/fixture/vec0" };
     });
     mockPlatformVariantResolver(undefined);
-    const { loadSqliteVecExtension } = await importLoader();
+    const { loadSqliteVecExtension } = await import("./sqlite-vec.js");
     const db = new DatabaseSync(":memory:", { allowExtension: true });
     // Observe the unsafe call without crashing Node versions that dereference a closed handle.
     const enable = vi.spyOn(db, "enableLoadExtension").mockImplementation(() => {});
@@ -104,11 +114,8 @@ describe("loadSqliteVecExtension", () => {
 
   it("rejects a loaded extension when sqlite-vec functions are unavailable", async () => {
     mockMissingSqliteVecPackage();
-    const { loadSqliteVecExtension } = await importLoader();
-    const { db } = createDbMock({ healthError: new Error("no such function: vec_version") });
-
-    const result = await loadSqliteVecExtension({
-      db: db as never,
+    const { db, result } = await loadMock({
+      healthError: new Error("no such function: vec_version"),
       extensionPath: "/opt/openclaw/sqlite-vec.so",
     });
 
@@ -124,10 +131,7 @@ describe("loadSqliteVecExtension", () => {
   it("returns a valid memory.search extensionPath hint when sqlite-vec is absent", async () => {
     mockMissingSqliteVecPackage();
     mockPlatformVariantResolver(undefined);
-    const { loadSqliteVecExtension } = await importLoader();
-    const { db } = createDbMock();
-
-    const result = await loadSqliteVecExtension({ db: db as never });
+    const { db, result } = await loadMock();
 
     expect(result).toEqual({
       ok: false,
@@ -142,35 +146,21 @@ describe("loadSqliteVecExtension", () => {
 
   it("falls back to the platform variant when bundled sqlite-vec load fails", async () => {
     mockFailingSqliteVecPackage();
-    mockPlatformVariantResolver({
-      pkg: platformPackage,
-      extensionPath: `/install/node_modules/${platformPackage}/vec0.so`,
-    });
-    const { loadSqliteVecExtension } = await importLoader();
-    const { db, prepare } = createDbMock();
-
-    const result = await loadSqliteVecExtension({ db: db as never });
+    mockPlatformVariantResolver(variantPath);
+    const { db, prepare, result } = await loadMock();
 
     expect(result).toEqual({
       ok: true,
-      extensionPath: `/install/node_modules/${platformPackage}/vec0.so`,
+      extensionPath: variantPath,
     });
-    expect(db.loadExtension).toHaveBeenCalledWith(
-      `/install/node_modules/${platformPackage}/vec0.so`,
-    );
+    expect(db.loadExtension).toHaveBeenCalledWith(variantPath);
     expect(prepare).toHaveBeenCalledWith("SELECT vec_version() AS version");
   });
 
   it("rejects a platform variant when sqlite-vec functions are unavailable", async () => {
     mockMissingSqliteVecPackage();
-    mockPlatformVariantResolver({
-      pkg: platformPackage,
-      extensionPath: `/install/node_modules/${platformPackage}/vec0.so`,
-    });
-    const { loadSqliteVecExtension } = await importLoader();
-    const { db } = createDbMock({ healthError: new Error("no such function: vec_version") });
-
-    const result = await loadSqliteVecExtension({ db: db as never });
+    mockPlatformVariantResolver(variantPath);
+    const { result } = await loadMock({ healthError: new Error("no such function: vec_version") });
 
     expect(result).toEqual({
       ok: false,
@@ -180,17 +170,8 @@ describe("loadSqliteVecExtension", () => {
 
   it("preserves bundled sqlite-vec and platform variant errors when both fail", async () => {
     mockFailingSqliteVecPackage();
-    mockPlatformVariantResolver({
-      pkg: platformPackage,
-      extensionPath: `/install/node_modules/${platformPackage}/vec0.so`,
-    });
-    const { loadSqliteVecExtension } = await importLoader();
-    const { db } = createDbMock();
-    db.loadExtension.mockImplementation(() => {
-      throw new Error("platform variant failed");
-    });
-
-    const result = await loadSqliteVecExtension({ db: db as never });
+    mockPlatformVariantResolver(variantPath);
+    const { result } = await loadMock({ loadError: new Error("platform variant failed") });
 
     expect(result).toEqual({
       ok: false,

@@ -54,6 +54,8 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     const { agentId, env, storePath } = scope("selected");
     return searchSessionTranscripts({ agentId, env, storePath, query, ...options });
   };
+  const hitIds = async (query: string, options: Partial<SessionTranscriptSearchParams> = {}) =>
+    (await search(query, options)).hits.map((hit) => hit.messageId);
   const append = async (
     name: string,
     id: string,
@@ -199,10 +201,7 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     expect(ranked.hits[0]!.score).toBeGreaterThan(ranked.hits[1]!.score);
     expect((await search("cafe copp", { match: "prefix" })).hits).toHaveLength(2);
     for (const query of ["cafe & copper", "cafe | copper", "cafe ! copper", "cafe ( copper )"]) {
-      expect((await search(query)).hits.map((hit) => hit.messageId)).toEqual([
-        "phrase-hit",
-        "scattered-hit",
-      ]);
+      expect(await hitIds(query)).toEqual(["phrase-hit", "scattered-hit"]);
     }
     expect((await search("& | ! ()")).hits).toEqual([]);
     expect((await search("x".repeat(4096))).hits).toEqual([]);
@@ -218,21 +217,14 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
       eventId: "alias-hit",
       message: { role: "user", content: "aliasmarker" },
     });
-    expect(
-      (await search("aliasmarker", { storePath: alias.storePath })).hits.map(
-        (hit) => hit.messageId,
-      ),
-    ).toEqual(["alias-hit"]);
+    expect(await hitIds("aliasmarker", { storePath: alias.storePath })).toEqual(["alias-hit"]);
     await append("rewrite", "retained", "quartz retained");
     await appendTranscriptMessage(scope("rewrite"), {
       eventId: "removed",
       parentId: "retained",
       message: { role: "assistant", content: "quartz obsolete" },
     });
-    expect((await search("quartz")).hits.map((hit) => hit.messageId).toSorted()).toEqual([
-      "removed",
-      "retained",
-    ]);
+    expect((await hitIds("quartz")).toSorted()).toEqual(["removed", "retained"]);
     await appendTranscriptEvent(scope("rewrite"), {
       type: "leaf",
       id: "rewind",
@@ -247,9 +239,9 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     };
     await waitForSessionTranscriptIndexReconcile(options);
     await reconcileSessionTranscriptIndexes(options);
-    expect((await search("quartz")).hits.map((hit) => hit.messageId)).toEqual(["retained"]);
+    expect(await hitIds("quartz")).toEqual(["retained"]);
     await reconcileSessionTranscriptIndexes(options);
-    expect((await search("quartz")).hits.map((hit) => hit.messageId)).toEqual(["retained"]);
+    expect(await hitIds("quartz")).toEqual(["retained"]);
     const target = scope("rewrite");
     expect(
       await deleteSessionEntryLifecycle({
