@@ -226,11 +226,12 @@ if (values["workload-cpu-profile"] && values["cpu-profile"]) {
 if (
   values["workload-cpu-profile"] &&
   (values.allocations ||
+    values["trace-gc"] ||
     values["stream-start-allocations"] ||
     (soakScenario && retainedProfileMs > 0))
 ) {
   throw new Error(
-    "--workload-cpu-profile needs a separate pass without --allocations, --stream-start-allocations, or memory-soak retained heap capture (--retained-profile-ms 0)",
+    "--workload-cpu-profile needs a separate pass without --allocations, --trace-gc, --stream-start-allocations, or memory-soak retained heap capture (--retained-profile-ms 0)",
   );
 }
 if (values["stream-start-allocations"] && (!turnScenario || values.allocations)) {
@@ -2327,7 +2328,11 @@ try {
       sessionEventsPerSecond: (sourceEvents / cpu.wallMs) * 1000,
     };
     samples.push(sample);
-    console.log(JSON.stringify(sample));
+    console.log(
+      JSON.stringify(sample, (key, value) =>
+        key === "representativeResponse" ? undefined : value,
+      ),
+    );
     if (soakScenario) {
       if (Date.now() - (memorySamples.at(-1)?.atEpochMs ?? 0) >= memoryIntervalMs) {
         await sampleMemory();

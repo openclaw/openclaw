@@ -1302,7 +1302,7 @@ hottest functions, and sampled time under `broadcastInternal`. This differs from
 phases; the two flags cannot be combined.
 
 Run full CPU attribution in a separate matched pass, replacing `--allocations`
-with `--workload-cpu-profile`. The new mode rejects `--allocations`,
+with `--workload-cpu-profile`. The new mode rejects `--allocations`, `--trace-gc`,
 `--stream-start-allocations`, and retained heap capture; for `memory-soak`, set
 `--retained-profile-ms 0`. Serializing and writing CPU profiles allocates enough
 memory to contaminate simultaneous allocation, promotion, and GC measurements.
@@ -1320,7 +1320,8 @@ acceptance timing, and compare equally instrumented pairs.
 
 Add `--capture-responses` to retain the first successful measured response payload
 per method per round at `samples[].rpc[method].representativeResponse.payload`.
-Capture is opt-in and happens in the controller; serialization into the report
+Capture is opt-in and happens in the controller; payloads are saved only in the
+result artifact, not the stdout sample summaries. Serialization into the report
 happens after measurement. The sample preserves parsed payload content, not the
 original wire encoding or response envelope. Use it for offline content and
 serialized-payload comparison, accounting explicitly for expected dynamic fields
