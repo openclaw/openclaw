@@ -20,15 +20,20 @@ import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 
 const requireRecord = createRequireRecord("object", "expected-label");
-const sessionRow = (overrides: Partial<GatewaySessionRow>): GatewaySessionRow => ({
-  key: "global",
-  kind: "global",
-  updatedAt: 10,
-  modelProvider: "test",
-  hasActiveRun: false,
-  status: "done",
-  ...overrides,
-});
+function sessionRow(name: string, extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return {
+    key: "global",
+    kind: "global",
+    updatedAt: 10,
+    modelProvider: "test",
+    hasActiveRun: false,
+    status: "done",
+    sessionId: `${name === "main" ? "main" : "work"}-incarnation`,
+    label: name,
+    model: `model-${name}`,
+    ...extra,
+  };
+}
 
 beforeEach(() => {
   installOutboxBrowserStorage();
@@ -48,42 +53,25 @@ it.each([
   ["Main-only publication does not freeze Work history", true, "none"],
 ] as const)("%s", async (_name, moveRoster, workRefresh) => {
   const pendingHistory = createDeferred<ChatHistoryResult>();
-  const initialWork = sessionRow({
-    sessionId: "work-incarnation",
-    label: "Original Work label",
-    model: "model-old",
-    contextTokens: 1000,
-    totalTokens: 10,
-  });
-  const newerWork: GatewaySessionRow = {
-    ...initialWork,
-    label: "Newer Work label",
-    model: "model-new",
-    contextTokens: 2000,
-  };
-  const mainRow = sessionRow({
-    sessionId: "main-incarnation",
-    label: "Main stays Main",
-    model: "model-main",
-  });
+  const initialWork = sessionRow("old", { contextTokens: 1000, totalTokens: 10 });
+  const newerWork = sessionRow("new", { contextTokens: 2000, totalTokens: 10 });
+  const mainRow = sessionRow("main");
   let workListCount = 0;
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "chat.history") {
       expect(params).toMatchObject({ sessionKey: "agent:work:main", agentId: "work" });
       return pendingHistory.promise;
     }
-    if (method === "sessions.list") {
-      const agentId = requireRecord(params, "session list params").agentId;
-      if (agentId === "work") {
-        workListCount += 1;
-        return sessionListFixture(
-          workListCount === 1 ? [initialWork] : workRefresh === "missing" ? [] : [newerWork],
-          workListCount,
-        );
-      }
-      if (agentId === "main") {
-        return sessionListFixture([mainRow], 3);
-      }
+    const agentId =
+      method === "sessions.list" && requireRecord(params, "session list params").agentId;
+    if (agentId === "work") {
+      return sessionListFixture(
+        ++workListCount === 1 ? [initialWork] : workRefresh === "missing" ? [] : [newerWork],
+        workListCount,
+      );
+    }
+    if (agentId === "main") {
+      return sessionListFixture([mainRow], 3);
     }
     throw new Error(`Unexpected RPC ${method}: ${JSON.stringify(params)}`);
   });
@@ -105,11 +93,8 @@ it.each([
     expect(selectedChatSessionRow(state)).toMatchObject(initialWork);
     const previousSessionsResult = state.sessionsResult;
     const issuedRevision = sessions.canonicalListRevision;
-    const refresh = refreshPageChat(state, {
-      awaitHistory: true,
-      deferBranches: true,
-      scheduleScroll: false,
-    });
+    const refreshOptions = { awaitHistory: true, deferBranches: true, scheduleScroll: false };
+    const refresh = refreshPageChat(state, refreshOptions);
     const historyLoad = loadChatHistory(state, { deferBranches: true });
     expect(getChatHistoryLoadState(state).phase).toBe("in-flight");
     if (workRefresh !== "none") {
@@ -141,8 +126,7 @@ it.each([
       messages: [{ role: "assistant", content: "History really applied" }],
       sessionInfo: historyRow,
     });
-    await historyLoad;
-    await refresh;
+    await Promise.all([historyLoad, refresh]);
     expect(getChatHistoryLoadState(state).phase).toBe("committed");
     expect(state.chatMessages).toEqual([{ role: "assistant", content: "History really applied" }]);
     expect(request.mock.calls.filter(([method]) => method === "chat.history")).toHaveLength(1);
