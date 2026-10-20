@@ -15,29 +15,24 @@ const emptyStatus = {
 };
 const installRef = "skills-sh:openai/skills/pdf";
 
-const installedStatus = {
-  ...emptyStatus,
-  skills: [
-    createSkill({
-      name: "pdf",
-      source: "clawhub",
-      skillKey: "pdf",
-      primaryEnv: undefined,
-      homepage: undefined,
-      clawhub: {
-        status: "linked",
-        valid: true,
-        registry: "https://clawhub.ai",
-        slug: "pdf",
-        requestedReference: installRef,
-        installedVersion: "0.0.0",
-        installedAt: 1,
-        originPath: "/tmp/.clawhub/origin.json",
-        lockPath: "/tmp/.clawhub/lock.json",
-      },
-    }),
-  ],
-};
+const installedSkill = createSkill({
+  name: "pdf",
+  source: "clawhub",
+  skillKey: "pdf",
+  primaryEnv: undefined,
+  homepage: undefined,
+  clawhub: {
+    status: "linked",
+    valid: true,
+    registry: "https://clawhub.ai",
+    slug: "pdf",
+    requestedReference: installRef,
+    installedVersion: "0.0.0",
+    installedAt: 1,
+    originPath: "/tmp/.clawhub/origin.json",
+    lockPath: "/tmp/.clawhub/lock.json",
+  },
+});
 
 suite.define(() => {
   it("searches, installs the exact skills.sh reference, and renders installed state", () =>
@@ -48,7 +43,6 @@ suite.define(() => {
           "chat.startup",
           "skills.status",
           "skills.search",
-          "skills.detail",
           "skills.install",
         ],
         methodResponses: {
@@ -70,8 +64,7 @@ suite.define(() => {
         },
       });
 
-      const response = await page.goto(`${suite.server.baseUrl}skills`);
-      expect(response?.status()).toBe(200);
+      expect((await page.goto(`${suite.server.baseUrl}skills`))?.status()).toBe(200);
       await gateway.waitForRequest("skills.status");
 
       await page.getByRole("searchbox", { name: "Search skills", exact: true }).fill("pdf");
@@ -79,14 +72,18 @@ suite.define(() => {
       const row = page.locator(".plugin-catalog-card", { hasText: installRef });
       await row.getByText("Not scanned by ClawHub", { exact: true }).waitFor();
       const install = row.getByRole("button", { name: "Install Pdf", exact: true });
-      await install.waitFor();
 
       await gateway.deferNext("skills.install");
       await install.click();
-      const installRequest = await gateway.waitForRequest("skills.install");
-      expect(installRequest.params).toMatchObject({ source: "clawhub", slug: installRef });
+      expect((await gateway.waitForRequest("skills.install")).params).toMatchObject({
+        source: "clawhub",
+        slug: installRef,
+      });
 
-      await gateway.setMethodResponse("skills.status", installedStatus);
+      await gateway.setMethodResponse("skills.status", {
+        ...emptyStatus,
+        skills: [installedSkill],
+      });
       await gateway.resolveDeferred("skills.install", { message: "Installed pdf" });
 
       await row.getByRole("img", { name: "Ready", exact: true }).waitFor();

@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createServer, type ViteDevServer } from "vite";
+import { createServer, type ProxyOptions, type ViteDevServer } from "vite";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../src/config/sessions/session-accessor.ts";
 import { GatewayClient } from "../../../src/gateway/client.ts";
@@ -100,6 +100,46 @@ function createTaskState(label: string) {
   });
 }
 
+type TaskResources = {
+  gateway?: GatewayServer;
+  proxy?: ViteDevServer;
+  restoreFetch?: () => void;
+};
+async function withTaskState(
+  test: Parameters<typeof suite.runScenario>[0],
+  label: string,
+  run: (state: OpenClawTestState, resources: TaskResources, signal: AbortSignal) => Promise<void>,
+  close = async () => {},
+) {
+  let state: OpenClawTestState | undefined;
+  const resources: TaskResources = {};
+  await suite.runScenario(test, {
+    retainedState: () => state?.root,
+    async run(signal) {
+      state = await createTaskState(label);
+      await run(state, resources, signal);
+    },
+    close: () =>
+      runQaGatewayFixture(
+        close,
+        () => resources.proxy?.close(),
+        () => resources.gateway?.close({ reason: "task PR proof cleanup" }),
+        () => resources.restoreFetch?.(),
+      ),
+    release: async () => state?.cleanup(),
+  });
+}
+
+async function startGateway(port: number, trustedProxy: ReturnType<typeof trustedProxyFor>) {
+  const { startGatewayServer } = await import("../../../src/gateway/server.js");
+  return startGatewayServer(port, {
+    auth: { mode: "trusted-proxy", trustedProxy },
+    bind: "loopback",
+    controlUiEnabled: false,
+    sidecarStartup: "defer",
+  });
+}
+
 function publishedRow(id: string) {
   return {
     ...publicationRowDefaults(id),
@@ -123,36 +163,39 @@ function publishedRow(id: string) {
   } as const;
 }
 
-function proxyConfig(
+async function startProxy(
+  resources: TaskResources,
   workspace: string,
-  routes: Record<string, { target: string; email: string; rewrite?: () => string }>,
+  target: string,
+  users: Record<string, string>,
 ) {
-  return {
-    configFile: false as const,
-    envFile: false as const,
+  const proxy: Record<string, ProxyOptions> = {};
+  for (const [route, email] of Object.entries(users)) {
+    proxy[route] = {
+      target,
+      ws: true,
+      ...(route === "/" ? {} : { rewrite: () => "/" }),
+      headers: {
+        "x-forwarded-for": "192.0.2.10",
+        "x-forwarded-proto": "http",
+        "x-forwarded-user": email,
+      },
+    };
+  }
+  const server = (resources.proxy = await createServer({
+    configFile: false,
+    envFile: false,
     root: workspace,
-    appType: "custom" as const,
-    logLevel: "error" as const,
-    server: {
-      host: "127.0.0.1",
-      port: 0,
-      proxy: Object.fromEntries(
-        Object.entries(routes).map(([route, { target, email, rewrite }]) => [
-          route,
-          {
-            target,
-            ws: true,
-            ...(rewrite ? { rewrite } : {}),
-            headers: {
-              "x-forwarded-for": "192.0.2.10",
-              "x-forwarded-proto": "http",
-              "x-forwarded-user": email,
-            },
-          },
-        ]),
-      ),
-    },
-  };
+    appType: "custom",
+    logLevel: "error",
+    server: { host: "127.0.0.1", port: 0, proxy },
+  }));
+  await server.listen();
+  const address = server.resolvedUrls?.local[0];
+  if (!address) {
+    throw new Error("Task PR fixture proxy has no loopback URL");
+  }
+  return new URL(address);
 }
 
 function trustedProxyFor(allowUsers: string[], admin = false) {
@@ -288,196 +331,162 @@ async function seedTask(state: OpenClawTestState, profileId: string) {
 
 suite.define(() => {
   it("shows three persisted descendant PRs while keeping the parent branch unpublished", async (test) => {
-    let state: OpenClawTestState | undefined;
-    let gateway: GatewayServer | undefined;
-    let proxy: ViteDevServer | undefined;
-    let restoreFetch: (() => void) | undefined;
-    await suite.runScenario(test, {
-      retainedState: () => state?.root,
-      async run() {
-        state = await createTaskState("task-pr-live");
-        const port = await getFreePort();
-        const viewer = ensureProfileForEmail(viewerEmail);
-        setUserProfileRole(viewer.id, "reader");
-        const trustedProxy = trustedProxyFor([viewerEmail]);
-        await state.writeConfig(
-          taskConfig(state, port, trustedProxy, new URL(suite.server.baseUrl).origin),
-        );
-        await seedTask(state, viewer.id);
-        let githubRequests = 0;
-        restoreFetch = mockGitHub(async (url, fallback) => {
-          githubRequests++;
-          if (live) {
-            return fallback();
-          }
-          if (url.pathname === "/repos/" + repository) {
-            return Response.json({ fork: false, default_branch: "main" });
-          }
-          if (url.pathname.endsWith("/check-runs")) {
-            return Response.json({ total_count: 0, check_runs: [] });
-          }
-          const number = Number(url.pathname.split("/").at(-1));
-          if (
-            url.pathname === "/repos/" + repository + "/pulls" &&
-            url.searchParams.get("head") === "openclaw:" + branch
-          ) {
-            return Response.json([]);
-          }
-          if (!numbers.includes(number)) {
-            throw new Error("Unexpected GitHub request: " + url.href);
-          }
-          return Response.json({
-            ...pullFixture(
-              repository,
-              number,
-              "Delegated repair " + (numbers.indexOf(number) + 1),
-              "proof/repair-" + numbers.indexOf(number),
-              "open",
-            ),
-            additions: 12,
-            deletions: 3,
-            changed_files: 2,
-          });
-        });
-        const { startGatewayServer } = await import("../../../src/gateway/server.js");
-        const start = () =>
-          startGatewayServer(port, {
-            auth: { mode: "trusted-proxy", trustedProxy },
-            bind: "loopback",
-            controlUiEnabled: false,
-            sidecarStartup: "defer",
-          });
-        gateway = await start();
-        proxy = await createServer(
-          proxyConfig(state.workspaceDir, {
-            "/": { target: "http://127.0.0.1:" + port, email: viewerEmail },
-          }),
-        );
-        await proxy.listen();
-        const proxyUrl = proxy.resolvedUrls?.local[0];
-        if (!proxyUrl) {
-          throw new Error("Task PR fixture proxy has no loopback URL");
+    await withTaskState(test, "task-pr-live", async (state, resources) => {
+      const port = await getFreePort();
+      const viewer = ensureProfileForEmail(viewerEmail);
+      setUserProfileRole(viewer.id, "reader");
+      const trustedProxy = trustedProxyFor([viewerEmail]);
+      await state.writeConfig(
+        taskConfig(state, port, trustedProxy, new URL(suite.server.baseUrl).origin),
+      );
+      await seedTask(state, viewer.id);
+      let githubRequests = 0;
+      resources.restoreFetch = mockGitHub(async (url, fallback) => {
+        githubRequests++;
+        if (live) {
+          return fallback();
         }
-        const browserGatewayUrl = new URL(proxyUrl);
-        browserGatewayUrl.protocol = "ws:";
-        // Browser WebSocket traffic is never replaced: only external GitHub HTTP is fixture-backed.
-        for (const stage of ["initial", "restarted"] as const) {
-          const requestsBeforeStage = githubRequests;
-          await suite.withPage(
-            {
-              viewport: { width: 1280, height: 900 },
-              colorScheme: "dark",
-              locale: "en-US",
-              serviceWorkers: "block",
-            },
-            async ({ page }) => {
-              await page.addInitScript(() => {
-                localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]");
-                localStorage.setItem(
-                  "openclaw:control-ui:community-invite:v2",
-                  JSON.stringify({ dismissedAtMs: 1770000000000 }),
-                );
-              });
-              const snapshots: Record<string, unknown>[] = [];
-              page.on("websocket", (socket) =>
-                socket.on("framereceived", ({ payload }) => {
-                  const frame: unknown = JSON.parse(String(payload));
-                  if (isRecord(frame) && typeof frame.event === "string") {
-                    const row = eventSnapshot(
-                      { event: frame.event, payload: frame.payload },
-                      parentKey,
-                    );
-                    if (row) {
-                      snapshots.push(row);
-                    }
+        if (url.pathname === "/repos/" + repository) {
+          return Response.json({ fork: false, default_branch: "main" });
+        }
+        if (url.pathname.endsWith("/check-runs")) {
+          return Response.json({ total_count: 0, check_runs: [] });
+        }
+        const number = Number(url.pathname.split("/").at(-1));
+        if (
+          url.pathname === "/repos/" + repository + "/pulls" &&
+          url.searchParams.get("head") === "openclaw:" + branch
+        ) {
+          return Response.json([]);
+        }
+        if (!numbers.includes(number)) {
+          throw new Error("Unexpected GitHub request: " + url.href);
+        }
+        return Response.json({
+          ...pullFixture(
+            repository,
+            number,
+            "Delegated repair " + (numbers.indexOf(number) + 1),
+            "proof/repair-" + numbers.indexOf(number),
+            "open",
+          ),
+          additions: 12,
+          deletions: 3,
+          changed_files: 2,
+        });
+      });
+      resources.gateway = await startGateway(port, trustedProxy);
+      const browserGatewayUrl = await startProxy(
+        resources,
+        state.workspaceDir,
+        "http://127.0.0.1:" + port,
+        { "/": viewerEmail },
+      );
+      browserGatewayUrl.protocol = "ws:";
+      // Browser WebSocket traffic is never replaced: only external GitHub HTTP is fixture-backed.
+      for (const stage of ["initial", "restarted"] as const) {
+        const requestsBeforeStage = githubRequests;
+        await suite.withPage(
+          {
+            viewport: { width: 1280, height: 900 },
+            colorScheme: "dark",
+            locale: "en-US",
+            serviceWorkers: "block",
+          },
+          async ({ page }) => {
+            await page.addInitScript(() => {
+              localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", "[]");
+              localStorage.setItem(
+                "openclaw:control-ui:community-invite:v2",
+                JSON.stringify({ dismissedAtMs: 1770000000000 }),
+              );
+            });
+            const snapshots: Record<string, unknown>[] = [];
+            page.on("websocket", (socket) =>
+              socket.on("framereceived", ({ payload }) => {
+                const frame: unknown = JSON.parse(String(payload));
+                if (isRecord(frame) && typeof frame.event === "string") {
+                  const row = eventSnapshot(
+                    { event: frame.event, payload: frame.payload },
+                    parentKey,
+                  );
+                  if (row) {
+                    snapshots.push(row);
                   }
-                }),
-              );
-              const url = new URL(controlUiSessionUrl(suite.server.baseUrl, selectedKey));
-              url.hash = new URLSearchParams({ gatewayUrl: browserGatewayUrl.href }).toString();
-              await page.goto(url.href);
-              await page
-                .locator("openclaw-gateway-url-confirmation")
-                .getByRole("button", { name: "Switch to " + browserGatewayUrl.host, exact: true })
-                .click();
-              const row = page.locator(
-                '.sidebar-recent-session[data-session-key="' + parentKey + '"]',
-              );
-              await row.waitFor();
-              const card = page.locator(".session-progress-hovercard");
-              const activate = async () => {
-                await row.locator(".sidebar-recent-session__link").focus();
-                await card.waitFor();
-                await expect.poll(() => snapshots.at(-1)?.status).toBeTruthy();
-              };
-              // The selected session has no worktree: a parent hover must not be needed to hydrate its badge.
-              await expect
-                .poll(() => row.locator(".session-row-badge--pull-request").isVisible())
-                .toBe(true);
-              await expect.poll(() => snapshots.at(-1)?.taskPullRequestCount).toBe(3);
-              expect(githubRequests).toBe(requestsBeforeStage);
-              await activate();
-              await expect.poll(() => snapshots.at(-1)?.taskPullRequestCount).toBe(3);
-              await expect
-                .poll(() => snapshots.at(-1)?.taskPullRequests)
-                .toEqual(
-                  expect.arrayContaining(
-                    numbers.map((number, index) =>
-                      expect.objectContaining({
+                }
+              }),
+            );
+            const url = new URL(controlUiSessionUrl(suite.server.baseUrl, selectedKey));
+            url.hash = new URLSearchParams({ gatewayUrl: browserGatewayUrl.href }).toString();
+            await page.goto(url.href);
+            await page
+              .locator("openclaw-gateway-url-confirmation")
+              .getByRole("button", { name: "Switch to " + browserGatewayUrl.host, exact: true })
+              .click();
+            const row = page.locator(
+              '.sidebar-recent-session[data-session-key="' + parentKey + '"]',
+            );
+            await row.waitFor();
+            const card = page.locator(".session-progress-hovercard");
+            const activate = async () => {
+              await row.locator(".sidebar-recent-session__link").focus();
+              await card.waitFor();
+              await expect.poll(() => snapshots.at(-1)?.status).toBeTruthy();
+            };
+            // The selected session has no worktree: a parent hover must not be needed to hydrate its badge.
+            await expect
+              .poll(() => row.locator(".session-row-badge--pull-request").isVisible())
+              .toBe(true);
+            await expect.poll(() => snapshots.at(-1)?.taskPullRequestCount).toBe(3);
+            expect(githubRequests).toBe(requestsBeforeStage);
+            await activate();
+            await expect.poll(() => snapshots.at(-1)?.taskPullRequestCount).toBe(3);
+            await expect
+              .poll(() => snapshots.at(-1)?.taskPullRequests)
+              .toEqual(
+                expect.arrayContaining(
+                  numbers.map((number, index) =>
+                    expect.objectContaining({
+                      number,
+                      sourceSessionKey: "agent:main:subagent:task-pr-child-" + index,
+                      sourceAgentId: "main",
+                      pullRequest: expect.objectContaining({
                         number,
-                        sourceSessionKey: "agent:main:subagent:task-pr-child-" + index,
-                        sourceAgentId: "main",
-                        pullRequest: expect.objectContaining({
-                          number,
-                          title: expect.any(String),
-                        }),
+                        title: expect.any(String),
                       }),
-                    ),
+                    }),
                   ),
-                );
-              expect(snapshots.at(-1)?.pullRequests).toEqual([]);
-              expect(snapshots.at(-1)?.branch).toMatchObject({ branch });
-              await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(3);
-              await expect
-                .poll(() => row.locator(".session-row-badge--pull-request").count())
-                .toBe(1);
+                ),
+              );
+            expect(snapshots.at(-1)?.pullRequests).toEqual([]);
+            expect(snapshots.at(-1)?.branch).toMatchObject({ branch });
+            await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(3);
+            await expect
+              .poll(() => row.locator(".session-row-badge--pull-request").count())
+              .toBe(1);
+            expect(
+              await card.getByRole("link", { name: "Create a pull request for " + branch }).count(),
+            ).toBe(1);
+            for (const number of numbers) {
               expect(
                 await card
-                  .getByRole("link", { name: "Create a pull request for " + branch })
+                  .locator('a[href="https://github.com/' + repository + "/pull/" + number + '"]')
                   .count(),
               ).toBe(1);
-              for (const number of numbers) {
-                expect(
-                  await card
-                    .locator('a[href="https://github.com/' + repository + "/pull/" + number + '"]')
-                    .count(),
-                ).toBe(1);
-              }
-            },
-          );
-          if (stage === "initial") {
-            await gateway.close({ reason: "task PR persistence proof restart" });
-            // Reopen persisted rows, not this process's retained projection/database handles.
-            await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-            gateway = await start();
-          }
+            }
+          },
+        );
+        if (stage === "initial") {
+          await resources.gateway.close({ reason: "task PR persistence proof restart" });
+          // Reopen persisted rows, not this process's retained projection/database handles.
+          await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
+          resources.gateway = await startGateway(port, trustedProxy);
         }
-      },
-      close: () =>
-        runQaGatewayFixture(
-          () => proxy?.close(),
-          () => gateway?.close({ reason: "task PR proof cleanup" }),
-          () => restoreFetch?.(),
-        ),
-      release: async () => state?.cleanup(),
+      }
     });
   });
 
   it("enforces viewer receipt scope, descendant privacy, and grant revocation at the socket", async (test) => {
-    let state: OpenClawTestState | undefined;
-    let gateway: GatewayServer | undefined;
-    let proxy: ViteDevServer | undefined;
-    let restoreFetch: (() => void) | undefined;
     const clients: GatewayClient[] = [];
     const providerEntered = createDeferredCore();
     const releaseProvider = createDeferredCore();
@@ -502,10 +511,10 @@ suite.define(() => {
         (item: unknown) => isRecord(item) && isRecord(item.pullRequest),
       );
     const calls: number[] = [];
-    await suite.runScenario(test, {
-      retainedState: () => state?.root,
-      async run(signal) {
-        state = await createTaskState("task-pr-authority");
+    await withTaskState(
+      test,
+      "task-pr-authority",
+      async (state, resources, signal) => {
         const ownerEmail = "task-authority-owner@example.test";
         const aEmail = "task-authority-a@example.test";
         const bEmail = "task-authority-b@example.test";
@@ -564,7 +573,7 @@ suite.define(() => {
         const origin = "http://127.0.0.1:" + port;
         const trustedProxy = trustedProxyFor([ownerEmail, aEmail, bEmail], true);
         await state.writeConfig(taskConfig(state, port, trustedProxy, origin, true));
-        restoreFetch = mockGitHub(async (url) => {
+        resources.restoreFetch = mockGitHub(async (url) => {
           const number = Number(url.pathname.split("/").at(-1));
           if (
             !url.pathname.startsWith("/repos/" + repo + "/pulls/") ||
@@ -581,27 +590,12 @@ suite.define(() => {
             pullFixture(repo, number, "Authority receipt " + number, "proof/" + number, "closed"),
           );
         });
-        const { startGatewayServer } = await import("../../../src/gateway/server.js");
-        gateway = await startGatewayServer(port, {
-          auth: { mode: "trusted-proxy", trustedProxy },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
+        resources.gateway = await startGateway(port, trustedProxy);
+        const address = await startProxy(resources, state.workspaceDir, origin, {
+          "/owner": ownerEmail,
+          "/a": aEmail,
+          "/b": bEmail,
         });
-        const route = (email: string) => ({ target: origin, email, rewrite: () => "/" });
-        proxy = await createServer(
-          proxyConfig(state.workspaceDir, {
-            "/owner": route(ownerEmail),
-            "/a": route(aEmail),
-            "/b": route(bEmail),
-          }),
-        );
-        await proxy.listen();
-        const address = proxy.resolvedUrls?.local[0];
-        if (!address) {
-          throw new Error("Authority fixture proxy has no loopback URL");
-        }
-        const fixtureState = state;
         const connect = async (name: string, admin = false) => {
           const events: WireEvent[] = [];
           const closed = createDeferredCore<number>();
@@ -617,7 +611,7 @@ suite.define(() => {
               scopes: [admin ? "operator.admin" : "operator.read"],
               sharedStateMode: "read-only",
               deviceIdentity: loadOrCreateDeviceIdentity({
-                env: fixtureState.env,
+                env: state.env,
                 identityKey: "task-authority-" + name,
               }),
               onHelloOk: (hello) =>
@@ -696,18 +690,10 @@ suite.define(() => {
         expect(calls.includes(1122)).toBe(false);
         expect(JSON.stringify(readerB.events)).not.toContain("/pull/1122");
       },
-      async close() {
+      async () => {
         releaseProvider.resolve();
-        await runQaGatewayFixture(
-          async () => {
-            await Promise.all(clients.map((client) => client.stopAndWait()));
-          },
-          () => proxy?.close(),
-          () => gateway?.close({ reason: "task authority proof cleanup" }),
-          () => restoreFetch?.(),
-        );
+        await Promise.all(clients.map((client) => client.stopAndWait()));
       },
-      release: async () => state?.cleanup(),
-    });
+    );
   });
 });

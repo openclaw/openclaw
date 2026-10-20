@@ -26,7 +26,7 @@ const suite = createControlUiE2eSuite({ name: "Team-scale cold-load fixture" });
 function observeStoreWrite(
   page: Page,
   observation:
-    | { store: "sidebarSnapshots"; navigationView: "online"; people: number }
+    | { store: "sidebarSnapshots"; people: number }
     | { store: "composerDrafts"; text: string },
 ) {
   return page.evaluateHandle((expected) => {
@@ -44,7 +44,7 @@ function observeStoreWrite(
             this.name === expected.store &&
             (expected.store === "composerDrafts"
               ? value.text === expected.text
-              : value.model?.navigationView === expected.navigationView &&
+              : value.model?.navigationView === "online" &&
                 value.model.onlineUsers?.length === expected.people)
           ) {
             IDBObjectStore.prototype.put = put;
@@ -64,18 +64,16 @@ async function readStoredWarmState({
   sessionKey: string;
   includeDrafts?: boolean;
 }) {
-  const result = <T>(request: IDBRequest<T>, failure: string) =>
+  const result = <T>(request: IDBRequest<T>) =>
     new Promise<T>((resolve, reject) => {
       request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener("error", () => reject(request.error ?? new Error(failure)), {
-        once: true,
-      });
+      request.addEventListener("error", () => reject(request.error), { once: true });
     });
-  const database = await result(indexedDB.open("openclaw-chat-snapshots"), "Snapshot open failed");
+  const database = await result(indexedDB.open("openclaw-chat-snapshots"));
   try {
     const transaction = database.transaction(["snapshots", "sidebarSnapshots"]);
     const readAll = <T>(name: string): Promise<T[]> =>
-      result(transaction.objectStore(name).getAll(), "Snapshot read failed");
+      result(transaction.objectStore(name).getAll());
     const [records, sidebars] = await Promise.all([
       readAll<{ sessionKey: string; snapshot: { messages: unknown[] } }>("snapshots"),
       readAll<{ sessionKey: string; model: { onlineUsers: unknown[] } }>("sidebarSnapshots"),
@@ -92,14 +90,10 @@ async function readStoredWarmState({
     }
     let drafts: number | null = null;
     if (includeDrafts) {
-      const controls = await result(
-        indexedDB.open("openclaw-control-ui"),
-        "Draft database open failed",
-      );
+      const controls = await result(indexedDB.open("openclaw-control-ui"));
       try {
         drafts = await result(
           controls.transaction("composerDrafts").objectStore("composerDrafts").count(),
-          "Draft count failed",
         );
       } finally {
         controls.close();
@@ -233,7 +227,6 @@ suite.define(() => {
         await page.evaluate("globalThis.__name = (fn) => fn");
         const onlineWrite = await observeStoreWrite(page, {
           store: "sidebarSnapshots",
-          navigationView: "online",
           people: 120,
         });
         await sidebar.locator('[data-navigation-view="online"]').click();
@@ -350,7 +343,6 @@ suite.define(() => {
         }
         const sidebarWrite = await observeStoreWrite(page, {
           store: "sidebarSnapshots",
-          navigationView: "online",
           people: 119,
         });
         await gateway.emitGatewayEvent("presence", {
