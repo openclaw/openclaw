@@ -60,13 +60,10 @@ function createModelNormalizationRegistry() {
 
 describe("config model reference validation", () => {
   it("rejects statically suppressed provider/model pairs during config validation", () => {
+    const manifestRegistry = createModelSuppressionRegistry();
     const res = validateConfigObjectWithPlugins(
       { agents: { defaults: { model: { primary: "openai/gpt-5.3-codex-spark" } } } },
-      {
-        pluginMetadataSnapshot: {
-          manifestRegistry: createModelSuppressionRegistry(),
-        },
-      },
+      { pluginMetadataSnapshot: { manifestRegistry } },
     );
 
     expect(res.ok).toBe(false);
@@ -83,29 +80,23 @@ describe("config model reference validation", () => {
   });
 
   it("loads model normalization policies when plugin validation is skipped", () => {
+    const model = {
+      id: "latest",
+      name: "Custom latest",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8192,
+    };
+    const myproxy = {
+      baseUrl: "https://proxy.example/v1",
+      apiKey: "sk-test",
+      api: "openai-completions",
+      models: [model],
+    };
     const res = validateConfigObjectWithPlugins(
-      {
-        models: {
-          providers: {
-            myproxy: {
-              baseUrl: "https://proxy.example/v1",
-              apiKey: "sk-test",
-              api: "openai-completions",
-              models: [
-                {
-                  id: "latest",
-                  name: "Custom latest",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 200_000,
-                  maxTokens: 8192,
-                },
-              ],
-            },
-          },
-        },
-      },
+      { models: { providers: { myproxy } } },
       {
         pluginValidation: "skip",
         loadPluginMetadataSnapshot: () => ({
@@ -124,25 +115,20 @@ describe("config model reference validation", () => {
     const loadPluginMetadataSnapshot = vi.fn(() => ({
       manifestRegistry: createModelNormalizationRegistry(),
     }));
+    const options = { pluginValidation: "core-only" as const, loadPluginMetadataSnapshot };
+    const provider = {
+      baseUrl: "http://127.0.0.1:19432/v1",
+      api: "openai-completions",
+      models: [],
+    };
     const valid = validateConfigObjectWithPlugins(
       {
         gateway: { mode: "local" },
-        models: {
-          providers: {
-            "fixture-external": {
-              baseUrl: "http://127.0.0.1:19432/v1",
-              api: "openai-completions",
-              models: [],
-            },
-          },
-        },
+        models: { providers: { "fixture-external": provider } },
       },
-      { pluginValidation: "core-only", loadPluginMetadataSnapshot },
+      options,
     );
-    const invalid = validateConfigObjectWithPlugins(
-      { gateway: { port: "invalid" } },
-      { pluginValidation: "core-only", loadPluginMetadataSnapshot },
-    );
+    const invalid = validateConfigObjectWithPlugins({ gateway: { port: "invalid" } }, options);
 
     expect(valid.ok).toBe(true);
     expect(invalid.ok).toBe(false);
