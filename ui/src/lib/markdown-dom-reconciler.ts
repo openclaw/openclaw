@@ -221,15 +221,16 @@ function patchAttributes(
     if (name === "class") {
       const oldTokens = new Set(oldValue?.split(/\s+/).filter(Boolean));
       const tokens = new Set(value?.split(/\s+/).filter(Boolean));
-      for (const token of oldTokens) {
-        if (!tokens.has(token)) {
-          element.classList.remove(token);
-        }
-      }
-      for (const token of tokens) {
-        if (!oldTokens.has(token)) {
-          element.classList.add(token);
-        }
+      // Keep canonical class order on promotion (plain code → highlighted code),
+      // while retaining reader-owned state such as expanded or wrapped blocks.
+      const retained = [...element.classList].filter(
+        (token) => !oldTokens.has(token) && !tokens.has(token),
+      );
+      const classes = [...tokens, ...retained].join(" ");
+      if (value === undefined && !classes) {
+        element.removeAttribute(name);
+      } else {
+        element.setAttribute(name, classes);
       }
     } else if (value === undefined) {
       element.removeAttribute(name);
