@@ -88,8 +88,12 @@ describe("memory-wiki cli", () => {
     process.exitCode = undefined;
   });
 
-  function createProgram(config: ResolvedMemoryWikiConfig) {
+  function createProgram(config: ResolvedMemoryWikiConfig, exitOverride = false) {
     const program = new Command().name("test");
+    if (exitOverride) {
+      program.exitOverride();
+      program.configureOutput({ writeErr: () => {}, writeOut: () => {} });
+    }
     registerWikiCli(program, { config });
     return program;
   }
@@ -308,7 +312,7 @@ describe("memory-wiki cli", () => {
     { command: ["get", "entity.alpha"], flag: "--lines", value: "1.5" },
   ])("rejects $flag=$value before dispatch", async ({ command, flag, value }) => {
     const { config } = await createCliVault();
-    const program = createProgram(config).exitOverride();
+    const program = createProgram(config, true);
     program.configureOutput({ writeErr: () => {}, writeOut: () => {} });
     const range = flag === "--confidence" ? "a number between 0 and 1" : "a positive integer";
     await expect(
@@ -319,7 +323,7 @@ describe("memory-wiki cli", () => {
   it("reports invalid search backends through Commander before dispatch", async () => {
     const { config } = await createCliVault({ initialize: false });
     const writeErr = vi.fn();
-    const program = createProgram(config).exitOverride();
+    const program = createProgram(config, true);
     program.configureOutput({ writeErr });
 
     await expect(

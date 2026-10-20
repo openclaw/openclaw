@@ -788,7 +788,7 @@ suite.define(() => {
       expect(tabPadding.trailing).toBeCloseTo(tabPadding.leading, 0);
       expect(Math.min(...tabPadding.labelInsets)).toBeGreaterThanOrEqual(0);
       expect([tabPadding.tabRadii[1], tabPadding.closeRadii[0]]).toEqual([0, 0]);
-      expect(Math.min(tabPadding.tabRadii[0], tabPadding.closeRadii[1])).toBeGreaterThan(0);
+      expect(Math.min(tabPadding.tabRadii[0]!, tabPadding.closeRadii[1]!)).toBeGreaterThan(0);
     }
     await tab.evaluate((node) => node.closest(".side-panel")!.removeAttribute("dir"));
 

@@ -26,7 +26,9 @@ export function registerGatewayCallLocalBackendAuthTests(fixture: {
   const backend = {
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     mode: GATEWAY_CLIENT_MODES.BACKEND,
-    scopes: ["operator.read", "operator.pairing"],
+    scopes: ["operator.read", "operator.pairing"] satisfies NonNullable<
+      Parameters<typeof fixture.callGateway>[0]["scopes"]
+    >,
     deviceIdentity: null,
   };
   const localAuthNone = () => {

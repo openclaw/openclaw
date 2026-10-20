@@ -95,7 +95,7 @@ async function fixture(
       notify("thread/status/changed", { threadId, status: value }),
     name: (threadName: string) =>
       notify("thread/name/updated", { threadId: "thread-1", threadName }),
-    async request(position: number, threadId = "thread-1") {
+    request: async (position: number, threadId = "thread-1") => {
       const result = JSON.parse(await harness.waitForWrite(position));
       expect(result).toMatchObject({
         method: "thread/read",
@@ -103,7 +103,7 @@ async function fixture(
       });
       return result;
     },
-    async reply(position: number, value: CodexThread) {
+    reply: async (position: number, value: CodexThread) => {
       const { id } = await events.request(position, value.id);
       harness.send({ id, result: { thread: value } });
       await nativeReads.mock.results[position]!.value;

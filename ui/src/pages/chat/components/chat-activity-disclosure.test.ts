@@ -119,7 +119,7 @@ async function renderSummary(
   }
   flush();
   await settleToolBridges(container);
-  return container.querySelector(".chat-activity-group__summary");
+  return container.querySelector<HTMLElement>(".chat-activity-group__summary");
 }
 
 it.each(["activity", "work"] as const)(

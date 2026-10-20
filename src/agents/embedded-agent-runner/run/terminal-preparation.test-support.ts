@@ -5,12 +5,26 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
-import { createUsageAccumulator } from "../usage-accumulator.js";
+import { createUsageAccumulator, type mergeUsageIntoAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { prepareEmbeddedRunTerminal } from "./terminal-preparation.js";
 
 type PreparationInput = Parameters<typeof prepareEmbeddedRunTerminal>[0];
+export type OuterContextTokenMeta = PreparationInput["outerContextTokenMeta"];
+export type TerminalStatsInput = {
+  attempt?: Partial<EmbeddedRunAttemptWithReceiptEvidence> & { terminalTurnId?: string };
+  assistantTurns?: number;
+  bridgeCalls?: { search: number; describe: number; call: number };
+  config?: unknown;
+  assistantProvider?: string;
+  provider?: string;
+  model?: string;
+  outerContextTokenMeta?: OuterContextTokenMeta;
+  responseModel?: string;
+  usage?: Parameters<typeof mergeUsageIntoAccumulator>[1];
+  attempts?: NonNullable<Parameters<typeof mergeUsageIntoAccumulator>[1]>[];
+};
 const finalSignature = JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" });
 export function assistantMessage(
   stopReason: AssistantMessage["stopReason"] = "stop",
