@@ -511,6 +511,16 @@ export function formatControlUiPerformanceReport(
     lines.push(
       `  locale catalog JS: ${formatAssetSummary(summarizeAssets(metrics.localeCatalogs))} (largest pair: ${largestLocalePair.locale}, ${formatControlUiPerformanceBytes(largestLocalePairSummary.gzipBytes)} gzip; limits: 1 base + 1 config-hint asset per locale, ${formatControlUiPerformanceBytes(CONTROL_UI_LOCALE_GZIP_BYTES)} combined; forbidden at startup)`,
     );
+    for (const group of localeGroups.toSorted((left, right) =>
+      left.locale.localeCompare(right.locale),
+    )) {
+      const baseBytes = summarizeAssets(group.base).gzipBytes;
+      const configHintBytes = summarizeAssets(group.configHints).gzipBytes;
+      const pairBytes = baseBytes + configHintBytes;
+      lines.push(
+        `    ${group.locale}: ${pairBytes} B gzip (base ${baseBytes} B + config hints ${configHintBytes} B; cap ${CONTROL_UI_LOCALE_GZIP_BYTES} B; headroom ${CONTROL_UI_LOCALE_GZIP_BYTES - pairBytes} B)`,
+      );
+    }
   }
   if (
     startupBudgetBaseline &&
@@ -729,6 +739,7 @@ function main(argv: string[] = process.argv.slice(2)): void {
       "startup Mermaid JS assets",
       "locale catalog base JS assets per locale",
       "locale config-hint JS assets per locale",
+      "largest locale catalog pair JS gzip",
       "startup locale catalog JS assets",
     ]);
     const metricFiles: Record<string, string> = {

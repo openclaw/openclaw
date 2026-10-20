@@ -9,6 +9,7 @@ import {
 import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { en } from "../locales/en.ts";
+import { getLocaleNamespaceLoader } from "./lazy-catalog.ts";
 import { loadLazyLocaleTranslation } from "./registry.ts";
 import type { TranslationMap } from "./types.ts";
 
@@ -55,6 +56,7 @@ class I18nManager {
   // disconnected/failed load remains retryable on the next connected transition.
   private inFlightLocaleLoads = new Map<Locale, Promise<TranslationMap | null>>();
   private localeLoadRecovery: LocaleLoadRecovery | undefined;
+  private namespaceLoads = new WeakMap<TranslationMap, Map<string, Promise<void>>>();
 
   constructor(
     private readonly loadLocaleTranslation: LocaleTranslationLoader = loadLazyLocaleTranslation,
@@ -207,14 +209,47 @@ class I18nManager {
     this.subscribers.forEach((sub) => sub(this.locale));
   }
 
+  private lookupActive(keys: readonly string[]): unknown {
+    const catalog = this.translations[this.locale];
+    const value = lookupTranslation(catalog, keys);
+    if (value !== undefined || !catalog) {
+      return value;
+    }
+    const namespace = keys[0]!;
+    const load = getLocaleNamespaceLoader(catalog, namespace);
+    if (load) {
+      let loads = this.namespaceLoads.get(catalog);
+      if (!loads) {
+        loads = new Map();
+        this.namespaceLoads.set(catalog, loads);
+      }
+      void getOrCreatePromise(
+        loads,
+        namespace,
+        async () => {
+          try {
+            await load();
+            if (this.translations[this.locale] === catalog) {
+              this.notify();
+            }
+          } catch (error) {
+            console.error(`Failed to load locale namespace: ${namespace}`, error);
+          }
+        },
+        { evictOnSettled: true },
+      );
+    }
+    return value;
+  }
+
   public translateActive(key: string): string | undefined {
-    const value = lookupTranslation(this.translations[this.locale], key.split("."));
+    const value = this.lookupActive(key.split("."));
     return typeof value === "string" ? value : undefined;
   }
 
   public t(key: string, params?: Record<string, string>): string {
     const keys = key.split(".");
-    let value = lookupTranslation(this.translations[this.locale], keys);
+    let value = this.lookupActive(keys);
     if (value === undefined && this.locale !== DEFAULT_LOCALE) {
       value = lookupTranslation(this.translations[DEFAULT_LOCALE], keys);
     }

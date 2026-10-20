@@ -404,6 +404,42 @@ describe("Control UI performance budgets", () => {
     jsonCli(fixture, ["--report-only"], 0, actions);
   });
 
+  it("enforces each locale pair cap in Actions and reports exact headroom", () => {
+    const fixture = createCliFixture();
+    const assetsDir = path.join(fixture.distDir, "assets");
+    writeAssetAt(assetsDir, "ru-a.js", 100_000, 100_000, 100);
+    writeAssetAt(assetsDir, "locale-config-hints-ru-a.js", 207_200, 207_200, 100);
+    writeAssetAt(assetsDir, "de-a.js", 130_000, 130_000, 100);
+    writeAssetAt(assetsDir, "locale-config-hints-de-a.js", 177_200, 177_200, 100);
+    const actions = { GITHUB_ACTIONS: "true" };
+    const passing = jsonCli(fixture, [], 0, actions);
+    expect(passing.violations).toEqual([]);
+    expectReportText(
+      passing.report,
+      "ru: 307200 B gzip (base 100000 B + config hints 207200 B; cap 307200 B; headroom 0 B)",
+      "de: 307200 B gzip (base 130000 B + config hints 177200 B; cap 307200 B; headroom 0 B)",
+    );
+
+    for (const locale of ["ru", "de"]) {
+      const gzipPath = path.join(assetsDir, `${locale}-a.js.gz`);
+      const originalBytes = fs.statSync(gzipPath).size;
+      fs.appendFileSync(gzipPath, "x");
+      const failing = jsonCli(fixture, [], 1, actions);
+      expect(failing.violations).toEqual([
+        {
+          metric: "largest locale catalog pair JS gzip",
+          actual: 307_201,
+          limit: 307_200,
+          unit: "bytes",
+        },
+      ]);
+      expect(failing.report).toContain(`${locale}: 307201 B gzip`);
+      expect(failing.report).toContain("headroom -1 B");
+      jsonCli(fixture, ["--report-only"], 0, actions);
+      fs.truncateSync(gzipPath, originalBytes);
+    }
+  });
+
   it("fails closed when the startup baseline is malformed", () => {
     const { distDir } = createStartupFixture();
     const baselinePath = path.join(distDir, "baseline.json");

@@ -55,6 +55,13 @@ limits locally and in CI; `pnpm ui:build` reports them without rejecting the bui
 Worker scripts and other URL assets remain available in the offline cache without
 being modulepreloaded into the document.
 
+Selecting a language loads its startup catalog. Page-only namespaces and configuration
+hints load when first used, with English fallback while the request is pending. The
+build derives this split from the English startup catalog and canonical translation
+memory for every language. The combined base and configuration-hint catalog size is
+capped at 307,200 B gzip per language; `pnpm ui:check-performance` enforces this cap
+both locally and in CI and reports every language's remaining headroom.
+
 MCP app new-conversation handling loads when the app requests a conversation.
 New Session includes its completion handler in the route bundle, so submission
 does not pause for another chunk before sending the creation request.
