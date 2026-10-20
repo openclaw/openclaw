@@ -11,25 +11,26 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function fixture() {
+  const state = makeChatHost({
+    sessionKey: "main",
+    chatRunId: "run-1",
+    chatStream: "",
+    chatRunStartup: null,
+  });
+  const receive = (event: Omit<ChatEventPayload, "sessionKey" | "runId">) =>
+    handleChatGatewayEvent(state, { runId: "run-1", sessionKey: "main", ...event });
+  return { state, receive };
+}
+
 it.each(["final", "aborted", "error"] as const)(
   "clears local model waits on %s after later calls",
   (terminal) => {
-    const state = makeChatHost({
-      sessionKey: "main",
-      chatRunId: "run-1",
-      chatStream: "",
-      chatRunStartup: null,
-    });
+    const { state, receive: dispatch } = fixture();
     const receive = (
       eventState: ChatEventPayload["state"],
       event: Omit<ChatEventPayload, "state" | "sessionKey">,
-    ) =>
-      handleChatGatewayEvent(state, {
-        runId: "run-1",
-        sessionKey: "main",
-        state: eventState,
-        ...event,
-      });
+    ) => dispatch({ state: eventState, ...event });
     const label = () =>
       chatStartupStatusLabel(activeChatRunStartupStatus(state.chatRunStartup), null);
     receive("status", { phase: "starting_model", seq: 1 });
@@ -51,37 +52,29 @@ it.each(["final", "aborted", "error"] as const)(
 );
 
 it("keeps a local cancellation caveat terminal, bounded, and unchanged by replay", () => {
-  const state = makeChatHost({
-    sessionKey: "main",
-    chatRunId: "run-1",
-    chatStream: "",
-    chatRunStartup: null,
-  });
-  const aborted: ChatEventPayload = {
-    runId: "run-1",
-    sessionKey: "main",
+  const { state, receive } = fixture();
+  const aborted = {
     state: "aborted",
     localModelMayStillBeFinishing: true,
-  };
+  } as const;
 
-  handleChatGatewayEvent(state, aborted);
-  expect(state.chatRunId).toBeNull();
-  expect(state.chatRunStartup).toBeNull();
+  receive(aborted);
+  expect(state).toMatchObject({ chatRunId: null, chatRunStartup: null });
   expect(state.chatRunStatus).toMatchObject({
     phase: "interrupted",
     localModelMayStillBeFinishing: true,
   });
   const terminal = state.chatRunStatus;
   vi.advanceTimersByTime(4_000);
-  handleChatGatewayEvent(state, aborted);
+  receive(aborted);
   expect(state.chatRunStatus).toBe(terminal);
   vi.advanceTimersByTime(1_000);
   expect(state.chatRunStatus).toBeNull();
-  handleChatGatewayEvent(state, aborted);
+  receive(aborted);
   expect(state.chatRunStatus).toBeNull();
 
   adoptStartedChatRun(state, "run-2", Date.now());
-  handleChatGatewayEvent(state, aborted);
+  receive(aborted);
   expect(state.chatRunId).toBe("run-2");
   expect(state.chatRunStatus).toBeNull();
 });
@@ -92,15 +85,9 @@ it("clears the cancellation caveat when another run starts or the pane resets", 
     (state: ReturnType<typeof makeChatHost>) =>
       reconcileChatRunLifecycle(state, { clearRunStatus: true }),
   ]) {
-    const state = makeChatHost({ sessionKey: "main", chatRunId: "run-1", chatStream: "" });
-    handleChatGatewayEvent(state, {
-      runId: "run-1",
-      sessionKey: "main",
-      state: "aborted",
-      localModelMayStillBeFinishing: true,
-    });
+    const { state, receive } = fixture();
+    receive({ state: "aborted", localModelMayStillBeFinishing: true });
     reset(state);
-    expect(state.chatRunStatus).toBeNull();
-    expect(state.chatRunStatusClearTimer).toBeNull();
+    expect(state).toMatchObject({ chatRunStatus: null, chatRunStatusClearTimer: null });
   }
 });
