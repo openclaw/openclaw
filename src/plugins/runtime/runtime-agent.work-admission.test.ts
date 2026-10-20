@@ -6,6 +6,7 @@ import {
   attachActiveEmbeddedRun,
   detachActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -55,25 +56,23 @@ beforeEach(async () => {
   });
 });
 
-it("rejects an archived session before running admitted work", async () => {
-  await session.patchSessionEntry({
-    ...scope(),
-    update: () => ({ archivedAt: Date.now() }),
-  });
+it.each(["archived", "pending deletion"])("rejects %s before plugin work", async (reason) => {
   const run = vi.fn(async () => {});
-  await expect(work(run)).rejects.toThrow(`Session "${sessionKey}" is archived`);
-  expect(run).not.toHaveBeenCalled();
-});
-
-it("rejects a persisted pending agent deletion before running plugin work", async () => {
-  const run = vi.fn(async () => {});
-  vi.mocked(readAgentDeletionJournalStatusInWorker).mockResolvedValueOnce("pending");
-  await expect(work(run)).rejects.toThrow("deletion is in progress");
-  expect(readAgentDeletionJournalStatusInWorker).toHaveBeenCalledWith(
-    "main",
-    expect.anything(),
-    expect.any(AbortSignal),
+  if (reason === "archived") {
+    await session.patchSessionEntry({ ...scope(), update: () => ({ archivedAt: 1 }) });
+  } else {
+    vi.mocked(readAgentDeletionJournalStatusInWorker).mockResolvedValueOnce("pending");
+  }
+  await expect(work(run)).rejects.toThrow(
+    reason === "archived" ? `Session "${sessionKey}" is archived` : "deletion is in progress",
   );
+  if (reason === "pending deletion") {
+    expect(readAgentDeletionJournalStatusInWorker).toHaveBeenCalledWith(
+      "main",
+      expect.anything(),
+      expect.any(AbortSignal),
+    );
+  }
   expect(run).not.toHaveBeenCalled();
 });
 
@@ -94,13 +93,7 @@ it("admits fresh work and protects session creation inside the callback", async 
       async (operation) => {
         expect(operation?.sessionId).toBe(freshId);
         expect(getCurrentSessionControllerClaim()).toBe(claim);
-        const native = {
-          runId: "fresh-sdk-native",
-          queueMessage: async () => {},
-          isStreaming: () => true,
-          isCompacting: () => false,
-          abort: () => {},
-        };
+        const native = createEmbeddedRunHandle({ runId: "fresh-sdk-native" });
         attachActiveEmbeddedRun(freshId, native, freshKey, undefined, "main", operation);
         try {
           expect(getActiveNativeAttempt(freshId)).toBe(native);

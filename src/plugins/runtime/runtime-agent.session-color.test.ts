@@ -7,10 +7,10 @@ import { createRuntimeAgent } from "./runtime-agent.js";
 it("creates a plugin-owned CLI fork with canonical color", async () => {
   await withOpenClawTestState({ label: "plugin-runtime-cli-session-create" }, async () => {
     await captureRuntimeConfigAsyncReader()();
-    const runtime = createRuntimeAgent();
+    const { session } = createRuntimeAgent();
     const key = "agent:main:catalog-adopt:claude:source";
     const binding = { sessionId: "claude-source", forceReuse: true, forkNextResume: true };
-    const created = await runtime.session.createSessionEntry({
+    const created = await session.createSessionEntry({
       cfg: {},
       key,
       label: "Renamed CLI session",
@@ -25,11 +25,10 @@ it("creates a plugin-owned CLI fork with canonical color", async () => {
         cliSessionBinding: binding,
       },
       afterCreate: async ({ entry }) => {
-        expect(entry.initializationPending).toBe(true);
-        expect(entry.color).toBe("blue");
+        expect(entry).toMatchObject({ initializationPending: true, color: "blue" });
       },
     });
-    expect(runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" })).toEqual(
+    expect(session.getSessionEntry({ sessionKey: key, readConsistency: "latest" })).toEqual(
       created.entry,
     );
     expect(created.entry).toMatchObject({
@@ -55,38 +54,34 @@ it("creates a plugin-owned CLI fork with canonical color", async () => {
 it("rejects a patch whose owner closes during asynchronous preparation", async () => {
   await withOpenClawTestState({ label: "plugin-runtime-patch-owner" }, async () => {
     await captureRuntimeConfigAsyncReader()();
-    const runtime = createRuntimeAgent();
+    const { session } = createRuntimeAgent();
     const scope = { agentId: "main", sessionKey: "agent:main:reef:group:room" };
-    await runtime.session.upsertSessionEntry({
+    await session.upsertSessionEntry({
       ...scope,
       entry: { sessionId: "original", updatedAt: 100, displayName: "Original title" },
     });
-    const original = runtime.session.getSessionEntry(scope);
+    const original = session.getSessionEntry(scope);
     const preparing = createDeferred();
-    const releasePreparation = createDeferred();
-    let ownerActive = true;
-    const patch = runtime.session.patchSessionEntry({
+    const release = createDeferred();
+    const owner = new AbortController();
+    const patch = session.patchSessionEntry({
       ...scope,
       preserveActivity: true,
-      assertCommitAllowed: () => {
-        if (!ownerActive) {
-          throw new Error("Session patch owner closed");
-        }
-      },
+      assertCommitAllowed: () => owner.signal.throwIfAborted(),
       update: async () => {
         preparing.resolve();
-        await releasePreparation.promise;
+        await release.promise;
         return { displayName: "Stale title" };
       },
     });
     try {
       await preparing.promise;
-      ownerActive = false;
-      releasePreparation.resolve();
+      owner.abort(new Error("Session patch owner closed"));
+      release.resolve();
       await expect(patch).rejects.toThrow("Session patch owner closed");
-      expect(runtime.session.getSessionEntry(scope)).toEqual(original);
+      expect(session.getSessionEntry(scope)).toEqual(original);
     } finally {
-      releasePreparation.resolve();
+      release.resolve();
       await patch.catch(() => undefined);
     }
   });

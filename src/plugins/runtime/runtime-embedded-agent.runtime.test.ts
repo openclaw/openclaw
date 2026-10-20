@@ -197,30 +197,39 @@ it("delegates the parent audience to the child session before core execution", a
   expect(() => assertMemoryAudienceCurrent(audience)).not.toThrow();
 });
 
-it.each(["legacy-send", "legacy-send-then-throw", "collector", "no-send"] as const)(
+it.each([
+  "legacy-send",
+  "legacy-send-then-throw",
+  "legacy-pending-then-reject",
+  "collector",
+  "no-send",
+] as const)(
   "keeps %s ownership across a result-required NO_REPLY after settled tools",
   async (owner) => {
     const delivered: string[] = [];
     const collected: string[] = [];
-    const callerOwnsDelivery = owner === "legacy-send" || owner === "legacy-send-then-throw";
-    const callbackRejects = owner === "legacy-send-then-throw" || owner === "no-send";
+    const callerOwnsDelivery = owner.startsWith("legacy");
+    const delayed = owner === "legacy-pending-then-reject";
+    const callbackRejects = owner === "legacy-send-then-throw" || owner === "no-send" || delayed;
+    const callback = createDeferred();
     const assistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "NO_REPLY" }],
     });
     const attempt = makeEmbeddedRunnerAttempt({
       assistantTexts: ["NO_REPLY"],
       lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
       toolMetas: [{ toolName: "write", isError: false, replaySafe: false }],
       itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
       currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
     });
     let finalizationRequest: string | null = null;
     mocks.runEmbeddedAgentCore.mockImplementationOnce(async (input: RunParams) => {
-      const blockReply = Promise.resolve().then(() =>
-        input.onBlockReply?.({ text: "The note is saved." }, { assistantMessageIndex: 1 }),
-      );
+      const blockReply = (async () =>
+        input.onBlockReply?.({ text: "The note is saved." }, { assistantMessageIndex: 1 }))();
+      if (delayed) {
+        expect(await input.resolveReplyDelivery?.(0)).toBe("pending");
+        callback.reject(new Error("transport callback rejected"));
+      }
       if (callbackRejects) {
         await expect(blockReply).rejects.toThrow("transport callback rejected");
       } else {
@@ -249,6 +258,9 @@ it.each(["legacy-send", "legacy-send-then-throw", "collector", "no-send"] as con
         onBlockReply: ({ text }) => {
           if (text && owner !== "no-send") {
             (callerOwnsDelivery ? delivered : collected).push(text);
+          }
+          if (delayed) {
+            return callback.promise;
           }
           if (callbackRejects) {
             throw new Error("transport callback rejected");
@@ -329,23 +341,6 @@ it("does not restore earlier-input custody when an old callback resolves late", 
   );
 });
 
-it("retains uncertain custody while a callback is pending and after it rejects", async () => {
-  const callback = createDeferred();
-  await replies(
-    async (input) => {
-      const pending = input.onBlockReply?.(
-        { text: "Uncertain answer" },
-        { assistantMessageIndex: 1 },
-      );
-      expect(await input.resolveReplyDelivery?.(0)).toBe("pending");
-      callback.reject(new Error("transport callback rejected"));
-      await expect(pending).rejects.toThrow("transport callback rejected");
-      expect(await input.resolveReplyDelivery?.(0)).toBe("pending");
-    },
-    { onBlockReply: () => callback.promise },
-  );
-});
-
 it.each(["abort", "completion"] as const)("retires legacy custody on %s", async (end) => {
   const controller = new AbortController();
   const accepted = createDeferred();
@@ -422,18 +417,16 @@ it.each(["completion", "abort"] as const)(
       core.resolve({ payloads: [] });
       await expect(running).resolves.toEqual({ payloads: [] });
       expect(mocks.close).toHaveBeenCalledOnce();
-      expect(receipts).toMatchObject([
-        {
-          decision: { outcome: "allowed", reasonCode: "plugin_runtime_owner_admitted" },
-          enforcement: { coverageState: "enforced" },
-        },
+      expect(
+        receipts.map(({ decision, enforcement }) => [
+          decision.outcome,
+          decision.reasonCode,
+          enforcement.coverageState,
+        ]),
+      ).toEqual([
+        ["allowed", "plugin_runtime_owner_admitted", "enforced"],
         ...(end === "completion"
-          ? [
-              {
-                decision: { outcome: "allowed", reasonCode: "plugin_runtime_completed" },
-                enforcement: { coverageState: "attribution-only" },
-              },
-            ]
+          ? [["allowed", "plugin_runtime_completed", "attribution-only"]]
           : []),
       ]);
       expect(JSON.stringify(receipts)).not.toContain("private-plugin-id");
@@ -476,51 +469,43 @@ it.each(["before preparation", "during preparation"] as const)(
   },
 );
 
-it.each<{
-  name: string;
-  patch: Record<string, unknown>;
-  inherited?: boolean;
-  unscoped?: boolean;
-  message: string;
-}>([
-  {
-    name: "missing plugin scope",
-    patch: {},
-    unscoped: true,
-    message: "active plugin runtime scope",
-  },
-  {
-    name: "forged memory audience",
-    patch: { memoryAudience: { kind: "owner-private", agentId: "researcher" } },
-    message: "memory audience must be host-minted",
-  },
-  ...[
-    "admittedRunContext",
-    "preparedRunAdmission",
-    "onDeferredLifecycleOwner",
-    "onDeferredLifecycleAbort",
-    "onRetryWait",
-    "compactionCountOwner",
-    "onCompactionAccounting",
-    "onContextAccountingEvent",
-  ].map((field) => ({
-    name: field,
-    patch: { [field]: field === "compactionCountOwner" ? "caller" : {} },
-    message: "cannot supply host run authority",
-  })),
-  ...["compactionCountOwner", "onCompactionAccounting", "onContextAccountingEvent"].map(
-    (field) => ({
-      name: `inherited ${field}`,
-      inherited: true,
-      patch: { [field]: field === "compactionCountOwner" ? "caller" : vi.fn() },
-      message: "cannot supply host run authority",
-    }),
-  ),
-])("rejects $name before admission", async ({ patch, inherited, unscoped, message }) => {
+type Rejection = [name: string, patch: Record<string, unknown>, inherited?: boolean];
+const accountingFields = [
+  "compactionCountOwner",
+  "onCompactionAccounting",
+  "onContextAccountingEvent",
+];
+const hostFields = [
+  "admittedRunContext",
+  "preparedRunAdmission",
+  "onDeferredLifecycleOwner",
+  "onDeferredLifecycleAbort",
+  "onRetryWait",
+  ...accountingFields,
+];
+it.each<Rejection>([
+  ["missing plugin scope", {}],
+  ["forged memory audience", { memoryAudience: { kind: "owner-private", agentId: "researcher" } }],
+  ...hostFields.map((field): Rejection => [
+    field,
+    { [field]: field === "compactionCountOwner" ? "caller" : {} },
+  ]),
+  ...accountingFields.map((field): Rejection => [
+    `inherited ${field}`,
+    { [field]: field === "compactionCountOwner" ? "caller" : vi.fn() },
+    true,
+  ]),
+])("rejects %s before admission", async (name, patch, inherited) => {
   const input = { ...params, ...(!inherited ? patch : {}) };
   if (inherited) {
     Object.setPrototypeOf(input, patch);
   }
+  const unscoped = name === "missing plugin scope";
+  const message = unscoped
+    ? "active plugin runtime scope"
+    : name === "forged memory audience"
+      ? "memory audience must be host-minted"
+      : "cannot supply host run authority";
   const invoke = () => runPluginEmbeddedAgent(input);
   await expect(
     unscoped ? invoke() : withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, invoke),
