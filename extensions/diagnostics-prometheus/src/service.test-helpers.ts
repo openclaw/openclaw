@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { expect, it } from "vitest";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -10,6 +10,21 @@ import { createDiagnosticsPrometheusExporter } from "./service.js";
 
 export const trusted: DiagnosticEventMetadata = Object.freeze({ trusted: true });
 export const untrusted: DiagnosticEventMetadata = Object.freeze({ trusted: false });
+
+export function expectMetrics(actual: string | readonly string[]) {
+  const lines = typeof actual === "string" ? actual.split("\n") : actual;
+  return (samples: string) => {
+    for (const sample of samples.trim().split("\n")) {
+      expect(lines).toContain(sample.trim());
+    }
+  };
+}
+
+export function expectExcludes(actual: string, ...samples: string[]) {
+  for (const sample of samples) {
+    expect(actual).not.toContain(sample);
+  }
+}
 type EventInput<T = DiagnosticEventPayload> = T extends DiagnosticEventPayload
   ? Omit<T, "seq" | "ts">
   : never;
@@ -24,47 +39,35 @@ export type TrustedExporterInternalDiagnostics = NonNullable<
 > & {
   reportExporterHealth?: (update: ExporterHealthReport) => void;
 };
+const noop = () => {};
 
 export function baseEvent(): Pick<DiagnosticEventPayload, "seq" | "ts"> {
   return { seq: 1, ts: 1700000000000 };
 }
 
 export function createMetricsHarness(
-  getRuntimeIdentity?: NonNullable<
-    OpenClawPluginServiceContext["internalDiagnostics"]
-  >["getRuntimeIdentity"],
+  getRuntimeIdentity?: TrustedExporterInternalDiagnostics["getRuntimeIdentity"],
   config: OpenClawPluginServiceContext["config"] = {},
   onGatewayWorkMetrics?: TrustedExporterInternalDiagnostics["onGatewayWorkMetrics"],
 ) {
   const exporter = createDiagnosticsPrometheusExporter();
-  let listener:
-    | ((
-        event: DiagnosticEventPayload,
-        metadata: DiagnosticEventMetadata,
-        privateData: DiagnosticEventPrivateData,
-      ) => void)
-    | undefined;
+  let listener: Parameters<TrustedExporterInternalDiagnostics["onEvent"]>[0] | undefined;
   const internalDiagnostics: TrustedExporterInternalDiagnostics = {
     ...(getRuntimeIdentity ? { getRuntimeIdentity } : {}),
     ...(onGatewayWorkMetrics ? { onGatewayWorkMetrics } : {}),
-    emit() {},
+    emit: noop,
     onEvent(nextListener) {
       listener = nextListener;
       return () => {
         listener = undefined;
       };
     },
-    reportExporterHealth() {},
+    reportExporterHealth: noop,
   };
   const context: OpenClawPluginServiceContext = {
     config,
     stateDir: "/tmp/openclaw-prometheus-test",
-    logger: {
-      info() {},
-      warn() {},
-      error() {},
-      debug() {},
-    },
+    logger: { info: noop, warn: noop, error: noop, debug: noop },
     internalDiagnostics,
   };
   const start = () => exporter.service.start(context);
@@ -83,6 +86,17 @@ export function createMetricsHarness(
     stop: () => exporter.service.stop?.(),
   };
 }
+
+export const metricsTest = it.extend<{ metrics: ReturnType<typeof createMetricsHarness> }>({
+  metrics: async ({ task: _task }, use) => {
+    const metrics = createMetricsHarness();
+    try {
+      await use(metrics);
+    } finally {
+      metrics.stop();
+    }
+  },
+});
 
 export async function withMetricsServer(
   metrics: ReturnType<typeof createMetricsHarness>,
