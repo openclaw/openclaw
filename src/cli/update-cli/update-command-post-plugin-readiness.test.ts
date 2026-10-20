@@ -4,6 +4,7 @@ import {
   recordCommandProcessFailure,
 } from "../../process/exec-result.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { processResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { applyPostPluginUpdateReadiness } from "./update-command-post-plugin-readiness.js";
 
@@ -13,6 +14,8 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 }));
 
 afterEach(() => vi.resetAllMocks());
+const execute = vi.mocked(runUtf8CommandWithTimeout);
+const repair = "Run `openclaw update repair` to retry post-update readiness checks.";
 
 const params = {
   root: "/synthetic/openclaw",
@@ -23,12 +26,14 @@ const params = {
 };
 
 it("redacts caught execution errors before publishing repair warnings", async () => {
-  vi.mocked(runUtf8CommandWithTimeout).mockRejectedValue(
+  execute.mockRejectedValue(
     new Error("Readiness unavailable https://example.test/diagnostic?token=fixture-secret"),
   );
   const result = await applyPostPluginUpdateReadiness(params);
-  expect(result.status).toBe("warning");
-  expect(result.doctorLint?.command).toBe("doctor --lint --json --severity-min error");
+  expect(result).toMatchObject({
+    status: "warning",
+    doctorLint: { command: "doctor --lint --json --severity-min error" },
+  });
   expect(result.warnings?.[0]?.message).toContain("token=<redacted>");
   expect(JSON.stringify(result)).not.toContain("fixture-secret");
 });
@@ -39,33 +44,31 @@ it.each([
 ] as const)(
   "defers settled lint contention ($termination) without masking earlier errors",
   async (physical) => {
-    vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue({
-      ...physical,
-      cleanup: "normal",
-      stdout: "",
-      stderr: "SQLite transaction lock wait failed: database is locked (SQLITE_BUSY)",
-    });
+    execute.mockResolvedValue(
+      processResult({
+        ...physical,
+        cleanup: "normal",
+        stderr: "SQLite transaction lock wait failed: database is locked (SQLITE_BUSY)",
+      }),
+    );
     for (const status of ["ok", "error"] as const) {
       const result = await applyPostPluginUpdateReadiness({
         ...params,
         pluginUpdate: { ...params.pluginUpdate, status },
       });
-      expect(result.status).toBe(status === "ok" ? "warning" : "error");
+      const { code: exitCode, ...lifecycle } = physical;
+      expect(result).toMatchObject({
+        status: status === "ok" ? "warning" : "error",
+        doctorLint: { exitCode, ...lifecycle, advisory: { kind: "recoverable-maintenance" } },
+      });
       expect(result.failureFacts).toBeUndefined();
-      expect(result.warnings).toEqual([
-        expect.objectContaining({
+      expect(result.warnings).toMatchObject([
+        {
           reason: "doctor-advisory",
           message: expect.stringContaining("database is locked"),
-          guidance: ["Run `openclaw update repair` to retry post-update readiness checks."],
-        }),
+          guidance: [repair],
+        },
       ]);
-      expect(result.doctorLint).toMatchObject({
-        exitCode: physical.code,
-        termination: physical.termination,
-        signal: physical.signal,
-        killed: physical.killed,
-        advisory: { kind: "recoverable-maintenance" },
-      });
     }
   },
 );
@@ -74,17 +77,16 @@ it.each(["canonical", "recorded", "result"] as const)(
   "preserves %s uncertain cleanup instead of deferring potentially active work",
   async (kind) => {
     if (kind === "result") {
-      vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue({
-        code: 1,
-        termination: "exit",
-        signal: null,
-        killed: true,
-        cleanup: "uncertain",
-        stdout: "",
-        stderr: "Unjoined inspection child",
-      });
+      execute.mockResolvedValue(
+        processResult({
+          code: 1,
+          killed: true,
+          cleanup: "uncertain",
+          stderr: "Unjoined inspection child",
+        }),
+      );
     } else {
-      vi.mocked(runUtf8CommandWithTimeout).mockRejectedValue(
+      execute.mockRejectedValue(
         kind === "canonical"
           ? new CommandProcessCleanupError()
           : recordCommandProcessFailure(new Error("Inspection output failed"), {
@@ -108,21 +110,20 @@ it("keeps budget-deferred inspection receipts advisory when no check ran", async
     message: "Inspection allowance exhausted.",
     fixHint: "Run `openclaw doctor --fix` after activation.",
   };
-  vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue({
-    code: 0,
-    termination: "exit",
-    signal: null,
-    killed: false,
-    cleanup: "normal",
-    stderr: "",
-    stdout: JSON.stringify({ ok: true, checksRun: 0, findings: [], warnings: [finding] }),
-  });
+  execute.mockResolvedValue(
+    processResult({
+      cleanup: "normal",
+      stdout: JSON.stringify({ ok: true, checksRun: 0, findings: [], warnings: [finding] }),
+    }),
+  );
   const result = await applyPostPluginUpdateReadiness(params);
-  expect(result.status).toBe("warning");
-  expect(result.doctorLint).toMatchObject({
-    exitCode: 0,
-    doctorLintFindings: [finding],
-    advisory: { kind: "recoverable-maintenance" },
+  expect(result).toMatchObject({
+    status: "warning",
+    doctorLint: {
+      exitCode: 0,
+      doctorLintFindings: [finding],
+      advisory: { kind: "recoverable-maintenance" },
+    },
   });
   expect(result.warnings).toEqual(
     expect.arrayContaining([
@@ -130,9 +131,7 @@ it("keeps budget-deferred inspection receipts advisory when no check ran", async
         errorCode: "update-inspection-deferred",
         guidance: [finding.fixHint],
       }),
-      expect.objectContaining({
-        guidance: ["Run `openclaw update repair` to retry post-update readiness checks."],
-      }),
+      expect.objectContaining({ guidance: [repair] }),
     ]),
   );
 });

@@ -19,6 +19,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
+import { finishParams, updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import * as sourceRuntime from "./update-command-runtime.js";
@@ -112,10 +113,8 @@ export async function finishSuccessfulPackageSwitch(
 ): Promise<void> {
   const packageRoot = params.packageRoot ?? "/tmp/openclaw-update";
   const previousRoot = params.previousRoot ?? packageRoot;
-  const input = {
-    mutationStarted: true,
-    result: {
-      status: "ok",
+  const input = finishParams({
+    result: updateResult({
       mode: params.updateMode ?? "npm",
       root: packageRoot,
       ...(params.sealed && {
@@ -125,22 +124,17 @@ export async function finishSuccessfulPackageSwitch(
           ...(params.updateMode === "git" ? { buildId: "new-build" } : {}),
         },
       }),
-      steps: [],
-      durationMs: 1,
-    },
+    }),
     root: packageRoot,
     previousInstallRoot: previousRoot,
     installKindChanged: !params.restartEnvironment,
     configSnapshot: validConfigSnapshot,
-    requestedChannel: null,
     storedChannel: null,
     channel: params.updateMode === "git" ? "dev" : "stable",
     downgradeRisk: true,
     shouldRestart: Boolean(params.restartEnvironment),
     opts: { json: params.json, run: params.run },
     controlPlaneUpdateSentinelMeta: {},
-    preUpdatePluginInstallRecords: {},
-    startedAt: Date.now(),
     updateStepTimeoutMs: 1_000,
     ...(params.restartEnvironment && {
       preManagedServiceStop: {
@@ -159,7 +153,7 @@ export async function finishSuccessfulPackageSwitch(
       ownedManagedUpdateEnv: params.restartEnvironment,
     }),
     ...overrides,
-  } as unknown as FinishUpdateParams;
+  } as unknown as FinishUpdateParams);
   const installRoot = input.result.root ?? input.root;
   const packageInstall =
     input.result.mode === "npm" || input.result.mode === "pnpm" || input.result.mode === "bun";
@@ -276,16 +270,15 @@ export function registerForegroundFinalizationTests({
           opts,
           coreAlreadyCurrent: outcome !== "retirement",
           shouldRestart: true,
-          result: {
+          result: updateResult({
             status: outcome === "retirement" ? "ok" : "skipped",
             reason: outcome === "retirement" ? undefined : "already-current",
             mode: "git",
             root,
             before: { sha: "same", version: "1.0.0" },
             after: { sha: "same", version: "1.0.0" },
-            steps: [],
             durationMs: 0,
-          },
+          }),
         },
         { candidateRuntime },
       );
@@ -485,13 +478,8 @@ export function registerServiceInstallationConvergenceTests(
           serviceEnv: process.env,
           serviceUpdateVerdict,
         };
-        let originalRunning = true;
-        mocks.stopService.mockImplementationOnce(async () => {
-          originalRunning = false;
-          return { ...serviceObservation, stopped: true };
-        });
         mocks.restartService.mockImplementationOnce(async ({ result }) => {
-          expect(originalRunning).toBe(true);
+          expect(mocks.stopService).not.toHaveBeenCalled();
           expect(result).toMatchObject({ status: "skipped", reason: "already-current" });
           expect(mocks.printResult).not.toHaveBeenCalled();
           if (outcome === "readiness-pending") {
@@ -505,16 +493,13 @@ export function registerServiceInstallationConvergenceTests(
             coreAlreadyCurrent: true,
             shouldRestart: restart,
             mutationStarted: false,
-            result: {
+            result: updateResult({
               status: "skipped",
               reason: "already-current",
-              mode: "npm",
               root: packageRoot,
               before: { version: VERSION },
               after: { version: VERSION },
-              steps: [],
-              durationMs: 1,
-            },
+            }),
             preManagedServiceStop: { ...serviceObservation, stopped: false },
           },
         );
@@ -537,18 +522,12 @@ export function registerServiceInstallationConvergenceTests(
             expect.objectContaining({ refreshServiceEnv: true, shouldRestart: true }),
           );
         } else if (drift) {
-          expect(mocks.printResult).toHaveBeenCalledWith(
+          expect(mocks.printResult.mock.lastCall?.[0].steps).toContainEqual(
             expect.objectContaining({
-              steps: expect.arrayContaining([
-                expect.objectContaining({
-                  advisory: expect.objectContaining({
-                    message: expect.stringContaining("Service reconciliation was skipped"),
-                  }),
-                }),
-              ]),
+              advisory: expect.objectContaining({
+                message: expect.stringContaining("Service reconciliation was skipped"),
+              }),
             }),
-            expect.anything(),
-            expect.anything(),
           );
         }
       } finally {

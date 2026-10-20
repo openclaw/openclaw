@@ -37,6 +37,11 @@ import type { UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import {
+  finishParams,
+  updateResult,
+  updateStep,
+} from "./update-command-maintenance-fixtures.test-support.js";
 import { registerCurrentF3Controls } from "./update-command-original-service-current.test-support.js";
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
 import { finishUpdate } from "./update-command-post-update.js";
@@ -116,6 +121,22 @@ let serviceNodeRunner: string;
 let before: PreManagedServiceStop;
 let stopped = false;
 const schemas = { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION };
+const updateRun = (env: NodeJS.ProcessEnv) => ({
+  runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
+  env,
+});
+
+function writePackage(root: string, version: string) {
+  return fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({
+      name: "openclaw",
+      version,
+      type: "module",
+      openclaw: { schemaVersions: schemas },
+    }),
+  );
+}
 
 function executePackageUpdate(
   opts: UpdateCommandOptions,
@@ -156,7 +177,7 @@ function rollbackOriginal(
   return readConfigFileSnapshot({ observe: false }).then((configSnapshot) =>
     rollbackFailedUpdate({
       definitionRecovery: {},
-      result: { status: "error", mode: "npm", root: rootB, steps: [], durationMs: 0 },
+      result: updateResult({ status: "error", root: rootB, durationMs: 0 }),
       previousRoot: rootB,
       previousSchemaVersions: schemas,
       originalManagedServiceRuntime: original,
@@ -203,15 +224,7 @@ beforeEach(async () => {
     [rootB, "2026.9.4"],
   ]) {
     await fs.mkdir(path.join(root!, "dist"), { recursive: true });
-    await fs.writeFile(
-      path.join(root!, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version,
-        type: "module",
-        openclaw: { schemaVersions: schemas },
-      }),
-    );
+    await writePackage(root!, version!);
     await fs.writeFile(path.join(root!, "dist", "index.js"), "export {};\n");
     await fs.writeFile(
       path.join(root!, "dist", "build-info.json"),
@@ -288,12 +301,12 @@ beforeEach(async () => {
     options.assertCurrent?.();
     await options.beforeMutation?.();
   });
-  mocks.stop.mockImplementation(async ({ phase, shouldRestart, updateRun }) => {
+  mocks.stop.mockImplementation(async ({ phase, shouldRestart, updateRun: run }) => {
     if (phase !== "inspect" && shouldRestart) {
       if (mocks.windows && !before.windowsTaskAutoStartRecovery) {
         before.windowsTaskAutoStartRecovery = createWindowsTaskAutoStartRecovery({
           serviceEnv: state.env,
-          assertCurrent: () => updateRun.executorFence.assertCurrent(),
+          assertCurrent: () => run.executorFence.assertCurrent(),
         });
         await before.windowsTaskAutoStartRecovery.suspended;
         before.windowsTaskAutoStartRecovery.beginMutation();
@@ -395,10 +408,7 @@ it.for([
       mocks.health.mockImplementation(observeOriginal);
       mocks.inspect.mockImplementation(observeOriginal);
     }
-    const run = {
-      runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
-      env: state.env,
-    };
+    const run = updateRun(state.env);
     const opts: UpdateCommandOptions = { json: true, run };
     if (scenario === "agent-support-older") {
       const packagePath = path.join(rootA, "package.json");
@@ -413,15 +423,7 @@ it.for([
     const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
     mocks.package.mockImplementation(async (params) => {
       await params.beforeActivate();
-      await fs.writeFile(
-        path.join(rootB, "package.json"),
-        JSON.stringify({
-          name: "openclaw",
-          version: scenario === "same-version" || sameBuild ? "2026.9.4" : "2026.9.5",
-          type: "module",
-          openclaw: { schemaVersions: schemas },
-        }),
-      );
+      await writePackage(rootB, scenario === "same-version" || sameBuild ? "2026.9.4" : "2026.9.5");
       candidatePackageBytes = await fs.readFile(path.join(rootB, "package.json"));
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: "agent:main:after", env: state.env },
@@ -454,9 +456,8 @@ it.for([
         ).run(rootB);
         db.close();
       }
-      return {
+      return updateResult({
         status: "error",
-        mode: "npm",
         root: rootB,
         reason: "named-plugin-failure",
         before: { version: "2026.9.4", buildId: "build-B" },
@@ -469,9 +470,7 @@ it.for([
           reason: sameBuild ? "runtime-verification-failed" : "deps-install-failed",
           packageRollbackVerified: false,
         },
-        steps: [],
-        durationMs: 1,
-      };
+      });
     });
     if (scenario === "readiness-failed" || scenario === "windows-autostart-health-failed") {
       mocks.health.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
@@ -512,24 +511,17 @@ it.for([
         buildId: "build-B",
       });
       assert(execution, "missing execution");
-      final = await finishUpdate({
-        ...execution,
-        root: rootB,
-        packageUpdateNodeRunner: state.path("selected-B-node"),
-        installKindChanged: false,
-        configSnapshot,
-        requestedChannel: null,
-        storedChannel: "stable",
-        channel: "stable",
-        downgradeRisk: false,
-        shouldRestart: scenario !== "no-restart",
-        opts,
-        ownedManagedUpdateEnv: state.env,
-        controlPlaneUpdateSentinelMeta: null,
-        preUpdatePluginInstallRecords: {},
-        startedAt: Date.now(),
-        updateStepTimeoutMs: 30000,
-      }).catch((error: unknown) => error);
+      final = await finishUpdate(
+        finishParams({
+          ...execution,
+          root: rootB,
+          packageUpdateNodeRunner: state.path("selected-B-node"),
+          configSnapshot,
+          shouldRestart: scenario !== "no-restart",
+          opts,
+          ownedManagedUpdateEnv: state.env,
+        }),
+      ).catch((error: unknown) => error);
       if (scenario === "schema-newer") {
         expect(final).toMatchObject({
           name: "UpdateCommandPendingRecoveryFailure",
@@ -661,10 +653,7 @@ it("refuses B ledger admission independently from compatible service A state", a
     parentEnv.OPENCLAW_CONFIG_PATH,
     JSON.stringify({ plugins: { enabled: false } }),
   );
-  const run: NonNullable<UpdateCommandOptions["run"]> = {
-    runId: createUpdateRun({ trigger: "cli" }, { env: parentEnv }).runId,
-    env: parentEnv,
-  };
+  const run: NonNullable<UpdateCommandOptions["run"]> = updateRun(parentEnv);
   await withUpdateCommandExecutor(run.runId, async (executor) => {
     run.executorFence = await executor.enter(rootB, { serviceRoot: rootA });
     const opts: UpdateCommandOptions = { json: true, run };
@@ -698,10 +687,7 @@ it.each([
   "reload-pending",
   "no-restart",
 ] as const)("pre-stop qualification keeps retained A recoverable: %s", async (scenario) => {
-  const run = {
-    runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
-    env: state.env,
-  };
+  const run = updateRun(state.env);
   const opts: UpdateCommandOptions = { json: true, run };
   const packageBefore = await fs.readFile(path.join(rootB, "package.json"));
   const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
@@ -734,26 +720,15 @@ it.each([
     expect(params.honorPackageRoot).toBe(true);
     await params.beforeActivate();
     activated = true;
-    return {
+    return updateResult({
       status: "error",
-      mode: "npm",
       root: rootB,
       reason: "doctor-failed",
       before: { version: "2026.9.4", buildId: "build-B" },
       after: { version: "2026.9.5", buildId: "candidate-B" },
       recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      steps: [
-        {
-          name: "doctor",
-          command: "doctor",
-          cwd: rootB,
-          durationMs: 1,
-          exitCode: 97,
-          stderrTail: failure.message,
-        },
-      ],
-      durationMs: 1,
-    };
+      steps: [updateStep("doctor", { cwd: rootB, exitCode: 97, stderrTail: failure.message })],
+    });
   });
   await withUpdateCommandExecutor(run.runId, async (executor) => {
     const fence = await executor.enter(rootB, { serviceRoot: rootA });
@@ -796,10 +771,7 @@ registerCurrentF3Controls(() => ({
 it.each([false, true])(
   "handles restored receipt fingerprints with actual mutation=%s",
   async (mutated) => {
-    const run: NonNullable<UpdateCommandOptions["run"]> = {
-      runId: createUpdateRun({ trigger: "cli" }, { env: state.env }).runId,
-      env: state.env,
-    };
+    const run: NonNullable<UpdateCommandOptions["run"]> = updateRun(state.env);
     await withUpdateCommandExecutor(run.runId, async (executor) => {
       run.executorFence = await executor.enter(rootB, { serviceRoot: rootA });
       const opts: UpdateCommandOptions = { json: true, run };

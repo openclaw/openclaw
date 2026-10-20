@@ -20,10 +20,14 @@ import {
 } from "../../daemon/service-rebind.js";
 import * as integrity from "../../infra/package-update-integrity.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
+import {
+  finishParams,
+  updateResult,
+  updateStep,
+} from "./update-command-maintenance-fixtures.test-support.js";
 import type { OriginalServiceFixture } from "./update-command-original-service-fixture.test-support.js";
 import { registerRuntimePinPreservationTest } from "./update-command-original-service-pins.test-support.js";
 import {
@@ -177,16 +181,21 @@ export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture)
       root: rootA,
     });
     const pinScope = { kind: "gateway" as const, env: state.env };
-    const pinScenario = scenario === "own-pin-rebind" || scenario === "foreign-pin";
-    if (pinScenario) {
+    const writePin = (
+      nodePath: string,
+      expected = readDaemonRuntimePinForInstall(pinScope, serviceState.command, true),
+    ) =>
       commitDaemonRuntimePin(
         pinScope,
         {
-          expected: readDaemonRuntimePinForInstall(pinScope, serviceState.command, true),
-          pin: { runtime: "node", path: serviceNodeRunner },
+          expected,
+          pin: { runtime: "node", path: nodePath },
         },
         serviceState.command,
       );
+    const pinScenario = scenario === "own-pin-rebind" || scenario === "foreign-pin";
+    if (pinScenario) {
+      writePin(serviceNodeRunner);
     }
     await observed(async (original, run) => {
       const originalPin = original.definition.runtimePin;
@@ -216,14 +225,7 @@ export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture)
                     programArguments: serviceState.command.programArguments,
                   };
                   if (pinScenario) {
-                    commitDaemonRuntimePin(
-                      pinScope,
-                      {
-                        expected: originalPin,
-                        pin: { runtime: "node", path: "/selected-B-node" },
-                      },
-                      serviceState.command,
-                    );
+                    writePin("/selected-B-node", originalPin);
                   }
                 },
                 () => readDaemonRuntimePinForInstall(pinScope, null, true).revision,
@@ -264,14 +266,7 @@ export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture)
         commitDaemonRuntimePin(pinScope, args.runtimePinUpdate, serviceState.command);
       });
       if (scenario === "foreign-pin") {
-        commitDaemonRuntimePin(
-          pinScope,
-          {
-            expected: readDaemonRuntimePinForInstall(pinScope, serviceState.command, true),
-            pin: { runtime: "node", path: "/operator-node" },
-          },
-          serviceState.command,
-        );
+        writePin("/operator-node");
       }
       if (scenario === "unrelated-replacement") {
         assert(serviceState.command, "missing rebound command");
@@ -283,14 +278,11 @@ export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture)
       if (scenario === "schema-newer") {
         original.schemaVersions = { state: 0, agent: 0 };
       }
-      const result: UpdateRunResult = {
+      const result = updateResult({
         status: "error",
-        mode: "npm",
         root: rootB,
         reason: "B-health-failed",
-        steps: [],
-        durationMs: 1,
-      };
+      });
       const bytes = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
       const readinessBeforeRecovery = mocks.readiness.mock.calls.length;
       const recoveryParams = {
@@ -305,35 +297,24 @@ export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture)
         result.reason = "state-migrated-no-rollback";
         result.recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
         result.rollbackOutcome = { status: "not-attempted", reason: "Later writes must remain" };
-        result.steps.push({
-          name: "database rollback",
-          command: "restore pre-migration databases",
-          cwd: state.home,
-          durationMs: 0,
-          exitCode: 1,
-          stderrTail: "Restoring the backup would discard later writes",
-        });
+        result.steps.push(
+          updateStep("database rollback", {
+            command: "restore pre-migration databases",
+            cwd: state.home,
+            durationMs: 0,
+            stderrTail: "Restoring the backup would discard later writes",
+          }),
+        );
         const nativeAdmission = vi.spyOn(nativeLock, "withGatewayServiceOperationLock");
         const onGatewayStartAttempted = vi.fn();
         await expect(
           finishUpdate(
-            {
+            finishParams({
               ...recoveryParams,
               root: rootB,
-              mutationStarted: true,
-              installKindChanged: false,
               configSnapshot: await readConfigFileSnapshot({ observe: false }),
-              requestedChannel: null,
-              storedChannel: "stable",
-              channel: "stable",
-              downgradeRisk: false,
-              shouldRestart: true,
               ownedManagedUpdateEnv: state.env,
-              controlPlaneUpdateSentinelMeta: null,
-              preUpdatePluginInstallRecords: {},
-              startedAt: Date.now(),
-              updateStepTimeoutMs: 30_000,
-            },
+            }),
             { onGatewayStartAttempted },
           ),
         ).rejects.toMatchObject({
@@ -535,15 +516,12 @@ export function registerCurrentF3Controls(fixture: () => OriginalServiceFixture)
         return actualLock(env, operation);
       },
     );
-    const result: UpdateRunResult = {
-      status: "error" as const,
-      mode: "npm" as const,
+    const result = updateResult({
+      status: "error",
       root: rootB,
       reason: "named-B-doctor-failure",
-      steps: [],
-      durationMs: 1,
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" as const },
-    };
+      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+    });
     await observed(async (original, run) => {
       expect(original?.verified).toBe(true);
       const config = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
