@@ -17,6 +17,10 @@ export function registerCanaryMigrationPolicyTests({
 }) {
   const step = (name: string, exitCode: number | null) =>
     expect.objectContaining({ name, exitCode });
+  const validate = (params: Partial<Parameters<typeof validateUpdateCandidateCanary>[0]>) => {
+    stubHealthyGateway();
+    return validateUpdateCandidateCanary({ ...canaryStateOptions(3_000), ...params });
+  };
   it.each([
     { migrationPolicy: "rehearse", startupMigration: false, expected: "ok" },
     { migrationPolicy: "startup-only", startupMigration: false, expected: "error" },
@@ -53,13 +57,7 @@ export function registerCanaryMigrationPolicyTests({
         }
         return child;
       });
-      stubHealthyGateway();
-
-      const result = await validateUpdateCandidateCanary({
-        ...canaryStateOptions(3_000),
-        config: original,
-        migrationPolicy,
-      });
+      const result = await validate({ config: original, migrationPolicy });
 
       expect(result, result.logTail.join("\n")).toMatchObject({ status: expected });
       expect(result.steps).toContainEqual(
@@ -86,13 +84,8 @@ export function registerCanaryMigrationPolicyTests({
       await fs.rm(
         path.join(canaryStateOptions().root, "dist", "infra", "update-migrated-finalize.worker.js"),
       );
-      stubHealthyGateway();
       const onStep = vi.fn();
-      const result = await validateUpdateCandidateCanary({
-        ...canaryStateOptions(3_000),
-        onStep,
-        migrationPolicy,
-      });
+      const result = await validate({ onStep, migrationPolicy });
       const rehearsing = migrationPolicy === "rehearse";
       expect(result).toMatchObject({
         status: rehearsing ? "ok" : "error",

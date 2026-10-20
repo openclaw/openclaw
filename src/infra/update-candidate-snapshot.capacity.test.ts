@@ -11,6 +11,7 @@ import { assessInitialUpdateSnapshotCapacity } from "./update-candidate-snapshot
 import { materializeUpdateCandidateStateWorker } from "./update-candidate-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const capacityFailure = { capacity: { reason: "snapshot-capacity-insufficient" } };
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -122,9 +123,7 @@ it("keeps the larger allowance when the candidate omits the copy capability", as
      };
      ${source}`,
   );
-  await expect(f.prepare()).rejects.toMatchObject({
-    capacity: { reason: "snapshot-capacity-insufficient" },
-  });
+  await expect(f.prepare()).rejects.toMatchObject(capacityFailure);
   await f.unchanged();
 });
 
@@ -150,16 +149,13 @@ it.each(["global", "mixed-workboard", "global with SQLite built-in overrides"] a
         postgres: { connection: "postgresql://fixture:fixture@127.0.0.1:1/snapshot_fixture" },
       },
     });
-    try {
-      await expect(rehearsal).rejects.toMatchObject({
-        capacity: { reason: "snapshot-capacity-insufficient" },
-      });
-    } finally {
-      await rehearsal.then(
-        (result) => result.cleanup(),
-        () => {},
-      );
-    }
+    await rehearsal.then(
+      async (result) => {
+        await result.cleanup();
+        expect.fail("Capacity preflight unexpectedly admitted a portable PostgreSQL export");
+      },
+      (error: unknown) => expect(error).toMatchObject(capacityFailure),
+    );
     await f.unchanged();
   },
 );

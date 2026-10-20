@@ -37,6 +37,7 @@ it.each([
     await write("package.json", { type: "module" });
     await write("unrelated.txt", "not a plugin dependency");
     const commonjs = syntax === "require" || syntax === "require-package-subpath";
+    const workspace = syntax === "workspace-dependency" || syntax === "require-package-subpath";
     const basename = commonjs ? "index.cjs" : "index.mjs";
     const dependency = path.join(shared, commonjs ? "value.cjs" : "value.js");
     const dependencyText = commonjs
@@ -48,7 +49,7 @@ it.each([
     if (syntax === "package-map") {
       importTarget = "#helper";
       await write("plugin/mapped.mjs", 'export { default } from "../shared/value.js";');
-    } else if (syntax === "workspace-dependency" || syntax === "require-package-subpath") {
+    } else if (workspace) {
       importTarget = commonjs ? "sibling-helper/lib/value" : "sibling-helper";
       const helper = path.join(repository, "helper");
       await fs.mkdir(path.join(helper, "lib"), { recursive: true });
@@ -70,9 +71,7 @@ it.each([
       type: "module",
       openclaw: { extensions: [`./${basename}`] },
       ...(syntax === "package-map" ? { imports: { "#helper": "./mapped.mjs" } } : {}),
-      ...(syntax === "workspace-dependency" || syntax === "require-package-subpath"
-        ? { dependencies: { "sibling-helper": "1.0.0" } }
-        : {}),
+      ...(workspace ? { dependencies: { "sibling-helper": "1.0.0" } } : {}),
     });
     await write("plugin/openclaw.plugin.json", { id: "demo", configSchema: { type: "object" } });
     await fs.writeFile(
