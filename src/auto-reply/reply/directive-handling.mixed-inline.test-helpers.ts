@@ -38,8 +38,7 @@ export async function applyMixedDirectives(params: {
   directives?: DirectiveParams["directives"];
   resolveDefaultThinkingLevel?: ModelState["resolveDefaultThinkingLevel"];
 }) {
-  const cfg =
-    params.cfg ?? ({ commands: { text: true }, agents: { defaults: {} } } as OpenClawConfig);
+  const cfg: OpenClawConfig = params.cfg ?? { commands: { text: true }, agents: { defaults: {} } };
   const provider = params.provider ?? "anthropic";
   const model = params.model ?? "claude-opus-4-6";
   const channel = params.channel ?? "telegram";
@@ -48,11 +47,8 @@ export async function applyMixedDirectives(params: {
   const sessionStore = { [sessionKey]: sessionEntry };
   const directives =
     params.directives ??
-    parseInlineSessionDirectives(params.body, {
-      modelAliases: params.modelAliases,
-    });
+    parseInlineSessionDirectives(params.body, { modelAliases: params.modelAliases });
   const allowedModels = params.allowedModels ?? [];
-  const aliasIndex = params.aliasIndex ?? { byAlias: new Map(), byKey: new Map() };
   const modelState: ModelState = {
     provider,
     model,
@@ -110,7 +106,7 @@ export async function applyMixedDirectives(params: {
     elevatedFailures: [],
     defaultProvider: params.defaultProvider ?? provider,
     defaultModel: params.defaultModel ?? model,
-    aliasIndex,
+    aliasIndex: params.aliasIndex ?? { byAlias: new Map(), byKey: new Map() },
     provider,
     model,
     modelState,
