@@ -70,14 +70,12 @@ type DiscoverLmstudioModelsParams = {
   headers?: Record<string, string>;
   quiet: boolean;
   discoveryMode?: "strict";
-  fetchImpl?: typeof fetch;
 };
 
 async function fetchLmstudioEndpoint(params: {
   url: string;
   init?: RequestInit;
   timeoutMs: number;
-  fetchImpl?: typeof fetch;
   ssrfPolicy?: SsrFPolicy;
   auditContext: string;
   signal?: AbortSignal;
@@ -92,15 +90,13 @@ async function fetchLmstudioEndpoint(params: {
       init: params.init,
       timeoutMs,
       signal: params.signal,
-      fetchImpl: params.fetchImpl,
       policy: params.ssrfPolicy,
       auditContext: params.auditContext,
     });
     response = guarded.response;
     release = guarded.release;
   } else {
-    const fetchFn = params.fetchImpl ?? fetch;
-    response = await fetchFn(params.url, {
+    response = await fetch(params.url, {
       ...params.init,
       signal: params.signal
         ? AbortSignal.any([params.signal, AbortSignal.timeout(timeoutMs)])
@@ -128,7 +124,6 @@ export async function fetchLmstudioModels(params: {
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
   signal?: AbortSignal;
-  fetchImpl?: typeof fetch;
 }): Promise<FetchLmstudioModelsResult> {
   const baseUrl = resolveLmstudioServerBase(params.baseUrl);
   const timeoutMs = params.timeoutMs ?? 5000;
@@ -143,7 +138,6 @@ export async function fetchLmstudioModels(params: {
       },
       timeoutMs,
       signal: params.signal,
-      fetchImpl: params.fetchImpl,
       ssrfPolicy: params.ssrfPolicy,
       auditContext: "lmstudio-model-discovery",
     });
@@ -188,7 +182,6 @@ export async function discoverLmstudioModels(
     baseUrl: params.baseUrl,
     apiKey: params.apiKey,
     headers: params.headers,
-    fetchImpl: params.fetchImpl,
   });
   const quiet = params.quiet;
   if (!fetched.reachable || (fetched.status !== undefined && fetched.status >= 400)) {
@@ -218,7 +211,6 @@ type LmstudioModelLoadParams = {
   requestedContextLength?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
-  fetchImpl?: typeof fetch;
 };
 
 export type LmstudioPreparedModel = {
@@ -248,7 +240,6 @@ export async function prepareLmstudioModelForInference(
     ssrfPolicy: params.ssrfPolicy,
     timeoutMs,
     signal: params.signal,
-    fetchImpl: params.fetchImpl,
   });
   params.signal?.throwIfAborted();
   if (!preflight.reachable) {
@@ -304,7 +295,6 @@ export async function prepareLmstudioModelForInference(
       },
       timeoutMs,
       signal: params.signal,
-      fetchImpl: params.fetchImpl,
       ssrfPolicy: params.ssrfPolicy,
       auditContext: "lmstudio-model-load",
     });
