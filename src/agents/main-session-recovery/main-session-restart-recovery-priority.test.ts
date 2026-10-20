@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -38,6 +36,9 @@ import { makeUserMessage } from "./main-session-restart-recovery-transcript.test
 import { retryRestartAbortedMainSessionRecovery } from "./main-session-restart-recovery.js";
 
 let tmpDir: string;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type Dispatch = GatewayRecoveryRuntime["dispatchAgent"];
+const session = { sessionKey: "agent:main:main", sessionId: "main-session" };
 let dispatchSettlement = createDeferred();
 const callGateway = vi.fn(async () => ({ runId: "run-resumed" }));
 const mockRecoveryRuntime = createRecoveryRuntimeFixture({
@@ -54,278 +55,262 @@ async function mainFixture(overrides: Parameters<typeof mainSessionEntry>[0] = {
   ]);
   return { ...fixture, cfg };
 }
-beforeEach(async () => {
+async function blockLane(lane: string) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const task = enqueueCommandInLane(lane, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await entered.promise;
+  return { task, release };
+}
+beforeEach(() => {
   callGateway.mockClear();
   dispatchSettlement = createDeferred();
   resetAgentEventsForTest();
   resetGatewayWorkAdmission();
   resetCommandQueueStateForTest();
-  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-recovery-priority-"));
+  tmpDir = tempDirs.make("openclaw-recovery-priority-");
   setRuntimeConfigSnapshot({});
 });
 afterEach(async () => {
   resetGatewayWorkAdmission();
   resetCommandQueueStateForTest();
   await cleanupSessionStateForTest({ stateDir: tmpDir });
-  await fs.rm(tmpDir, { recursive: true, force: true });
   clearRuntimeConfigSnapshot();
 });
 
-describe("demand-triggered restart recovery", () => {
-  it("admits visible input recovery without waiting for unrelated background work", async ({
-    signal,
-  }) => {
-    const { storePath, sessionKey, cfg, readEntry } = await mainFixture();
-    setRuntimeConfigSnapshot(cfg);
-    const backgroundStarted = createDeferred();
-    const releaseBackground = createDeferred();
-    const finishRecovery = createDeferred();
-    const recoveryEntered = createDeferred();
-    const background = enqueueCommandInLane("background", async () => {
-      backgroundStarted.resolve();
-      await releaseBackground.promise;
-    });
-    await backgroundStarted.promise;
-    let dispatches = 0;
-    let recoveryExecution: Promise<unknown> | undefined;
-    const runtime: GatewayRecoveryRuntime = {
-      ...mockRecoveryRuntime,
-      dispatchAgent: <T>(
-        request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
-        _timeout?: number,
-        options?: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
-      ) => {
-        dispatches++;
-        expect(request.lane).toBe("main");
-        const sourceInput = options?.controllerInput;
-        if (!sourceInput?.target) {
-          throw new Error("Recovery dispatch omitted its controller input");
-        }
-        const registration = registerChatAbortController({
-          runId: request.idempotencyKey,
-          sessionKey,
-          sessionId: "main-session",
-          agentId: "main",
-          target: sourceInput.target,
-          sourceInput,
-          timeoutMs: 60_000,
-        });
-        const lifecycleGeneration = getAgentEventLifecycleGeneration();
-        let executionStarted = false;
-        options?.onStartOwner?.({
-          observe: () => ({ executionStarted, startDeadlineAtMs: Date.now() + 60_000 }),
-          abort: () => false,
-        });
-        options?.onAccepted?.({ runId: request.idempotencyKey });
-        const execution = withSessionTurn(
-          {
-            sessionKey,
-            sessionId: "main-session",
-            target: sourceInput.target,
-            controllerInput: sourceInput,
-          },
-          async () => {
-            await admitAgentRestartRecovery({
-              lifecycleGeneration,
-              runId: request.idempotencyKey,
-              sessionId: "main-session",
-              sessionKey,
-              storePath,
-              activeRunAbort: registration,
-            });
-            return await enqueueCommandInLane(request.lane ?? "main", async () => {
-              executionStarted = true;
-              registration.markExecutionStarted();
-              options?.onExecutionStarted?.();
-              recoveryEntered.resolve();
-              await finishRecovery.promise;
-              await settleAcceptedRestartRecovery({
-                agentId: "main",
-                expectedRecoveryRunId: request.idempotencyKey,
-                expectedSessionId: "main-session",
-                lifecycleGeneration,
-                sessionKey,
-                sessionKeys: [sessionKey],
-                storePath,
-                terminalStatus: "ok",
-              });
-              return { runId: request.idempotencyKey, status: "ok" } as T;
-            });
-          },
-        ).finally(() => registration.cleanup());
-        recoveryExecution = execution;
-        return execution;
-      },
-    };
-    const context = createGatewayTestContext([], () => cfg);
-    context.recoveryRuntime = runtime;
-    const input = admitReplyTurn({
-      agentId: "main",
-      sessionKey,
-      sessionId: "main-session",
-      storePath,
-      kind: "visible",
-      resetTriggered: false,
-      waitForActive: false,
-      resolveGatewayContext: () => context,
-      upstreamAbortSignal: signal,
-    });
-    let admitted: Awaited<typeof input> | undefined;
-    try {
-      await withinTest(recoveryEntered.promise, signal);
-      expect(dispatches).toBe(1);
-      expect(getQueueSize("background")).toBe(1);
-      finishRecovery.resolve();
-      admitted = await withinTest(input, signal);
-      expect(admitted.status).toBe("owned");
-      expect(dispatches).toBe(1);
-      expect(readEntry()?.abortedLastRun).toBe(false);
-      expect(getQueueSize("background")).toBe(1);
-    } finally {
-      finishRecovery.resolve();
-      releaseBackground.resolve();
-      if (admitted?.status === "owned") {
-        admitted.operation.complete();
+it("admits visible input recovery without waiting for unrelated background work", async ({
+  signal,
+}) => {
+  const { storePath, sessionKey, cfg, readEntry } = await mainFixture();
+  setRuntimeConfigSnapshot(cfg);
+  const { task: background, release: releaseBackground } = await blockLane("background");
+  const finishRecovery = createDeferred();
+  const recoveryEntered = createDeferred();
+  let dispatches = 0;
+  let recoveryExecution: Promise<unknown> | undefined;
+  const runtime: GatewayRecoveryRuntime = {
+    ...mockRecoveryRuntime,
+    dispatchAgent: <T>(...[request, , options]: Parameters<Dispatch>) => {
+      dispatches++;
+      expect(request.lane).toBe("main");
+      const sourceInput = options?.controllerInput;
+      if (!sourceInput?.target) {
+        throw new Error("Recovery dispatch omitted its controller input");
       }
-      const settled = await input.catch(() => undefined);
-      if (settled?.status === "owned") {
-        settled.operation.complete();
-      }
-      await Promise.all([background, recoveryExecution]);
-    }
-  });
-
-  it("resumes an unmarked startup orphan before reserving its child completions", async () => {
-    const { storePath, sessionKey, cfg, readEntry } = await mainFixture({
-      status: undefined,
-      abortedLastRun: false,
-      mainRestartRecovery: undefined,
-      lifecycleRunId: "interrupted-turn",
-      restartRecoveryRuns: [{ runId: "interrupted-turn", lifecycleGeneration: "previous-boot" }],
-    });
-    setRuntimeConfigSnapshot(cfg);
-    const children = Array.from({ length: 8 }, (_, index) =>
-      createSubagentRunRecord({
-        runId: `child-${index}`,
-        childSessionKey: `agent:main:subagent:child-${index}`,
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        requesterStorePath: storePath,
-        expectsCompletionMessage: true,
-        createdAt: index + 1,
-        execution: { status: "terminal", endedAt: index + 1, outcome: { status: "ok" } },
-        delivery: { status: "pending", createdAt: index + 1 },
-      }),
-    );
-    for (const child of children) {
-      subagentRuns.set(child.runId, child);
-    }
-    const inputs = await reserveRestoredSubagentControllerSources(children);
-    let execution: Promise<unknown> | undefined;
-    const runtime: GatewayRecoveryRuntime = {
-      ...mockRecoveryRuntime,
-      dispatchAgent: <T>(
-        request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
-        _timeout?: number,
-        options?: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
-      ) => {
-        const input = options?.controllerInput;
-        if (!input?.target) {
-          throw new Error("Recovery dispatch omitted its controller input");
-        }
-        let executionStarted = false;
-        options?.onStartOwner?.({
-          observe: () => ({ executionStarted, startDeadlineAtMs: null }),
-          abort: () => false,
-        });
-        options?.onAccepted?.({ runId: request.idempotencyKey });
-        execution = withSessionTurn(
-          { sessionKey, sessionId: "main-session", target: input.target, controllerInput: input },
-          async () => {
-            executionStarted = true;
-            options?.onExecutionStarted?.();
-            await callGateway();
-            await dispatchSettlement.promise;
-            return { runId: request.idempotencyKey, status: "ok" };
-          },
-        );
-        return execution as Promise<T>;
-      },
-    };
-    try {
-      // Startup may discover the store only when child restoration prepares it.
-      // Those children must not hold raw FIFO positions ahead of the interrupted turn.
-      expect(inputs).toHaveLength(0);
-      expect(readEntry()?.abortedLastRun).toBe(true);
-      await expect(
-        retryRestartAbortedMainSessionRecovery({
-          agentId: "main",
-          sessionKey,
-          storePath,
-          expectedSessionId: "main-session",
-          gatewayRuntime: runtime,
-        }),
-      ).resolves.toMatchObject({ started: 1, failed: 0 });
-      expect(callGateway).toHaveBeenCalledOnce();
-      const restored = await reserveRestoredSubagentControllerSources(children);
-      inputs.push(...restored);
-      expect(restored.map((input) => input.sourceTurnId)).toEqual(
-        children.map((child) => `subagent-completion:${child.runId}:0`),
-      );
-    } finally {
-      dispatchSettlement.resolve();
-      for (const input of inputs) {
-        retireSessionControllerInput(input);
-      }
-      for (const child of children) {
-        subagentRuns.delete(child.runId);
-      }
-      await execution;
-    }
-  });
-
-  it.each([false, true])(
-    "respects main capacity before recovery ownership (replaced=%s)",
-    async (replaced) => {
-      const { storePath, sessionKey, readEntry } = await mainFixture();
-      setCommandLaneConcurrency("main", 1);
-      const entered = createDeferred();
-      const release = createDeferred();
-      const blocker = enqueueCommandInLane("main", async () => {
-        entered.resolve();
-        await release.promise;
+      const registration = registerChatAbortController({
+        runId: request.idempotencyKey,
+        ...session,
+        agentId: "main",
+        target: sourceInput.target,
+        sourceInput,
+        timeoutMs: 60_000,
       });
-      await entered.promise;
-      const recovery = retryRestartAbortedMainSessionRecovery({
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      let executionStarted = false;
+      options?.onStartOwner?.({
+        observe: () => ({ executionStarted, startDeadlineAtMs: Date.now() + 60_000 }),
+        abort: () => false,
+      });
+      options?.onAccepted?.({ runId: request.idempotencyKey });
+      const execution = withSessionTurn(
+        {
+          ...session,
+          target: sourceInput.target,
+          controllerInput: sourceInput,
+        },
+        async () => {
+          await admitAgentRestartRecovery({
+            lifecycleGeneration,
+            runId: request.idempotencyKey,
+            ...session,
+            storePath,
+            activeRunAbort: registration,
+          });
+          return await enqueueCommandInLane(request.lane ?? "main", async () => {
+            executionStarted = true;
+            registration.markExecutionStarted();
+            options?.onExecutionStarted?.();
+            recoveryEntered.resolve();
+            await finishRecovery.promise;
+            await settleAcceptedRestartRecovery({
+              agentId: "main",
+              expectedRecoveryRunId: request.idempotencyKey,
+              expectedSessionId: "main-session",
+              lifecycleGeneration,
+              sessionKey,
+              sessionKeys: [sessionKey],
+              storePath,
+              terminalStatus: "ok",
+            });
+            return { runId: request.idempotencyKey, status: "ok" } as T;
+          });
+        },
+      ).finally(() => registration.cleanup());
+      recoveryExecution = execution;
+      return execution;
+    },
+  };
+  const context = createGatewayTestContext([], () => cfg);
+  context.recoveryRuntime = runtime;
+  const input = admitReplyTurn({
+    agentId: "main",
+    ...session,
+    storePath,
+    kind: "visible",
+    resetTriggered: false,
+    waitForActive: false,
+    resolveGatewayContext: () => context,
+    upstreamAbortSignal: signal,
+  });
+  let admitted: Awaited<typeof input> | undefined;
+  try {
+    await withinTest(recoveryEntered.promise, signal);
+    expect(dispatches).toBe(1);
+    expect(getQueueSize("background")).toBe(1);
+    finishRecovery.resolve();
+    admitted = await withinTest(input, signal);
+    expect(admitted.status).toBe("owned");
+    expect(dispatches).toBe(1);
+    expect(readEntry()?.abortedLastRun).toBe(false);
+    expect(getQueueSize("background")).toBe(1);
+  } finally {
+    finishRecovery.resolve();
+    releaseBackground.resolve();
+    if (admitted?.status === "owned") {
+      admitted.operation.complete();
+    }
+    const settled = await input.catch(() => undefined);
+    if (settled?.status === "owned") {
+      settled.operation.complete();
+    }
+    await Promise.all([background, recoveryExecution]);
+  }
+});
+
+it("resumes an unmarked startup orphan before reserving its child completions", async () => {
+  const { storePath, sessionKey, cfg, readEntry } = await mainFixture({
+    status: undefined,
+    abortedLastRun: false,
+    mainRestartRecovery: undefined,
+    lifecycleRunId: "interrupted-turn",
+    restartRecoveryRuns: [{ runId: "interrupted-turn", lifecycleGeneration: "previous-boot" }],
+  });
+  setRuntimeConfigSnapshot(cfg);
+  const children = Array.from({ length: 8 }, (_, index) =>
+    createSubagentRunRecord({
+      runId: `child-${index}`,
+      childSessionKey: `agent:main:subagent:child-${index}`,
+      requesterSessionKey: sessionKey,
+      requesterAgentId: "main",
+      requesterStorePath: storePath,
+      expectsCompletionMessage: true,
+      createdAt: index + 1,
+      execution: { status: "terminal", endedAt: index + 1, outcome: { status: "ok" } },
+      delivery: { status: "pending", createdAt: index + 1 },
+    }),
+  );
+  for (const child of children) {
+    subagentRuns.set(child.runId, child);
+  }
+  const inputs = await reserveRestoredSubagentControllerSources(children);
+  let execution: Promise<unknown> | undefined;
+  const runtime: GatewayRecoveryRuntime = {
+    ...mockRecoveryRuntime,
+    dispatchAgent: <T>(...[request, , options]: Parameters<Dispatch>) => {
+      const input = options?.controllerInput;
+      if (!input?.target) {
+        throw new Error("Recovery dispatch omitted its controller input");
+      }
+      let executionStarted = false;
+      options?.onStartOwner?.({
+        observe: () => ({ executionStarted, startDeadlineAtMs: null }),
+        abort: () => false,
+      });
+      options?.onAccepted?.({ runId: request.idempotencyKey });
+      execution = withSessionTurn(
+        { ...session, target: input.target, controllerInput: input },
+        async () => {
+          executionStarted = true;
+          options?.onExecutionStarted?.();
+          await callGateway();
+          await dispatchSettlement.promise;
+          return { runId: request.idempotencyKey, status: "ok" };
+        },
+      );
+      return execution as Promise<T>;
+    },
+  };
+  try {
+    // Startup may discover the store only when child restoration prepares it.
+    // Those children must not hold raw FIFO positions ahead of the interrupted turn.
+    expect(inputs).toHaveLength(0);
+    expect(readEntry()?.abortedLastRun).toBe(true);
+    await expect(
+      retryRestartAbortedMainSessionRecovery({
         agentId: "main",
         sessionKey,
         storePath,
         expectedSessionId: "main-session",
-        lane: CommandLane.Main,
-        gatewayRuntime: mockRecoveryRuntime,
-      });
-      try {
-        await waitForFast(() => expect(getQueueSize("main")).toBe(2));
-        expect(callGateway).not.toHaveBeenCalled();
-        expect(readEntry()?.mainRestartRecovery).toMatchObject({
-          chargedAttempts: 0,
-        });
-        expect(readEntry()?.mainRestartRecovery?.reservation).toBeUndefined();
-        if (replaced) {
-          await replaceSessionEntry(
-            { storePath, sessionKey },
-            mainSessionEntry({ sessionId: "replacement-session" }),
-          );
-        }
-        release.resolve();
-        await expect(recovery).resolves.toMatchObject({ started: replaced ? 0 : 1 });
-        expect(callGateway).toHaveBeenCalledTimes(replaced ? 0 : 1);
-        expect(readEntry()?.sessionId).toBe(replaced ? "replacement-session" : "main-session");
-      } finally {
-        release.resolve();
-        dispatchSettlement.resolve();
-        await Promise.allSettled([blocker, recovery]);
-      }
-    },
-  );
+        gatewayRuntime: runtime,
+      }),
+    ).resolves.toMatchObject({ started: 1, failed: 0 });
+    expect(callGateway).toHaveBeenCalledOnce();
+    const restored = await reserveRestoredSubagentControllerSources(children);
+    inputs.push(...restored);
+    expect(restored.map((input) => input.sourceTurnId)).toEqual(
+      children.map((child) => `subagent-completion:${child.runId}:0`),
+    );
+  } finally {
+    dispatchSettlement.resolve();
+    for (const input of inputs) {
+      retireSessionControllerInput(input);
+    }
+    for (const child of children) {
+      subagentRuns.delete(child.runId);
+    }
+    await execution;
+  }
 });
+
+it.each([false, true])(
+  "respects main capacity before recovery ownership (replaced=%s)",
+  async (replaced) => {
+    const { storePath, sessionKey, readEntry } = await mainFixture();
+    setCommandLaneConcurrency("main", 1);
+    const { task: blocker, release } = await blockLane("main");
+    const recovery = retryRestartAbortedMainSessionRecovery({
+      agentId: "main",
+      sessionKey,
+      storePath,
+      expectedSessionId: "main-session",
+      lane: CommandLane.Main,
+      gatewayRuntime: mockRecoveryRuntime,
+    });
+    try {
+      await waitForFast(() => expect(getQueueSize("main")).toBe(2));
+      expect(callGateway).not.toHaveBeenCalled();
+      const pending = readEntry()?.mainRestartRecovery;
+      expect({
+        chargedAttempts: pending?.chargedAttempts,
+        reservation: pending?.reservation,
+      }).toEqual({ chargedAttempts: 0, reservation: undefined });
+      if (replaced) {
+        await replaceSessionEntry(
+          { storePath, sessionKey },
+          mainSessionEntry({ sessionId: "replacement-session" }),
+        );
+      }
+      release.resolve();
+      await expect(recovery).resolves.toMatchObject({ started: replaced ? 0 : 1 });
+      expect(callGateway).toHaveBeenCalledTimes(replaced ? 0 : 1);
+      expect(readEntry()?.sessionId).toBe(replaced ? "replacement-session" : "main-session");
+    } finally {
+      release.resolve();
+      dispatchSettlement.resolve();
+      await Promise.allSettled([blocker, recovery]);
+    }
+  },
+);

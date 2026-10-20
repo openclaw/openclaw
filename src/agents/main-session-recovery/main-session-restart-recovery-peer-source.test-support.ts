@@ -19,7 +19,6 @@ import {
   readSessionSendDelivery,
   type SessionSendDeliveryEndpoint,
 } from "../../gateway/session-send-delivery.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
@@ -41,7 +40,7 @@ export async function seedConsumedPeerRestartInput(params: {
     sourceTool: "sessions_send",
     sourceSessionKey: source.sessionKey,
   };
-  await replaceSessionEntry(source, {
+  const sourceEntry = await replaceSessionEntry(source, {
     sessionId: source.sessionId,
     lifecycleRevision: source.lifecycleRevision,
     updatedAt: 1,
@@ -52,14 +51,13 @@ export async function seedConsumedPeerRestartInput(params: {
     permissionMode: "full" as const,
     updatedAt: 1,
   };
-  await replaceSessionEntry(target, targetEntry);
+  const storedTarget = await replaceSessionEntry(target, targetEntry);
   const receiver = vi.fn(async () => {
     const turn = await prepareAgentRunUserTurn({
       assertCurrent() {},
       onUserTurnMediaPersisted() {},
       request: { message, idempotencyKey: runId, deliver: false },
       cfg,
-      sessionEntry: targetEntry,
       resolvedSessionKey: target.sessionKey,
       admittedSessionId: target.sessionId,
       activeSessionAgentId: target.agentId,
@@ -96,28 +94,13 @@ export async function seedConsumedPeerRestartInput(params: {
     return { runId, status: "accepted" };
   });
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-  const endpoint = async (expected: SessionSendDeliveryEndpoint) => {
-    const loaded = await resolveGatewaySessionStoreTargetInWorker({
-      cfg,
-      key: expected.sessionKey,
-      agentId: expected.agentId,
-      assertActive() {},
-      projection: "full",
-    });
-    return {
-      agentId: loaded.agentId,
-      sessionKey: loaded.canonicalKey,
-      storePath: loaded.readSource?.path ?? loaded.storePath,
-      entry: loaded.store[loaded.canonicalKey],
-    };
-  };
   const communication = await withPluginRuntimeGatewayContextResolver(
     () => context,
     async () =>
       prepareSessionsSendCommunication({
         config: cfg,
-        source: await endpoint(source),
-        target: await endpoint(target),
+        source: { ...source, entry: sourceEntry ?? undefined },
+        target: { ...target, entry: storedTarget ?? undefined },
         message,
         inputProvenance: provenance,
         allowApproval: false,

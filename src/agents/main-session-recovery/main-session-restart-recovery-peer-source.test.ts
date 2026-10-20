@@ -26,6 +26,7 @@ import { markStartupOrphanedMainSessionsForRecovery } from "./main-session-resta
 import { seedConsumedPeerRestartInput } from "./main-session-restart-recovery-peer-source.test-support.js";
 import { recoverStore } from "./main-session-restart-recovery-store.js";
 
+type Dispatch = GatewayRecoveryRuntime["dispatchAgent"];
 afterEach(() => {
   testing.resetSessionControllerForTest();
   resetGatewayWorkAdmission();
@@ -86,8 +87,8 @@ function idleRuntime(): GatewayRecoveryRuntime {
 
 it.each(["exact", "legacy"] as const)(
   "restores the %s peer source when the recovery run ID is also a legacy transcript key",
-  async (selected) => {
-    await withPeerState(async ({ cfg, endpoint, prepare }) => {
+  (selected) =>
+    withPeerState(async ({ cfg, endpoint, prepare }) => {
       const legacy = endpoint("legacy-source");
       const exact = endpoint("exact-source");
       const target = endpoint("collision-target");
@@ -110,14 +111,13 @@ it.each(["exact", "legacy"] as const)(
       } finally {
         recovered.release();
       }
-    });
-  },
+    }),
 );
 
 it.each(["permission", "replacement"] as const)(
   "keeps consumed peer authority through committed compaction without bypassing %s revocation",
-  async (revocation) => {
-    await withPeerState(async ({ cfg, endpoint, prepare }) => {
+  (revocation) =>
+    withPeerState(async ({ cfg, endpoint, prepare }) => {
       const source = endpoint("compaction-source");
       const target = endpoint("compaction-target");
       await seedConsumedPeerRestartInput({ cfg, source, target, runId: "compacting-peer-input" });
@@ -153,14 +153,13 @@ it.each(["permission", "replacement"] as const)(
       } finally {
         recovered.release();
       }
-    });
-  },
+    }),
 );
 
 it.each(["reset", "archive", "deny"] as const)(
   "settles a consumed peer input once when its sender changes before recovery: %s",
-  async (change) => {
-    await withPeerState(async ({ cfg, endpoint, restart, recover }) => {
+  (change) =>
+    withPeerState(async ({ cfg, endpoint, restart, recover }) => {
       const source = endpoint("revoked-source");
       const target = endpoint("revoked-target");
       const { originalTranscript } = await seedConsumedPeerRestartInput({
@@ -189,12 +188,11 @@ it.each(["reset", "archive", "deny"] as const)(
       expect(loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
       expect(await recover(runtime)).toEqual({ started: 0, settled: 0, failed: 0, skipped: 0 });
       expect(await loadTranscriptEvents(target)).toEqual(settledTranscript);
-    });
-  },
+    }),
 );
 
-it("leaves authenticated consumed inputs to their private requester recovery owner", async () => {
-  await withPeerState(async ({ cfg, endpoint, prepare }) => {
+it("leaves authenticated consumed inputs to their private requester recovery owner", () =>
+  withPeerState(async ({ cfg, endpoint, prepare }) => {
     for (const kind of ["channel", "operator"] as const) {
       const source = endpoint(`authenticated-source-${kind}`);
       const target = endpoint(`authenticated-target-${kind}`);
@@ -215,11 +213,10 @@ it("leaves authenticated consumed inputs to their private requester recovery own
       expect(receiver).toHaveBeenCalledOnce();
       expect(await loadTranscriptEvents(target)).toEqual(originalTranscript);
     }
-  });
-});
+  }));
 
-it("recovers a consumed peer input through two process losses without replaying the input", async () => {
-  await withPeerState(async ({ cfg, stateDir, endpoint, restart, recover }) => {
+it("recovers a consumed peer input through two process losses without replaying the input", () =>
+  withPeerState(async ({ cfg, stateDir, endpoint, restart, recover }) => {
     const source = endpoint("peer-source");
     const target = endpoint("peer-target");
     const { receiver, originalTranscript } = await seedConsumedPeerRestartInput({
@@ -236,11 +233,7 @@ it("recovers a consumed peer input through two process losses without replaying 
     let current = true;
     const runtime: GatewayRecoveryRuntime = {
       ...idleRuntime(),
-      dispatchAgent: async <T>(
-        request: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[0],
-        _timeout?: number,
-        options?: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
-      ) => {
+      dispatchAgent: async <T>(...[request, , options]: Parameters<Dispatch>) => {
         await options?.prepareDispatchCurrent?.();
         options?.assertAdmissionCurrent?.();
         dispatches.push(request.message);
@@ -261,9 +254,8 @@ it("recovers a consumed peer input through two process losses without replaying 
       });
     try {
       await restart();
-      const firstRecovery = await recoverCurrent();
+      expect(await recoverCurrent()).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
       expect(skipped).toEqual([]);
-      expect(firstRecovery).toEqual({ started: 1, settled: 0, failed: 0, skipped: 0 });
       expect(loadSessionEntry(target)?.mainRestartRecovery?.tombstone).toBeUndefined();
       // The admitted continuation vanishes without a terminal owner receipt.
       current = false;
@@ -290,5 +282,4 @@ it("recovers a consumed peer input through two process losses without replaying 
       dispatchGate.resolve();
       finalDispatchGate.resolve();
     }
-  });
-});
+  }));
