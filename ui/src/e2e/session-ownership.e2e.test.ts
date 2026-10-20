@@ -636,7 +636,7 @@ suite.define(() => {
 
     for (const item of [longNameItem, longIdItem]) {
       const label = item.locator(".chat-pane__sharing-member-label");
-      const geometry = await label.evaluate((element) => {
+      const labelGeometry = await label.evaluate((element) => {
         const rect = element.getBoundingClientRect();
         const menu = element.closest(".chat-pane__sharing-panel")!.getBoundingClientRect();
         return {
@@ -645,7 +645,7 @@ suite.define(() => {
           ellipsis: getComputedStyle(element).textOverflow,
         };
       });
-      expect(geometry).toEqual({ contained: true, overflow: true, ellipsis: "ellipsis" });
+      expect(labelGeometry).toEqual({ contained: true, overflow: true, ellipsis: "ellipsis" });
     }
 
     await roster.evaluate((element) => {
