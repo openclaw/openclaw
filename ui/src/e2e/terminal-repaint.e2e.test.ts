@@ -8,15 +8,10 @@ import {
   waitForControlUiTerminalReady,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createConfigSuite } from "./config-composer-fixtures.test-support.ts";
 import { nativeAuth, terminalSession } from "./workspace-terminal.test-support.ts";
 
-const suite = createControlUiE2eSuite({
-  name: "Control UI terminal repaint",
-  startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
-});
+const suite = createConfigSuite("Control UI terminal repaint");
 
 const requestedScreenshotPath = process.env.OPENCLAW_TERMINAL_REPAINT_SCREENSHOT?.trim();
 

@@ -5,6 +5,7 @@ import {
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI theme selection defaults" });
@@ -36,13 +37,7 @@ suite.define(() => {
           presenceUsers: [{ id: profileId, name: "Theme demo", self: true }],
           heldMethods: ["users.prefs.get"],
           methodResponses: {
-            "config.get": {
-              config,
-              raw: JSON.stringify(config),
-              hash: "theme-defaults",
-              valid: true,
-              issues: [],
-            },
+            "config.get": configSnapshot(config, "theme-defaults"),
             "users.prefs.set": { status: "ok" },
           },
         });
