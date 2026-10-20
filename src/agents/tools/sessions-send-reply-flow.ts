@@ -4,7 +4,6 @@ import { isGatewayProtocolResponseError } from "../../../packages/gateway-client
 import { getRuntimeConfig } from "../../config/config.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readAcceptedAgentRunReplyText } from "../../gateway/agent-turn/agent-dedupe.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import type { GatewaySessionStoreTargetWithStore } from "../../gateway/session-utils-store.types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -79,6 +78,10 @@ export function startSessionsSendReplyFlow(
             } else if (!completion) {
               return undefined;
             }
+            assertDeliveryCurrent();
+            // Loading the tool must not start the Gateway run tracker; its Gateway owns that.
+            const { readAcceptedAgentRunReplyText } =
+              await import("../../gateway/agent-turn/agent-dedupe.js");
             assertDeliveryCurrent();
             return readAcceptedAgentRunReplyText(admittedContext, acceptedRun);
           } catch {

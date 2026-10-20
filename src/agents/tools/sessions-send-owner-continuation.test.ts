@@ -33,6 +33,7 @@ const fixture = vi.hoisted(() => ({
   gatewayContext: {},
   peerReply: vi.fn(),
 }));
+// mock-isolation: Observe requester inputs without starting a provider turn in custody unit tests.
 vi.mock("./agent-step.js", () => ({ runAgentStep: fixture.peerReply }));
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 // mock-isolation: The fixture owns dispatch and continuation custody without booting a Gateway.
@@ -59,6 +60,7 @@ vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
     run: (work: () => unknown) => work(),
   }),
 }));
+// mock-isolation: Supply the exact operator request scope and resolver continuation used by this fixture.
 vi.mock("../../plugins/runtime/gateway-request-scope.js", () => ({
   withPluginRuntimeGatewayContextResolver: (_resolver: unknown, work: () => unknown) => work(),
   getPluginRuntimeGatewayRequestScope: () => ({
@@ -94,6 +96,7 @@ vi.mock("../../config/sessions/transcript-write-context.js", () => ({
 vi.mock("../prepared-model-runtime-generation-scope.js", () => ({
   runOutsidePreparedModelRuntimePluginGenerationScope: (work: () => unknown) => work(),
 }));
+// mock-isolation: Control terminal observation and expired history authority without a live Gateway.
 vi.mock("../run-wait.js", () => ({
   waitForAgentRunReply: fixture.wait,
   readLatestAssistantReply: () => {

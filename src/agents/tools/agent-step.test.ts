@@ -36,7 +36,8 @@ vi.mock("./gateway-caller-context.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-caller-context.js")>()),
   getGatewayToolCallerIdentity: replyFixture.caller,
 }));
-vi.mock("../../logging/subsystem.js", () => ({
+vi.mock("../../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
   createSubsystemLogger: () => ({ warn: replyFixture.warn }),
 }));
 const peer = vi.hoisted(() => ({
