@@ -271,11 +271,11 @@ function selectionError(path: string, error: unknown, bundled = false): Error {
 function createRuntimeSelector(): ReturnType<typeof createSelector> {
   const isBun = Boolean(process.versions.bun);
   const sharedLibrary = isBun && process.platform === "darwin";
-  // SAFETY: Only this selector publishes the chosen fact; workers inherit Node's structured clone.
-  const inherited =
-    sharedLibrary && !isMainThread
-      ? (getEnvironmentData(WORKER_SELECTION_KEY) as SqliteLibrarySelection | undefined)
-      : undefined;
+  let inherited: SqliteLibrarySelection | undefined;
+  if (sharedLibrary && !isMainThread) {
+    // SAFETY: Only this selector publishes the chosen fact; workers inherit Node's structured clone.
+    inherited = getEnvironmentData(WORKER_SELECTION_KEY) as SqliteLibrarySelection | undefined;
+  }
   const select = createSelector();
   let published = false;
   return (options?: SelectionOptions) => {
