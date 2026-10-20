@@ -3,8 +3,10 @@ import type { CronCompactJob } from "../../../packages/gateway-protocol/src/inde
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { cronJobReadView } from "../../cron/job-read-view.js";
 import { toPublicCronJob } from "../../cron/public-job.js";
+import { cronJobNeedsCreatorReauthorization } from "../../cron/scheduled-tool-policy.js";
 import type { CronServiceContract } from "../../cron/service-contract.js";
 import type { CronListPageResult } from "../../cron/service/list-page-types.js";
+import type { CronToolsAllowProvenance } from "../../cron/types.js";
 import type { CronJob } from "../../cron/types.js";
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { registerSerializedJsonArray } from "../serialized-json.js";
@@ -59,9 +61,16 @@ function prepareJobs(jobs: CronJob[], cached: Projections, compact: boolean) {
 }
 
 function prepareJob(job: CronJob, defaultAgentId: string | undefined, compact: boolean) {
+  // toolsAllowProvenance is store-private and stripped by toPublicCronJob, so compute the
+  // reauthorization flag from the stored job before projection.
+  const stored = job as CronJob & { toolsAllowProvenance?: CronToolsAllowProvenance };
   const row = freezeTrustedJsonSnapshot({
-    ...(compact ? compactCronListJob(toPublicCronJob(job)) : cronJobReadView(job)),
+    ...(compact ? compactCronListJob(toPublicCronJob(job)) : cronJobReadView(stored)),
     effectiveAgentId: tryResolveCronJobEffectiveAgentId(job, defaultAgentId) ?? null,
+    // Compact rows omit absent metadata; the flag is present only when the job is blocked.
+    ...(compact && cronJobNeedsCreatorReauthorization({ job: stored })
+      ? { reauthorizationRequired: true }
+      : {}),
   });
   return { row, json: JSON.stringify(row) };
 }

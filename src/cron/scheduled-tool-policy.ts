@@ -1,6 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeOptionalAccountId } from "../routing/account-id.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeOptionalAccountId,
+} from "../routing/account-id.js";
+import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
 import { snapshotOwnCronRecord } from "./own-record.js";
 
 /** Closed, server-authored origin of an account-scoped scheduled tool cap. */
@@ -255,4 +260,44 @@ export function resolveCronScheduledToolPolicy(params: {
   return ownerSessionKey === policy.ownerSessionKey && ownerAccountId === policy.ownerAccountId
     ? policy
     : undefined;
+}
+
+/**
+ * A job needs creator reauthorization when its account-scoped tool cap cannot
+ * resolve a channel at run time. This mirrors the scheduled account liveness
+ * guard exactly: the owner account is named (not the default), the recorded
+ * creator origin is unknown (an external origin carries its channel and a local
+ * origin resolves via the delivery channel), and the owner session key is not a
+ * group/channel ref (those parse to a channel). Such jobs fail closed before the
+ * agent turn runs. Re-saving the job's tool cap from the creator's authenticated
+ * turn records a fresh origin and clears this state.
+ */
+export function cronJobNeedsCreatorReauthorization(params: {
+  job: {
+    payload?: { kind?: unknown; toolsAllow?: readonly string[] | undefined };
+    scheduledToolPolicy?: unknown;
+    owner?: { sessionKey?: string; accountId?: string };
+    toolsAllowProvenance?: { callerOrigin?: unknown };
+  };
+}): boolean {
+  const { job } = params;
+  if (job.payload?.toolsAllow === undefined) {
+    return false;
+  }
+  const policy = resolveCronScheduledToolPolicy({
+    toolsAllow: job.payload.toolsAllow,
+    scheduledToolPolicy: job.scheduledToolPolicy,
+    owner: job.owner,
+  });
+  if (policy?.mode !== "account") {
+    return false;
+  }
+  if (normalizeAccountId(job.owner?.accountId) === DEFAULT_ACCOUNT_ID) {
+    return false;
+  }
+  const origin = normalizeCronScheduledToolCallerOrigin(job.toolsAllowProvenance?.callerOrigin);
+  if (origin.kind !== "unknown") {
+    return false;
+  }
+  return parseRawSessionConversationRef(job.owner?.sessionKey)?.channel === undefined;
 }
