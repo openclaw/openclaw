@@ -107,7 +107,11 @@ if (entry?.endsWith("/scripts/pr-lib/worktree-provision.mts")) {
       assert.ok(launched.length > 0, "cold provisioner never launched through the private owner");
       assert.ok(launched.every((pid) => Number.isSafeInteger(pid) && pid > 0));
       assert.equal(new Set(launched).size, launched.length, "ambiguous reused provisioner PID");
-      assert.deepEqual(sortedPids(injected.map((row) => row.pid)), sortedPids(launched));
+      assert.deepEqual(
+        sortedPids(injected.map((row) => row.pid)),
+        sortedPids(launched),
+        "not every launched provisioner received its private store",
+      );
       assert.ok(rows.every((row) => row.databasePath === databasePath));
       for (const { pid } of injected) {
         const kinds = new Set(rows.filter((row) => row.pid === pid).map((row) => row.kind));

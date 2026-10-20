@@ -88,11 +88,15 @@ describe("memory-wiki cli", () => {
     process.exitCode = undefined;
   });
 
-  function createProgram(config: ResolvedMemoryWikiConfig, exitOverride = false) {
+  function createProgram(
+    config: ResolvedMemoryWikiConfig,
+    exitOverride = false,
+    writeErr: (text: string) => void = () => {},
+  ) {
     const program = new Command().name("test");
     if (exitOverride) {
       program.exitOverride();
-      program.configureOutput({ writeErr: () => {}, writeOut: () => {} });
+      program.configureOutput({ writeErr, writeOut: () => {} });
     }
     registerWikiCli(program, { config });
     return program;
@@ -323,8 +327,7 @@ describe("memory-wiki cli", () => {
   it("reports invalid search backends through Commander before dispatch", async () => {
     const { config } = await createCliVault({ initialize: false });
     const writeErr = vi.fn();
-    const program = createProgram(config, true);
-    program.configureOutput({ writeErr });
+    const program = createProgram(config, true, writeErr);
 
     await expect(
       program.parseAsync(["wiki", "search", "alpha", "--backend", "bogus"], { from: "user" }),

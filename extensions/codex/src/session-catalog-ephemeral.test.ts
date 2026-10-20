@@ -51,7 +51,7 @@ it.each([false, true])(
         assertCurrent: () => {},
       });
     const index = createIndex();
-    const thread: CodexThread = { ...native.thread, status: { type: "idle" } };
+    const thread: CodexThread = { ...native.thread, source: "cli", status: { type: "idle" } };
     const harness = createClientHarness({
       onWrite: (line, send) => {
         const request: { id: number; method: string; params: { ephemeral?: boolean } } =
