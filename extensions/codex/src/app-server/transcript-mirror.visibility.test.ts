@@ -41,31 +41,39 @@ it.each([
       ...base,
       ...target,
       sessionTarget: target,
-      workspaceDir: path.dirname(target.storePath),
       prompt: "Review the worker result",
       privateCompletion,
       inputProvenance: { kind: "inter_session", sourceTool, sourceRole: "subagent" },
     };
     const mirror = {
+      ...target,
       params,
-      agentId: target.agentId,
-      sessionKey: target.sessionKey,
       notifyUserMessagePersisted: () => undefined,
       cwd: params.workspaceDir,
       threadId: "thread-1",
       turnId: "turn-1",
     };
-    const progress = {
+    const message = (id: string, phase: string, text: string) => ({
       type: "agentMessage",
-      id: "progress",
-      phase: "commentary",
-      text: "Checking the worker result",
-    };
-    const answer = {
-      ...progress,
-      id: "answer",
-      phase: "final_answer",
-      text: "The repair passed validation",
+      id,
+      phase,
+      text,
+    });
+    const expectHistory = async (entries: [string, string][]) => {
+      const messages = await readCodexMirroredSessionHistoryMessages({
+        ...params,
+        sessionFile: target.bogusSessionFile,
+      });
+      expect(messages).toHaveLength(entries.length);
+      expect(messages).toMatchObject(
+        entries.map(([role, text]) => ({
+          role,
+          content: role === "user" ? text : [{ type: "text", text }],
+        })),
+      );
+      expect(messages?.map((entry) => Reflect.get(entry, "display") === false)).toEqual(
+        entries.map(() => hidden),
+      );
     };
     initializeGlobalHookRunner(
       createMockPluginRegistry([
@@ -80,43 +88,27 @@ it.each([
         },
       ]),
     );
-    await mirrorPromptAtTurnStartBestEffort({
-      ...mirror,
-      ...target,
-      upstreamUserText: params.prompt,
-    });
+    await mirrorPromptAtTurnStartBestEffort({ ...mirror, upstreamUserText: params.prompt });
     const projector = new CodexAppServerEventProjector(params, "thread-1", "turn-1");
-    await projector.handleNotification(forCurrentTurn("item/completed", { item: progress }));
-    const checkpointMessages = await readCodexMirroredSessionHistoryMessages({
-      ...params,
-      sessionFile: target.bogusSessionFile,
-    });
-    expect(checkpointMessages).toMatchObject([
-      { role: "user", content: params.prompt },
-      { role: "assistant", content: [{ type: "text", text: "Checking the worker result" }] },
-    ]);
-    expect(checkpointMessages?.map((message) => Reflect.get(message, "display") === false)).toEqual(
-      [hidden, hidden],
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", { item: message("progress", "commentary", "progress") }),
     );
+    await expectHistory([
+      ["user", params.prompt],
+      ["assistant", "progress"],
+    ]);
 
-    await projector.handleNotification(turnCompleted([answer]));
+    await projector.handleNotification(
+      turnCompleted([message("answer", "final_answer", "answer")]),
+    );
     await codexTranscriptMirrorRuntime.mirrorBestEffort({
       ...mirror,
       result: projector.buildResult(buildEmptyToolTelemetry()),
     });
-    const messages = await readCodexMirroredSessionHistoryMessages({
-      ...params,
-      sessionFile: target.bogusSessionFile,
-    });
-    expect(messages).toHaveLength(3);
-    expect(messages?.map((message) => Reflect.get(message, "display") === false)).toEqual([
-      hidden,
-      hidden,
-      hidden,
+    await expectHistory([
+      ["user", params.prompt],
+      ["assistant", "progress"],
+      ["assistant", "answer"],
     ]);
-    expect(messages?.[2]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "The repair passed validation" }],
-    });
   },
 );

@@ -53,46 +53,26 @@ describe("resolveCodexWebSearchPlan", () => {
     });
   });
 
-  it.each<[string, Params]>([
-    ["an explicit managed provider is selected", { config: config({ provider: "brave" }) }],
+  it.each<[string, Params, "managed" | "disabled"]>([
+    ["explicit managed provider", { config: config({ provider: "brave" }) }, "managed"],
+    ["native search disabled", { config: config({ openaiCodex: { enabled: false } }) }, "managed"],
+    ["native tools denied", { nativeToolSurfaceEnabled: false }, "managed"],
+    ["unsupported provider", { nativeProviderWebSearchSupport: "unsupported" }, "managed"],
     [
-      "Codex native search is explicitly disabled",
-      { config: config({ openaiCodex: { enabled: false } }) },
-    ],
-    ["runtime policy disables Codex native tools", { nativeToolSurfaceEnabled: false }],
-    [
-      "the active Codex provider lacks hosted search",
-      { nativeProviderWebSearchSupport: "unsupported" },
-    ],
-  ])("keeps managed web_search when %s", (_name, params) => {
-    expect(resolveCodexWebSearchPlan(params)).toEqual({
-      kind: "managed",
-      suppressManagedWebSearch: false,
-      threadConfig: threadConfig("disabled"),
-    });
-  });
-
-  it("fails closed instead of bypassing native domain restrictions through managed fallback", () => {
-    expect(
-      resolveCodexWebSearchPlan({
+      "domain restrictions fail closed",
+      {
         config: config({ openaiCodex: { allowedDomains: ["example.com"] } }),
         nativeProviderWebSearchSupport: "unsupported",
-      }),
-    ).toEqual({
-      kind: "disabled",
-      suppressManagedWebSearch: true,
-      threadConfig: threadConfig("disabled"),
-    });
-  });
-
-  it.each<[string, Params]>([
-    ["tool-disabled runs", { disableTools: true }],
-    ["effective tool policy denial", { webSearchAllowed: false }],
-    ["disabled OpenClaw web search", { config: config({ enabled: false }) }],
-  ])("disables native and managed search for %s", (_name, params) => {
+      },
+      "disabled",
+    ],
+    ["tool-disabled run", { disableTools: true }, "disabled"],
+    ["effective policy denial", { webSearchAllowed: false }, "disabled"],
+    ["OpenClaw search disabled", { config: config({ enabled: false }) }, "disabled"],
+  ])("%s keeps the intended search ownership", (_name, params, kind) => {
     expect(resolveCodexWebSearchPlan(params)).toEqual({
-      kind: "disabled",
-      suppressManagedWebSearch: true,
+      kind,
+      suppressManagedWebSearch: kind === "disabled",
       threadConfig: threadConfig("disabled"),
     });
   });
