@@ -357,6 +357,15 @@ describe("ModelRegistry", () => {
     expect(registry.getError()).toContain("Failed to load generated plugin model catalogs");
   });
 
+  it("falls back to the Gemini Enterprise public display name for google-vertex", () => {
+    const modelsPath = writeModelsJson({ providers: {} });
+    const registry = createRegistry(modelsPath);
+
+    expect(registry.getProviderDisplayName("google-vertex")).toBe(
+      "Gemini Enterprise Agent Platform (Vertex AI)",
+    );
+  });
+
   it("loads richer generated catalog metadata without widening runtime inputs", async () => {
     // Generated catalogs can report video/audio support. Keep those rows while
     // projecting their metadata to the runtime execution contract.

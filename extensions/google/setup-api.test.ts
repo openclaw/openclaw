@@ -6,21 +6,37 @@ import setupEntry from "./setup-api.js";
 
 describe("google setup entry", () => {
   it("registers setup runtime providers declared by the manifest", () => {
-    const providerIds: string[] = [];
+    const providers: ProviderPlugin[] = [];
     const cliBackends: CliBackendPlugin[] = [];
 
     setupEntry.register({
       registerProvider(provider: ProviderPlugin) {
-        providerIds.push(provider.id);
+        providers.push(provider);
       },
       registerCliBackend(backend: CliBackendPlugin) {
         cliBackends.push(backend);
       },
     } as never);
 
-    expect(providerIds).toEqual(["google-vertex"]);
+    expect(providers.map((provider) => provider.id)).toEqual(["google-vertex"]);
     expect(cliBackends.map((backend) => backend.id)).toEqual(["google-gemini-cli"]);
     expect(cliBackends[0]?.config.reliability?.watchdog?.resume).toBeUndefined();
+  });
+
+  it("labels google-vertex with the current Gemini Enterprise public name", () => {
+    const providers: ProviderPlugin[] = [];
+
+    setupEntry.register({
+      registerProvider(provider: ProviderPlugin) {
+        providers.push(provider);
+      },
+      registerCliBackend() {},
+    } as never);
+
+    expect(providers[0]).toMatchObject({
+      id: "google-vertex",
+      label: "Gemini Enterprise Agent Platform (Vertex AI)",
+    });
   });
 });
 
