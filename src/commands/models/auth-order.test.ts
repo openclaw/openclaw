@@ -22,16 +22,11 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   resolveAuthStatePathForDisplay: (agentDir: string) => `${agentDir}/auth-profiles.json`,
 }));
 
-vi.mock("./load-config.js", () => ({
-  loadModelsConfig: mocks.loadModelsConfig,
-}));
+vi.mock("./load-config.js", () => ({ loadModelsConfig: mocks.loadModelsConfig }));
 
 vi.mock("./shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./shared.js")>();
-  return {
-    ...actual,
-    resolveModelsTargetAgent: mocks.resolveModelsTargetAgent,
-  };
+  return { ...actual, resolveModelsTargetAgent: mocks.resolveModelsTargetAgent };
 });
 
 vi.mock("./auth-refresh.js", () => ({
@@ -42,15 +37,11 @@ const { modelsAuthOrderGetCommand, modelsAuthOrderUpdateCommand } = await import
 
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv;
 
-function storeWith(
-  profileIds: string[],
-  order?: string[],
-  provider = "anthropic",
-): AuthProfileStore {
+function storeWith(ids: string[], order?: string[], provider = "anthropic"): AuthProfileStore {
   return {
     version: 1,
     profiles: Object.fromEntries(
-      profileIds.map((profileId) => [
+      ids.map((profileId) => [
         profileId,
         { type: "oauth" as const, provider: profileId.split(":")[0] ?? "anthropic", access: "tok" },
       ]),
@@ -74,9 +65,7 @@ describe("models auth order", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadModelsConfig.mockResolvedValue({} as OpenClawConfig);
-    mocks.ensureAuthProfileStore.mockReturnValue(
-      storeWith(["anthropic:a", "anthropic:b"], ["anthropic:a"]),
-    );
+    mocks.ensureAuthProfileStore.mockReturnValue(storeWith(order.toReversed(), ["anthropic:a"]));
     mocks.setAuthProfileOrder.mockResolvedValue(storeWith(["anthropic:a", "anthropic:b"], order));
   });
 
@@ -87,16 +76,27 @@ describe("models auth order", () => {
     expect(runtime.log).toHaveBeenCalledWith("Agent: main");
   });
 
-  it("set writes the store order and refreshes a running gateway", async () => {
-    await modelsAuthOrderUpdateCommand({ provider: "anthropic", agent: "ops", order }, runtime);
-
-    expectWrite("ops", "anthropic", order);
-    expectTarget("ops", "mutation");
-    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("ops", "update", runtime);
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Auth profile order override: anthropic:b, anthropic:a",
-    );
-  });
+  it.each([
+    { agent: "ops", order, message: "Auth profile order override: anthropic:b, anthropic:a" },
+    {
+      agent: undefined,
+      order: null,
+      message: expect.stringContaining("Auth profile order override cleared"),
+    },
+  ])(
+    "writes order $order for $agent and refreshes the gateway",
+    async ({ agent, order: ids, message }) => {
+      await modelsAuthOrderUpdateCommand({ provider: "anthropic", agent, order: ids }, runtime);
+      expectWrite(agent ?? "main", "anthropic", ids);
+      expectTarget(agent, "mutation");
+      expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith(
+        agent ?? "main",
+        "update",
+        runtime,
+      );
+      expect(runtime.log).toHaveBeenCalledWith(message);
+    },
+  );
 
   it("accepts alias-provider profiles and reports the canonical stored order", async () => {
     mocks.ensureAuthProfileStore.mockReturnValue(storeWith(["xai:a"]));
@@ -106,17 +106,6 @@ describe("models auth order", () => {
 
     expectWrite("main", "xai", ["xai:a"]);
     expect(runtime.log).toHaveBeenCalledWith("Auth profile order override: xai:a");
-  });
-
-  it("clear removes the store order and refreshes a running gateway", async () => {
-    await modelsAuthOrderUpdateCommand({ provider: "anthropic", order: null }, runtime);
-
-    expectWrite("main", "anthropic", null);
-    expectTarget(undefined, "mutation");
-    expect(mocks.refreshRunningGatewayAuthState).toHaveBeenCalledWith("main", "update", runtime);
-    expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("Auth profile order override cleared"),
-    );
   });
 
   it("does not refresh the gateway when the store update fails", async () => {

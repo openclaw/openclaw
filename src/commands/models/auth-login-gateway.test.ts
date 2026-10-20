@@ -1,17 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { WizardNextResult } from "../../../packages/gateway-protocol/src/index.js";
+import type { WizardNextResult, WizardStep } from "../../../packages/gateway-protocol/src/index.js";
 import type { GatewayRequestFunction } from "../../gateway/call.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { WizardCancelledError } from "../../wizard/prompts.js";
 import { readGatewayLoginParams, runGatewayLoginWizard } from "./auth-login-gateway.js";
 
-const prompts = vi.hoisted(() => ({
-  note: vi.fn(),
-  text: vi.fn(),
-  select: vi.fn(),
-  confirm: vi.fn(),
-  multiselect: vi.fn(),
-}));
+const prompts = vi.hoisted(() => ({ note: vi.fn(), text: vi.fn(), select: vi.fn() }));
 // mock-isolation: Exercise remote step handling without reading the test runner's terminal.
 vi.mock("../../wizard/clack-prompter.js", () => ({
   createClackPrompter: (_output: unknown, signal: AbortSignal) => ({
@@ -37,24 +31,17 @@ const next = (stepId?: string, value?: unknown) => ({
   method: "wizard.next",
   params: { sessionId: "login", ...(stepId ? { answer: { stepId, value } } : {}) },
 });
-const browserStep: WizardNextResult = {
-  done: false,
-  step: { id: "code", type: "text", externalUrl: "https://example.test/authorize" },
-};
+const step = (value: WizardStep): WizardNextResult => ({ done: false, step: value });
+const authUrl = "https://example.test/authorize";
+const browserStep = step({ id: "code", type: "text", externalUrl: authUrl });
 const done: WizardNextResult = { done: true, status: "done" };
 function gateway(results: Array<WizardNextResult | Error>) {
   const calls: Array<{ method: string; params: unknown }> = [];
-  const request: GatewayRequestFunction = async <T>(
-    method: string,
-    params?: unknown,
-  ): Promise<T> => {
+  const request: GatewayRequestFunction = async <T>(method: string, params?: unknown) => {
     calls.push({ method, params });
     const result = method === "wizard.cancel" ? { status: "cancelled" } : results.shift();
-    if (!result) {
-      throw new Error("Unexpected wizard request");
-    }
-    if (result instanceof Error) {
-      throw result;
+    if (!result || result instanceof Error) {
+      throw result ?? new Error("Unexpected wizard request");
     }
     return result as T;
   };
@@ -70,12 +57,9 @@ afterEach(() => {
 });
 
 it("maps normalized API-key method and agent to the exact plugin choice", async () => {
+  const opts = { provider: "OpenAI", method: "API-KEY", agent: "writer" };
   await expect(
-    readGatewayLoginParams(
-      { provider: "OpenAI", method: "API-KEY", agent: "writer" },
-      "login",
-      new AbortController().signal,
-    ),
+    readGatewayLoginParams(opts, "login", new AbortController().signal),
   ).resolves.toEqual({
     sessionId: "login",
     authChoice: "openai/openai-api-key",
@@ -86,20 +70,14 @@ it("maps normalized API-key method and agent to the exact plugin choice", async 
 it("renders device codes and sends selection answers on the admitted session", async () => {
   prompts.select.mockResolvedValueOnce("keep");
   const h = gateway([
-    {
-      done: false,
-      step: {
-        id: "device",
-        type: "note",
-        message: "Approve sign-in",
-        externalUrl: "https://github.com/login/device",
-        deviceCode: { code: "ABCD-1234" },
-      },
-    },
-    {
-      done: false,
-      step: { id: "access", type: "select", options: [{ label: "Keep", value: "keep" }] },
-    },
+    step({
+      id: "device",
+      type: "note",
+      message: "Approve sign-in",
+      externalUrl: "https://github.com/login/device",
+      deviceCode: { code: "ABCD-1234" },
+    }),
+    step({ id: "access", type: "select", options: [{ label: "Keep", value: "keep" }] }),
     done,
   ]);
   await h.run();
@@ -113,7 +91,7 @@ it("renders device codes and sends selection answers on the admitted session", a
 
 it("closes the admitted session when a terminal prompt is cancelled", async () => {
   prompts.select.mockRejectedValueOnce(new WizardCancelledError());
-  const h = gateway([{ done: false, step: { id: "choice", type: "select", options: [] } }]);
+  const h = gateway([step({ id: "choice", type: "select", options: [] })]);
   await h.run();
   expect(h.calls.at(-1)).toEqual({
     method: "wizard.cancel",

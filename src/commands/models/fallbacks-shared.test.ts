@@ -4,38 +4,23 @@ import { registerModelsCli } from "../../cli/models-cli.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 
-const mocks = vi.hoisted(() => ({
-  loadModelsConfig: vi.fn(),
-}));
-
-vi.mock("./load-config.js", () => ({
-  loadModelsConfig: mocks.loadModelsConfig,
-}));
+const mocks = vi.hoisted(() => ({ loadModelsConfig: vi.fn() }));
+vi.mock("./load-config.js", () => ({ loadModelsConfig: mocks.loadModelsConfig }));
 
 describe.each([
-  {
-    name: "fallbacks",
-    label: "Fallbacks",
-    key: "model" as const,
-    model: "anthropic/claude-sonnet-4-6",
-  },
-  {
-    name: "image-fallbacks",
-    label: "Image fallbacks",
-    key: "imageModel" as const,
-    model: "openai/gpt-image-1",
-  },
-])("models $name list", (testCase) => {
+  ["fallbacks", "Fallbacks", "model", "anthropic/claude-sonnet-4-6"],
+  ["image-fallbacks", "Image fallbacks", "imageModel", "openai/gpt-image-1"],
+])("models %s list", (name, label, key, defaultModel) => {
   const run = (...args: string[]) =>
     runRegisteredCli({ register: registerModelsCli, argv: ["models", ...args] });
-  const list = (...flags: string[]) => run(testCase.name, "list", ...flags);
+  const list = (...flags: string[]) => run(name, "list", ...flags);
   const setFallback = (model: string) =>
     mocks.loadModelsConfig.mockResolvedValue({
-      agents: { defaults: { [testCase.key]: { fallbacks: [model] } } },
+      agents: { defaults: { [key]: { fallbacks: [model] } } },
     });
   beforeEach(() => {
     mocks.loadModelsConfig.mockReset();
-    setFallback(testCase.model);
+    setFallback(defaultModel);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "writeStdout").mockImplementation(() => {});
     vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
@@ -44,17 +29,17 @@ describe.each([
   afterEach(() => vi.restoreAllMocks());
 
   it.each([
-    ["--json", testCase.name, "list"],
-    [testCase.name, "list", "--json"],
+    ["--json", name, "list"],
+    [name, "list", "--json"],
   ])("writes JSON and attributes diagnostics for %s %s %s", async (...args) => {
     await run(...args);
 
     expect(mocks.loadModelsConfig).toHaveBeenCalledWith({
-      commandName: `models ${testCase.name} list`,
+      commandName: `models ${name} list`,
       runtime: defaultRuntime,
     });
     expect(vi.mocked(defaultRuntime.writeJson).mock.calls.map(([value]) => value)).toEqual([
-      { fallbacks: [testCase.model] },
+      { fallbacks: [defaultModel] },
     ]);
     expect(defaultRuntime.log).not.toHaveBeenCalled();
   });
@@ -62,7 +47,7 @@ describe.each([
   it("writes populated plain output directly to stdout", async () => {
     await list("--plain");
 
-    expect(defaultRuntime.writeStdout).toHaveBeenCalledExactlyOnceWith(testCase.model);
+    expect(defaultRuntime.writeStdout).toHaveBeenCalledExactlyOnceWith(defaultModel);
     expect(defaultRuntime.log).not.toHaveBeenCalled();
   });
 
@@ -92,8 +77,8 @@ describe.each([
     await list();
 
     expect(vi.mocked(defaultRuntime.log).mock.calls).toEqual([
-      [`${testCase.label} (${empty ? 0 : 1}):`],
-      [empty ? "- none" : `- ${testCase.model}`],
+      [`${label} (${empty ? 0 : 1}):`],
+      [empty ? "- none" : `- ${defaultModel}`],
     ]);
   });
 });

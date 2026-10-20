@@ -3,10 +3,7 @@ import { GatewayClientRequestError } from "../../../packages/gateway-client/src/
 import { GatewayLocalBackendSharedAuthUnavailableError } from "../../gateway/call.js";
 import { GatewayTransportError } from "../../gateway/transport-error.js";
 
-const mocks = vi.hoisted(() => ({
-  callGateway: vi.fn(),
-  isImplicitLocalGatewayTarget: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ callGateway: vi.fn(), isImplicitLocalGatewayTarget: vi.fn() }));
 
 vi.mock("../../gateway/call.js", async () => {
   const requestErrors = await import("../../../packages/gateway-client/src/request-error.js");
@@ -26,14 +23,11 @@ async function expectRefresh(
   warning?: string,
   operation: "login" | "update" = "login",
 ) {
-  await expect(refreshRunningGatewayAuthState("main", operation, { error: warn })).resolves.toBe(
-    outcome,
-  );
-  if (warning) {
-    expect(warn).toHaveBeenCalledWith(warning);
-  } else {
-    expect(warn).not.toHaveBeenCalled();
-  }
+  const result = await refreshRunningGatewayAuthState("main", operation, { error: warn });
+  expect({ result, warnings: warn.mock.calls }).toEqual({
+    result: outcome,
+    warnings: warning ? [[warning]] : [],
+  });
 }
 
 describe("refreshRunningGatewayAuthState", () => {
