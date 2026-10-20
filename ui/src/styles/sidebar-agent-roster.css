@@ -85,7 +85,7 @@ openclaw-sidebar-agent-roster {
   flex: 1;
   min-width: 0;
   font-size: 13px;
-  font-weight: 550;
+  font-weight: 500;
   line-height: 16px;
 }
 
@@ -97,7 +97,7 @@ openclaw-sidebar-agent-roster {
 
 .sidebar-agent-roster__preview {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 400;
 }
 
@@ -157,7 +157,7 @@ openclaw-sidebar-agent-roster {
 }
 
 .sidebar-agent-roster__group {
-  margin-bottom: 12px;
+  margin-bottom: 2px;
 }
 .sidebar-agent-roster__signals {
   grid-area: 2 / 2;
