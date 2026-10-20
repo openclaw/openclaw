@@ -20,15 +20,15 @@ import { createGatewayRequest } from "./hooks-test-helpers.js";
 import { handleGatewayProbeRequest } from "./server-http-probes.js";
 import { createReadinessChecker } from "./server/readiness.js";
 
-const paths = new Set<string>();
+let cleanupPath: string | undefined;
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
     await closeOpenClawStateDatabaseAsync();
-    for (const pathname of paths) {
-      clearOpenClawStateDatabaseOpenFailure(pathname);
+    if (cleanupPath) {
+      clearOpenClawStateDatabaseOpenFailure(cleanupPath);
     }
-    paths.clear();
+    cleanupPath = undefined;
     cleanup();
   }),
 );
@@ -36,8 +36,7 @@ const dirs = useAutoCleanupTempDirTracker((cleanup) =>
 it("returns 503 with the worker admission refusal after audit index corruption, despite cached healthy channels", async () => {
   const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-readiness-integrity-") };
   const capture = () => captureOpenClawStateWorkerContext({ env });
-  const pathname = capture().admission.databasePath;
-  paths.add(pathname);
+  const pathname = (cleanupPath = capture().admission.databasePath);
   const read = () =>
     executeOpenClawStateWorker(capture(), {
       type: "plugins.conversationBindingApprovals.read",
@@ -83,30 +82,30 @@ it("returns 503 with the worker admission refusal after audit index corruption, 
         getReadiness,
       ),
     ).toBe(true);
-    return response;
+    return {
+      status: response.statusCode,
+      body: response.body === undefined ? undefined : JSON.parse(response.body),
+    };
   };
   const mainSql = observeMainThreadSql();
   try {
-    expect((await probe("/readyz")).statusCode).toBe(200);
+    expect(await probe("/readyz")).toMatchObject({ status: 200 });
     await expect(read()).rejects.toThrow(/integrity_check.*sqlite_autoindex_audit_events_1/);
 
-    const refused = await probe("/readyz");
-    expect(refused.statusCode).toBe(503);
-    expect(JSON.parse(refused.body ?? "null")).toMatchObject({
-      ready: false,
-      failing: ["state-database"],
-      stateDatabase: {
-        reason: expect.stringMatching(/integrity_check.*sqlite_autoindex_audit_events_1/),
+    expect(await probe("/readyz")).toMatchObject({
+      status: 503,
+      body: {
+        ready: false,
+        failing: ["state-database"],
+        stateDatabase: {
+          reason: expect.stringMatching(/integrity_check.*sqlite_autoindex_audit_events_1/),
+        },
       },
     });
     expect(channelManager.getRuntimeSnapshot).toHaveBeenCalledTimes(1);
-    expect((await probe("/healthz")).statusCode).toBe(200);
-    const remote = await probe("/readyz", "203.0.113.10");
-    expect(remote.statusCode).toBe(503);
-    expect(JSON.parse(remote.body ?? "null")).toEqual({ ready: false });
-    const head = await probe("/ready", "127.0.0.1", "HEAD");
-    expect(head.statusCode).toBe(503);
-    expect(head.body).toBeUndefined();
+    expect(await probe("/healthz")).toMatchObject({ status: 200 });
+    expect(await probe("/readyz", "203.0.113.10")).toEqual({ status: 503, body: { ready: false } });
+    expect(await probe("/ready", "127.0.0.1", "HEAD")).toEqual({ status: 503, body: undefined });
     mainSql.expectIdle();
 
     clearOpenClawStateDatabaseOpenFailure(pathname);

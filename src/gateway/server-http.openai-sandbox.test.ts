@@ -23,8 +23,6 @@ import {
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { AUTH_TOKEN, createTestGatewayServer } from "./server-http.test-harness.js";
-import { createGatewayRequestContext } from "./server-request-context.js";
-import { makeContextParams } from "./server-request-context.test-support.js";
 
 // The command and session owners are real; only model/provider execution is replaced.
 vi.mock("../agents/agent-runtime-config.js", () => ({
@@ -94,13 +92,9 @@ beforeAll(async () => {
   const ordinary = ensureProfileForEmail("ordinary@example.test");
   setUserProfileRole(ordinary.id, "ordinary");
   releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
-  const context = createGatewayRequestContext(makeContextParams());
-  context.resolveGatewayContext = () => context;
   const overrides = {
     openAiChatCompletionsEnabled: true,
     openResponsesEnabled: true,
-    getGatewayRequestContext: () => context,
-    httpRequestLifetime: context,
   };
   const listen = (resolvedAuth: ResolvedGatewayAuth) =>
     reserveTestPortListener({
@@ -124,7 +118,17 @@ afterAll(async () => {
 
 beforeEach(() => {
   vi.mocked(runEmbeddedAgent).mockReset();
-  reportRuntimeIsolation();
+  vi.mocked(runEmbeddedAgent).mockImplementation(async (params) => {
+    const runtime = await resolveSandboxRuntimeStatusAsync({
+      cfg: params.config,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    });
+    return {
+      payloads: [{ text: runtime.sandboxed ? "sandbox execution" : "host execution" }],
+      meta: { durationMs: 0 },
+    };
+  });
 });
 
 async function post(params: {
@@ -157,20 +161,6 @@ async function post(params: {
     body,
   });
   return { status: response.status, body: await response.text() };
-}
-
-function reportRuntimeIsolation() {
-  vi.mocked(runEmbeddedAgent).mockImplementation(async (params) => {
-    const runtime = await resolveSandboxRuntimeStatusAsync({
-      cfg: params.config,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    });
-    return {
-      payloads: [{ text: runtime.sandboxed ? "sandbox execution" : "host execution" }],
-      meta: { durationMs: 0 },
-    };
-  });
 }
 
 describe.each(endpointCases)("$name session sandbox boundary", (endpoint) => {

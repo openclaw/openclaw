@@ -14,10 +14,8 @@ import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-ha
 
 const MCP_APP_PATH = "/__openclaw__/mcp-app";
 
-async function withMcpAppServer(
-  run: Parameters<typeof withGatewayServer>[0]["run"],
-): Promise<void> {
-  await withGatewayServer({
+function withMcpAppServer(run: Parameters<typeof withGatewayServer>[0]["run"]) {
+  return withGatewayServer({
     prefix: "mcp-app-http-admission",
     resolvedAuth: AUTH_NONE,
     overrides: {
@@ -47,7 +45,6 @@ it("keeps deferred handler work visible until it settles", async () => {
     async (_req: IncomingMessage, res: ServerResponse) => {
       started.resolve();
       await finish.promise;
-      res.statusCode = 200;
       res.end("ok");
       return true;
     },
@@ -66,8 +63,7 @@ it("keeps deferred handler work visible until it settles", async () => {
     }
     const response = await pending;
     expect(response.res.statusCode).toBe(200);
-    // The response mock resolves from res.end(), immediately before the
-    // admission wrapper's finally block releases the request root.
+    // res.end() resolves the mock before admission's finally releases the root.
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 });
