@@ -35,31 +35,18 @@ function buildSafeguardFactories(
   return { factories, sessionManager };
 }
 
-function expectSafeguardRuntime(
-  qualityGuard: Compaction["qualityGuard"],
-  expectedRuntime: { qualityGuardEnabled: boolean; qualityGuardMaxRetries?: number },
-) {
-  const { factories, sessionManager } = buildSafeguardFactories(qualityGuard);
-  expect(factories).toContain(compactionSafeguardExtension);
-  const runtime = getCompactionSafeguardRuntime(sessionManager);
-  expect(runtime?.qualityGuardEnabled).toBe(expectedRuntime.qualityGuardEnabled);
-  expect(runtime?.qualityGuardMaxRetries).toBe(expectedRuntime.qualityGuardMaxRetries);
-}
-
 describe("buildEmbeddedExtensionFactories", () => {
-  it("enables quality-guard retries by default in safeguard mode", () => {
-    expectSafeguardRuntime(undefined, { qualityGuardEnabled: true });
-  });
-
-  it("honors explicit safeguard quality-guard disablement", () => {
-    expectSafeguardRuntime({ enabled: false }, { qualityGuardEnabled: false });
-  });
-
-  it("wires explicit safeguard quality-guard runtime flags", () => {
-    expectSafeguardRuntime(
-      { enabled: true, maxRetries: 2 },
-      { qualityGuardEnabled: true, qualityGuardMaxRetries: 2 },
-    );
+  it.each([
+    ["default", undefined, true, undefined],
+    ["disabled", { enabled: false }, false, undefined],
+    ["explicit retries", { enabled: true, maxRetries: 2 }, true, 2],
+  ] as const)("wires %s quality-guard settings", (_name, qualityGuard, enabled, maxRetries) => {
+    const { factories, sessionManager } = buildSafeguardFactories(qualityGuard);
+    expect(factories).toContain(compactionSafeguardExtension);
+    expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
+      qualityGuardEnabled: enabled,
+      qualityGuardMaxRetries: maxRetries,
+    });
   });
 
   it("wires the run workspace into safeguard runtime", () => {

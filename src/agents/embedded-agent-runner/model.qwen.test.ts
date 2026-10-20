@@ -82,8 +82,7 @@ describe("Qwen static fallback routing", () => {
         { apiKey: auth?.apiKey },
       )
       .result();
-    expect(result.errorMessage).toBeUndefined();
-    expect(result.stopReason).toBe("stop");
+    expect([result.errorMessage, result.stopReason]).toEqual([undefined, "stop"]);
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe(`${endpoint}/chat/completions`);
     expect(requests[0]?.headers.get("authorization")).toBe("Bearer synthetic-qwen-key");

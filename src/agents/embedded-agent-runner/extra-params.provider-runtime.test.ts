@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLlmStreamSimpleMock } from "../../../test/helpers/agents/llm-stream-simple-mock.js";
 import { createKilocodeWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
 import type { Model, SimpleStreamOptions } from "../../llm/types.js";
@@ -14,19 +14,8 @@ import { testing as extraParamsTesting } from "./extra-params.test-support.js";
 
 vi.mock("../../llm/stream.js", () => createLlmStreamSimpleMock());
 
-beforeEach(() => {
-  extraParamsTesting.setProviderRuntimeDepsForTest({
-    prepareProviderExtraParams: ({ context }) => context.extraParams,
-    resolveProviderExtraParamsForTransport: () => undefined,
-    wrapProviderStreamFn: ({ context }) => context.streamFn,
-  });
-});
-
-afterEach(() => {
-  extraParamsTesting.resetProviderRuntimeDepsForTest();
-});
-
 describe("extra-params: provider runtime handoff", () => {
+  afterEach(() => extraParamsTesting.resetProviderRuntimeDepsForTest());
   it.each([
     { label: "default", allowlist: undefined, expected: true },
     { label: "disabled tools", allowlist: undefined, webSearchEnabled: false, expected: false },
@@ -92,37 +81,29 @@ describe("extra-params: provider runtime handoff", () => {
       expect(payload.tools.some((tool) => tool.type === "web_search")).toBe(expected);
     },
   );
+});
 
-  it("supports cached WebSockets and filters unknown upstream transport values", () => {
-    const settingsManager = { getGlobalSettings: () => ({}) };
-
-    expect(
-      resolveAgentTransportOverride({
-        settingsManager,
-        effectiveExtraParams: { transport: "websocket-cached" },
-      }),
-    ).toBe("websocket-cached");
-    expect(
-      resolveAgentTransportOverride({
-        settingsManager,
-        effectiveExtraParams: { transport: "webtransport" },
-      }),
-    ).toBeUndefined();
-    expect(
-      resolveExplicitSettingsTransport({
-        settingsManager: { getGlobalSettings: () => ({ transport: "auto" }) },
-        sessionTransport: "websocket-cached",
-      }),
-    ).toBe("websocket-cached");
-  });
+it("supports cached WebSockets and filters unknown upstream transport values", () => {
+  const settingsManager = { getGlobalSettings: () => ({}) };
+  const override = (transport: string) =>
+    resolveAgentTransportOverride({
+      settingsManager,
+      effectiveExtraParams: { transport },
+    });
+  expect(override("websocket-cached")).toBe("websocket-cached");
+  expect(override("webtransport")).toBeUndefined();
+  expect(
+    resolveExplicitSettingsTransport({
+      settingsManager: { getGlobalSettings: () => ({ transport: "auto" }) },
+      sessionTransport: "websocket-cached",
+    }),
+  ).toBe("websocket-cached");
 });
 
 describe("extra-params: Kilocode wrapper", () => {
   const envSnapshot = captureEnv(["KILOCODE_FEATURE"]);
 
-  afterEach(() => {
-    envSnapshot.restore();
-  });
+  afterEach(() => envSnapshot.restore());
 
   it("cannot be overridden by caller headers", () => {
     delete process.env.KILOCODE_FEATURE;

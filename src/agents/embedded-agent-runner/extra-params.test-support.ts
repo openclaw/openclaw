@@ -29,24 +29,22 @@ type ProviderRuntimeDeps = {
 
 export const testing = {
   setProviderRuntimeDepsForTest(deps: Partial<ProviderRuntimeDeps> = {}): void {
-    vi.spyOn(providerRuntime, "ensureProviderRuntimePluginHandle").mockImplementation((params) => {
-      if (params.runtimeHandle) {
-        return params.runtimeHandle;
-      }
-      return {
-        ...params,
-        plugin: {
-          id: params.provider,
-          label: params.provider,
-          auth: [],
-          prepareExtraParams: (context) =>
-            deps.prepareProviderExtraParams?.({ ...params, context }),
-          extraParamsForTransport: (context) =>
-            deps.resolveProviderExtraParamsForTransport?.({ ...params, context }),
-          wrapStreamFn: (context) => deps.wrapProviderStreamFn?.({ ...params, context }),
+    vi.spyOn(providerRuntime, "ensureProviderRuntimePluginHandle").mockImplementation(
+      (params) =>
+        params.runtimeHandle ?? {
+          ...params,
+          plugin: {
+            id: params.provider,
+            label: params.provider,
+            auth: [],
+            prepareExtraParams: (context) =>
+              deps.prepareProviderExtraParams?.({ ...params, context }),
+            extraParamsForTransport: (context) =>
+              deps.resolveProviderExtraParamsForTransport?.({ ...params, context }),
+            wrapStreamFn: (context) => deps.wrapProviderStreamFn?.({ ...params, context }),
+          },
         },
-      };
-    });
+    );
   },
   resetProviderRuntimeDepsForTest(): void {
     vi.mocked(providerRuntime.ensureProviderRuntimePluginHandle).mockRestore();
@@ -88,9 +86,7 @@ export function runExtraParamsCase<TPayload extends Record<string, unknown>>(
     // Wrappers need push/result/iterate, but no real provider.
     return {
       push() {},
-      async result() {
-        return undefined;
-      },
+      result: async () => undefined,
       async *[Symbol.asyncIterator]() {},
     } as unknown as ReturnType<StreamFn>;
   };
@@ -116,14 +112,10 @@ export function runExtraParamsCase<TPayload extends Record<string, unknown>>(
     }
   }
 
-  void agent.streamFn?.(
-    params.model,
-    { messages: [] },
-    {
-      ...params.options,
-      headers: params.callerHeaders ?? params.options?.headers,
-    },
-  );
-
+  const options = {
+    ...params.options,
+    headers: params.callerHeaders ?? params.options?.headers,
+  };
+  void agent.streamFn?.(params.model, { messages: [] }, options);
   return captured;
 }
