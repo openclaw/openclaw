@@ -19,21 +19,36 @@ afterEach(resetTranscriptTestDom);
 
 function parentBreadcrumb(pane: TestChatPane) {
   const container = document.createElement("div");
+  const workspace = createPaneHeaderWorkspaceFixture(pane.state);
+  const row = selectedChatSessionRow(pane.state);
   renderPaneHeaderInto(
-    pane.renderPaneHeader(
-      createPaneHeaderWorkspaceFixture(pane.state),
-      selectedChatSessionRow(pane.state),
-      false,
-      undefined,
-      false,
-      null,
-    ),
+    pane.renderPaneHeader(workspace, row, false, undefined, false, null),
     container,
   );
   return container.querySelector<HTMLButtonElement>(".chat-pane__parent-session");
 }
 
-function family(prefix: string, displayName: string, incognito: boolean) {
+async function mountChild(harness: ReturnType<typeof createMountedPanes>, key: string) {
+  await harness.sessions.refresh({ agentId: "main", force: true });
+  const pane = harness.mount(key);
+  const refresh = async () => {
+    await harness.sessions.refresh({ agentId: "main", force: true });
+    await refreshPane(pane);
+  };
+  await refreshPane(pane);
+  const changed = (row: GatewaySessionRow, reason: "update" | "delete" = "update") =>
+    harness.emitGatewayEvent("sessions.changed", {
+      sessionKey: row.key,
+      agentId: "main",
+      sessionId: row.sessionId,
+      reason,
+      ...(reason === "update" ? { session: row } : {}),
+    });
+  return { pane, refresh, changed, draw: () => parentBreadcrumb(pane) };
+}
+
+function family(incognito: boolean, displayName = "Release prep — café 雪", dashboard = true) {
+  const prefix = `agent:main:${dashboard ? "dashboard:" : ""}${incognito ? "incognito-" : ""}`;
   const parent: GatewaySessionRow = {
     key: `${prefix}parent`,
     agentId: "main",
@@ -56,29 +71,17 @@ function family(prefix: string, displayName: string, incognito: boolean) {
 it.each([false, true])(
   "keeps the parent breadcrumb across roster refresh (incognito: %s)",
   async (incognito) => {
-    const { parent, child } = family(
-      `agent:main:dashboard:${incognito ? "incognito-" : ""}`,
-      "Release prep — café 雪",
-      incognito,
-    );
-    const { sessions, mount, emitGatewayEvent } = createMountedPanes(
-      [parent, child],
-      "main",
-      undefined,
-      {
-        "sessions.list": async () => sessionsResult(incognito ? [] : [parent, child], 1),
-      },
-    );
-    await sessions.refresh({ agentId: "main", force: true });
-    const pane = mount(child.key);
-    await refreshPane(pane);
+    const { parent, child } = family(incognito);
+    const harness = createMountedPanes([parent, child], "main", undefined, {
+      "sessions.list": async () => sessionsResult(incognito ? [] : [parent, child], 1),
+    });
+    const { sessions } = harness;
+    const { pane, refresh, changed, draw } = await mountChild(harness, child.key);
     await vi.dynamicImportSettled();
     pane.paneId = "pane-child";
     pane.onPaneSessionChange = vi.fn();
-    const draw = () => parentBreadcrumb(pane);
     expect(draw()?.textContent).toContain(parent.displayName);
-    await sessions.refresh({ agentId: "main", force: true });
-    await refreshPane(pane);
+    await refresh();
     expect(draw()?.textContent).toContain(parent.displayName);
     draw()?.click();
     expect(pane.onPaneSessionChange).toHaveBeenCalledExactlyOnceWith("pane-child", parent.key);
@@ -86,20 +89,9 @@ it.each([false, true])(
       expect(sessions.state.result?.sessions.some((row) => row.key === parent.key)).toBe(false);
       expect(pane.state.sessionsResult?.sessions.some((row) => row.key === parent.key)).toBe(false);
     }
-    emitGatewayEvent("sessions.changed", {
-      sessionKey: parent.key,
-      agentId: "main",
-      sessionId: parent.sessionId,
-      reason: "update",
-      session: { ...parent, updatedAt: 2, displayName: "Renamed parent" },
-    });
+    changed({ ...parent, updatedAt: 2, displayName: "Renamed parent" });
     expect(draw()?.textContent).toContain("Renamed parent");
-    emitGatewayEvent("sessions.changed", {
-      sessionKey: parent.key,
-      agentId: "main",
-      sessionId: parent.sessionId,
-      reason: "delete",
-    });
+    changed(parent, "delete");
     expect(draw()).toBeNull();
   },
 );
@@ -109,7 +101,7 @@ it.each(["lineage changes", "descriptor fails"] as const)(
   async (change) => {
     const recovering = change === "descriptor fails";
     const { parent, child } = family(
-      recovering ? "agent:main:dashboard:incognito-" : "agent:main:",
+      recovering,
       recovering ? "Recovered parent" : "Old parent",
       recovering,
     );
@@ -122,7 +114,7 @@ it.each(["lineage changes", "descriptor fails"] as const)(
     const oldParent = createDeferred<{ session: GatewaySessionRow }>();
     const parentRequested = createDeferred();
     let parentReads = 0;
-    const { sessions, mount, emitGatewayEvent } = createMountedPanes([child], "main", undefined, {
+    const harness = createMountedPanes([child], "main", undefined, {
       "sessions.describe": async (_method, raw) => {
         const key = asOptionalRecord(raw)?.key;
         if (key === parent.key) {
@@ -136,37 +128,25 @@ it.each(["lineage changes", "descriptor fails"] as const)(
         return { session: key === replacement.key ? replacement : child };
       },
     });
-    await sessions.refresh({ agentId: "main", force: true });
-    const pane = mount(child.key);
-    await refreshPane(pane);
+    const { sessions } = harness;
+    const { refresh, changed, draw } = await mountChild(harness, child.key);
     await parentRequested.promise;
     await vi.dynamicImportSettled();
     if (recovering) {
       oldParent.reject(new Error("Temporary descriptor outage"));
       await vi.dynamicImportSettled();
-      expect(parentBreadcrumb(pane)).toBeNull();
-      expect(parentReads).toBe(1);
+      expect([draw(), parentReads]).toEqual([null, 1]);
       sessions.reconcile({ ...child, updatedAt: 2, displayName: "Updated child" });
       await vi.dynamicImportSettled();
-      expect(parentBreadcrumb(pane)).toBeNull();
-      expect(parentReads).toBe(1);
-      await sessions.refresh({ agentId: "main", force: true });
-      await refreshPane(pane);
+      expect([draw(), parentReads]).toEqual([null, 1]);
+      await refresh();
     } else {
-      emitGatewayEvent("sessions.changed", {
-        sessionKey: child.key,
-        agentId: "main",
-        sessionId: child.sessionId,
-        reason: "update",
-        session: { ...child, updatedAt: 2, parentSessionKey: replacement.key },
-      });
+      changed({ ...child, updatedAt: 2, parentSessionKey: replacement.key });
       oldParent.resolve({ session: parent });
     }
     await vi.dynamicImportSettled();
-    expect(parentBreadcrumb(pane)?.textContent).toContain(
-      recovering ? "Recovered parent" : "Current parent",
-    );
-    expect(parentBreadcrumb(pane)?.textContent).not.toContain("Old parent");
+    expect(draw()?.textContent).toContain(recovering ? "Recovered parent" : "Current parent");
+    expect(draw()?.textContent).not.toContain("Old parent");
     if (recovering) {
       expect(parentReads).toBe(2);
     }

@@ -23,6 +23,20 @@ function clickChoice(value: string) {
   return button;
 }
 
+const profile = {
+  id: "aws",
+  providerId: "crabbox",
+  operatingSystems: [
+    { id: "linux", label: "Linux", default: true },
+    { id: "windows/wsl2", label: "Windows (WSL2)" },
+  ],
+  machines: [
+    { id: "tiny", label: "Tiny", os: "linux", default: true },
+    { id: "tiny", label: "Tiny", os: "windows/wsl2", default: true },
+    { id: "fast", label: "Fast", os: "windows/wsl2" },
+  ],
+};
+
 it.each([
   { target: "cloud", fails: false },
   { target: "gateway", fails: false },
@@ -35,24 +49,7 @@ it.each([
       dialogs,
       async (method: string) => {
         if (method === "environments.list") {
-          return {
-            profiles: [
-              {
-                id: "aws",
-                providerId: "crabbox",
-                operatingSystems: [
-                  { id: "linux", label: "Linux", default: true },
-                  { id: "windows/wsl2", label: "Windows (WSL2)" },
-                ],
-                machines: [
-                  { id: "tiny", label: "Tiny", os: "linux", default: true },
-                  { id: "tiny", label: "Tiny", os: "windows/wsl2", default: true },
-                  { id: "fast", label: "Fast", os: "windows/wsl2" },
-                ],
-              },
-            ],
-            environments: [],
-          };
+          return { profiles: [profile], environments: [] };
         }
         if (method === "sessions.dispatch" || method === "sessions.reclaim") {
           return recovery.promise;
@@ -103,24 +100,17 @@ it.each([
         (button) => button.textContent?.trim() === "Restart session",
       );
       restartButton?.click();
-      const expectedRequest =
-        target === "cloud"
-          ? [
-              "sessions.dispatch",
-              {
-                key: session.key,
-                agentId: "main",
-                profileId: "aws",
-                os: "windows/wsl2",
-                machineClass: "fast",
-              },
-            ]
-          : [
-              "sessions.reclaim",
-              { key: session.key, agentId: "main", recoverToGateway: { expectedGeneration: 2 } },
-              { timeoutMs: null },
-            ];
-      await dialogs.waitFor(() => expect(request).toHaveBeenCalledWith(...expectedRequest));
+      const cloud = target === "cloud";
+      const targetParams = cloud
+        ? { profileId: "aws", os: "windows/wsl2", machineClass: "fast" }
+        : { recoverToGateway: { expectedGeneration: 2 } };
+      await dialogs.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          cloud ? "sessions.dispatch" : "sessions.reclaim",
+          { key: session.key, agentId: "main", ...targetParams },
+          ...(cloud ? [] : [{ timeoutMs: null }]),
+        ),
+      );
       expect(state).toMatchObject({ chatRunError: null, lastError: null, chatError: null });
       if (fails) {
         recovery.reject(new Error("Saved workspace could not be restored"));

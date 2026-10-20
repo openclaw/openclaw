@@ -7,6 +7,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
+import type { GatewayRequestMock } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -64,11 +65,11 @@ function expectErrors(state: ChatPageHost, error: string | null) {
 }
 
 function expectPermissionPatch(
-  host: ReturnType<typeof makeChatHost>,
+  request: GatewayRequestMock,
   row: Pick<GatewaySessionRow, "key" | "sessionId">,
   exactIdentity = true,
 ) {
-  expect(host.request).toHaveBeenCalledWith(
+  expect(request).toHaveBeenCalledWith(
     "sessions.patch",
     expect.objectContaining({
       key: row.key,
@@ -130,20 +131,18 @@ describe("chat permission failure ownership", () => {
         await host.sessions.refresh({ agentId: "main", force: true });
         const controls = picker();
         selection = Promise.resolve(controls.onSelect("full"));
-        await vi.waitFor(() => expectPermissionPatch(host, selectedSession));
-        const container = document.createElement("div");
+        await vi.waitFor(() => expectPermissionPatch(host.request, selectedSession));
         const [currentPicker, setCurrentPicker] = createSignal(picker());
         const view = mountSolid(() => createComponent(ChatPermissionPicker, merge(currentPicker)), {
-          container,
+          container: document.createElement("div"),
         });
-        onTestFinished(view.unmount);
+        const trigger = view.container.querySelector<HTMLButtonElement>(
+          "[data-chat-permission-select]",
+        )!;
         const draw = () => {
           setCurrentPicker(picker());
           flush();
         };
-        const trigger = container.querySelector<HTMLButtonElement>(
-          "[data-chat-permission-select]",
-        )!;
         expectPicker(trigger, "full", true);
         expect(trigger.getAttribute("aria-label")).not.toContain("Applying permissions");
         void controls.onSelect("guarded");
@@ -249,15 +248,15 @@ describe("chat permission failure ownership", () => {
           state.sessionsResult = next.result;
         }
       });
-      const observation = host.sessions.observeRow(
-        { key: original.key, agentId: "main" },
-        () => {},
-      );
       const controls = () =>
         permissionPicker(
           state,
           state.sessionsResult?.sessions.find((row) => row.key === original.key),
         );
+      const observation = host.sessions.observeRow(
+        { key: original.key, agentId: "main" },
+        () => {},
+      );
       const successorError = "Successor's current error";
       const replace = async () => {
         current = {
@@ -280,7 +279,7 @@ describe("chat permission failure ownership", () => {
         const older = Promise.resolve(controls().onSelect("full"));
         operations.push(older);
         await patchIssued.promise;
-        expectPermissionPatch(host, original);
+        expectPermissionPatch(host.request, original);
         if (replacement === "before recovery") {
           await replace();
         }
@@ -410,7 +409,7 @@ describe("chat permission failure ownership", () => {
     try {
       await host.sessions.refresh({ agentId: "main", force: true });
       await permissionPicker(state, selectedChatSessionRow(state)).onSelect("full");
-      expectPermissionPatch(host, { key: state.sessionKey }, false);
+      expectPermissionPatch(host.request, { key: state.sessionKey }, false);
       if (scenario === "retired identity-less row") {
         expect(selectedChatSessionRow(state)).toBeUndefined();
         expectErrors(state, null);
