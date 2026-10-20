@@ -1,10 +1,7 @@
 import { expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import {
-  deleteSessionEntryLifecycle,
-  replaceSessionEntrySync,
-} from "../config/sessions/session-accessor.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -15,6 +12,7 @@ import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { profileActor, writeListEntry } from "./session-list-entry.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
@@ -73,11 +71,7 @@ test("preserves viewer pages across publications while bounding shared predicate
       sessionId,
       updatedAt,
       lastInteractionAt: 20 - updatedAt,
-      createdActor: {
-        type: "human",
-        source: "profile",
-        id: clients[owner]!.authenticatedUserProfile!.profileId,
-      },
+      createdActor: profileActor(clients[owner]!.authenticatedUserProfile!.profileId),
     });
     const store = {
       "agent:main:a": {
@@ -128,14 +122,9 @@ test("preserves viewer pages across publications while bounding shared predicate
         selectEntries.mockClear();
         for (const [index, client] of clients.entries()) {
           const expected = golden[revision]![index]!;
-          const projectOwner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
-          let result: Awaited<ReturnType<typeof listProjectedSessions>>;
-          try {
-            result = await read(client);
-            expect(projectOwner.mock.calls.length).toBeLessThanOrEqual(expected.total);
-          } finally {
-            projectOwner.mockRestore();
-          }
+          using projectOwner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
+          const result = await read(client);
+          expect(projectOwner.mock.calls.length).toBeLessThanOrEqual(expected.total);
           expectPage(result, expected.ids, expected.total);
           expect(result.count).toBe(expected.ids.length);
           expect(result.hasMore).toBe(expected.total > 2);
@@ -208,28 +197,20 @@ test("preserves viewer pages across publications while bounding shared predicate
         expect(unarchived.sessions.map((row) => row.sessionId)).toEqual(golden[revision]![0]!.ids);
         expect(predicate).not.toHaveBeenCalled();
         if (revision === 0) {
-          replaceSessionEntrySync(
-            { agentId: "main", sessionKey: "agent:main:a" },
-            { ...store["agent:main:a"], label: undefined, archivedAt: 2 },
-          );
-          replaceSessionEntrySync(
-            { agentId: "main", sessionKey: "agent:main:b" },
-            { ...store["agent:main:b"], visibility: "shared" },
-          );
+          writeListEntry("agent:main:a", {
+            ...store["agent:main:a"],
+            label: undefined,
+            archivedAt: 2,
+          });
+          writeListEntry("agent:main:b", { ...store["agent:main:b"], visibility: "shared" });
           await deleteSessionEntryLifecycle({
             agentId: "main",
             storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
             archiveTranscript: false,
             target: { canonicalKey: "agent:main:c", storeKeys: ["agent:main:c"] },
           });
-          replaceSessionEntrySync(
-            { agentId: "main", sessionKey: "agent:main:d" },
-            entry("d", 1, 11),
-          );
-          replaceSessionEntrySync(
-            { agentId: "main", sessionKey: "agent:main:f" },
-            { ...entry("f", 2, 12), visibility: "draft" },
-          );
+          writeListEntry("agent:main:d", entry("d", 1, 11));
+          writeListEntry("agent:main:f", { ...entry("f", 2, 12), visibility: "draft" });
         }
       }
     } finally {
@@ -255,7 +236,7 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
       updatedAt: sessionId === "aged" ? initialNow : initialNow + 2,
       archivedAt: 1,
       visibility: sessionId === "admin-only" ? "draft" : "shared",
-      createdActor: { type: "human", source: "profile", id: bob.id },
+      createdActor: profileActor(bob.id),
     });
     const store = Object.fromEntries(
       ["admin-only", "publication", "aged", "stable"].map((id) => [`agent:main:${id}`, entry(id)]),
@@ -302,10 +283,11 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
       await entered.promise;
       alice.connect.scopes = ["operator.read"];
       clock.mockReturnValue(initialNow + 60_001);
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "agent:main:publication" },
-        { ...entry("publication"), updatedAt: Date.now(), visibility: "draft" },
-      );
+      writeListEntry("agent:main:publication", {
+        ...entry("publication"),
+        updatedAt: Date.now(),
+        visibility: "draft",
+      });
       hold = false;
       paused.resolve(empty);
       const result = await pending;
@@ -367,11 +349,9 @@ test("shares concurrent list selection across row modes and refilters only publi
           sessionId: `s${index}`,
           updatedAt: now + index,
           visibility: "shared" as const,
-          createdActor: {
-            type: "human" as const,
-            source: "profile" as const,
-            id: (index === 127 ? bob : alice).authenticatedUserProfile!.profileId,
-          },
+          createdActor: profileActor(
+            (index === 127 ? bob : alice).authenticatedUserProfile!.profileId,
+          ),
         },
       ]),
     );
@@ -391,51 +371,41 @@ test("shares concurrent list selection across row modes and refilters only publi
         "s127",
         "s126",
       ]);
-      const owner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
-      try {
-        const repeated = await Promise.all(
-          Array.from({ length: 8 }, (_, i) => read(i % 2 ? "compact" : "sidebar")),
-        );
-        expect(repeated.map((result) => result.totalCount)).toEqual(Array(8).fill(128));
-        expect(owner).not.toHaveBeenCalled();
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: "agent:main:selection-0" },
-          {
-            ...store["agent:main:selection-0"]!,
-            updatedAt: now + 200,
-            visibility: "draft",
-          },
-        );
-        const changed = await read("compact");
-        expectPage(changed, ["s0", "s127"], 128);
-        expect(owner.mock.calls.length).toBeLessThan(32);
-        const other = await read("compact", bob);
-        expectPage(other, ["s127", "s126"], 127);
-        // An exact publication must not hide an expired retained partition.
-        clock.mockReturnValue(now + 60_128);
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: "agent:main:selection-1" },
-          {
-            ...store["agent:main:selection-1"]!,
-            updatedAt: Date.now(),
-          },
-        );
-        const expired = await read("compact");
-        expectPage(expired, ["s1", "s0"], 2);
-        setDisplayName(alice.authenticatedUserProfile!.profileId, "Renamed Alice");
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: "agent:main:selection-127" },
-          { ...store["agent:main:selection-127"]!, updatedAt: Date.now() },
-        );
-        const renamed = await read("compact");
-        expect(renamed.totalCount).toBe(3);
-        expect(
-          renamed.owners?.find((actor) => actor.id === alice.authenticatedUserProfile!.profileId)
-            ?.label,
-        ).toBe("Renamed Alice");
-      } finally {
-        owner.mockRestore();
-      }
+      using owner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
+      const repeated = await Promise.all(
+        Array.from({ length: 8 }, (_, i) => read(i % 2 ? "compact" : "sidebar")),
+      );
+      expect(repeated.map((result) => result.totalCount)).toEqual(Array(8).fill(128));
+      expect(owner).not.toHaveBeenCalled();
+      writeListEntry("agent:main:selection-0", {
+        ...store["agent:main:selection-0"]!,
+        updatedAt: now + 200,
+        visibility: "draft",
+      });
+      const changed = await read("compact");
+      expectPage(changed, ["s0", "s127"], 128);
+      expect(owner.mock.calls.length).toBeLessThan(32);
+      const other = await read("compact", bob);
+      expectPage(other, ["s127", "s126"], 127);
+      // An exact publication must not hide an expired retained partition.
+      clock.mockReturnValue(now + 60_128);
+      writeListEntry("agent:main:selection-1", {
+        ...store["agent:main:selection-1"]!,
+        updatedAt: Date.now(),
+      });
+      const expired = await read("compact");
+      expectPage(expired, ["s1", "s0"], 2);
+      setDisplayName(alice.authenticatedUserProfile!.profileId, "Renamed Alice");
+      writeListEntry("agent:main:selection-127", {
+        ...store["agent:main:selection-127"]!,
+        updatedAt: Date.now(),
+      });
+      const renamed = await read("compact");
+      expect(renamed.totalCount).toBe(3);
+      expect(
+        renamed.owners?.find((actor) => actor.id === alice.authenticatedUserProfile!.profileId)
+          ?.label,
+      ).toBe("Renamed Alice");
     } finally {
       projection.dispose();
       release();
