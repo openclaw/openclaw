@@ -52,22 +52,6 @@ function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, 
   }
 }
 
-function resolveBotDisplayName(params: {
-  accountName?: string;
-  agentId: string;
-  config: OpenClawConfig;
-}): string {
-  const { accountName, agentId, config } = params;
-  if (accountName?.trim()) {
-    return accountName.trim();
-  }
-  const agent = resolveAgentConfig(config, agentId);
-  if (agent?.name?.trim()) {
-    return agent.name.trim();
-  }
-  return agent?.identity?.name?.trim() || "OpenClaw";
-}
-
 async function processGoogleChatEvent(
   event: GoogleChatEvent,
   target: WebhookTarget,
@@ -291,11 +275,17 @@ async function processGoogleChatEvent(
 
   if (typingIndicator === "message") {
     try {
-      const botName = resolveBotDisplayName({
-        accountName: account.config.name,
-        agentId: route.agentId,
-        config,
-      });
+      const accountName = account.config.name;
+      const agentId = route.agentId;
+      let botName: string;
+      if (accountName?.trim()) {
+        botName = accountName.trim();
+      } else {
+        const agent = resolveAgentConfig(config, agentId);
+        botName = agent?.name?.trim()
+          ? agent.name.trim()
+          : agent?.identity?.name?.trim() || "OpenClaw";
+      }
       const result = await sendGoogleChatMessage({
         account,
         space: spaceId,
