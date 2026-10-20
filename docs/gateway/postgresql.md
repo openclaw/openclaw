@@ -239,6 +239,10 @@ exercise those paths with certificate verification:
 node scripts/test-database-conformance.mjs --engine postgres --connection "$OPENCLAW_DATABASE_DSN"
 ```
 
+The [PostgreSQL 17 TLS acceptance matrix](https://github.com/openclaw/openclaw/pull/177928)
+records the live CLI and Gateway runs, certificate rejection cases, and
+secret-redaction checks behind these support claims.
+
 ## Set up a fresh installation
 
 1. Provision the database, role, extensions, and connection secret above.
