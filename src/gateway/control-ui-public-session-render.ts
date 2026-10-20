@@ -162,6 +162,38 @@ const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
     if(event.target.closest?.("[data-public-latest]")){following=enabled();scrollLatest();updateControls()}
     if(event.target.closest?.("[data-public-refresh-now]")&&enabled()&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey&&!event.altKey){event.preventDefault();schedule(0)}
   });
+  function carryWidgetHeights(root,heights){
+    for(const frame of root.querySelectorAll("iframe[data-public-widget]")){const height=heights.get(frame.dataset.publicWidget);if(height)frame.style.height=height}
+  }
+  function reconcile(current,next,heights){
+    const page=current.querySelector(".page"),nextPage=next.querySelector(".page");
+    const previous=page?.querySelector(":scope > .transcript"),incoming=nextPage?.querySelector(":scope > .transcript");
+    if(!previous||!incoming)return false;
+    const oldRows=[...previous.children],newRows=[...incoming.children];
+    const keyed=rows=>rows.every(row=>row.dataset.publicItem&&row.dataset.publicRevision)&&new Set(rows.map(row=>row.dataset.publicItem)).size===rows.length;
+    if(!keyed(oldRows)||!keyed(newRows))return false;
+    const oldByKey=new Map(oldRows.map(row=>[row.dataset.publicItem,row]));
+    const kept=new Map(newRows.filter(row=>oldByKey.get(row.dataset.publicItem)?.dataset.publicRevision===row.dataset.publicRevision).map(row=>[row.dataset.publicItem,oldByKey.get(row.dataset.publicItem)]));
+    const keptOrder=oldRows.filter(row=>kept.has(row.dataset.publicItem));
+    if([...kept.values()].some((row,index)=>row!==keptOrder[index]))return false;
+    // Never detach a retained row: moving an iframe destroys its browsing context.
+    for(const node of [...previous.childNodes])if(kept.get(node.dataset?.publicItem)!==node)node.remove();
+    let cursor=previous.firstChild;
+    for(const row of newRows){
+      const retained=kept.get(row.dataset.publicItem);
+      if(retained)cursor=retained.nextSibling;
+      else{carryWidgetHeights(row,heights);previous.insertBefore(row,cursor)}
+    }
+    for(const node of [...page.childNodes])if(node!==previous)node.remove();
+    let before=true;
+    for(const node of [...nextPage.childNodes]){
+      if(node===incoming){before=false;continue}
+      page.insertBefore(node,before?previous:null);
+    }
+    for(const attribute of [...current.attributes])current.removeAttribute(attribute.name);
+    for(const attribute of next.attributes)current.setAttribute(attribute.name,attribute.value);
+    return true;
+  }
   async function refresh(){
     if(document.hidden||!enabled()||running)return;
     running=true;
@@ -174,7 +206,7 @@ const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
       if(response.status===304){status("upToDate");return}
       if(response.status!==200&&response.status!==404)throw new Error("Refresh failed");
       const next=new DOMParser().parseFromString(await response.text(),"text/html");
-      const main=next.querySelector("main[data-public-session]");
+      let main=next.querySelector("main[data-public-session]");
       const current=document.querySelector("main[data-public-session]");
       if(document.hidden||!current)return;
       if(!main){
@@ -189,8 +221,8 @@ const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
       const expanded=new Set([...current.querySelectorAll("details[open][data-public-item]")].map(row=>row.dataset.publicItem));
       for(const row of main.querySelectorAll("details[data-public-item]"))row.open=expanded.has(row.dataset.publicItem);
       const heights=new Map([...current.querySelectorAll("iframe[data-public-widget]")].map(frame=>[frame.dataset.publicWidget,frame.style.height]));
-      for(const frame of main.querySelectorAll("iframe[data-public-widget]")){const height=heights.get(frame.dataset.publicWidget);if(height)frame.style.height=height}
-      current.replaceWith(main);
+      if(reconcile(current,main,heights))main=current;
+      else{carryWidgetHeights(main,heights);current.replaceWith(main)}
       localize(main);enhance(main);
       document.title=next.title;syncTitle();
       // A revoked public read is already resolved; its inert script will not run here.
@@ -288,6 +320,7 @@ export function publicSessionTitle(title: string): string {
 export function renderPublicSessionDocument(params: {
   messages: unknown[];
   mediaBaseUrl?: string;
+  widgetUrls?: ReadonlyMap<string, string>;
   title: string;
   truncated: boolean;
   latestUrl: string;
@@ -356,17 +389,19 @@ export function renderPublicSessionDocument(params: {
       remaining -= html.length;
       media.push(html);
     }
-    if (params.mediaBaseUrl) {
-      for (const widget of item.widgets) {
-        const url = escapeHtml(`${params.mediaBaseUrl}&widget=${encodeURIComponent(widget.docId)}`);
-        const html = `<iframe class="widget" src="${url}" title="${widget.title ? escapeHtml(widget.title) : title}" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy" data-public-widget="${escapeHtml(widget.docId)}" style="height:${widget.height ?? 420}px"></iframe>`;
-        if (html.length > remaining) {
-          truncated = true;
-          break;
-        }
-        remaining -= html.length;
-        media.push(html);
+    for (const widget of item.widgets) {
+      const widgetUrl = params.widgetUrls?.get(widget.docId);
+      if (!widgetUrl) {
+        continue;
       }
+      const url = escapeHtml(widgetUrl);
+      const html = `<iframe class="widget" src="${url}" title="${widget.title ? escapeHtml(widget.title) : title}" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy" data-public-widget="${escapeHtml(widget.docId)}" style="height:${widget.height ?? 420}px"></iframe>`;
+      if (html.length > remaining) {
+        truncated = true;
+        break;
+      }
+      remaining -= html.length;
+      media.push(html);
     }
     entries.push({
       role: item.role,
@@ -380,14 +415,19 @@ export function renderPublicSessionDocument(params: {
       .update(entry.key ?? `${entry.role}:${entry.html}`)
       .digest("hex")
       .slice(0, 24);
-    if (entry.role === "tools") {
-      return entry.html.replace(
-        '<details class="tools"',
-        `<details class="tools" data-public-item="${key}"`,
-      );
-    }
     const continued = ordered[index - 1]?.role === entry.role;
-    return `<article class="message ${entry.role}${continued ? " continued" : ""}" data-public-item="${key}" ${copyLabel(entry.role === "user" ? "userMessage" : "assistantMessage")}><h2 class="speaker">${entry.role === "user" ? copyMarkup("user") : "OpenClaw"}</h2>${entry.role === "assistant" && !continued ? `<span class="avatar" aria-hidden="true">${LOBSTER_MARK}</span>` : ""}<div class="content" dir="auto">${entry.html}</div></article>`;
+    const html =
+      entry.role === "tools"
+        ? entry.html.replace(
+            '<details class="tools"',
+            `<details class="tools" data-public-item="${key}"`,
+          )
+        : `<article class="message ${entry.role}${continued ? " continued" : ""}" data-public-item="${key}" ${copyLabel(entry.role === "user" ? "userMessage" : "assistantMessage")}><h2 class="speaker">${entry.role === "user" ? copyMarkup("user") : "OpenClaw"}</h2>${entry.role === "assistant" && !continued ? `<span class="avatar" aria-hidden="true">${LOBSTER_MARK}</span>` : ""}<div class="content" dir="auto">${entry.html}</div></article>`;
+    const revision = createHash("sha256").update(html).digest("hex").slice(0, 24);
+    return html.replace(
+      `data-public-item="${key}"`,
+      `data-public-item="${key}" data-public-revision="${revision}"`,
+    );
   });
   const description = params.unavailable
     ? "Log in to open conversations you have access to."

@@ -1,12 +1,17 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
+import { buildPublicSessionWidgetUrl } from "./control-ui-public-session-attachments.js";
+import { projectPublicSessionItems } from "./control-ui-public-session-project.js";
 import {
   isPublicSessionShareActive,
   readPublicSessionShare,
 } from "./control-ui-public-session-read.js";
 import { renderPublicSessionDocument } from "./control-ui-public-session-render.js";
-import type { PublicSessionShareLocator } from "./control-ui-public-session-token.js";
+import {
+  mintPublicSessionWidgetToken,
+  type PublicSessionShareLocator,
+} from "./control-ui-public-session-token.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
@@ -42,16 +47,33 @@ export async function servePublicSessionRepresentation(params: {
     requestKey: params.requestKey,
     work: async () => {
       const session = await readPublicSessionShare(config, locator, { offset, projection });
-      return session
-        ? renderPublicSessionDocument({
-            ...session,
-            ...params.document,
-            isLatest: offset === 0,
-            ...(session.olderOffset !== undefined
-              ? { olderUrl: params.olderUrl(session.olderOffset) }
-              : {}),
-          })
-        : null;
+      if (!session) {
+        return null;
+      }
+      const widgetUrls = new Map<string, string>();
+      for (const item of projectPublicSessionItems(session.messages)) {
+        if (item.kind !== "message") {
+          continue;
+        }
+        for (const { docId } of item.widgets) {
+          const token = await mintPublicSessionWidgetToken(locator, docId);
+          if (token) {
+            widgetUrls.set(
+              docId,
+              buildPublicSessionWidgetUrl(params.document.assetBasePath ?? "", token),
+            );
+          }
+        }
+      }
+      return renderPublicSessionDocument({
+        ...session,
+        ...params.document,
+        widgetUrls,
+        isLatest: offset === 0,
+        ...(session.olderOffset !== undefined
+          ? { olderUrl: params.olderUrl(session.olderOffset) }
+          : {}),
+      });
     },
   });
   if (result.kind !== "ok") {

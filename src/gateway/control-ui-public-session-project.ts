@@ -4,11 +4,11 @@ import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
 import { parseCanvasDocumentHttpPath } from "../canvas/documents.js";
 import { extractCanvasFromRecord, extractCanvasShortcodes } from "../chat/canvas-render.js";
 import { isToolCallContentType, resolveToolBlockArgs } from "../chat/tool-content.js";
-import { readInlineWidgetReceipt } from "../sessions/transcript-visible-record.js";
 import { collectPublicSessionAttachments } from "./control-ui-public-session-attachments.js";
 import {
   publicSessionMessageEntry,
   publicSessionMessageText,
+  readPublicWidgetReceipt,
 } from "./control-ui-public-session-message.js";
 
 type PublicSessionWidget = { docId: string; title?: string; height?: number };
@@ -58,10 +58,7 @@ export function projectPublicSessionItems(messages: unknown[]): PublicSessionIte
   const receiptTitles = new Map<string, string>();
   const prepared = messages.map((message) => {
     const entry = publicSessionMessageEntry(message);
-    const receipt =
-      entry || asOptionalRecord(message)?.role === "custom"
-        ? hostedWidget(extractCanvasFromRecord(readInlineWidgetReceipt(message)))
-        : undefined;
+    const receipt = hostedWidget(extractCanvasFromRecord(readPublicWidgetReceipt(message)));
     if (receipt?.title) {
       receiptTitles.set(receipt.docId, receipt.title);
     }

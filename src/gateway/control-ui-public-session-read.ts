@@ -14,6 +14,7 @@ import type { PublicSessionCardFacts } from "./control-ui-public-session-card-fa
 import {
   publicSessionMessageEntry,
   publicSessionMessageText,
+  readPublicWidgetReceipt,
 } from "./control-ui-public-session-message.js";
 import { projectPublicSessionItems } from "./control-ui-public-session-project.js";
 import type { PublicSessionShareLocator } from "./control-ui-public-session-token.js";
@@ -411,6 +412,7 @@ export async function readPublicSessionWidget(
     const current = readAuthorizedTarget(cfg, locator, projection);
     return Boolean(
       selected &&
+      readPublicWidgetReceipt(asOptionalRecord(selected.event)?.message) &&
       current &&
       current.source.path === initial.source.path &&
       current.source.databaseIdentity === initial.source.databaseIdentity &&

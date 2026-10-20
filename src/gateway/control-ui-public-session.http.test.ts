@@ -25,6 +25,7 @@ import { createSessionRowProjectionFixture } from "./session-row-projection.test
 const reader = vi.hoisted(() => vi.fn());
 const shareActive = vi.hoisted(() => vi.fn());
 const tokenResolver = vi.hoisted(() => vi.fn());
+const widgetToken = vi.hoisted(() => vi.fn());
 const renderCard = vi.hoisted(() => vi.fn());
 vi.mock(import("./control-ui-public-session-card.js"), async (importOriginal) => ({
   ...(await importOriginal()),
@@ -38,6 +39,7 @@ vi.mock("./control-ui-public-session-read.js", () => ({
 // mock-isolation: The transport fixture supplies exact token outcomes without installation identity.
 vi.mock("./control-ui-public-session-token.js", () => ({
   resolvePublicSessionShareToken: tokenResolver,
+  mintPublicSessionWidgetToken: widgetToken,
 }));
 
 const TEST_CONFIG: OpenClawConfig = {
@@ -140,6 +142,7 @@ beforeEach(() => {
     const shareId = token.slice(3, 51);
     return /^[a-f0-9]{48}$/u.test(shareId) ? { ...LOCATOR, shareId } : null;
   });
+  widgetToken.mockReset().mockResolvedValue("v1.document-only");
 });
 
 afterEach(() => {
@@ -151,6 +154,18 @@ afterEach(() => {
 });
 
 describe("anonymous public session HTTP boundary", () => {
+  it("mints a document-scoped widget link under the configured base path", async () => {
+    reader.mockResolvedValue({
+      ...PUBLIC_SESSION,
+      messages: [{ role: "assistant", content: '[embed ref="chart" /]' }],
+    });
+    const response = await send(createPublicGateway("/control"), { path: requestPath("/control") });
+    expect(response.res.statusCode).toBe(200);
+    expect(widgetToken).toHaveBeenCalledWith(LOCATOR, "chart");
+    expect(response.getBody()).toContain(
+      'src="/control/share/session/media?widget=v1.document-only"',
+    );
+  });
   it.each(["", "/control"])(
     "serves only published text and keeps private APIs authenticated (%s)",
     async (basePath) => {

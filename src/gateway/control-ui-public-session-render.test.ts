@@ -59,7 +59,10 @@ describe("public session document", () => {
     startedAt: 1,
     timestamp: 2,
   });
-  const widgetOptions = { mediaBaseUrl: "/control/share/session/media?token=v1.opaque" };
+  const widgetOptions = {
+    mediaBaseUrl: "/control/share/session/media?token=v1.opaque",
+    widgetUrls: new Map([["cv_timeline", "/control/share/session/media?widget=v1.widget"]]),
+  };
 
   it("renders hosted shortcodes with the public widget URL and preserves surrounding text", () => {
     const page = JSDOM.fragment(
@@ -77,13 +80,37 @@ describe("public session document", () => {
     const frame = article.querySelector("iframe")!;
     expect(article.textContent).toContain("Before  After");
     expect(article.textContent).not.toContain("[embed");
-    expect(frame.getAttribute("src")).toBe(
-      "/control/share/session/media?token=v1.opaque&widget=cv_timeline",
-    );
+    expect(frame.getAttribute("src")).toBe("/control/share/session/media?widget=v1.widget");
+    expect(frame.src).not.toContain("v1.opaque");
     expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
     expect(frame.getAttribute("title")).toBe("A & B");
     expect(frame.style.height).toBe("1050px");
     expect(frame.getAttribute("referrerpolicy")).toBe("no-referrer");
+  });
+
+  it("renders only explicitly mapped widgets and gives byte-stable rows content revisions", () => {
+    const messages = [
+      widgetReceipt,
+      message("assistant", '[embed ref="unmapped" /]', {
+        content: [
+          { type: "toolCall", id: "read", name: "read", arguments: {} },
+          { type: "text", text: '[embed ref="unmapped" /]' },
+        ],
+      }),
+    ];
+    const html = render(messages, widgetOptions);
+    expect(render(messages, widgetOptions)).toBe(html);
+    const page = JSDOM.fragment(html);
+    expect(page.querySelectorAll("iframe")).toHaveLength(1);
+    for (const row of page.querySelectorAll(".transcript > *")) {
+      expect(row.getAttribute("data-public-item")).toBeTruthy();
+      expect(row.getAttribute("data-public-revision")).toMatch(/^[a-f0-9]{24}$/);
+    }
+    expect(
+      JSDOM.fragment(
+        render([widgetReceipt], { mediaBaseUrl: widgetOptions.mediaBaseUrl }),
+      ).querySelector("iframe"),
+    ).toBeNull();
   });
 
   it("merges a nested receipt into its same-turn shortcode and inherits its title", () => {
@@ -147,7 +174,7 @@ describe("public session document", () => {
     expect(page.textContent).toContain("https://www.youtube.com/watch?v=example");
   });
 
-  it("retains shortcode-only messages and requires a media base URL to render frames", () => {
+  it("retains shortcode-only messages and requires a mapped widget URL to render frames", () => {
     const messages = [message("assistant", '[embed ref="cv_timeline" /]')];
     expect(JSDOM.fragment(render(messages, widgetOptions)).querySelector("iframe")?.title).toBe(
       "A shared conversation",

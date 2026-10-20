@@ -9,11 +9,12 @@ import { serveControlUiPublicSessionMedia } from "./control-ui-public-session-me
 import { createRequest, createResponse } from "./server-http.test-harness.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
-const { readMessage, readWidget, active, resolveToken } = vi.hoisted(() => ({
+const { readMessage, readWidget, active, resolveToken, resolveWidgetToken } = vi.hoisted(() => ({
   readMessage: vi.fn(),
   readWidget: vi.fn(),
   active: vi.fn(),
   resolveToken: vi.fn(),
+  resolveWidgetToken: vi.fn(),
 }));
 // mock-isolation: Public publication state is controlled while exercising real media bytes and admission.
 vi.mock("./control-ui-public-session-read.js", () => ({
@@ -24,6 +25,7 @@ vi.mock("./control-ui-public-session-read.js", () => ({
 // mock-isolation: Token cryptography is covered by its owner; this suite exercises the resolved publication boundary.
 vi.mock("./control-ui-public-session-token.js", () => ({
   resolvePublicSessionShareToken: resolveToken,
+  resolvePublicSessionWidgetToken: resolveWidgetToken,
 }));
 
 const png = Buffer.from(
@@ -89,6 +91,7 @@ function storedMedia(media: unknown[]) {
 
 beforeEach(() => {
   resolveToken.mockReset().mockResolvedValue(locator);
+  resolveWidgetToken.mockReset().mockResolvedValue(null);
   active.mockReset().mockReturnValue(true);
   readMessage.mockReset().mockResolvedValue(message());
   readWidget.mockReset().mockResolvedValue(true);
@@ -106,7 +109,8 @@ describe("public session media", () => {
       const document = await createCanvasDocument({ html, cspSandbox: "scripts" });
       const gate = createControlUiPublicSessionRequestGate();
       gates.push(gate);
-      const query = `token=v1.YWJj&widget=${document.id}`;
+      resolveWidgetToken.mockResolvedValue({ locator, docId: document.id });
+      const query = "widget=v1.widget";
       const response = await request({ query, gate });
       expect(response.res.statusCode).toBe(200);
       expect(response.getBody()).toBe(html);
@@ -135,14 +139,17 @@ describe("public session media", () => {
       expect(unchanged.res.statusCode).toBe(304);
       expect(unchanged.getBody()).toBe("");
       active.mockReturnValue(false);
-      expect((await request({ query, gate })).res.statusCode).toBe(404);
+      const revoked = await request({ query, gate, headers: { "if-none-match": etag } });
+      expect(revoked.res.statusCode).toBe(404);
+      expect(revoked.getBody()).toBe("This widget is unavailable.");
     });
   });
 
   it("requires a publication receipt and script-only document even for an existing widget", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const document = await createCanvasDocument({ html: "<p>Private chart</p>" });
-      const query = `token=v1.YWJj&widget=${document.id}`;
+      resolveWidgetToken.mockResolvedValue({ locator, docId: document.id });
+      const query = "widget=v1.widget";
       expect((await request({ query })).res.statusCode).toBe(404);
       await createCanvasDocument({
         id: document.id,
@@ -152,7 +159,41 @@ describe("public session media", () => {
       readWidget.mockResolvedValue(false);
       expect((await request({ query })).res.statusCode).toBe(404);
       readWidget.mockResolvedValue(true);
-      expect((await request({ query: "token=v1.YWJj&widget=missing" })).res.statusCode).toBe(404);
+      resolveWidgetToken.mockResolvedValue({ locator, docId: "missing" });
+      expect((await request({ query })).res.statusCode).toBe(404);
+    });
+  });
+
+  it("uses only the document bound to a widget token and rejects attempts to select another", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const a = await createCanvasDocument({ html: "<p>A</p>", cspSandbox: "scripts" });
+      const b = await createCanvasDocument({ html: "<p>B</p>", cspSandbox: "scripts" });
+      resolveWidgetToken.mockResolvedValue({ locator, docId: a.id });
+      const response = await request({ query: "widget=v1.widget-a" });
+      expect(response.getBody()).toBe("<p>A</p>");
+      expect(readWidget).toHaveBeenCalledWith(config, locator, { docId: a.id, projection });
+      expect((await request({ query: `widget=v1.widget-a&widget=${b.id}` })).res.statusCode).toBe(
+        404,
+      );
+      expect((await request({ query: `token=v1.YWJj&widget=${b.id}` })).res.statusCode).toBe(404);
+    });
+  });
+
+  it("rechecks publication after reading a widget before sending its response", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const document = await createCanvasDocument({
+        html: "<p>Revoked</p>",
+        cspSandbox: "scripts",
+      });
+      resolveWidgetToken.mockResolvedValue({ locator, docId: document.id });
+      readWidget.mockImplementationOnce(async () => {
+        active.mockReturnValue(false);
+        return true;
+      });
+      const response = await request({ query: "widget=v1.widget" });
+      expect(response.res.statusCode).toBe(404);
+      expect(response.getBody()).toBe("This widget is unavailable.");
+      expect(response.setHeader).not.toHaveBeenCalledWith("ETag", expect.anything());
     });
   });
 

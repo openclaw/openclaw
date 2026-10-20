@@ -27,7 +27,10 @@ function openReader(
     renderPublicSessionDocument({
       title: "Conversation unavailable",
       messages: options.messages ?? [],
-      mediaBaseUrl: "/control/share/session/media?token=v1.opaque",
+      widgetUrls: new Map([
+        ["cv_size", "/control/share/session/media?widget=size"],
+        ["cv_other", "/control/share/session/media?widget=other"],
+      ]),
       truncated: false,
       unavailable: options.unavailable !== false,
       latestUrl: "/control/chat/main/private",
