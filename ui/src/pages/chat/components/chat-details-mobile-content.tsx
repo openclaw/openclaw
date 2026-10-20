@@ -183,7 +183,7 @@ function MobileRoot(
   });
   const progressNote = createMemo(() => {
     const markdown = props.details.progressCard?.markdown;
-    if (progress()?.currentStep || !markdown) {
+    if (progress()?.counts || !markdown) {
       return "";
     }
     // Use the full note's parser/sanitizer; the compact preview omits its bars.
@@ -250,11 +250,11 @@ function MobileRoot(
       {...props.content.entries}
       presented={props.presented}
       taskProgress={
-        progress()?.currentStep || progressNote()
+        progress()?.counts || progressNote()
           ? {
-              label: progress()?.currentStep?.step ?? progressNote(),
-              truncateDescription: !progress()?.currentStep,
-              leading: progress()?.currentStep ? (
+              label: (progress()?.counts ? progress()?.stepLabel : undefined) ?? progressNote(),
+              truncateDescription: !progress()?.counts,
+              leading: progress()?.counts ? (
                 <span
                   class="chat-details-mobile-root__step-marker"
                   data-status={progress()?.presentedCurrentStatus}
