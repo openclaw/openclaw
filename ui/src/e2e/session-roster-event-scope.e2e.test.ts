@@ -162,7 +162,8 @@ suite.define(() => {
       const selectedRow = sidebar.locator(`[data-session-key="${key}"]`);
       await expect.poll(() => selectedRow.textContent()).toContain("Weekly report");
       await gateway.waitForRequest("sessions.subscribe");
-      await waitForSessionRosterHydration(page);
+      // Let startup reconciliation settle before counting event-driven network traffic.
+      await page.waitForTimeout(1_200);
       const before = (await gateway.getRequests("sessions.list")).length;
       await captureUiProof(suite, page, "roster-before-other-agent-events.png");
       for (let burst = 0; burst < 3; burst += 1) {
