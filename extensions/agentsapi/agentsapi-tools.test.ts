@@ -2,42 +2,26 @@ import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentHarnessAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, assert, expect, it, vi } from "vitest";
-import { buildAgentsApiToolSurface } from "./agentsapi-tools.js";
-import { createModel } from "./agentsapi.test-support.js";
+import { afterEach, assert, expect, it, vi, type Mock } from "vitest";
+import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
+import { buildAgentsApiToolSurface, type AgentsApiToolExecutionResult } from "./agentsapi-tools.js";
 
 // mock-isolation: Transcript persistence is independent of Gateway file authorization.
 vi.mock("./agentsapi-transcript.js", () => ({ recordAgentsApiToolTranscript: vi.fn() }));
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["guarded", "read-only"] as const)(
-  "keeps %s Gateway PDF reads inside the recorded root, not the nested cwd",
-  async (permissionMode) => {
-    await withToolSurface(
-      { permissionMode, recordedRoot: true },
-      async ({ execute, inside, outside }) => {
-        // Plain text intentionally stops after the real file read, before PDF parsing or inference.
-        expect(await execute("inside", inside)).toMatchObject({
-          success: false,
-          error: expect.stringContaining("Expected PDF but got"),
-        });
-        expect(await execute("outside", outside)).toMatchObject({
-          success: false,
-          error: expect.stringContaining("not under an allowed directory"),
-        });
-      },
-    );
-  },
-);
-
-it("uses the prepared workspace when a restricted session has no recorded root", async () => {
-  await withToolSurface(
-    { permissionMode: "guarded", recordedRoot: false },
-    async ({ execute, inside, outside }) => {
+it.each([
+  { permissionMode: "guarded", recordedRoot: true },
+  { permissionMode: "read-only", recordedRoot: true },
+  { permissionMode: "guarded", recordedRoot: false },
+] as const)(
+  "confines $permissionMode PDF reads with recordedRoot=$recordedRoot",
+  async (options) => {
+    await withToolSurface(options, async ({ execute, inside, outside }) => {
+      // Plain text intentionally stops after the real file read, before PDF parsing or inference.
       expect(await execute("inside", inside)).toMatchObject({
         success: false,
         error: expect.stringContaining("Expected PDF but got"),
@@ -46,9 +30,9 @@ it("uses the prepared workspace when a restricted session has no recorded root",
         success: false,
         error: expect.stringContaining("not under an allowed directory"),
       });
-    },
-  );
-});
+    });
+  },
+);
 
 it("retains default media access in full mode and forwards turn exec restrictions", async () => {
   await withToolSurface(
@@ -70,16 +54,11 @@ it("retains default media access in full mode and forwards turn exec restriction
 });
 
 type ToolFixture = {
-  execute: (
-    id: string,
-    file: string,
-  ) => ReturnType<Awaited<ReturnType<typeof buildAgentsApiToolSurface>>["execute"]>;
+  execute: (id: string, file: string) => Promise<AgentsApiToolExecutionResult>;
   inside: string;
   outside: string;
-  construction: ReturnType<
-    typeof vi.fn<
-      NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurfaceAsync"]>
-    >
+  construction: Mock<
+    NonNullable<AgentHarnessAttemptParamsV2["hostCapabilities"]["createToolSurfaceAsync"]>
   >;
 };
 
@@ -103,10 +82,8 @@ async function withToolSurface(
     await fs.mkdir(path.dirname(outside), { recursive: true });
     await fs.writeFile(inside, "synthetic inside document");
     await fs.writeFile(outside, "synthetic outside document");
-    const authStorage = AuthStorage.inMemory();
     const controller = new AbortController();
-    const attempt = {
-      agentId: "main",
+    const attempt = createAttemptParams({
       sessionId: "permission-session",
       sessionKey: "agent:main:permission-session",
       sessionFile: state.statePath("permission-session.jsonl"),
@@ -131,14 +108,7 @@ async function withToolSurface(
       prompt: "Inspect the synthetic document.",
       timeoutMs: 5_000,
       abortSignal: controller.signal,
-      provider: "openai",
-      modelId: "fixture-model",
-      model: createModel(),
-      authStorage,
-      modelRegistry: ModelRegistry.inMemory(authStorage),
-      authProfileStore: { version: 1 as const, profiles: {} },
-      thinkLevel: "off" as const,
-    };
+    });
     const host = await createAgentHarnessHostCapabilitiesForTest({
       attempt,
       pluginId: "agentsapi",

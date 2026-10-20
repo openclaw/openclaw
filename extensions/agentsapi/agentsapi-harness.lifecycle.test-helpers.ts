@@ -1,6 +1,6 @@
 import { patchSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { expect, it, vi } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import {
   externalSessionFixture,
@@ -10,10 +10,8 @@ import { createHostedSession } from "./agentsapi.test-support.js";
 
 /** Shares the persistence suite's admitted database and mocked native execution. */
 export function registerNativeLifecycleTests(
-  resolveProviderAuth: ReturnType<
-    typeof vi.fn<
-      typeof import("openclaw/plugin-sdk/provider-auth-runtime").resolveApiKeyForProvider
-    >
+  resolveProviderAuth: Mock<
+    typeof import("openclaw/plugin-sdk/provider-auth-runtime").resolveApiKeyForProvider
   >,
 ) {
   it.each([
@@ -92,13 +90,14 @@ export function registerNativeLifecycleTests(
             terminal: { kind: "ok" },
           });
           const saved = await fixture.openStore().lookup(fixture.params.sessionId);
+          const successor = {
+            sessionId: "rotated-local-session",
+            previousSessionId: fixture.params.sessionId,
+          };
           if (predecessor) {
             await patchSessionEntry({
               ...fixture.params.sessionTarget,
-              update: () => ({
-                sessionId: "rotated-local-session",
-                previousSessionId: fixture.params.sessionId,
-              }),
+              update: () => successor,
             });
           }
           fixture.events.length = 0;
@@ -106,12 +105,7 @@ export function registerNativeLifecycleTests(
           const result = harness.withSessionContextReset(
             {
               ...fixture.params.sessionTarget,
-              ...(predecessor
-                ? {
-                    sessionId: "rotated-local-session",
-                    previousSessionId: fixture.params.sessionId,
-                  }
-                : {}),
+              ...(predecessor ? successor : {}),
               assertCurrent: () => {},
             },
             async (settle) => {
