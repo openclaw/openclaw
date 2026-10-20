@@ -105,16 +105,13 @@ it("reads GC owner facts without parsing unrelated session payloads", () => {
   }
 });
 
+const ownerJson = JSON.stringify({ sessionId: "owner", updatedAt: 1 });
 it.each([
-  { name: "unsettled row", payload: JSON.stringify({ sessionId: "owner", updatedAt: 1 }) },
-  { name: "malformed JSON", payload: "{" },
-  {
-    name: "uncertified validity flag",
-    payload: JSON.stringify({ sessionId: "owner", updatedAt: 1 }),
-    validity: 1,
-  },
-  { name: "retained marker without a window", payload: "{}", validity: -1 },
-])("refuses $name instead of authorizing cleanup", ({ payload, validity }) => {
+  ["unsettled row", ownerJson, undefined],
+  ["malformed JSON", "{", undefined],
+  ["uncertified validity flag", ownerJson, 1],
+  ["retained marker without a window", "{}", -1],
+] as const)("refuses %s instead of authorizing cleanup", (_name, payload, validity) => {
   const { scope, database, update, read } = ownerFixture("owner", { updatedAt: 1 });
   markCanonicalSessionValidationPending(database, [scope.sessionKey]);
   update("entry_json", payload);

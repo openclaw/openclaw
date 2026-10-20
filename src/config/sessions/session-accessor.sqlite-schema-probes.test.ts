@@ -1,6 +1,6 @@
 import path from "node:path";
 import { constants } from "node:sqlite";
-import { afterEach, expect, it, vi, describe } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
   trackSqliteStatementExecutions,
@@ -34,7 +34,6 @@ import {
 import * as entryCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
-import type { SessionMaintenanceMetadataResult } from "./session-accessor.sqlite-lifecycle-types.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { runSessionEntryWorkerMutation } from "./session-accessor.sqlite-replacement-worker.js";
 import {
@@ -172,7 +171,7 @@ it("refreshes admitted session readers after worker commits without schema or fr
     await expectMainKey("main");
     let fixtureWriteStarted = false;
     let configured: Promise<void> | undefined;
-    await runSessionEntryWorkerMutation<SessionMaintenanceMetadataResult>(
+    await runSessionEntryWorkerMutation(
       { ...options, path: writer.path },
       undefined,
       () => {},
@@ -293,7 +292,7 @@ it.each<{ scope: SessionEntryListScope; fullKeys: string[] }>([
 ])(
   "loads only selected cold snapshots outside the retention transaction: $scope",
   ({ scope, fullKeys }) => {
-    const { database, options, read, select } = fixture(listSessionEntriesReadOnly);
+    const { database, options, read, select } = fixture();
     const saved = { prompt: "cron saved snapshot", skills: [] };
     const usageFamilySessionIds = Array.from({ length: 1024 }, (_, i) => `previous-run-${i}`);
     runOpenClawAgentWriteTransaction((db) => {
@@ -361,7 +360,7 @@ it.each<{ scope: SessionEntryListScope; fullKeys: string[] }>([
   },
 );
 
-function fixture(list: typeof listSessionEntriesReadOnly) {
+function fixture(list = listSessionEntriesReadOnly) {
   const stateDir = tempDirs.make("selected-session-list-");
   const options = {
     agentId: "main",
@@ -369,6 +368,12 @@ function fixture(list: typeof listSessionEntriesReadOnly) {
     env: { OPENCLAW_STATE_DIR: stateDir },
   };
   const database = openOpenClawAgentDatabase(options);
+  const write = (key: string, entry: Parameters<typeof writeSessionEntry>[2]) =>
+    runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, key, entry), options);
+  const storeJson = (key: string, json: string) =>
+    database.db
+      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+      .run(json, key);
   const hidden = resolveInternalSessionEffectsIdentity({ agentId: "main", runId: "hidden" });
   runOpenClawAgentWriteTransaction((db) => {
     for (const name of ["c", "a", "b"]) {
@@ -383,11 +388,11 @@ function fixture(list: typeof listSessionEntriesReadOnly) {
   const scope = { agentId: options.agentId, env: options.env, storePath: options.path };
   const select = (selection: SessionEntryListScope) => list({ ...scope, ...selection });
   const read = (sessionKeys?: readonly string[]) => select({ projection: "list", sessionKeys });
-  return { database, hidden, options, scope, read, select };
+  return { database, hidden, options, scope, read, select, write, storeJson };
 }
 
 it("reads cron participants only after expiry selection and includes committed changes", () => {
-  const { database, options, scope: baseScope, select } = fixture(listSessionEntriesReadOnly);
+  const { database, scope: baseScope, select, write } = fixture();
   const sessionKey = "agent:main:cron:job:run:selected";
   const scope = { ...baseScope, sessionKey };
   const entry = {
@@ -395,7 +400,7 @@ it("reads cron participants only after expiry selection and includes committed c
     updatedAt: 2,
     skillsSnapshot: { prompt: "retained deletion candidate", skills: [] },
   };
-  runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, sessionKey, entry), options);
+  write(sessionKey, entry);
   recordSessionParticipant(scope, { identity: { type: "agent", id: "before" }, promptedAt: 1 });
   const readExpired = () =>
     select({ ...scope, expiredCronRuns: { agentId: "main", updatedBefore: 2 } });
@@ -410,10 +415,7 @@ it("reads cron participants only after expiry selection and includes committed c
   } finally {
     statements.restore();
   }
-  runOpenClawAgentWriteTransaction(
-    (db) => writeSessionEntry(db, sessionKey, { ...entry, updatedAt: 1 }),
-    options,
-  );
+  write(sessionKey, { ...entry, updatedAt: 1 });
   recordSessionParticipant(scope, { identity: { type: "agent", id: "after" }, promptedAt: 2 });
   expect(readExpired()).toEqual([
     {
@@ -433,37 +435,33 @@ it("reads cron participants only after expiry selection and includes committed c
 });
 
 it("retains unsplit snapshots on selected cron rows", () => {
-  const { database, options, read, select } = fixture(listSessionEntriesReadOnly);
+  const { read, select, write, storeJson } = fixture();
   const sessionKey = "agent:main:cron:job:run:legacy";
   const entry = { sessionId: "legacy", updatedAt: 1 };
-  runOpenClawAgentWriteTransaction((db) => writeSessionEntry(db, sessionKey, entry), options);
+  write(sessionKey, entry);
   read();
   const retained = { ...entry, skillsSnapshot: { prompt: "retained raw prompt", skills: [] } };
-  database.db
-    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-    .run(JSON.stringify(retained), sessionKey);
+  storeJson(sessionKey, JSON.stringify(retained));
   expect(select({ expiredCronRuns: { agentId: "main", updatedBefore: 2 } })).toEqual([
     { sessionKey, entry: retained },
   ]);
 });
 
-describe.each([
-  { mode: "readonly", list: listSessionEntriesReadOnly },
-  { mode: "core", list: listSessionEntriesCore },
-])("selected $mode listing", ({ list }) => {
-  it.each([
-    { selection: undefined, expected: ["a", "b", "c"] },
-    { selection: ["c", "missing", "a", "c", "hidden", "malformed"], expected: ["a", "c"] },
-    { selection: [], expected: [] },
-  ])("returns the ordered selected metadata for $selection", ({ selection, expected }) => {
-    const { database, hidden, options, read } = fixture(list);
-    runOpenClawAgentWriteTransaction((db) => {
-      writeSessionEntry(db, "agent:main:malformed", { sessionId: "malformed", updatedAt: 1 });
-    }, options);
+it.each(
+  [listSessionEntriesReadOnly, listSessionEntriesCore].flatMap((list) =>
+    [
+      { selection: undefined, expected: ["a", "b", "c"] },
+      { selection: ["c", "missing", "a", "c", "hidden", "malformed"], expected: ["a", "c"] },
+      { selection: [], expected: [] },
+    ].map(({ selection, expected }) => ({ list, selection, expected })),
+  ),
+)(
+  "$list.name returns the ordered selected metadata for $selection",
+  ({ list, selection, expected }) => {
+    const { hidden, read, write, storeJson } = fixture(list);
+    write("agent:main:malformed", { sessionId: "malformed", updatedAt: 1 });
     read();
-    database.db
-      .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-      .run("{", "agent:main:malformed");
+    storeJson("agent:main:malformed", "{");
     const rows = read(
       selection?.map((name) => (name === "hidden" ? hidden.sessionKey : `agent:main:${name}`)),
     );
@@ -471,47 +469,42 @@ describe.each([
       expected.map((name) => `agent:main:${name}`),
     );
     expect(rows.every(({ entry }) => entry.skillsSnapshot === undefined)).toBe(true);
-  });
-});
+  },
+);
 
-it("retains unrelated canonical-key errors for an empty selection", () => {
-  const { database, read } = fixture(listSessionEntriesReadOnly);
-  read();
-  // Explicitly pending repair rows must not disappear behind an unrelated selection.
-  database.db
-    .prepare(
-      "INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES(?, ?, ?, ?, 1)",
-    )
-    .run(
-      "AGENT:MAIN:UNRELATED",
-      "unrelated",
-      JSON.stringify({ sessionId: "unrelated", updatedAt: 1 }),
-      1,
+it.each([false, true])(
+  "rejects unrelated canonical-key corruption before selecting rows (delivery=%s)",
+  (deliveryAlias) => {
+    const { database, read, write, storeJson } = fixture();
+    const canonicalKey = "agent:main:matrix:channel:!MixedCase:example.org";
+    const key = deliveryAlias ? canonicalKey.toLowerCase() : "AGENT:MAIN:UNRELATED";
+    const entry = { sessionId: deliveryAlias ? key : "unrelated", updatedAt: 1 };
+    if (deliveryAlias) {
+      write(key, entry);
+    }
+    read();
+    if (deliveryAlias) {
+      storeJson(
+        key,
+        JSON.stringify({
+          ...entry,
+          delivery: normalizeSessionDeliveryState({
+            context: { channel: "matrix", to: "!MixedCase:example.org" },
+          }),
+        }),
+      );
+    } else {
+      database.db
+        .prepare(
+          "INSERT INTO session_nodes(session_key, current_session_id, entry_json, updated_at, entry_valid) VALUES(?, ?, ?, ?, 1)",
+        )
+        .run(key, entry.sessionId, JSON.stringify(entry), 1);
+    }
+    markCanonicalSessionValidationPending(database, [key]);
+    expect(() => read(deliveryAlias ? ["agent:main:a"] : [])).toThrow(
+      deliveryAlias
+        ? `non-canonical persisted row resolves to session key ${canonicalKey}`
+        : "non-canonical persisted row",
     );
-  markCanonicalSessionValidationPending(database, ["AGENT:MAIN:UNRELATED"]);
-  expect(() => read([])).toThrow("non-canonical persisted row");
-});
-
-it("validates unrelated warm delivery aliases before selecting listing keys", () => {
-  const { database, options, read } = fixture(listSessionEntriesReadOnly);
-  const canonicalKey = "agent:main:matrix:channel:!MixedCase:example.org";
-  const legacyKey = canonicalKey.toLowerCase();
-  runOpenClawAgentWriteTransaction((db) => {
-    writeSessionEntry(db, legacyKey, { sessionId: legacyKey, updatedAt: 1 });
-  }, options);
-  read();
-  const entry = {
-    sessionId: legacyKey,
-    updatedAt: 1,
-    delivery: normalizeSessionDeliveryState({
-      context: { channel: "matrix", to: "!MixedCase:example.org" },
-    }),
-  };
-  database.db
-    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-    .run(JSON.stringify(entry), legacyKey);
-  markCanonicalSessionValidationPending(database, [legacyKey]);
-  expect(() => read(["agent:main:a"])).toThrow(
-    `non-canonical persisted row resolves to session key ${canonicalKey}`,
-  );
-});
+  },
+);

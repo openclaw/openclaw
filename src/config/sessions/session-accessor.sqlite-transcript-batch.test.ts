@@ -41,6 +41,10 @@ function indexState(count: number, leaf: string) {
 function fixture() {
   const original = createSessionCompoundWorkerFixture();
   const { database, scope } = original;
+  const get = (table: string, columns: string) =>
+    database.db
+      .prepare(`SELECT ${columns} FROM ${table} WHERE session_id = ?`)
+      .get(scope.sessionId);
   return {
     ...original,
     write: (run: () => void) =>
@@ -53,7 +57,13 @@ function fixture() {
     single: (event: Parameters<typeof appendTranscriptEventInTransaction>[2]) =>
       appendTranscriptEventInTransaction(database, scope, event),
     all: (sql: string) => database.db.prepare(sql).all(scope.sessionId),
-    get: (sql: string) => database.db.prepare(sql).get(scope.sessionId),
+    window: () => get("session_windows", "updated_at, transcript_updated_at"),
+    index: () =>
+      get(
+        "session_transcript_index_state",
+        "active_event_count, active_message_count, indexed_seq, leaf_event_id, needs_rebuild",
+      ),
+    generation: () => get("transcript_rewrite_watermarks", "generation")?.generation,
     identities: (sessionId = scope.sessionId) =>
       database.db
         .prepare(
@@ -215,7 +225,7 @@ it.each(
 );
 
 it("rejects a scalar duplicate without an identity read or advancing transcript order", () =>
-  withFixture(({ database, events, write, single, get, identities }) => {
+  withFixture(({ database, events, write, single, index, identities }) => {
     const first = { ...message("first", null, 1), message: { role: "user", content: "first" } };
     const next = { ...message("next", "first", 3), message: { role: "user", content: "next" } };
     const reads = trackSqliteStatementExecutions(database.db, ["identities"], (sql) =>
@@ -243,83 +253,73 @@ it("rejects a scalar duplicate without an identity read or advancing transcript 
       { event_id: "first", seq: 0 },
       { event_id: "next", seq: 1 },
     ]);
-    expect(
-      get(
-        "SELECT active_event_count, active_message_count, indexed_seq, leaf_event_id FROM session_transcript_index_state WHERE session_id = ?",
-      ),
-    ).toEqual(indexState(2, "next"));
+    expect(index()).toMatchObject(indexState(2, "next"));
   }));
 
 it("settles batch recency and index once, including rejected attempts and a later rewrite", () =>
-  withFixture(({ database, scope, events, write, get, append: appendBatch }) => {
-    const append = (rows: ReturnType<typeof message>[]) =>
-      appendBatch(rows, { idempotencyKeyMode: "dedupe" });
-    const window = () =>
-      get("SELECT updated_at, transcript_updated_at FROM session_windows WHERE session_id = ?");
-    const index = () =>
-      get(
-        "SELECT active_event_count, active_message_count, indexed_seq, leaf_event_id, needs_rebuild FROM session_transcript_index_state WHERE session_id = ?",
+  withFixture(
+    ({ database, scope, events, write, window, index, generation, append: appendBatch }) => {
+      const append = (rows: ReturnType<typeof message>[]) =>
+        appendBatch(rows, { idempotencyKeyMode: "dedupe" });
+      vi.spyOn(Date, "now").mockReturnValue(1000);
+      write(() => expect(append([message("root", null, 10)])).toBe(1));
+      const originalGeneration = generation();
+      const writes = trackSqliteStatementExecutions(
+        database.db,
+        ["window", "index", "reads", "ensures"],
+        (sql) => {
+          if (/^select /i.test(sql)) {
+            return "reads";
+          }
+          if (/^insert into "(?:session_windows|transcript_rewrite_watermarks)"/i.test(sql)) {
+            return "ensures";
+          }
+          if (/^update "session_windows"/i.test(sql)) {
+            return "window";
+          }
+          return /^(?:insert into|update) "session_transcript_index_state"/i.test(sql)
+            ? "index"
+            : null;
+        },
       );
-    const generation = () =>
-      get("SELECT generation FROM transcript_rewrite_watermarks WHERE session_id = ?")?.generation;
-    vi.spyOn(Date, "now").mockReturnValue(1000);
-    write(() => expect(append([message("root", null, 10)])).toBe(1));
-    const originalGeneration = generation();
-    const writes = trackSqliteStatementExecutions(
-      database.db,
-      ["window", "index", "reads", "ensures"],
-      (sql) => {
-        if (/^select /i.test(sql)) {
-          return "reads";
-        }
-        if (/^insert into "(?:session_windows|transcript_rewrite_watermarks)"/i.test(sql)) {
-          return "ensures";
-        }
-        if (/^update "session_windows"/i.test(sql)) {
-          return "window";
-        }
-        return /^(?:insert into|update) "session_transcript_index_state"/i.test(sql)
-          ? "index"
-          : null;
-      },
-    );
-    expect(
-      withCounts(writes, () =>
-        write(() =>
-          expect(
-            append([
-              message("one", "root", 20),
-              message("two", "one", 30),
-              message("two", "one", 25),
-              {
-                ...message("rejected", "two", 40),
-                message: { role: "user", content: "retry", idempotencyKey: "one" },
-              },
-            ]),
-          ).toBe(2),
+      expect(
+        withCounts(writes, () =>
+          write(() =>
+            expect(
+              append([
+                message("one", "root", 20),
+                message("two", "one", 30),
+                message("two", "one", 25),
+                {
+                  ...message("rejected", "two", 40),
+                  message: { role: "user", content: "retry", idempotencyKey: "one" },
+                },
+              ]),
+            ).toBe(2),
+          ),
         ),
-      ),
-    ).toEqual({ window: 1, index: 1, reads: 2, ensures: 0 });
-    expect(events().map((event) => event.id)).toEqual(["root", "one", "two"]);
-    expect(window()).toEqual({ updated_at: 40, transcript_updated_at: 1001 });
-    expect(index()).toEqual({ ...indexState(3, "two"), needs_rebuild: 0 });
-    expect(generation()).toBe(originalGeneration);
-    write(() => expect(append([message("two", "one", 50)])).toBe(0));
-    expect(window()).toEqual({ updated_at: 50, transcript_updated_at: 1001 });
-    write(() =>
-      replaceSqliteTranscriptEventsInTransaction(database, scope, [message("reset", null, 60)]),
-    );
-    const rewrittenGeneration = generation();
-    expect(rewrittenGeneration).not.toBe(originalGeneration);
-    write(() => expect(append([message("after", "reset", 70)])).toBe(1));
-    expect(generation()).toBe(rewrittenGeneration);
-    expect(index()).toEqual({ ...indexState(2, "after"), needs_rebuild: 0 });
-  }));
+      ).toEqual({ window: 1, index: 1, reads: 2, ensures: 0 });
+      expect(events().map((event) => event.id)).toEqual(["root", "one", "two"]);
+      expect(window()).toEqual({ updated_at: 40, transcript_updated_at: 1001 });
+      expect(index()).toEqual({ ...indexState(3, "two"), needs_rebuild: 0 });
+      expect(generation()).toBe(originalGeneration);
+      write(() => expect(append([message("two", "one", 50)])).toBe(0));
+      expect(window()).toEqual({ updated_at: 50, transcript_updated_at: 1001 });
+      write(() =>
+        replaceSqliteTranscriptEventsInTransaction(database, scope, [message("reset", null, 60)]),
+      );
+      const rewrittenGeneration = generation();
+      expect(rewrittenGeneration).not.toBe(originalGeneration);
+      write(() => expect(append([message("after", "reset", 70)])).toBe(1));
+      expect(generation()).toBe(rewrittenGeneration);
+      expect(index()).toEqual({ ...indexState(2, "after"), needs_rebuild: 0 });
+    },
+  ));
 
 it.each(["commit prefix", "rollback"] as const)(
   "settles a throwing iterator before %s",
   (outcome) =>
-    withFixture(({ events, write, append: appendBatch, all, get }) => {
+    withFixture(({ events, write, append: appendBatch, all, window, index }) => {
       vi.spyOn(Date, "now").mockReturnValue(1000);
       write(() => appendBatch([message("root", null, 10)]));
       const feedback: boolean[] = [];
@@ -347,14 +347,8 @@ it.each(["commit prefix", "rollback"] as const)(
       ).toEqual(
         (retained ? ["root", "one", "two"] : ["root"]).map((message_id) => ({ message_id })),
       );
-      expect(
-        get("SELECT updated_at, transcript_updated_at FROM session_windows WHERE session_id = ?"),
-      ).toEqual({ updated_at: retained ? 40 : 10, transcript_updated_at: 1000 });
-      expect(
-        get(
-          "SELECT indexed_seq, leaf_event_id, active_message_count FROM session_transcript_index_state WHERE session_id = ?",
-        ),
-      ).toEqual({
+      expect(window()).toEqual({ updated_at: retained ? 40 : 10, transcript_updated_at: 1000 });
+      expect(index()).toMatchObject({
         indexed_seq: retained ? 2 : 0,
         leaf_event_id: retained ? "two" : "root",
         active_message_count: retained ? 3 : 1,

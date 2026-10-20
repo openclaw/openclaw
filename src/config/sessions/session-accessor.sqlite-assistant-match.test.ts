@@ -15,7 +15,7 @@ const sessionId = "assistant-match";
 
 beforeAll(() => {
   db = openNodeSqliteDatabase(":memory:");
-  // Raw legacy rows can predate identity indexing or contain invalid JSON.
+  // Legacy rows can predate identity indexing or contain invalid JSON.
   db.exec(`CREATE TABLE transcript_events (
       session_id TEXT NOT NULL, seq INTEGER NOT NULL, event_json TEXT, event_zstd BLOB,
       event_utf8_bytes INTEGER, navigation_json TEXT,
@@ -62,14 +62,9 @@ const answer = {
   message: { role: "assistant", idempotencyKey: "wanted", content: "complete answer ".repeat(256) },
 };
 it("retains the last duplicate message envelope in a compressed JavaScript match", () => {
-  const event = answer;
-  const json =
-    '{"id":"answer","message":{"role":"user","idempotencyKey":"other"},"message":{"role":"assistant","idempotencyKey":"wanted","content":"complete answer"}}'.replace(
-      "complete answer",
-      event.message.content,
-    );
+  const json = `{"id":"answer","message":{"role":"user","idempotencyKey":"other"},"message":${JSON.stringify(answer.message)}}`;
   expect(insert(0, json, true).event_zstd).not.toBeNull();
-  expect(findBoth(event.message.idempotencyKey)).toEqual([{ event }, { event }]);
+  expect(findBoth(answer.message.idempotencyKey)).toEqual([{ event: answer }, { event: answer }]);
   expect(findAssistantTranscriptEventInDatabase({ db }, sessionId, "other")).toBeUndefined();
   expect(find({ kind: "idempotency", key: "other" })).toBeUndefined();
 });
@@ -90,51 +85,39 @@ it("decodes only selected compressed canonical candidates", () => {
   };
   expect(insert(0, JSON.stringify(event), true).event_zstd).not.toBeNull();
   for (let seq = 1; seq <= 12; seq++) {
-    insert(
-      seq,
-      JSON.stringify({
-        ...event,
-        id: `unrelated-${seq}`,
-        message: {
-          ...event.message,
-          role: seq % 2 ? "toolResult" : "assistant",
-          idempotencyKey: "other",
-          __openclaw: { runId: "other-run" },
-        },
-      }),
-      true,
-    );
+    const message = {
+      ...event.message,
+      role: seq % 2 ? "toolResult" : "assistant",
+      idempotencyKey: "other",
+      __openclaw: { runId: "other-run" },
+    };
+    insert(seq, JSON.stringify({ id: `unrelated-${seq}`, message }), true);
   }
   const decode = vi.spyOn(codec, "decompress");
   const sql = trackSqliteStatementExecutions(db, ["transcript"], (query) =>
     query.includes('from "transcript_events"') ? "transcript" : null,
   );
-  const measuredFind = (match: SessionTranscriptEventMatch, decodes: number, queries: number) => {
-    decode.mockClear();
-    sql.counts.transcript = 0;
-    const found = find(match);
-    expect(decode).toHaveBeenCalledTimes(decodes);
-    expect(sql.counts.transcript).toBe(queries);
-    return found;
-  };
   try {
-    for (const match of [
-      { kind: "visible-final", runId: "missing" },
-      { kind: "idempotency", key: "missing" },
-      { kind: "active-assistant", runId: "missing" },
-    ] satisfies SessionTranscriptEventMatch[]) {
-      expect(measuredFind(match, 0, 1)).toBeUndefined();
+    for (const [match, expected] of [
+      [{ kind: "visible-final", runId: "missing" }, undefined],
+      [{ kind: "idempotency", key: "missing" }, undefined],
+      [{ kind: "active-assistant", runId: "missing" }, undefined],
+      [{ kind: "visible-final", runId: "wanted-run" }, { event }],
+      [{ kind: "idempotency", key: "wanted", assistant: true, runId: "wanted-run" }, { event }],
+      [{ kind: "idempotency", key: "wanted", deliveryMirror: true }, { event }],
+      [{ kind: "latest" }, { event: { id: "unrelated-12" } }],
+    ] satisfies [SessionTranscriptEventMatch, unknown][]) {
+      decode.mockClear();
+      sql.counts.transcript = 0;
+      const found = find(match);
+      expect(decode).toHaveBeenCalledTimes(expected ? 1 : 0);
+      expect(sql.counts.transcript).toBe(expected && match.kind !== "latest" ? 2 : 1);
+      if (match.kind === "latest") {
+        expect(found).toMatchObject(expected);
+      } else {
+        expect(found).toEqual(expected);
+      }
     }
-    for (const match of [
-      { kind: "visible-final", runId: "wanted-run" },
-      { kind: "idempotency", key: "wanted", assistant: true, runId: "wanted-run" },
-      { kind: "idempotency", key: "wanted", deliveryMirror: true },
-    ] satisfies SessionTranscriptEventMatch[]) {
-      expect(measuredFind(match, 1, 2)).toEqual({ event });
-    }
-    expect(measuredFind({ kind: "latest" }, 1, 1)).toMatchObject({
-      event: { id: "unrelated-12" },
-    });
   } finally {
     sql.restore();
     decode.mockRestore();

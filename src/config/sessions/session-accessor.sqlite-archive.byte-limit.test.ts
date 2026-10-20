@@ -32,17 +32,13 @@ vi.mock("./session-accessor.sqlite-archive-stream.js", async (importOriginal) =>
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-archive-byte-limit-");
 async function* buffers(...parts: string[]) {
-  for (const part of parts) {
-    yield Buffer.from(part);
-  }
+  yield* parts.map((part) => Buffer.from(part));
 }
 
 let tempDir: string;
-let storePath: string;
 
 beforeEach(() => {
   tempDir = sessionDirs.make();
-  storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
 });
 
 it.each([
@@ -90,7 +86,6 @@ it.each([
           : createHash("sha256").update(encoded.bytes).digest("hex"),
       archive_name: `${sessionId}.jsonl${encoded.suffix}`,
       created_at: index,
-      published_at: null,
     };
   });
   runOpenClawAgentWriteTransaction(() => {
@@ -147,6 +142,7 @@ it("bounds each framed record before reading more input and excludes its final n
 });
 
 it("aborts encoded output at the cap and removes staging files", async () => {
+  const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   const sessionId = "archive-output-overflow";
   const sessionKey = "agent:main:archive-output-overflow";
   await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });

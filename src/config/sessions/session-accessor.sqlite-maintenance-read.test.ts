@@ -69,9 +69,9 @@ it.each(["durable", "warm durable", "direct active", "runtime"] as const)(
       const expectReclamation = async (archived: number, durable: boolean) => {
         const result = await runSqliteSessionReclamation({ plan });
         expect(result).toMatchObject({ kind: "maintenance-plan", value: { archived } });
-        if (result.kind === "maintenance-plan") {
-          expect(result.value.durableNoCandidates === true).toBe(durable);
-        }
+        expect(
+          result.kind === "maintenance-plan" && result.value.durableNoCandidates === true,
+        ).toBe(durable);
       };
       if (protection === "warm durable") {
         await expect(runSqliteSessionReclamation({ plan })).resolves.toMatchObject({
@@ -106,6 +106,7 @@ it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"
       request.maintenanceConfig.maxEntries = 1;
       const lockedKey = "agent:main:locked-owner";
       const newKey = "agent:main:new-entry";
+      const preview = "Synthetic backfill preview";
       const transcriptScope = { agentId: "main", storePath, sessionKey, sessionId: sessionKey };
       const irrelevant = overlap === "transcript backfill" || overlap === "usage rollup";
       type CompletedPlan = Extract<SqliteSessionReclamationResult, { kind: "maintenance-plan" }>;
@@ -134,7 +135,7 @@ it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"
                 type: "message",
                 id: "backfill-message",
                 parentId: null,
-                message: { role: "user", content: "Synthetic backfill preview" },
+                message: { role: "user", content: preview },
               },
             ]),
           ).toBe(true);
@@ -145,17 +146,16 @@ it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"
         }
         observeSessionMaintenancePlanningWorker({
           async afterPrepare() {
-            if (overlaps >= 1) {
+            if (overlaps++ >= 1) {
               return;
             }
-            overlaps++;
             if (overlap === "transcript backfill") {
               await expect(
                 backfillSessionRowTranscriptFields({
                   ...transcriptScope,
                   sessionEntry: { sessionId: sessionKey, updatedAt },
                 }),
-              ).resolves.toEqual({ lastMessagePreview: "Synthetic backfill preview" });
+              ).resolves.toEqual({ lastMessagePreview: preview });
             } else if (overlap === "usage rollup") {
               await expect(
                 usage!.writeRollup([
@@ -222,13 +222,14 @@ it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"
         kickSessionEntryMaintenanceAfterWrite(request);
         const initial = await withinTest(first.promise, signal);
         if (irrelevant) {
-          expect(initial.kind).toBe("maintenance-plan");
-          if (initial.kind !== "maintenance-plan") {
-            throw new Error("Unrelated writes invalidated maintenance planning");
+          expect(initial).toMatchObject({
+            kind: "maintenance-plan",
+            value: { archived: 0, durableNoCandidates: true },
+            ageFact: { entryCount: 2 },
+          });
+          if (initial.kind === "maintenance-plan") {
+            expect(initial.nextAt).toBeGreaterThan(Date.now());
           }
-          expect(initial.value).toMatchObject({ archived: 0, durableNoCandidates: true });
-          expect(initial.ageFact?.entryCount).toBe(2);
-          expect(initial.nextAt).toBeGreaterThan(Date.now());
           expect(await withinTest(scheduled.promise, signal)).toBeGreaterThan(1_000);
           expect(completedPlans).toBe(1);
         } else {
@@ -243,11 +244,10 @@ it.for(["transcript backfill", "usage rollup", "new entry", "protection removal"
             loadSessionEntry({ storePath, sessionKey: archivedKey })?.archivedAt,
           ).toBeDefined();
         }
-        for (const key of overlap === "protection removal"
-          ? [sessionKey]
-          : [sessionKey, lockedKey]) {
-          expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
-        }
+        const preserved = overlap === "protection removal" ? [sessionKey] : [sessionKey, lockedKey];
+        expect(
+          preserved.map((key) => loadSessionEntry({ storePath, sessionKey: key })?.archivedAt),
+        ).toEqual(preserved.map(() => undefined));
       } finally {
         await usage?.release();
         await closeOpenClawAgentDatabaseByPathAsync(storePath);
