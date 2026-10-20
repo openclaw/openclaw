@@ -36,7 +36,6 @@ it("serializes concurrent Settings builders with checkout artifact writers", asy
   files.write("package.json", { type: "module" });
   plugin.write("package.json", {
     name: "@openclaw/fixture",
-    version: "1.0.0",
     type: "module",
     openclaw: { extensions: ["./index.ts"], controlUi: "./browser.ts" },
   });
@@ -160,7 +159,6 @@ it("rebuilds browser assets without invalidating unchanged manifest inputs", () 
   const files = fixtureFiles(rootDir);
   fs.symlinkSync(path.resolve("node_modules"), path.join(rootDir, "node_modules"), "junction");
   files.write("package.json", {
-    name: "fixture",
     type: "module",
     openclaw: { controlUi: "browser.ts" },
   });
@@ -198,10 +196,7 @@ it("rebuilds browser assets without invalidating unchanged manifest inputs", () 
     expect(files.read("openclaw.plugin.json")).toBe(manifest);
     expect(files.json("dist/openclaw.plugin.json").controlUi).toEqual(generatedManifest.controlUi);
     const after = fs.statSync(manifestPath, { bigint: true });
-    expect({ ino: after.ino, ctimeNs: after.ctimeNs }).toEqual({
-      ino: before.ino,
-      ctimeNs: before.ctimeNs,
-    });
+    expect(after).toMatchObject({ ino: before.ino, ctimeNs: before.ctimeNs });
   }
 
   // Generated publication retains the atomic writer's refusal of linked destinations.

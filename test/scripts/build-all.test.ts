@@ -60,6 +60,18 @@ const buildArtifactCacheUrl = resolveRuntimeWorkerUrl(
   toolingProbeRuntimeEntrypoints.buildArtifactCache,
 );
 
+const STEP = {
+  compile: "tsdown",
+  external: "external-plugins:local-dist",
+  bootstrap: "check-cli-bootstrap-imports",
+  ui: "ui:build",
+  info: "write-build-info",
+  unified: "write-unified-entry-dts",
+  sdk: "write-plugin-sdk-entry-dts",
+  copy: "plugins:assets:copy",
+  postbuild: "runtime-postbuild",
+};
+
 function getBuildAllStep(label: string) {
   const step = BUILD_ALL_STEPS.find((entry) => entry.label === label);
   if (!step) {
@@ -80,7 +92,7 @@ function buildMemoryLimit(cgroupGiB: number) {
 }
 
 function buildRunner() {
-  return {
+  const runner = {
     env: {},
     logger: { error: vi.fn(), warn: vi.fn() },
     memoryLimit: buildMemoryLimit(5),
@@ -88,6 +100,12 @@ function buildRunner() {
     runStep: vi.fn<(invocation: ReturnType<typeof resolveBuildAllStep>) => { status: number }>(
       () => ({ status: 0 }),
     ),
+  };
+  return {
+    ...runner,
+    calls: () => runner.runStep.mock.calls.map(([invocation]) => invocation),
+    run: (profile: string, options: Parameters<typeof runBuildAllSteps>[1] = {}) =>
+      runBuildAllSteps(profile, { ...runner, ...options }),
   };
 }
 
@@ -114,6 +132,22 @@ function pausedStep() {
   };
 }
 
+function runPipeline(
+  profile: string,
+  labels: string[],
+  handlers: Record<string, () => { status: number } | Promise<{ status: number }>>,
+) {
+  const calls: string[] = [];
+  const build = buildRunner().run(profile, {
+    steps: labeledSteps(labels),
+    runStep({ args: [label] }) {
+      calls.push(label!);
+      return handlers[label!]?.() ?? { status: 0 };
+    },
+  });
+  return { calls, build };
+}
+
 function buildCacheFixture(cache: Partial<BuildCache> = {}, label = "cached") {
   const rootDir = tempDirs.make("openclaw-build-cache-");
   const inputPath = writeFixture(rootDir, "src/input.ts", "input");
@@ -137,10 +171,10 @@ describe("resolveBuildAllStep", () => {
       () => new Date("2026-07-10T12:34:56.789Z"),
       () => commit,
     );
-    const uiInvocation = resolveBuildAllStep(getBuildAllStep("ui:build"), {
+    const uiInvocation = resolveBuildAllStep(getBuildAllStep(STEP.ui), {
       env: buildEnv,
     });
-    const buildInfoInvocation = resolveBuildAllStep(getBuildAllStep("write-build-info"), {
+    const buildInfoInvocation = resolveBuildAllStep(getBuildAllStep(STEP.info), {
       env: buildEnv,
     });
     expect(uiInvocation.options.env).toMatchObject({
@@ -162,8 +196,8 @@ describe("resolveBuildAllStep", () => {
       const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
       const result = resolveBuildAllStep(
         {
-          ...getBuildAllStep("tsdown"),
-          args: ["--import", importUrl, ...getBuildAllStep("tsdown").args.slice(2)],
+          ...getBuildAllStep(STEP.compile),
+          args: ["--import", importUrl, ...getBuildAllStep(STEP.compile).args.slice(2)],
         },
         {
           nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
@@ -254,7 +288,7 @@ describe("resolveBuildAllSteps", () => {
         return { status: 0 };
       });
       for (let build = 0; build < 2; build++) {
-        expect((await runBuildAllSteps(profile, { ...runner, cwd })).exitCode).toBe(0);
+        expect((await runner.run(profile, { cwd })).exitCode).toBe(0);
       }
       expect(signatures).toHaveLength(2);
       expect(signatures[1]).toBe(signatures[0]);
@@ -271,13 +305,12 @@ describe("resolveBuildAllSteps", () => {
     "generates native protocol models before compiling %s with skip-dts=%s",
     async (profile, skipDts) => {
       const runner = buildRunner();
-      const result = await runBuildAllSteps(profile, {
-        ...runner,
+      const result = await runner.run(profile, {
         cacheEnabled: false,
         env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: skipDts },
       });
       expect(result.exitCode).toBe(0);
-      const invocations = runner.runStep.mock.calls.map(([invocation]) => invocation);
+      const invocations = runner.calls();
       const generation = invocations.findIndex(({ args }) =>
         args.includes("scripts/prepare-native-protocol.mjs"),
       );
@@ -293,12 +326,12 @@ describe("resolveBuildAllSteps", () => {
     const steps = resolveBuildAllSteps("full");
     const labels = steps.map(({ label }) => label);
     const ui = expectDefined(
-      steps.find(({ label }) => label === "ui:build"),
+      steps.find(({ label }) => label === STEP.ui),
       "UI build",
     );
     expect(ui.cache).toBeUndefined();
-    expect(labels.indexOf("ui:build")).toBeGreaterThan(labels.indexOf("runtime-postbuild-stamp"));
-    expect(labels.indexOf("ui:build")).toBeLessThan(labels.indexOf("write-build-info"));
+    expect(labels.indexOf(STEP.ui)).toBeGreaterThan(labels.indexOf("runtime-postbuild-stamp"));
+    expect(labels.indexOf(STEP.ui)).toBeLessThan(labels.indexOf(STEP.info));
   });
 
   it("parses build-all CLI args before any build work", () => {
@@ -360,9 +393,9 @@ describe("resolveBuildAllSteps", () => {
     async (profile) => {
       const cwd = tempDirs.make("openclaw-phase-stamp-");
       const steps = resolveBuildAllSteps(profile, {})
-        .filter((step) => ["runtime-postbuild", "runtime-postbuild-stamp"].includes(step.label))
+        .filter((step) => [STEP.postbuild, "runtime-postbuild-stamp"].includes(step.label))
         .map((step) =>
-          step.label === "runtime-postbuild"
+          step.label === STEP.postbuild
             ? Object.assign({}, step, { args: ["-e", "process.exit(0)"] })
             : step,
         );
@@ -424,8 +457,7 @@ describe("resolveBuildAllSteps", () => {
   it("admits package once and freezes its heap for every child", async () => {
     const profile = "package";
     const tsdownSteps = resolveBuildAllSteps(profile).filter(
-      (step) =>
-        step.args.includes("scripts/tsdown-build.mts") || step.label === "write-unified-entry-dts",
+      (step) => step.args.includes("scripts/tsdown-build.mts") || step.label === STEP.unified,
     );
     const tsdownInvocations: ReturnType<typeof resolveBuildAllStep>[] = [];
     const executionOrder: string[] = [];
@@ -496,13 +528,12 @@ describe("resolveBuildAllSteps", () => {
     async ({ env, cgroupGiB, heapMb, nodeOptions, warns }) => {
       const runner = buildRunner();
       const { logger } = runner;
-      const result = await runBuildAllSteps("ciArtifacts", {
-        ...runner,
+      const result = await runner.run("ciArtifacts", {
         env,
         memoryLimit: buildMemoryLimit(cgroupGiB),
         resolveCacheState: () => ({ cacheable: true, fresh: false, reason: "missing-inputs" }),
       });
-      const invocations = runner.runStep.mock.calls.map(([invocation]) => invocation);
+      const invocations = runner.calls();
       expect(result.exitCode).toBe(0);
       const writer = expectDefined(
         invocations.find((invocation) =>
@@ -550,16 +581,11 @@ describe("resolveBuildAllSteps", () => {
 
       expect(result.exitCode).toBe(23);
       expect(labels).toEqual(
-        expect.arrayContaining([
-          "tsdown-ai",
-          "tsdown-packages",
-          "tsdown",
-          "write-unified-entry-dts",
-        ]),
+        expect.arrayContaining(["tsdown-ai", "tsdown-packages", STEP.compile, STEP.unified]),
       );
-      expect(labels.at(-1)).toBe("write-unified-entry-dts");
+      expect(labels.at(-1)).toBe(STEP.unified);
       expect(labels).not.toContain("check-plugin-sdk-exports");
-      for (const step of ["write-build-info", "write-cli-startup-metadata"]) {
+      for (const step of [STEP.info, "write-cli-startup-metadata"]) {
         expect(resolveBuildAllSteps(profile).some(({ label }) => label === step)).toBe(false);
       }
     },
@@ -574,44 +600,28 @@ describe("resolveBuildAllSteps", () => {
     async ({ runtimeExit, uiExit, expectedExit, throws }) => {
       const ui = Promise.withResolvers<{ status: number }>();
       const runtimeReached = Promise.withResolvers<void>();
-      const calls: string[] = [];
       let settled = false;
-      const build = runBuildAllSteps("runtime", {
-        ...buildRunner(),
-        steps: labeledSteps([
-          "tsdown",
-          "external-plugins:local-dist",
-          "check-cli-bootstrap-imports",
-          "ui:build",
-          "write-build-info",
-        ]),
-        runStep({ args: [label] }) {
-          calls.push(label!);
-          if (label === "ui:build") {
-            return ui.promise;
-          }
-          if (label === "check-cli-bootstrap-imports") {
+      const { calls, build } = runPipeline(
+        "runtime",
+        [STEP.compile, STEP.external, STEP.bootstrap, STEP.ui, STEP.info],
+        {
+          [STEP.ui]: () => ui.promise,
+          [STEP.bootstrap]: () => {
             runtimeReached.resolve();
             if (throws) {
               throw new Error("runtime writer failed");
             }
             return { status: runtimeExit };
-          }
-          return { status: 0 };
+          },
         },
-      });
+      );
       void build.then(
         () => (settled = true),
         () => (settled = true),
       );
       try {
         await runtimeReached.promise;
-        expect(calls).toEqual([
-          "tsdown",
-          "external-plugins:local-dist",
-          "check-cli-bootstrap-imports",
-          "ui:build",
-        ]);
+        expect(calls).toEqual([STEP.compile, STEP.external, STEP.bootstrap, STEP.ui]);
         expect(settled).toBe(false);
       } finally {
         ui.resolve({ status: uiExit });
@@ -621,86 +631,51 @@ describe("resolveBuildAllSteps", () => {
       } else {
         expect((await build).exitCode).toBe(expectedExit);
       }
-      expect(calls.includes("write-build-info")).toBe(!throws && expectedExit === 0);
+      expect(calls.includes(STEP.info)).toBe(!throws && expectedExit === 0);
     },
   );
-  it.each(["write-unified-entry-dts", "write-plugin-sdk-entry-dts"])(
+  it.each([STEP.unified, STEP.sdk])(
     "finishes late %s compiler work before starting the independent UI build",
     async (compiler) => {
       const compilerStep = pausedStep();
-      const calls: string[] = [];
-      const build = runBuildAllSteps("full", {
-        ...buildRunner(),
-        steps: labeledSteps([
-          "tsdown",
-          "external-plugins:local-dist",
-          compiler,
-          "check-cli-bootstrap-imports",
-          "ui:build",
-        ]),
-        runStep({ args: [label] }) {
-          calls.push(label!);
-          if (label === compiler) {
-            return compilerStep.run();
-          }
-          return { status: 0 };
-        },
-      });
+      const { calls, build } = runPipeline(
+        "full",
+        [STEP.compile, STEP.external, compiler, STEP.bootstrap, STEP.ui],
+        { [compiler]: compilerStep.run },
+      );
       try {
         await compilerStep.started;
-        expect(calls).toEqual(["tsdown", "external-plugins:local-dist", compiler]);
+        expect(calls).toEqual([STEP.compile, STEP.external, compiler]);
       } finally {
         compilerStep.finish();
       }
       expect((await build).exitCode).toBe(0);
-      expect(calls).toEqual([
-        "tsdown",
-        "external-plugins:local-dist",
-        compiler,
-        "check-cli-bootstrap-imports",
-        "ui:build",
-      ]);
+      expect(calls).toEqual([STEP.compile, STEP.external, compiler, STEP.bootstrap, STEP.ui]);
     },
   );
   it("waits for copied assets and emitted runtime metadata before UI, then joins independent checks", async () => {
     const copied = pausedStep();
     const metadata = pausedStep();
     const check = pausedStep();
-    const calls: string[] = [];
-    const build = runBuildAllSteps("full", {
-      ...buildRunner(),
-      steps: labeledSteps([
-        "tsdown",
-        "plugins:assets:copy",
-        "runtime-postbuild",
-        "check-plugin-sdk-exports",
-        "ui:build",
-        "write-build-info",
-      ]),
-      runStep({ args: [label] }) {
-        calls.push(label!);
-        if (label === "plugins:assets:copy") {
-          return copied.run();
-        }
-        if (label === "runtime-postbuild") {
-          return metadata.run();
-        }
-        if (label === "check-plugin-sdk-exports") {
-          return check.run();
-        }
-        return { status: 0 };
+    const { calls, build } = runPipeline(
+      "full",
+      [STEP.compile, STEP.copy, STEP.postbuild, "check-plugin-sdk-exports", STEP.ui, STEP.info],
+      {
+        [STEP.copy]: copied.run,
+        [STEP.postbuild]: metadata.run,
+        "check-plugin-sdk-exports": check.run,
       },
-    });
+    );
     await copied.started;
-    expect(calls).not.toContain("ui:build");
+    expect(calls).not.toContain(STEP.ui);
     copied.finish();
     await metadata.started;
-    expect(calls).not.toContain("ui:build");
+    expect(calls).not.toContain(STEP.ui);
     metadata.finish();
     await check.started;
     await Promise.resolve();
-    expect(calls).toContain("ui:build");
-    expect(calls).not.toContain("write-build-info");
+    expect(calls).toContain(STEP.ui);
+    expect(calls).not.toContain(STEP.info);
     check.finish();
     expect((await build).exitCode).toBe(0);
   });
@@ -744,8 +719,8 @@ describe("resolveBuildAllSteps", () => {
       ]);
       const env = spawn.mock.calls[0]![2].env!;
       const runner = buildRunner();
-      const result = await runBuildAllSteps("qaRuntime", { ...runner, env });
-      const invocations = runner.runStep.mock.calls.map(([invocation]) => invocation);
+      const result = await runner.run("qaRuntime", { env });
+      const invocations = runner.calls();
       expect(result.exitCode).toBe(0);
       const compiler = invocations.find((call) => call.args.includes("scripts/tsdown-build.mts"))!;
       expect(compiler.options.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe(skipDts ?? "1");
@@ -754,11 +729,11 @@ describe("resolveBuildAllSteps", () => {
       );
       expect(result.timings.map(({ label }) => label)).toEqual([
         "plugins:assets:build",
-        "tsdown",
-        "external-plugins:local-dist",
-        "check-cli-bootstrap-imports",
-        "plugins:assets:copy",
-        "runtime-postbuild",
+        STEP.compile,
+        STEP.external,
+        STEP.bootstrap,
+        STEP.copy,
+        STEP.postbuild,
         "build-stamp",
         "runtime-postbuild-stamp",
       ]);
@@ -805,8 +780,8 @@ describe("resolveBuildAllSteps", () => {
       const env = { OPENCLAW_DEV_SOURCE_ROOT: "/serving-checkout", ...overrides };
       const originalEnv = { ...env };
       const runner = buildRunner();
-      const result = await runBuildAllSteps(profile, { ...runner, cacheEnabled: false, env });
-      const invocations = runner.runStep.mock.calls.map(([invocation]) => invocation);
+      const result = await runner.run(profile, { cacheEnabled: false, env });
+      const invocations = runner.calls();
 
       expect(result.exitCode).toBe(0);
       const labels = result.timings.map((timing) => timing.label);
@@ -815,8 +790,8 @@ describe("resolveBuildAllSteps", () => {
           OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: runtimeOnly ? "1" : "0",
         }).map((step) => step.label),
       );
-      expect(labels).not.toContain("write-plugin-sdk-entry-dts");
-      expect(labels.includes("write-unified-entry-dts")).toBe(!runtimeOnly);
+      expect(labels).not.toContain(STEP.sdk);
+      expect(labels.includes(STEP.unified)).toBe(!runtimeOnly);
       expect(labels.includes("check-plugin-sdk-exports")).toBe(!runtimeOnly);
       expect(labels.includes("clean:dist")).toBe(profile === "package");
       const compilers = invocations.filter((call) =>
@@ -844,9 +819,9 @@ describe("build-all timing output", () => {
   it("summarizes phases slowest first with total time and status", () => {
     expect(
       formatBuildAllTimingSummary([
-        { label: "tsdown", status: "ran", durationMs: 99000 },
-        { label: "plugins:assets:copy", status: "cached", durationMs: 12 },
-        { label: "write-plugin-sdk-entry-dts", status: "ran", durationMs: 34567 },
+        { label: STEP.compile, status: "ran", durationMs: 99000 },
+        { label: STEP.copy, status: "cached", durationMs: 12 },
+        { label: STEP.sdk, status: "ran", durationMs: 34567 },
       ]),
     ).toBe(
       "[build-all] phase timings: total 2m 13.6s; slowest tsdown 1m 39s; write-plugin-sdk-entry-dts 34.6s; plugins:assets:copy (cached) 12ms",

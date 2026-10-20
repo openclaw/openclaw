@@ -88,22 +88,12 @@ describe("scripts bounded response reader", () => {
   });
 
   it.each([
-    { label: "equivalent", values: ["17", "017"], combined: "17, 017", readsBody: false },
-    { label: "conflicting", values: ["17", "12"], combined: "17, 12", readsBody: true },
-    { label: "malformed", values: ["17", "1e3"], combined: "17, 1e3", readsBody: true },
-    {
-      label: "unsafe decimal",
-      values: ["9007199254740993"],
-      combined: "9007199254740993",
-      readsBody: false,
-    },
-  ])("handles $label content-length values", async ({ values, combined, readsBody }) => {
-    const headers = new Headers();
-    for (const value of values) {
-      headers.append("content-length", value);
-    }
-    expect(headers.get("content-length")).toBe(combined);
-
+    { label: "equivalent", values: ["17", "017"], readsBody: false },
+    { label: "conflicting", values: ["17", "12"], readsBody: true },
+    { label: "malformed", values: ["17", "1e3"], readsBody: true },
+    { label: "unsafe decimal", values: ["9007199254740993"], readsBody: false },
+  ])("handles $label content-length values", async ({ values, readsBody }) => {
+    const headers = new Headers(values.map((value) => ["content-length", value]));
     const { response, state } = responseProbe(headers, readsBody);
 
     await expect(readBoundedResponseText(response, "probe", 16)).rejects.toThrow(

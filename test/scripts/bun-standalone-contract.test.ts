@@ -13,6 +13,10 @@ import {
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const version = "2026.10.3";
+const parse = (...flags: string[]) => parseStandaloneArguments(["out", ...flags]);
+const identity = (info: Parameters<typeof resolveStandaloneBuildIdentity>[0]) =>
+  resolveStandaloneBuildIdentity(info, version);
 function fixture() {
   const root = tempDirs.make("openclaw-standalone-contract-");
   const runtime = path.join(root, "runtime");
@@ -22,7 +26,7 @@ function fixture() {
 
 describe("standalone build interface", () => {
   it("defaults to JIT and selects exactly one explicit compilation mode", () => {
-    expect(parseStandaloneArguments(["out"])).toEqual({
+    expect(parse()).toEqual({
       outputDirectory: "out",
       mode: "jit",
       compileFlags: [],
@@ -31,13 +35,11 @@ describe("standalone build interface", () => {
       "--bytecode": "bytecode",
       "--compile-aot": "aot",
     })) {
-      const parsed = parseStandaloneArguments(["out", flag]);
+      const parsed = parse(flag);
       expect(parsed).toMatchObject({ mode });
     }
-    expect(() => parseStandaloneArguments(["out", "--bytecode", "--compile-aot"])).toThrow(
-      "at most one",
-    );
-    expect(() => parseStandaloneArguments(["out", "--unknown"])).toThrow("at most one");
+    expect(() => parse("--bytecode", "--compile-aot")).toThrow("at most one");
+    expect(() => parse("--unknown")).toThrow("at most one");
     expect(() => parseStandaloneArguments([])).toThrow("Usage:");
   });
 
@@ -46,7 +48,7 @@ describe("standalone build interface", () => {
       ["--plugins", "codex, slack,codex", "--bytecode"],
       ["--bytecode", "--plugins", "codex,slack"],
     ]) {
-      expect(parseStandaloneArguments(["out", ...flags])).toEqual({
+      expect(parse(...flags)).toEqual({
         outputDirectory: "out",
         mode: "bytecode",
         compileFlags: ["--bytecode"],
@@ -60,7 +62,7 @@ describe("standalone build interface", () => {
       ["--plugins", "--bytecode"],
       ["--plugins", "codex", "--plugins", "slack"],
     ]) {
-      expect(() => parseStandaloneArguments(["out", ...flags])).toThrow("--plugins");
+      expect(() => parse(...flags)).toThrow("--plugins");
     }
   });
 
@@ -94,23 +96,18 @@ describe("standalone build interface", () => {
 
   it("normalizes canonical runtime provenance", () => {
     expect(
-      resolveStandaloneBuildIdentity(
-        { version: "2026.10.3", commit: "A".repeat(40), builtAt: "2026-10-14T00:00:00.000Z" },
-        "2026.10.3",
-      ),
-    ).toEqual({ version: "2026.10.3", commit: "a".repeat(40) });
+      identity({ version, commit: "A".repeat(40), builtAt: "2026-10-14T00:00:00.000Z" }),
+    ).toEqual({ version, commit: "a".repeat(40) });
   });
 
   it.each([
-    [undefined, "2026.10.3"],
-    [{ version: "", commit: "a".repeat(40) }, "2026.10.3"],
-    [{ version: "2026.10.3", commit: null }, "2026.10.3"],
-    [{ version: "2026.10.3", commit: "abc123" }, "2026.10.3"],
-    [{ version: "2026.10.2", commit: "a".repeat(40) }, "2026.10.3"],
-  ])("refuses missing, invalid, or mixed runtime provenance (%s)", (buildInfo, packageVersion) => {
-    expect(() => resolveStandaloneBuildIdentity(buildInfo, packageVersion)).toThrow(
-      "Run pnpm build",
-    );
+    undefined,
+    { version: "", commit: "a".repeat(40) },
+    { version, commit: null },
+    { version, commit: "abc123" },
+    { version: "2026.10.2", commit: "a".repeat(40) },
+  ])("refuses missing, invalid, or mixed runtime provenance (%s)", (buildInfo) => {
+    expect(() => identity(buildInfo)).toThrow("Run pnpm build");
   });
 
   it("describes the executable and deterministic sidecar without following links", async () => {
