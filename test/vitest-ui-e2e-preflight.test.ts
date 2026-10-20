@@ -1,15 +1,11 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
+import { promisify } from "node:util";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { assertUiE2ePreflight } from "./vitest/vitest.ui-e2e-preflight.ts";
 
-const listeners = vi.hoisted(
-  () =>
-    new Array<{
-      server: ReturnType<typeof createServer>;
-      closed: ReturnType<typeof vi.fn>;
-    }>(),
-);
+type Listener = [ReturnType<typeof createServer>, ReturnType<typeof vi.fn>];
+const listeners = vi.hoisted(() => new Array<Listener>());
 vi.mock("node:http", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:http")>();
   const trackedServer = vi.fn(actual.createServer);
@@ -17,28 +13,24 @@ vi.mock("node:http", async (importOriginal) => {
     const server = actual.createServer(...args),
       closed = vi.fn();
     server.on("close", closed);
-    listeners.push({ server, closed });
+    listeners.push([server, closed]);
     return server;
   });
   return { ...actual, createServer: trackedServer };
 });
-// Native implementations must survive later shared-worker consumers.
 afterAll(() => vi.mocked(createServer).mockRestore());
 
 afterEach(async () => {
   try {
     // Keep a failed cleanup assertion from leaking its real listener into later tests.
-    for (const { server } of listeners) {
+    for (const [server] of listeners) {
       server.closeAllConnections();
       if (server.listening) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await promisify(server.close).call(server);
       }
     }
   } finally {
     listeners.length = 0;
-    vi.mocked(createServer).mockClear();
   }
 });
 
@@ -50,10 +42,9 @@ async function preflight(fetchImpl: typeof fetch = fetch, timeoutMs?: number) {
     expect(request).toHaveBeenCalledOnce();
     expect(request.mock.calls[0]?.[1]?.signal).toMatchObject({ aborted: true });
     expect(listeners).toHaveLength(1);
-    const { server, closed } = listeners[0]!;
+    const [server, closed] = listeners[0]!;
     expect(closed).toHaveBeenCalledOnce();
-    expect(server.listening).toBe(false);
-    expect(server.address()).toBeNull();
+    expect([server.listening, server.address()]).toEqual([false, null]);
   }
 }
 

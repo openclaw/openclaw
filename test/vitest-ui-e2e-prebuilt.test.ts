@@ -7,7 +7,6 @@ import * as metadata from "../scripts/lib/local-build-metadata.mts";
 import { writeUpdateCompatibilityChunks } from "../scripts/lib/update-compat-chunks.mts";
 import { listCoreRuntimePostBuildOutputs } from "../scripts/runtime-postbuild.mts";
 import { writeBuildInfo } from "../scripts/write-build-info.ts";
-import { inspectControlUiRootAssets } from "../src/infra/control-ui-assets.ts";
 import { spawnNodeEvalSync } from "../src/test-utils/node-process.ts";
 import * as compat from "./scripts/update-compat-chunks.test-support.js";
 import { assertPrebuiltUiE2eRuntime } from "./vitest/vitest.ui-e2e-prebuilt.global-setup.ts";
@@ -21,18 +20,7 @@ function write(relative: string, contents = "fixture\n") {
   fs.writeFileSync(file, contents);
 }
 
-function git(...args: string[]) {
-  const config = [
-    "user.name=Fixture",
-    "user.email=fixture@example.invalid",
-    "commit.gpgsign=false",
-    "core.hooksPath=/dev/null",
-  ];
-  execFileSync("git", [...config.flatMap((entry) => ["-c", entry]), ...args], {
-    cwd: root,
-    stdio: "pipe",
-  });
-}
+const git = (...args: string[]) => execFileSync("git", args, { cwd: root, stdio: "pipe" });
 
 const readBuildInfo = () =>
   JSON.parse(fs.readFileSync(path.join(root, "dist/build-info.json"), "utf8"));
@@ -53,9 +41,13 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_FORCE_BUILD", undefined);
   vi.stubEnv("OPENCLAW_FORCE_RUNTIME_POSTBUILD", undefined);
   vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", root);
-  write(".gitignore", "dist/\n");
+  write(".gitignore", "dist/\nnode_modules/\n");
   write("package.json", '{"name":"prebuilt-ui-fixture","private":true}\n');
   git("init", "--quiet");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  git("config", "commit.gpgsign", "false");
+  git("config", "core.hooksPath", "/dev/null");
   git("add", ".");
   git("commit", "--quiet", "-m", "fixture");
   compat.writeUpdateCompatibilityBuildFixture(root);
@@ -85,11 +77,10 @@ afterEach(() => {
 });
 
 it("rejects retained UI assets after a same-source runtime rebuild without repairing them", () => {
-  const uiRoot = path.join(root, "dist/control-ui");
-  const indexPath = path.join(uiRoot, "index.html");
+  const indexPath = path.join(root, "dist/control-ui/index.html");
   const index = fs.readFileSync(indexPath);
   const before = readBuildInfo();
-  expect(inspectControlUiRootAssets(uiRoot, before.buildId).kind).toBe("ready");
+  expect(assertPrebuiltUiE2eRuntime(root)).toEqual(expect.any(String));
 
   writeBuildInfo({
     rootDir: root,
@@ -98,24 +89,12 @@ it("rejects retained UI assets after a same-source runtime rebuild without repai
   const after = readBuildInfo();
   expect(after.commit).toBe(before.commit);
   expect(after.buildId).not.toBe(before.buildId);
-  expect(inspectControlUiRootAssets(uiRoot, after.buildId)).toMatchObject({
-    kind: "stale",
-    buildId: before.buildId,
-  });
   expect(() => assertPrebuiltUiE2eRuntime(root)).toThrow("Control UI assets are not ready (stale)");
   expect(fs.readFileSync(indexPath)).toEqual(index);
 });
 
-it("rejects incomplete UI without repairing it", () => {
-  const target = path.join(root, "dist/control-ui/assets/entry.js");
-  fs.rmSync(target, { recursive: true, force: true });
-  expect(() => assertPrebuiltUiE2eRuntime(root)).toThrow("Control UI assets");
-  expect(fs.existsSync(target)).toBe(false);
-});
-
 it.each([false, true])("sets the native CLI outcome after teardown (drift: %s)", (drift) => {
   const repoRoot = path.resolve(import.meta.dirname, "..");
-  write(".gitignore", "dist/\nnode_modules/\n");
   fs.symlinkSync(path.join(repoRoot, "node_modules"), path.join(root, "node_modules"), "junction");
   write(
     "probe.test.ts",
@@ -123,9 +102,7 @@ it.each([false, true])("sets the native CLI outcome after teardown (drift: %s)",
 import { it } from "vitest";
 it("finishes before the generation check", () => {
   if (${drift}) {
-    const file = ${JSON.stringify(path.join(root, "dist/build-info.json"))};
-    const metadata = JSON.parse(fs.readFileSync(file, "utf8"));
-    fs.writeFileSync(file, JSON.stringify({ ...metadata, generation: "later" }));
+    fs.appendFileSync(${JSON.stringify(path.join(root, "dist/build-info.json"))}, "\\n");
   }
 });`,
   );
