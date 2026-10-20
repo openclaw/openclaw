@@ -50,9 +50,7 @@ it("counts caller-visible conversations once through direct and delegated work b
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const ada = ensureProfileForEmail("counts-ada@example.test").id;
     const bob = ensureProfileForEmail("counts-bob@example.test").id;
-    const context = requestContext({
-      agents: { entries: { main: {}, work: {} } },
-    });
+    const context = requestContext({ agents: { entries: { main: {}, work: {} } } });
     setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const client = identifiedClient(ada);
     const now = Date.now();
@@ -60,10 +58,7 @@ it("counts caller-visible conversations once through direct and delegated work b
       const sessionKey = "agent:" + agentId + ":" + name;
       const scope = { agentId, sessionKey };
       const { owner, participants, ...entry } = fields;
-      replaceSessionEntrySync(scope, {
-        ...profileEntry(name, now, ada),
-        ...entry,
-      });
+      replaceSessionEntrySync(scope, { ...profileEntry(name, now, ada), ...entry });
       const ownerId = owner?.actor.id;
       if (owner && ownerId) {
         assignSessionOwner(scope, {
@@ -227,10 +222,7 @@ it("counts caller-visible conversations once through direct and delegated work b
       vi.spyOn(projection, "prepareSelection").mockImplementationOnce(async () => {
         assignSessionOwner(
           { agentId: "main", sessionKey: running },
-          {
-            owner: actor(bob),
-            assignedBy: actor(ada),
-          },
+          { owner: actor(bob), assignedBy: actor(ada) },
         );
         await patchSessionEntryCore(
           { agentId: "main", sessionKey: running },
@@ -313,17 +305,11 @@ it("updates personal membership after owner, participant, and archive publicatio
     expect(initial.ownerSessionCounts).toEqual([{ profileId: ada, open: 1, running: 0 }]);
     assignSessionOwner(
       { agentId: "main", sessionKey: "agent:main:reassigned" },
-      {
-        owner: actor(ada),
-        assignedBy: actor(bob),
-      },
+      { owner: actor(ada), assignedBy: actor(bob) },
     );
     recordSessionParticipant(
       { agentId: "main", sessionKey: "agent:main:participant" },
-      {
-        identity: { type: "profile", id: ada },
-        promptedAt: 10,
-      },
+      { identity: { type: "profile", id: ada }, promptedAt: 10 },
     );
     const involved = await listSessions({ client, context, request });
     expect(involved.sessions.map((row) => row.key).toSorted()).toEqual([

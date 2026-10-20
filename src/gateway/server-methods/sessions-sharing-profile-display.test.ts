@@ -5,7 +5,7 @@ import {
   recordInboundSessionMeta,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { setDisplayName } from "../../state/user-profile-writes.worker.js";
+import { setDisplayName as setName } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { profileSessionEntry } from "./sessions-read-cache.test-support.js";
@@ -16,20 +16,7 @@ import {
   soloClient,
 } from "./sessions-sharing.test-support.js";
 
-async function evidence(
-  sessionKey: string,
-  client: Parameters<typeof callSessionSharingHandler>[3],
-  context = sessionSharingTestContext(vi.fn()),
-) {
-  const responses = await callSessionSharingHandler(
-    "session.members.listEvidence",
-    { sessionKey },
-    context,
-    client,
-  );
-  expect(responses[0]?.[0]).toBe(true);
-  return responses[0]?.[1];
-}
+const evidence = callSessionSharingHandler.bind(null, "session.members.listEvidence");
 
 it.each([
   { senderName: "  Slack owner  ", label: "Slack owner" },
@@ -37,25 +24,21 @@ it.each([
 ])("presents channel owner attribution with name $senderName", ({ senderName, label }) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const profile = ensureProfileForEmail("channel-id-collision@example.test");
-    setDisplayName(profile.id, "Gateway profile name");
+    const { id } = ensureProfileForEmail("channel-id-collision@example.test");
+    setName(id, "Gateway profile name");
     const sessionKey = "agent:main:slack:channel:c-owner:thread:123.456";
     // Channel ids are opaque; matching a profile id must not adopt its display or identity.
     await recordInboundSessionMeta({
       storePath: resolveDefaultSessionStorePath("main"),
       sessionKey,
-      ctx: {
-        SenderId: profile.id,
-        SenderName: senderName,
-      },
+      ctx: { SenderId: id, SenderName: senderName },
     });
     const client = soloClient();
     client.connect.scopes = ["operator.admin"];
-    const result = await evidence(sessionKey, client);
-    expect(result).toMatchObject({
-      owner: { type: "human", id: profile.id, label },
-      role: "admin",
-    });
+    const context = sessionSharingTestContext(vi.fn());
+    const [ok, result] = (await evidence({ sessionKey }, context, client))[0]!;
+    expect(ok).toBe(true);
+    expect(result).toMatchObject({ owner: { type: "human", id, label }, role: "admin" });
     expect(result).not.toHaveProperty("owner.identity");
   }),
 );
@@ -63,27 +46,28 @@ it.each([
 it("hydrates persisted profile attribution on every read without changing the access identity", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const profile = ensureProfileForEmail("sharing-owner@example.test");
+    const { id } = ensureProfileForEmail("sharing-owner@example.test");
     const sessionKey = "agent:main:sharing-profile-display";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
-      profileSessionEntry("sharing-profile-display", 1, profile.id),
+      profileSessionEntry("sharing-profile-display", 1, id),
     );
     const context = sessionSharingTestContext(vi.fn());
-    const client = identifiedClient(profile.id, "Old login name");
+    const client = identifiedClient(id, "Old login name");
     for (const [index, name] of ["Current owner", "Renamed owner"].entries()) {
       const directoryEmail = `directory-only-${index}@example.test`;
       const directoryOnly = ensureProfileForEmail(directoryEmail);
-      expect(setDisplayName(directoryOnly.id, null)).toMatchObject({
+      expect(setName(directoryOnly.id, null)).toMatchObject({
         displayName: null,
         githubIdentity: null,
       });
-      setDisplayName(profile.id, name);
-      const result = await evidence(sessionKey, client, context);
+      setName(id, name);
+      const [ok, result] = (await evidence({ sessionKey }, context, client))[0]!;
+      expect(ok).toBe(true);
       expect(result).toMatchObject({
-        owner: { id: profile.id, label: name, identity: { type: "profile", id: profile.id } },
+        owner: { id, label: name, identity: { type: "profile", id } },
         identities: expect.arrayContaining([
-          expect.objectContaining({ id: profile.id, label: name }),
+          expect.objectContaining({ id, label: name }),
           expect.objectContaining({ id: directoryOnly.id, label: directoryEmail }),
         ]),
         role: "owner",

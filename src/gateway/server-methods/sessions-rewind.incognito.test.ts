@@ -14,7 +14,6 @@ import { invokeHandler } from "./sessions-rewind.handler.test-support.js";
 import {
   cfg,
   invokeMessageCut,
-  messageCutContext,
   mutationMethods,
   seedMessageCutSource,
   useMessageCutStorageFixture,
@@ -29,17 +28,11 @@ const lifetime = { assertCurrent() {}, assertReadable() {} };
 async function expectBranches(branches: [string, boolean][]) {
   const respond = await invokeHandler("sessions.branches.list", undefined, {
     params: { sessionKey },
-    context: messageCutContext(),
   });
-  expect(respond).toHaveBeenCalledWith(
-    true,
-    {
-      branches: expect.arrayContaining(
-        branches.map(([leafEntryId, active]) => expect.objectContaining({ leafEntryId, active })),
-      ),
-    },
-    undefined,
+  const expected = expect.arrayContaining(
+    branches.map(([leafEntryId, active]) => expect.objectContaining({ leafEntryId, active })),
   );
+  expect(respond).toHaveBeenCalledWith(true, { branches: expected }, undefined);
 }
 
 it.each(mutationMethods)("acquires memory history for unbound %s", (method) =>
@@ -53,10 +46,7 @@ it.each(mutationMethods)("acquires memory history for unbound %s", (method) =>
       ),
       "message-cut memory session",
     );
-    const captured = expectDefined(
-      captureSessionActorStorageOwner(scope, authority),
-      "message-cut memory owner",
-    );
+    const captured = expectDefined(captureSessionActorStorageOwner(scope, authority), "owner");
     const sql = observeHostDataSql();
     try {
       await expectBranches([

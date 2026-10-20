@@ -63,26 +63,17 @@ export async function seedMessageCutSource(
     },
   }));
   expect(created.ok).toBe(true);
-  for (const message of [
-    { eventId: "user-1", parentId: null, role: "user", content: "Remember lighthouse." },
-    { eventId: "assistant-1", parentId: "user-1", role: "assistant", content: "Lighthouse." },
-    { eventId: "user-2", parentId: "assistant-1", role: "user", content: "What did I say?" },
-    { eventId: "alternate-user", parentId: null, role: "user", content: "An alternate branch." },
-  ]) {
-    await appendTranscriptMessage(scope, {
-      eventId: message.eventId,
-      parentId: message.parentId,
-      message: { role: message.role, content: message.content },
-    });
+  for (const [eventId, parentId, role, content] of [
+    ["user-1", null, "user", "Remember lighthouse."],
+    ["assistant-1", "user-1", "assistant", "Lighthouse."],
+    ["user-2", "assistant-1", "user", "What did I say?"],
+    ["alternate-user", null, "user", "An alternate branch."],
+  ] as const) {
+    await appendTranscriptMessage(scope, { eventId, parentId, message: { role, content } });
   }
   await appendPreparedTranscriptEvent(
     scope,
-    {
-      type: "leaf",
-      id: "active-leaf",
-      parentId: "alternate-user",
-      targetId: "user-2",
-    },
+    { type: "leaf", id: "active-leaf", parentId: "alternate-user", targetId: "user-2" },
     () => {},
   );
   await waitForSessionTranscriptIndexReconcile(toDatabaseOptions(resolveSqliteScope(scope)));
@@ -128,20 +119,23 @@ export function invokeMessageCut(
 
 export async function readMutationStorage(scope: SourceScope) {
   const memory = captureSessionActorStorageOwner(scope, { assertCurrent() {}, authorize() {} });
+  const snapshots = memory?.owner?.listSessions(memory.authority) ?? [];
+  const options = memory ? undefined : toDatabaseOptions(resolveSqliteScope(scope));
+  const source = await readSessionEntryReadOnlyInWorker(scope);
+  const history = await loadTranscriptEvents(scope);
   if (memory) {
-    const snapshots = memory.owner?.listSessions(memory.authority) ?? [];
     return {
-      source: await readSessionEntryReadOnlyInWorker(scope),
-      history: await loadTranscriptEvents(scope),
+      source,
+      history,
       sessions: memory.owner?.listSessionEntries(memory.authority) ?? [],
       // Include retired windows so a rejected cut cannot leave orphaned private history.
       transcripts: await Promise.all(
-        snapshots.flatMap((snapshot) =>
-          snapshot.dependencySessionIds.map(async (sessionId) => ({
+        snapshots.flatMap(({ dependencySessionIds, target }) =>
+          dependencySessionIds.map(async (sessionId) => ({
             sessionId,
             events: await loadTranscriptEvents({
               ...scope,
-              sessionKey: snapshot.target.sessionKey,
+              sessionKey: target.sessionKey,
               sessionId,
             }),
           })),
@@ -149,23 +143,20 @@ export async function readMutationStorage(scope: SourceScope) {
       ),
     };
   }
-  const options = toDatabaseOptions(resolveSqliteScope(scope));
-  const source = await readSessionEntryReadOnlyInWorker(scope);
-  const history = await loadTranscriptEvents(scope);
-  const stored = withOpenClawAgentDatabaseReadOnly((database) => {
-    const db = getSessionKysely(database.db);
-    return {
-      sessions: listSessionEntriesReadOnly({ agentId: scope.agentId }),
-      // Include every transcript generation so a rejected copy cannot leave orphaned private rows.
-      transcripts: executeSqliteQuerySync(
-        database.db,
-        db.selectFrom("transcript_events").selectAll().orderBy("seq"),
-      ).rows,
-    };
-  }, options);
-  return {
-    source,
-    history,
-    ...expectDefined(stored.found ? stored.value : undefined, "mutation storage"),
-  };
+  const stored = withOpenClawAgentDatabaseReadOnly(
+    (database) => {
+      const db = getSessionKysely(database.db);
+      return {
+        sessions: listSessionEntriesReadOnly({ agentId: scope.agentId }),
+        // Include every transcript generation so a rejected copy cannot leave orphaned private rows.
+        transcripts: executeSqliteQuerySync(
+          database.db,
+          db.selectFrom("transcript_events").selectAll().orderBy("seq"),
+        ).rows,
+      };
+    },
+    expectDefined(options, "durable storage scope"),
+  );
+  const data = expectDefined(stored.found ? stored.value : undefined, "mutation storage");
+  return { source, history, ...data };
 }

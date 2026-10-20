@@ -67,9 +67,7 @@ export async function holdLifecycle(
     run: async () => {
       entered.resolve();
       await release.promise;
-      if (afterRelease) {
-        await afterRelease();
-      }
+      await afterRelease?.();
     },
   });
   await entered.promise;
@@ -104,10 +102,8 @@ export async function invokeHandler(
   options: Partial<GatewayRequestHandlerOptions> = {},
 ) {
   const respond = vi.fn();
-  await expectDefined(
-    sessionRewindHandlers[method],
-    `${method} handler`,
-  )({
+  const handler = expectDefined(sessionRewindHandlers[method], `${method} handler`);
+  await handler({
     req: { id: `${method}-request` } as never,
     params: messageCutParams(method, sessionKey, entryId),
     respond,
@@ -129,13 +125,11 @@ export async function restrictedOperator(
   await setCanonicalUserProfileRole(profile.id, "guest");
   const client = {
     connect: {
-      ...(fullProtocol
-        ? {
-            minProtocol: 1,
-            maxProtocol: 1,
-            client: { id: "test", version: "test", platform: "test", mode: "test" },
-          }
-        : {}),
+      ...(fullProtocol && {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: "test", version: "test", platform: "test", mode: "test" },
+      }),
       scopes: ["operator.write"],
     },
     authenticatedUserProfile: {
@@ -145,17 +139,12 @@ export async function restrictedOperator(
       updatedAt: profile.updatedAt,
     },
   } as GatewayClient;
-  const context: GatewayRequestContext = {
-    ...messageCutContext(),
-    getRuntimeConfig: () => ({
-      ...cfg,
-      ...sessionRoleConfig("guest", {
-        sessions: { others: "view" },
-        agents: [agentId],
-        scopes: ["operator.read", "operator.write"],
-        ...(sandbox ? { sandbox } : {}),
-      }),
-    }),
-  };
+  const roles = sessionRoleConfig("guest", {
+    sessions: { others: "view" },
+    agents: [agentId],
+    scopes: ["operator.read", "operator.write"],
+    ...(sandbox ? { sandbox } : {}),
+  });
+  const context = messageCutContext({ ...cfg, ...roles });
   return { profile, options: { client, context } };
 }

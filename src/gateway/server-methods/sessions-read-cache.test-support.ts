@@ -118,12 +118,7 @@ export function identifiedClient(profileId: string): GatewayClient {
       role: "operator",
       scopes: ["operator.read", "operator.write"],
     },
-    authenticatedUserProfile: {
-      profileId,
-      displayName: profileId,
-      hasAvatar: false,
-      updatedAt: 1,
-    },
+    authenticatedUserProfile: { profileId, displayName: profileId, hasAvatar: false, updatedAt: 1 },
   };
   const refresh = () => {
     const identity = client.authenticatedUserProfile?.profileId ?? profileId;
@@ -177,9 +172,7 @@ export async function listSessions(params: {
 }
 
 export async function seedSessions(activityTimes = false): Promise<OpenClawConfig> {
-  const config: OpenClawConfig = {
-    agents: { entries: { main: {}, work: {} } },
-  };
+  const config: OpenClawConfig = { agents: { entries: { main: {}, work: {} } } };
   setRuntimeConfigSnapshot(config);
   for (const [agentId, name, updatedAt, owner, overrides] of [
     ["main", "active", 400, "owner@example.com", {}],
@@ -189,10 +182,7 @@ export async function seedSessions(activityTimes = false): Promise<OpenClawConfi
   ] as const) {
     const scope = { agentId, sessionKey: `agent:${agentId}:${name}` };
     const entry = mergeSessionEntry(undefined, {
-      sessionId: `${agentId}-${name}`,
-      updatedAt,
-      createdActor: { type: "human", source: "profile", id: owner },
-      visibility: "shared",
+      ...profileSessionEntry(`${agentId}-${name}`, updatedAt, owner),
       ...overrides,
     });
     // mergeSessionEntry stamps the current time; activity fixtures need historical main rows.
