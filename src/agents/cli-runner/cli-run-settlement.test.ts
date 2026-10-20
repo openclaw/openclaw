@@ -29,6 +29,24 @@ import {
 } from "./cli-run-settlement.js";
 import { prepareCliRunTerminalReply } from "./terminal-reply.js";
 
+type RunResultParams = Parameters<typeof buildCliRunResult>[0];
+function testRunResult(
+  context: RunResultParams["context"],
+  output: RunResultParams["output"],
+  overrides: Partial<Omit<RunResultParams, "context" | "output">> = {},
+) {
+  return buildCliRunResult({
+    context,
+    output,
+    preparedReply: overrides.preparedReply ?? prepareCliRunTerminalReply(context, output),
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: true,
+    preparedContextAgentMeta: {},
+    ...overrides,
+  });
+}
+
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => ({
     hasHooks: (name: string) => name === "before_agent_reply",
@@ -131,15 +149,9 @@ describe("CLI empty result fallback", () => {
       const context = buildPreparedCliRunContext({ provider: "claude-cli" });
       context.params.terminalReplyExpectation = terminalReplyExpectation;
       const output = { text: "" };
-      const result = buildCliRunResult({
-        context,
-        output,
-        preparedReply: prepareCliRunTerminalReply(context, output),
+      const result = testRunResult(context, output, {
         bindingFlushOk: true,
-        usedHistoryPrompt: false,
-        userTurnHandled: true,
         sessionBindingDisabled: false,
-        preparedContextAgentMeta: {},
       });
       const classification = classifyEmbeddedAgentRunResultForModelFallback({
         provider: "claude-cli",
@@ -169,17 +181,15 @@ describe("CLI native continuity projection", () => {
               preparedContextAgentMeta: {},
               sessionBindingDisabled: false,
             })
-          : buildCliRunResult({
+          : testRunResult(
               context,
-              output: { text: "done" },
-              preparedReply: prepareCliRunTerminalReply(context, { text: "done" }),
-              effectiveCliSessionId: kind === "native" ? "next-native-session" : undefined,
-              bindingFlushOk: kind !== "no-native-id",
-              usedHistoryPrompt: false,
-              userTurnHandled: true,
-              sessionBindingDisabled: kind === "stateless",
-              preparedContextAgentMeta: {},
-            });
+              { text: "done" },
+              {
+                effectiveCliSessionId: kind === "native" ? "next-native-session" : undefined,
+                bindingFlushOk: kind !== "no-native-id",
+                sessionBindingDisabled: kind === "stateless",
+              },
+            );
       const entry: SessionEntry = {
         sessionId: context.params.sessionId,
         updatedAt: 1,
@@ -243,17 +253,15 @@ describe.each(["anthropic", undefined])(
                     preparedContextAgentMeta: {},
                     sessionBindingDisabled: false,
                   })
-                : buildCliRunResult({
+                : testRunResult(
                     context,
-                    output: { text: "done" },
-                    preparedReply: prepareCliRunTerminalReply(context, { text: "done" }),
-                    effectiveCliSessionId: "next-native-session",
-                    bindingFlushOk: true,
-                    usedHistoryPrompt: false,
-                    userTurnHandled: true,
-                    sessionBindingDisabled: false,
-                    preparedContextAgentMeta: {},
-                  });
+                    { text: "done" },
+                    {
+                      effectiveCliSessionId: "next-native-session",
+                      bindingFlushOk: true,
+                      sessionBindingDisabled: false,
+                    },
+                  );
 
         expect(result.meta.agentMeta?.provider).toBe(modelProvider ?? "claude-cli");
         if (kind === "hook-handled") {
@@ -326,15 +334,7 @@ it("captures only the last CLI result as the model's final message", async () =>
     textParts: ["Checking now", "Done"],
     rawFinalText: "Done",
   });
-  const result = buildCliRunResult({
-    context,
-    output,
-    preparedReply: prepareCliRunTerminalReply(context, output),
-    usedHistoryPrompt: false,
-    userTurnHandled: true,
-    sessionBindingDisabled: true,
-    preparedContextAgentMeta: {},
-  });
+  const result = testRunResult(context, output);
   expect(result.meta.finalAssistantRawText).toBe("Checking now\nDone");
   expect(resolveDiagnosticModelResponse(result)).toBe("Done");
 });
@@ -342,15 +342,7 @@ it("captures only the last CLI result as the model's final message", async () =>
 it("captures nothing when the CLI's final message was empty after narration", async () => {
   const context = buildPreparedCliRunContext({ provider: "claude-cli" });
   const output = transformCliResultText({ text: "Checking now", rawFinalText: "" });
-  const result = buildCliRunResult({
-    context,
-    output,
-    preparedReply: prepareCliRunTerminalReply(context, output),
-    usedHistoryPrompt: false,
-    userTurnHandled: true,
-    sessionBindingDisabled: true,
-    preparedContextAgentMeta: {},
-  });
+  const result = testRunResult(context, output);
   expect(result.meta.finalAssistantRawText).toBe("Checking now");
   expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
 });
@@ -358,15 +350,7 @@ it("captures nothing when the CLI's final message was empty after narration", as
 it("never captures host-synthesized optional silence as model output", async () => {
   const context = buildPreparedCliRunContext({ provider: "claude-cli" });
   context.params.terminalReplyExpectation = "optional";
-  const result = buildCliRunResult({
-    context,
-    output: { text: "" },
-    preparedReply: prepareCliRunTerminalReply(context, { text: "" }),
-    usedHistoryPrompt: false,
-    userTurnHandled: true,
-    sessionBindingDisabled: true,
-    preparedContextAgentMeta: {},
-  });
+  const result = testRunResult(context, { text: "" });
   expect(result.payloads).toBeUndefined();
   expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
   expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
@@ -378,14 +362,7 @@ it("preserves completed result boundaries for independent final delivery", async
     text: "First answer.\nLast answer.",
     textParts: ["First answer.", "Last answer."],
   };
-  const result = buildCliRunResult({
-    context,
-    output,
-    preparedReply: prepareCliRunTerminalReply(context, output),
-    usedHistoryPrompt: false,
-    userTurnHandled: true,
-    sessionBindingDisabled: true,
-    preparedContextAgentMeta: {},
+  const result = testRunResult(context, output, {
     assistantTranscriptOwned: true,
     assistantTranscriptIdempotencyKey: "synthetic-turn",
   });

@@ -13,10 +13,8 @@ import {
 } from "../agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agent-bundle-mcp-manager.test-support.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
-import { AuthStorage } from "../sessions/auth-storage.js";
-import { ModelRegistry } from "../sessions/model-registry.js";
-import { buildCodexUserMcpServersThreadConfigPatchForRun } from "./bundle-mcp-codex.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { prepareNativeMcpTestConfig } from "./bundle-mcp.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -61,7 +59,6 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
           });
       };
       const sessions: string[] = [];
-      const authStorage = AuthStorage.inMemory();
       await withEnvAsync({ OPENCLAW_STATE_DIR: workspaceDir }, async () => {
         try {
           for (const denied of [false, false, false, true]) {
@@ -86,38 +83,7 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
               },
             };
             if (adapter === "app-server") {
-              const patch = await buildCodexUserMcpServersThreadConfigPatchForRun({
-                cwd: workspaceDir,
-                run: {
-                  agentId: "main",
-                  sessionId,
-                  sessionKey,
-                  sessionFile: sessionKey,
-                  workspaceDir,
-                  config,
-                  prompt: "hello",
-                  timeoutMs: 5_000,
-                  runId: sessionId,
-                  provider: "openai",
-                  modelId: "gpt-5.6-luna",
-                  model: {
-                    id: "gpt-5.6-luna",
-                    name: "Test model",
-                    api: "openai-responses",
-                    provider: "openai",
-                    baseUrl: "http://127.0.0.1:1",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 100_000,
-                    maxTokens: 1_000,
-                  },
-                  authStorage,
-                  authProfileStore: { version: 1, profiles: {} },
-                  modelRegistry: ModelRegistry.inMemory(authStorage),
-                  thinkLevel: "off",
-                },
-              });
+              const patch = await prepareNativeMcpTestConfig({ workspaceDir, sessionId, config });
               expect(Object.keys(patch?.mcp_servers ?? {})).toEqual(
                 denied ? [] : ["alpha", "beta"],
               );

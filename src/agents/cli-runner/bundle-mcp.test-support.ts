@@ -10,6 +10,9 @@ import { captureEnv, setTestEnvValue, withEnvAsync } from "../../test-utils/env.
 import { disposeAllSessionMcpRuntimes } from "../agent-bundle-mcp-manager-api.js";
 import { bindSessionMcpRuntimeTestScheduler } from "../agent-bundle-mcp-manager.test-support.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { AuthStorage } from "../sessions/auth-storage.js";
+import { ModelRegistry } from "../sessions/model-registry.js";
+import { buildCodexUserMcpServersThreadConfigPatchForRun } from "./bundle-mcp-codex.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
 const tempHarness = createBundleMcpTempHarness();
@@ -103,16 +106,6 @@ export function cliNativeMcpPolicyContext(config: OpenClawConfig, sessionId: str
   };
 }
 
-function createEnabledBundleProbeConfig(): OpenClawConfig {
-  return {
-    plugins: {
-      entries: {
-        "bundle-probe": { enabled: true },
-      },
-    },
-  };
-}
-
 export async function prepareBundleProbeCliConfig(params?: {
   additionalConfig?: Parameters<typeof prepareCliBundleMcpConfig>[0]["additionalConfig"];
   env?: Parameters<typeof prepareCliBundleMcpConfig>[0]["env"];
@@ -127,9 +120,50 @@ export async function prepareBundleProbeCliConfig(params?: {
         args: ["./fake-claude.mjs"],
       },
       workspaceDir: bundleProbeWorkspaceDir,
-      config: createEnabledBundleProbeConfig(),
+      config: { plugins: { entries: { "bundle-probe": { enabled: true } } } },
       additionalConfig: params?.additionalConfig,
       env: params?.env,
     });
+  });
+}
+
+export function prepareNativeMcpTestConfig(params: {
+  workspaceDir: string;
+  sessionId: string;
+  config: OpenClawConfig;
+  senderId?: string;
+}) {
+  const { workspaceDir, sessionId } = params;
+  const authStorage = AuthStorage.inMemory();
+  const sessionKey = `agent:main:${sessionId}`;
+  return buildCodexUserMcpServersThreadConfigPatchForRun({
+    cwd: workspaceDir,
+    run: {
+      ...params,
+      agentId: "main",
+      sessionKey,
+      sessionFile: sessionKey,
+      prompt: "hello",
+      timeoutMs: 5_000,
+      runId: sessionId,
+      provider: "openai",
+      modelId: "gpt-5.6-luna",
+      model: {
+        id: "gpt-5.6-luna",
+        name: "Test model",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "http://127.0.0.1:1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 100_000,
+        maxTokens: 1_000,
+      },
+      authStorage,
+      authProfileStore: { version: 1, profiles: {} },
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+      thinkLevel: "off",
+    },
   });
 }

@@ -2,6 +2,7 @@
 import { vi, type Mock } from "vitest";
 import type { enqueueSessionEventForHost } from "../../auto-reply/reply/session-event-handoff.js";
 import type { getProcessSupervisor } from "../../process/supervisor/index.js";
+import type { RunExit } from "../../process/supervisor/types.js";
 import { withTestRunAdmission } from "../admitted-run-context.test-support.js";
 import { executeDeps } from "./execute-deps.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -49,8 +50,7 @@ setCliRunnerExecuteTestDeps({
       spawn: async (params: Parameters<SupervisorSpawnFn>[0]) => {
         let stdoutDelivered = false;
         let stderrDelivered = false;
-        // Supervisor tests sometimes return captured output even when streaming
-        // was requested; replay it through callbacks once to match production.
+        // Replay captured output once when the fixture did not stream it.
         const wrappedParams = {
           ...params,
           ...(params.mode === "child" && params.resolveArgs
@@ -71,8 +71,7 @@ setCliRunnerExecuteTestDeps({
         };
         const managedRun = await supervisorSpawnMock(wrappedParams);
         if (!managedRun) {
-          // A defeated or reset once-mock returns undefined; fail loudly instead
-          // of letting the run wedge into an opaque test timeout.
+          // A consumed once-mock must fail instead of hanging the run.
           throw new Error(
             "supervisorSpawnMock returned no managed run; a test consumed or reset the mock implementation",
           );
@@ -84,8 +83,6 @@ setCliRunnerExecuteTestDeps({
           wait: async () => {
             const exit = await wait();
             if (params.captureOutput === false) {
-              // Production streams stdout/stderr through callbacks; replay captured
-              // output once so tests cover streaming and captured-output paths.
               if (!stdoutDelivered && exit.stdout) {
                 params.onStdout?.(exit.stdout);
               }
@@ -112,22 +109,7 @@ setCliRunnerExecuteTestDeps({
   enqueueSessionEvent: (text, options) => enqueueSessionEventMock(text, options),
 });
 
-type MockRunExit = {
-  reason:
-    | "manual-cancel"
-    | "overall-timeout"
-    | "no-output-timeout"
-    | "spawn-error"
-    | "signal"
-    | "exit";
-  exitCode: number | null;
-  exitSignal: NodeJS.Signals | number | null;
-  durationMs: number;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-  noOutputTimedOut: boolean;
-};
+type MockRunExit = Omit<RunExit, "oomScoreWrapperSelected">;
 
 type ManagedRunMock = {
   runId: string;

@@ -14,9 +14,7 @@ import {
 } from "../agent-bundle-mcp-manager-api.js";
 import { getSessionMcpRuntimeTestManager } from "../agent-bundle-mcp-manager.test-support.js";
 import { createMcpProofPluginRegistry } from "../mcp-connection-resolver.test-fixtures.js";
-import { AuthStorage } from "../sessions/auth-storage.js";
-import { ModelRegistry } from "../sessions/model-registry.js";
-import { buildCodexUserMcpServersThreadConfigPatchForRun } from "./bundle-mcp-codex.js";
+import { prepareNativeMcpTestConfig } from "./bundle-mcp.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -111,39 +109,11 @@ it("keeps requester tools callable across static native preflight until session 
         });
         expect(tools?.tools.map((tool) => tool.name)).toEqual(["requester__read_note"]);
         try {
-          const authStorage = AuthStorage.inMemory();
-          const patch = await buildCodexUserMcpServersThreadConfigPatchForRun({
-            cwd: workspaceDir,
-            run: {
-              agentId: "main",
-              sessionId,
-              sessionKey,
-              sessionFile: sessionKey,
-              workspaceDir,
-              config,
-              senderId: "alice",
-              prompt: "hello",
-              timeoutMs: 5_000,
-              runId: sessionId,
-              provider: "openai",
-              modelId: "gpt-5.6-luna",
-              model: {
-                id: "gpt-5.6-luna",
-                name: "Test model",
-                api: "openai-responses",
-                provider: "openai",
-                baseUrl: "http://127.0.0.1:1",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 100_000,
-                maxTokens: 1_000,
-              },
-              authStorage,
-              authProfileStore: { version: 1, profiles: {} },
-              modelRegistry: ModelRegistry.inMemory(authStorage),
-              thinkLevel: "off",
-            },
+          const patch = await prepareNativeMcpTestConfig({
+            workspaceDir,
+            sessionId,
+            config,
+            senderId: "alice",
           });
           expect(Object.keys(patch?.mcp_servers ?? {})).toEqual(["static"]);
           const requesterTool = expectDefined(tools?.tools[0], "requester tool");
