@@ -7,18 +7,10 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const helper = path.resolve(".github/actions/setup-node-env/dependency-fingerprint.mjs");
 
-function dependencyFingerprint(root: string, frozenLockfile = true) {
-  return execFileSync(
-    process.execPath,
-    [helper, "--workspace", root, "--frozen-lockfile", String(frozenLockfile)],
-    { encoding: "utf8" },
-  ).trim();
-}
-
 it("fingerprints dependency install inputs without ordinary script churn", () => {
   const { git, write, json, remove, fingerprint } = createFingerprintFixture();
   const writeManifest = (manifest: Record<string, unknown>) => json("package.json", manifest);
-  const unrelatedManifest = "test/fixtures/other/package.json";
+  const unrelatedManifest = "other/package.json";
   const writeOther = (version = "1.0.0") => json(unrelatedManifest, { name: "other", version });
   const writeLock = (lock: string) => write("pnpm-lock.yaml", lock);
   const expectOtherInvalidation = (previous: string, included = true) => {
@@ -26,8 +18,7 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
     expect(fingerprint() !== previous).toBe(included);
     writeOther();
   };
-  const dependencyLock = (value: string) =>
-    `importers:\n  .:\n    dependencies:\n      other:${value}\n`;
+  const lockWith = (value: string) => `importers:\n  .:\n    dependencies:\n      other:${value}\n`;
   const lifecycleScripts = {
     "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
     postinstall: "node scripts/postinstall-bundled-plugins.mjs",
@@ -41,8 +32,7 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
   };
   writeManifest({ ...manifest, openclaw: { schemaVersions: { agent: 17, state: 6 } } });
   const frozenLock =
-    "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/worker: {}\n" +
-    "snapshots:\n  example@1.0.0:\n    dependencies:\n      get-caller-file: 2.0.5\n";
+    "lockfileVersion: '9.0'\nimporters:\n  .: {}\n  packages/worker: {}\nsnapshots:\n  example@1.0.0:\n    dependencies:\n      get-caller-file: 2.0.5\n";
   writeLock(frozenLock);
   writeOther();
   git(["add", "package.json", "pnpm-lock.yaml", unrelatedManifest]);
@@ -59,15 +49,12 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
   for (const [lock, included] of [
     // pnpm 12 separates the package-manager environment from workspace importers.
     ["---\nlockfileVersion: '9.0'\nimporters:\n  .: {}\n---\n" + frozenLock, false],
-    [dependencyLock("\n        version: link:test/fixtures/other"), true],
-    [
-      dependencyLock(" {specifier: file:test/fixtures/other, version: file:test/fixtures/other}"),
-      true,
-    ],
+    [lockWith("\n        version: link:other"), true],
+    [lockWith(" {specifier: file:other, version: file:other}"), true],
     // Shapes outside the dependency-free reader retain conservative coverage.
     ["importers: {'.': {}}\n", true],
     ["importers:\n  '.': {}\n", true],
-    [dependencyLock("\n        version: file:test/fixtures/other"), true],
+    [lockWith("\n        version: file:other"), true],
   ] as const) {
     writeLock(lock);
     expectOtherInvalidation(fingerprint(), included);
@@ -81,7 +68,6 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
     expectOtherInvalidation(fingerprint());
     remove(file);
   }
-  // Literal missing markers must differ from absent files.
   write(".pnpmfile.cjs", "<missing>");
   const hookFingerprint = fingerprint();
   expect(hookFingerprint).not.toBe(baseline);
@@ -111,12 +97,11 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
     expect(fingerprint(), relativePath).toBe(baseline);
   }
   writeManifest({
-    devDependencies: { vitest: "1.0.0" },
+    ...Object.fromEntries(Object.entries(manifest).toReversed()),
     scripts: {
       test: "vitest run --reporter=dot",
       ...Object.fromEntries(Object.entries(lifecycleScripts).toReversed()),
     },
-    name: "fixture",
   });
   expect(fingerprint()).toBe(baseline);
   writeManifest({ ...manifest, openclaw: { schemaVersions: { agent: 17, state: 7 } } });
@@ -150,8 +135,7 @@ it("fingerprints dependency install inputs without ordinary script churn", () =>
 });
 
 it.each([false, true])("preserves sparse install inputs with sparse-index=%s", (sparseIndex) => {
-  const { root, git, write, fingerprint } = createSparseFingerprintFixture();
-  const initial = fingerprint();
+  const { root, git, write, fingerprint, initial } = createSparseFingerprintFixture();
   const stagedManifest = '{"name":"worker","version":"2.0.0"}\n';
   write("packages/worker/package.json", stagedManifest);
   git(["add", "packages/worker/package.json"]);
@@ -195,8 +179,7 @@ it.each([false, true])("preserves sparse install inputs with sparse-index=%s", (
 });
 
 it("uses staged additions and deletions without reading HEAD as a fallback", () => {
-  const { root, git, write, fingerprint } = createSparseFingerprintFixture();
-  const initial = fingerprint();
+  const { root, git, write, fingerprint, initial } = createSparseFingerprintFixture();
   write("packages/added/package.json", '{"name":"added"}\n');
   git(["add", "packages/added/package.json"]);
   const added = fingerprint();
@@ -209,8 +192,7 @@ it("uses staged additions and deletions without reading HEAD as a fallback", () 
 });
 
 it("keeps physical skip-worktree bytes independent of unavailable index objects", () => {
-  const { root, git, write, fingerprint } = createSparseFingerprintFixture();
-  const original = fingerprint();
+  const { root, git, write, fingerprint, initial: original } = createSparseFingerprintFixture();
   const present = "packages/worker/package.json";
   git(["update-index", "--info-only", "--cacheinfo", "100644", "1".repeat(40), present]);
   git(["update-index", "--skip-worktree", present]);
@@ -242,8 +224,8 @@ it("rejects unmerged and unavailable sparse index inputs", () => {
 
 function createFingerprintFixture() {
   const root = tempDirs.make("openclaw-dependency-fingerprint-");
-  const git = (args: string[], input?: string) =>
-    execFileSync("git", args, {
+  const run = (command: string, args: string[], input?: string) =>
+    execFileSync(command, args, {
       cwd: root,
       encoding: "utf8",
       input,
@@ -254,6 +236,7 @@ function createFingerprintFixture() {
     mkdirSync(path.dirname(absolute), { recursive: true });
     writeFileSync(absolute, contents);
   };
+  const git = (args: string[], input?: string) => run("git", args, input);
   git(["init", "-q"]);
   return {
     root,
@@ -261,7 +244,8 @@ function createFingerprintFixture() {
     write,
     json: (file: string, value: unknown) => write(file, `${JSON.stringify(value, null, 2)}\n`),
     remove: (file: string) => rmSync(path.join(root, file)),
-    fingerprint: (frozen = true) => dependencyFingerprint(root, frozen),
+    fingerprint: (frozen = true) =>
+      run(process.execPath, [helper, "--workspace", root, "--frozen-lockfile", String(frozen)]),
   };
 }
 
@@ -285,5 +269,5 @@ function createSparseFingerprintFixture() {
   git(["config", "user.name", "Fixture"]);
   git(["config", "user.email", "fixture@example.invalid"]);
   git(["commit", "-qm", "fixture"]);
-  return fixture;
+  return { ...fixture, initial: fixture.fingerprint() };
 }

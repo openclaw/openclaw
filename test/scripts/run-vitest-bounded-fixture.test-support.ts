@@ -17,22 +17,16 @@ export function createPreparedVitestCliFixture(
   let redirect: string;
   const local = (file: string) => path.join(root, file);
   const compilerPath = "scripts/lib/vitest-worker-compiler.mts";
-  const moduleUrl = (directory: string) =>
-    JSON.stringify(pathToFileURL(path.join(directory, compilerPath)).href);
   return {
     get root() {
       return root;
     },
     env(base: NodeJS.ProcessEnv) {
-      return (
-        compiler?.env(
-          {
-            ...base,
-            NODE_OPTIONS: `${base.NODE_OPTIONS ?? ""} --import=${pathToFileURL(redirect).href}`,
-          },
-          "node",
-        ) ?? base
-      );
+      if (!compiler) {
+        return base;
+      }
+      const nodeOptions = `${base.NODE_OPTIONS ?? ""} --import=${pathToFileURL(redirect).href}`;
+      return compiler.env({ ...base, NODE_OPTIONS: nodeOptions }, "node");
     },
     async prepare() {
       await compiler?.prepare();
@@ -63,13 +57,10 @@ export function createPreparedVitestCliFixture(
       }
       fs.symlinkSync(path.join(repoRoot, "node_modules"), local("node_modules"), "junction");
       // Source URL adapters must also serve exports used by unchanged native wrappers.
-      await prepareCopiedSourceModules(
-        root,
-        options.preserveSourceModuleExports
-          ? closure.filter((source) => /\.[cm]?ts$/u.test(source))
-          : entries,
-      );
-      // CLI wrappers and generated configs retain their original entry paths.
+      const sources = options.preserveSourceModuleExports
+        ? closure.filter((source) => /\.[cm]?ts$/u.test(source))
+        : entries;
+      await prepareCopiedSourceModules(root, sources);
       for (const source of entries) {
         fs.copyFileSync(local(source.replace(/\.[cm]?ts$/u, ".js")), local(source));
       }
@@ -78,8 +69,8 @@ export function createPreparedVitestCliFixture(
         fs.writeFileSync(
           redirect,
           `import {registerHooks} from "node:module";
-const copied = ${moduleUrl(root)};
-const original = ${moduleUrl(repoRoot)};
+const copied = ${JSON.stringify(pathToFileURL(local(compilerPath)).href)};
+const original = ${JSON.stringify(pathToFileURL(path.join(repoRoot, compilerPath)).href)};
 registerHooks({resolve(specifier, context, nextResolve) {
   const resolved = nextResolve(specifier, context);
   return resolved.url === copied ? {...resolved, url: original} : resolved;
@@ -88,12 +79,8 @@ registerHooks({resolve(specifier, context, nextResolve) {
         );
       }
     },
-    async cleanup() {
-      try {
-        await compiler?.cleanup();
-      } finally {
-        await lifetime.cleanup();
-      }
+    cleanup() {
+      return (compiler?.cleanup() ?? Promise.resolve()).finally(() => lifetime.cleanup());
     },
   };
 }
