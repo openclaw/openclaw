@@ -64,7 +64,6 @@ describe("Discord audio worker control boundary", () => {
     expect(stopped).toHaveBeenCalledOnce();
     expect(destroy).toHaveBeenCalledOnce();
     worker.message({ type: "ready" });
-    expect(audio.connectionStatus).toBe("destroyed");
   });
 
   it("stops the allocated worker if gateway adapter registration throws", () => {

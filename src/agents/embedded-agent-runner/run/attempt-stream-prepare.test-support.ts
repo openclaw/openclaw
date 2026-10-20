@@ -247,7 +247,6 @@ export async function observeTerminalRunActivity(
       createMediaGenerationOperation({
         taskId: "tool:image_generate:terminal",
         status: "running",
-        createdAt: 1,
         taskKind: "image_generation",
         requesterSessionKey: sessionKey,
         runId: "tool:image_generate:terminal",
