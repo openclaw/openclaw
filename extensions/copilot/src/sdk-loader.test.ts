@@ -17,6 +17,7 @@ describe("sdk-loader", () => {
 
   beforeEach(() => {
     vi.resetModules();
+    mockPrimaryImport(new Error("Cannot find module '@github/copilot-sdk'"));
     stateDir = mkdtempSync(path.join(tmpdir(), "copilot-sdk-loader-"));
     fallbackPath = path.join(stateDir, "npm-runtime/copilot/node_modules/@github/copilot-sdk");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -31,28 +32,17 @@ describe("sdk-loader", () => {
   it("resolves and imports the installed SDK entry from OPENCLAW_STATE_DIR", async () => {
     // Exercise a concrete entry file: Node ESM rejects package directory imports.
     mkdirSync(fallbackPath, { recursive: true });
-    writeFileSync(
-      path.join(fallbackPath, "package.json"),
-      JSON.stringify({ name: "@github/copilot-sdk", version: "0.0.0-test", main: "./index.cjs" }),
-    );
-    writeFileSync(
-      path.join(fallbackPath, "index.cjs"),
-      "module.exports = { openclawDefaultImporterSentinel: true };",
-    );
-    mockPrimaryImport(new Error("Cannot find module '@github/copilot-sdk'"));
+    writeFileSync(path.join(fallbackPath, "package.json"), JSON.stringify({ main: "./index.cjs" }));
+    writeFileSync(path.join(fallbackPath, "index.cjs"), "module.exports = { fixture: true };");
     const { loadCopilotSdk } = await import("./sdk-loader.js");
-    await expect(loadCopilotSdk()).resolves.toMatchObject({
-      openclawDefaultImporterSentinel: true,
-    });
+    await expect(loadCopilotSdk()).resolves.toMatchObject({ fixture: true });
   });
 
   it("throws an actionable error with install and resolution details", async () => {
     const { loadCopilotSdk } = await import("./sdk-loader.js");
     // Vitest wraps rejected mock factories, hiding the original import diagnostic.
     const failed = loadCopilotSdk({
-      primaryImport: async () => {
-        throw new Error("primary boom");
-      },
+      primaryImport: () => Promise.reject(new Error("primary boom")),
     });
 
     await expect(failed).rejects.toMatchObject({ code: "COPILOT_SDK_MISSING" });
@@ -77,7 +67,6 @@ describe("sdk-loader", () => {
   });
 
   it("does not poison the cache after a failed load", async () => {
-    mockPrimaryImport(new Error("first boom"));
     const { loadCopilotSdk } = await import("./sdk-loader.js");
     await expect(loadCopilotSdk()).rejects.toMatchObject({ code: "COPILOT_SDK_MISSING" });
 

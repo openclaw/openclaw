@@ -6,6 +6,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi } from "vitest";
 import {
   makeAssistantMessageEvent,
+  awaitAttemptStage,
+  createAttemptGate,
   makeFakePool,
   makeFakeSdk,
   projectAgentRunAttemptTerminal,
@@ -26,157 +28,136 @@ export function registerCopilotCleanupTests({
   ) => AgentHarnessAttemptParamsV2;
   requireSession: (sdk: FakeSdk) => FakeSession;
 }) {
-  it.each(["auth", "proxy"] as const)(
-    "releases abort listeners when pre-session %s setup fails",
-    async (stage) => {
-      const controller = new AbortController();
-      const callerAbort = vi.fn();
-      controller.signal.addEventListener("abort", callerAbort);
-      const callerListeners = getEventListeners(controller.signal, "abort");
-      const sdk = makeFakeSdk();
-      const pool = makeFakePool(sdk);
-      const params = { ...makeParams(), abortSignal: controller.signal };
-      copilotAttemptOverrides.resolveSandboxContext = async () => null;
-      const deps = { pool };
-      try {
-        if (stage === "auth") {
-          const invalidAuth = {
+  it.each(["auth", "proxy"] as const)("cleans up pre-session %s failures", async (stage) => {
+    const controller = new AbortController();
+    const callerAbort = vi.fn();
+    controller.signal.addEventListener("abort", callerAbort);
+    const callerListeners = getEventListeners(controller.signal, "abort");
+    const sdk = makeFakeSdk();
+    const pool = makeFakePool(sdk);
+    const params = { ...makeParams(), abortSignal: controller.signal };
+    copilotAttemptOverrides.resolveSandboxContext = async () => null;
+    const deps = { pool };
+    try {
+      if (stage === "auth") {
+        const invalidAuth = {
+          ...params,
+          auth: { useLoggedInUser: false, gitHubToken: "synthetic-token" },
+        };
+        await expect(runCopilotAttempt(invalidAuth, deps)).rejects.toThrow(
+          "gitHubToken auth requires profileId+profileVersion",
+        );
+      } else {
+        const failure = new Error("synthetic proxy startup failure");
+        vi.spyOn(byokProxy, "createCopilotByokProxy").mockRejectedValueOnce(failure);
+        const result = await runCopilotAttempt(
+          {
             ...params,
-            auth: { useLoggedInUser: false, gitHubToken: "synthetic-token" },
-          };
-          await expect(runCopilotAttempt(invalidAuth, deps)).rejects.toThrow(
-            "gitHubToken auth requires profileId+profileVersion",
-          );
-        } else {
-          const failure = new Error("synthetic proxy startup failure");
-          vi.spyOn(byokProxy, "createCopilotByokProxy").mockRejectedValueOnce(failure);
-          const result = await runCopilotAttempt(
-            {
-              ...params,
-              model: {
-                ...params.model,
-                provider: "custom-openai",
-                baseUrl: "https://api.example.test/v1",
-              },
-              resolvedApiKey: "synthetic-token",
-              authProfileId: "custom-openai:main",
+            model: {
+              ...params.model,
+              provider: "custom-openai",
+              baseUrl: "https://api.example.test/v1",
             },
-            deps,
-          );
-          expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toMatchObject({
-            code: "model_not_supported",
-            cause: failure,
-          });
-        }
-        expect(pool.acquire).not.toHaveBeenCalled();
-        expect(getEventListeners(controller.signal, "abort")).toEqual(callerListeners);
-      } finally {
-        controller.abort();
+            resolvedApiKey: "synthetic-token",
+            authProfileId: "custom-openai:main",
+          },
+          deps,
+        );
+        expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toMatchObject({
+          code: "model_not_supported",
+          cause: failure,
+        });
       }
-      expect(callerAbort).toHaveBeenCalledOnce();
-    },
-  );
+      expect(pool.acquire).not.toHaveBeenCalled();
+      expect(getEventListeners(controller.signal, "abort")).toEqual(callerListeners);
+    } finally {
+      controller.abort();
+    }
+    expect(callerAbort).toHaveBeenCalledOnce();
+  });
 
   it("keeps cancellation raised during pre-session preparation", async () => {
     const controller = new AbortController();
-    const sandboxStarted = createDeferred<void>();
-    const finishSandbox = createDeferred<null>();
+    const sandbox = createAttemptGate<null>();
     const sdk = makeFakeSdk();
-    copilotAttemptOverrides.resolveSandboxContext = async () => {
-      sandboxStarted.resolve();
-      return finishSandbox.promise;
-    };
+    copilotAttemptOverrides.resolveSandboxContext = sandbox.wait;
     const attempt = runCopilotAttempt(
       { ...makeParams(), abortSignal: controller.signal },
-      {
-        pool: makeFakePool(sdk),
-      },
+      { pool: makeFakePool(sdk) },
     );
     try {
-      await Promise.race([
-        sandboxStarted.promise,
-        attempt.then(() => {
-          throw new Error("Copilot attempt settled before sandbox preparation");
-        }),
-      ]);
+      await awaitAttemptStage(sandbox.entered, attempt);
       controller.abort();
-      finishSandbox.resolve(null);
+      sandbox.release(null);
       const result = await attempt;
       expect(result.terminal).toMatchObject({ kind: "aborted", source: "external" });
       expect(sdk.sessions.flatMap((session) => session.sendAndWait.mock.calls)).toEqual([]);
       expect(getEventListeners(controller.signal, "abort")).toEqual([]);
     } finally {
       controller.abort();
-      finishSandbox.resolve(null);
+      sandbox.release(null);
       await attempt;
     }
   });
 
-  it.each([false, true])(
-    "detaches listeners and joins accepted agent callbacks before cleanup (deferred: %s)",
-    async (deferred) => {
-      const callbackStarted = createDeferred<void>();
-      const releaseCallback = createDeferred<void>();
-      const listenersDetached = createDeferred<void>();
-      const sendFailure = new Error("send failed after an accepted agent event");
-      const onAgentEvent = vi.fn(async () => {
-        callbackStarted.resolve();
-        await releaseCallback.promise;
+  it.each([false, true])("joins callbacks before cleanup (deferred: %s)", async (deferred) => {
+    const callback = createAttemptGate();
+    const listenersDetached = createDeferred<void>();
+    const sendFailure = new Error("send failed after an accepted agent event");
+    const onAgentEvent = vi.fn(callback.wait);
+    const sdk = makeFakeSdk((session) => {
+      const off = expectDefined(session.off.getMockImplementation(), "session unsubscribe");
+      session.off.mockImplementationOnce((...args) => {
+        off(...args);
+        listenersDetached.resolve();
       });
-      const sdk = makeFakeSdk((session) => {
-        const off = expectDefined(session.off.getMockImplementation(), "session unsubscribe");
-        session.off.mockImplementationOnce((...args) => {
-          off(...args);
-          listenersDetached.resolve();
-        });
-        session.sendAndWait.mockImplementationOnce(async () => {
-          session.emit("user.message", { content: "hello" });
-          if (deferred) {
-            session.emit("session.compaction_start", {});
-            return makeAssistantMessageEvent("done");
-          }
-          session.emit("session.plan_changed", { operation: "update" });
-          throw sendFailure;
-        });
-      });
-      const pool = makeFakePool(sdk);
-      const onDeferredCompaction = vi.fn<(params: { cleanup: Promise<unknown> }) => void>();
-      const attempt = runCopilotAttempt(makeParams({ onAgentEvent }), {
-        pool,
-        onDeferredCompaction,
-      });
-      let cleanup: Promise<unknown> = attempt;
-      try {
+      session.sendAndWait.mockImplementationOnce(async () => {
+        session.emit("user.message", { content: "hello" });
         if (deferred) {
-          expect((await attempt).terminal).toEqual({ kind: "ok" });
-          cleanup = expectDefined(
-            onDeferredCompaction.mock.calls[0]?.[0].cleanup,
-            "deferred cleanup",
-          );
-          const session = requireSession(sdk);
-          session.emit("session.plan_changed", { operation: "update" });
-          session.emit("session.compaction_complete", { success: true });
-          session.emit("session.idle", {});
+          session.emit("session.compaction_start", {});
+          return makeAssistantMessageEvent("done");
         }
-        await callbackStarted.promise;
-        await listenersDetached.promise;
-        const session = requireSession(sdk);
-        expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
-        expect(session.disconnect).not.toHaveBeenCalled();
-        expect(pool.release).not.toHaveBeenCalled();
         session.emit("session.plan_changed", { operation: "update" });
-      } finally {
-        releaseCallback.resolve();
-        await cleanup;
-      }
-      expect(onAgentEvent).toHaveBeenCalledOnce();
-      expect(requireSession(sdk).disconnect).toHaveBeenCalledOnce();
-      expect(pool.release).toHaveBeenCalledOnce();
-      if (!deferred) {
-        expect(projectAgentRunAttemptTerminal((await attempt).terminal).promptError).toBe(
-          sendFailure,
+        throw sendFailure;
+      });
+    });
+    const pool = makeFakePool(sdk);
+    const onDeferredCompaction = vi.fn<(params: { cleanup: Promise<unknown> }) => void>();
+    const attempt = runCopilotAttempt(makeParams({ onAgentEvent }), {
+      pool,
+      onDeferredCompaction,
+    });
+    let cleanup: Promise<unknown> = attempt;
+    try {
+      if (deferred) {
+        expect((await attempt).terminal).toEqual({ kind: "ok" });
+        cleanup = expectDefined(
+          onDeferredCompaction.mock.calls[0]?.[0].cleanup,
+          "deferred cleanup",
         );
+        const session = requireSession(sdk);
+        session.emit("session.plan_changed", { operation: "update" });
+        session.emit("session.compaction_complete", { success: true });
+        session.emit("session.idle", {});
       }
-    },
-  );
+      await callback.entered;
+      await listenersDetached.promise;
+      const session = requireSession(sdk);
+      expect(session.off).toHaveBeenCalledTimes(session.on.mock.calls.length);
+      expect(session.disconnect).not.toHaveBeenCalled();
+      expect(pool.release).not.toHaveBeenCalled();
+      session.emit("session.plan_changed", { operation: "update" });
+    } finally {
+      callback.release();
+      await cleanup;
+    }
+    expect(onAgentEvent).toHaveBeenCalledOnce();
+    expect(requireSession(sdk).disconnect).toHaveBeenCalledOnce();
+    expect(pool.release).toHaveBeenCalledOnce();
+    if (!deferred) {
+      expect(projectAgentRunAttemptTerminal((await attempt).terminal).promptError).toBe(
+        sendFailure,
+      );
+    }
+  });
 }

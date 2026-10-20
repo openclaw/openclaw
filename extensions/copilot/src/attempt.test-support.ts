@@ -1,11 +1,34 @@
 import type { CopilotClient } from "@github/copilot-sdk";
 import type { AgentHarnessAttemptResult as AgentHarnessAttemptResultContract } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { runInHarnessToolAuthorityForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
 import { runCopilotAttempt as runCopilotAttemptImpl } from "./attempt.js";
 import type { CopilotClientPool } from "./runtime.js";
 
 type AgentHarnessAttemptResult = Extract<AgentHarnessAttemptResultContract, { terminal: unknown }>;
+
+export function createAttemptGate<T = void>() {
+  const entered = createDeferred<void>();
+  const released = createDeferred<T>();
+  return {
+    entered: entered.promise,
+    release: released.resolve,
+    wait: () => {
+      entered.resolve();
+      return released.promise;
+    },
+  };
+}
+
+export async function awaitAttemptStage(stage: Promise<unknown>, attempt: Promise<unknown>) {
+  await Promise.race([
+    stage,
+    attempt.then((result) => {
+      throw new Error("Copilot attempt settled before the expected stage", { cause: result });
+    }),
+  ]);
+}
 
 export function projectAgentRunAttemptTerminal(terminal: AgentHarnessAttemptResult["terminal"]) {
   return {
@@ -109,7 +132,7 @@ function createFakeSession(cfg: Record<string, unknown>, id: string) {
 }
 
 export function makeFakePool(sdk: FakeSdk) {
-  const pool = {
+  return {
     acquire: vi.fn(async (key, _options) => ({
       client: sdk.client as unknown as CopilotClient,
       key,
@@ -118,7 +141,6 @@ export function makeFakePool(sdk: FakeSdk) {
     release: vi.fn(async () => undefined),
     size: vi.fn(() => 0),
   } satisfies CopilotClientPool;
-  return pool;
 }
 
 export function makeFakeSdk(

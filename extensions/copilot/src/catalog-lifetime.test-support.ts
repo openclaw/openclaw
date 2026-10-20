@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { createServer, type Socket } from "node:net";
+import { promisify } from "node:util";
 import { CopilotClient, RuntimeConnection } from "@github/copilot-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 
@@ -11,36 +13,27 @@ export async function createCopilotFaultPeer() {
   const detaching = createDeferred<void>();
   const releaseDetach = createDeferred<void>();
   const replies = new Map<string, ReturnType<typeof createDeferred<Record<string, unknown>>>>();
-  const methods: string[] = [];
   const sockets = new Set<Socket>();
   let socket: Socket;
   let sessionId: string;
   let previousEventId: string | null = null;
-  const send = (value: unknown) => {
-    const bytes = Buffer.from(JSON.stringify(value));
+  const send = (value: Record<string, unknown>) => {
+    const bytes = Buffer.from(JSON.stringify({ jsonrpc: "2.0", ...value }));
     socket.write(`Content-Length: ${bytes.length}\r\n\r\n`);
     socket.write(bytes);
   };
   const emit = (type: string, data: Record<string, unknown>) => {
-    const id = randomUUID();
-    send({
-      jsonrpc: "2.0",
-      method: "session.event",
-      params: {
-        sessionId,
-        event: {
-          id,
-          parentId: previousEventId,
-          timestamp: new Date().toISOString(),
-          type,
-          data,
-        },
-      },
-    });
-    previousEventId = id;
+    const event = {
+      id: randomUUID(),
+      parentId: previousEventId,
+      timestamp: new Date().toISOString(),
+      type,
+      data,
+    };
+    send({ method: "session.event", params: { sessionId, event } });
+    previousEventId = event.id;
   };
   const handle = async (request: Request) => {
-    methods.push(request.method);
     switch (request.method) {
       case "connect":
         return { protocolVersion: 3 };
@@ -82,15 +75,13 @@ export async function createCopilotFaultPeer() {
         if (buffer.length < separator + 4 + length) {
           return;
         }
-        const request = JSON.parse(
-          buffer.subarray(separator + 4, separator + 4 + length).toString(),
-        ) as Request;
-        buffer = buffer.subarray(separator + 4 + length);
+        const end = separator + 4 + length;
+        const request = JSON.parse(buffer.subarray(separator + 4, end).toString()) as Request;
+        buffer = buffer.subarray(end);
         void handle(request).then(
-          (result) => send({ jsonrpc: "2.0", id: request.id, result }),
+          (result) => send({ id: request.id, result }),
           (error: unknown) =>
             send({
-              jsonrpc: "2.0",
               id: request.id,
               error: {
                 code: -32603,
@@ -101,9 +92,7 @@ export async function createCopilotFaultPeer() {
       }
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Expected loopback TCP listener");
@@ -113,7 +102,6 @@ export async function createCopilotFaultPeer() {
   });
   return {
     client,
-    methods,
     sent: sent.promise,
     detaching: detaching.promise,
     releaseDetach: () => releaseDetach.resolve(),
@@ -136,9 +124,7 @@ export async function createCopilotFaultPeer() {
       for (const connected of sockets) {
         connected.destroy();
       }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await promisify(server.close.bind(server))();
     },
   };
 }

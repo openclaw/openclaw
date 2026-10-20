@@ -17,8 +17,6 @@ import type { createCopilotToolBridge } from "./tool-bridge.js";
 
 const { copilotAttemptOverrides } = await import("./attempt-selectors.test-support.js");
 
-type CopilotToolBridgeInput = Parameters<typeof createCopilotToolBridge>[0];
-
 export function registerCopilotWorkspaceTests({
   makeParams,
   makeSandboxStub,
@@ -32,74 +30,66 @@ export function registerCopilotWorkspaceTests({
   requireCreateSessionConfig: (sdk: FakeSdk) => Record<string, unknown>;
   workspaceBootstrapMock: { loadCopilotWorkspaceInstructions: Mock };
 }) {
-  it.each(["unsandboxed", "rw", "ro"] as const)(
-    "uses the correct SDK and tool workspace in %s mode",
-    async (mode) => {
-      const sandboxDir = `${tmpdir()}/copilot-sandbox-${Date.now()}`;
-      const workspaceDir =
-        mode === "ro" ? `${tmpdir()}/copilot-orig-${Date.now()}` : "C:\\workspace";
-      const cwd = mode === "unsandboxed" ? "C:\\workspace\\task-repo" : undefined;
-      const sandbox =
-        mode === "unsandboxed"
-          ? null
-          : makeSandboxStub({
-              workspaceAccess: mode,
-              ...(mode === "ro" ? { workspaceDir: sandboxDir } : {}),
-            });
-      const sdk = makeFakeSdk();
-      const prepareContinuationRetryCount = vi.fn();
-      const params = makeParams({ workspaceDir, ...(cwd ? { cwd } : {}) });
-      params.hostCapabilities = {
-        ...params.hostCapabilities,
-        prepareContinuationRetryCount,
-      };
-      const createToolBridge = vi.fn(async (_input: CopilotToolBridgeInput) =>
-        createStubToolBridge(),
-      );
-      try {
-        copilotAttemptOverrides.createToolBridge = createToolBridge;
-        copilotAttemptOverrides.resolveSandboxContext = async () => sandbox;
-        await runCopilotAttempt(params, {
-          pool: makeFakePool(sdk),
-        });
-        const bridgeArgs = expectDefined(createToolBridge.mock.calls[0]?.[0], "bridge input");
-        const effectiveWorkspaceDir = mode === "ro" ? sandboxDir : workspaceDir;
-        if (mode === "unsandboxed") {
-          expect(prepareContinuationRetryCount).toHaveBeenCalledExactlyOnceWith({
-            cwd: bridgeArgs.cwd,
+  it.each(["unsandboxed", "rw", "ro"] as const)("routes the %s workspace", async (mode) => {
+    const sandboxDir = `${tmpdir()}/copilot-sandbox-${Date.now()}`;
+    const workspaceDir = mode === "ro" ? `${tmpdir()}/copilot-orig-${Date.now()}` : "C:\\workspace";
+    const cwd = mode === "unsandboxed" ? "C:\\workspace\\task-repo" : undefined;
+    const sandbox =
+      mode === "unsandboxed"
+        ? null
+        : makeSandboxStub({
+            workspaceAccess: mode,
+            ...(mode === "ro" ? { workspaceDir: sandboxDir } : {}),
           });
-          expect(prepareContinuationRetryCount.mock.invocationCallOrder[0]).toBeLessThan(
-            createToolBridge.mock.invocationCallOrder[0]!,
-          );
-        } else {
-          expect(prepareContinuationRetryCount).not.toHaveBeenCalled();
-        }
-        expect(bridgeArgs.workspaceDir).toBe(effectiveWorkspaceDir);
-        expect(requireCreateSessionConfig(sdk).workingDirectory).toBe(cwd ?? effectiveWorkspaceDir);
-        if (mode === "unsandboxed") {
-          expect(bridgeArgs.cwd).toBe(cwd);
-          expect(requireCreateSessionConfig(sdk).instructionDirectories).toEqual([workspaceDir]);
-        } else {
-          expect(bridgeArgs.sandbox).toBe(sandbox);
-          expect(bridgeArgs.spawnWorkspaceDir).toBe(mode === "ro" ? workspaceDir : undefined);
-          if (mode === "ro") {
-            expect(
-              workspaceBootstrapMock.loadCopilotWorkspaceInstructions,
-            ).toHaveBeenLastCalledWith(
-              expect.objectContaining({
-                effectiveWorkspaceDir: sandboxDir,
-                attempt: expect.objectContaining({ workspaceDir }),
-              }),
-            );
-            await expect(fsp.stat(sandboxDir)).resolves.toBeTruthy();
-          }
-        }
-      } finally {
-        if (mode === "ro") {
-          await fsp.rm(sandboxDir, { recursive: true, force: true });
-          await fsp.rm(workspaceDir, { recursive: true, force: true });
-        }
+    const sdk = makeFakeSdk();
+    const prepareContinuationRetryCount = vi.fn();
+    const params = makeParams({ workspaceDir, ...(cwd ? { cwd } : {}) });
+    params.hostCapabilities = {
+      ...params.hostCapabilities,
+      prepareContinuationRetryCount,
+    };
+    const createToolBridge = vi.fn<typeof createCopilotToolBridge>(async () =>
+      createStubToolBridge(),
+    );
+    try {
+      copilotAttemptOverrides.createToolBridge = createToolBridge;
+      copilotAttemptOverrides.resolveSandboxContext = async () => sandbox;
+      await runCopilotAttempt(params, { pool: makeFakePool(sdk) });
+      const bridgeArgs = expectDefined(createToolBridge.mock.calls[0]?.[0], "bridge input");
+      const effectiveWorkspaceDir = mode === "ro" ? sandboxDir : workspaceDir;
+      expect(bridgeArgs.workspaceDir).toBe(effectiveWorkspaceDir);
+      expect(requireCreateSessionConfig(sdk)).toMatchObject({
+        workingDirectory: cwd ?? effectiveWorkspaceDir,
+        ...(mode === "unsandboxed" ? { instructionDirectories: [workspaceDir] } : {}),
+      });
+      if (mode === "unsandboxed") {
+        expect(prepareContinuationRetryCount).toHaveBeenCalledExactlyOnceWith({
+          cwd: bridgeArgs.cwd,
+        });
+        expect(prepareContinuationRetryCount.mock.invocationCallOrder[0]).toBeLessThan(
+          createToolBridge.mock.invocationCallOrder[0]!,
+        );
+        expect(bridgeArgs.cwd).toBe(cwd);
+      } else {
+        expect(prepareContinuationRetryCount).not.toHaveBeenCalled();
+        expect(bridgeArgs.sandbox).toBe(sandbox);
+        expect(bridgeArgs.spawnWorkspaceDir).toBe(mode === "ro" ? workspaceDir : undefined);
       }
-    },
-  );
+      if (mode === "ro") {
+        const loadInstructions = workspaceBootstrapMock.loadCopilotWorkspaceInstructions;
+        expect(loadInstructions).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            effectiveWorkspaceDir: sandboxDir,
+            attempt: expect.objectContaining({ workspaceDir }),
+          }),
+        );
+        await expect(fsp.stat(sandboxDir)).resolves.toBeTruthy();
+      }
+    } finally {
+      if (mode === "ro") {
+        await fsp.rm(sandboxDir, { recursive: true, force: true });
+        await fsp.rm(workspaceDir, { recursive: true, force: true });
+      }
+    }
+  });
 }

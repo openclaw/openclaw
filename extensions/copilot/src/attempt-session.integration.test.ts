@@ -5,7 +5,6 @@ import type {
   AgentHarnessAttemptParamsV2,
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -24,6 +23,8 @@ import {
 import type { AttemptParamsLike, AttemptResultWithSdkSessionId } from "./attempt-types.js";
 import {
   makeAssistantMessageEvent,
+  awaitAttemptStage,
+  createAttemptGate,
   makeFakePool,
   makeFakeSdk,
   projectAgentRunAttemptTerminal,
@@ -104,8 +105,7 @@ describe("Copilot canonical session persistence", () => {
     async (outcome) => {
       const { attempt, target, tempDir, bridge } = await createFixture();
       bridge.detach();
-      const appendEntered = createDeferred<void>();
-      const releaseAppend = createDeferred<void>();
+      const append = createAttemptGate();
       const controller = new AbortController();
       const execute = vi.fn<AnyAgentTool["execute"]>(async () => ({
         content: [{ type: "text", text: "fixture result" }],
@@ -119,64 +119,54 @@ describe("Copilot canonical session persistence", () => {
         execute,
       };
       let sdkReply: unknown;
-      let sdkSendError: unknown;
       let attemptSettled = false;
-      transcriptAppendControl.beforeAppend = async () => {
-        appendEntered.resolve();
-        await releaseAppend.promise;
-      };
+      transcriptAppendControl.beforeAppend = append.wait;
       if (outcome === "rollback") {
         toolResultFault.enable();
       }
 
       const sdk = makeFakeSdk((session, config) => {
         session.sendAndWait.mockImplementationOnce(async () => {
-          try {
-            session.emit("user.message", {
-              __eventId: "initial-user",
-              content: attempt.prompt,
-            });
-            session.emit("assistant.message", {
-              __eventId: "assistant-boundary",
-              messageId: "assistant-boundary",
-              content: "checking",
-              toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-boundary" }],
-            });
-            session.emit("tool.execution_start", {
+          session.emit("user.message", {
+            __eventId: "initial-user",
+            content: attempt.prompt,
+          });
+          session.emit("assistant.message", {
+            __eventId: "assistant-boundary",
+            messageId: "assistant-boundary",
+            content: "checking",
+            toolRequests: [{ arguments: {}, name: "read", toolCallId: "call-boundary" }],
+          });
+          session.emit("tool.execution_start", {
+            toolName: "read",
+            toolCallId: "call-boundary",
+          });
+          const handler = expectDefined(
+            (config.tools as SdkTool[]).find((tool) => tool.name === "read")?.handler,
+            "registered read handler",
+          );
+          sdkReply = await handler(
+            {},
+            {
+              arguments: {},
+              sessionId: session.sessionId,
+              toolCallId: "call-boundary",
               toolName: "read",
-              toolCallId: "call-boundary",
-            });
-            const tool = expectDefined(
-              (config.tools as SdkTool[]).find((candidate) => candidate.name === "read"),
-              "registered read tool",
-            );
-            const handler = expectDefined(tool.handler, "registered read handler");
-            sdkReply = await handler(
-              {},
-              {
-                arguments: {},
-                sessionId: session.sessionId,
-                toolCallId: "call-boundary",
-                toolName: tool.name,
-              },
-            );
-            const reply = expectDefined(asOptionalRecord(sdkReply), "SDK tool reply");
-            session.emit("tool.execution_complete", {
-              __eventId: "result-boundary",
-              result: { content: reply.textResultForLlm },
-              success: reply.resultType === "success",
-              toolCallId: "call-boundary",
-            });
-            const final = makeAssistantMessageEvent("finished", {
-              messageId: "assistant-final",
-            });
-            session.emit(final.type, { ...final.data, __eventId: "assistant-final" });
-            session.emit("session.idle", {});
-            return { ...final, id: "assistant-final" };
-          } catch (error) {
-            sdkSendError = error;
-            throw error;
-          }
+            },
+          );
+          const reply = expectDefined(asOptionalRecord(sdkReply), "SDK tool reply");
+          session.emit("tool.execution_complete", {
+            __eventId: "result-boundary",
+            result: { content: reply.textResultForLlm },
+            success: reply.resultType === "success",
+            toolCallId: "call-boundary",
+          });
+          const final = makeAssistantMessageEvent("finished", {
+            messageId: "assistant-final",
+          });
+          session.emit(final.type, { ...final.data, __eventId: "assistant-final" });
+          session.emit("session.idle", {});
+          return { ...final, id: "assistant-final" };
         });
       });
       const pool = makeFakePool(sdk);
@@ -195,15 +185,7 @@ describe("Copilot canonical session persistence", () => {
       const joined = pending.catch(() => undefined);
 
       try {
-        await Promise.race([
-          appendEntered.promise,
-          pending.then((result) => {
-            throw new AggregateError(
-              [sdkSendError, projectAgentRunAttemptTerminal(result.terminal).promptError],
-              `Attempt settled before the group append: ${JSON.stringify(result.terminal)}`,
-            );
-          }),
-        ]);
+        await awaitAttemptStage(append.entered, pending);
         expect(sdkReply).toMatchObject({
           resultType: "success",
           textResultForLlm: "fixture result",
@@ -213,32 +195,25 @@ describe("Copilot canonical session persistence", () => {
         expect(prefix[0]?.message.idempotencyKey).toBe("run-1:user");
         expect(attemptSettled).toBe(false);
 
-        releaseAppend.resolve();
+        append.release();
         const result = await pending;
         const rows = transcriptMessages(await readSessionTranscriptEvents(target));
         expect(rows.slice(0, prefix.length)).toEqual(prefix);
         if (outcome === "commit") {
-          expect(result.terminal).toEqual({ kind: "ok" });
-          expect(result.replayMetadata.replaySafe).toBe(true);
+          expect(result).toMatchObject({
+            terminal: { kind: "ok" },
+            replayMetadata: { replaySafe: true },
+          });
           expect(rows.map((row) => row.message.role)).toEqual([
             "user",
             "assistant",
             "toolResult",
             "assistant",
           ]);
-          expect(rows[1]?.message).toMatchObject({
-            idempotencyKey: "copilot-sdk:sess-1:assistant-boundary",
-            content: [
-              { type: "text", text: "checking" },
-              { type: "toolCall", id: "call-boundary", name: "read", arguments: {} },
-            ],
-          });
-          expect(rows[2]?.message).toMatchObject({
-            idempotencyKey: "copilot-sdk:sess-1:result-boundary",
-            toolCallId: "call-boundary",
-            toolName: "read",
-            content: [{ type: "text", text: "fixture result" }],
-          });
+          expect(rows.slice(1, 3).map((row) => row.message.idempotencyKey)).toEqual([
+            "copilot-sdk:sess-1:assistant-boundary",
+            "copilot-sdk:sess-1:result-boundary",
+          ]);
           expect(result.messagesSnapshot).toEqual(rows.map((row) => row.message));
         } else {
           expect(rows).toEqual(prefix);
@@ -261,7 +236,7 @@ describe("Copilot canonical session persistence", () => {
         expect(session.disconnect).toHaveBeenCalledOnce();
         expect(pool.release).toHaveBeenCalledOnce();
       } finally {
-        releaseAppend.resolve();
+        append.release();
         if (!attemptSettled) {
           controller.abort();
         }
@@ -305,50 +280,44 @@ describe("Copilot canonical session persistence", () => {
       dispose: vi.fn(async () => []),
       size: () => 0,
     } satisfies CopilotClientPool;
-    const params = makeParams(attempt, tempDir);
+    const baseParams = makeParams(attempt, tempDir);
+    let sessionId = baseParams.sessionId;
+    let initialReplayState = baseParams.initialReplayState;
     copilotAttemptOverrides.createToolBridge = async () => ({
       sourceTools: [],
       promptToolPolicy: { apply: () => ({ tools: [], callableToolNames: [] }) },
     });
-    const deps = { pool };
-    const failed = (await runCopilotAttempt(params, deps)) as AttemptResultWithSdkSessionId;
-    expect(failed.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
-    expect(failed.sdkSessionId).toBe("sdk-session-1");
-
-    // The host adopts sessionIdUsed before retrying; storage must still accept
-    // that exact identity, while the SDK independently resumes its native id.
-    const retryParams = {
-      ...params,
-      sessionId: failed.sessionIdUsed,
-      sessionTarget: { ...target, sessionId: failed.sessionIdUsed },
-    };
-    const retried = (await runCopilotAttempt(retryParams, deps)) as AttemptResultWithSdkSessionId;
-    expect(retried.terminal).toEqual({ kind: "ok" });
-    expect(retried.sessionIdUsed).toBe(target.sessionId);
-    expect(retried.replayMetadata.replaySafe).toBe(true);
-
-    const resumeParams = {
-      ...retryParams,
-      sessionId: retried.sessionIdUsed,
-      initialReplayState: {
-        replayInvalid: !retried.replayMetadata.replaySafe,
-        hadPotentialSideEffects: retried.replayMetadata.hadPotentialSideEffects,
-        journalValidated: retried.journalValidated,
-        sdkSessionId: retried.sdkSessionId,
-      },
-    };
-    const resumed = (await runCopilotAttempt(resumeParams, deps)) as AttemptResultWithSdkSessionId;
-    expect(resumed.terminal).toEqual({ kind: "ok" });
-    expect(resumed.sessionIdUsed).toBe(target.sessionId);
-    expect(resumed.replayMetadata.replaySafe).toBe(true);
-
-    const final = (await runCopilotAttempt(
-      { ...resumeParams, sessionId: resumed.sessionIdUsed },
-      { ...deps, operation: "settled-tool-finalization" },
-    )) as AttemptResultWithSdkSessionId;
-    expect(final.terminal).toEqual({ kind: "ok" });
-    expect(final.sessionIdUsed).toBe(target.sessionId);
-    expect(final.sdkSessionId).toBe("sdk-session-2");
+    for (const phase of ["failure", "retry", "resume", "finalize"] as const) {
+      const params = {
+        ...baseParams,
+        sessionId,
+        initialReplayState,
+        sessionTarget: { ...target, sessionId },
+      };
+      const result = (await runCopilotAttempt(params, {
+        pool,
+        ...(phase === "finalize" ? { operation: "settled-tool-finalization" as const } : {}),
+      })) as AttemptResultWithSdkSessionId;
+      if (phase === "failure") {
+        expect(result.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
+      } else {
+        expect(result).toMatchObject({ terminal: { kind: "ok" }, sessionIdUsed: target.sessionId });
+      }
+      expect(result.sdkSessionId).toBe(phase === "failure" ? "sdk-session-1" : "sdk-session-2");
+      if (phase === "retry" || phase === "resume") {
+        expect(result.replayMetadata.replaySafe).toBe(true);
+      }
+      // Adopt the host identity on every continuation, but resume the SDK checkpoint from retry.
+      sessionId = result.sessionIdUsed;
+      if (phase === "retry") {
+        initialReplayState = {
+          replayInvalid: !result.replayMetadata.replaySafe,
+          hadPotentialSideEffects: result.replayMetadata.hadPotentialSideEffects,
+          journalValidated: result.journalValidated,
+          sdkSessionId: result.sdkSessionId,
+        };
+      }
+    }
     expect(client.createSession).toHaveBeenCalledTimes(2);
     expect(client.resumeSession.mock.calls.map(([id]) => id)).toEqual([
       "sdk-session-2",

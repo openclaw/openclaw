@@ -54,9 +54,9 @@ export function registerCopilotToolEventTests({ createFakeSession, makeEvent }: 
       }
       await bridge.awaitAgentEventChain();
       expect(bus).toHaveLength(6);
-      expect(direct.mock.calls.map(([event]) => event.data)).toEqual(bus);
-      for (const [index, call] of direct.mock.calls.entries()) {
-        expect(call[0].data).toBe(bus[index]);
+      expect(direct.mock.calls).toHaveLength(bus.length);
+      for (const [index, [event]] of direct.mock.calls.entries()) {
+        expect(event.data).toBe(bus[index]);
       }
       expect(
         bus
@@ -69,29 +69,26 @@ export function registerCopilotToolEventTests({ createFakeSession, makeEvent }: 
         toolName: "tool_search",
         arguments: {},
       });
-      bridge.completeTool({
-        toolCallId: "root-nested",
-        parentToolCallId: "root-catalog",
-        toolName: "read",
-        isError: false,
-      });
-      await bridge.awaitAgentEventChain();
-      expect(bus.at(-1)).toMatchObject({ toolCallId: "root-nested", status: "completed" });
-      bridge.completeTool({
-        toolCallId: "pending-exec",
-        parentToolCallId: "root-catalog",
-        toolName: "exec",
-        isError: false,
-        result: {
-          details: { status: "approval-pending", approvalId: "approval", approvalSlug: "approve" },
-        },
-      });
-      await bridge.awaitAgentEventChain();
-      expect(bus.at(-1)).toMatchObject({
-        status: "blocked",
-        approvalId: "approval",
-        approvalSlug: "approve",
-      });
+      const approval = { approvalId: "approval", approvalSlug: "approve" };
+      for (const [toolCallId, toolName, result, expected] of [
+        ["root-nested", "read", undefined, { toolCallId: "root-nested", status: "completed" }],
+        [
+          "pending-exec",
+          "exec",
+          { details: { status: "approval-pending", ...approval } },
+          { status: "blocked", ...approval },
+        ],
+      ] as const) {
+        bridge.completeTool({
+          toolCallId,
+          toolName,
+          parentToolCallId: "root-catalog",
+          isError: false,
+          result,
+        });
+        await bridge.awaitAgentEventChain();
+        expect(bus.at(-1)).toMatchObject(expected);
+      }
     } finally {
       bridge.detach();
       dispose();
