@@ -44,15 +44,10 @@ const subscriptionToken = [
 ].join(".");
 
 const modelIds = ["gpt-4.1", "gpt-4o"];
-const runtimeModel = () => ({
-  agentRuntime: { id: "openclaw" },
-  params: { transport: "sse" },
-});
-const quietConfig = (): OpenClawConfig => ({
-  plugins: { allow: ["openai"], slots: { memory: "none" } },
-  skills: { load: { watch: false } },
-  tools: { deny: ["*"] },
-});
+const runtimeModels = (...ids: string[]) =>
+  Object.fromEntries(
+    ids.map((id) => [id, { agentRuntime: { id: "openclaw" }, params: { transport: "sse" } }]),
+  );
 
 function modelDefinition(id: string) {
   return {
@@ -66,11 +61,65 @@ function modelDefinition(id: string) {
   };
 }
 
+function provider(
+  baseUrl: string,
+  api: "openai-responses" | "openai-chatgpt-responses" = "openai-responses",
+  ids = ["gpt-4.1"],
+) {
+  return { api, baseUrl, agentRuntime: { id: "openclaw" }, models: ids.map(modelDefinition) };
+}
+
+function configure(
+  state: OpenClawTestState,
+  defaults: NonNullable<OpenClawConfig["agents"]>["defaults"],
+  providers: NonNullable<OpenClawConfig["models"]>["providers"],
+  auth?: OpenClawConfig["auth"],
+): OpenClawConfig {
+  return {
+    plugins: { allow: ["openai"], slots: { memory: "none" } },
+    skills: { load: { watch: false } },
+    tools: { deny: ["*"] },
+    auth,
+    agents: {
+      entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+      defaults,
+    },
+    models: { mode: "replace", providers },
+  };
+}
+
+async function writeConfig(state: OpenClawTestState, cfg: OpenClawConfig) {
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+}
+
+function runStoredTurn(cfg: OpenClawConfig, job: CronStoredJob) {
+  return runCronIsolatedAgentTurn({
+    cfg,
+    deps: {},
+    job,
+    deliveryAttemptFence: null,
+    message: job.payload.kind === "agentTurn" ? job.payload.message : "",
+    sessionKey: `cron:${job.id}`,
+    lane: "cron",
+  });
+}
+
+function interceptProvider(fetch: typeof globalThis.fetch) {
+  vi.spyOn(globalThis, "fetch").mockImplementation(fetch);
+  vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(fetch);
+}
+
 function keyProfile(profileId: string, key: string) {
   return { profileId, credential: { type: "api_key" as const, provider: "openai", key } };
 }
 
-function oauthProfile(profileId: string, access: string, refresh: string, accountId: string) {
+function oauthProfile(
+  profileId: string,
+  access: string,
+  refresh = "synthetic-refresh",
+  accountId = "synthetic-account",
+) {
   return {
     profileId,
     credential: {
@@ -84,10 +133,10 @@ function oauthProfile(profileId: string, access: string, refresh: string, accoun
   };
 }
 
-function storedJob(id: string, name: string, message: string): CronStoredJob {
+function storedJob(id: string, message = "Reply."): CronStoredJob {
   return {
     id,
-    name,
+    name: id,
     agentId: "main",
     enabled: true,
     createdAtMs: 1,
@@ -123,21 +172,18 @@ function completedResponse(model: string): Response {
     content: [{ type: "output_text", text: "same authorized account", annotations: [] }],
   };
   const response = { id: "resp_synthetic", model, status: "in_progress", output: [] };
+  const position = { item_id: item.id, output_index: 0, content_index: 0 };
   const events = [
     { type: "response.created", response },
     { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
     {
       type: "response.content_part.added",
-      item_id: item.id,
-      output_index: 0,
-      content_index: 0,
+      ...position,
       part: { type: "output_text", text: "", annotations: [] },
     },
     {
       type: "response.output_text.delta",
-      item_id: item.id,
-      output_index: 0,
-      content_index: 0,
+      ...position,
       delta: "same authorized account",
     },
     { type: "response.output_item.done", output_index: 0, item },
@@ -185,9 +231,7 @@ describe("persisted cron inference identity through the real embedded runner", (
     "keeps the creator's $mode account across fresh runs and default changes",
     async ({ profileId, api, baseUrl, credential }) => {
       await withAuthState("cron-real-auth-continuity", async (state) => {
-        // These are the only substituted boundaries: serialized provider HTTP and a
-        // fail-closed guard for any unexpected network request. Auth, cron, model
-        // planning, embedded attempts, AgentCore and response parsing stay real.
+        // Only provider HTTP is substituted; unexpected network requests fail closed.
         const requests: Array<{
           url: string;
           authorization: string | null;
@@ -221,23 +265,18 @@ describe("persisted cron inference identity through the real embedded runner", (
           });
           return completedResponse(body.model);
         };
-        vi.spyOn(globalThis, "fetch").mockImplementation(providerFetch);
-        vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(providerFetch);
+        interceptProvider(providerFetch);
         const other = profileId === platformId ? otherPlatformId : otherSubscriptionId;
         function config(model: string, selected?: string): OpenClawConfig {
           const preferred = selected ?? profileId;
-          return {
-            agents: {
-              entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
-              defaults: {
-                model: `openai/${model}${selected ? `@${selected}` : ""}`,
-                models: {
-                  "openai/gpt-4.1": runtimeModel(),
-                  "openai/gpt-4o": runtimeModel(),
-                },
-              },
+          return configure(
+            state,
+            {
+              model: `openai/${model}${selected ? `@${selected}` : ""}`,
+              models: runtimeModels("openai/gpt-4.1", "openai/gpt-4o"),
             },
-            auth: {
+            { openai: provider(baseUrl, api, modelIds) },
+            {
               profiles: {
                 [platformId]: { provider: "openai", mode: "api_key" },
                 [subscriptionId]: { provider: "openai", mode: "oauth" },
@@ -248,41 +287,18 @@ describe("persisted cron inference identity through the real embedded runner", (
                 openai: [preferred, preferred === platformId ? subscriptionId : platformId],
               },
             },
-            models: {
-              mode: "replace",
-              providers: {
-                openai: {
-                  api,
-                  baseUrl,
-                  agentRuntime: { id: "openclaw" },
-                  models: modelIds.map(modelDefinition),
-                },
-              },
-            },
-            ...quietConfig(),
-          };
+          );
         }
         await persistAuthProfileBatch({
           profiles: [
             keyProfile(platformId, platformKey),
             keyProfile(otherPlatformId, "synthetic-other-platform-key"),
-            oauthProfile(
-              otherSubscriptionId,
-              "synthetic-other-subscription-token",
-              "synthetic-other-refresh",
-              "synthetic-other-account",
-            ),
-            oauthProfile(
-              subscriptionId,
-              subscriptionToken,
-              "synthetic-refresh",
-              "synthetic-account",
-            ),
+            oauthProfile(otherSubscriptionId, "other-token", "other-refresh", "other-account"),
+            oauthProfile(subscriptionId, subscriptionToken),
           ],
         });
         const originalConfig = config("gpt-4.1");
-        await state.writeConfig(originalConfig);
-        setRuntimeConfigSnapshot(originalConfig);
+        await writeConfig(state, originalConfig);
         const binding = await captureCronInferenceBinding({
           cfg: originalConfig,
           agentId: "main",
@@ -295,14 +311,9 @@ describe("persisted cron inference identity through the real embedded runner", (
             authProfileOverrideSource: "auto",
           },
         });
-        expect(binding?.profileId).toBe(profileId);
-        expect(binding?.source).toBe("auto");
+        expect(binding).toMatchObject({ profileId, source: "auto" });
         const job: CronStoredJob = {
-          ...storedJob(
-            "real-auth-continuity",
-            "Real auth continuity",
-            "Reply with the account continuity result.",
-          ),
+          ...storedJob("real-auth-continuity", "Reply with the account continuity result."),
           inferenceBinding: binding,
         };
         const storePath = state.statePath("cron", "jobs.json");
@@ -331,17 +342,8 @@ describe("persisted cron inference identity through the real embedded runner", (
               throw new Error("Persisted automation missing");
             }
             const changed = config(model, other);
-            await state.writeConfig(changed);
-            setRuntimeConfigSnapshot(changed);
-            const result = await runCronIsolatedAgentTurn({
-              cfg: changed,
-              deps: {},
-              job: reloaded,
-              deliveryAttemptFence: null,
-              message: reloaded.payload.kind === "agentTurn" ? reloaded.payload.message : "",
-              sessionKey: "cron:real-auth-continuity",
-              lane: "cron",
-            });
+            await writeConfig(state, changed);
+            const result = await runStoredTurn(changed, reloaded);
             expect(result.status, result.error).toBe("ok");
             expect(result.summary).toContain("same authorized account");
             expect(result.sessionId).toBeTruthy();
@@ -387,43 +389,25 @@ describe("legacy cron jobs without a recorded account through the real embedded 
         requests.push({ url: request.url, authorization: request.headers.get("authorization") });
         return completedResponse("gpt-4.1");
       };
-      vi.spyOn(globalThis, "fetch").mockImplementation(providerFetch);
-      vi.spyOn(getAiTransportHost(), "buildModelFetch").mockReturnValue(providerFetch);
-      const cfg: OpenClawConfig = {
-        agents: {
-          entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
-          defaults: {
-            model: { primary: "openai/gpt-4.1", fallbacks: ["local/gpt-4.1"] },
-            models: {
-              "openai/gpt-4.1": runtimeModel(),
-              "local/gpt-4.1": runtimeModel(),
-            },
-          },
+      interceptProvider(providerFetch);
+      const cfg = configure(
+        state,
+        {
+          model: { primary: "openai/gpt-4.1", fallbacks: ["local/gpt-4.1"] },
+          models: runtimeModels("openai/gpt-4.1", "local/gpt-4.1"),
         },
-        ...(params.storedProfile
-          ? { auth: { profiles: { [platformId]: { provider: "openai", mode: "api_key" } } } }
-          : {}),
-        models: {
-          mode: "replace",
-          providers: {
-            openai: {
-              api: "openai-responses",
-              baseUrl: openaiUrl,
-              agentRuntime: { id: "openclaw" },
-              ...(params.openaiApiKey ? { apiKey: params.openaiApiKey } : {}),
-              models: [modelDefinition("gpt-4.1")],
-            },
-            // A credentialless loopback route, so its own account check admits it.
-            local: {
-              api: "openai-responses",
-              baseUrl: localUrl,
-              agentRuntime: { id: "openclaw" },
-              models: [modelDefinition("gpt-4.1")],
-            },
+        {
+          openai: {
+            ...provider(openaiUrl),
+            ...(params.openaiApiKey ? { apiKey: params.openaiApiKey } : {}),
           },
+          // A credentialless loopback route, so its own account check admits it.
+          local: provider(localUrl),
         },
-        ...quietConfig(),
-      };
+        params.storedProfile
+          ? { profiles: { [platformId]: { provider: "openai", mode: "api_key" } } }
+          : undefined,
+      );
       if (params.storedProfile) {
         await persistAuthProfileBatch({
           profiles: [keyProfile(platformId, platformKey)],
@@ -463,9 +447,8 @@ describe("legacy cron jobs without a recorded account through the real embedded 
           },
         });
       }
-      await state.writeConfig(cfg);
-      setRuntimeConfigSnapshot(cfg);
-      const stored = storedJob("legacy-account", "Legacy account", "Reply.");
+      await writeConfig(state, cfg);
+      const stored = storedJob("legacy-account");
       const storePath = state.statePath("cron", "jobs.json");
       const sessionScope = { agentId: "main", sessionKey: "agent:main:cron:legacy-account" };
       if (linkedProfileId) {
@@ -510,15 +493,7 @@ describe("legacy cron jobs without a recorded account through the real embedded 
       }
       const job = (await loadCronJobsStore(storePath)).jobs[0]!;
       try {
-        const result = await runCronIsolatedAgentTurn({
-          cfg,
-          deps: {},
-          job,
-          deliveryAttemptFence: null,
-          message: "Reply.",
-          sessionKey: "cron:legacy-account",
-          lane: "cron",
-        });
+        const result = await runStoredTurn(cfg, job);
         return { result, requests, migration, job };
       } finally {
         await resetPreparedModelRuntimeSnapshotsForTest();
@@ -546,13 +521,15 @@ describe("legacy cron jobs without a recorded account through the real embedded 
     expect(requests).toEqual([]);
   });
 
-  it("records the shared account a run plans, never a personal one listed first", async () => {
+  it.each([
+    { name: "a personal account listed first", personalFirst: true },
+    { name: "a temporary rate limit during Doctor", cooledFirst: true },
+  ])("records the usual shared account despite $name", async (scenario) => {
     const { result, requests, migration, job } = await runLegacyJob({
       storedProfile: true,
-      personalFirst: true,
       migrate: true,
+      ...scenario,
     });
-
     expect(migration?.changes.join("\n")).toContain(`retain ${platformId}`);
     expect(job.inferenceBinding).toMatchObject({ profileId: platformId });
     expect(result.status, result.error).toBe("ok");
@@ -610,19 +587,4 @@ describe("legacy cron jobs without a recorded account through the real embedded 
       expect(requests).toEqual([]);
     },
   );
-
-  it("records the usual account even while it is rate-limited during Doctor", async () => {
-    const { result, requests, migration, job } = await runLegacyJob({
-      storedProfile: true,
-      cooledFirst: true,
-      migrate: true,
-    });
-
-    expect(migration?.changes.join("\n")).toContain(`retain ${platformId}`);
-    expect(job.inferenceBinding).toMatchObject({ profileId: platformId });
-    expect(result.status, result.error).toBe("ok");
-    expect(requests).toEqual([
-      { url: `${openaiUrl}/responses`, authorization: `Bearer ${platformKey}` },
-    ]);
-  });
 });
