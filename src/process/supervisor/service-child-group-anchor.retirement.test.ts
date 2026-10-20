@@ -10,7 +10,11 @@ import {
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "./cancellation-policy.js";
-import type { ServiceChildAnchorMessage } from "./service-child-protocol.js";
+import { readLines } from "./service-child-group-anchor.preparation.test-support.js";
+import type {
+  ServiceChildAnchorMessage,
+  ServiceChildControlPayload,
+} from "./service-child-protocol.js";
 
 describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
   it.each([
@@ -34,7 +38,8 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
     "retires gracefully only after the closing receipt is acknowledged (%s)",
     async (acknowledgement) => {
       const forced = acknowledgement.startsWith("forced-");
-      const legacy = acknowledgement === "legacy-host" || acknowledgement === "forced-legacy-host";
+      const mode = acknowledgement.replace("forced-", "");
+      const legacy = mode === "legacy-host";
       const generation = randomUUID();
       const child = spawn(
         process.execPath,
@@ -43,10 +48,7 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
         ),
         { detached: true, stdio: ["ignore", "pipe", "pipe", "pipe", "pipe", "ipc"] },
       );
-      const exited = createDeferredCore<{
-        code: number | null;
-        signal: NodeJS.Signals | null;
-      }>();
+      const exited = createDeferredCore<{ code: number | null; signal: NodeJS.Signals | null }>();
       child.once("exit", (code, signal) => exited.resolve({ code, signal }));
       child.once("error", exited.reject);
       const control = child.stdio[3];
@@ -57,6 +59,10 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
       const messages: ServiceChildAnchorMessage[] = [];
       let prearmedSequence: number | undefined;
       let outboundSequence = 0;
+      const send = (payload: ServiceChildControlPayload) =>
+        control.write(
+          `${JSON.stringify({ ...payload, generation, sequence: ++outboundSequence })}\n`,
+        );
       const lineage = child.stdio[4];
       if (!(lineage instanceof Duplex)) {
         child.kill("SIGKILL");
@@ -64,15 +70,18 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
       }
       lineage.once("end", () => {
         if (!control.destroyed && !legacy) {
-          control.write(
-            `${JSON.stringify({ type: "lineage-closed", generation, sequence: ++outboundSequence })}\n`,
-          );
+          send({ type: "lineage-closed" });
         }
       });
       lineage.resume();
       let forcedCancellationAt = 0;
       const startupFailure = acknowledgement === "pre-armed" || acknowledgement === "startup-error";
-      let pending = "";
+      const invalidReceipt = [
+        "stale-generation",
+        "wrong-receipt",
+        "malformed-receipt",
+        "non-monotonic",
+      ].includes(acknowledgement);
       let stderr = "";
       child.stdout?.resume();
       child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
@@ -84,65 +93,47 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
         control.write(
           `${JSON.stringify({ type: "closing-ack", generation: replyGeneration, sequence, closingSequence })}\n`,
         );
-      control.setEncoding("utf8").on("data", (chunk: string) => {
-        pending += chunk;
-        for (;;) {
-          const newline = pending.indexOf("\n");
-          if (newline < 0) {
-            return;
+      readLines(control, (line) => {
+        // SAFETY: this exact spawned anchor is the sole writer on its private control channel.
+        const message = JSON.parse(line) as ServiceChildAnchorMessage;
+        messages.push(message);
+        if (message.type === "ready" && forced) {
+          forcedCancellationAt = performance.now();
+          send({ type: "cancel", signal: "SIGKILL" });
+        }
+        if (message.type === "startup-error") {
+          if (acknowledgement === "pre-armed") {
+            // Both frames share the ordered control channel: the early ACK must
+            // be consumed before startup acknowledgement can begin retirement.
+            prearmedSequence = message.sequence + 1;
+            reply(prearmedSequence, generation, ++outboundSequence);
           }
-          // SAFETY: this exact spawned anchor is the sole writer on its private control channel.
-          const message = JSON.parse(pending.slice(0, newline)) as ServiceChildAnchorMessage;
-          pending = pending.slice(newline + 1);
-          messages.push(message);
-          if (message.type === "ready" && forced) {
-            forcedCancellationAt = performance.now();
-            control.write(
-              `${JSON.stringify({ type: "cancel", generation, sequence: ++outboundSequence, signal: "SIGKILL" })}\n`,
-            );
-          }
-          if (message.type === "startup-error") {
-            if (acknowledgement === "pre-armed") {
-              // Both frames share the ordered control channel: the early ACK must
-              // be consumed before startup acknowledgement can begin retirement.
-              prearmedSequence = message.sequence + 1;
-              reply(prearmedSequence, generation, ++outboundSequence);
-            }
-            control.write(
-              `${JSON.stringify({ type: "startup-error-ack", generation, sequence: ++outboundSequence })}\n`,
-            );
-          }
-          if (message.type !== "closing") {
-            continue;
-          }
-          if (acknowledgement === "control-lost" || acknowledgement === "forced-control-lost") {
-            control.destroy();
-          } else if (acknowledgement === "relay-lost") {
-            child.disconnect();
-          } else if (
-            acknowledgement !== "missing" &&
-            acknowledgement !== "forced-missing" &&
-            acknowledgement !== "pre-armed" &&
-            acknowledgement !== "legacy-host"
-          ) {
-            reply(
-              acknowledgement === "malformed-receipt"
-                ? String(message.sequence)
-                : acknowledgement === "wrong-receipt"
-                  ? message.sequence - 1
-                  : message.sequence,
-              acknowledgement === "stale-generation" ? `${generation}-stale` : generation,
-              acknowledgement === "non-monotonic" ? 0 : ++outboundSequence,
-            );
-            if (
-              acknowledgement === "stale-generation" ||
-              acknowledgement === "wrong-receipt" ||
-              acknowledgement === "malformed-receipt" ||
-              acknowledgement === "non-monotonic"
-            ) {
-              // EOF follows the invalid frame on the same ordered control pipe.
-              control.end();
-            }
+          send({ type: "startup-error-ack" });
+        }
+        if (message.type !== "closing") {
+          return;
+        }
+        if (mode === "control-lost") {
+          control.destroy();
+        } else if (acknowledgement === "relay-lost") {
+          child.disconnect();
+        } else if (
+          mode !== "missing" &&
+          mode !== "pre-armed" &&
+          acknowledgement !== "legacy-host"
+        ) {
+          reply(
+            acknowledgement === "malformed-receipt"
+              ? String(message.sequence)
+              : acknowledgement === "wrong-receipt"
+                ? message.sequence - 1
+                : message.sequence,
+            acknowledgement === "stale-generation" ? `${generation}-stale` : generation,
+            acknowledgement === "non-monotonic" ? 0 : ++outboundSequence,
+          );
+          if (invalidReceipt) {
+            // EOF follows the invalid frame on the same ordered control pipe.
+            control.end();
           }
         }
       });
@@ -171,18 +162,18 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
           expect(messages).toEqual([]);
           return;
         }
-        expect(messages, stderr).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining(
-              forced
-                ? { type: "ready", generation }
-                : startupFailure
-                  ? { type: "startup-error", generation }
-                  : { type: "root-result", generation, code: 0, signal: null },
-            ),
-            expect.objectContaining({ type: "closing", generation }),
-          ]),
+        const expectMessage = (message: Partial<ServiceChildAnchorMessage>) =>
+          expect(messages, stderr).toContainEqual(
+            expect.objectContaining({ ...message, generation }),
+          );
+        expectMessage(
+          forced
+            ? { type: "ready" }
+            : startupFailure
+              ? { type: "startup-error" }
+              : { type: "root-result", code: 0, signal: null },
         );
+        expectMessage({ type: "closing" });
         if (acknowledgement === "pre-armed") {
           expect(messages.find((message) => message.type === "closing")?.sequence).toBe(
             prearmedSequence,
@@ -202,11 +193,7 @@ describe.skipIf(process.platform === "win32")("POSIX anchor retirement", () => {
           }
           return;
         }
-        if (
-          acknowledgement === "matching" ||
-          acknowledgement === "startup-error" ||
-          acknowledgement === "legacy-host"
-        ) {
+        if (["matching", "startup-error", "legacy-host"].includes(acknowledgement)) {
           expect(result, stderr).toEqual({ code: 0, signal: null });
         } else {
           expect(

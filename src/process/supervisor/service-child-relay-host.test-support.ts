@@ -1,5 +1,5 @@
 import type { ChildProcess } from "node:child_process";
-import { Duplex, PassThrough } from "node:stream";
+import { Duplex, PassThrough, type DuplexOptions } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import { createStubChild, firstMockArg } from "./adapters/child.test-support.js";
@@ -10,8 +10,7 @@ import {
 } from "./service-child-protocol.js";
 import { createServiceChildRelayAdapter as startServiceChildRelayAdapter } from "./service-child-relay-host.js";
 
-// Direct factory assertions concern completed readiness; caller regressions
-// below consume the production split startup directly.
+// Direct factory assertions await readiness; startup regressions use the split factory.
 export async function createServiceChildRelayAdapter(
   params: Parameters<typeof startServiceChildRelayAdapter>[0],
 ) {
@@ -20,7 +19,11 @@ export async function createServiceChildRelayAdapter(
   return adapter;
 }
 
-export function createWritableRelayChild() {
+export function createWritableRelayChild(
+  write: DuplexOptions["write"] = (_chunk, _encoding, done) => {
+    done();
+  },
+) {
   const stub = createStubChild();
   const stdout = new PassThrough();
   const stderr = new PassThrough();
@@ -29,9 +32,7 @@ export function createWritableRelayChild() {
   const control = new Duplex({
     autoDestroy: false,
     read() {},
-    write(_chunk, _encoding, callback) {
-      callback();
-    },
+    write,
   });
   const lineage = new PassThrough();
   Object.defineProperty(stub.child, "stdio", {
@@ -50,31 +51,22 @@ export async function createRelayFixture(
   const groupProbe = vi.spyOn(process, "kill").mockImplementation(() => {
     throw Object.assign(new Error("synthetic missing process group"), { code: "ESRCH" });
   });
-  const stub = createStubChild();
   const cancellations: Array<(error: Error) => void> = [];
   const acknowledgements: ServiceChildControlMessage[] = [];
   // The simulated peer must stay outside spies on the host's incoming decoder.
   const parseControlMessage = JSON.parse;
   // Keep channel closure independently controlled from cancellation write completion.
-  const control = new Duplex({
-    autoDestroy: false,
-    read() {},
-    write(chunk: Buffer, _encoding, callback) {
-      // SAFETY: this exact adapter is the sole writer on its private control channel.
-      const message = parseControlMessage(chunk.toString()) as ServiceChildControlMessage;
-      if (message.type === "cancel") {
-        cancellations.push(callback);
-      } else {
-        acknowledgements.push(message);
-        callback();
-      }
-    },
+  const stub = createWritableRelayChild((chunk: Buffer, _encoding, callback) => {
+    // SAFETY: this exact adapter is the sole writer on its private control channel.
+    const message = parseControlMessage(chunk.toString()) as ServiceChildControlMessage;
+    if (message.type === "cancel") {
+      cancellations.push(callback);
+    } else {
+      acknowledgements.push(message);
+      callback();
+    }
   });
-  const lineage = new PassThrough();
-  Object.defineProperty(stub.child, "stdio", {
-    value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control, lineage],
-    configurable: true,
-  });
+  const { control, lineage } = stub;
   if (platform === "win32") {
     stub.child.stdout = null;
     stub.child.stderr = null;
@@ -144,10 +136,6 @@ export async function createRelayFixture(
     closeControl();
     exitRelay();
   };
-  const floodControl = (chunk: string | Buffer) => {
-    control.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  };
-  const controlEncoding = () => control.readableEncoding;
   const killSpy = vi.spyOn(stub.child, "kill");
   onCleanup(() => {
     close();
@@ -164,8 +152,10 @@ export async function createRelayFixture(
     close,
     closeControl,
     exitRelay,
-    floodControl,
-    controlEncoding,
+    floodControl: (chunk: string | Buffer) => {
+      control.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    },
+    controlEncoding: () => control.readableEncoding,
     killSpy,
     groupProbe,
     lineage,

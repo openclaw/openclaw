@@ -10,6 +10,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readLines } from "./service-child-group-anchor.preparation.test-support.js";
 import type {
   ServiceChildAnchorMessage,
   ServiceChildControlPayload,
@@ -60,7 +61,6 @@ describe.skipIf(process.platform === "win32")("POSIX anchor input lifetime", () 
       let sequence = 0;
       let stdout = "";
       let stderr = "";
-      let pending = "";
       const run = async () => {
         if (!(control instanceof Duplex) || !(lineage instanceof Duplex) || !inputProbe) {
           throw new Error("Missing anchor fixture pipes");
@@ -86,28 +86,20 @@ describe.skipIf(process.platform === "win32")("POSIX anchor input lifetime", () 
           }
         });
         lineage.resume();
-        control.setEncoding("utf8").on("data", (chunk: string) => {
-          pending += chunk;
-          for (;;) {
-            const newline = pending.indexOf("\n");
-            if (newline < 0) {
-              break;
+        readLines(control, (line) => {
+          // This fixture's spawned anchor is the sole control-channel writer.
+          const message = JSON.parse(line) as ServiceChildAnchorMessage;
+          messages.push(message);
+          if (message.type === "prepared") {
+            // Ordered control frames prove that this end request precedes launch and EOF.
+            if (mode === "end-before-eof") {
+              send({ type: "stdin-end" });
             }
-            // This fixture's spawned anchor is the sole control-channel writer.
-            const message = JSON.parse(pending.slice(0, newline)) as ServiceChildAnchorMessage;
-            pending = pending.slice(newline + 1);
-            messages.push(message);
-            if (message.type === "prepared") {
-              // Ordered control frames prove that this end request precedes launch and EOF.
-              if (mode === "end-before-eof") {
-                send({ type: "stdin-end" });
-              }
-              send({ type: "launch" });
-            } else if (message.type === "closing") {
-              send({ type: "closing-ack", closingSequence: message.sequence });
-            } else if (message.type === "startup-error") {
-              send({ type: "startup-error-ack" });
-            }
+            send({ type: "launch" });
+          } else if (message.type === "closing") {
+            send({ type: "closing-ack", closingSequence: message.sequence });
+          } else if (message.type === "startup-error") {
+            send({ type: "startup-error-ack" });
           }
         });
         const start: ServiceChildStart = {
@@ -139,23 +131,17 @@ describe.skipIf(process.platform === "win32")("POSIX anchor input lifetime", () 
           send({ type: "stdin-end" });
         }
         const result = await closed;
+        const expectMessage = (message: Partial<ServiceChildAnchorMessage>) =>
+          expect(messages).toContainEqual(expect.objectContaining(message));
         if (mode === "host-loss") {
           expect(result, stderr).toEqual({ code: null, signal: "SIGKILL" });
           expect(stdout).toBe("child-ready\n");
-          expect(messages).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ type: "closing", reason: "parent-lost" }),
-            ]),
-          );
+          expectMessage({ type: "closing", reason: "parent-lost" });
         } else {
           expect(result, stderr).toEqual({ code: 0, signal: null });
           expect(stdout).toBe("child-ready\nsynthetic-refusal:flushed-input\n");
-          expect(messages).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ type: "root-result", code: 0, signal: null }),
-              expect.objectContaining({ type: "closing" }),
-            ]),
-          );
+          expectMessage({ type: "root-result", code: 0, signal: null });
+          expectMessage({ type: "closing" });
         }
       };
       try {
