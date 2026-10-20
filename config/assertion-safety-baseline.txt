@@ -337,7 +337,7 @@ extensions/google/vertex-adc.ts	4
 extensions/google/video-generation-provider.ts	13
 extensions/googlechat/src/approval-card-actions.ts	1
 extensions/googlechat/src/approval-handler.runtime.ts	1
-extensions/googlechat/src/google-auth.runtime.ts	4
+extensions/googlechat/src/google-auth.runtime.ts	1
 extensions/googlechat/src/monitor-event.ts	2
 extensions/huggingface/index.ts	1
 extensions/huggingface/models.ts	2
@@ -730,7 +730,7 @@ extensions/slack/src/approval-handler.runtime.ts	1
 extensions/slack/src/blocks-input.ts	2
 extensions/slack/src/channel-actions.ts	1
 extensions/slack/src/channel-type.ts	1
-extensions/slack/src/channel.ts	5
+extensions/slack/src/channel.ts	4
 extensions/slack/src/client-delivery.ts	1
 extensions/slack/src/client-options.ts	2
 extensions/slack/src/doctor.ts	1

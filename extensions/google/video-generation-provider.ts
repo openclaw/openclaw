@@ -119,33 +119,6 @@ function resolveInputVideo(req: VideoGenerationRequest) {
   };
 }
 
-function resolveGoogleGeneratedVideoDownloadUrl(params: {
-  uri: string | undefined;
-  apiKey: string;
-  configuredBaseUrl?: string;
-}): string | undefined {
-  const trimmed = normalizeOptionalString(params.uri);
-  if (!trimmed) {
-    return undefined;
-  }
-  const url = URL.parse(trimmed);
-  if (url?.protocol !== "https:") {
-    return undefined;
-  }
-  const allowedOrigins = new Set(["https://generativelanguage.googleapis.com"]);
-  const configuredOrigin = URL.parse(params.configuredBaseUrl ?? "")?.origin;
-  if (configuredOrigin?.startsWith("https://")) {
-    allowedOrigins.add(configuredOrigin);
-  }
-  if (!allowedOrigins.has(url.origin)) {
-    return undefined;
-  }
-  if (!url.searchParams.has("key")) {
-    url.searchParams.set("key", params.apiKey);
-  }
-  return url.toString();
-}
-
 function resolveGoogleGeneratedVideoFileDownloadUrl(params: {
   file: unknown;
   apiKey: string;
@@ -161,63 +134,6 @@ function resolveGoogleGeneratedVideoFileDownloadUrl(params: {
   url.searchParams.set("alt", "media");
   url.searchParams.set("key", params.apiKey);
   return url.toString();
-}
-
-async function downloadGeneratedVideoFromUri(params: {
-  uri: string | undefined;
-  apiKey: string;
-  configuredBaseUrl?: string;
-  mimeType?: string;
-  index: number;
-  maxBytes: number;
-  timeoutMs: number;
-}): Promise<GeneratedVideoAsset | undefined> {
-  const downloadUrl = resolveGoogleGeneratedVideoDownloadUrl({
-    uri: params.uri,
-    apiKey: params.apiKey,
-    configuredBaseUrl: params.configuredBaseUrl,
-  });
-  if (!downloadUrl) {
-    return undefined;
-  }
-  return await executeProviderOperationWithRetry({
-    provider: "google",
-    stage: "download",
-    operation: async () => {
-      const { response, release } = await fetchWithSsrFGuard({
-        url: downloadUrl,
-        timeoutMs: params.timeoutMs,
-      });
-      try {
-        if (!response.ok) {
-          // A debug-capture clone can keep the tee open, so waiting for cancel
-          // would hang before the HTTP error and dispatcher can be released.
-          void response.body?.cancel().catch(() => undefined);
-          throw new Error(
-            `Failed to download Google generated video: ${response.status} ${response.statusText}`,
-          );
-        }
-        const downloadLabel = "Google generated video download";
-        const buffer = await readProviderBinaryResponse(response, downloadLabel, "video", {
-          maxBytes: params.maxBytes,
-          chunkTimeoutMs: params.timeoutMs,
-          onOverflow: ({ maxBytes }) => new Error(`${downloadLabel} exceeds ${maxBytes} bytes`),
-          onIdleTimeout: ({ chunkTimeoutMs }) =>
-            new Error(`${downloadLabel} stalled after ${chunkTimeoutMs}ms`),
-        });
-        return {
-          buffer,
-          mimeType:
-            normalizeOptionalString(response.headers.get("content-type")) ||
-            normalizeOptionalString(params.mimeType) ||
-            "video/mp4",
-          fileName: `video-${params.index + 1}.mp4`,
-        };
-      } finally {
-        await release();
-      }
-    },
-  });
 }
 
 function extractGoogleApiErrorCode(error: unknown): number | undefined {
@@ -506,19 +422,79 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
               fileName: `video-${index + 1}.mp4`,
             };
           }
-          const download = (uri: string | undefined) =>
-            downloadGeneratedVideoFromUri({
-              uri,
-              apiKey,
-              configuredBaseUrl,
-              mimeType: inline?.mimeType,
-              index,
-              maxBytes: maxVideoBytes,
-              timeoutMs: resolveProviderOperationTimeoutMs({
-                deadline,
-                defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
-              }),
+          const download = async (
+            uri: string | undefined,
+          ): Promise<GeneratedVideoAsset | undefined> => {
+            const mimeType = inline?.mimeType;
+            const timeoutMs = resolveProviderOperationTimeoutMs({
+              deadline,
+              defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
             });
+            const trimmed = normalizeOptionalString(uri);
+            if (!trimmed) {
+              return undefined;
+            }
+            const url = URL.parse(trimmed);
+            if (url?.protocol !== "https:") {
+              return undefined;
+            }
+            const allowedOrigins = new Set(["https://generativelanguage.googleapis.com"]);
+            const configuredOrigin = URL.parse(configuredBaseUrl ?? "")?.origin;
+            if (configuredOrigin?.startsWith("https://")) {
+              allowedOrigins.add(configuredOrigin);
+            }
+            if (!allowedOrigins.has(url.origin)) {
+              return undefined;
+            }
+            if (!url.searchParams.has("key")) {
+              url.searchParams.set("key", apiKey);
+            }
+            const downloadUrl = url.toString();
+            return await executeProviderOperationWithRetry({
+              provider: "google",
+              stage: "download",
+              operation: async () => {
+                const { response, release } = await fetchWithSsrFGuard({
+                  url: downloadUrl,
+                  timeoutMs,
+                });
+                try {
+                  if (!response.ok) {
+                    // A debug-capture clone can keep the tee open, so waiting for cancel
+                    // would hang before the HTTP error and dispatcher can be released.
+                    void response.body?.cancel().catch(() => undefined);
+                    throw new Error(
+                      `Failed to download Google generated video: ${response.status} ${response.statusText}`,
+                    );
+                  }
+                  const downloadLabel = "Google generated video download";
+                  const buffer = await readProviderBinaryResponse(
+                    response,
+                    downloadLabel,
+                    "video",
+                    {
+                      maxBytes: maxVideoBytes,
+                      chunkTimeoutMs: timeoutMs,
+                      onOverflow: ({ maxBytes }) =>
+                        new Error(`${downloadLabel} exceeds ${maxBytes} bytes`),
+                      onIdleTimeout: ({ chunkTimeoutMs }) =>
+                        new Error(`${downloadLabel} stalled after ${chunkTimeoutMs}ms`),
+                    },
+                  );
+                  return {
+                    buffer,
+                    mimeType:
+                      normalizeOptionalString(response.headers.get("content-type")) ||
+                      normalizeOptionalString(mimeType) ||
+                      "video/mp4",
+                    fileName: `video-${index + 1}.mp4`,
+                  };
+                } finally {
+                  await release();
+                }
+              },
+            });
+          };
           const directDownload = await download(inline?.uri);
           if (directDownload) {
             return directDownload;

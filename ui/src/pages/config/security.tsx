@@ -16,7 +16,7 @@ import {
 import { PROFILE_OPTIONS } from "../../lib/agents/tool-catalog.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
-export type SecurityOverview = ReturnType<typeof extractQuickSettingsSecurity>;
+type SecurityOverview = ReturnType<typeof extractQuickSettingsSecurity>;
 
 export function extractQuickSettingsSecurity(root: Record<string, unknown>) {
   const gateway = asConfigRecord(root.gateway);

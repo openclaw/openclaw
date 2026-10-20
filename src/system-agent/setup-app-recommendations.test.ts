@@ -138,7 +138,7 @@ describe("setup app recommendation candidates", () => {
   it.each([
     {
       reason: "unsupported",
-      inventory: { status: "unsupported" as const, platform: "linux" as const, apps: [] as [] },
+      inventory: { status: "unsupported" as const, apps: [] as [] },
     },
     { reason: "no-apps", inventory: [] },
   ])("does not report phases when the scan skips for $reason", async ({ inventory }) => {

@@ -375,6 +375,10 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/install-swift-tools.sh") &&
   existsSync("scripts/lint-swift.sh") &&
   existsSync("scripts/format-swift.sh");
+const runMacosSwift =
+  runMacos &&
+  !npmQualification &&
+  (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
 const iosBuildScope =
@@ -1080,6 +1084,7 @@ const runPostgresConformance =
         ))));
 const runBuildArtifacts =
   publishedDriverUpdate ||
+  (runMacosSwift && existsSync("apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift")) ||
   (runNodeFull &&
     (changedScopeHasBuildImpact ||
       runSqliteSessionLifecycle ||
@@ -1751,10 +1756,7 @@ const manifest = {
           [{ check_name: "macos-node", runtime: "node", task: "test" }]
       : [],
   ),
-  run_macos_swift:
-    runMacos &&
-    !npmQualification &&
-    (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
+  run_macos_swift: runMacosSwift,
   run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,

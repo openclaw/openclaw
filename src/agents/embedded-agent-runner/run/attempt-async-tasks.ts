@@ -8,7 +8,6 @@ import {
   listMediaGenerationOperations,
   type MediaGenerationOperation,
 } from "../../media-generation-activity.js";
-import { withAbortListener } from "./abortable.js";
 
 export type AsyncStartedToolMeta = {
   toolName?: string;
@@ -40,19 +39,6 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {
     throw createAbortError(signal);
   }
-}
-
-async function sleepWithAbort(
-  ms: number,
-  signal: AbortSignal | undefined,
-  sleepFn: (ms: number) => Promise<void>,
-): Promise<void> {
-  if (!signal) {
-    await sleepFn(ms);
-    return;
-  }
-  throwIfAborted(signal);
-  await withAbortListener(signal, () => sleepFn(ms), createAbortError);
 }
 
 function isPendingCompletionTask(task: MediaGenerationOperation): boolean {
@@ -120,13 +106,9 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;
   getDeadlineAtMs: () => number | undefined;
-  now?: () => number;
   pollIntervalMs?: number;
-  sleep?: (ms: number) => Promise<void>;
   abortSignal?: AbortSignal;
 }): Promise<CompletionRequiredAsyncTaskWaitResult> {
-  const now = params.now ?? Date.now;
-  const sleepFn = params.sleep ?? sleep;
   const pollIntervalMs =
     params.pollIntervalMs ?? (isFastTestRuntimeEnv() ? 10 : DEFAULT_ASYNC_TASK_POLL_INTERVAL_MS);
   const waitedRunIds = new Set<string>();
@@ -172,14 +154,14 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
       // Approval pauses and resumed grace windows replace the owner's deadline.
       // Unlimited waits still use finite sleeps and remain abort-responsive.
       const deadlineAtMs = params.getDeadlineAtMs();
-      const remainingMs = deadlineAtMs === undefined ? pollIntervalMs : deadlineAtMs - now();
+      const remainingMs = deadlineAtMs === undefined ? pollIntervalMs : deadlineAtMs - Date.now();
       if (remainingMs <= 0) {
         for (const runId of pendingRunIds) {
           timedOutRunIds.add(runId);
         }
         break waitForTasks;
       }
-      await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), params.abortSignal, sleepFn);
+      await sleep(Math.min(pollIntervalMs, remainingMs), params.abortSignal);
     }
   }
   return {

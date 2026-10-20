@@ -45,7 +45,7 @@ type MatrixQaFaultProxyForwardedResponse = {
   status: number;
 };
 
-export type MatrixQaFaultProxyExchange = {
+type MatrixQaFaultProxyExchange = {
   request: MatrixQaFaultProxyRequest;
   response: MatrixQaFaultProxyForwardedResponse;
 };

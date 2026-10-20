@@ -3,8 +3,8 @@ import type {
   EnvironmentsListResult,
   UserProfile,
   ProjectsCheckoutOptionsResult,
-  SystemAgentChatHistoryResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
+import type { SystemAgentChatHistoryResult } from "../../../packages/gateway-protocol/src/schema/openclaw.ts";
 import type {
   PluginsCatalogBrowseResult,
   PluginsCatalogCategoriesResult,
