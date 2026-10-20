@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -27,16 +27,13 @@ import {
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
-import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
-  createAgentTurnExecutionDefaults,
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
   getExecuteAgentTurnForTest,
   getRawExecuteAgentTurnForTest,
   createRunAgentTurnParams,
-  createMockTypingSignaler,
   createFollowupRun,
   createMockReplyOperation,
   requireMockCall,
@@ -51,76 +48,78 @@ import {
 } from "./reply-operation-run-state.js";
 
 const state = await setupAgentRunnerExecutionTestState();
+const executeAgentTurn = await getExecuteAgentTurnForTest();
+const executeRawAgentTurn = await getRawExecuteAgentTurnForTest();
+const { emitAgentEvent } = await import("../../infra/agent-events.js");
+function terminalEvents(runId?: string) {
+  return vi
+    .mocked(emitAgentEvent)
+    .mock.calls.map(([event]) => event)
+    .filter(
+      (event) =>
+        (runId === undefined || event.runId === runId) &&
+        event.stream === "lifecycle" &&
+        (event.data.phase === "end" || event.data.phase === "error"),
+    );
+}
 
 describe("executeAgentTurn: terminal failures", () => {
-  it.each([0])(
-    "preserves retry exhaustion through returned provider payloads (%s)",
-    async (retries) => {
-      const rawError = "429 rate limit exceeded. Please try again in 221ms.";
-      const payloads = buildPayloads({
-        provider: "external",
-        lastAssistant: makeAssistantMessageFixture({
-          provider: "external",
-          model: "primary",
-          errorMessage: rawError,
-        }),
-        rateLimitRetriesExhausted: retries,
-      });
-      expect(getReplyPayloadMetadata(payloads[0]!)?.providerFailure).toMatchObject({
-        rawError,
-        rateLimitRetriesExhausted: retries,
-      });
-      state.runWithModelFallbackMock.mockResolvedValueOnce({
-        result: {
-          payloads,
-          meta: {
-            durationMs: 1,
-            replayInvalid: true,
-            error: { kind: "incomplete_turn", message: rawError, fallbackSafe: false },
-          },
-        },
+  it("preserves disabled retry exhaustion through returned provider payloads", async () => {
+    const rawError = "429 rate limit exceeded. Please try again in 221ms.";
+    const payloads = buildPayloads({
+      provider: "external",
+      lastAssistant: makeAssistantMessageFixture({
         provider: "external",
         model: "primary",
-        attempts: [],
-      });
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
-      const text = JSON.stringify(result);
-      expect(text).toContain(
-        retries === 0
-          ? "recovery is disabled"
-          : `${retries} automatic ${retries === 1 ? "retry" : "retries"}`,
-      );
-      // Diagnostics keep the raw hint, but the delivered payload names exhaustion.
-      if (result.kind !== "success") {
-        throw new Error("expected success result");
-      }
-      expect(result.runResult.payloads?.[0]?.text).not.toContain("221ms");
-    },
-  );
+        errorMessage: rawError,
+      }),
+      rateLimitRetriesExhausted: 0,
+    });
+    expect(getReplyPayloadMetadata(payloads[0]!)?.providerFailure).toMatchObject({
+      rawError,
+      rateLimitRetriesExhausted: 0,
+    });
+    state.runWithModelFallbackMock.mockResolvedValueOnce({
+      result: {
+        payloads,
+        meta: {
+          durationMs: 1,
+          replayInvalid: true,
+          error: { kind: "incomplete_turn", message: rawError, fallbackSafe: false },
+        },
+      },
+      provider: "external",
+      model: "primary",
+      attempts: [],
+    });
+    const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
+    const text = JSON.stringify(result);
+    expect(text).toContain("recovery is disabled");
+    // Diagnostics keep the raw hint, but the delivered payload names exhaustion.
+    if (result.kind !== "success") {
+      throw new Error("expected success result");
+    }
+    expect(result.runResult.payloads?.[0]?.text).not.toContain("221ms");
+  });
 
-  it.each(["HTTP 429: An error occurred while processing your request. Try again in 221ms."])(
-    "preserves retry exhaustion through external thrown failures (%s)",
-    async (rawError) => {
-      state.runWithModelFallbackMock.mockRejectedValueOnce(
-        new FailoverError(rawError, {
-          rawError,
-          status: 429,
-          reason: "rate_limit",
-          rateLimitRetriesExhausted: 9,
-        }),
-      );
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn({
-        ...createRunAgentTurnParams(createFollowupRun()),
-        sessionCtx: { Provider: "whatsapp", MessageSid: "message" },
-      });
-      expect(result.kind).toBe("final");
-      if (result.kind === "final") {
-        expect(result.payload.text).toContain("9 automatic retries");
-      }
-    },
-  );
+  it("preserves retry exhaustion through external thrown failures", async () => {
+    const rawError =
+      "HTTP 429: An error occurred while processing your request. Try again in 221ms.";
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new FailoverError(rawError, {
+        rawError,
+        status: 429,
+        reason: "rate_limit",
+        rateLimitRetriesExhausted: 9,
+      }),
+    );
+    const result = await executeAgentTurn({
+      ...createRunAgentTurnParams(createFollowupRun()),
+      sessionCtx: { Provider: "whatsapp", MessageSid: "message" },
+    });
+    assert(result.kind === "final");
+    expect(result.payload.text).toContain("9 automatic retries");
+  });
 
   it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
@@ -135,16 +134,13 @@ describe("executeAgentTurn: terminal failures", () => {
       }),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(formatBillingErrorMessage());
-      expect(result.payload.text).not.toContain("All models failed");
-      expect(result.payload.text).not.toContain("402 (billing)");
-      expect(result.payload.text).not.toContain("Rate-limited");
-    }
+    assert(result.kind === "final");
+    expect(result.payload.text).toBe(formatBillingErrorMessage());
+    expect(result.payload.text).not.toContain("All models failed");
+    expect(result.payload.text).not.toContain("402 (billing)");
+    expect(result.payload.text).not.toContain("Rate-limited");
   });
 
   it("keeps the provider reset hint when the chain summary exceeds the length guard", async () => {
@@ -165,7 +161,6 @@ describe("executeAgentTurn: terminal failures", () => {
       attempts: [],
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn(createRunAgentTurnParams(createFollowupRun()));
 
     const rendered = JSON.stringify(result);
@@ -191,26 +186,16 @@ describe("executeAgentTurn: terminal failures", () => {
       }),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
+      ...createRunAgentTurnParams(createFollowupRun()),
       replyOperation,
       opts: {},
-      typingSignals: createMockTypingSignaler(),
-      ...createAgentTurnExecutionDefaults(),
     });
 
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(
-        "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-      );
-    }
+    assert(result.kind === "final");
+    expect(result.payload.text).toBe(
+      "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+    );
     const failCall = requireMockCall(failMock, 0, "reply operation fail");
     expect(failCall[0]).toBe("gateway_draining");
     expect(failCall[1]).toBeInstanceOf(GatewayDrainingError);
@@ -243,8 +228,7 @@ describe("executeAgentTurn: terminal failures", () => {
     });
 
     try {
-      const executeAgentTurn = await getRawExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
+      const result = await executeRawAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
       expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
       expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
       expect(failMock).not.toHaveBeenCalled();
@@ -254,7 +238,6 @@ describe("executeAgentTurn: terminal failures", () => {
   });
 
   it("retains automatic recovery when restart admission refuses an active turn", async () => {
-    const { emitAgentEvent } = await import("../../infra/agent-events.js");
     const replyOperation = createReplyOperation({
       sessionKey: "agent:main:restart-refusal",
       sessionId: "restart-refusal",
@@ -273,19 +256,10 @@ describe("executeAgentTurn: terminal failures", () => {
       throw new GatewayDrainingError();
     });
     try {
-      const executeAgentTurn = await getRawExecuteAgentTurnForTest();
-      const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
+      const result = await executeRawAgentTurn(createMinimalRunAgentTurnParams({ replyOperation }));
       expect(result.outcome).toEqual({ kind: "aborted", reason: "restart" });
       expect(replyOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-      const terminals = vi
-        .mocked(emitAgentEvent)
-        .mock.calls.map(([event]) => event)
-        .filter(
-          (event) =>
-            event.runId === result.runId &&
-            event.stream === "lifecycle" &&
-            (event.data.phase === "end" || event.data.phase === "error"),
-        );
+      const terminals = terminalEvents(result.runId);
       expect(terminals).toHaveLength(1);
       expect(terminals[0]?.data).toMatchObject({
         phase: "end",
@@ -310,8 +284,6 @@ describe("executeAgentTurn: terminal failures", () => {
   ])(
     "settles $label through the node-loss continuation owner",
     async ({ canContinue, acceptsFollowup }) => {
-      const agentEvents = await import("../../infra/agent-events.js");
-      const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
       const replyOperation = createReplyOperation({
         sessionKey: "agent:main:node-loss-terminal",
         sessionId: "session",
@@ -333,8 +305,7 @@ describe("executeAgentTurn: terminal failures", () => {
       const params = createMinimalRunAgentTurnParams({ replyOperation });
       params.opts = { [REPLY_OPERATION_RUN_STATE]: runState, onAgentRunTerminalOutcome };
       try {
-        const executeAgentTurn = await getRawExecuteAgentTurnForTest();
-        const result = await executeAgentTurn(params);
+        const result = await executeRawAgentTurn(params);
         const continuing = canContinue && acceptsFollowup;
         expect(result.outcome).toMatchObject({
           kind: "rejected",
@@ -357,14 +328,7 @@ describe("executeAgentTurn: terminal failures", () => {
         if (canContinue) {
           expect(continueStalledTurn).toHaveBeenCalledWith(expect.any(String), replyOperation);
         }
-        const terminals = emitAgentEvent.mock.calls
-          .map(([event]) => event)
-          .filter(
-            (event) =>
-              event.runId === result.runId &&
-              event.stream === "lifecycle" &&
-              (event.data.phase === "end" || event.data.phase === "error"),
-          );
+        const terminals = terminalEvents(result.runId);
         expect(terminals).toHaveLength(1);
         expect(terminals[0]?.data).toMatchObject(
           continuing
@@ -397,8 +361,6 @@ describe("executeAgentTurn: terminal failures", () => {
     "records one $stopReason abort terminal event without returning a reply ($restartError)",
     async (testCase) => {
       const { reason, code, phase, stopReason } = testCase;
-      const agentEvents = await import("../../infra/agent-events.js");
-      const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
       const upstreamAbort = new AbortController();
       const replyOperation = createReplyOperation({
         sessionKey: "agent:main:abort-terminal",
@@ -421,8 +383,7 @@ describe("executeAgentTurn: terminal failures", () => {
       });
 
       try {
-        const executeAgentTurn = await getRawExecuteAgentTurnForTest();
-        const result = await executeAgentTurn({
+        const result = await executeRawAgentTurn({
           ...createMinimalRunAgentTurnParams({ replyOperation }),
           opts: { abortSignal: upstreamAbort.signal },
           isRestartRecoveryArmed: async () => true,
@@ -432,14 +393,7 @@ describe("executeAgentTurn: terminal failures", () => {
         expect(replyOperation.result).toEqual({ kind: "aborted", code });
         expect(failMock).not.toHaveBeenCalled();
         expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-        const terminals = emitAgentEvent.mock.calls
-          .map(([event]) => event)
-          .filter(
-            (event) =>
-              event.runId === result.runId &&
-              event.stream === "lifecycle" &&
-              (event.data.phase === "end" || event.data.phase === "error"),
-          );
+        const terminals = terminalEvents(result.runId);
         expect(terminals).toHaveLength(1);
         expect(terminals[0]?.data).toMatchObject({ phase, aborted: true, stopReason });
       } finally {
@@ -452,8 +406,6 @@ describe("executeAgentTurn: terminal failures", () => {
   it.for([false, true])(
     "preserves the prior terminal row when cancellation precedes execution (started=%s)",
     async (started, { signal }) => {
-      const executeAgentTurn = await getRawExecuteAgentTurnForTest();
-      const { emitAgentEvent } = await import("../../infra/agent-events.js");
       const reachedBoundary = createDeferred();
       const release = createDeferred();
       const upstreamAbort = new AbortController();
@@ -477,7 +429,7 @@ describe("executeAgentTurn: terminal failures", () => {
         upstreamAbort.signal.throwIfAborted();
         throw new Error("Cancellation must stop this candidate");
       });
-      const pending = executeAgentTurn({
+      const pending = executeRawAgentTurn({
         ...createMinimalRunAgentTurnParams(),
         replyOperation,
         opts: { abortSignal: upstreamAbort.signal },
@@ -531,17 +483,12 @@ describe("executeAgentTurn: terminal failures", () => {
     },
   );
 
-  it.each([
-    {
-      label: "settled result",
-      armed: true,
-      result: {
-        payloads: [{ text: "completed before the restart marker was observed" }],
-        meta: {},
-      },
-    },
-  ])("settles $label after awaiting restart recovery", async ({ label, result, armed }) => {
-    const runId = `armed-restart-${label.replaceAll(" ", "-")}`;
+  it("settles a completed result after awaiting restart recovery", async () => {
+    const result = {
+      payloads: [{ text: "completed before the restart marker was observed" }],
+      meta: {},
+    };
+    const runId = "armed-restart-settled-result";
     const { replyOperation, failMock } = createMockReplyOperation();
     let operationResult: typeof replyOperation.result = null;
     const abortForRestart = vi.fn(() => {
@@ -560,12 +507,11 @@ describe("executeAgentTurn: terminal failures", () => {
       complete,
     } satisfies typeof replyOperation;
     state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
-    const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 
-    const execution = await executeAgentTurn({
+    const execution = await executeRawAgentTurn({
       ...createMinimalRunAgentTurnParams({ replyOperation: restartReplyOperation }),
       opts: { runId } as GetReplyOptions,
-      isRestartRecoveryArmed: async () => armed,
+      isRestartRecoveryArmed: async () => true,
     });
 
     expect(execution).toEqual({
@@ -605,15 +551,12 @@ describe("executeAgentTurn: terminal failures", () => {
       ),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
 
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.isError).toBe(true);
-      expect(result.payload.text).toBe(recoveryText);
-      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-    }
+    assert(result.kind === "final");
+    expect(result.payload.isError).toBe(true);
+    expect(result.payload.text).toBe(recoveryText);
+    expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
   });
 
   it("uses heartbeat failure copy for raw external errors during heartbeat runs", async () => {
@@ -621,16 +564,12 @@ describe("executeAgentTurn: terminal failures", () => {
       new Error('Command lane "main" task timed out after 120000ms'),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams(),
       isHeartbeat: true,
     });
 
-    expect(result.kind).toBe("final");
-    if (result.kind !== "final") {
-      throw new Error("expected final reply");
-    }
+    assert(result.kind === "final");
     expect(result.payload.text).toBe(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT);
     expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
     expect(result.payload.text).not.toContain("/new");
@@ -641,16 +580,12 @@ describe("executeAgentTurn: terminal failures", () => {
       "Codex session became active in another runner; wait for it to finish before continuing";
     state.runEmbeddedAgentMock.mockRejectedValueOnce(new AgentHarnessPreflightError(message));
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams(),
       isHeartbeat: true,
     });
 
-    expect(result.kind).toBe("final");
-    if (result.kind !== "final") {
-      throw new Error("expected final reply");
-    }
+    assert(result.kind === "final");
     expect(result.payload.text).toBe(renderHeartbeatRunFailureCopy(message));
     expect(result.payload.isError).toBe(true);
     expect(result.payload.text).not.toContain("/new");
@@ -678,55 +613,35 @@ describe("executeAgentTurn: terminal failures", () => {
     expect(payload?.text).toContain("task time limit in the Control UI settings");
   });
 
-  it.each([
-    {
-      rejection: new Error("codex app-server turn idle timed out waiting for turn/completed"),
-      expected: "hasn't confirmed whether the task finished",
-    },
-  ])(
-    "surfaces Codex app-server bridge failures instead of generic copy",
-    async ({ rejection, expected }) => {
-      state.runWithModelFallbackMock.mockRejectedValueOnce(rejection);
+  it("surfaces Codex app-server bridge failures instead of generic copy", async () => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error("codex app-server turn idle timed out waiting for turn/completed"),
+    );
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const result = await executeAgentTurn({
-        ...createMinimalRunAgentTurnParams(),
-      });
+    const result = await executeAgentTurn({
+      ...createMinimalRunAgentTurnParams(),
+    });
 
-      expect(result.kind).toBe("final");
-      if (result.kind !== "final") {
-        throw new Error("expected final reply");
-      }
-      expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-      expect(result.payload.text).toContain("may still be running");
-      expect(result.payload.text).toContain(expected);
-    },
-  );
+    assert(result.kind === "final");
+    expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
+    expect(result.payload.text).toContain("may still be running");
+    expect(result.payload.text).toContain("hasn't confirmed whether the task finished");
+  });
 
   it("forwards sanitized generic errors on external chat channels when verbose is on", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error("INVALID_ARGUMENT: some other failure"),
     );
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
+      ...createRunAgentTurnParams(createFollowupRun()),
       opts: {},
-      typingSignals: createMockTypingSignaler(),
-      ...createAgentTurnExecutionDefaults(),
       resolvedVerboseLevel: "on",
     });
 
-    expect(result.kind).toBe("final");
-    if (result.kind === "final") {
-      expect(result.payload.text).toBe(
-        "⚠️ Agent failed before reply: INVALID_ARGUMENT: some other failure. Please try again, or use /new to start a fresh session.",
-      );
-    }
+    assert(result.kind === "final");
+    expect(result.payload.text).toBe(
+      "⚠️ Agent failed before reply: INVALID_ARGUMENT: some other failure. Please try again, or use /new to start a fresh session.",
+    );
   });
 });

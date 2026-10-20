@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { TemplateContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
 import {
-  createAgentTurnExecutionDefaults,
+  createRunAgentTurnParams,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
-  createMockTypingSignaler,
   createFollowupRun,
   fallbackAttemptOptions,
   initialFallbackAttemptOptions,
@@ -19,61 +18,71 @@ import type {
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
 const state = await setupAgentRunnerExecutionTestState();
+const executeAgentTurn = await getExecuteAgentTurnForTest();
+
+function messageTurn(opts: InternalGetReplyOptions = {}) {
+  const followupRun = createFollowupRun();
+  followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+  return {
+    ...createRunAgentTurnParams(followupRun),
+    sessionCtx: { Provider: "discord", MessageSid: "msg" } as unknown as TemplateContext,
+    opts,
+    resolvedVerboseLevel: "on" as const,
+  };
+}
+
+type AgentEvent = Parameters<NonNullable<EmbeddedAgentParams["onAgentEvent"]>>[0];
+const messageStart = (read = false): AgentEvent => ({
+  stream: "tool",
+  data: {
+    phase: "start",
+    name: "message",
+    toolCallId: read ? "message-read-1" : "message-1",
+    args: read
+      ? { action: "read", threadId: "thread-1" }
+      : { action: "send", message: "Visible reply" },
+  },
+});
+const messageEnd = (read = false, title = true): AgentEvent => ({
+  stream: "item",
+  data: {
+    itemId: "tool-message-1",
+    phase: "end",
+    kind: "tool",
+    name: "message",
+    ...(title ? { title: "message" } : {}),
+    toolCallId: read ? "message-read-1" : "message-1",
+    status: "completed",
+  },
+});
+const failedCommand: AgentEvent = {
+  stream: "command_output",
+  data: {
+    itemId: "command:exec-1",
+    phase: "end",
+    title: "command false",
+    toolCallId: "exec-1",
+    name: "exec",
+    output: "failed command output",
+    status: "failed",
+    exitCode: 1,
+  },
+};
 
 describe("executeAgentTurn: message tool progress", () => {
   it("suppresses progress callbacks after message-tool-only delivery completes", async () => {
-    let releaseItemEvent: (() => void) | undefined;
-    const itemEventGate = new Promise<void>((resolve) => {
-      releaseItemEvent = resolve;
-    });
-    let markItemEventStarted: (() => void) | undefined;
-    const itemEventStarted = new Promise<void>((resolve) => {
-      markItemEventStarted = resolve;
-    });
+    const itemEventGate = createDeferred();
+    const itemEventStarted = createDeferred();
     const onItemEvent = vi.fn(async () => {
-      markItemEventStarted?.();
-      await itemEventGate;
+      itemEventStarted.resolve();
+      await itemEventGate.promise;
     });
     const onCommandOutput = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "message",
-          toolCallId: "message-1",
-          args: {
-            action: "send",
-            message: "Visible reply",
-          },
-        },
-      });
-      const itemEventPromise = params.onAgentEvent?.({
-        stream: "item",
-        data: {
-          itemId: "tool-message-1",
-          phase: "end",
-          kind: "tool",
-          title: "message",
-          name: "message",
-          toolCallId: "message-1",
-          status: "completed",
-        },
-      });
-      await itemEventStarted;
-      await params.onAgentEvent?.({
-        stream: "command_output",
-        data: {
-          itemId: "command:exec-1",
-          phase: "end",
-          title: "command false",
-          toolCallId: "exec-1",
-          name: "exec",
-          output: "failed command output",
-          status: "failed",
-          exitCode: 1,
-        },
-      });
+      await params.onAgentEvent?.(messageStart());
+      const itemEventPromise = params.onAgentEvent?.(messageEnd());
+      await itemEventStarted.promise;
+      await params.onAgentEvent?.(failedCommand);
       await params.onAgentEvent?.({
         stream: "item",
         data: {
@@ -83,7 +92,7 @@ describe("executeAgentTurn: message tool progress", () => {
           progressText: "This must stay suppressed.",
         },
       });
-      releaseItemEvent?.();
+      itemEventGate.resolve();
       await itemEventPromise;
       return {
         payloads: [],
@@ -92,25 +101,9 @@ describe("executeAgentTurn: message tool progress", () => {
       };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "discord",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {
-        onItemEvent,
-        onCommandOutput,
-        progressPreambleEnabled: true,
-      } satisfies InternalGetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      ...createAgentTurnExecutionDefaults(),
-      resolvedVerboseLevel: "on",
-    });
+    await executeAgentTurn(
+      messageTurn({ onItemEvent, onCommandOutput, progressPreambleEnabled: true }),
+    );
 
     expect(onItemEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -129,34 +122,22 @@ describe("executeAgentTurn: message tool progress", () => {
     );
   });
 
-  it.each([false])(
-    "settles failed recording without replaying the turn (runFailed=%s)",
-    async (runFailed) => {
-      const original = new Error("invalid image metadata");
-      if (runFailed) {
-        state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(original);
-      } else {
-        state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-      }
-      state.recordMessageToolRunOutcomeMock.mockRejectedValueOnce(
-        new SqliteWorkerError("Outcome could not be confirmed", "outcome-unknown"),
-      );
-      const followupRun = createFollowupRun();
-      followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
-      const execution = executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
-      if (runFailed) {
-        await expect(execution).rejects.toBe(original);
-      } else {
-        await expect(execution).resolves.toMatchObject({
-          kind: "success",
-          runResult: { payloads: [] },
-        });
-      }
-      expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledTimes(1);
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(runFailed ? 0 : 1);
-    },
-  );
+  it("settles failed recording without replaying the turn", async () => {
+    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+    state.recordMessageToolRunOutcomeMock.mockRejectedValueOnce(
+      new SqliteWorkerError("Outcome could not be confirmed", "outcome-unknown"),
+    );
+    const followupRun = createFollowupRun();
+    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
+    await expect(
+      executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun })),
+    ).resolves.toMatchObject({
+      kind: "success",
+      runResult: { payloads: [] },
+    });
+    expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
 
   it.each(["model"] as const)("clears run ownership when %s preflight fails", async (stage) => {
     const onAgentRunTerminalOutcome = vi.fn();
@@ -172,7 +153,6 @@ describe("executeAgentTurn: message tool progress", () => {
       )
       .mockRejectedValueOnce(failure);
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     try {
       await expect(
         executeAgentTurn(
@@ -203,26 +183,8 @@ describe("executeAgentTurn: message tool progress", () => {
     const onCommandOutput = vi.fn();
     state.runEmbeddedAgentMock
       .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-        await params.onAgentEvent?.({
-          stream: "tool",
-          data: {
-            phase: "start",
-            name: "message",
-            toolCallId: "message-1",
-            args: { action: "send", message: "Visible reply" },
-          },
-        });
-        await params.onAgentEvent?.({
-          stream: "item",
-          data: {
-            itemId: "tool-message-1",
-            phase: "end",
-            kind: "tool",
-            name: "message",
-            toolCallId: "message-1",
-            status: "completed",
-          },
-        });
+        await params.onAgentEvent?.(messageStart());
+        await params.onAgentEvent?.(messageEnd(false, false));
         return { payloads: [], meta: {} };
       })
       .mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -249,18 +211,7 @@ describe("executeAgentTurn: message tool progress", () => {
       };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: { Provider: "discord", MessageSid: "msg" } as unknown as TemplateContext,
-      opts: { onItemEvent, onCommandOutput } satisfies GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      ...createAgentTurnExecutionDefaults(),
-      resolvedVerboseLevel: "on",
-    });
+    await executeAgentTurn(messageTurn({ onItemEvent, onCommandOutput }));
 
     expect(onItemEvent).toHaveBeenCalledTimes(1);
     expect(onCommandOutput).not.toHaveBeenCalled();
@@ -270,64 +221,13 @@ describe("executeAgentTurn: message tool progress", () => {
     const onItemEvent = vi.fn();
     const onCommandOutput = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      await params.onAgentEvent?.({
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: "message",
-          toolCallId: "message-read-1",
-          args: {
-            action: "read",
-            threadId: "thread-1",
-          },
-        },
-      });
-      await params.onAgentEvent?.({
-        stream: "item",
-        data: {
-          itemId: "tool-message-1",
-          phase: "end",
-          kind: "tool",
-          title: "message",
-          name: "message",
-          toolCallId: "message-read-1",
-          status: "completed",
-        },
-      });
-      await params.onAgentEvent?.({
-        stream: "command_output",
-        data: {
-          itemId: "command:exec-1",
-          phase: "end",
-          title: "command false",
-          toolCallId: "exec-1",
-          name: "exec",
-          output: "failed command output",
-          status: "failed",
-          exitCode: 1,
-        },
-      });
+      await params.onAgentEvent?.(messageStart(true));
+      await params.onAgentEvent?.(messageEnd(true));
+      await params.onAgentEvent?.(failedCommand);
       return { payloads: [], meta: { terminalReply: { disposition: "silent" } } };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const followupRun = createFollowupRun();
-    followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-    await executeAgentTurn({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "discord",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {
-        onItemEvent,
-        onCommandOutput,
-      } satisfies GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      ...createAgentTurnExecutionDefaults(),
-      resolvedVerboseLevel: "on",
-    });
+    await executeAgentTurn(messageTurn({ onItemEvent, onCommandOutput }));
 
     expect(onItemEvent).toHaveBeenCalledWith(
       expect.objectContaining({

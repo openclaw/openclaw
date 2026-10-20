@@ -2,14 +2,12 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { assert, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
-import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
-  createAgentTurnExecutionDefaults,
+  createRunAgentTurnParams,
   setupAgentRunnerExecutionTestState,
   getExecuteAgentTurnForTest,
   getRawExecuteAgentTurnForTest,
-  createMockTypingSignaler,
   createFollowupRun,
   initialFallbackAttemptOptions,
   requireRecord,
@@ -27,6 +25,30 @@ import { accountAgentTurn } from "./agent-runner-result-accounting.js";
 import { resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import { createTurn } from "./followup-delivery.test-helpers.js";
 const state = await setupAgentRunnerExecutionTestState();
+const executeAgentTurn = await getExecuteAgentTurnForTest();
+
+async function deliverToolResults(onToolResult: GetReplyOptions["onToolResult"]) {
+  const input = createRunAgentTurnParams(createFollowupRun());
+  input.opts = { onToolResult };
+  const result = await executeAgentTurn(input);
+  await Promise.all(input.pendingToolTasks);
+  return { result, typingSignals: input.typingSignals };
+}
+
+async function classifyPrimary(params: FallbackRunnerParams) {
+  const result = requireRecord(
+    await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
+    "executed fallback result",
+  );
+  const classification = await params.classifyResult?.({
+    result,
+    provider: "openai",
+    model: "gpt-5.4",
+    attempt: 1,
+    total: 2,
+  });
+  return { result, classification };
+}
 
 describe("executeAgentTurn: result and tool delivery", () => {
   it.each([
@@ -42,23 +64,20 @@ describe("executeAgentTurn: result and tool delivery", () => {
         meta: { stopReason: testCase.stopReason },
       });
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
       const result = await executeAgentTurn({
         ...createMinimalRunAgentTurnParams({ followupRun }),
         isHeartbeat: testCase.isHeartbeat,
       });
 
-      expect(result.kind).toBe("success");
-      if (result.kind === "success") {
-        expect(result.terminalFailurePayload?.text).toBe(testCase.failureText);
-        if (testCase.failureText !== undefined) {
-          assert(result.terminalFailurePayload);
-          expect(result.terminalFailurePayload.isError).toBe(true);
-          expect(
-            getReplyPayloadMetadata(result.terminalFailurePayload)
-              ?.deliverDespiteSourceReplySuppression,
-          ).toBe(true);
-        }
+      assert(result.kind === "success");
+      expect(result.terminalFailurePayload?.text).toBe(testCase.failureText);
+      if (testCase.failureText !== undefined) {
+        assert(result.terminalFailurePayload);
+        expect(result.terminalFailurePayload.isError).toBe(true);
+        expect(
+          getReplyPayloadMetadata(result.terminalFailurePayload)
+            ?.deliverDespiteSourceReplySuppression,
+        ).toBe(true);
       }
     },
   );
@@ -137,25 +156,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const pendingToolTasks = new Set<Promise<void>>();
-    const typingSignals = createMockTypingSignaler();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {
-        onToolResult,
-      } satisfies GetReplyOptions,
-      typingSignals,
-      ...createAgentTurnExecutionDefaults(),
-      pendingToolTasks,
-    });
-
-    await Promise.all(pendingToolTasks);
+    const { result, typingSignals } = await deliverToolResults(onToolResult);
 
     expect(result.kind).toBe("success");
     expect(typingSignals.signalTextDelta).not.toHaveBeenCalled();
@@ -184,22 +185,19 @@ describe("executeAgentTurn: result and tool delivery", () => {
         },
       });
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
       const result = await executeAgentTurn(
         createMinimalRunAgentTurnParams({
           sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
       );
 
-      expect(result.kind).toBe("success");
-      if (result.kind === "success") {
-        expect(result.runResult.payloads).toEqual([
-          {
-            text: "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
-            isError: true,
-          },
-        ]);
-      }
+      assert(result.kind === "success");
+      expect(result.runResult.payloads).toEqual([
+        {
+          text: "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
+          isError: true,
+        },
+      ]);
     },
   );
 
@@ -214,20 +212,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
       },
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const first = (await params.run(
-        "openai",
-        "gpt-5.4",
-        initialFallbackAttemptOptions(params),
-      )) as {
-        payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }>;
-      };
-      const classification = await params.classifyResult?.({
-        result: first,
-        provider: "openai",
-        model: "gpt-5.4",
-        attempt: 1,
-        total: 2,
-      });
+      const { classification } = await classifyPrimary(params);
       expectRecordFields(requireRecord(classification, "fallback classification"), {
         reason: "format",
         code: "planning_only_result",
@@ -247,15 +232,12 @@ describe("executeAgentTurn: result and tool delivery", () => {
       };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
 
-    expect(result.kind).toBe("success");
-    if (result.kind === "success") {
-      expect(result.runResult.payloads?.[0]?.text).toBe("fallback ok");
-      expect(result.fallbackProvider).toBe("anthropic");
-      expect(result.fallbackAttempts[0]?.reason).toBe("format");
-    }
+    assert(result.kind === "success");
+    expect(result.runResult.payloads?.[0]?.text).toBe("fallback ok");
+    expect(result.fallbackProvider).toBe("anthropic");
+    expect(result.fallbackAttempts[0]?.reason).toBe("format");
   });
 
   it("does not classify empty final payloads after block replies were sent", async () => {
@@ -272,22 +254,8 @@ describe("executeAgentTurn: result and tool delivery", () => {
       return { payloads: [], meta: {} };
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = (await params.run(
-        "openai",
-        "gpt-5.4",
-        initialFallbackAttemptOptions(params),
-      )) as {
-        payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }>;
-      };
-      expect(
-        await params.classifyResult?.({
-          result,
-          provider: "openai",
-          model: "gpt-5.4",
-          attempt: 1,
-          total: 2,
-        }),
-      ).toBeUndefined();
+      const { result, classification } = await classifyPrimary(params);
+      expect(classification).toBeUndefined();
       return {
         result,
         provider: "openai",
@@ -296,7 +264,6 @@ describe("executeAgentTurn: result and tool delivery", () => {
       };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({
         followupRun,
@@ -325,19 +292,8 @@ describe("executeAgentTurn: result and tool delivery", () => {
     };
     state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = requireRecord(
-        await params.run("openai", "gpt-5.4", initialFallbackAttemptOptions(params)),
-        "executed fallback result",
-      );
-      expect(
-        await params.classifyResult?.({
-          result,
-          provider: "openai",
-          model: "gpt-5.4",
-          attempt: 1,
-          total: 2,
-        }),
-      ).toBeUndefined();
+      const { result, classification } = await classifyPrimary(params);
+      expect(classification).toBeUndefined();
       return {
         result,
         provider: "openai",
@@ -346,7 +302,6 @@ describe("executeAgentTurn: result and tool delivery", () => {
       };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
     const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       blockReplyPipeline,
@@ -364,25 +319,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const pendingToolTasks = new Set<Promise<void>>();
-    const typingSignals = createMockTypingSignaler();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {
-        onToolResult,
-      } satisfies GetReplyOptions,
-      typingSignals,
-      ...createAgentTurnExecutionDefaults(),
-      pendingToolTasks,
-    });
-
-    await Promise.all(pendingToolTasks);
+    const { result, typingSignals } = await deliverToolResults(onToolResult);
 
     expect(result.kind).toBe("success");
     expect(typingSignals.signalTextDelta).toHaveBeenCalledWith("NO_REPLYThe user is saying hello");
@@ -412,7 +349,6 @@ describe("executeAgentTurn: result and tool delivery", () => {
         return { payloads: [{ text: "final" }], meta: {} };
       });
 
-      const executeAgentTurn = await getExecuteAgentTurnForTest();
       const input = createMinimalRunAgentTurnParams({ opts: { onToolResult } });
       const result = await executeAgentTurn(input);
       await Promise.all(input.pendingToolTasks);
@@ -437,22 +373,7 @@ describe("executeAgentTurn: result and tool delivery", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const pendingToolTasks = new Set<Promise<void>>();
-    const result = await executeAgentTurn({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { onToolResult } satisfies GetReplyOptions,
-      typingSignals: createMockTypingSignaler(),
-      ...createAgentTurnExecutionDefaults(),
-      pendingToolTasks,
-    });
-
-    await Promise.all(pendingToolTasks);
+    const { result } = await deliverToolResults(onToolResult);
 
     expect(result.kind).toBe("success");
     expect(onToolResult).toHaveBeenCalledTimes(2);
