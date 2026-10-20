@@ -44,6 +44,14 @@ afterEach(() => {
 function respond(...args: Parameters<typeof createAssistant>) {
   return createAssistantResultStream(createAssistant(...args));
 }
+function toolCall(id: string, name: string, args: Record<string, unknown> = {}) {
+  return { type: "toolCall" as const, id, name, arguments: args };
+}
+function cardWith(
+  steps: NonNullable<ProgressCardPutResult["card"]>["steps"],
+): ProgressCardPutResult {
+  return { card: { sessionKey: "agent:main:main", steps, revision: 1, updatedAt: 1 } };
+}
 
 function prepare(options: Parameters<typeof prepareCatalogExecutor>[0]) {
   const prepared = prepareCatalogExecutor({ replyOperation, ...options });
@@ -93,9 +101,7 @@ it.each([
       { step: "Publish repair", status: "completed" as const },
       { step: "Repair remaining failure", status: "pending" as const },
     ];
-    const committed: ProgressCardPutResult = {
-      card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
-    };
+    const committed: ProgressCardPutResult = cardWith(plan);
     using gatewayCall = vi
       .spyOn(gatewayTool, "callInProcessGatewayTool")
       .mockResolvedValue(committed);
@@ -178,13 +184,8 @@ it.each([
         return respond(
           model,
           [
-            { type: "toolCall", id: "first-repair", name: "repair", arguments: {} },
-            {
-              type: "toolCall",
-              id: "save-plan",
-              name: nested ? "exec" : "progress_card",
-              arguments: { plan },
-            },
+            toolCall("first-repair", "repair"),
+            toolCall("save-plan", nested ? "exec" : "progress_card", { plan }),
           ],
           "toolUse",
         );
@@ -203,11 +204,7 @@ it.each([
               JSON.stringify(message.content).includes("latest successfully saved plan"),
           ),
         ).toBe(true);
-        return respond(
-          model,
-          [{ type: "toolCall", id: "remaining-repair", name: "repair", arguments: {} }],
-          "toolUse",
-        );
+        return respond(model, [toolCall("remaining-repair", "repair")], "toolUse");
       }
       return respond(model, "Both repairs verified.");
     });
@@ -253,20 +250,14 @@ it("keeps a reply that already reports the blocker as the only reply after the c
     { step: "List files", status: "completed" as const },
     { step: "Delete the largest file", status: "pending" as const },
   ];
-  vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue({
-    card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
-  });
+  vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue(cardWith(plan));
   const { session, prepared } = await planSession(completionCheck);
   const answer = "Files: big.log (9 KB), notes.md (1 KB). May I delete big.log?";
   let requests = 0;
   streamMocks.streamSimple.mockImplementation((model, context) => {
     requests += 1;
     if (requests === 1) {
-      return respond(
-        model,
-        [{ type: "toolCall", id: "save", name: "progress_card", arguments: { plan } }],
-        "toolUse",
-      );
+      return respond(model, [toolCall("save", "progress_card", { plan })], "toolUse");
     }
     if (requests === 2) {
       return respond(model, answer);
@@ -303,9 +294,7 @@ it.each([
 ])("honors $name", async ({ replacement, checks }) => {
   const completionCheck = { unfinishedPlan: false, checked: replacement === "recovery" };
   const pending = [{ step: "Await external permission", status: "pending" as const }];
-  const initial = {
-    card: { sessionKey: "agent:main:main", steps: pending, revision: 1, updatedAt: 1 },
-  };
+  const initial = cardWith(pending);
   const gateway = vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue(initial);
   const replacementArgs =
     replacement === "completed"
@@ -353,12 +342,11 @@ it.each([
       model,
       requests <= writes
         ? [
-            {
-              type: "toolCall",
-              id: "save-" + requests,
-              name: "progress_card",
-              arguments: requests === 1 ? { plan: pending } : replacementArgs,
-            },
+            toolCall(
+              "save-" + requests,
+              "progress_card",
+              requests === 1 ? { plan: pending } : replacementArgs,
+            ),
           ]
         : replacement === "silent"
           ? "NO_REPLY"
@@ -391,9 +379,7 @@ it.each([
 ])("preserves $owner policy with $checks completion checks", async ({ owner, checks }) => {
   const completionCheck = { unfinishedPlan: false, checked: false };
   const plan = [{ step: "Remaining repair", status: "pending" as const }];
-  vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue({
-    card: { sessionKey: "agent:main:main", steps: plan, revision: 1, updatedAt: 1 },
-  });
+  vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue(cardWith(plan));
   const controller = new AbortController();
   let requests = 0;
   const onFinalize = vi.fn(async () => {
@@ -438,8 +424,8 @@ it.each([
     const assistant = createAssistant(
       model,
       requests === 1
-        ? [{ type: "toolCall", id: "save", name: "progress_card", arguments: { plan } }]
-        : [{ type: "text", text: "The owner stopped this work." }],
+        ? [toolCall("save", "progress_card", { plan })]
+        : "The owner stopped this work.",
       requests === 1 ? "toolUse" : owner === "output limited" ? "length" : "stop",
     );
     if (requests > 1 && owner === "provider refusal") {

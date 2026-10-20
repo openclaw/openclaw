@@ -1,20 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { beforeEach, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
   detectAndLoadPromptImages: vi.fn(),
-  resolveImageSanitizationLimits: vi.fn(() => ({ maxDimensionPx: 2048 })),
 }));
 
-vi.mock("@openclaw/media-core/constants", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@openclaw/media-core/constants")>()),
-  MAX_IMAGE_BYTES: 1_234,
-  mediaKindFromMime: (mime?: string) =>
-    mime ? (mime.startsWith("image/") ? "image" : "unknown") : undefined,
-}));
-vi.mock("../../image-sanitization.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../image-sanitization.js")>()),
-  resolveImageSanitizationLimits: hoisted.resolveImageSanitizationLimits,
-}));
 vi.mock("./images.js", () => ({
   detectAndLoadPromptImages: hoisted.detectAndLoadPromptImages,
 }));
@@ -22,15 +12,33 @@ vi.mock("./images.js", () => ({
 import { prepareEmbeddedAttemptPromptExecution as prepare } from "./prompt-image-preparation.js";
 
 type PromptExecutionInput = Parameters<typeof prepare>[0];
+type ImageResult = Awaited<ReturnType<typeof prepare>>;
 
-function createInput(overrides: Partial<PromptExecutionInput> = {}): PromptExecutionInput {
+function imageResult(overrides: Partial<ImageResult> = {}): ImageResult {
+  return {
+    images: [],
+    imageFactIndexes: [],
+    detectedRefs: [],
+    failedMediaCount: 0,
+    loadedCount: 0,
+    skippedCount: 0,
+    ...overrides,
+  };
+}
+const image = (data: string) => ({ type: "image" as const, data, mimeType: "image/png" });
+
+function createInput(
+  overrides: Partial<PromptExecutionInput> = {},
+  attempt: Partial<PromptExecutionInput["attempt"]> = {},
+): PromptExecutionInput {
   return {
     attempt: {
       workspaceDir: "/agent/workspace",
       config: { agents: { defaults: { imageMaxDimensionPx: 2048 } } },
       imageOrder: ["inline"],
-      images: [{ type: "image", data: "data", mimeType: "image/png" }],
+      images: [image("data")],
       model: { input: ["text", "image"] },
+      ...attempt,
     },
     effectiveFsWorkspaceOnly: true,
     effectiveWorkspace: "/tmp/workspace",
@@ -45,38 +53,29 @@ function createInput(overrides: Partial<PromptExecutionInput> = {}): PromptExecu
   } as PromptExecutionInput;
 }
 
-describe("prepareEmbeddedAttemptPromptExecution", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    hoisted.resolveImageSanitizationLimits.mockReturnValue({ maxDimensionPx: 2048 });
-    hoisted.detectAndLoadPromptImages.mockResolvedValue({
-      images: [{ type: "image", data: "loaded", mimeType: "image/png" }],
-      imageFactIndexes: [null],
-      detectedRefs: [],
-      failedMediaCount: 0,
-      loadedCount: 1,
-      skippedCount: 0,
-    });
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  hoisted.detectAndLoadPromptImages.mockResolvedValue(
+    imageResult({ images: [image("loaded")], imageFactIndexes: [null], loadedCount: 1 }),
+  );
+});
 
-  it("returns an isolated empty image result when prompt submission is already skipped", async () => {
-    const first = await prepare(createInput({ skipPromptSubmission: true }));
-    first.images.push({ type: "image", data: "mutated", mimeType: "image/png" });
-    const second = await prepare(createInput({ skipPromptSubmission: true }));
+it("returns an isolated empty image result when prompt submission is already skipped", async () => {
+  const first = await prepare(createInput({ skipPromptSubmission: true }));
+  first.images.push(image("mutated"));
+  const second = await prepare(createInput({ skipPromptSubmission: true }));
 
-    expect(second).toEqual({
-      images: [],
-      imageFactIndexes: [],
-      detectedRefs: [],
-      failedMediaCount: 0,
-      loadedCount: 0,
-      skippedCount: 0,
-    });
-    expect(hoisted.detectAndLoadPromptImages).not.toHaveBeenCalled();
-  });
+  expect(second).toEqual(imageResult());
+  expect(hoisted.detectAndLoadPromptImages).not.toHaveBeenCalled();
+});
 
-  it("loads prompt images with the prepared workspace policy", async () => {
+it.each([true, false])(
+  "loads prompt images with workspace policy (sandbox: %s)",
+  async (sandbox) => {
     const input = createInput();
+    if (!sandbox) {
+      input.sandbox = null;
+    }
 
     const result = await prepare(input);
 
@@ -87,69 +86,47 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
       model: input.attempt.model,
       existingImages: input.attempt.images,
       imageOrder: ["inline"],
-      maxBytes: 1_234,
+      maxBytes: MAX_IMAGE_BYTES,
       maxDimensionPx: 2048,
       workspaceOnly: true,
-      sandbox: {
-        root: "/sandbox/workspace",
-        bridge: input.sandbox?.fsBridge,
-      },
+      sandbox: sandbox
+        ? {
+            root: "/sandbox/workspace",
+            bridge: input.sandbox?.fsBridge,
+          }
+        : undefined,
     });
-    expect(result).toEqual({
-      images: [{ type: "image", data: "loaded", mimeType: "image/png" }],
-      imageFactIndexes: [null],
-      detectedRefs: [],
-      failedMediaCount: 0,
-      loadedCount: 1,
-      skippedCount: 0,
-    });
-  });
-
-  it("omits sandbox constraints when no sandbox bridge is active", async () => {
-    const input = createInput({ sandbox: null });
-
-    await prepare(input);
-
-    expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
-      expect.objectContaining({ sandbox: undefined }),
+    expect(result).toEqual(
+      imageResult({ images: [image("loaded")], imageFactIndexes: [null], loadedCount: 1 }),
     );
-  });
+  },
+);
 
-  it("reports failed hydration without consuming the embedded attempt fact", async () => {
-    const base = createInput();
-    const media = [{ path: "/tmp/missing.png", contentType: "image/png" }];
-    const input = createInput({ attempt: { ...base.attempt, media } });
-    hoisted.detectAndLoadPromptImages.mockResolvedValueOnce({
-      images: [],
-      imageFactIndexes: [],
-      detectedRefs: [],
-      failedMediaCount: 1,
-      loadedCount: 0,
-      skippedCount: 1,
-    });
+it("reports failed hydration without consuming the embedded attempt fact", async () => {
+  const media = [{ path: "/tmp/missing.png", contentType: "image/png" }];
+  const input = createInput({}, { media });
+  hoisted.detectAndLoadPromptImages.mockResolvedValueOnce(
+    imageResult({ failedMediaCount: 1, skippedCount: 1 }),
+  );
 
-    const result = await prepare(input);
+  const result = await prepare(input);
 
-    expect(result.failedMediaCount).toBe(1);
-    expect(input.attempt.media).toBe(media);
-  });
+  expect(result.failedMediaCount).toBe(1);
+  expect(input.attempt.media).toBe(media);
+});
 
-  it("delegates recorder resolution and ingress facts to the canonical hydrator", async () => {
-    const base = createInput();
-    const recorder = {
-      message: undefined,
-      resolveMessage: vi.fn(),
-    } as unknown as NonNullable<PromptExecutionInput["attempt"]["userTurnTranscriptRecorder"]>;
-    const media = [{ path: "/tmp/offloaded.png", contentType: "image/png" }];
-    const input = createInput({
-      attempt: { ...base.attempt, media, userTurnTranscriptRecorder: recorder },
-    });
+it("delegates recorder resolution and ingress facts to the canonical hydrator", async () => {
+  const recorder = {
+    message: undefined,
+    resolveMessage: vi.fn(),
+  } as unknown as NonNullable<PromptExecutionInput["attempt"]["userTurnTranscriptRecorder"]>;
+  const media = [{ path: "/tmp/offloaded.png", contentType: "image/png" }];
+  const input = createInput({}, { media, userTurnTranscriptRecorder: recorder });
 
-    await prepare(input);
+  await prepare(input);
 
-    expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
-      expect.objectContaining({ media, userTurnTranscriptRecorder: recorder }),
-    );
-    expect(recorder.resolveMessage).not.toHaveBeenCalled();
-  });
+  expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
+    expect.objectContaining({ media, userTurnTranscriptRecorder: recorder }),
+  );
+  expect(recorder.resolveMessage).not.toHaveBeenCalled();
 });
