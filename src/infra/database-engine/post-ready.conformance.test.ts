@@ -5,6 +5,7 @@ import {
   encodePluginModelCatalogRelativePath,
   replacePersistedPluginModelCatalogs,
 } from "../../agents/plugin-model-catalog.js";
+import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { CronService } from "../../cron/service.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../../cron/store.js";
 import { makeStore } from "../../cron/store.test-support.js";
@@ -31,18 +32,13 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         ensureUserProfileRoleSchema({});
         return owner;
       });
-      await expect(getCanonicalUserPreferences(profile.id)).resolves.toEqual({
-        profileId: profile.id,
-        entries: {},
-      });
+      const preferences = { profileId: profile.id, entries: {} };
+      await expect(getCanonicalUserPreferences(profile.id)).resolves.toEqual(preferences);
       const bytes = new Uint8Array([0, 1, 127, 128, 255]);
       expect(withEngineStoreAdmission(() => setAvatar(profile.id, bytes, "image/png")).ok).toBe(
         true,
       );
-      await expect(getCanonicalUserPreferences(profile.id)).resolves.toEqual({
-        profileId: profile.id,
-        entries: {},
-      });
+      await expect(getCanonicalUserPreferences(profile.id)).resolves.toEqual(preferences);
       const avatar = await createProfileAvatarReader(profile.id).inspect();
       await expect(avatar.loadBytes()).resolves.toMatchObject({ bytes, mime: "image/png" });
     });
@@ -50,23 +46,21 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
     it("reads cold placement projections and committed turn claims", async () => {
       withEngineStoreAdmission(() => openOpenClawStateDatabase());
       const store = createWorkerSessionPlacementStore();
-      const session = {
+      const claimInput = {
         agentId: "main",
         sessionKey: "agent:main:placement-projection",
         sessionId: "placement-projection",
-      };
-      expect((await store.readProjection([session.sessionId])).placements.size).toBe(0);
-      const claimInput = {
-        ...session,
         owner: { kind: "local" as const },
         runId: "projection-run",
         claimId: "projection-claim",
       };
+      const sessionId = claimInput.sessionId;
+      expect((await store.readProjection([sessionId])).placements.size).toBe(0);
       const claim = await store.claimTurn(claimInput);
       try {
         expect(await store.claimTurn(claimInput)).toEqual(claim);
-        const projection = await store.readProjection([session.sessionId], { current: true });
-        expect(projection.placements.get(session.sessionId)).toMatchObject({
+        const projection = await store.readProjection([sessionId], { current: true });
+        expect(projection.placements.get(sessionId)).toMatchObject({
           state: "local",
           turnClaim: { claimId: "projection-claim", runId: "projection-run" },
         });
@@ -107,12 +101,13 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       const captured = makeStore("captured-authority", false);
       captured.jobs[0].sessionTarget = "isolated";
       captured.jobs[0].payload = { kind: "agentTurn", message: "synthetic scheduled turn" };
-      captured.jobs[0].runtimeAuthority = {
+      const runtimeAuthority: CronRuntimeAuthority = {
         version: 1,
         runtimeId: "codex",
         namespace: "codex.apps",
         payload: { apps: [{ id: "calendar" }] },
       };
+      captured.jobs[0].runtimeAuthority = structuredClone(runtimeAuthority);
       const recovery = makeStore("authority-recovery", false);
       recovery.jobs[0].sessionTarget = "isolated";
       recovery.jobs[0].payload = { kind: "agentTurn", message: "synthetic recovery turn" };
@@ -122,17 +117,9 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
         jobs: [...captured.jobs, ...recovery.jobs],
       });
       const loaded = await loadCronJobsStore(storePath);
-      expect(loaded.jobs.find((job) => job.id === "captured-authority")).toMatchObject({
-        runtimeAuthority: {
-          version: 1,
-          runtimeId: "codex",
-          namespace: "codex.apps",
-          payload: { apps: [{ id: "calendar" }] },
-        },
-      });
-      expect(loaded.jobs.find((job) => job.id === "authority-recovery")).toMatchObject({
-        runtimeAuthorityRecoveryRequired: true,
-      });
+      const find = (id: string) => loaded.jobs.find((job) => job.id === id);
+      expect(find("captured-authority")).toMatchObject({ runtimeAuthority });
+      expect(find("authority-recovery")).toMatchObject({ runtimeAuthorityRecoveryRequired: true });
     });
 
     it("starts cron and retains a disabled job across scheduler restart", async () => {

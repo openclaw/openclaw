@@ -21,6 +21,20 @@ export const connection = typeof configured === "string" ? configured : undefine
 export const payload = ' {"first":1,"first":2,"escaped":"\\u0000"} \n';
 export const credentialRef = { source: "env", provider: "default", id: "OPENCLAW_P36_TEST_TOKEN" };
 export const injected = "postgres://private-user:private-secret@example.invalid/payload";
+export const portConfig = {
+  plugins: { $include: "plugins.json" },
+  gateway: { auth: { mode: "token" as const, token: credentialRef } },
+  database: {
+    engine: "sqlite" as const,
+    postgres: { connection: "${OPENCLAW_P36_TEST_DATABASE_URL}" },
+  },
+};
+
+function selectTable(table: (typeof metadata.tables)[number], namespace?: string) {
+  const quote = (name: string) => `"${name}"`;
+  const from = namespace ? `${quote(namespace)}.${quote(table.name)}` : quote(table.name);
+  return `SELECT ${table.columns.map(({ name }) => quote(name)).join(",")} FROM ${from} ORDER BY ${table.pk.map(quote).join(",")}`;
+}
 
 function canonicalCells(
   rows: Record<string, unknown>[],
@@ -40,22 +54,14 @@ function canonicalCells(
 export function canonical(file: string) {
   using db = openNodeSqliteDatabase(file, { readOnly: true, readBigInts: true });
   return metadata.tables.map((table) => {
-    const rows = db
-      .prepare(
-        `SELECT ${table.columns.map(({ name }) => `"${name}"`).join(",")} FROM "${table.name}" ORDER BY ${table.pk.map((name) => `"${name}"`).join(",")}`,
-      )
-      .all();
+    const rows = db.prepare(selectTable(table)).all();
     return [table.name, canonicalCells(rows, table.columns)];
   });
 }
 export async function canonicalPostgres(client: Client, namespace: string) {
   const cells = [];
   for (const table of metadata.tables) {
-    const rows = (
-      await client.query(
-        `SELECT ${table.columns.map(({ name }) => `"${name}"`).join(",")} FROM "${namespace}"."${table.name}" ORDER BY ${table.pk.map((name) => `"${name}"`).join(",")}`,
-      )
-    ).rows;
+    const { rows } = await client.query(selectTable(table, namespace));
     cells.push([table.name, canonicalCells(rows, table.columns, true)]);
   }
   return cells;
@@ -99,14 +105,7 @@ export async function fixture(
         "plugins.json",
         JSON.stringify({ entries: { workboard: { enabled: false } } }),
       );
-      await state.writeConfig({
-        plugins: { $include: "plugins.json" },
-        gateway: { auth: { mode: "token", token: credentialRef } },
-        database: {
-          engine: "sqlite",
-          postgres: { connection: "${OPENCLAW_P36_TEST_DATABASE_URL}" },
-        },
-      });
+      await state.writeConfig(portConfig);
       loadBundledPluginPublicArtifactModuleSync<{
         workboardDatabasePortApi: WorkboardDatabasePortApi<
           ReturnType<typeof openNodeSqliteDatabase>,
@@ -118,39 +117,28 @@ export async function fixture(
       }).workboardDatabasePortApi.admitWorkboardPort(source);
       {
         using db = openNodeSqliteDatabase(source);
-        db.exec("UPDATE workboard_schema_migrations SET applied_at = 17");
-        db.prepare(
-          "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES (?, ?, ?, ?)",
-        ).run("board-é-🦞", "", -9223372036854775808n, 9223372036854775807n);
+        db.exec(`UPDATE workboard_schema_migrations SET applied_at = 17;
+          INSERT INTO workboard_boards (id, name, created_at, updated_at)
+            VALUES ('board-é-🦞', '', -9223372036854775808, 9223372036854775807)`);
         const insert = db.prepare(
-          "INSERT INTO workboard_cards (id, board_id, title, notes, status, priority, position, created_at, updated_at, automation_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          "INSERT INTO workboard_cards (id, board_id, title, notes, status, priority, position, created_at, updated_at, automation_json) VALUES (?, 'board-é-🦞', ?, ?, 'todo', 'normal', ?, 9007199254740993, 1, ?)",
         );
         db.exec("BEGIN");
         for (let index = 0; index < rows; index++) {
           insert.run(
             `card-${String(index).padStart(4, "0")}`,
-            "board-é-🦞",
             `Card ${index}`,
             index ? "x".repeat(4500) : null,
-            "todo",
-            "normal",
             index / 8,
-            9007199254740993n,
-            1,
             payload,
           );
         }
         db.exec("COMMIT");
-        db.prepare("INSERT INTO workboard_attachment_blobs VALUES (?, ?)").run(
-          "blob",
-          Buffer.from([0, 255, 128, 1]),
-        );
-        db.prepare(
-          "INSERT INTO workboard_card_notifications (id, card_id, ordinal, kind, message, created_at, sequence) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ).run("notification", "card-0000", 1, "status", "line one\nline two", 3, 9007199254740995n);
-        db.prepare(
-          "INSERT INTO workboard_notification_subscriptions (id, board_id, last_event_sequence, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-        ).run("subscription", "board-é-🦞", 9007199254740995n, 0, 1);
+        db.exec(`INSERT INTO workboard_attachment_blobs VALUES ('blob', x'00ff8001');
+          INSERT INTO workboard_card_notifications (id, card_id, ordinal, kind, message, created_at, sequence)
+            VALUES ('notification', 'card-0000', 1, 'status', 'line one\nline two', 3, 9007199254740995);
+          INSERT INTO workboard_notification_subscriptions (id, board_id, last_event_sequence, created_at, updated_at)
+            VALUES ('subscription', 'board-é-🦞', 9007199254740995, 0, 1)`);
       }
       const client = postgres ? new Client({ connectionString: connection }) : undefined;
       await client?.connect();

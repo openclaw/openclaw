@@ -12,12 +12,12 @@ import * as snapshots from "../sqlite-snapshot.js";
 import {
   canonical,
   connection,
-  credentialRef,
   expectSafe,
   fixture,
   injected,
   manifest,
   payload,
+  portConfig,
 } from "./port-command.integration.test-support.js";
 import * as tasks from "./port-command.worker.js";
 
@@ -29,6 +29,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       async ({ state, source, client }) => {
         assert(client);
         const before = canonical(source);
+        const query = async (sql: string) => (await client.query(sql)).rows;
         const privateSources = new Set<string>();
         const isolatedReads = vi.spyOn(sourceSnapshots, "prepareSqliteReadOnlyLocationSync");
         const isolatedCopies = vi.spyOn(sourceSnapshots, "prepareSqliteReadOnlyLocation");
@@ -45,20 +46,14 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         const sharedAnchor = readBackupEngine(sharedPath);
         assert(sharedAnchor.engine === "postgres");
         expect(
-          (
-            await client.query(
-              `SELECT value_json FROM "${sharedAnchor.namespace}".config_machine_state WHERE state_key = 'config.lastTouchedAt'`,
-            )
-          ).rows,
+          await query(
+            `SELECT value_json FROM "${sharedAnchor.namespace}".config_machine_state WHERE state_key = 'config.lastTouchedAt'`,
+          ),
         ).toEqual([{ value_json: expect.any(String) }]);
         const anchor = readBackupEngine(source);
         assert(anchor.engine === "postgres");
         expect(
-          (
-            await client.query(
-              `SELECT sequence FROM "${anchor.namespace}".workboard_card_notifications`,
-            )
-          ).rows,
+          await query(`SELECT sequence FROM "${anchor.namespace}".workboard_card_notifications`),
         ).toEqual([{ sequence: "9007199254740995" }]);
         const reverse = await doctorDatabasePort({ to: "sqlite" });
         expect(readBackupEngine(sharedPath)).toEqual({ engine: "sqlite" });
@@ -80,15 +75,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           ),
         ).toEqual([]);
         expect(readBackupEngine(source)).toEqual({ engine: "sqlite" });
-        const authored = JSON.parse(fs.readFileSync(state.configPath, "utf8"));
-        expect(authored).toMatchObject({
-          plugins: { $include: "plugins.json" },
-          gateway: { auth: { mode: "token", token: credentialRef } },
-          database: {
-            engine: "sqlite",
-            postgres: { connection: "${OPENCLAW_P36_TEST_DATABASE_URL}" },
-          },
-        });
+        expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).toMatchObject(portConfig);
         expect(fs.readFileSync(state.statePath("plugins.json"), "utf8")).toBe(include);
         assert("manifest" in forward && typeof forward.manifest === "string");
         await expect(doctorDatabasePort({ rollback: forward.manifest })).rejects.toThrow(
@@ -128,6 +115,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           fired = true;
           throw new Error(injected);
         };
+        const published = ["config", "config committed", "complete revision"].includes(point);
         if (["migrate", "stage", "verify"].includes(point)) {
           const run = tasks.runDatabasePortTask;
           vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
@@ -178,7 +166,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         expect(fired).toBe(true);
         expectSafe(
           error,
-          ["config", "config committed", "complete revision"].includes(point)
+          published
             ? state.stateDir
             : point === "initial manifest"
               ? state.statePath("state", "openclaw.sqlite")
@@ -193,7 +181,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
           assert(target);
           const captured = target.originalCapture.path;
           expect(canonical(captured)).toEqual(before);
-          if (!["config", "config committed", "complete revision"].includes(point)) {
+          if (!published) {
             expect(canonical(source)).toEqual(before);
             expect(fs.readFileSync(state.configPath, "utf8")).toBe(originalConfig);
           }

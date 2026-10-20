@@ -5,10 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Client } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  doctorDatabasePort,
-  type DatabasePortOptions,
-} from "../../commands/doctor-database-port.js";
+import { doctorDatabasePort as port } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { capturePostgresBackup, readBackupEngine } from "../../snapshot/database-backup.js";
@@ -31,7 +28,6 @@ import { agentPortProvider } from "./agent-port.js";
 import { canonical, connection, files } from "./port-command.integration.test-support.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
-// Reuse one installation and server connection across both family and recovery directions.
 describe.skipIf(!connection)("family-scoped database port", () => {
   let state: OpenClawTestState;
   let client: Client;
@@ -39,15 +35,18 @@ describe.skipIf(!connection)("family-scoped database port", () => {
   let shared: string;
   const hash = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
   const config = () => JSON.parse(fs.readFileSync(state.configPath, "utf8")) as OpenClawConfig;
-  const port = (options: DatabasePortOptions) => doctorDatabasePort(options);
+  const interruptPublication = () => {
+    const write = configIo.writeConfigFile;
+    vi.spyOn(configIo, "writeConfigFile").mockImplementationOnce(async (...args) => {
+      await write(...args);
+      throw new Error("synthetic interruption after publication");
+    });
+  };
 
   beforeAll(async () => {
     state = await createOpenClawTestState({ scenario: "minimal", prefix: "mixed-port-" });
     await state.writeConfig({
-      database: {
-        engine: "sqlite",
-        postgres: { connection: connection! },
-      },
+      database: { engine: "sqlite", postgres: { connection: connection! } },
       plugins: { entries: { workboard: { enabled: false } } },
     });
     workboard = state.statePath("plugins", "workboard", "workboard.sqlite");
@@ -150,11 +149,7 @@ describe.skipIf(!connection)("family-scoped database port", () => {
         INSERT INTO cache_entries VALUES ('retained', 'sentinel', '"agent-data"', NULL, NULL, 1);`);
     }
     const unrelated = hash(workboard);
-    const write = configIo.writeConfigFile;
-    vi.spyOn(configIo, "writeConfigFile").mockImplementationOnce(async (...args) => {
-      await write(...args);
-      throw new Error("synthetic interruption after agent publication");
-    });
+    interruptPublication();
     await expect(port({ family: "agent", to: "postgres" })).rejects.toThrow();
     vi.restoreAllMocks();
     expect(readBackupEngine(agent).engine).toBe("postgres");
@@ -179,9 +174,8 @@ describe.skipIf(!connection)("family-scoped database port", () => {
     expect(readBackupEngine(shared).engine).toBe("sqlite");
     expect(hash(workboard)).toBe(unrelated);
     using db = openNodeSqliteDatabase(agent, { readOnly: true });
-    expect(
-      db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get(),
-    ).toEqual({
+    const row = db.prepare("SELECT value_json FROM cache_entries WHERE scope = 'retained'").get();
+    expect(row).toEqual({
       value_json: '"agent-data"',
     });
   }, 120_000);
@@ -199,11 +193,7 @@ describe.skipIf(!connection)("family-scoped database port", () => {
       async (action) => {
         const other = hash(shared);
         const before = canonical(workboard);
-        const write = configIo.writeConfigFile;
-        vi.spyOn(configIo, "writeConfigFile").mockImplementationOnce(async (...args) => {
-          await write(...args);
-          throw new Error("synthetic interruption after publication");
-        });
+        interruptPublication();
         const failure = await port({ family: "workboard", to: "postgres" }).catch(
           (error: unknown) => error,
         );

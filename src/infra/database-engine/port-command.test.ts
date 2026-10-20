@@ -14,6 +14,8 @@ import metadata from "./workboard-port.generated.json" with { type: "json" };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scope = { assertCurrent() {} };
+const inspect = (sourcePath: string) =>
+  runDatabasePortTask({ operation: "inspect", sourcePath, config: {}, to: "postgres" }, scope);
 let descriptor: PortDescriptor;
 beforeAll(async () => {
   descriptor = await loadDatabasePortDescriptor("workboard");
@@ -23,10 +25,8 @@ function fixture(sql = "") {
   const sourcePath = path.join(directory, "workboard.sqlite");
   using db = openNodeSqliteDatabase(sourcePath);
   db.exec(metadata.sqlite);
-  db.exec("INSERT INTO workboard_schema_migrations VALUES ('schema-3', 17)");
-  db.exec(
-    "INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', ' {\"a\":1,\"a\":2} ', 1, 2)",
-  );
+  db.exec(`INSERT INTO workboard_schema_migrations VALUES ('schema-3', 17);
+    INSERT INTO workboard_boards (id, name, created_at, updated_at) VALUES ('board', ' {"a":1,"a":2} ', 1, 2)`);
   if (sql) {
     db.exec(sql);
   }
@@ -67,9 +67,9 @@ it.each([25, 27])("preserves the version %s backup shape and Doctor guidance", a
     }
   }
   const original = await hash(sourcePath);
-  await expect(
-    runDatabasePortTask({ operation: "inspect", sourcePath, config: {}, to: "postgres" }, scope),
-  ).rejects.toThrow("run openclaw doctor --fix with the matching version first");
+  await expect(inspect(sourcePath)).rejects.toThrow(
+    "run openclaw doctor --fix with the matching version first",
+  );
   expect(await hash(sourcePath)).toBe(original);
 });
 
@@ -78,10 +78,7 @@ describe("workboard port worker", () => {
     const { directory, sourcePath } = fixture();
     const original = await hash(sourcePath);
     const before = await fs.readdir(directory);
-    const inspected = await runDatabasePortTask(
-      { operation: "inspect", sourcePath, config: {}, to: "postgres" },
-      scope,
-    );
+    const inspected = await inspect(sourcePath);
     expect(inspected).toMatchObject({ engine: "sqlite", version: 3, migrationRequired: false });
     expect(inspected.verification?.tables.workboard_boards?.rows).toBe(1);
     expect(await fs.readdir(directory)).toEqual(before);
@@ -152,10 +149,7 @@ describe("workboard port worker", () => {
       "PRAGMA foreign_keys = OFF; INSERT INTO workboard_card_labels VALUES ('absent', 1, 'private-payload')",
     );
     const original = await hash(sourcePath);
-    const failure = await runDatabasePortTask(
-      { operation: "inspect", sourcePath, config: {}, to: "postgres" },
-      scope,
-    ).catch((error: unknown) => error);
+    const failure = await inspect(sourcePath).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
     expect(String(failure)).toContain("database validation");
     expect(String(failure)).not.toContain("private-payload");
