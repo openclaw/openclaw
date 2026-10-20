@@ -1,31 +1,27 @@
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { chromium } from "playwright";
+import { expect, it, onTestFinished } from "vitest";
 import { withBrowserPage } from "../test-helpers/browser-page.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
   startControlUiE2eServer,
-  type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 
-describe.runIf(canRunPlaywrightChromium(executablePath))("Shared control accessibility", () => {
-  let browser: Browser;
-  let server: ControlUiE2eServer;
-
-  beforeAll(async () => {
-    server = await startControlUiE2eServer(undefined, { source: true });
-    browser = await chromium.launch({ executablePath, headless: true });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
-  it("keeps panel actions outside the tablist in the accessibility tree", async () => {
-    await withBrowserPage(browser.newPage(), async (page) => {
+it.runIf(canRunPlaywrightChromium(executablePath))(
+  "keeps panel actions outside the tablist in the accessibility tree",
+  async () => {
+    const server = await startControlUiE2eServer(undefined, { source: true });
+    const launch = chromium.launch({ executablePath, headless: true });
+    onTestFinished(async () => {
+      await launch.then(
+        (browser) => browser.close(),
+        () => {},
+      );
+      await server.close();
+    });
+    await withBrowserPage((await launch).newPage(), async (page) => {
       const url = new URL("accessibility-fixture", server.baseUrl).href;
       const moduleUrl = (path: string) => JSON.stringify(new URL(path, server.baseUrl).href);
       await page.route(url, (route) =>
@@ -78,5 +74,5 @@ describe.runIf(canRunPlaywrightChromium(executablePath))("Shared control accessi
         await accessibility.detach();
       }
     });
-  });
-});
+  },
+);

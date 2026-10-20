@@ -1,18 +1,18 @@
 import { createSignal, merge, type ComponentProps } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { WizardStep } from "../api/types.ts";
-import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { choosePickerValue, updatePickers } from "../test-helpers/select-picker.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { WizardStepControls } from "./wizard-step-controls.tsx";
 
-afterEach(cleanupSolid);
 type Props = ComponentProps<typeof WizardStepControls>;
-const step = (
-  type: WizardStep["type"],
-  message: string,
-  options?: WizardStep["options"],
-): WizardStep => ({ id: "test", type, message, options });
+const step = (type: WizardStep["type"], options?: WizardStep["options"]): WizardStep => ({
+  id: "test",
+  type,
+  message: "Question",
+  options,
+});
 const option = (label: string, value: unknown) => ({ label, value });
 const cancelButton = (onClick: () => void) => (
   <button type="button" class="cancel" onClick={onClick}>
@@ -45,7 +45,7 @@ function mountStep(initialStep: WizardStep, configure: () => Partial<Props> = ()
 
 it("submits booleans and replaces busy channel choices with a status", () => {
   const [busy, setBusy] = createSignal(false);
-  const { container, answer } = mountStep(step("confirm", "Continue?"), () => ({
+  const { container, answer } = mountStep(step("confirm"), () => ({
     get busy() {
       return busy();
     },
@@ -70,7 +70,7 @@ it("submits booleans and replaces busy channel choices with a status", () => {
 it("retains a channel draft through validation, submits it, and resets on a new step", () => {
   const [validationError, setValidationError] = createSignal<string>();
   const [stepId, setStepId] = createSignal("account");
-  const { container, answer } = mountStep(step("text", "Account name"), () => ({
+  const { container, answer } = mountStep(step("text"), () => ({
     get step() {
       return { id: stepId(), type: "text", message: "Account name" };
     },
@@ -99,25 +99,22 @@ it("retains a channel draft through validation, submits it, and resets on a new 
 
 it("preserves a sensitive answer and cancel action across reveal changes", () => {
   const cancel = vi.fn();
-  const { container, answer } = mountStep(
-    { ...step("text", "Synthetic secret"), sensitive: true },
-    () => {
-      const [value, setValue] = createSignal("", { ownedWrite: true });
-      const [revealed, setRevealed] = createSignal(false, { ownedWrite: true });
-      return {
-        get value() {
-          return value();
-        },
-        get sensitiveRevealed() {
-          return revealed();
-        },
-        validationErrorId: "secret-error",
-        leadingAction: cancelButton(cancel),
-        onToggleSensitiveVisibility: () => setRevealed((current) => !current),
-        onValueChange: (next) => setValue(typeof next === "string" ? next : ""),
-      };
-    },
-  );
+  const { container, answer } = mountStep({ ...step("text"), sensitive: true }, () => {
+    const [value, setValue] = createSignal("", { ownedWrite: true });
+    const [revealed, setRevealed] = createSignal(false, { ownedWrite: true });
+    return {
+      get value() {
+        return value();
+      },
+      get sensitiveRevealed() {
+        return revealed();
+      },
+      validationErrorId: "secret-error",
+      leadingAction: cancelButton(cancel),
+      onToggleSensitiveVisibility: () => setRevealed((current) => !current),
+      onValueChange: (next) => setValue(typeof next === "string" ? next : ""),
+    };
+  });
   const input = container.querySelector("input")!;
   typeInto(input, "synthetic-key");
   flush();
@@ -137,10 +134,10 @@ it("preserves model paragraphs, cancellation, and object-valued choices", () => 
   const cancel = vi.fn(),
     selected = { preset: "synthetic" };
   const { container, answer } = mountStep(
-    step("select", "Choose a preset\n\nSynthetic preset details", [
-      option("One", selected),
-      option("Two", 2),
-    ]),
+    {
+      ...step("select", [option("One", selected), option("Two", 2)]),
+      message: "Choose a preset\n\nSynthetic preset details",
+    },
     () => ({ presentation: "model-setup", leadingAction: cancelButton(cancel) }),
   );
   expect(
@@ -160,7 +157,7 @@ it.each([false, true])(
   "keeps model submission in its native form (manual sign-in: %s)",
   (externalAuthInput) => {
     const cancel = vi.fn();
-    const { container, answer } = mountStep(step("text", "Synthetic token"), () => ({
+    const { container, answer } = mountStep(step("text"), () => ({
       value: "synthetic-answer",
       presentation: "model-setup",
       externalAuthInput,
@@ -183,10 +180,7 @@ it.each([false, true])(
 
 it("submits the channel ID from a single-choice picker", async () => {
   const { container, answer } = mountStep(
-    step("select", "Choose a channel", [
-      option("Telegram", "telegram"),
-      option("Discord", "discord"),
-    ]),
+    step("select", [option("Telegram", "telegram"), option("Discord", "discord")]),
     () => ({ value: "telegram", presentation: "channels", channelSelect: true }),
   );
   await updatePickers(container);
@@ -199,7 +193,7 @@ it("submits the channel ID from a single-choice picker", async () => {
 
 it("delegates channel multiselect toggles and submits the caller-owned selection", () => {
   const { container, answer, change } = mountStep(
-    step("multiselect", "Choose channels", [option("First", "first"), option("Second", "second")]),
+    step("multiselect", [option("First", "first"), option("Second", "second")]),
     () => ({ value: ["first"], presentation: "channels" }),
   );
   const options = container.querySelectorAll<HTMLButtonElement>(".channels-wizard__option");
