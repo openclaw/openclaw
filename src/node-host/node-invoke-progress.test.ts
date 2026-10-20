@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodeHostClient } from "./client.js";
 import { createNodeInvokeProgressWriter } from "./node-invoke-progress.js";
 import { NodeHostWorkerBridgeClient } from "./worker-support.js";
@@ -11,17 +11,25 @@ const frame = {
   timeoutMs: 0,
   idempotencyKey: null,
 };
+afterEach(() => vi.useRealTimers());
+
+function progressWriter(
+  client: NodeHostClient,
+  options: Partial<Parameters<typeof createNodeInvokeProgressWriter>[0]> = {},
+) {
+  return createNodeInvokeProgressWriter({
+    client,
+    frame,
+    idleTimeoutMs: 30_000,
+    onError: vi.fn(),
+    ...options,
+  });
+}
 
 describe("node invoke progress writer", () => {
   it("chunks output to 16 KiB", async () => {
     const request = vi.fn(async () => ({}));
-    const client = { request } as NodeHostClient;
-    const writer = createNodeInvokeProgressWriter({
-      client,
-      frame,
-      idleTimeoutMs: 30_000,
-      onError: vi.fn(),
-    });
+    const writer = progressWriter({ request } as NodeHostClient);
 
     await writer.write("é".repeat(10_000));
     expect(request).toHaveBeenCalledTimes(2);
@@ -31,41 +39,27 @@ describe("node invoke progress writer", () => {
   });
 
   it.each([
-    { idleTimeoutMs: 100, heartbeatIntervalMs: 250 },
-    { idleTimeoutMs: 2_000, heartbeatIntervalMs: 1_000 },
-    { idleTimeoutMs: 60_000, heartbeatIntervalMs: 5_000 },
+    [100, 250],
+    [2_000, 1_000],
+    [60_000, 5_000],
   ])(
-    "emits idle heartbeats every $heartbeatIntervalMs ms for a $idleTimeoutMs ms timeout",
-    async ({ idleTimeoutMs, heartbeatIntervalMs }) => {
+    "uses a %i ms timeout to emit heartbeats every %i ms",
+    async (idleTimeoutMs, heartbeatIntervalMs) => {
       vi.useFakeTimers();
-      try {
-        vi.setSystemTime(0);
-        const request = vi.fn(async () => ({}));
-        const writer = createNodeInvokeProgressWriter({
-          client: { request } as NodeHostClient,
-          frame,
-          idleTimeoutMs,
-          onError: vi.fn(),
-        });
-        writer.startHeartbeats();
-        await vi.advanceTimersByTimeAsync(heartbeatIntervalMs - 1);
-        expect(request).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(request).toHaveBeenCalledWith(
-          "node.invoke.progress",
-          {
-            invokeId: "invoke-1",
-            nodeId: "node-1",
-            seq: 0,
-            chunk: "",
-          },
-          undefined,
-        );
-        writer.stop();
-        await writer.flush();
-      } finally {
-        vi.useRealTimers();
-      }
+      vi.setSystemTime(0);
+      const request = vi.fn(async () => ({}));
+      const writer = progressWriter({ request } as NodeHostClient, { idleTimeoutMs });
+      writer.startHeartbeats();
+      await vi.advanceTimersByTimeAsync(heartbeatIntervalMs - 1);
+      expect(request).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(request).toHaveBeenCalledWith(
+        "node.invoke.progress",
+        { invokeId: "invoke-1", nodeId: "node-1", seq: 0, chunk: "" },
+        undefined,
+      );
+      writer.stop();
+      await writer.flush();
     },
   );
 });
@@ -78,14 +72,16 @@ describe("invocation-owned progress cancellation", () => {
       messages.push(message as Record<string, unknown>),
     );
     client.setConnection(1, true);
+    const respond = (id: string, result: unknown) =>
+      client.handleResponse({
+        type: "gateway-response",
+        generation: 1,
+        id,
+        ok: true,
+        result,
+      });
     const controller = new AbortController();
-    const writer = createNodeInvokeProgressWriter({
-      client,
-      frame,
-      idleTimeoutMs: 30_000,
-      signal: controller.signal,
-      onError: vi.fn(),
-    });
+    const writer = progressWriter(client, { signal: controller.signal });
     try {
       const unrelated = client.request("skills.bins");
       void writer.write("first");
@@ -103,30 +99,13 @@ describe("invocation-owned progress cancellation", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(flushed).toBe(true);
       expect(messages).toHaveLength(2);
-      expect(
-        client.handleResponse({
-          type: "gateway-response",
-          generation: 1,
-          id: "gateway-2",
-          ok: true,
-          result: {},
-        }),
-      ).toBe(false);
-      expect(
-        client.handleResponse({
-          type: "gateway-response",
-          generation: 1,
-          id: "gateway-1",
-          ok: true,
-          result: { bins: [] },
-        }),
-      ).toBe(true);
+      expect(respond("gateway-2", {})).toBe(false);
+      expect(respond("gateway-1", { bins: [] })).toBe(true);
       await expect(unrelated).resolves.toEqual({ bins: [] });
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       writer.stop();
       client.close();
-      vi.useRealTimers();
     }
   });
 
@@ -136,16 +115,10 @@ describe("invocation-owned progress cancellation", () => {
     client.setConnection(1, true);
     const controller = new AbortController();
     controller.abort(new Error("cancelled before progress"));
-    let rejected = false;
-    const request = client
-      .request("node.invoke.progress", {}, { signal: controller.signal })
-      .catch(() => {
-        rejected = true;
-      });
-    await Promise.resolve();
+    await expect(
+      client.request("node.invoke.progress", {}, { signal: controller.signal }),
+    ).rejects.toThrow("cancelled before progress");
     expect(send).not.toHaveBeenCalled();
-    expect(rejected).toBe(true);
     client.close();
-    await request;
   });
 });

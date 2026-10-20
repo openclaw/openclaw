@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseWorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
 import { assertNativeInferenceAssignment } from "../worker/native-inference-startup.js";
@@ -33,7 +34,7 @@ function model(id: string, headers?: Record<string, string>) {
   };
 }
 
-function config(models = [model("model-1"), model("model-2", { "x-model": modelHeader })]) {
+function config(overrides: Partial<ModelProviderConfig> = {}): OpenClawConfig {
   return {
     models: {
       providers: {
@@ -42,14 +43,15 @@ function config(models = [model("model-1"), model("model-2", { "x-model": modelH
           api: "openai-completions",
           baseUrl: "https://model.example.test/v1",
           headers: { "x-provider": providerHeader },
-          models,
+          models: [model("model-1"), model("model-2", { "x-model": modelHeader })],
+          ...overrides,
         },
       },
     },
-  } as OpenClawConfig;
+  };
 }
 
-function descriptor(workspace: string, modelId = "model-1") {
+function descriptor(modelId = "model-1", workspace = tempDirs.make("node-native-")) {
   const input = testWorkerLaunchInput(workspace, "native-turn");
   input.descriptor.assignment.inference = "runtime-local";
   input.descriptor.assignment.modelRef = { provider: "provider-1", model: modelId };
@@ -61,57 +63,41 @@ function descriptor(workspace: string, modelId = "model-1") {
 
 describe("node worker inference config projection", () => {
   it("uses the canonical custom-provider API default", () => {
-    const workspace = tempDirs.make("node-native-default-api-");
-    const defaulted = config([model("model-1")]);
-    delete defaulted.models!.providers!["provider-1"]!.api;
-    const snapshot = snapshotNodeWorkerNativeInference(defaulted, {})!;
-    const startup = projectNodeWorkerNativeInference(snapshot, descriptor(workspace));
+    const snapshot = snapshotNodeWorkerNativeInference(config({ api: undefined }), {})!;
+    const startup = projectNodeWorkerNativeInference(snapshot, descriptor());
     expect(startup.config.models[0]?.api).toBe("openai-completions");
   });
 
   it("accepts an empty provider header map", () => {
-    const source = config([model("model-1")]);
-    source.models!.providers!["provider-1"]!.headers = {};
-    expect(snapshotNodeWorkerNativeInference(source, {})).toBeDefined();
+    expect(
+      snapshotNodeWorkerNativeInference(config({ headers: {}, models: [model("model-1")] }), {}),
+    ).toBeDefined();
   });
 
   it("rejects a selected model that is absent from the node config", () => {
-    const workspace = tempDirs.make("node-native-missing-model-");
     const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
-    expect(() =>
-      projectNodeWorkerNativeInference(snapshot, descriptor(workspace, "missing")),
-    ).toThrow(
+    expect(() => projectNodeWorkerNativeInference(snapshot, descriptor("missing"))).toThrow(
       "Configure it under models.providers with a usable credential in the node openclaw.json",
     );
   });
 
   it("captures credentials and header bytes for child diagnostics", () => {
     const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
-    const assignment = descriptor(tempDirs.make("node-native-secrets-"));
+    const assignment = descriptor();
     expect(new Set(nodeWorkerLaunchSecrets(assignment, snapshot))).toEqual(
       new Set([assignment.admission.credential, credential, providerHeader, modelHeader]),
     );
   });
 
   it("ignores providers without usable credentials or worker-compatible models", () => {
-    const missingCredential = config();
-    delete missingCredential.models!.providers!["provider-1"]!.apiKey;
-    expect(snapshotNodeWorkerNativeInference(missingCredential, {})).toBeUndefined();
-
-    const unsupported = config();
-    unsupported.models!.providers!["provider-1"]!.models = [
-      { ...model("audio-model"), input: ["audio" as never] },
-    ];
-    expect(snapshotNodeWorkerNativeInference(unsupported, {})).toBeUndefined();
-
-    const ambientAzure = config();
-    ambientAzure.models!.providers!["provider-1"]!.api = "azure-openai-responses";
-    expect(snapshotNodeWorkerNativeInference(ambientAzure, {})).toBeUndefined();
-
-    const ambientVertex = config();
-    ambientVertex.models!.providers!["provider-1"]!.api = "google-vertex";
-    ambientVertex.models!.providers!["provider-1"]!.apiKey = "gcp-vertex-credentials";
-    expect(snapshotNodeWorkerNativeInference(ambientVertex, {})).toBeUndefined();
+    for (const overrides of [
+      { apiKey: undefined },
+      { models: [{ ...model("audio-model"), input: ["audio" as never] }] },
+      { api: "azure-openai-responses" as const },
+      { api: "google-vertex" as const, apiKey: "gcp-vertex-credentials" },
+    ]) {
+      expect(snapshotNodeWorkerNativeInference(config(overrides), {})).toBeUndefined();
+    }
   });
 
   it("does not advertise worker-local inference on Windows", () => {
@@ -125,7 +111,7 @@ describe("node worker inference config projection", () => {
     const link = path.join(root, "workspace-link");
     fs.symlinkSync(workspace, link, "junction");
     const snapshot = snapshotNodeWorkerNativeInference(config(), {})!;
-    const assignment = descriptor(link);
+    const assignment = descriptor("model-1", link);
     const startup = projectNodeWorkerNativeInference(snapshot, assignment);
     expect(startup.config.workspace).toBe(fs.realpathSync(workspace));
     expect(() => assertNativeInferenceAssignment(startup, assignment)).not.toThrow();

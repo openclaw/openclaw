@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { NodeWorkerCapacity } from "./node-worker-capacity.js";
@@ -16,7 +16,21 @@ import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 import { NodeWorkerWorkspaceRuntime } from "./node-worker-workspace.js";
 
 const tempDirs = useStateDatabaseTempDirs();
-afterEach(() => vi.restoreAllMocks());
+
+function afterJournal(retarget: () => string) {
+  let replacement = "";
+  // oxlint-disable-next-line typescript/unbound-method -- apply preserves the original receiver.
+  const original = NodeWorkerTurnStore.prototype.claim;
+  vi.spyOn(NodeWorkerTurnStore.prototype, "claim").mockImplementation(async function (
+    this: NodeWorkerTurnStore,
+    ...args
+  ) {
+    const result = await original.apply(this, args);
+    replacement = retarget();
+    return result;
+  });
+  return () => replacement;
+}
 
 function fixture() {
   const value = writeNodeWorkerFixture(tempDirs.make("device-folder-launch-"));
@@ -39,12 +53,13 @@ function fixture() {
     fs.symlinkSync(replacement, folder, "dir");
     return replacement;
   };
-  return { supervisor, folder, input, retarget };
+  return { supervisor, input, retarget, [Symbol.asyncDispose]: () => supervisor.close() };
 }
 
 describe("device-folder launch fencing", () => {
   it("rejects a folder retargeted while capacity acquisition was waiting", async () => {
-    const { supervisor, input, retarget } = fixture();
+    await using context = fixture();
+    const { supervisor, input, retarget } = context;
     const acquired = createDeferred();
     const resume = createDeferred();
     // oxlint-disable-next-line typescript/unbound-method -- apply below preserves the original receiver.
@@ -77,37 +92,26 @@ describe("device-folder launch fencing", () => {
       expect(fs.readdirSync(replacement)).toEqual([]);
     } finally {
       resume.resolve();
-      await supervisor.close();
     }
   });
 
   it("rechecks after first-turn journaling before preparing a child", async () => {
-    const { supervisor, input, retarget } = fixture();
-    // oxlint-disable-next-line typescript/unbound-method -- apply below preserves the original receiver.
-    const originalClaim = NodeWorkerTurnStore.prototype.claim;
-    const claim = vi.spyOn(NodeWorkerTurnStore.prototype, "claim");
-    let replacement = "";
-    claim.mockImplementation(async function (this: NodeWorkerTurnStore, ...args) {
-      const result = await originalClaim.apply(this, args);
-      replacement = retarget();
-      return result;
-    });
+    await using context = fixture();
+    const { supervisor, input, retarget } = context;
+    const replacement = afterJournal(retarget);
     const prepare = vi.spyOn(transport, "prepareNodeWorkerLaunchTransport");
-    try {
-      const receipt = await supervisor.launch(input("journal-wait"), TEST_WORKER_ENDPOINT);
-      expect(receipt).toMatchObject({
-        state: "failed",
-        errorText: expect.stringContaining("acquired device folder changed"),
-      });
-      expect(prepare).not.toHaveBeenCalled();
-      expect(fs.readdirSync(replacement)).toEqual([]);
-    } finally {
-      await supervisor.close();
-    }
+    const receipt = await supervisor.launch(input("journal-wait"), TEST_WORKER_ENDPOINT);
+    expect(receipt).toMatchObject({
+      state: "failed",
+      errorText: expect.stringContaining("acquired device folder changed"),
+    });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(fs.readdirSync(replacement())).toEqual([]);
   });
 
   it("rechecks after child startup before opening the turn execution gate", async () => {
-    const { supervisor, input, retarget } = fixture();
+    await using context = fixture();
+    const { supervisor, input, retarget } = context;
     const prepare = transport.prepareNodeWorkerLaunchTransport;
     let replacement = "";
     vi.spyOn(transport, "prepareNodeWorkerLaunchTransport").mockImplementation(async (options) => {
@@ -115,38 +119,25 @@ describe("device-folder launch fencing", () => {
       replacement = retarget();
       return prepared;
     });
-    try {
-      const receipt = await supervisor.launch(input("startup-wait"), TEST_WORKER_ENDPOINT);
-      expect(receipt).toMatchObject({
-        state: "failed",
-        errorText: expect.stringContaining("acquired device folder changed"),
-      });
-      expect(fs.readdirSync(replacement)).toEqual([]);
-    } finally {
-      await supervisor.close();
-    }
+    const receipt = await supervisor.launch(input("startup-wait"), TEST_WORKER_ENDPOINT);
+    expect(receipt).toMatchObject({
+      state: "failed",
+      errorText: expect.stringContaining("acquired device folder changed"),
+    });
+    expect(fs.readdirSync(replacement)).toEqual([]);
   });
 
   it("rechecks a retained child's folder after journaling its next turn", async () => {
-    const { supervisor, input, retarget } = fixture();
-    try {
-      await supervisor.launch(input("first", "diagnostic-retain"), TEST_WORKER_ENDPOINT);
-      expect((await waitForNodeWorkerTerminal(supervisor, "first")).state).toBe("completed");
-      // oxlint-disable-next-line typescript/unbound-method -- apply below preserves the original receiver.
-      const originalClaim = NodeWorkerTurnStore.prototype.claim;
-      const claim = vi.spyOn(NodeWorkerTurnStore.prototype, "claim");
-      let replacement = "";
-      claim.mockImplementation(async function (this: NodeWorkerTurnStore, ...args) {
-        const result = await originalClaim.apply(this, args);
-        replacement = retarget();
-        return result;
-      });
-      const receipt = await supervisor.launch(input("reused"), TEST_WORKER_ENDPOINT);
-      expect(receipt.state).toBe("interrupted");
-      expect(receipt.errorText).toContain("acquired device folder changed");
-      expect(fs.readdirSync(replacement)).toEqual([]);
-    } finally {
-      await supervisor.close();
-    }
+    await using context = fixture();
+    const { supervisor, input, retarget } = context;
+    await supervisor.launch(input("first", "diagnostic-retain"), TEST_WORKER_ENDPOINT);
+    expect((await waitForNodeWorkerTerminal(supervisor, "first")).state).toBe("completed");
+    const replacement = afterJournal(retarget);
+    const receipt = await supervisor.launch(input("reused"), TEST_WORKER_ENDPOINT);
+    expect(receipt).toMatchObject({
+      state: "interrupted",
+      errorText: expect.stringContaining("acquired device folder changed"),
+    });
+    expect(fs.readdirSync(replacement())).toEqual([]);
   });
 });
