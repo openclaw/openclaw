@@ -96,15 +96,17 @@ suite.define(() => {
             .toContain("Updated file bytes");
           expect(await gateway.getRequests("sessions.files.get")).toHaveLength(2);
         }
+        // Settle native menu frames before freezing the feedback clock.
+        if (lifecycle === "current" && action === "path") {
+          await openFileActions(panel);
+        }
         // Keep transient feedback alive until its assertions settle.
-        await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1_000);
+        const pendingAt = await page.evaluate(() => Date.now());
+        await page.clock.pauseAt(pendingAt + 1_000);
         await page.evaluate(() => window.fileCopyProof.reject!());
         if (lifecycle === "current") {
           await page.waitForFunction(() => window.fileCopyProof.fallbacks.length === 1);
           expect(await page.evaluate(() => window.fileCopyProof.fallbacks)).toEqual([expected]);
-          if (action === "path") {
-            await openFileActions(panel);
-          }
           await copied().waitFor({ state: "visible" });
         }
         expect(await page.evaluate(() => window.fileCopyProof.fallbacks)).toEqual(
@@ -113,12 +115,15 @@ suite.define(() => {
         if (lifecycle === "current") {
           // Retire the first attempt's feedback before proving native success.
           await page.clock.fastForward(1_500);
+          await page.clock.resume();
           await copy();
           await page.waitForFunction(() => window.fileCopyProof.nativeWrites.length === 2);
-          await page.evaluate(() => window.fileCopyProof.resolve!());
           if (action === "path") {
             await openFileActions(panel);
           }
+          const nativePendingAt = await page.evaluate(() => Date.now());
+          await page.clock.pauseAt(nativePendingAt + 1_000);
+          await page.evaluate(() => window.fileCopyProof.resolve!());
           await copied().waitFor({ state: "visible" });
           const writes = await page.evaluate(() => window.fileCopyProof.nativeWrites);
           expect(writes).toEqual([expected, expected]);
