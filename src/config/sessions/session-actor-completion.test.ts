@@ -6,6 +6,7 @@ import {
   ACTIVITY_SUMMARY_FORMAT_REVISION,
   type SessionActivitySummary,
 } from "./activity-summary.js";
+import { buildCreatedSessionGoal } from "./goals-transitions.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type {
@@ -187,9 +188,7 @@ it("retains stale recap text but skips another session's recap without losing co
         {
           type: "session",
           id: f.scope.sessionId,
-          version: 3,
           timestamp: "2026-01-01T00:00:00Z",
-          cwd: "/synthetic",
         },
         {
           type: "message",
@@ -253,18 +252,16 @@ it.each(["active", "complete", "replaced", "cleared"] as const)(
   "preserves %s Goal identity and status while accounting a continuation across actor restart",
   async (state) => {
     await withActor(async (f) => {
+      const entry = f.nativeEntry()!;
       f.writeEntry({
-        ...f.nativeEntry()!,
+        ...entry,
         goal:
           state === "cleared"
             ? undefined
             : {
-                schemaVersion: 1,
+                ...buildCreatedSessionGoal(entry, { objective: "Verify the synthetic fixture" }, 1),
                 id: state === "replaced" ? "other-goal" : "admitted-goal",
-                objective: "Verify the synthetic fixture",
                 status: state === "complete" ? "complete" : "active",
-                createdAt: 1,
-                updatedAt: 1,
                 tokenStart: 0,
                 tokenStartFresh: true,
                 tokensUsed: 12,

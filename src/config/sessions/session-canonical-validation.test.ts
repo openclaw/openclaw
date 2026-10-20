@@ -103,10 +103,8 @@ it("processes an oversized first row alone and preserves the exact validated sna
     database.db.exec(
       "INSERT INTO session_canonical_validation_pending SELECT session_key FROM session_nodes",
     );
-    const batch = readBatch(database, {
-      maxRows: 128,
-      maxBytes: 1024,
-    });
+    const limits = { maxRows: 128, maxBytes: 1024 };
+    const batch = readBatch(database, limits);
     expect(batch.rows.map((row) => row.session_key)).toEqual([scope.sessionKey]);
     expect(batch.oversizedRows).toBe(1);
     expect(batch.hasMore).toBe(true);
@@ -116,10 +114,7 @@ it("processes an oversized first row alone and preserves the exact validated sna
       expect(certify(writer, validated)).toBe(1);
     }, scope);
     expect(hasPending(database)).toBe(true);
-    const next = readBatch(database, {
-      maxRows: 128,
-      maxBytes: 1024,
-    });
+    const next = readBatch(database, limits);
     expect(next.rows.map((row) => row.session_key)).toEqual(["agent:main:b"]);
   });
 });
