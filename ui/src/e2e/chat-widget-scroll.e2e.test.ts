@@ -62,14 +62,19 @@ async function swipe(
     ),
   );
   try {
-    // Chromium owns gesture timing; per-event CDP round trips can stall under load.
-    await cdp.send("Input.synthesizeScrollGesture", {
-      ...point,
-      yDistance: direction * distance,
-      speed: 1_250,
-      gestureSourceType: "touch",
-      preventFling: false,
+    // Use Chromium's touch emulator on every platform; synthetic scroll gestures
+    // bypass Aura's touch recognizer. Keep layout reads out of the input sequence.
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ ...point, id: 0 }],
     });
+    for (let step = 1; step <= 12; step++) {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [{ x: point.x, y: point.y + (direction * distance * step) / 12, id: 0 }],
+      });
+    }
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
     const releaseTimes = await Promise.all(
       releases.map((release) => release.evaluate(({ state }) => state.time)),
     );
