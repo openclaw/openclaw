@@ -4,6 +4,7 @@ import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { makeEmbeddedRunnerAttempt as makeAttempt } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
+import { CUT_OFF_SUMMARY_NOTICE_TEXT } from "./incomplete-turn-resolution.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
 import { useFinalizationAdmission } from "./settled-finalization-harness.test-support.js";
 import {
@@ -140,6 +141,39 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
         expect(attempt.settledTurnFinalizationContext).toBe(context);
         expect(result.attempt.assistantTexts).toEqual(["The tools completed successfully."]);
       }
+    },
+  );
+
+  it.each(["length", "stop"] as const)(
+    "labels a recovered summary only when the settled turn was cut off (%s)",
+    async (stopReason) => {
+      // #178300: a tool-free summary of a cut-off turn must not read as a clean finish.
+      const attempt = settledAttempt(false);
+      const cutOff = textAssistant(undefined, {
+        stopReason,
+        content: [{ type: "thinking", thinking: "Next", thinkingSignature: "opaque" }],
+      });
+      Object.assign(attempt, {
+        lastAssistant: cutOff,
+        currentAttemptAssistant: cutOff,
+        currentAttemptCompletedAssistant: cutOff,
+        messagesSnapshot: [...attempt.messagesSnapshot, cutOff],
+      });
+      backendMocks.finalize.mockResolvedValueOnce(
+        finalizationReply("answered", "All steps are complete."),
+      );
+
+      const result = await finalize(finalizationInput(attempt));
+
+      expect(result.finalizationOutcome).toBe("answered");
+      expect(backendMocks.finalize.mock.calls[0]?.[0].prompt.includes("cut off")).toBe(
+        stopReason === "length",
+      );
+      expect(result.prepared.payloadsWithToolMedia?.map((payload) => payload.text)).toEqual(
+        stopReason === "length"
+          ? ["All steps are complete.", CUT_OFF_SUMMARY_NOTICE_TEXT]
+          : ["All steps are complete."],
+      );
     },
   );
 
