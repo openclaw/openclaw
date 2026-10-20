@@ -1,6 +1,9 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
-import { createTextEndBlockReplyHarness } from "./embedded-agent-subscribe.e2e-harness.js";
+import {
+  createTextEndBlockReplyHarness,
+  emitToolRun,
+} from "./embedded-agent-subscribe.e2e-harness.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 function ollamaAssistant(text: string, extra?: AssistantMessage["content"]): AssistantMessage {
@@ -80,22 +83,13 @@ describe("native Ollama pre-tool narration", () => {
       }
       emit({
         type: "message_end",
-        message: {
-          ...unsigned,
-          stopReason: "toolUse",
-          content: [...unsigned.content, toolCall],
-        },
+        message: { ...ollamaAssistant(narration, [toolCall]), stopReason: "toolUse" },
       });
-      emit({
-        type: "tool_execution_start",
+      emitToolRun({
+        emit,
         toolName: toolCall.name,
         toolCallId: toolCall.id,
         args: toolCall.arguments,
-      });
-      emit({
-        type: "tool_execution_end",
-        toolName: toolCall.name,
-        toolCallId: toolCall.id,
         result: { content: [{ type: "text", text: "File contents" }] },
         isError: false,
       });
@@ -128,14 +122,8 @@ describe("native Ollama pre-tool narration", () => {
       const answer = "Visible answer";
       emit({ type: "message_start", message: ollamaAssistant("") });
       update(ollamaAssistant(answer), { type: "text_delta", contentIndex: 0, delta: answer });
-      const finalMessage = {
-        ...ollamaAssistant(answer),
-        content: [
-          { type: "thinking" as const, thinking: "Late reasoning" },
-          { type: "text" as const, text: answer },
-        ],
-        stopReason,
-      };
+      const finalMessage = { ...ollamaAssistant(answer), stopReason };
+      finalMessage.content.unshift({ type: "thinking", thinking: "Late reasoning" });
       update(finalMessage, { type: "thinking_delta", contentIndex: 0, delta: "Late reasoning" });
       update(finalMessage, { type: "text_end", contentIndex: 1, content: answer });
       await subscription.waitForPendingEvents();

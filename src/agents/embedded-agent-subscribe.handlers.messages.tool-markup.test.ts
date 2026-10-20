@@ -18,17 +18,26 @@ const markup = [
   '<mm:function_calls><mm:invoke name="exec"><mm:parameter name="command">echo hidden</mm:parameter></mm:invoke></mm:function_calls>',
   "<tool_call>exec<arg_key>command</arg_key><arg_value>[[reply_to:hidden]]\nMEDIA:/tmp/hidden.png</arg_value></tool_call>",
 ];
+const textPart = (text: string) => ({ type: "text" as const, text });
+function expectVisible(
+  message: AssistantMessage,
+  text: string,
+  ctx = createMessageUpdateContext(),
+) {
+  expect(extractAssistantStreamSnapshot(ctx, message)).toMatchObject({ text, blockText: text });
+  expect(extractAssistantVisibleText(message)).toBe(text);
+}
 
 describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-responses"] as const)(
   "%s tool markup delivery",
   (api) => {
-    function message(text: string) {
+    function message(content: string | AssistantMessage["content"]) {
       return makeAgentAssistantMessage({
         api,
         provider: "fixture",
         model: "fixture",
         ...(api === "openai-responses" ? { phase: "final_answer" as const } : {}),
-        content: [{ type: "text", text }],
+        content: typeof content === "string" ? [textPart(content)] : content,
       });
     }
 
@@ -77,36 +86,28 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
     });
 
     it("keeps markup context across adjacent text and whitespace blocks", () => {
-      const partial = message("");
-      partial.content = [
-        { type: "text", text: "Visible\n<tool_call>exec<arg_key>command</arg_key><arg_value>" },
-        { type: "text", text: " \n" },
-        { type: "text", text: "hidden</arg_value></tool_call>\nDone." },
-      ];
-      expect(extractAssistantStreamSnapshot(createMessageUpdateContext(), partial)).toMatchObject({
-        text: "Visible\n\nDone.",
-        blockText: "Visible\n\nDone.",
-      });
-      expect(extractAssistantVisibleText(partial)).toBe("Visible\n\nDone.");
+      const partial = message(
+        [
+          "Visible\n<tool_call>exec<arg_key>command</arg_key><arg_value>",
+          " \n",
+          "hidden</arg_value></tool_call>\nDone.",
+        ].map(textPart),
+      );
+      expectVisible(partial, "Visible\n\nDone.");
     });
 
     it.each([
       { type: "toolCall", id: "call-1", name: "exec", arguments: {} },
       { type: "thinking", thinking: "Private reasoning." },
     ] as const)("ends XML context at a native $type block", (boundary) => {
-      const partial: AssistantMessage = {
-        ...message(""),
-        content: [
-          { type: "text", text: '<tool_call>{"name":"exec","arguments":{}}' },
+      expectVisible(
+        message([
+          textPart('<tool_call>{"name":"exec","arguments":{}}'),
           boundary,
-          { type: "text", text: "Done." },
-        ],
-      };
-      expect(extractAssistantStreamSnapshot(createMessageUpdateContext(), partial)).toMatchObject({
-        text: "Done.",
-        blockText: "Done.",
-      });
-      expect(extractAssistantVisibleText(partial)).toBe("Done.");
+          textPart("Done."),
+        ]),
+        "Done.",
+      );
     });
 
     it.each(markup)(
@@ -125,11 +126,10 @@ describe.each(["ollama", "anthropic-messages", "openai-completions", "openai-res
         const partial = message(text);
         await update(context, text, "text_end");
         expect(context.state.assistantStream?.text).toBe("Visible\n\nDone.");
-        expect(extractAssistantStreamSnapshot(context, partial).blockText).toBe("Visible\n\nDone.");
+        expectVisible(partial, "Visible\n\nDone.", context);
         if (api === "openai-responses") {
           expect(context.blockChunker.bufferedText).toBe("Visible\n\nDone.");
         }
-        expect(extractAssistantVisibleText(partial)).toBe("Visible\n\nDone.");
         expect(
           consumePendingAssistantReplyDirectivesIntoReply(context.state, {
             text: "Visible\n\nDone.",

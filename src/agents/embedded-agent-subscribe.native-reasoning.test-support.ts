@@ -18,15 +18,12 @@ export const NATIVE_REASONING_BENCH_PREFIX = "REASONING_BENCH:";
 export async function measureNativeReasoningSubscription(
   options: {
     signal?: AbortSignal;
-    chunks?: string[];
     runId?: string;
   } = {},
 ) {
-  const chunks =
-    options.chunks ??
-    Array.from({ length: 4096 }, (_, index) =>
-      (index === 0 ? NATIVE_REASONING_BENCH_PREFIX : "").padEnd(64, "x"),
-    );
+  const chunks = Array.from({ length: 4096 }, (_, index) =>
+    (index === 0 ? NATIVE_REASONING_BENCH_PREFIX : "").padEnd(64, "x"),
+  );
   const model = makeProviderModelFixture({
     id: "reasoning-fixture",
     name: "Reasoning fixture",
@@ -85,8 +82,6 @@ export async function measureNativeReasoningSubscription(
   });
   const stream = new AssistantMessageEventStream();
   stream.push({ type: "start", partial: output });
-  const started = performance.now();
-  const rssBefore = process.memoryUsage().rss;
   let producing: Promise<void> | undefined;
   let consumed = 0;
   try {
@@ -133,16 +128,13 @@ export async function measureNativeReasoningSubscription(
       },
     );
     await producing;
+    const expected = chunks.join("");
     return {
       chunks: chunks.length,
-      chars: chunks.join("").length,
+      chars: expected.length,
       events,
-      elapsedMs: performance.now() - started,
-      rssBefore,
-      rssAfter: process.memoryUsage().rss,
-      maxRssKiB: process.resourceUsage().maxRSS,
-      textMatches: lastText === chunks.join("").trim(),
-      deltaMatches: joinedDelta === chunks.join("").trim(),
+      textMatches: lastText === expected.trim(),
+      deltaMatches: joinedDelta === expected.trim(),
     };
   } finally {
     options.signal?.removeEventListener("abort", releaseAcknowledgments);

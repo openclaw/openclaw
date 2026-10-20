@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
+import { expect, it } from "vitest";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { resolveRawAssistantAnswerText } from "../shared/assistant-answer-text.js";
 import { prepareAgentRunTerminalReply } from "./agent-run-terminal-reply.js";
@@ -16,44 +16,38 @@ import {
 
 registerAgentSessionLoopTestLifecycle();
 
-describe("completed assistant delivery snapshot", () => {
-  it.each([
-    {
-      name: "speech facts alongside a literal silence token",
-      source: "[[tts:text]]Do not speak.[[/tts:text]]NO_REPLY",
-      text: "NO_REPLY",
-      facts: { tts: { tagged: true, text: "Do not speak." } },
-      payload: {},
-    },
-    {
-      name: "a fenced literal followed by a genuine target",
-      source: [
-        "```text",
-        "[[reply_to_current]]\n[[audio_as_voice]]",
-        "```\n[[reply_to:actual]]Done.",
-      ],
-      parts: ["```text", "[[reply_to_current]]\n[[audio_as_voice]]", "```\nDone."],
-      text: "```text\n[[reply_to_current]]\n[[audio_as_voice]]\n```\nDone.",
-      facts: { replyToId: "actual" },
-      payload: { replyToId: "actual", replyToTag: true },
-    },
-    {
-      name: "genuine voice intent after a split literal",
-      source: ["Use `", "[[audio_as_voice]]` literally.\n[[audio_as_voice]]Voice."],
-      parts: ["Use `", "[[audio_as_voice]]` literally.\nVoice."],
-      text: "Use `\n[[audio_as_voice]]` literally.\nVoice.",
-      facts: { audioAsVoice: true },
-      payload: { audioAsVoice: true },
-    },
-  ])("preserves $name without changing the raw completion event", async (scenario) => {
-    const sourceParts = Array.isArray(scenario.source) ? scenario.source : [scenario.source];
-    const contentFor = (parts: readonly string[]) =>
-      parts.map((text, index) => ({
+it.each([
+  [
+    "speech facts alongside a literal silence token",
+    ["[[tts:text]]Do not speak.[[/tts:text]]NO_REPLY"],
+    ["NO_REPLY"],
+    { tts: { tagged: true, text: "Do not speak." } },
+    {},
+  ],
+  [
+    "a fenced literal followed by a genuine target",
+    ["```text", "[[reply_to_current]]\n[[audio_as_voice]]", "```\n[[reply_to:actual]]Done."],
+    ["```text", "[[reply_to_current]]\n[[audio_as_voice]]", "```\nDone."],
+    { replyToId: "actual" },
+    { replyToId: "actual", replyToTag: true },
+  ],
+  [
+    "genuine voice intent after a split literal",
+    ["Use `", "[[audio_as_voice]]` literally.\n[[audio_as_voice]]Voice."],
+    ["Use `", "[[audio_as_voice]]` literally.\nVoice."],
+    { audioAsVoice: true },
+    { audioAsVoice: true },
+  ],
+] as const)(
+  "preserves %s without changing the raw completion event",
+  async (_name, sourceParts, parts, facts, payload) => {
+    const contentFor = (chunks: readonly string[]) =>
+      chunks.map((text, index) => ({
         type: "text" as const,
         text,
         textSignature: JSON.stringify({ v: 1, id: `part-${index}`, phase: "final_answer" }),
       }));
-    streamMocks.streamSimple.mockImplementation((model: Model) =>
+    streamMocks.streamSimple.mockImplementation((model) =>
       createAssistantResultStream(createAssistant(model, contentFor(sourceParts))),
     );
     const { session, sessionManager } = await createTestSession();
@@ -71,7 +65,7 @@ describe("completed assistant delivery snapshot", () => {
         subscription.getCurrentAttemptAssistant(),
         "Completed assistant",
       );
-      const content = contentFor(scenario.parts ?? [scenario.text]);
+      const content = contentFor(parts);
       const persisted = sessionManager
         .getEntries()
         .findLast((entry) => entry.type === "message" && entry.message.role === "assistant");
@@ -86,27 +80,27 @@ describe("completed assistant delivery snapshot", () => {
       expect.soft(rawCompletion?.content).toEqual(contentFor(sourceParts));
       expect.soft(rawCompletion?.openclawDelivery).toBeUndefined();
       expect.soft(captured.content).toEqual(contentFor(sourceParts));
-      expect.soft(captured.openclawDelivery).toEqual(scenario.facts);
+      expect.soft(captured.openclawDelivery).toEqual(facts);
       expect(
         prepareAgentRunTerminalReply({ rawText: resolveRawAssistantAnswerText(captured) })
           .terminalReply.disposition,
       ).toBe("visible");
       expect.soft(persisted).toMatchObject({
         type: "message",
-        message: { content, ...(scenario.facts ? { openclawDelivery: scenario.facts } : {}) },
+        message: { content, openclawDelivery: facts },
       });
       expect.soft(payloads).toHaveLength(1);
       expect.soft(payloads[0]).toMatchObject({
-        text: scenario.text || undefined,
-        ...scenario.payload,
+        text: parts.join("\n"),
+        ...payload,
       });
       expect
         .soft(getReplyPayloadMetadata(expectDefined(payloads[0], "Final payload"))?.tts)
-        .toEqual(scenario.facts?.tts);
+        .toEqual("tts" in facts ? facts.tts : undefined);
     } finally {
       await subscription.waitForPendingEvents();
       subscription.unsubscribe();
       stopObserve();
     }
-  });
-});
+  },
+);

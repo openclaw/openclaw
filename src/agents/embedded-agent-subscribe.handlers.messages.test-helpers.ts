@@ -8,6 +8,27 @@ import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.j
 import { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
 
+type ContextOptions = {
+  onAgentEvent?: Mock;
+  sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  state?: Record<string, unknown>;
+};
+function baseContext(params: ContextOptions) {
+  return {
+    params: {
+      runId: "run-1",
+      session: { id: "session-1" },
+      ...(params.sourceReplyDeliveryMode
+        ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
+        : {}),
+      ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
+    },
+    noteLastAssistant: vi.fn(),
+    captureModelEvent: vi.fn(),
+    blockChunker: new EmbeddedBlockChunker(),
+  };
+}
+
 export function updateMessage(
   context: EmbeddedAgentSubscribeContext,
   event: { message: unknown; assistantMessageEvent?: unknown },
@@ -28,61 +49,44 @@ export function endMessage(context: EmbeddedAgentSubscribeContext, event: { mess
 }
 
 export function createMessageUpdateContext(
-  params: {
-    onAgentEvent?: ReturnType<typeof vi.fn>;
-    onPartialReply?: ReturnType<typeof vi.fn>;
-    flushBlockReplyBuffer?: ReturnType<typeof vi.fn>;
-    resetAssistantMessageState?: ReturnType<typeof vi.fn>;
-    debug?: ReturnType<typeof vi.fn>;
+  params: ContextOptions & {
+    onPartialReply?: Mock;
+    flushBlockReplyBuffer?: Mock;
+    resetAssistantMessageState?: Mock;
+    debug?: Mock;
     shouldEmitPartialReplies?: boolean;
-    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-    consumePartialReplyDirectives?: ReturnType<typeof vi.fn>;
-    stripBlockTags?: ReturnType<typeof vi.fn>;
-    emitReasoningStream?: ReturnType<typeof vi.fn>;
-    state?: Record<string, unknown>;
+    consumePartialReplyDirectives?: Mock;
+    stripBlockTags?: Mock;
+    emitReasoningStream?: Mock;
   } = {},
 ) {
-  // Update context fixture wires the partial-reply path through the same
-  // directive accumulator used by streaming runtime events.
-  const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
-  const onAgentEvent = params.onAgentEvent as ((event: unknown) => void) | undefined;
-  const onPartialReply = params.onPartialReply as ((event: unknown) => void) | undefined;
+  const directives = createStreamingDirectiveAccumulator();
+  const { onAgentEvent, onPartialReply } = params;
+  const base = baseContext(params);
   const ctx = {
+    ...base,
     params: {
-      runId: "run-1",
-      session: { id: "session-1" },
-      ...(params.sourceReplyDeliveryMode
-        ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
-        : {}),
-      ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
+      ...base.params,
       ...(params.onPartialReply ? { onPartialReply: params.onPartialReply } : {}),
     },
     log: { debug: params.debug ?? vi.fn() },
-    noteLastAssistant: vi.fn(),
     stripBlockTags: params.stripBlockTags ?? vi.fn((text: string) => text),
     consumePartialReplyDirectives:
       params.consumePartialReplyDirectives ??
-      vi.fn((text: string, options?: { final?: boolean }) =>
-        partialReplyDirectiveAccumulator.consume(text, options),
-      ),
-    getPartialReplySourceText: () => partialReplyDirectiveAccumulator.sourceText,
+      vi.fn((text: string, options?: { final?: boolean }) => directives.consume(text, options)),
+    getPartialReplySourceText: () => directives.sourceText,
     emitReasoningStream: params.emitReasoningStream ?? vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
     flushAssistantStream: vi.fn(),
-    blockChunker: new EmbeddedBlockChunker(),
     resetAssistantMessageState:
-      params.resetAssistantMessageState ?? vi.fn(() => partialReplyDirectiveAccumulator.reset()),
-    captureModelEvent: vi.fn(),
+      params.resetAssistantMessageState ?? vi.fn(() => directives.reset()),
     resetPartialReplyDirectives: () => {
-      partialReplyDirectiveAccumulator.reset();
+      directives.reset();
       ctx.state.lastAssistantAudioDirectiveCount = 0;
       ctx.state.pendingAssistantReplyDirectives = undefined;
     },
-    emitAssistantStreamData: vi.fn(
-      (
-        data: Parameters<EmbeddedAgentSubscribeContext["emitAssistantStreamData"]>[0],
-        options?: { emitPartialReply?: boolean },
-      ) => {
+    emitAssistantStreamData: vi.fn<EmbeddedAgentSubscribeContext["emitAssistantStreamData"]>(
+      (data, options) => {
         onAgentEvent?.({ stream: "assistant", data });
         if (options?.emitPartialReply === true && (params.shouldEmitPartialReplies ?? true)) {
           onPartialReply?.(data);
@@ -98,35 +102,26 @@ export function createMessageUpdateContext(
 }
 
 export function createMessageEndContext(
-  params: {
-    onAgentEvent?: ReturnType<typeof vi.fn>;
-    onBlockReply?: ReturnType<typeof vi.fn>;
+  params: ContextOptions & {
+    onBlockReply?: Mock;
     finalizeAssistantTexts?: Mock<EmbeddedAgentSubscribeContext["finalizeAssistantTexts"]>;
-    warn?: ReturnType<typeof vi.fn>;
+    warn?: Mock;
     builtinToolNames?: ReadonlySet<string>;
-    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     enforceFinalTag?: boolean;
     bufferedText?: string;
-    state?: Record<string, unknown>;
   } = {},
 ) {
   // Buffered cases seed the real source buffer; other cases exercise terminal-only delivery.
+  const base = baseContext(params);
   const ctx = {
+    ...base,
     params: {
-      runId: "run-1",
-      session: { id: "session-1" },
-      ...(params.sourceReplyDeliveryMode
-        ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
-        : {}),
+      ...base.params,
       ...(params.enforceFinalTag !== undefined ? { enforceFinalTag: params.enforceFinalTag } : {}),
-      ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       onBlockReply: params.onBlockReply ?? vi.fn(),
     },
-    noteLastAssistant: vi.fn(),
-    captureModelEvent: vi.fn(),
     log: { debug: vi.fn(), info: vi.fn(), warn: params.warn ?? vi.fn() },
     builtinToolNames: params.builtinToolNames,
-    blockChunker: new EmbeddedBlockChunker(),
   } as unknown as EmbeddedAgentSubscribeContext;
   ctx.state = Object.assign(new EmbeddedAgentSubscribeState(ctx.params), {
     blockReplyBreak: "message_end",
