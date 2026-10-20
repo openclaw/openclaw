@@ -177,7 +177,7 @@ public final class OpenClawChatViewModel {
 
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     private(set) var timelineRevision: UInt64 = 0
-    // Capped or filtered rosters can omit the active row. Reset this projection with session-owned state.
+    /// Capped or filtered rosters can omit the active row. Reset this projection with session-owned state.
     var retainedActiveSession: OpenClawChatSessionEntry?
     // Reader motion follows live user admission, never cache/history/narration hydration.
     private(set) var liveUserTurnRevision: UInt64 = 0
