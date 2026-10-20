@@ -5894,7 +5894,6 @@
 ["src/gateway/server-methods/session-catalog-import.test.ts","../session-sharing-target-read.js","3b1c10b651320b438ab129ae4efba0b3c94a4a58b47485bff4748683f45f8e74",1]
 ["src/gateway/server-methods/session-catalog-import.test.ts","./session-catalog-visibility.js","975e7ea9a5144afce349c230e027e4d1c5c55add5aabd4341ba0f6de5c526c58",1]
 ["src/gateway/server-methods/session-catalog-share-route.test.ts","../../plugins/runtime.js","21d0ddde7da7cfe91d39924785531706a5a7354676ea42f9ce4d1db976dd6192",1]
-["src/gateway/server-methods/session-catalog-share-route.test.ts","../../state/user-profiles.js","839b83a30794b4bf16be93498798ab301298827cf513da8c36d4415b7522f4ab",1]
 ["src/gateway/server-methods/session-catalog.performance-counters.test-support.ts","../../plugin-state/plugin-state-worker-client.js","dc9314760a8048f5467c7e7034b547d29822f0b4d8f73dbbf0f25ac79d4dea54",1]
 ["src/gateway/server-methods/session-catalog.test-helpers.ts","../../plugins/session-conversation-binding.js","83f94110c7ad8ec9a17f68cdfa808f2a3c22517af269d38b08daa126aefea4de",1]
 ["src/gateway/server-methods/session-discovery.authority.test.ts","../../skills/discovery/chat-commands.js","60e8cfdf28faff6def81b1295808aba3877c485e84511860d0072a9e4b14da03",1]
