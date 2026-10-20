@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
-import os from "node:os";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import JSZip from "jszip";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withServer } from "../plugin-sdk/test-helpers/http-test-server.js";
 import { readRequestBody, spawnOpenClaw } from "./clawhub-install.test-support.js";
 
+const directories = useAutoCleanupTempDirTracker(afterEach);
 function reply(res: ServerResponse, body: unknown, type = "application/json", status = 200) {
   res.writeHead(status, { "Content-Type": type });
   res.end(typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body));
@@ -48,53 +49,45 @@ it("installs a ClawHub GitHub skill through the CLI and reports telemetry", asyn
         return reply(res, "not found", "text/plain; charset=utf-8", 404);
     }
   }
-  const server = createServer((req, res) => {
-    void handleRequest(req, res).catch((error: unknown) => {
-      reply(res, String(error), "text/plain; charset=utf-8", 500);
-    });
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-
-  const registry = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-clawhub-cli-e2e-"));
-  try {
-    const result = await spawnOpenClaw(
-      ["skills", "install", "@demo-owner/aiq-deploy", "--global"],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-          OPENCLAW_CLAWHUB_URL: registry,
-          CLAWHUB_TOKEN: "test-token",
-          CLAWHUB_GITHUB_CODELOAD_BASE_URL: registry,
-          CLAWHUB_DISABLE_TELEMETRY: "",
-          CLAWDHUB_DISABLE_TELEMETRY: "",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+  const stateDir = directories.make("openclaw-clawhub-cli-e2e-");
+  await withServer(
+    (req, res) => {
+      void handleRequest(req, res).catch((error: unknown) => {
+        reply(res, String(error), "text/plain; charset=utf-8", 500);
+      });
+    },
+    async (registry) => {
+      const result = await spawnOpenClaw(
+        ["skills", "install", "@demo-owner/aiq-deploy", "--global"],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            OPENCLAW_STATE_DIR: stateDir,
+            OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+            OPENCLAW_CLAWHUB_URL: registry,
+            CLAWHUB_TOKEN: "test-token",
+            CLAWHUB_GITHUB_CODELOAD_BASE_URL: registry,
+            CLAWHUB_DISABLE_TELEMETRY: "",
+            CLAWDHUB_DISABLE_TELEMETRY: "",
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+          },
         },
-      },
-    );
+      );
 
-    expect(result.status, result.stderr || result.stdout).toBe(0);
-    const readInstalled = (name: string) =>
-      fs.readFile(path.join(stateDir, "skills", "aiq-deploy", name), "utf8");
-    await expect(readInstalled("SKILL.md")).resolves.toContain("# AIQ Deploy");
-    await expect(readInstalled("skill-card.md")).resolves.toContain("# Card");
-    await expect(readInstalled("other/SKILL.md")).rejects.toThrow();
-    expect(telemetryBodies, `Install requests: ${requestLog.join(", ")}`).toHaveLength(1);
-    expect(telemetryBodies[0]).toMatchObject({
-      event: "install",
-      slug: "aiq-deploy",
-      ownerHandle: "demo-owner",
-      version: commit,
-    });
-  } finally {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
+      expect(result.status, result.stderr || result.stdout).toBe(0);
+      const readInstalled = (name: string) =>
+        fs.readFile(path.join(stateDir, "skills", "aiq-deploy", name), "utf8");
+      await expect(readInstalled("SKILL.md")).resolves.toContain("# AIQ Deploy");
+      await expect(readInstalled("skill-card.md")).resolves.toContain("# Card");
+      await expect(readInstalled("other/SKILL.md")).rejects.toThrow();
+      expect(telemetryBodies, `Install requests: ${requestLog.join(", ")}`).toHaveLength(1);
+      expect(telemetryBodies[0]).toMatchObject({
+        event: "install",
+        slug: "aiq-deploy",
+        ownerHandle: "demo-owner",
+        version: commit,
+      });
+    },
+  );
 }, 30_000);

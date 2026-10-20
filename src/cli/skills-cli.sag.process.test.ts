@@ -26,16 +26,10 @@ async function createSagCliFixture(enabled?: boolean) {
   fs.writeFileSync(path.join(binDir, process.platform === "win32" ? "sag.cmd" : "sag"), "", {
     mode: 0o755,
   });
+  const workspace = path.join(root, "workspace");
   const config = {
-    gateway: {
-      mode: "local",
-      port: await getFreePort(),
-      auth: { mode: "token", token: "sag-fixture-token" },
-    },
-    agents: {
-      ownership: "explicit",
-      entries: { main: { workspace: path.join(root, "workspace") } },
-    },
+    gateway: { mode: "local", port: await getFreePort(), auth: { mode: "token", token: "test" } },
+    agents: { ownership: "explicit", entries: { main: { workspace } } },
     skills: {
       allowBundled: ["sag"],
       ...(enabled === undefined ? {} : { entries: { sag: { enabled } } }),

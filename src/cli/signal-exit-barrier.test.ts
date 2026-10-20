@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import {
   exitAfterSignalExitBarriers,
   registerSignalExitBarrier,
@@ -96,11 +97,7 @@ it.skipIf(process.platform === "win32").each([
   const root = directories.make("cli-signal-owner-");
   const result = spawnSync(
     process.execPath,
-    [
-      "--import",
-      import.meta.resolve("tsx"),
-      "--input-type=module",
-      "-e",
+    createNodeEvalArgs(
       `import { once } from 'node:events';
          import { installCliSignalExitHandlers, registerSignalExitBarrier } from ${JSON.stringify(new URL("./signal-exit-barrier.ts", import.meta.url).href)};
          installCliSignalExitHandlers();
@@ -124,7 +121,8 @@ it.skipIf(process.platform === "win32").each([
            });
          }
          process.kill(process.pid, ${JSON.stringify(signal)});`,
-    ],
+      { imports: [import.meta.resolve("tsx")], evalFlag: "-e" },
+    ),
     {
       encoding: "utf8",
       timeout: 30_000,

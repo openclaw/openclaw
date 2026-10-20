@@ -4,23 +4,11 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { defaultRuntime } from "../runtime.js";
+import * as gatewayRpc from "./gateway-rpc.js";
 import { registerSkillsLibraryCli } from "./skills-library-cli.js";
 
-const { call, error, exit } = vi.hoisted(() => ({
-  call: vi.fn<
-    (method: string, opts: unknown, params: Record<string, unknown>) => Promise<unknown>
-  >(),
-  error: vi.fn(),
-  exit: vi.fn(),
-}));
-vi.mock("./gateway-rpc.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./gateway-rpc.js")>()),
-  callGatewayFromCliWithTransport: call,
-}));
-vi.mock("../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../runtime.js")>()),
-  defaultRuntime: { log: vi.fn(), error, exit, writeJson: vi.fn(), writeStdout: vi.fn() },
-}));
+const rpc = () => vi.mocked(gatewayRpc.callGatewayFromCliWithTransport);
 
 async function parseLibraryInput(input: string, zip = false) {
   const program = new Command().exitOverride();
@@ -31,35 +19,33 @@ async function parseLibraryInput(input: string, zip = false) {
   );
 }
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    vi.restoreAllMocks();
-    syncBuiltinESMExports();
-    cleanup();
-  }),
-);
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  vi.restoreAllMocks();
+  syncBuiltinESMExports();
+});
 const MIB = 1024 * 1024;
 
 beforeEach(() => {
-  call.mockReset().mockResolvedValue({ state: "published" });
-  error.mockReset();
-  exit.mockReset();
+  vi.spyOn(gatewayRpc, "callGatewayFromCliWithTransport").mockResolvedValue({ state: "published" });
+  for (const method of ["error", "exit", "writeJson"] as const) {
+    vi.spyOn(defaultRuntime, method).mockImplementation(() => {});
+  }
 });
 
 function inputFixture() {
   const directory = tempDirs.make("skills-library-input-");
-  const write = async (name: string, data: string | Buffer) => {
+  const write = (name: string, data: string | Buffer, mode?: number) => {
     const file = path.join(directory, name);
-    await fs.writeFile(file, data);
-    return file;
+    return fs.writeFile(file, data, { mode }).then(() => file);
   };
   return { directory, write };
 }
 
 function expectRejectedInput(expected: RegExp) {
-  expect(error).toHaveBeenCalledWith(expect.stringMatching(expected));
-  expect(exit).toHaveBeenCalledWith(1);
-  expect(call).not.toHaveBeenCalled();
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringMatching(expected));
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  expect(rpc()).not.toHaveBeenCalled();
 }
 
 function mutateBeforeFileRead(target: string, mutate: () => Promise<void>, beforeOpen = false) {
@@ -91,32 +77,30 @@ it("keeps the 256-file boundary including empty supporting files", async () => {
     await write(`${index}.txt`, "");
   }
   await parseLibraryInput(directory);
-  expect(call.mock.calls[0]?.[2].files).toHaveLength(255);
-  expect(error).not.toHaveBeenCalled();
+  expect(rpc().mock.calls[0]?.[2]).toHaveProperty("files.length", 255);
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
 
   await write("extra.txt", "");
-  call.mockClear();
+  rpc().mockClear();
   await parseLibraryInput(directory);
   expectRejectedInput(/256-file limit/);
 });
 
 it("preserves hardlinks, ancestor symlinks, and executable metadata", async () => {
-  const directory = tempDirs.make("skills-library-aliases-");
-  const parent = path.join(directory, "parent");
-  const bundle = path.join(parent, "bundle");
+  const { directory, write } = inputFixture();
+  const bundle = path.join(directory, "parent", "bundle");
   const alias = path.join(directory, "alias");
   await fs.mkdir(bundle, { recursive: true });
-  await fs.symlink(parent, alias, "junction");
+  await fs.symlink(path.dirname(bundle), alias, "junction");
   await fs.writeFile(path.join(bundle, "SKILL.md"), "skill\r\n");
-  const original = path.join(directory, "original.bin");
-  await fs.writeFile(original, Buffer.from([0, 255, 13, 10]), { mode: 0o755 });
+  const original = await write("original.bin", Buffer.from([0, 255, 13, 10]), 0o755);
   await fs.link(original, path.join(bundle, "linked.bin"));
 
   await parseLibraryInput(path.join(alias, "bundle"));
 
-  expect(error).not.toHaveBeenCalled();
-  expect(call.mock.calls[0]?.[2].content).toBe("skill\r\n");
-  expect(call.mock.calls[0]?.[2].files).toEqual([
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  expect(rpc().mock.calls[0]?.[2]).toHaveProperty("content", "skill\r\n");
+  expect(rpc().mock.calls[0]?.[2]).toHaveProperty("files", [
     {
       path: "linked.bin",
       content: "AP8NCg==",
