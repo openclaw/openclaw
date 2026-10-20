@@ -314,10 +314,10 @@ export function createAgentEventAuditRecorder(options: {
   };
   const settleTerminal = (runInstance: string, finish: AgentRunFinishedAuditEventInput) => {
     const start = bufferedStarts.get(runInstance);
-    bufferedStarts.delete(runInstance);
     clearPending(runInstance);
     openRunInstances.delete(runInstance);
     if (start ? writer.recordRun(start, finish) : writer.record(finish)) {
+      bufferedStarts.delete(runInstance);
       rememberSettled(runInstance);
     }
   };

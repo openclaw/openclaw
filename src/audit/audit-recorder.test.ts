@@ -113,6 +113,34 @@ describe("message audit recorder", () => {
 });
 
 describe("buffered agent audit starts", () => {
+  it("retains the original start when a rejected pair settles after capacity returns", async () => {
+    const inputs: AuditEventInput[] = [];
+    const writer = captureWriter(inputs);
+    let accepting = false;
+    const recorder = createAgentEventAuditRecorder({
+      writer: {
+        ...writer,
+        recordRun: (start, finish) => accepting && writer.recordRun(start, finish),
+      },
+      getConfig: () => ({}),
+    });
+    try {
+      recorder.record(runEvent("rejected"));
+      recorder.record(runEvent("rejected", 2, "end"));
+      expect(inputs).toEqual([]);
+      accepting = true;
+      recorder.record(runEvent("rejected", 3, "end"));
+      recorder.record(runEvent("rejected", 4, "end"));
+      await recorder.stop();
+      expect(inputs.map(({ action, sourceSequence }) => ({ action, sourceSequence }))).toEqual([
+        { action: "agent.run.started", sourceSequence: 1 },
+        { action: "agent.run.finished", sourceSequence: 3 },
+      ]);
+    } finally {
+      await recorder.stop();
+    }
+  });
+
   it("flushes the oldest bounded start without duplicating it on retry, then drains unmatched starts", async () => {
     const inputs: AuditEventInput[] = [];
     const recorder = createAgentEventAuditRecorder({

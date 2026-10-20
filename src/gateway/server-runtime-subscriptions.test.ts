@@ -110,6 +110,7 @@ vi.mock("../config/io.js", () => ({
 vi.mock("../audit/audit-recorder.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../audit/audit-recorder.js")>();
   return {
+    ...actual,
     createAuditEventRecorder: (options: Parameters<typeof actual.createAuditEventRecorder>[0]) => {
       auditTestState.created += 1;
       return actual.createAuditEventRecorder({
