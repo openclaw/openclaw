@@ -1,28 +1,26 @@
-// Xai tests cover stt plugin behavior.
+import type { AudioTranscriptionRequest } from "openclaw/plugin-sdk/media-understanding";
+import type { postTranscriptionRequest } from "openclaw/plugin-sdk/provider-http";
 import { describe, expect, it, vi } from "vitest";
 import { buildXaiMediaUnderstandingProvider } from "./stt.js";
 
 const { postTranscriptionRequestMock } = vi.hoisted(() => ({
   postTranscriptionRequestMock: vi.fn(
-    async (_params: {
-      headers: Headers;
-      body: BodyInit;
-      url: string;
-      timeoutMs?: number;
-      auditContext?: string;
-    }) => ({
+    async (_params: Parameters<typeof postTranscriptionRequest>[0]) => ({
       response: new Response(JSON.stringify({ text: "hello from audio" }), { status: 200 }),
       release: vi.fn(),
     }),
   ),
 }));
 
-function requireLastPostTranscriptionCall() {
-  const params = postTranscriptionRequestMock.mock.calls.at(-1)?.[0];
-  if (!params) {
-    throw new Error("Expected transcription request params");
-  }
-  return params;
+function transcribeAudio(overrides: Partial<AudioTranscriptionRequest> = {}) {
+  return buildXaiMediaUnderstandingProvider().transcribeAudio({
+    buffer: Buffer.from("audio-bytes"),
+    fileName: "sample.wav",
+    mime: "audio/wav",
+    apiKey: "xai-key",
+    timeoutMs: 1000,
+    ...overrides,
+  });
 }
 
 vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
@@ -35,12 +33,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => {
 
 describe("xai stt", () => {
   it("posts audio files to the xAI STT endpoint", async () => {
-    const provider = buildXaiMediaUnderstandingProvider();
-    const result = await provider.transcribeAudio?.({
-      buffer: Buffer.from("audio-bytes"),
-      fileName: "sample.wav",
-      mime: "audio/wav",
-      apiKey: "xai-key",
+    const result = await transcribeAudio({
       baseUrl: "https://api.x.ai/v1/",
       model: "grok-4.3",
       language: "en",
@@ -49,10 +42,15 @@ describe("xai stt", () => {
     });
 
     expect(result).toEqual({ text: "hello from audio" });
-    const call = requireLastPostTranscriptionCall();
-    expect(call.url).toBe("https://api.x.ai/v1/stt");
-    expect(call.timeoutMs).toBe(10_000);
-    expect(call.auditContext).toBe("xai stt");
+    const call = postTranscriptionRequestMock.mock.lastCall?.[0];
+    if (!call) {
+      throw new Error("Expected transcription request params");
+    }
+    expect(call).toMatchObject({
+      url: "https://api.x.ai/v1/stt",
+      timeoutMs: 10_000,
+      auditContext: "xai stt",
+    });
     expect(call.headers.get("authorization")).toBe("Bearer xai-key");
     expect(call.body).toBeInstanceOf(FormData);
     const form = call.body as FormData;
@@ -76,15 +74,7 @@ describe("xai stt", () => {
         release,
       });
 
-      await expect(
-        buildXaiMediaUnderstandingProvider().transcribeAudio!({
-          buffer: Buffer.from("audio-bytes"),
-          fileName: "sample.wav",
-          mime: "audio/wav",
-          apiKey: "xai-key",
-          timeoutMs: 1000,
-        }),
-      ).resolves.toEqual({ text: text.trim() });
+      await expect(transcribeAudio()).resolves.toEqual({ text: text.trim() });
       expect(release).toHaveBeenCalledOnce();
     },
   );
@@ -108,15 +98,7 @@ describe("xai stt", () => {
       release,
     });
 
-    await expect(
-      buildXaiMediaUnderstandingProvider().transcribeAudio!({
-        buffer: Buffer.from("audio-bytes"),
-        fileName: "sample.wav",
-        mime: "audio/wav",
-        apiKey: "xai-key",
-        timeoutMs: 1000,
-      }),
-    ).rejects.toThrow(error);
+    await expect(transcribeAudio()).rejects.toThrow(error);
     expect(release).toHaveBeenCalledOnce();
   });
 

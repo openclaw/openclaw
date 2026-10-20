@@ -4,8 +4,8 @@ import {
   requestPreparedOpenAIResponsesCompaction,
 } from "@openclaw/ai/transports";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import type { AssistantMessage, Context, Model } from "openclaw/plugin-sdk/llm";
-import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapXaiProviderStream } from "./stream.js";
 
@@ -38,8 +38,6 @@ const model = {
   maxTokens: 8_192,
 } satisfies Model<"openai-responses">;
 
-const usage = createZeroUsageFixture();
-
 function wrapResponses(options: { fastMode?: boolean; clientVersion?: string }): StreamFn {
   const wrapped = wrapXaiProviderStream(
     {
@@ -52,6 +50,24 @@ function wrapResponses(options: { fastMode?: boolean; clientVersion?: string }):
     throw new Error("expected xAI stream wrapper");
   }
   return wrapped;
+}
+
+async function capturePayload(
+  streamFn: StreamFn,
+  targetModel: Model<"openai-responses">,
+  context: Context,
+  options: NonNullable<Parameters<StreamFn>[2]>,
+) {
+  let captured: Record<string, unknown> | undefined;
+  const stream = await streamFn(targetModel, context, {
+    ...options,
+    onPayload: (payload) => {
+      captured = structuredClone(payload as Record<string, unknown>);
+      throw new Error("stop after request payload capture");
+    },
+  });
+  await stream.result();
+  return captured;
 }
 
 beforeEach(() => {
@@ -67,16 +83,12 @@ beforeEach(() => {
 describe("xAI server compaction request preparation", () => {
   it("compacts and replays through the legacy fast-mode wrapper", async () => {
     const streamFn = wrapResponses({ fastMode: true });
-    const owner: AssistantMessage = {
-      role: "assistant",
+    const owner = makeAgentAssistantMessage({
       content: [{ type: "text", text: "remembered" }],
-      api: "openai-responses",
       provider: "xai",
       model: "grok-4-fast",
-      usage,
-      stopReason: "stop",
       timestamp: 2,
-    };
+    });
     const context: Context = {
       systemPrompt: "Retain the conversation.",
       messages: [{ role: "user", content: "Remember NORTH-COPPER-17.", timestamp: 1 }, owner],
@@ -100,35 +112,21 @@ describe("xAI server compaction request preparation", () => {
       compacted.replayMetadata,
     );
 
-    let replayPayload: Record<string, unknown> | undefined;
-    const replayStream = await Promise.resolve(
-      streamFn(
-        model,
-        {
-          ...context,
-          messages: [
-            ...context.messages,
-            { role: "user", content: "What was the code?", timestamp: 3 },
-          ],
-        },
-        {
-          apiKey: "test-key",
-          sessionId: "session-1",
-          onPayload: (payload) => {
-            replayPayload = structuredClone(payload as Record<string, unknown>);
-            throw new Error("stop after replay payload capture");
-          },
-        },
-      ),
+    const replayPayload = await capturePayload(
+      streamFn,
+      model,
+      {
+        ...context,
+        messages: [
+          ...context.messages,
+          { role: "user", content: "What was the code?", timestamp: 3 },
+        ],
+      },
+      { apiKey: "test-key", sessionId: "session-1" },
     );
-    await replayStream.result();
 
     expect(replayPayload?.model).toBe("grok-4-fast");
-    // The compact endpoint (a separate request, asserted above) still needs
-    // the system prompt embedded in its own input[0]. This replay is the
-    // normal streaming turn that follows it, on xAI's main route -- which
-    // carries the system prompt via top-level `instructions` instead, so it
-    // no longer appears in `input` at all.
+    // Normal replay carries the system prompt in instructions, not compaction input.
     expect(replayPayload?.instructions).toBe("Retain the conversation.");
     expect(replayPayload?.input).toEqual([
       expect.objectContaining({ type: "compaction", encrypted_content: "opaque" }),
@@ -156,15 +154,7 @@ describe("xAI server compaction request preparation", () => {
     await requestPreparedOpenAIResponsesCompaction(streamFn, oauthModel, context, options);
     const compactHeaders = sdkState.clients[0]?.defaultHeaders;
 
-    const normalStream = await Promise.resolve(
-      streamFn(oauthModel, context, {
-        ...options,
-        onPayload: () => {
-          throw new Error("stop after normal request preparation");
-        },
-      }),
-    );
-    await normalStream.result();
+    await capturePayload(streamFn, oauthModel, context, options);
     const normalHeaders = sdkState.clients[1]?.defaultHeaders;
 
     expect(compactHeaders).toEqual(normalHeaders);

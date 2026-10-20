@@ -3,8 +3,15 @@ import { describe, expect, it, vi } from "vitest";
 import {
   capabilityHost,
   loadLazyProviders,
-  runtimeMocks,
+  runtimeMocks as m,
 } from "./lazy-capability-providers.test-support.js";
+
+async function createSession() {
+  const lazy = await loadLazyProviders();
+  return lazy.createLazyXaiRealtimeTranscriptionProvider(capabilityHost).createSession({
+    providerConfig: {},
+  });
+}
 
 describe("xAI lazy capability providers", () => {
   it("keeps heavy builders unloaded until their capability methods run", async () => {
@@ -19,12 +26,12 @@ describe("xAI lazy capability providers", () => {
 
     expect(
       [
-        runtimeMocks.buildImageProvider,
-        runtimeMocks.buildMediaProvider,
-        runtimeMocks.buildVideoProvider,
-        runtimeMocks.buildSpeechProvider,
-        runtimeMocks.buildTranscriptionProvider,
-        runtimeMocks.buildVoiceProvider,
+        m.buildImageProvider,
+        m.buildMediaProvider,
+        m.buildVideoProvider,
+        m.buildSpeechProvider,
+        m.buildTranscriptionProvider,
+        m.buildVoiceProvider,
       ].map((mock) => mock.mock.calls.length),
     ).toEqual([0, 0, 0, 0, 0, 0]);
     expect(transcription.label).toBe("xAI Realtime Transcription");
@@ -36,22 +43,19 @@ describe("xAI lazy capability providers", () => {
     await speech.synthesize({} as never);
     await speech.listVoices?.({} as never);
 
-    expect(runtimeMocks.buildImageProvider).toHaveBeenCalledOnce();
-    expect(runtimeMocks.buildMediaProvider).toHaveBeenCalledOnce();
-    expect(runtimeMocks.buildVideoProvider).toHaveBeenCalledOnce();
-    expect(runtimeMocks.buildSpeechProvider).toHaveBeenCalledOnce();
-    expect(runtimeMocks.generateImage).toHaveBeenCalledOnce();
-    expect(runtimeMocks.transcribeAudio).toHaveBeenCalledOnce();
-    expect(runtimeMocks.generateVideo).toHaveBeenCalledOnce();
-    expect(runtimeMocks.synthesize).toHaveBeenCalledOnce();
-    expect(runtimeMocks.listVoices).toHaveBeenCalledOnce();
+    expect(m.buildImageProvider).toHaveBeenCalledOnce();
+    expect(m.buildMediaProvider).toHaveBeenCalledOnce();
+    expect(m.buildVideoProvider).toHaveBeenCalledOnce();
+    expect(m.buildSpeechProvider).toHaveBeenCalledOnce();
+    expect(m.generateImage).toHaveBeenCalledOnce();
+    expect(m.transcribeAudio).toHaveBeenCalledOnce();
+    expect(m.generateVideo).toHaveBeenCalledOnce();
+    expect(m.synthesize).toHaveBeenCalledOnce();
+    expect(m.listVoices).toHaveBeenCalledOnce();
   });
 
   it("keeps the newest transcription audio ordered while the runtime loads", async () => {
-    const lazy = await loadLazyProviders();
-    const session = lazy.createLazyXaiRealtimeTranscriptionProvider(capabilityHost).createSession({
-      providerConfig: {},
-    });
+    const session = await createSession();
     const first = Buffer.alloc(1024 * 1024, 0x01);
     const second = Buffer.alloc(1024 * 1024, 0x02);
     const third = Buffer.alloc(1024 * 1024, 0x03);
@@ -61,33 +65,27 @@ describe("xAI lazy capability providers", () => {
     session.sendAudio(third);
     await session.connect();
 
-    expect(runtimeMocks.buildTranscriptionProvider).toHaveBeenCalledOnce();
-    const forwardedAudio = runtimeMocks.transcriptionSendAudio.mock.calls.map(([audio]) => audio);
-    expect(forwardedAudio).toHaveLength(2);
-    for (const [index, expected] of [second, third].entries()) {
-      const audio = forwardedAudio[index];
-      expect(Buffer.isBuffer(audio) && audio.equals(expected)).toBe(true);
-    }
-    expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledOnce();
-    expect(runtimeMocks.transcriptionConnect.mock.invocationCallOrder[0]).toBeLessThan(
-      runtimeMocks.transcriptionSendAudio.mock.invocationCallOrder[0]!,
+    expect(m.buildTranscriptionProvider).toHaveBeenCalledOnce();
+    const forwarded = m.transcriptionSendAudio.mock.calls.map(([audio]) => audio);
+    expect(forwarded.every(Buffer.isBuffer)).toBe(true);
+    expect(forwarded).toEqual([second, third]);
+    expect(m.transcriptionConnect).toHaveBeenCalledOnce();
+    expect(m.transcriptionConnect.mock.invocationCallOrder[0]).toBeLessThan(
+      m.transcriptionSendAudio.mock.invocationCallOrder[0]!,
     );
   });
 
   it("closes a transcription session that finishes loading after the wrapper closes", async () => {
-    const lazy = await loadLazyProviders();
-    const session = lazy.createLazyXaiRealtimeTranscriptionProvider(capabilityHost).createSession({
-      providerConfig: {},
-    });
+    const session = await createSession();
 
     const connectPromise = session.connect();
     session.close();
     session.close();
     await connectPromise;
 
-    expect(runtimeMocks.createTranscriptionSession).toHaveBeenCalledOnce();
-    expect(runtimeMocks.transcriptionConnect).not.toHaveBeenCalled();
-    expect(runtimeMocks.transcriptionClose).toHaveBeenCalledOnce();
+    expect(m.createTranscriptionSession).toHaveBeenCalledOnce();
+    expect(m.transcriptionConnect).not.toHaveBeenCalled();
+    expect(m.transcriptionClose).toHaveBeenCalledOnce();
   });
 
   it("reopens transcription after close without replaying discarded audio", async () => {
@@ -96,7 +94,7 @@ describe("xAI lazy capability providers", () => {
     const events: string[] = [];
     let connectCount = 0;
     let providerClosed = false;
-    runtimeMocks.transcriptionConnect.mockImplementation(() => {
+    m.transcriptionConnect.mockImplementation(() => {
       providerClosed = false;
       connectCount += 1;
       if (connectCount === 1) {
@@ -107,19 +105,16 @@ describe("xAI lazy capability providers", () => {
         events.push("connect-settle");
       });
     });
-    runtimeMocks.transcriptionClose.mockImplementation(() => {
+    m.transcriptionClose.mockImplementation(() => {
       providerClosed = true;
     });
-    runtimeMocks.transcriptionSendAudio.mockImplementation((audio: Buffer) => {
+    m.transcriptionSendAudio.mockImplementation((audio: Buffer) => {
       events.push(`${providerClosed ? "drop" : "audio"}:${audio[0]}`);
       if (!providerClosed) {
         forwarded.push(audio);
       }
     });
-    const lazy = await loadLazyProviders();
-    const session = lazy.createLazyXaiRealtimeTranscriptionProvider(capabilityHost).createSession({
-      providerConfig: {},
-    });
+    const session = await createSession();
     const first = Buffer.from([0x01]);
     const discarded = Buffer.from([0x02]);
     const droppedByLimit = Buffer.alloc(1024 * 1024, 0x03);
@@ -138,10 +133,10 @@ describe("xAI lazy capability providers", () => {
     session.sendAudio(droppedByLimit);
     session.sendAudio(retainedFirst);
     session.sendAudio(retainedSecond);
-    await vi.waitFor(() => expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(m.transcriptionConnect).toHaveBeenCalledTimes(2));
     session.sendAudio(live);
 
-    expect(runtimeMocks.transcriptionClose).toHaveBeenCalledOnce();
+    expect(m.transcriptionClose).toHaveBeenCalledOnce();
     expect(forwarded.map((audio) => [audio[0], audio.byteLength])).toEqual([
       [1, 1],
       [4, 1024 * 1024],
@@ -159,16 +154,13 @@ describe("xAI lazy capability providers", () => {
     const first = createDeferred<void>();
     const second = createDeferred<void>();
     const started = createDeferred<void>();
-    runtimeMocks.transcriptionConnect
+    m.transcriptionConnect
       .mockImplementationOnce(() => {
         started.resolve();
         return first.promise;
       })
       .mockImplementationOnce(() => second.promise);
-    const lazy = await loadLazyProviders();
-    const session = lazy.createLazyXaiRealtimeTranscriptionProvider(capabilityHost).createSession({
-      providerConfig: {},
-    });
+    const session = await createSession();
     const connecting = session.connect();
     await started.promise;
     session.close();
@@ -177,12 +169,12 @@ describe("xAI lazy capability providers", () => {
     session.sendAudio(audio);
     try {
       await vi.dynamicImportSettled();
-      expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledTimes(2);
-      expect(runtimeMocks.transcriptionSendAudio).toHaveBeenCalledWith(audio);
+      expect(m.transcriptionConnect).toHaveBeenCalledTimes(2);
+      expect(m.transcriptionSendAudio).toHaveBeenCalledWith(audio);
       first.resolve();
       await connecting;
       const joined = session.connect();
-      expect(runtimeMocks.transcriptionConnect).toHaveBeenCalledTimes(2);
+      expect(m.transcriptionConnect).toHaveBeenCalledTimes(2);
       second.resolve();
       await Promise.all([reconnecting, joined]);
     } finally {

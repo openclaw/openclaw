@@ -1,4 +1,3 @@
-// Xai tests cover onboard plugin behavior.
 import {
   resolveAgentModelPrimaryValue,
   type ModelProviderConfig,
@@ -31,29 +30,15 @@ describe("xai onboard", () => {
       modelName: "Custom",
     });
     const xaiProvider = legacy.models?.providers?.xai;
-    if (!xaiProvider) {
+    const template = xaiProvider?.models[0];
+    if (!xaiProvider || !template) {
       throw new Error("expected xAI provider fixture");
     }
     xaiProvider.models.push(
+      { ...template, id: "grok-3", name: "Grok 3" },
+      { ...template, id: "grok-code-fast-1", name: "Grok Code Fast 1", reasoning: true },
       {
-        id: "grok-3",
-        name: "Grok 3",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1000,
-        maxTokens: 100,
-      },
-      {
-        id: "grok-code-fast-1",
-        name: "Grok Code Fast 1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 1000,
-        maxTokens: 100,
-      },
-      {
+        ...template,
         id: "grok-4.20-beta-latest-reasoning",
         name: "Custom Moving Grok 4.20",
         reasoning: true,
@@ -65,21 +50,19 @@ describe("xai onboard", () => {
     );
 
     const cfg = applyXaiProviderConfig(legacy);
-
-    expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
-    expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
-    expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
-    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual([
+    const provider = cfg.models?.providers?.xai;
+    expect(provider?.baseUrl).toBe("https://api.x.ai/v1");
+    expect(provider?.api).toBe("openai-responses");
+    expect(provider?.apiKey).toBe("old-key");
+    expect(provider?.models.map((m) => m.id)).toEqual([
       "custom-model",
       "grok-3",
       "grok-code-fast-1",
       "grok-4.20-beta-latest-reasoning",
     ]);
-    expect(
-      cfg.models?.providers?.xai?.models.find(
-        (model) => model.id === "grok-4.20-beta-latest-reasoning",
-      )?.name,
-    ).toBe("Custom Moving Grok 4.20");
+    expect(provider?.models.find((m) => m.id === "grok-4.20-beta-latest-reasoning")?.name).toBe(
+      "Custom Moving Grok 4.20",
+    );
   });
 
   it("fills replace mode with the curated models newest first", () => {

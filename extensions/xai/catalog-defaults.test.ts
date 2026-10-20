@@ -39,38 +39,16 @@ it("preserves the existing primary during OAuth setup", () => {
   });
 });
 
+const proxyUrl = "https://cli-chat-proxy.grok.com/v1";
+const apiUrl = "https://api.x.ai/v1";
 it.each([
-  {
-    label: "OAuth",
-    mode: "oauth" as const,
-    baseUrl: undefined,
-    expectedUrl: "https://cli-chat-proxy.grok.com/v1",
-    expectedAuth: "oauth",
-  },
-  {
-    label: "subscription token",
-    mode: "token" as const,
-    baseUrl: "https://cli-chat-proxy.grok.com/v1",
-    expectedUrl: "https://cli-chat-proxy.grok.com/v1",
-    expectedAuth: "token",
-  },
-  {
-    label: "API token",
-    mode: "token" as const,
-    baseUrl: "https://api.x.ai/v1",
-    expectedUrl: "https://api.x.ai/v1",
-    expectedAuth: undefined,
-  },
-  {
-    label: "API key",
-    mode: "api_key" as const,
-    baseUrl: undefined,
-    expectedUrl: "https://api.x.ai/v1",
-    expectedAuth: undefined,
-  },
-])(
-  "keeps the static catalog on the selected $label route",
-  async ({ mode, baseUrl, expectedUrl, expectedAuth }) => {
+  ["oauth", undefined, proxyUrl, "oauth"],
+  ["token", proxyUrl, proxyUrl, "token"],
+  ["token", apiUrl, apiUrl, undefined],
+  ["api_key", undefined, apiUrl, undefined],
+] as const)(
+  "keeps the static catalog on the selected %s route (%s)",
+  async (mode, baseUrl, expectedUrl, expectedAuth) => {
     const pluginProvider = await registerSingleProviderPlugin(plugin);
     const result = await pluginProvider.staticCatalog?.run({
       config: baseUrl ? { models: { providers: { xai: { baseUrl, models: [] } } } } : {},
