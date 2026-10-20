@@ -1,16 +1,12 @@
 import { once } from "node:events";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { setTrackedWorkerGcObserver } from "../infra/worker-cpu.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { codeModeNodeInitialization, prepareCodeModeNodeCatalog } from "./code-mode-node-input.js";
 import { CodeModeNodeProgress } from "./code-mode-node-progress.js";
-import type {
-  CodeModeNodeInput,
-  CodeModeWorkerThreadResult,
-  SettledBridgeRequest,
-} from "./code-mode-worker-types.js";
+import type { CodeModeNodeInput, CodeModeWorkerThreadResult } from "./code-mode-worker-types.js";
 
 const initialization = prepareCodeModeNodeCatalog({ catalog: [], namespaces: [] })[
   codeModeNodeInitialization
@@ -25,16 +21,30 @@ const config = {
 };
 
 type Pool = WorkerTaskPool<CodeModeNodeInput, CodeModeWorkerThreadResult<undefined>>;
+function poolFor(workerUrl = resolveRuntimeProcessEntrypointUrl("codeModeNode")): Pool {
+  // A parked cell and its resume must retain custody of the same worker.
+  const pool: Pool = new WorkerTaskPool({ workerUrl, maxWorkers: 1 });
+  onTestFinished(() => pool.close());
+  return pool;
+}
+
 function run(
   pool: Pool,
-  input:
-    | { kind: "exec"; source: string }
-    | { kind: "resume"; settledRequests: SettledBridgeRequest[] },
+  input: string | CodeModeWorkerThreadResult<undefined>,
   progress = new CodeModeNodeProgress(config.maxOutputBytes),
 ) {
   const common = { config, inlineHost: false, progress: progress.buffer };
+  if (typeof input !== "string" && input.status !== "waiting") {
+    throw new Error(JSON.stringify(input));
+  }
   return pool.run(
-    input.kind === "exec" ? { ...common, ...input, initialization } : { ...common, ...input },
+    typeof input === "string"
+      ? { ...common, kind: "exec", source: input, initialization }
+      : {
+          ...common,
+          kind: "resume",
+          settledRequests: input.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })),
+        },
     { timeoutMs: config.timeoutMs },
   );
 }
@@ -63,11 +73,10 @@ it.skipIf(Boolean(process.versions.bun))(
     try {
       for (let index = 0; index < 16; index++) {
         expect(
-          await run(pool, {
-            kind: "exec",
-            source:
-              "const data = Array.from({ length: 10000 }, (_, i) => ({ i })); return data.length;",
-          }),
+          await run(
+            pool,
+            "const data = Array.from({ length: 10000 }, (_, i) => ({ i })); return data.length;",
+          ),
         ).toMatchObject({ status: "completed", value: { json: "10000" } });
       }
       const observed = once(port1, "message");
@@ -91,24 +100,19 @@ it("does not force full collections in a reusable Code Mode worker", async () =>
   const observed = once(port1, "message");
   const pool = gcPool(port2, 128, 4);
   try {
-    const initial = await run(pool, {
-      kind: "exec",
-      source:
-        "const data = new Array(5 * 1024 * 1024).fill(1); await yield_control(); return data.length;",
-    });
-    if (initial.status !== "waiting") {
-      throw new Error(JSON.stringify(initial));
-    }
+    const initial = await run(
+      pool,
+      "const data = new Array(5 * 1024 * 1024).fill(1); await yield_control(); return data.length;",
+    );
+    expect(initial.status).toBe("waiting");
     // Observe the native idle path; natural V8 collections are allowed and are not counted.
     port1.postMessage(null);
     expect(await observed).toEqual([0]);
-    expect(
-      await run(pool, {
-        kind: "resume",
-        settledRequests: initial.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })),
-      }),
-    ).toMatchObject({ status: "completed", value: { json: "5242880" } });
-    expect(await run(pool, { kind: "exec", source: "return 42;" })).toMatchObject({
+    expect(await run(pool, initial)).toMatchObject({
+      status: "completed",
+      value: { json: "5242880" },
+    });
+    expect(await run(pool, "return 42;")).toMatchObject({
       status: "completed",
       value: { json: "42" },
     });
@@ -122,66 +126,34 @@ it("does not force full collections in a reusable Code Mode worker", async () =>
 it.skipIf(process.platform !== "linux")(
   "runs cells without per-evaluation native threads",
   async () => {
-    const pool = new WorkerTaskPool<CodeModeNodeInput, CodeModeWorkerThreadResult<undefined>>({
-      workerUrl: new URL("./code-mode-node.watchdog.test-support.ts", import.meta.url),
-      maxWorkers: 1,
-    });
-    try {
-      for (let index = 0; index < 20; index++) {
-        const result = await run(pool, { kind: "exec", source: "return watchdogThreads();" });
-        expect(result).toMatchObject({
-          status: "completed",
-          value: { kind: "complete", json: "[]" },
-        });
-      }
-    } finally {
-      await pool.close();
+    const pool = poolFor(new URL("./code-mode-node.watchdog.test-support.ts", import.meta.url));
+    for (let index = 0; index < 20; index++) {
+      expect(await run(pool, "return watchdogThreads();")).toMatchObject({
+        status: "completed",
+        value: { kind: "complete", json: "[]" },
+      });
     }
   },
 );
 
 it("publishes resumed output only to its fresh interruption buffer", async () => {
-  const pool = new WorkerTaskPool<CodeModeNodeInput, CodeModeWorkerThreadResult<undefined>>({
-    workerUrl: resolveRuntimeProcessEntrypointUrl("codeModeNode"),
-    // The parked cell belongs to this worker; its resume must retain that custody.
-    maxWorkers: 1,
+  const pool = poolFor();
+  const output = (text: string) => ({
+    count: 1,
+    source: { kind: "complete", json: JSON.stringify([{ type: "text", text }]) },
   });
-  const before = {
-    count: 1,
-    source: { kind: "complete", json: '[{"type":"text","text":"before"}]' },
-  };
-  const after = {
-    count: 1,
-    source: { kind: "complete", json: '[{"type":"text","text":"after"}]' },
-  };
+  const before = output("before");
+  const after = output("after");
   const originalProgress = new CodeModeNodeProgress(config.maxOutputBytes);
   const resumedProgress = new CodeModeNodeProgress(config.maxOutputBytes);
-  try {
-    const initial = await run(
-      pool,
-      {
-        kind: "exec",
-        source:
-          'text("before"); await yield_control(); text("after"); await yield_control(); return 0;',
-      },
-      originalProgress,
-    );
-    if (initial.status !== "waiting") {
-      throw new Error(JSON.stringify(initial));
-    }
-    expect(initial.output).toEqual(before);
-    const resumed = await run(
-      pool,
-      {
-        kind: "resume",
-        settledRequests: initial.pendingRequests.map(({ id }) => ({ id, ok: true, json: "null" })),
-      },
-      resumedProgress,
-    );
-    expect(resumed).toMatchObject({ status: "waiting", output: after });
-    expect(resumedProgress.output()).toEqual(after);
-    expect(originalProgress.output()).toEqual(before);
-  } finally {
-    await pool.close();
-  }
+  const initial = await run(
+    pool,
+    'text("before"); await yield_control(); text("after"); await yield_control(); return 0;',
+    originalProgress,
+  );
+  expect(initial.output).toEqual(before);
+  const resumed = await run(pool, initial, resumedProgress);
+  expect(resumed).toMatchObject({ status: "waiting", output: after });
+  expect(resumedProgress.output()).toEqual(after);
+  expect(originalProgress.output()).toEqual(before);
 });
