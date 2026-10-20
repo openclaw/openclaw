@@ -1,25 +1,22 @@
-import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-outbound";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { MatrixClient } from "../sdk.js";
+import type { MatrixSendResult } from "../send/types.js";
 import { createMatrixDraftController } from "./handler-draft-controller.js";
 import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
 
 const deliveryMocks = vi.hoisted(() => ({
-  deliver: vi.fn(),
+  deliver: vi.fn<typeof import("../send.js").sendMessageMatrix>(),
   edit: vi.fn(async () => "$edited"),
   sendDraft: vi.fn(async () => ({ messageId: "$draft", roomId: "!room:example.org" })),
 }));
 
-vi.mock("./replies.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./replies.js")>()),
-  deliverMatrixReplies: deliveryMocks.deliver,
-}));
-
 vi.mock("../send.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../send.js")>()),
+  sendMessageMatrix: deliveryMocks.deliver,
   editMessageMatrix: deliveryMocks.edit,
   prepareMatrixSingleText: (text: string) => ({
     trimmedText: text.trim(),
@@ -61,13 +58,24 @@ describe("Matrix reasoning delivery failures", () => {
       });
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       const failedSend = new Error("reasoning send failed");
-      const failure = partialDelivery
-        ? createChannelPartialDeliveryError(failedSend, {
-            messageIds: ["$reasoning-chunk"],
-            visibleReplySent: true,
-          })
-        : failedSend;
-      deliveryMocks.deliver.mockRejectedValueOnce(failure);
+      const acceptedReasoning: MatrixSendResult = {
+        messageId: "$reasoning-chunk",
+        primaryMessageId: "$reasoning-chunk",
+        roomId: context.roomId,
+        receipt: {
+          primaryPlatformMessageId: "$reasoning-chunk",
+          platformMessageIds: ["$reasoning-chunk"],
+          parts: [{ platformMessageId: "$reasoning-chunk", kind: "text", index: 0 }],
+          sentAt: 1,
+        },
+        content: "Check the inputs",
+      };
+      deliveryMocks.deliver.mockImplementationOnce(async (_room, _text, options) => {
+        if (partialDelivery) {
+          await options.onDeliveryResult?.(acceptedReasoning);
+        }
+        throw failedSend;
+      });
       const matrix = createMatrixReplyDispatcher({
         ...context,
         draftStream: draft,
@@ -91,7 +99,26 @@ describe("Matrix reasoning delivery failures", () => {
           counts: { block: { delivered: 0, failedAfterSend: 1 } },
         });
         expect(matrix.nonFinalReplyDeliveryFailed()).toBe(true);
-        expect(onError).toHaveBeenCalledExactlyOnceWith(failure, { kind: "block" });
+        expect(onError).toHaveBeenCalledTimes(1);
+        const deliveryError = onError.mock.calls.at(0)?.[0];
+        expect(onError.mock.calls.at(0)?.[1]).toEqual({ kind: "block" });
+        if (partialDelivery) {
+          expect(isChannelPartialDeliveryError(deliveryError)).toBe(true);
+          expect(deliveryError).toMatchObject({
+            cause: failedSend,
+            deliveryResult: {
+              visibleReplySent: true,
+              messageIds: ["$reasoning-chunk"],
+              content: "Check the inputs",
+              receipt: {
+                platformMessageIds: ["$reasoning-chunk"],
+                parts: [{ platformMessageId: "$reasoning-chunk", kind: "text", index: 0 }],
+              },
+            },
+          });
+        } else {
+          expect(deliveryError).toBe(failedSend);
+        }
         expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("reply failed"));
 
         const answer = "Answer prefix with the complete result";
@@ -115,7 +142,14 @@ describe("Matrix reasoning delivery failures", () => {
           answer,
           expect.objectContaining({ live: false }),
         );
-        expect(deliveryMocks.deliver).toHaveBeenCalledTimes(1);
+        expect(deliveryMocks.deliver).toHaveBeenCalledExactlyOnceWith(
+          context.roomId,
+          "Check the inputs",
+          expect.objectContaining({
+            extraContent: { msgtype: "m.notice", "m.mentions": {} },
+            assertDirectAdapterHandoff: expect.any(Function),
+          }),
+        );
       } finally {
         dispatcher.markComplete();
         await dispatcher.waitForIdle();
