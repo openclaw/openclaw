@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import {
   isSessionEntryDataSql,
   observeHostDataSql,
@@ -10,7 +10,7 @@ import {
   withSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { sessionRewindHandlers } from "./sessions-rewind.js";
+import { invokeHandler } from "./sessions-rewind.handler.test-support.js";
 import {
   cfg,
   invokeMessageCut,
@@ -19,7 +19,6 @@ import {
   seedMessageCutSource,
   useMessageCutStorageFixture,
 } from "./sessions-rewind.storage.test-support.js";
-import type { RespondFn } from "./types.js";
 
 useMessageCutStorageFixture();
 
@@ -28,19 +27,9 @@ const authority = { assertCurrent() {}, authorize() {} };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
 
 async function expectBranches(branches: [string, boolean][]) {
-  const method = "sessions.branches.list";
-  const params = { sessionKey };
-  const respond = vi.fn<RespondFn>();
-  await expectDefined(
-    sessionRewindHandlers[method],
-    method,
-  )({
-    req: { type: "req", id: "actor-branches", method, params },
-    params,
-    respond,
+  const respond = await invokeHandler("sessions.branches.list", undefined, {
+    params: { sessionKey },
     context: messageCutContext(),
-    client: null,
-    isWebchatConnect: () => false,
   });
   expect(respond).toHaveBeenCalledWith(
     true,
@@ -53,8 +42,8 @@ async function expectBranches(branches: [string, boolean][]) {
   );
 }
 
-it.each(mutationMethods)("acquires memory history for unbound %s", async (method) => {
-  await withOpenClawTestState({ label: "message-cut-memory-actor" }, async (state) => {
+it.each(mutationMethods)("acquires memory history for unbound %s", (method) =>
+  withOpenClawTestState({ label: "message-cut-memory-actor" }, async (state) => {
     await state.writeConfig(cfg);
     const scope = expectDefined(
       await withSessionActorStorage(
@@ -100,5 +89,5 @@ it.each(mutationMethods)("acquires memory history for unbound %s", async (method
       sql.restore();
       memorySessionActorOwners.closeDatabase(captured);
     }
-  });
-});
+  }),
+);

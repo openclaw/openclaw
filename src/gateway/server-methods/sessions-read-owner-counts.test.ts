@@ -24,23 +24,30 @@ import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   identifiedClient,
   listSessions as readList,
+  profileSessionEntry as profileEntry,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
 
 const listSessions = (params: Parameters<typeof readList>[0]) =>
   readList({ ...params, acceptsSerializedJson: true });
 const actor = (id: string) => ({ type: "human", source: "profile", id }) as const;
-const profileEntry = (sessionId: string, updatedAt: number, profileId: string): SessionEntry => ({
-  sessionId,
-  updatedAt,
-  visibility: "shared",
-  createdActor: actor(profileId),
-});
 
 afterEach(() => vi.restoreAllMocks());
 
-it("counts caller-visible conversations once through direct and delegated work before pagination", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+function startRun(runId: string, sessionKey: string, agentId = "main") {
+  registerAgentRunContext(runId, { sessionKey, agentId, projectSessionActive: true });
+}
+function finishRun(run: ReturnType<typeof createSubagentRunRecord>) {
+  const completed = createSubagentRunRecord({
+    ...run,
+    execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } },
+  });
+  subagentRuns.set(completed.runId, completed);
+  subagentRuns.commitOwnership(completed);
+}
+
+it("counts caller-visible conversations once through direct and delegated work before pagination", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const ada = ensureProfileForEmail("counts-ada@example.test").id;
     const bob = ensureProfileForEmail("counts-bob@example.test").id;
     const context = requestContext({
@@ -106,7 +113,7 @@ it("counts caller-visible conversations once through direct and delegated work b
       [runIds[3], queued, "work"],
       [runIds[4], privateKey, "work"],
     ] as const) {
-      registerAgentRunContext(runId!, { sessionKey: key, agentId, projectSessionActive: true });
+      startRun(runId, key, agentId);
     }
     const releaseWait = registerAgentRunCapacityWait(runIds[3]!, getAgentRunLifecycleGeneration());
     const request: SessionsListParams = {
@@ -158,11 +165,7 @@ it("counts caller-visible conversations once through direct and delegated work b
       clearAgentRunContext(runIds[3]!);
       await expectCounts(8, 0);
 
-      registerAgentRunContext(runIds[0], {
-        sessionKey: visibleChild,
-        agentId: "work",
-        projectSessionActive: true,
-      });
+      startRun(runIds[0], visibleChild, "work");
       const releaseChildWait = registerAgentRunCapacityWait(
         runIds[0],
         getAgentRunLifecycleGeneration(),
@@ -198,26 +201,12 @@ it("counts caller-visible conversations once through direct and delegated work b
       expect(delegated.ownerSessionCounts).toEqual(expected(8, 1));
       subagentRuns.set(grandchildRun.runId, grandchildRun);
       subagentRuns.commitOwnership(grandchildRun);
-      registerAgentRunContext(runIds[0], {
-        sessionKey: idle,
-        agentId: "main",
-        projectSessionActive: true,
-      });
+      startRun(runIds[0], idle, "main");
       await expectCounts(8, 1);
       clearAgentRunContext(runIds[0]);
-      const completedChild = createSubagentRunRecord({
-        ...childRun,
-        execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } },
-      });
-      subagentRuns.set(completedChild.runId, completedChild);
-      subagentRuns.commitOwnership(completedChild);
+      finishRun(childRun);
       await expectCounts(8, 1);
-      const completedGrandchild = createSubagentRunRecord({
-        ...grandchildRun,
-        execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } },
-      });
-      subagentRuns.set(completedGrandchild.runId, completedGrandchild);
-      subagentRuns.commitOwnership(completedGrandchild);
+      finishRun(grandchildRun);
       const selections = vi.spyOn(projection, "selectEntries");
       await expectCounts(8, 0);
       // Retained terminal history is not a candidate for the live running-count facet.
@@ -228,11 +217,7 @@ it("counts caller-visible conversations once through direct and delegated work b
       ).toEqual([]);
       selections.mockRestore();
       // A later child turn has a new execution ID but retains the original parent lineage.
-      registerAgentRunContext(runIds[0], {
-        sessionKey: grandchild,
-        agentId: "work",
-        projectSessionActive: true,
-      });
+      startRun(runIds[0], grandchild, "work");
       await expectCounts(8, 1);
       clearAgentRunContext(runIds[0]);
       await expectCounts(8, 0);
@@ -263,11 +248,10 @@ it("counts caller-visible conversations once through direct and delegated work b
         clearAgentRunContext(runId);
       }
     }
-  });
-});
+  }));
 
-it("keeps the owner summary complete beyond the people facet cap and resolves merged owners", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("keeps the owner summary complete beyond the people facet cap and resolves merged owners", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const context = requestContext({ agents: { entries: { main: {} } } });
     setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const profiles = Array.from(
@@ -301,11 +285,10 @@ it("keeps the owner summary complete beyond the people facet cap and resolves me
     expect(
       await listSessions({ client, context, request: { ...request, involvingMe: true } }),
     ).toMatchObject({ ownerSessionCounts: [{ profileId: profiles[1], open: 2, running: 0 }] });
-  });
-});
+  }));
 
-it("updates personal membership after owner, participant, and archive publications while retaining owner facets", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+it("updates personal membership after owner, participant, and archive publications while retaining owner facets", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
     const ada = ensureProfileForEmail("membership-ada@example.test").id;
     const bob = ensureProfileForEmail("membership-bob@example.test").id;
     const context = requestContext({ agents: { entries: { main: {} } } });
@@ -363,5 +346,4 @@ it("updates personal membership after owner, participant, and archive publicatio
       "agent:main:reassigned",
     ]);
     expect(archived.ownerSessionCounts).toEqual([{ profileId: ada, open: 2, running: 0 }]);
-  });
-});
+  }));

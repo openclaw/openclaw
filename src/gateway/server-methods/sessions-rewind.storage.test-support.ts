@@ -20,8 +20,12 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { sessionRewindHandlers } from "./sessions-rewind.js";
-import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+import {
+  invokeHandler,
+  messageCutContext as createMessageCutContext,
+  messageCutParams,
+} from "./sessions-rewind.handler.test-support.js";
+import type { GatewayRequestHandlerOptions, RespondFn } from "./types.js";
 
 export const cfg = { agents: { entries: { main: {} } } };
 export const mutationMethods = [
@@ -85,21 +89,14 @@ export async function seedMessageCutSource(
   return scope;
 }
 
-export function messageCutContext(): GatewayRequestContext {
-  return {
-    broadcastToConnIds: vi.fn(),
-    getRuntimeConfig: () => cfg,
-    getSessionEventSubscriberConnIds: () => new Set(),
-  } as unknown as GatewayRequestContext;
-}
+export const messageCutContext = () => createMessageCutContext(cfg);
 
 export function mutationParams(method: MutationMethod, sessionKey: string) {
-  return {
+  return messageCutParams(
+    method,
     sessionKey,
-    ...(method === "sessions.branches.switch"
-      ? { leafEntryId: "alternate-user" }
-      : { entryId: "user-2" }),
-  };
+    method === "sessions.branches.switch" ? "alternate-user" : "user-2",
+  );
 }
 
 export function invokeMessageCut(
@@ -114,20 +111,13 @@ export function invokeMessageCut(
 ) {
   const params = mutationParams(method, scope.sessionKey);
   const respond = vi.fn<RespondFn>();
-  const completion = (async () => {
-    await expectDefined(
-      sessionRewindHandlers[method],
-      `${method} handler`,
-    )({
-      req: { type: "req", id: "message-cut-storage", method, params },
-      params,
-      respond,
-      context: messageCutContext(),
-      client: null,
-      isWebchatConnect: () => false,
-      ...options,
-    });
-  })();
+  const completion = invokeHandler(method, undefined, {
+    req: { type: "req", id: "message-cut-storage", method, params },
+    params,
+    respond,
+    context: messageCutContext(),
+    ...options,
+  });
   // Observe rejection immediately while the test controls an earlier queued writer.
   const error = completion.then(
     () => undefined,

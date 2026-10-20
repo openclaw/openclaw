@@ -1,6 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
@@ -20,6 +22,12 @@ import type {
 export const sessionKey = "agent:main:rewind-handler";
 export const sourceSessionId = "rewind-handler-source";
 export const cfg = { agents: { entries: { main: {} } } };
+export function sessionRoleConfig(
+  name: string,
+  definition: GatewayOperatorRoleDefinition,
+): OpenClawConfig {
+  return { gateway: { roles: { default: name, definitions: { [name]: definition } } } };
+}
 
 export function installHarness(
   overrides: Partial<AgentHarness>,
@@ -73,12 +81,21 @@ type MessageCutMethod =
   | "sessions.fork"
   | "sessions.rewind";
 
-function messageCutContext(): GatewayRequestContext {
+export function messageCutContext(config: OpenClawConfig = cfg): GatewayRequestContext {
   return {
     broadcastToConnIds: vi.fn(),
-    getRuntimeConfig: () => cfg,
+    getRuntimeConfig: () => config,
     getSessionEventSubscriberConnIds: () => new Set(),
   } as unknown as GatewayRequestContext;
+}
+
+export function messageCutParams(method: MessageCutMethod, key: string, entryId: string) {
+  if (method === "sessions.branches.list") {
+    return { sessionKey: key };
+  }
+  return method === "sessions.branches.switch"
+    ? { sessionKey: key, leafEntryId: entryId }
+    : { sessionKey: key, entryId };
 }
 
 export async function invokeHandler(
@@ -92,14 +109,7 @@ export async function invokeHandler(
     `${method} handler`,
   )({
     req: { id: `${method}-request` } as never,
-    params: {
-      sessionKey,
-      ...(method === "sessions.branches.switch"
-        ? { leafEntryId: entryId }
-        : method === "sessions.branches.list"
-          ? {}
-          : { entryId }),
-    },
+    params: messageCutParams(method, sessionKey, entryId),
     respond,
     context: messageCutContext(),
     client: null,
@@ -139,19 +149,12 @@ export async function restrictedOperator(
     ...messageCutContext(),
     getRuntimeConfig: () => ({
       ...cfg,
-      gateway: {
-        roles: {
-          default: "guest",
-          definitions: {
-            guest: {
-              sessions: { others: "view" },
-              agents: [agentId],
-              scopes: ["operator.read", "operator.write"],
-              ...(sandbox ? { sandbox } : {}),
-            },
-          },
-        },
-      },
+      ...sessionRoleConfig("guest", {
+        sessions: { others: "view" },
+        agents: [agentId],
+        scopes: ["operator.read", "operator.write"],
+        ...(sandbox ? { sandbox } : {}),
+      }),
     }),
   };
   return { profile, options: { client, context } };
