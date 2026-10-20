@@ -1,8 +1,10 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { navigationDevice } from "./new-session-page.navigation-fixtures.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
+  LOCAL_GIT_WORKSPACE_RESPONSES,
   pollText,
   waitForCommittedChatRoute,
   waitForConfirmModal,
@@ -13,7 +15,7 @@ const suite = createNewSessionPageE2eSuite();
 suite.define(() => {
   it("labels device startup and stops only its session, fencing the late dispatch", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const sessionKey = "agent:main:device-startup";
+      const key = "agent:main:device-startup";
       const now = Date.now();
       const placement = {
         state: "requested",
@@ -21,6 +23,13 @@ suite.define(() => {
         createdAtMs: now,
         updatedAtMs: now,
         stateChangedAtMs: now,
+      };
+      const session = {
+        key,
+        label: "Device startup",
+        kind: "direct",
+        updatedAt: now,
+        placement,
       };
       const gateway = await installMockGateway(page, {
         agentModel: "test-provider/test-model",
@@ -41,36 +50,20 @@ suite.define(() => {
           "environments.list": {
             environments: [
               {
-                id: "node:paired-runner",
-                type: "node",
-                label: "Paired runner",
-                status: "available",
-                sessionHost: true,
+                ...navigationDevice("paired-runner", "Paired runner"),
                 workerSlots: { total: 2, available: 1 },
               },
             ],
             profiles: [],
           },
-          "worktrees.branches": {
-            branches: [{ kind: "local", name: "main" }],
-            defaultBranch: "main",
-            repositoryStatus: "git",
-          },
-          "sessions.create": { key: sessionKey },
+          "worktrees.branches": LOCAL_GIT_WORKSPACE_RESPONSES["worktrees.branches"],
+          "sessions.create": { key },
           "sessions.list": {
             count: 1,
             defaults: {},
             path: "",
             ts: now,
-            sessions: [
-              {
-                key: sessionKey,
-                label: "Device startup",
-                kind: "direct",
-                updatedAt: now,
-                placement,
-              },
-            ],
+            sessions: [session],
           },
           "sessions.describe": { session: { placement } },
           "sessions.reclaim": { ok: true },
@@ -86,11 +79,7 @@ suite.define(() => {
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ agentId: "main", message: "", worktree: true });
       const dispatch = await gateway.waitForRequest("sessions.dispatch");
-      expect(dispatch.params).toEqual({
-        key: sessionKey,
-        agentId: "main",
-        deviceId: "paired-runner",
-      });
+      expect(dispatch.params).toEqual({ key, agentId: "main", deviceId: "paired-runner" });
       await waitForCommittedChatRoute(page);
 
       await page.locator(".chat-pane__placement-chip").click();
@@ -111,7 +100,7 @@ suite.define(() => {
       const confirmation = await waitForConfirmModal(page);
       await confirmation.getByRole("button", { name: "Stop device worker", exact: true }).click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");
-      expect(reclaim.params).toEqual({ key: sessionKey, agentId: "main" });
+      expect(reclaim.params).toEqual({ key, agentId: "main" });
       const stopNotice = page.getByRole("alert").filter({ hasText: "Worker stop requested." });
       const stopped = () =>
         pollText(stopNotice).toContain(

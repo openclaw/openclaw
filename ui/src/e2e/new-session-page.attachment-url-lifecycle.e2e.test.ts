@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
+import { navigationAgents } from "./new-session-page.navigation-fixtures.test-support.ts";
 import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
@@ -14,8 +15,7 @@ type AttachmentUrlProof = {
   created: string[];
   revoked: string[];
   deferNextRead: boolean;
-  deferredReads: number;
-  releaseDeferredReads: () => void;
+  pending: Array<() => void>;
 };
 
 declare global {
@@ -33,18 +33,11 @@ suite.define(() => {
         const createObjectURL = URL.createObjectURL.bind(URL);
         const revokeObjectURL = URL.revokeObjectURL.bind(URL);
         const readAsDataURL = FileReader.prototype.readAsDataURL;
-        const deferredReads: Array<{ blob: Blob; reader: FileReader }> = [];
         const proof: AttachmentUrlProof = {
           created: [],
           revoked: [],
           deferNextRead: false,
-          deferredReads: 0,
-          releaseDeferredReads: () => {
-            for (const { blob, reader } of deferredReads.splice(0)) {
-              readAsDataURL.call(reader, blob);
-            }
-            proof.deferredReads = 0;
-          },
+          pending: [],
         };
         window.attachmentUrlProof = proof;
         URL.createObjectURL = (blob: Blob) => {
@@ -61,25 +54,16 @@ suite.define(() => {
             return readAsDataURL.call(this, blob);
           }
           proof.deferNextRead = false;
-          deferredReads.push({ blob, reader: this });
-          proof.deferredReads = deferredReads.length;
+          proof.pending.push(() => readAsDataURL.call(this, blob));
         };
       });
       await installMockGateway(page, {
         methodResponses: {
-          "agents.list": {
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "writer", name: "Writer" },
-            ],
-          },
+          "agents.list": navigationAgents(["main", "writer"]),
           "sessions.create": { key: "agent:main:preview-cleanup", runStarted: true },
         },
       });
-      const readObjectUrlState = () =>
+      const readUrls = () =>
         page.evaluate(() => {
           const proof = window.attachmentUrlProof;
           const created = new Set(proof.created);
@@ -91,10 +75,10 @@ suite.define(() => {
             unknownRevocations: proof.revoked.filter((url) => !created.has(url)).length,
           };
         });
-      const expectActiveObjectUrls = (active: number) =>
-        expect.poll(readObjectUrlState).toEqual({
+      const expectUrls = (active: number, created?: number) =>
+        expect.poll(readUrls).toEqual({
           active,
-          created: expect.any(Number),
+          created: created ?? expect.any(Number),
           duplicateRevocations: 0,
           unknownRevocations: 0,
         });
@@ -109,7 +93,7 @@ suite.define(() => {
       };
       const remove = async () => {
         await page.getByRole("button", { name: "Remove pixel.png" }).click();
-        await expectActiveObjectUrls(0);
+        await expectUrls(0);
       };
 
       await paste();
@@ -127,31 +111,27 @@ suite.define(() => {
       await navigate("new-session", "?agent=main&catalog=missing");
       await expect
         .poll(() =>
-          page.evaluate(
-            () =>
-              document
-                .querySelector(".new-session-page__select--agent .agent-select__menu")
-                ?.matches(":popover-open") ?? false,
-          ),
+          agentMenu.evaluateAll((menus) => menus.some((menu) => menu.matches(":popover-open"))),
         )
         .toBe(false);
       await pollCount(thumbnails).toBe(0);
-      await expectActiveObjectUrls(0);
+      await expectUrls(0);
 
       await page.evaluate(() => {
         window.attachmentUrlProof.deferNextRead = true;
       });
       await navigate("new-session");
       await composer.waitFor();
-      await expect.poll(() => page.evaluate(() => window.attachmentUrlProof.deferredReads)).toBe(1);
-      const createdBeforeHydration = (await readObjectUrlState()).created;
-      await page.evaluate(() => window.attachmentUrlProof.releaseDeferredReads());
-      await expect.poll(readObjectUrlState).toEqual({
-        active: 1,
-        created: createdBeforeHydration + 1,
-        duplicateRevocations: 0,
-        unknownRevocations: 0,
+      await expect
+        .poll(() => page.evaluate(() => window.attachmentUrlProof.pending.length))
+        .toBe(1);
+      const createdBeforeHydration = (await readUrls()).created;
+      await page.evaluate(() => {
+        for (const read of window.attachmentUrlProof.pending.splice(0)) {
+          read();
+        }
       });
+      await expectUrls(1, createdBeforeHydration + 1);
       await pollCount(thumbnails).toBe(1);
       await remove();
 
@@ -159,7 +139,7 @@ suite.define(() => {
       await waitForCommittedNewSessionDraft(page, "", 1);
       await navigate("chat");
       await page.waitForURL((url) => url.pathname.endsWith("/chat"));
-      await expectActiveObjectUrls(1);
+      await expectUrls(1);
 
       await navigate("new-session");
       await composer.waitFor();
@@ -167,12 +147,12 @@ suite.define(() => {
       await remove();
 
       await paste();
-      await expectActiveObjectUrls(1);
+      await expectUrls(1);
       await page.getByRole("button", { name: "Start session" }).click();
       await page.waitForURL(
         (url) => url.pathname === controlUiSessionPath("agent:main:preview-cleanup"),
       );
-      await expectActiveObjectUrls(0);
+      await expectUrls(0);
     });
   });
 });

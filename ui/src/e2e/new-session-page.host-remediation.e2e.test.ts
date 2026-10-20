@@ -1,6 +1,7 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { scenario } from "./command-palette.test-support.ts";
+import { navigationDevice as device } from "./new-session-page.navigation-fixtures.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -10,83 +11,64 @@ import {
 const suite = createNewSessionPageE2eSuite();
 const availableDevices = (prefix: string, label: string, length: number, withSlots = false) =>
   Array.from({ length }, (_, index) => ({
-    id: `node:${prefix}-${index}`,
-    type: "node",
-    label: `${label} ${index + 1}`,
-    status: "available",
-    sessionHost: true,
+    ...device(`${prefix}-${index}`, `${label} ${index + 1}`),
     ...(withSlots ? { workerSlots: { total: 1, available: 1 } } : {}),
   }));
 const tooltip = (row: Locator) => row.locator("xpath=ancestor::openclaw-tooltip[1]");
 
 suite.define(() => {
-  it.each([1280, 390])(
-    "explains unavailable computers in both selectors at %ipx",
-    async (width) => {
-      const context = await suite.browser.newContext({
+  it.each([1280, 390])("explains unavailable computers in both selectors at %ipx", async (width) =>
+    suite.withPage(
+      {
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width },
         hasTouch: width === 390,
-      });
-      const page = await context.newPage();
-      const fixture = scenario({
-        "projects.list": {
-          projects: [
-            { id: "docs", displayName: "Documentation", repoRoot: "/workspace/docs" },
-            { id: "app", displayName: "Application", repoRoot: "/workspace/app" },
-          ],
-        },
-        "environments.list": {
-          profiles: [],
-          environments: [
-            // Fill the picker so unavailable rows require scrolling on phones.
-            ...availableDevices("available-device", "Additional computer", 12, true),
-            {
-              id: "node:paired-device",
-              type: "node",
-              label: "Paired device",
-              status: "available",
-              sessionHost: false,
-            },
-            {
-              id: "node:offline-device",
-              type: "node",
-              label: "Offline device",
-              status: "unavailable",
-              sessionHost: true,
-            },
-            // Keep the phone inventory overflowing independently of composer placement.
-            ...availableDevices("additional-device", "Additional device", width === 390 ? 12 : 0),
-          ],
-        },
-      });
-      const gateway = await installMockGateway(page, {
-        ...fixture,
-        featureMethods: [...(fixture.featureMethods ?? []), "projects.list"],
-      });
-      const tapRow = async (row: Locator) => {
-        await row.scrollIntoViewIfNeeded();
-        const bounds = await row.boundingBox();
-        expect(bounds).not.toBeNull();
-        await page.touchscreen.tap(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
-      };
-      const revealReason = async (row: Locator) => {
-        expect(await row.getAttribute("aria-disabled")).toBe("true");
-        if (width === 390) {
-          await tapRow(row);
-        } else {
-          // An unscoped Tab can leave the popover and dismiss it before row.focus().
-          await row.focus();
-          expect(await row.evaluate((element) => document.activeElement === element)).toBe(true);
-          await row.press("Enter");
-        }
-        const reason = tooltip(row).getByRole("tooltip");
-        await reason.waitFor({ state: "visible" });
-        return reason;
-      };
+      },
+      async ({ page }) => {
+        const fixture = scenario({
+          "projects.list": {
+            projects: [
+              { id: "docs", displayName: "Documentation", repoRoot: "/workspace/docs" },
+              { id: "app", displayName: "Application", repoRoot: "/workspace/app" },
+            ],
+          },
+          "environments.list": {
+            profiles: [],
+            environments: [
+              ...availableDevices("available-device", "Additional computer", 12, true),
+              device("paired-device", "Paired device", "available", false),
+              device("offline-device", "Offline device", "unavailable"),
+              // Keep the phone inventory overflowing independently of composer placement.
+              ...availableDevices("additional-device", "Additional device", width === 390 ? 12 : 0),
+            ],
+          },
+        });
+        const gateway = await installMockGateway(page, {
+          ...fixture,
+          featureMethods: [...(fixture.featureMethods ?? []), "projects.list"],
+        });
+        const tapRow = async (row: Locator) => {
+          await row.scrollIntoViewIfNeeded();
+          const bounds = await row.boundingBox();
+          expect(bounds).not.toBeNull();
+          await page.touchscreen.tap(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+        };
+        const revealReason = async (row: Locator) => {
+          expect(await row.getAttribute("aria-disabled")).toBe("true");
+          if (width === 390) {
+            await tapRow(row);
+          } else {
+            // An unscoped Tab can leave the popover and dismiss it before row.focus().
+            await row.focus();
+            expect(await row.evaluate((element) => document.activeElement === element)).toBe(true);
+            await row.press("Enter");
+          }
+          const reason = tooltip(row).getByRole("tooltip");
+          await reason.waitFor({ state: "visible" });
+          return reason;
+        };
 
-      try {
         await page.goto(`${suite.server.baseUrl}new`);
         await gateway.waitForRequest("environments.list");
         await openEnvironmentPicker(page);
@@ -150,9 +132,7 @@ suite.define(() => {
           .getByRole("checkbox", { name: /Remember settings for/ })
           .waitFor({ state: "visible" });
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-      } finally {
-        await context.close();
-      }
-    },
+      },
+    ),
   );
 });

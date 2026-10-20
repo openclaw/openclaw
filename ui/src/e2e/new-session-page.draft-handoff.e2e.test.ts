@@ -8,6 +8,7 @@ import {
   createdSessionListResult,
   installMockGateway,
   pollValue,
+  pollCount,
   waitForCommittedNewSessionDraft,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
@@ -32,18 +33,21 @@ suite.define(() => {
     { name: "retyping the same draft", returnEarly: true, replacement: "same" },
   ])("settles only the submitted draft when $name", async ({ returnEarly, replacement }) => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const existingSession = "agent:main:existing-session";
-      const createdSession = "agent:main:submitted-in-background";
       const message = "Send this once, even if I leave the screen";
+      const createdKey = "agent:main:submitted-in-background";
       const gateway = await installMockGateway(page, {
         deferredMethods: ["sessions.create"],
         methodResponses: {
-          "sessions.list": createdSessionListResult(existingSession),
-          "sessions.create": { key: createdSession, runStarted: true, runId: "created-run" },
+          "sessions.list": createdSessionListResult("agent:main:existing-session"),
+          "sessions.create": { key: createdKey, runStarted: true, runId: "created-run" },
         },
       });
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
       const composer = page.locator(".new-session-page__message");
+      const fill = async (text: string) => {
+        await composer.fill(text);
+        await waitForCommittedNewSessionDraft(page, text, ["favicon-32.png"]);
+      };
       await composer.fill(message);
       await attach(page, "favicon-32.png");
       await waitForCommittedNewSessionDraft(page, message, ["favicon-32.png"]);
@@ -61,36 +65,26 @@ suite.define(() => {
       const expected = replacement === "same" ? message : (replacement ?? "");
       if (returnEarly) {
         await pollValue(composer).toBe(message);
-        await page.getByRole("button", { name: "Open image favicon-32.png" }).waitFor();
+        await image(page, "favicon-32.png").waitFor();
         if (replacement) {
-          await composer.fill("Temporary replacement draft");
-          await waitForCommittedNewSessionDraft(page, "Temporary replacement draft", [
-            "favicon-32.png",
-          ]);
-          await composer.fill(expected);
-          await waitForCommittedNewSessionDraft(page, expected, ["favicon-32.png"]);
+          await fill("Temporary replacement draft");
+          await fill(expected);
         }
         await gateway.resolveDeferred("sessions.create");
       }
       await pollValue(composer).toBe(expected);
-      await waitForCommittedNewSessionDraft(
-        page,
-        expected || null,
-        replacement ? ["favicon-32.png"] : 0,
-      );
+      const files = replacement ? ["favicon-32.png"] : 0;
+      await waitForCommittedNewSessionDraft(page, expected || null, files);
       expect(new URL(page.url()).pathname.endsWith("/new")).toBe(true);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
       await page.reload();
       await pollValue(composer).toBe(expected);
-      await expect
-        .poll(() => page.getByRole("button", { name: "Open image favicon-32.png" }).count())
-        .toBe(replacement ? 1 : 0);
+      await pollCount(image(page, "favicon-32.png")).toBe(replacement ? 1 : 0);
     });
   });
 
-  it("lets a newer durable prompt and file beat a stale navigation handoff", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    try {
+  it("lets a newer durable prompt and file beat a stale navigation handoff", async () =>
+    suite.withPage(createControlUiE2eContextOptions(), async ({ context, page: pageA }) => {
       const sessionKey = "agent:main:existing-session";
       const staleText = "stale draft from the first page";
       const durableText = "newer durable draft from the second page";
@@ -101,7 +95,6 @@ suite.define(() => {
         await image(scope, durableFileName).waitFor();
         await expect(image(scope, staleFileName).count()).resolves.toBe(0);
       };
-      const pageA = await context.newPage();
       await installMockGateway(pageA, {
         methodResponses: {
           "sessions.list": createdSessionListResult(sessionKey),
@@ -114,11 +107,9 @@ suite.define(() => {
       await existingSession.waitFor();
       await returnToDraft(pageA);
 
-      const newSessionA = pageA.locator("openclaw-new-session-page");
-      const messageA = newSessionA.locator(".new-session-page__message");
-      await messageA.fill(staleText);
-      await attach(newSessionA, staleFileName);
-      await image(newSessionA, staleFileName).waitFor();
+      await pageA.locator(".new-session-page__message").fill(staleText);
+      await attach(pageA, staleFileName);
+      await image(pageA, staleFileName).waitFor();
 
       await existingSession.click();
       await pageA.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));
@@ -126,30 +117,26 @@ suite.define(() => {
       const pageB = await context.newPage();
       await installMockGateway(pageB);
       await pageB.goto(`${suite.server.baseUrl}new?agent=main`);
-      const newSessionB = pageB.locator("openclaw-new-session-page");
-      const messageB = newSessionB.locator(".new-session-page__message");
+      const messageB = pageB.locator(".new-session-page__message");
       await pollValue(messageB).toBe(staleText);
-      await image(newSessionB, staleFileName).waitFor();
+      await image(pageB, staleFileName).waitFor();
 
       await messageB.fill(durableText);
-      await newSessionB.getByRole("button", { name: `Remove ${staleFileName}` }).click();
-      await attach(newSessionB, durableFileName);
-      await image(newSessionB, durableFileName).waitFor();
+      await pageB.getByRole("button", { name: `Remove ${staleFileName}` }).click();
+      await attach(pageB, durableFileName);
+      await image(pageB, durableFileName).waitFor();
       await waitForCommittedNewSessionDraft(pageB, durableText, [durableFileName]);
       await pageB.reload();
-      await expectDurableDraft(newSessionB);
+      await expectDurableDraft(pageB);
       await pageB.close();
 
       await returnToDraft(pageA);
-      await expectDurableDraft(newSessionA);
+      await expectDurableDraft(pageA);
       await pageA.close();
 
       const freshPage = await context.newPage();
       await installMockGateway(freshPage);
       await freshPage.goto(`${suite.server.baseUrl}new?agent=main`);
       await expectDurableDraft(freshPage);
-    } finally {
-      await context.close();
-    }
-  });
+    }));
 });

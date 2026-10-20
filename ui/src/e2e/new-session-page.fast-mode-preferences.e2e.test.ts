@@ -94,11 +94,9 @@ suite.define(() => {
       };
       const confirmPreferenceWrite = async (selection: Record<string, unknown>) => {
         if (source === "identity") {
-          const request = await gateway.waitForRequest("users.prefs.set", {
-            after: preferenceWrites,
+          const { params } = await gateway.waitForRequest("users.prefs.set", {
+            after: preferenceWrites++,
           });
-          preferenceWrites += 1;
-          const params = request.params;
           if (!isRecord(params) || !isRecord(params.entries)) {
             throw new Error("Expected preference-write entries");
           }

@@ -1,8 +1,8 @@
 import { Buffer } from "node:buffer";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { navigationAgents } from "./new-session-page.navigation-fixtures.test-support.ts";
 import {
   installMockGateway,
   navigateInApp,
@@ -27,15 +27,7 @@ suite.define(() => {
         page.on("pageerror", (error) => errors.push(error.message));
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "agents.list": {
-              defaultId: "main",
-              mainKey: "main",
-              scope: "per-sender",
-              agents: [
-                { id: "main", name: "Main", identity: { name: "Main" } },
-                { id: "writer", name: "Writer", identity: { name: "Writer" } },
-              ],
-            },
+            "agents.list": navigationAgents(["main", "writer"], "per-sender", undefined, true),
           },
         });
         await page.goto(`${suite.server.baseUrl}new?agent=main`);
@@ -43,6 +35,14 @@ suite.define(() => {
         const message = page.locator(".new-session-page__message");
         const incognito = page.getByRole("switch", { name: "Incognito" });
         const attachments = page.locator(".chat-attachment-file__name");
+        const expectAgent = (id: string) =>
+          expect
+            .poll(() =>
+              page
+                .locator("openclaw-new-session-page")
+                .evaluate((element) => Reflect.get(element, "data")?.requestedAgentId),
+            )
+            .toBe(id);
         const text = `${scenario.name}: retain this unsent synthetic draft`;
         const filename = `${scenario.name}.txt`;
         if (scenario.incognito) {
@@ -67,9 +67,6 @@ suite.define(() => {
           await pollAttribute(incognito, "aria-checked").toBe("false");
         }
         const remainsIncognito = scenario.incognito && !scenario.turnOff;
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${scenario.name}-before.png`),
-        });
         await navigateInApp(
           page,
           scenario.destination,
@@ -80,43 +77,37 @@ suite.define(() => {
           pathname: scenario.destination === "new-session" ? "/new" : "/settings/appearance",
         });
         if (scenario.destination === "new-session") {
-          await expect
-            .poll(() =>
-              page
-                .locator("openclaw-new-session-page")
-                .evaluate((element) => Reflect.get(element, "data")?.requestedAgentId),
-            )
-            .toBe("writer");
+          await expectAgent("writer");
         }
         await page.goBack();
         await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
-        await expect
-          .poll(() =>
-            page
-              .locator("openclaw-new-session-page")
-              .evaluate((element) => Reflect.get(element, "data")?.requestedAgentId),
-          )
-          .toBe("main");
+        await expectAgent("main");
         await page.locator("openclaw-new-session-page").evaluate(async (element) => {
           await Reflect.get(element, "updateComplete");
         });
-        await page.screenshot({
-          path: path.join(suite.artifactDir, `${scenario.name}-returned.png`),
-        });
         const requests = await gateway.getRequests();
-        expect.soft(await message.inputValue(), scenario.name).toBe(text);
-        expect.soft(await attachments.allTextContents(), scenario.name).toContain(filename);
-        expect
-          .soft(await incognito.getAttribute("aria-checked"), scenario.name)
-          .toBe(String(remainsIncognito));
-        expect.soft(new URL(page.url()).searchParams.get("agent"), scenario.name).toBe("main");
-        expect.soft(errors, scenario.name).toEqual([]);
         expect
           .soft(
-            requests.filter(({ method }) => method === "sessions.create" || method === "chat.send"),
+            {
+              text: await message.inputValue(),
+              attachments: await attachments.allTextContents(),
+              incognito: await incognito.getAttribute("aria-checked"),
+              agent: new URL(page.url()).searchParams.get("agent"),
+              errors,
+              sends: requests.filter(
+                ({ method }) => method === "sessions.create" || method === "chat.send",
+              ),
+            },
             scenario.name,
           )
-          .toEqual([]);
+          .toEqual({
+            text,
+            attachments: expect.arrayContaining([filename]),
+            incognito: String(remainsIncognito),
+            agent: "main",
+            errors: [],
+            sends: [],
+          });
         if (remainsIncognito) {
           await waitForCommittedNewSessionDraft(page, null, 0);
           await page.reload();
