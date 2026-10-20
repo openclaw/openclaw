@@ -227,15 +227,15 @@ function onlyStringUniqueItems(value: unknown): boolean {
   return Object.values(value).every(onlyStringUniqueItems);
 }
 
-function compileApprovals(entries: typeof validators): string {
+function compileShared(entries: typeof validators): string {
   const sharedSchema = Compiler.Intern(
     Type.Object(Object.fromEntries(entries.map(([name, schema]) => [name, schema]))),
   );
   const root = sharedSchema.$defs[sharedSchema.$ref.slice("#/$defs/".length)];
   if (!root || !Compiler.IsProperties(root) || Compiler.HasUnevaluated({}, sharedSchema)) {
-    throw new Error("Approvals need a standalone object schema without unevaluated checks");
+    throw new Error("Shared validators need a standalone object schema without unevaluated checks");
   }
-  // Match Build's reset boundary while sharing one scope across the approval entry points.
+  // Match Build's reset boundary while sharing one scope across the group entry points.
   Compiler.ResetExternal();
   Compiler.ResetFunctions();
   const context = new Compiler.BuildContext(false);
@@ -299,20 +299,19 @@ async function main() {
     "sender-identity",
   ] as const) {
     const selected = validators.filter((entry) => entry[3] === group);
-    // Approval entry points share shapes; snapshots intern within their existing lazy boundary.
-    const compiled =
-      group === "approvals"
-        ? compileApprovals(selected)
-        : selected
-            .map(([name, schema]) =>
-              compile(
-                name,
-                name === "ChatHistoryState" || name === "ChatTranscriptMetadata"
-                  ? Compiler.Intern(schema)
-                  : schema,
-              ),
-            )
-            .join("\n");
+    // Share repeated shapes only within each existing lazy boundary.
+    const compiled = ["activity", "approvals", "session-input"].includes(group)
+      ? compileShared(selected)
+      : selected
+          .map(([name, schema]) =>
+            compile(
+              name,
+              name === "ChatHistoryState" || name === "ChatTranscriptMetadata"
+                ? Compiler.Intern(schema)
+                : schema,
+            ),
+          )
+          .join("\n");
     // Import the compiler's exact helpers by name so one scalar check does not bundle every guard.
     const source = [
       ...(compiled.includes("Guard.")

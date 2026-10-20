@@ -259,6 +259,12 @@ export function createModelProviders(
       core.invalidate();
       routeDataObserved = true;
       setSelectedAgent(context.settingsAgentSelection.state.selectedId ?? "");
+      // The catalog can change after preload completes but before this page subscribes.
+      const catalogScope = { agentId: state.selectedAgentId };
+      const catalogCurrent =
+        !data.client ||
+        !modelCatalog.peekModelCatalog(data.client, catalogScope, { allowStale: true }) ||
+        modelCatalog.peekModelCatalog(data.client, catalogScope) !== undefined;
       if (
         readAccess &&
         (data.agentId ?? "") === state.selectedAgentId &&
@@ -266,6 +272,9 @@ export function createModelProviders(
         gateway.isRouteDataCurrent(data)
       ) {
         supplemental.adoptCoreData(data.client, data.data);
+        if (!catalogCurrent) {
+          retryCatalog();
+        }
       } else {
         setState("data", null);
         dataClient = null;
@@ -682,8 +691,7 @@ export function createModelProviders(
         void profileActions.probe(cardId, providers),
       onRequestLogout: (pending: Parameters<typeof profileActions.requestLogout>[0]) =>
         void profileActions.requestLogout(pending),
-      onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) =>
-        profileActions.setOrder(cardId, provider, profileIds),
+      onProfileOrderChange: profileActions.setOrder,
       onAddProviderToggle: () => {
         setAddProviderOpen((open) => !open);
         setState("addProviderKey", "");

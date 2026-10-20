@@ -37,6 +37,7 @@ import {
   preparedModelPageState,
   updateModelSetupWizardDraft,
   mapActivationResult,
+  type ModelSetupActivationState,
 } from "./state.ts";
 import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizard-runner.ts";
 
@@ -212,7 +213,7 @@ export function createModelSetup(
 
   const runVerification = createModelSetupVerifyRequest();
 
-  let feedbackState: (typeof state)["activationState"] | undefined;
+  let feedbackState: ModelSetupActivationState | undefined;
 
   function afterRender() {
     if (!connected) {
@@ -600,7 +601,20 @@ export function createModelSetup(
     }
   }
 
-  function viewProps() {
+  const projection = projectOwner(
+    {
+      subscribe(listener: () => void) {
+        publish = listener;
+        return () => {
+          publish = undefined;
+        };
+      },
+    },
+    () => state,
+  );
+  const view = () => {
+    i18nRevision();
+    projection.read();
     const snapshot = context.gateway.snapshot;
     const canAdmin = hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
     const gatewayTooOld =
@@ -613,7 +627,7 @@ export function createModelSetup(
       onFeedback: (element: HTMLDivElement) => {
         feedback = element;
       },
-      onWizardDialog: (element: NonNullable<typeof wizardDialog>) => {
+      onWizardDialog: (element: import("../../components/modal-dialog.ts").OpenClawModalDialog) => {
         wizardDialog = element;
       },
       detecting: state.detectionRequest !== null,
@@ -648,7 +662,7 @@ export function createModelSetup(
       cancellationNotice: state.cancellationNotice,
       activationUnresolved: firstRun.unresolved,
       onUseCurrentModel: firstRun.canUseCurrentModel
-        ? () => void firstRun.useCurrentModel()
+        ? (): void => void firstRun.useCurrentModel()
         : undefined,
       actionsDisabled: actionsDisabled(),
       manualProviderId: state.manualProviderId,
@@ -666,8 +680,8 @@ export function createModelSetup(
           void detect();
         }
       },
-      onVerify: () => void firstRun.verify(),
-      onActivateCandidate: (candidate: SystemAgentSetupDetectResult["candidates"][number]) =>
+      onVerify: (): void => void firstRun.verify(),
+      onActivateCandidate: (candidate: SystemAgentSetupDetectResult["candidates"][number]): void =>
         void activate(
           candidateActivation(candidate),
           activationTargetId(candidate.kind, candidate.modelRef),
@@ -710,28 +724,11 @@ export function createModelSetup(
       },
       onWizardValueChange: (value: unknown) =>
         setState("wizardDraft", { ...state.wizardDraft, value }),
-      onWizardAnswer: (value: unknown, includeValue?: boolean) =>
+      onWizardAnswer: (value: unknown, includeValue?: boolean): void =>
         void runWizardMutation(() => wizard.answer(value, includeValue)),
-      onWizardCancel: () => void cancelWizard(),
+      onWizardCancel: (): void => void cancelWizard(),
       onWizardClose: () => closeWizard(),
     };
-  }
-
-  const projection = projectOwner(
-    {
-      subscribe(listener: () => void) {
-        publish = listener;
-        return () => {
-          publish = undefined;
-        };
-      },
-    },
-    () => state,
-  );
-  const view = () => {
-    i18nRevision();
-    projection.read();
-    return viewProps();
   };
   createEffect(
     () => [props.routeData, agentSelection()],

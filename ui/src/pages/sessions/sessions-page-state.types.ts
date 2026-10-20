@@ -1,5 +1,6 @@
 import type { SessionsListResult } from "../../api/types.ts";
 import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
+import type { SessionsTableState } from "./page-state.ts";
 import type { SessionDeleteRow } from "./selection.ts";
 import type { SessionsPageMenuProps } from "./session-menu.tsx";
 import type { TranscriptSearchProps } from "./transcript-search-view.tsx";
@@ -12,6 +13,7 @@ export type SessionsFilters = {
 };
 
 export type SessionsPageState = SessionsFilters &
+  SessionsTableState &
   Pick<TranscriptSearchProps, "transcriptSearchQuery" | "transcriptSearch"> & {
     result: SessionsListResult | null;
     loading: boolean;

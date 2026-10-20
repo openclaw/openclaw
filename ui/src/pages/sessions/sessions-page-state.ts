@@ -1,6 +1,6 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { createStore, onSettled } from "solid-js";
+import { onSettled } from "solid-js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
@@ -67,7 +67,7 @@ import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-group
 import { resolveSessionDeleteOutcome } from "./delete-outcome.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
 import { createSessionsDialog } from "./page-dialog.ts";
-import { loadStoredGroupBy, saveStoredGroupBy, type SessionsTableState } from "./page-state.ts";
+import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
 import type { SessionsPageRequestScope } from "./request-scope.ts";
 import type { SessionsRouteData } from "./route.ts";
 import {
@@ -104,18 +104,6 @@ export function createSessionsPage(
   let routeData = initialRouteData;
   let active = true;
   const menuOwner = {};
-  const [presentation, setPresentation] = createStore<SessionsTableState>({
-    sortColumn: "updated",
-    sortDir: "desc",
-    groupBy: loadStoredGroupBy(),
-    page: 0,
-    pageSize: 25,
-  });
-  function resetPage() {
-    setPresentation((draft) => {
-      draft.page = 0;
-    });
-  }
   function setRouteData(next?: SessionsRouteData) {
     if (routeData === next) {
       return;
@@ -128,6 +116,11 @@ export function createSessionsPage(
 
   // Query and mutation decisions read these facts synchronously; the projection only observes.
   const observation = observeState<SessionsPageState>({
+    sortColumn: "updated",
+    sortDir: "desc",
+    groupBy: loadStoredGroupBy(),
+    page: 0,
+    pageSize: 25,
     result: null,
     loading: false,
     refreshing: false,
@@ -176,7 +169,7 @@ export function createSessionsPage(
     retirePageOperations();
     resetTranscriptSearchState(state.transcriptSearchQuery);
     if (!deepLinkSessionKey) {
-      resetPage();
+      state.page = 0;
       state.selectedSessions = new Map();
       clearSearchTimer();
       bindSessionList();
@@ -382,7 +375,7 @@ export function createSessionsPage(
     state.includeUnknown = Boolean(data.expandedSessionKey);
     if (data.expandedSessionKey) {
       state.searchQuery = "";
-      resetPage();
+      state.page = 0;
       state.selectedSessions = new Map();
     }
     state.expandedSessionKey = data.expandedSessionKey;
@@ -445,7 +438,7 @@ export function createSessionsPage(
       details.synchronize();
       state.error = null;
       state.selectedSessions = new Map();
-      resetPage();
+      state.page = 0;
       listBinding = { sessions, query, key, transcriptKey };
       appliedListResult = undefined;
     }
@@ -581,7 +574,7 @@ export function createSessionsPage(
     state.limit = next.limit;
     state.includeGlobal = next.includeGlobal;
     state.includeUnknown = next.includeUnknown;
-    resetPage();
+    state.page = 0;
     state.selectedSessions = new Map();
     // Explicit filter edits leave deep-link mode; load the full roster.
     deepLinkSessionKey = null;
@@ -595,7 +588,7 @@ export function createSessionsPage(
     }
     state.statusFilter = statusFilter;
     clearSearchTimer();
-    resetPage();
+    state.page = 0;
     state.selectedSessions = new Map();
     deepLinkSessionKey = null;
     // Route navigation changes the managed query; mask the old view's rows
@@ -1329,19 +1322,13 @@ export function createSessionsPage(
 
   function viewProps() {
     const context = application;
+    const { selectedSessions, sessionMenuWork: _sessionMenuWork, ...viewState } = state;
     const personGroupingAvailable = (state.result?.owners?.length ?? 0) > 1;
     return {
-      ...presentation,
+      ...viewState,
       loading: state.loading || details.loading(),
-      refreshing: state.refreshing,
       refreshDisabled: context.gateway.snapshot.phase !== "connected",
-      result: state.result,
       error: details.error() ?? state.error,
-      activeMinutes: state.activeMinutes,
-      limit: state.limit,
-      includeGlobal: state.includeGlobal,
-      includeUnknown: state.includeUnknown,
-      statusFilter: state.statusFilter,
       basePath: context.basePath,
       agentId: resolveSessionNavigationAgentId(context),
       allAgentsScope: context.agentSelection.state.scopeId === null,
@@ -1349,10 +1336,7 @@ export function createSessionsPage(
         agentsList: context.agents.state.agentsList,
         hello: context.gateway.snapshot.hello,
       }),
-      searchQuery: state.searchQuery,
       transcriptSearchAvailable: context.gateway.snapshot.phase === "connected",
-      transcriptSearchQuery: state.transcriptSearchQuery,
-      transcriptSearch: state.transcriptSearch,
       agentIdentityById: sessionAgentIdentityById(
         state.result,
         (agentId) => context.agentIdentity.get(agentId) ?? undefined,
@@ -1360,13 +1344,9 @@ export function createSessionsPage(
       personGroupingAvailable,
       // Keep the stored Person preference while the owner roster is unavailable.
       groupBy:
-        personGroupingAvailable || presentation.groupBy !== "person"
-          ? presentation.groupBy
-          : ("none" as const),
+        personGroupingAvailable || state.groupBy !== "person" ? state.groupBy : ("none" as const),
       knownCategories: knownCategories(),
-      selectedKeys: new Set(state.selectedSessions.keys()),
-      sessionMenu: state.sessionMenu,
-      expandedSessionKey: state.expandedSessionKey,
+      selectedKeys: new Set(selectedSessions.keys()),
       labelDisabledReason: (row: GatewaySessionRow) =>
         mutationDisabledReason({
           method: "sessions.patch",
@@ -1400,7 +1380,7 @@ export function createSessionsPage(
       onSearchChange: (query: string) => {
         deepLinkSessionKey = null;
         state.searchQuery = query;
-        resetPage();
+        state.page = 0;
         state.selectedSessions = new Map();
         clearSearchTimer();
         if (captureRequestScope()) {
@@ -1415,17 +1395,13 @@ export function createSessionsPage(
       onTranscriptSearch: () => void actions.runTranscriptSearch(),
       onClearTranscriptSearch: () => resetTranscriptSearchState(""),
       onSortChange: (column: "key" | "updated", direction: "asc" | "desc") => {
-        setPresentation((draft) => {
-          draft.sortColumn = column;
-          draft.sortDir = direction;
-          draft.page = 0;
-        });
+        state.sortColumn = column;
+        state.sortDir = direction;
+        state.page = 0;
       },
       onGroupByChange: (mode: SessionsGroupBy) => {
-        setPresentation((draft) => {
-          draft.groupBy = mode;
-          draft.page = 0;
-        });
+        state.groupBy = mode;
+        state.page = 0;
         saveStoredGroupBy(mode);
       },
       onAssignCategory: assignCategory,
@@ -1438,15 +1414,11 @@ export function createSessionsPage(
         }
       },
       onPageChange: (page: number) => {
-        setPresentation((draft) => {
-          draft.page = page;
-        });
+        state.page = page;
       },
       onPageSizeChange: (pageSize: number) => {
-        setPresentation((draft) => {
-          draft.pageSize = pageSize;
-          draft.page = 0;
-        });
+        state.pageSize = pageSize;
+        state.page = 0;
       },
       onRefresh: () => void refreshSessionList(),
       onStatusFilterChange: (statusFilter: SessionArchivedFilter) =>

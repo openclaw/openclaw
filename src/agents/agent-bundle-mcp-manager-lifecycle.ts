@@ -375,7 +375,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
     ensureIdleSweepTimer();
   };
 
-  const sweepIdleRuntimes = async (): Promise<number> => {
+  const sweepIdleRuntimes = async (): Promise<void> => {
     const nowMs = store.scheduler.now();
     const expired = [...store.runtimesBySessionId].flatMap(([runtimeKey, runtime]) => {
       const idleTtlMs = store.runtimeSlots.get(runtime)?.idleTtlMs ?? 0;
@@ -386,7 +386,6 @@ export function createSessionMcpRuntimeManagerLifecycle(
         : [];
     });
     await retireIdleRuntimes(expired);
-    return expired.length;
   };
 
   const ensureIdleSweepTimer = () => {

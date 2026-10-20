@@ -23,7 +23,7 @@ const RUN_FIELDS = [
 
 type RunField = (typeof RUN_FIELDS)[number];
 type ChatRunFields<T> = Partial<Pick<T, Extract<RunField, keyof T>>>;
-export type ChatRunPublication = "immediate" | "animation-frame";
+type ChatRunPublication = "immediate" | "animation-frame";
 
 const presentations = new WeakMap<object, ChatRunPresentation<object>>();
 

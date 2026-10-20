@@ -9,6 +9,7 @@ export const {
   prepareAuthProfileProvider,
   findPersistedAuthProfileCredentialAsync,
   prepareAuthProfileCredentialRead,
+  withAuthProfileStoreAtEffect,
   resolvePersistedAuthProfileOwnerAgentDirAsync,
   loadAuthProfileStoreForSecretsRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfilesAsync,

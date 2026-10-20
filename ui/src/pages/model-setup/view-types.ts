@@ -1,21 +1,19 @@
 import type { JSX } from "../../types/solid-elements.js";
 import type { renderProviderIcon } from "./model-setup-icon-loader.tsx";
-import type { createModelSetup, ModelSetupPageProps } from "./model-setup-owner.ts";
+import type { createModelSetup } from "./model-setup-owner.ts";
 
 type ModelSetupOwnerView = ReturnType<ReturnType<typeof createModelSetup>["view"]>;
-type ViewCallback<Value> = Value extends (...args: infer Args) => unknown
-  ? (...args: Args) => void
-  : Value;
-type ViewData = {
-  [Key in keyof ModelSetupOwnerView]: ViewCallback<ModelSetupOwnerView[Key]>;
-};
-type OptionalViewKeys =
-  | Exclude<keyof ModelSetupPageProps, "routeData">
+type IconProps = Parameters<typeof renderProviderIcon>[0];
+type OptionalOwnerProps =
   | "detecting"
+  | "embedded"
   | "connection"
   | "onManualInput"
   | "onFeedback"
   | "onWizardDialog"
+  | "agentLabel"
+  | "credentialChoices"
+  | "onClose"
   | "onDiscoveryShown"
   | "detectionError"
   | "modelConfigured"
@@ -27,9 +25,9 @@ type OptionalViewKeys =
   | "nativeModels"
   | "onOpenSetupAssistant";
 
-export type ModelSetupViewProps = Parameters<typeof renderProviderIcon>[0] &
-  Omit<ViewData, OptionalViewKeys | "iconUrls" | "onIconError"> &
-  Partial<Pick<ViewData, OptionalViewKeys>> & {
+export type ModelSetupViewProps = Omit<ModelSetupOwnerView, OptionalOwnerProps | keyof IconProps> &
+  Partial<Pick<ModelSetupOwnerView, OptionalOwnerProps>> &
+  IconProps & {
     login?: JSX.Element;
     revision?: () => unknown;
   };

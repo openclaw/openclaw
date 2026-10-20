@@ -38,6 +38,13 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-ip-location": HTMLAttributes<HTMLElement>;
+      "openclaw-home-session": HTMLAttributes<HTMLElement>;
+      "openclaw-session-owner-chip": HTMLAttributes<HTMLElement> & {
+        size?: "row" | "header";
+        attribution?: "created" | "owned" | "archived";
+      };
+      "openclaw-elapsed-time": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-output": HTMLAttributes<HTMLElement>;
       "openclaw-chat-sent-comments": HTMLAttributes<HTMLElement>;
       "openclaw-chat-sources": HTMLAttributes<HTMLElement>;
@@ -105,9 +112,6 @@ declare module "@solidjs/web" {
         };
       "openclaw-message-reaction-picker": HTMLAttributes<HTMLElement> & {
         compact?: boolean;
-        placement?: "bottom-start" | "bottom-end";
-        "prop:activeEmoji"?: ReadonlySet<string>;
-        "prop:onSelect"?: (emoji: string, remove: boolean) => void;
       };
       "openclaw-chat-clawhub-card": HTMLAttributes<HTMLElement> & {
         "prop:recommendation"?: ClawHubRecommendation;
@@ -168,8 +172,6 @@ declare module "@solidjs/web" {
             "identity" | "user" | "markAsViewer"
           >
         > & { variant?: HTMLElementTagNameMap["openclaw-viewer-avatar"]["variant"] };
-      "openclaw-ip-location": HTMLAttributes<HTMLElementTagNameMap["openclaw-ip-location"]> &
-        ElementProperties<Pick<HTMLElementTagNameMap["openclaw-ip-location"], "ip">>;
       "openclaw-link-reader-hovercard-provider": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-link-reader-hovercard-provider"]
       > &
@@ -185,12 +187,6 @@ declare module "@solidjs/web" {
             | "claimedReaders"
           >
         >;
-      "openclaw-session-owner-chip": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-session-owner-chip"]
-      > &
-        ElementProperties<Pick<HTMLElementTagNameMap["openclaw-session-owner-chip"], "owner">> & {
-          size?: HTMLElementTagNameMap["openclaw-session-owner-chip"]["size"];
-        };
       "openclaw-chat-pdf-preview": HTMLAttributes<HTMLElement>;
       "openclaw-chat-pane-versions-menu": HTMLAttributes<HTMLElement>;
       "openclaw-chat-skill-learned-notice": HTMLAttributes<HTMLElement>;

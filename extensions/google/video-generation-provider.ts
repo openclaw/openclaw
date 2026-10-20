@@ -1,5 +1,4 @@
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
   executeProviderOperationWithRetry,
@@ -19,6 +18,7 @@ import {
 } from "openclaw/plugin-sdk/video-generation";
 import { canonicalizeGoogleProviderBase64 } from "./base64.js";
 import { parseGeminiAuth } from "./gemini-auth.js";
+import { resolveGoogleGenerationApiKey } from "./generation-auth.js";
 import {
   createGoogleVideoGenerationProviderMetadata,
   DEFAULT_GOOGLE_VIDEO_MODEL,
@@ -387,16 +387,7 @@ export function buildGoogleVideoGenerationProvider(): VideoGenerationProvider {
           "Google video generation does not support image and video inputs together.",
         );
       }
-      const auth = await resolveApiKeyForProvider({
-        provider: "google",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("Google API key missing");
-      }
-      const apiKey = auth.apiKey;
+      const apiKey = await resolveGoogleGenerationApiKey(req);
 
       const configuredUrl = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
       const configuredBaseUrl = configuredUrl

@@ -4,7 +4,6 @@ import { z } from "zod";
 
 export type WorkspaceHashMetrics = {
   contentHashCount: number;
-  contentHashDurationMs: number;
   memoHitCount: number;
 };
 
@@ -28,10 +27,8 @@ const remoteWorkspaceManifestEnvelopeSchema = z
     metrics: z
       .object({
         contentHashCount: z.number().finite().nonnegative(),
-        contentHashDurationMs: z.number().finite().nonnegative(),
         memoHitCount: z.number().finite().nonnegative(),
         memoTruncatedCount: z.number().finite().nonnegative(),
-        totalDurationMs: z.number().finite().nonnegative(),
       })
       .strict(),
   })
