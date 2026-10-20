@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry.js";
@@ -26,6 +27,16 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const storePath = "/private/tmp/subagent-controller-inputs/main/sessions.json";
 const requesterKey = "global";
 const inputs: SessionControllerInput[] = [];
+
+function pendingWake(batchRunIds: string[]) {
+  return { status: "pending" as const, attemptCount: 0, batchRunIds, rearmGeneration: 4 };
+}
+
+function expectAborted(...expected: Array<[SessionControllerInput, boolean]>) {
+  for (const [input, aborted] of expected) {
+    expect(input.abortSignal.aborted).toBe(aborted);
+  }
+}
 
 function child(overrides: Partial<SubagentRunRecord> = {}) {
   return createSubagentRunRecord({
@@ -131,19 +142,15 @@ it.each(["default", "custom", "memory"] as const)(
         },
       );
       const entry = child({ requesterSessionKey: sessionKey, requesterStorePath: physicalStore });
-      const input = await reserveSubagentCompletionControllerSource(entry);
-      expect(input).toBeDefined();
-      if (!input) {
-        throw new Error("Requester reservation was not created");
-      }
+      const input = expectDefined(
+        await reserveSubagentCompletionControllerSource(entry),
+        "Requester reservation",
+      );
       inputs.push(input);
       try {
         expect(input.target?.storeScope).toBe(layout === "memory" ? physicalStore : logicalStore);
         expect(hasSubagentControllerInput(entry)).toBe(true);
-        const target = input.target;
-        if (!target) {
-          throw new Error("Requester reservation has no target");
-        }
+        const target = expectDefined(input.target, "Requester reservation target");
         // A later binding can change the mailbox observation, but not this source's store.
         bindSessionControllerEntryTarget(
           input.mailbox.owner,
@@ -164,34 +171,19 @@ it.each(["default", "custom", "memory"] as const)(
 );
 
 it.each(
-  [
-    {
-      representation: "explicit",
-      requesterSessionKey: requesterKey,
-      requesterAgentId: "main",
-      batchAgentId: "main",
-    },
-    {
-      representation: "legacy",
-      requesterSessionKey: "agent:main:global",
-      requesterAgentId: undefined,
-      batchAgentId: "unknown",
-    },
-  ].flatMap((requester) =>
-    (["retired", "generation", "store", "key", "agent", "no wake"] as const).map((difference) =>
-      Object.assign({}, requester, { difference }),
-    ),
+  ["explicit", "legacy"].flatMap((representation) =>
+    (["retired", "generation", "store", "key", "agent", "no wake"] as const).map((difference) => ({
+      representation,
+      difference,
+    })),
   ),
 )(
   "uses surviving $representation batch members and excludes a member with different $difference",
-  ({ requesterSessionKey, requesterAgentId, batchAgentId, difference }) => {
-    const wake = {
-      status: "pending" as const,
-      attemptCount: 0,
-      batchRunIds: ["child-a", "child-b", "child-c", "retired-child"],
-      rearmGeneration: 4,
-    };
-    const requester = { requesterSessionKey, requesterAgentId };
+  ({ representation, difference }) => {
+    const legacy = representation === "legacy";
+    const requesterSessionKey = legacy ? "agent:main:global" : requesterKey;
+    const requester = { requesterSessionKey, requesterAgentId: legacy ? undefined : "main" };
+    const wake = pendingWake(["child-a", "child-b", "child-c", "retired-child"]);
     const entry = child({ ...requester, requesterSettleWake: wake });
     const sibling = child({ ...requester, runId: "child-b", requesterSettleWake: { ...wake } });
     subagentRuns.set(entry.runId, entry);
@@ -206,15 +198,14 @@ it.each(
             difference === "no wake"
               ? undefined
               : { ...wake, rearmGeneration: difference === "generation" ? 5 : 4 },
-          ...(difference === "store"
-            ? { requesterStorePath: "/private/tmp/other/sessions.json" }
-            : {}),
-          ...(difference === "key" ? { requesterSessionKey: "other-requester" } : {}),
-          ...(difference === "agent" ? { requesterAgentId: "research" } : {}),
+          requesterStorePath:
+            difference === "store" ? "/private/tmp/other/sessions.json" : storePath,
+          requesterSessionKey: difference === "key" ? "other-requester" : requesterSessionKey,
+          requesterAgentId: difference === "agent" ? "research" : requester.requesterAgentId,
         }),
       );
     }
-    const batchPrefix = `requester-settle:${batchAgentId}:${requesterSessionKey}`;
+    const batchPrefix = `requester-settle:${legacy ? "unknown" : "main"}:${requesterSessionKey}`;
     const scope = { sessionKey: requesterSessionKey };
     const obsolete = reserve(`${batchPrefix}:child-a,child-b,child-c,retired-child:yield-4`, scope);
     const foreignOnly = reserve(`${batchPrefix}:child-c:yield-4`, scope);
@@ -224,19 +215,14 @@ it.each(
     expect(hasSubagentControllerInput(entry)).toBe(true);
     retireSubagentControllerInputs(entry);
 
-    expect(surviving.abortSignal.aborted).toBe(true);
-    expect(obsolete.abortSignal.aborted).toBe(false);
-    expect(foreignOnly.abortSignal.aborted).toBe(false);
+    expectAborted([surviving, true], [obsolete, false], [foreignOnly, false]);
     expect(hasSubagentControllerInput(entry)).toBe(false);
   },
 );
 
 it("keeps a pause notice's singleton identity separate from its completion batch", () => {
   const wake = {
-    status: "pending" as const,
-    attemptCount: 0,
-    batchRunIds: ["child-a", "child-b"],
-    rearmGeneration: 4,
+    ...pendingWake(["child-a", "child-b"]),
     pauseNotice: { acknowledgment: "Waiting for direction" },
   };
   const entry = child({ pauseReason: "sessions_yield", requesterSettleWake: wake });
@@ -250,25 +236,18 @@ it("keeps a pause notice's singleton identity separate from its completion batch
   expect(hasSubagentControllerInput(entry)).toBe(true);
   retireSubagentControllerInputs(entry);
 
-  expect(pause.abortSignal.aborted).toBe(true);
-  expect(completionBatch.abortSignal.aborted).toBe(false);
-  expect(groupedPause.abortSignal.aborted).toBe(false);
+  expectAborted([pause, true], [completionBatch, false], [groupedPause, false]);
 });
 
 it("retires unclaimed reservations while a selected turn retains its input", async () => {
   const entry = child();
   const selected = reserve("subagent-completion:child-a:4");
-  const claim = tryClaimSessionControllerTask(selected);
-  expect(claim).toBeDefined();
-  if (!claim) {
-    throw new Error("Expected a controller claim");
-  }
+  const claim = expectDefined(tryClaimSessionControllerTask(selected), "controller claim");
   const queued = reserve("subagent-completion:child-a:4");
 
   retireSubagentControllerInputs(entry);
 
-  expect(selected.abortSignal.aborted).toBe(false);
-  expect(queued.abortSignal.aborted).toBe(true);
+  expectAborted([selected, false], [queued, true]);
   expect(hasSubagentControllerInput(entry)).toBe(true);
   releaseSessionControllerClaim(claim);
   await claim.settlement.promise;

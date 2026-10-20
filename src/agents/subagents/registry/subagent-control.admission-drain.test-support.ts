@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import {
   beginSessionEffect,
   SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
@@ -77,21 +77,16 @@ export function registerAdmissionDrainControlTests({
         runs: [entry],
       });
       let killSettled = false;
-      void pendingKill.then(
-        () => {
-          killSettled = true;
-        },
-        () => {
-          killSettled = true;
-        },
-      );
+      const markSettled = () => {
+        killSettled = true;
+      };
+      void pendingKill.then(markSettled, markSettled);
       try {
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           interrupted.promise,
-          pendingKill.then(() => {
-            throw new Error("Cancellation settled before interrupting the held admission");
-          }),
-        ]);
+          pendingKill,
+          "Cancellation settled before interrupting the held admission",
+        );
         await Promise.resolve();
         expect(killSettled).toBe(false);
         if (queued) {
@@ -106,12 +101,9 @@ export function registerAdmissionDrainControlTests({
           error:
             "hold admission during kill: Subagent is still active; try the kill again in a moment.",
         });
-        expect(
-          (await getSubagentRunByChildSessionKey(childSessionKey))?.execution.endedAt,
-        ).toBeUndefined();
-        expect(
-          (await getSubagentRunByChildSessionKey(childSessionKey))?.killIntent,
-        ).toBeUndefined();
+        const retained = await getSubagentRunByChildSessionKey(childSessionKey);
+        expect(retained?.execution.endedAt).toBeUndefined();
+        expect(retained?.killIntent).toBeUndefined();
         if (queued) {
           await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
         }

@@ -7,40 +7,41 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 export function registerControlledSubagentReadTests(
   addRun: (overrides: SubagentRunRecordOverrides) => Promise<SubagentRunRecord>,
 ) {
+  const addOwnedRun = (
+    runId: string,
+    childSessionKey: string,
+    owner: string,
+    startedAt: number,
+    overrides: Partial<SubagentRunRecordOverrides> = {},
+  ) =>
+    addRun({
+      runId,
+      childSessionKey,
+      controllerSessionKey: owner,
+      requesterSessionKey: owner,
+      requesterDisplayKey: overrides.requesterSessionKey ?? owner,
+      createdAt: startedAt - 500,
+      startedAt,
+      ...overrides,
+    });
   describe("controlled subagent reads", () => {
-    it.each([
-      {
-        name: "control owner",
-        controllerSessionKey: "agent:main:main",
-        requesterSessionKey: "agent:main:telegram:direct:abc123",
-        expectedCount: 1,
-      },
-      {
-        name: "completion owner",
-        controllerSessionKey: "agent:main:telegram:direct:abc123",
-        requesterSessionKey: "agent:main:main",
-        expectedCount: 1,
-      },
-      {
-        name: "unrelated session",
-        controllerSessionKey: "agent:other:discord:direct:xyz",
-        requesterSessionKey: "agent:other:main",
-        expectedCount: 0,
-      },
+    const root = "agent:main:main";
+    const peer = "agent:main:telegram:direct:abc123";
+    it.each<[string, string, string, number]>([
+      ["control owner", root, peer, 1],
+      ["completion owner", peer, root, 1],
+      ["unrelated session", "agent:other:discord:direct:xyz", "agent:other:main", 0],
     ])(
-      "applies read visibility for the $name",
-      async ({ controllerSessionKey, requesterSessionKey, expectedCount }) => {
+      "applies read visibility for the %s",
+      async (_name, controllerSessionKey, requesterSessionKey, expectedCount) => {
         const childSessionKey = "agent:main:subagent:list-visibility";
-        await addRun({
-          runId: "run-list-visibility",
+        await addOwnedRun(
+          "run-list-visibility",
           childSessionKey,
           controllerSessionKey,
-          requesterSessionKey,
-          requesterDisplayKey: requesterSessionKey,
-          task: "visibility test",
-          createdAt: Date.now(),
-          startedAt: Date.now(),
-        });
+          Date.now(),
+          { requesterSessionKey },
+        );
 
         const { runs: results } = await buildControlledSubagentRunsReadContext("agent:main:main");
         expect(results).toHaveLength(expectedCount);
@@ -54,40 +55,21 @@ export function registerControlledSubagentReadTests(
       const now = Date.now();
       const rootSessionKey = "agent:main:main";
       const parentSessionKey = "agent:main:subagent:status-parent";
-      await addRun({
-        runId: "run-status-parent",
-        childSessionKey: parentSessionKey,
-        controllerSessionKey: rootSessionKey,
-        requesterSessionKey: rootSessionKey,
-        requesterDisplayKey: rootSessionKey,
-        task: "status parent",
-        createdAt: now - 4_000,
-        startedAt: now - 3_500,
+      await addOwnedRun("run-status-parent", parentSessionKey, rootSessionKey, now - 3_500, {
         endedAt: now - 3_000,
       });
-      await addRun({
-        runId: "run-status-child-1",
-        childSessionKey: `${parentSessionKey}:subagent:child-1`,
-        controllerSessionKey: parentSessionKey,
-        requesterSessionKey: parentSessionKey,
-        requesterDisplayKey: parentSessionKey,
-        task: "status child 1",
-        createdAt: now - 2_000,
-        startedAt: now - 1_500,
-      });
+      const addChild = (id: number, startedAt: number) =>
+        addOwnedRun(
+          `run-status-child-${id}`,
+          `${parentSessionKey}:subagent:child-${id}`,
+          parentSessionKey,
+          startedAt,
+        );
+      await addChild(1, now - 1_500);
 
       const context = await buildControlledSubagentRunsReadContext(rootSessionKey);
 
-      await addRun({
-        runId: "run-status-child-2",
-        childSessionKey: `${parentSessionKey}:subagent:child-2`,
-        controllerSessionKey: parentSessionKey,
-        requesterSessionKey: parentSessionKey,
-        requesterDisplayKey: parentSessionKey,
-        task: "status child 2",
-        createdAt: now - 1_000,
-        startedAt: now - 500,
-      });
+      await addChild(2, now - 500);
 
       expect(context.runs.map((run) => run.runId)).toEqual(["run-status-parent"]);
       expect(context.list.pendingDescendants.get(parentSessionKey)).toBe(1);
@@ -101,16 +83,8 @@ export function registerControlledSubagentReadTests(
     it("partitions duplicate bare controller keys by owning agent", async () => {
       const now = Date.now();
       for (const agentId of ["research", "ops"]) {
-        await addRun({
-          runId: `run-${agentId}`,
-          childSessionKey: `agent:${agentId}:subagent:child`,
-          controllerSessionKey: "global",
-          requesterSessionKey: "global",
+        await addOwnedRun(`run-${agentId}`, `agent:${agentId}:subagent:child`, "global", now, {
           requesterAgentId: agentId,
-          requesterDisplayKey: "global",
-          task: `${agentId} task`,
-          createdAt: now,
-          startedAt: now,
         });
       }
 
