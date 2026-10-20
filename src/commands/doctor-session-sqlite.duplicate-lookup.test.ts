@@ -11,6 +11,14 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as recovery from "./doctor-session-sqlite-recovery-inventory.js";
 import { settleDuplicateSessionSqliteArchives } from "./doctor-session-sqlite-retirement.js";
 
+function expectSettled(result: Awaited<ReturnType<typeof settleDuplicateSessionSqliteArchives>>) {
+  expect(result).toEqual([
+    expect.objectContaining({
+      issues: [expect.objectContaining({ code: "historical_duplicate_settled" })],
+    }),
+  ]);
+}
+
 it.each([1, 7, 29])(
   "keeps the first artifact selected by a linear lookup (seed %s)",
   async (seed) => {
@@ -28,11 +36,7 @@ it.each([1, 7, 29])(
         .map((item) => artifacts.find((candidate) => candidate.path === item.path)!);
       const untouched = artifacts.filter((item) => !expected.includes(item));
       const before = untouched.map((item) => ({ ...item }));
-      expect(await settle()).toEqual([
-        expect.objectContaining({
-          issues: [expect.objectContaining({ code: "historical_duplicate_settled" })],
-        }),
-      ]);
+      expectSettled(await settle());
       expect(expected.map((item) => item.outcome)).toEqual(["removed", "removed", "removed"]);
       expect(untouched).toEqual(before);
     });
@@ -79,12 +83,7 @@ it.each(["artifacts", "moves"] as const)(
       );
       target.plannedMoves.unshift(...unrelated);
       target.completedMoves.unshift(...unrelated);
-      const result = await settle();
-      expect(result).toEqual([
-        expect.objectContaining({
-          issues: [expect.objectContaining({ code: "historical_duplicate_settled" })],
-        }),
-      ]);
+      expectSettled(await settle());
       expect(artifacts.slice(size + 1).every((item) => item.outcome === "removed")).toBe(true);
       expect(artifactVisits).toBeLessThanOrEqual(4 * size);
       expect(moveVisits).toBeLessThanOrEqual(20_000);

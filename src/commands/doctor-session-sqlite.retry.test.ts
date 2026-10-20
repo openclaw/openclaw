@@ -5,6 +5,7 @@ import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sq
 import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-migration.js";
 import { createTranscriptEventReader } from "../infra/session-sqlite-migration-readers.js";
 import { formatSessionSqliteMigrationWarnings } from "./doctor-session-sqlite-warnings.js";
+import { jsonl, sessionScope } from "./doctor-session-sqlite.fixtures.test-support.js";
 import {
   readMigrationManifest,
   runPublicSessionSqlite,
@@ -12,6 +13,10 @@ import {
 } from "./doctor-session-sqlite.test-support.js";
 
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
+const textBlocks = (value: string) => [{ type: "text", text: value }];
+function transcriptMessage(id: string, parentId: string | null, role: string, content: string) {
+  return { type: "message", id, parentId, message: { role, content: textBlocks(content) } };
+}
 
 it.each([
   "matching",
@@ -34,13 +39,11 @@ it.each([
     };
     const storedLegacy = history === "stored-legacy" || history === "stored-legacy-suffix";
     const appendSuffix = history === "suffix" || history === "stored-legacy-suffix";
+    const first = transcriptMessage("one", null, "assistant", "preserved history");
     const message = {
-      type: "message",
-      id: "one",
-      parentId: null,
+      ...first,
       message: {
-        role: "assistant",
-        content: [{ type: "text", text: "preserved history" }],
+        ...first.message,
         provider: "openai-codex",
         api: "openai-codex-responses",
       },
@@ -57,25 +60,14 @@ it.each([
         ["abandoned", "shadow", "assistant", "old answer"],
         ["visible", "one", "user", "hello"],
         ["answer", "visible", "assistant", "kept answer"],
-      ]) {
-        events.push({
-          type: "message",
-          id,
-          parentId,
-          message: { role, content: [{ type: "text", text }] },
-        });
+      ] as const) {
+        events.push(transcriptMessage(id, parentId, role, text));
       }
     }
     const store = createLegacyStore({
       transcriptLines: events.map((event) => JSON.stringify(event)),
     });
-    const scope = {
-      agentId: "main",
-      env: store.env,
-      storePath: store.storePath,
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
-    };
+    const scope = sessionScope(store);
     // The real importer committed, but Doctor has not archived any source yet.
     await importSqliteSessionRows({
       ...scope,
@@ -90,14 +82,9 @@ it.each([
         api: storedLegacy ? "openai-codex-responses" : "openai-chatgpt-responses",
       },
     });
-    const suffix = {
-      type: "message",
-      id: "two",
-      parentId: "one",
-      message: { role: "user", content: [{ type: "text", text: "new history" }] },
-    };
+    const suffix = transcriptMessage("two", "one", "user", "new history");
     if (history === "conflict") {
-      message.message.content = [{ type: "text", text: "changed history" }];
+      message.message.content = textBlocks("changed history");
     }
     const extra = history === "unknown" ? { type: "unrecognized", id: "opaque" } : suffix;
     const retryEvents =
@@ -105,7 +92,7 @@ it.each([
         ? [header, { ...suffix, parentId: null }, message]
         : [...events, ...(appendSuffix || history === "unknown" ? [extra] : [])];
     retryEvents.push({ ...header, timestamp: "2026-08-29T00:00:00Z" });
-    const original = `${retryEvents.map((event) => JSON.stringify(event)).join("\n")}\n`;
+    const original = jsonl(...retryEvents);
     fs.writeFileSync(store.transcriptPath, original);
     const originalIndex = fs.readFileSync(store.storePath, "utf8");
 

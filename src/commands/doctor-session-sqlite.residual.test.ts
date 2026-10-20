@@ -9,6 +9,11 @@ import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrati
 import { createTranscriptEventReader } from "../infra/session-sqlite-migration-readers.js";
 import * as pluginDoctor from "../infra/state-migrations.plugin-doctor.js";
 import {
+  jsonl,
+  messageEvent,
+  sessionScope,
+} from "./doctor-session-sqlite.fixtures.test-support.js";
+import {
   RECOVERY_TRANSCRIPT_LINES,
   readMigrationManifest,
   useDoctorSessionSqliteTestFixture,
@@ -36,19 +41,13 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
         ],
       });
     }
-    const scope = {
-      agentId: "main",
-      env: store.env,
-      sessionKey: "agent:main:main",
-      storePath: store.storePath,
-    };
+    const scope = sessionScope(store);
     await importSqliteSessionRows({
       ...scope,
       entry: { sessionId: "session-1", label: "Current metadata", updatedAt: 5000 },
       readTranscriptEvents: createTranscriptEventReader(store.transcriptPath, "session-1"),
     });
-    const transcriptScope = { ...scope, sessionId: "session-1" };
-    const currentHistory = loadTranscriptEventsSync(transcriptScope);
+    const currentHistory = loadTranscriptEventsSync(scope);
     const runsDir = path.join(store.stateDir, "session-sqlite-migration-runs");
     fs.mkdirSync(runsDir, { recursive: true });
     const unreadableManifest = path.join(runsDir, "unreadable.json");
@@ -77,19 +76,14 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
         cwd: "/fixture",
         timestamp: "2026-08-30T00:00:00Z",
       },
-      { type: "message", id: "new", parentId: null, message: { role: "user", content: "new" } },
+      messageEvent("new", "user", "new"),
     ];
     const index = JSON.parse(fs.readFileSync(store.storePath, "utf8"));
     index["agent:main:new"] = { sessionId: "new-session", updatedAt: 1000 };
     fs.writeFileSync(store.storePath, JSON.stringify(index));
-    fs.writeFileSync(
-      path.join(store.sessionDir, "new-session.jsonl"),
-      newEvents.map((event) => JSON.stringify(event)).join("\n") + "\n",
-    );
-    fs.writeFileSync(
-      path.join(siblingDir, "new-session.jsonl"),
-      newEvents.map((event) => JSON.stringify(event)).join("\n") + "\n",
-    );
+    for (const dir of [store.sessionDir, siblingDir]) {
+      fs.writeFileSync(path.join(dir, "new-session.jsonl"), jsonl(...newEvents));
+    }
     // Observe the real session gate without running unrelated plugin discovery and hooks.
     const laterRepair = vi
       .spyOn(pluginDoctor, "runPostSessionPluginDoctorStateRepairs")
@@ -112,7 +106,7 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
       label: "Current metadata",
       sessionId: "session-1",
     });
-    expect(loadTranscriptEventsSync(transcriptScope)).toEqual(currentHistory);
+    expect(loadTranscriptEventsSync(scope)).toEqual(currentHistory);
     expect(loadTranscriptEventsSync({ ...scope, sessionId: "new-session" })).toEqual(newEvents);
     expect(
       loadTranscriptEventsSync({ agentId: "other", env: store.env, sessionId: "new-session" }),

@@ -1,7 +1,5 @@
-// Doctor session state provider tests cover route-state repair through the public doctor path.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createOpenClawAgentHarness } from "../agents/harness/builtin-openclaw.js";
@@ -100,42 +98,38 @@ vi.mock("../plugins/doctor-contract-registry.js", async () => {
 
 async function runDoctor(params: {
   agentId?: string;
-  cfg: OpenClawConfig;
+  cfg?: OpenClawConfig;
   store: Record<string, SessionEntry>;
   confirm?: boolean;
   env?: NodeJS.ProcessEnv;
 }) {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-route-doctor-"));
+  const root = sessionDirs.make();
   const storePath = path.join(root, "sessions.json");
   await fs.writeFile(storePath, JSON.stringify(params.store), "utf8");
   const warnings: string[] = [];
   const changes: string[] = [];
   const confirmRuntimeRepair = vi.fn(async () => params.confirm ?? true);
-  try {
-    const scanner = createPluginSessionStateDoctorScanner({
-      agentId: params.agentId,
-      cfg: params.cfg,
-      env: params.env ?? {},
-    });
-    for (const [sessionKey, sessionEntry] of Object.entries(params.store)) {
-      scanner.scanEntry(sessionKey, sessionEntry);
-    }
-    await runPluginSessionStateDoctorRepairs({
-      scan: await scanner.result(),
-      store: { kind: "legacy", path: storePath },
-      prompter: { confirmRuntimeRepair },
-      warnings,
-      changes,
-    });
-    return {
-      store: JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, SessionEntry>,
-      warnings,
-      changes,
-      confirmRuntimeRepair,
-    };
-  } finally {
-    await fs.rm(root, { recursive: true, force: true });
+  const scanner = createPluginSessionStateDoctorScanner({
+    agentId: params.agentId,
+    cfg: params.cfg ?? {},
+    env: params.env ?? {},
+  });
+  for (const [sessionKey, sessionEntry] of Object.entries(params.store)) {
+    scanner.scanEntry(sessionKey, sessionEntry);
   }
+  await runPluginSessionStateDoctorRepairs({
+    scan: await scanner.result(),
+    store: { kind: "legacy", path: storePath },
+    prompter: { confirmRuntimeRepair },
+    warnings,
+    changes,
+  });
+  return {
+    store: JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, SessionEntry>,
+    warnings,
+    changes,
+    confirmRuntimeRepair,
+  };
 }
 
 function entry(patch: Record<string, unknown>): SessionEntry {
@@ -144,6 +138,28 @@ function entry(patch: Record<string, unknown>): SessionEntry {
     updatedAt: 1,
     ...patch,
   } as SessionEntry;
+}
+
+function modelConfig(primary: string): OpenClawConfig {
+  return { agents: { defaults: { model: { primary } } } };
+}
+
+function codexEntry(patch: Record<string, unknown> = {}) {
+  return entry({
+    providerOverride: "openai-codex",
+    modelOverride: "gpt-5.4",
+    modelOverrideSource: "auto",
+    modelProvider: "openai-codex",
+    model: "gpt-5.4",
+    agentHarnessId: "codex",
+    ...patch,
+  });
+}
+
+async function runEntry(row: SessionEntry, cfg = modelConfig("github-copilot/gpt-5-mini")) {
+  const key = "agent:main:telegram:direct:2";
+  const result = await runDoctor({ cfg, store: { [key]: row } });
+  return { ...result, key, row: result.store[key] };
 }
 
 describe("doctor session state provider routes", () => {
@@ -177,7 +193,7 @@ describe("doctor session state provider routes", () => {
       }),
     };
 
-    const result = await runDoctor({ cfg: {}, store });
+    const result = await runDoctor({ store });
 
     expect(result.store).toEqual(store);
     expect(result.warnings).toStrictEqual([]);
@@ -243,18 +259,11 @@ describe("doctor session state provider routes", () => {
   });
 
   it("clears stale automatic owner state through the doctor repair boundary", async () => {
-    const sessionKey = "agent:main:telegram:direct:2";
-    const store = {
-      [sessionKey]: entry({
-        providerOverride: "openai-codex",
-        modelOverride: "gpt-5.4",
-        modelOverrideSource: "auto",
+    const result = await runEntry(
+      codexEntry({
         modelOverrideRouteResolution: "resolved",
-        modelProvider: "openai-codex",
-        model: "gpt-5.4",
         contextTokens: 1_050_000,
         systemPromptReport: { source: "run" },
-        agentHarnessId: "codex",
         authProfileOverride: "openai-codex:default",
         authProfileOverrideSource: "auto",
         cliSessionBindings: {
@@ -262,24 +271,22 @@ describe("doctor session state provider routes", () => {
           "claude-cli": { sessionId: "claude-session" },
         },
       }),
-    };
-    const cfg = {
-      agents: { defaults: { model: { primary: "github-copilot/gpt-5-mini" } } },
-    } satisfies OpenClawConfig;
-
-    const result = await runDoctor({ cfg, store });
-    const repaired = result.store[sessionKey] as unknown as Record<string, unknown>;
+    );
 
     expect(result.confirmRuntimeRepair).toHaveBeenCalledOnce();
     expect(result.warnings.join("\n")).toContain("stale Codex session routing state");
     expect(result.changes.join("\n")).toContain("Cleared stale Codex session routing state");
-    expect(repaired.providerOverride).toBeUndefined();
-    expect(repaired.modelOverride).toBeUndefined();
-    expect(repaired.modelOverrideRouteResolution).toBeUndefined();
-    expect(repaired.modelProvider).toBeUndefined();
-    expect(repaired.agentHarnessId).toBeUndefined();
-    expect(repaired.authProfileOverride).toBeUndefined();
-    expect(repaired.cliSessionBindings).toEqual({
+    for (const key of [
+      "providerOverride",
+      "modelOverride",
+      "modelOverrideRouteResolution",
+      "modelProvider",
+      "agentHarnessId",
+      "authProfileOverride",
+    ] as const) {
+      expect(result.row?.[key]).toBeUndefined();
+    }
+    expect(result.row?.cliSessionBindings).toEqual({
       "claude-cli": { sessionId: "claude-session" },
     });
   });
@@ -288,23 +295,20 @@ describe("doctor session state provider routes", () => {
     "clears a genuinely stale owner model $modelProvider/$model",
     async (runtimeModel) => {
       ownerState.owners = [anthropicOwner];
-      const sessionKey = "agent:main:stale-runtime";
-      const result = await runDoctor({
-        cfg: { agents: { defaults: { model: "google/gemini-2.5-pro" } } },
-        store: {
-          [sessionKey]: entry({
-            ...runtimeModel,
-            contextTokens: 128_000,
-            authProfileOverride: "google:chosen",
-            authProfileOverrideSource: "user",
-          }),
-        },
-      });
+      const result = await runEntry(
+        entry({
+          ...runtimeModel,
+          contextTokens: 128_000,
+          authProfileOverride: "google:chosen",
+          authProfileOverrideSource: "user",
+        }),
+        modelConfig("google/gemini-2.5-pro"),
+      );
 
       expect(result.confirmRuntimeRepair).toHaveBeenCalledOnce();
       expect(result.warnings.join("\n")).toContain("runtime model state");
       expect(result.changes.join("\n")).toContain("Cleared stale Anthropic session routing state");
-      expect(result.store[sessionKey]).toEqual({
+      expect(result.row).toEqual({
         sessionId: "session-1",
         updatedAt: expect.any(Number),
         delivery: { kind: "none" },
@@ -322,13 +326,7 @@ describe("doctor session state provider routes", () => {
       defaultAgentId: "ops",
     }).path;
     const sessionKey = "agent:ops:telegram:direct:2";
-    const staleEntry = entry({
-      model: "gpt-5.4",
-      modelOverride: "gpt-5.4",
-      modelOverrideSource: "auto",
-      modelProvider: "openai-codex",
-      providerOverride: "openai-codex",
-    });
+    const staleEntry = codexEntry({ agentHarnessId: undefined });
     const cfg = {
       agents: {
         defaults: { model: { primary: "github-copilot/gpt-5-mini" } },
@@ -360,9 +358,9 @@ describe("doctor session state provider routes", () => {
       sessionKey,
       storePath: sqliteStorePath,
     });
-    expect(repaired?.providerOverride).toBeUndefined();
-    expect(repaired?.modelOverride).toBeUndefined();
-    expect(repaired?.modelProvider).toBeUndefined();
+    for (const key of ["providerOverride", "modelOverride", "modelProvider"] as const) {
+      expect(repaired?.[key]).toBeUndefined();
+    }
     expect(fsSync.existsSync(legacyStorePath)).toBe(false);
   });
 
@@ -407,110 +405,63 @@ describe("doctor session state provider routes", () => {
   });
 
   it.each([
-    {
-      provider: "anthropic",
-      runtime: "claude-cli",
-      model: "claude-sonnet-4-6",
-      available: true,
-    },
-    {
-      provider: "google",
-      runtime: "google-gemini-cli",
-      model: "gemini-2.5-pro",
-      available: true,
-    },
-    {
-      provider: "anthropic",
-      runtime: "claude-cli",
-      model: "claude-sonnet-4-6",
-      available: false,
-    },
-  ])("preserves only available CLI owner $provider/$runtime ($available)", async (choice) => {
-    ownerState.owners = [
-      {
-        id: choice.provider,
-        label: choice.provider,
-        providerIds: [choice.provider],
-        runtimeIds: [choice.runtime],
-      },
-    ];
-    runtimeState.registered = false;
-    runtimeState.cliBackends = choice.available
-      ? [{ id: choice.runtime, modelProvider: choice.provider }]
-      : [];
-    const key = "agent:main:dashboard:cli-runtime";
-    const selected = entry({
-      providerOverride: choice.provider,
-      modelOverride: choice.model,
-      modelOverrideSource: "user",
-      agentRuntimeOverride: choice.runtime,
-    });
-    const result = await runDoctor({
-      cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
-      store: { [key]: selected },
-    });
-    if (choice.available) {
-      expect(result.store[key]).toEqual(selected);
-    } else {
-      expect(result.store[key]).not.toHaveProperty("agentRuntimeOverride");
-      expect(result.store[key]).toMatchObject({
-        providerOverride: choice.provider,
-        modelOverride: choice.model,
+    ["anthropic", "claude-cli", "claude-sonnet-4-6", true],
+    ["google", "google-gemini-cli", "gemini-2.5-pro", true],
+    ["anthropic", "claude-cli", "claude-sonnet-4-6", false],
+  ] as const)(
+    "preserves only available CLI owner %s/%s (%s, %s)",
+    async (provider, runtime, model, available) => {
+      ownerState.owners = [
+        {
+          id: provider,
+          label: provider,
+          providerIds: [provider],
+          runtimeIds: [runtime],
+        },
+      ];
+      runtimeState.registered = false;
+      runtimeState.cliBackends = available ? [{ id: runtime, modelProvider: provider }] : [];
+      const selected = entry({
+        providerOverride: provider,
+        modelOverride: model,
+        modelOverrideSource: "user",
+        agentRuntimeOverride: runtime,
       });
-    }
-  });
+      const result = await runEntry(selected, modelConfig("openai/gpt-5.4"));
+      if (available) {
+        expect(result.row).toEqual(selected);
+      } else {
+        expect(result.row).not.toHaveProperty("agentRuntimeOverride");
+        expect(result.row).toMatchObject({
+          providerOverride: provider,
+          modelOverride: model,
+        });
+      }
+    },
+  );
 
   it("clears ignored legacy claude-cli residue after switching to openai-codex", async () => {
     ownerState.owners = [codexOwner, anthropicOwner];
-    const key = "agent:main:telegram:direct:legacy";
-    const result = await runDoctor({
-      cfg: { agents: { defaults: { model: { primary: "openai-codex/gpt-5.5" } } } },
-      store: {
-        [key]: entry({
-          modelProvider: "openai-codex",
-          model: "gpt-5.5",
-          agentRuntimeOverride: "claude-cli",
-        }),
-      },
-    });
-    expect(result.store[key]).not.toHaveProperty("agentRuntimeOverride");
+    const result = await runEntry(
+      entry({
+        modelProvider: "openai-codex",
+        model: "gpt-5.5",
+        agentRuntimeOverride: "claude-cli",
+      }),
+      modelConfig("openai-codex/gpt-5.5"),
+    );
+    expect(result.row).not.toHaveProperty("agentRuntimeOverride");
   });
 
   it("leaves explicit user owner choices for manual review", async () => {
-    const sessionKey = "agent:main:telegram:direct:3";
-    const store = {
-      [sessionKey]: entry({
-        providerOverride: "openai-codex",
-        modelOverride: "gpt-5.4",
-        modelOverrideSource: "user",
-        modelProvider: "openai-codex",
-        model: "gpt-5.4",
-        agentHarnessId: "codex",
-      }),
-    };
-    const cfg = {
-      agents: { defaults: { model: { primary: "github-copilot/gpt-5-mini" } } },
-    } satisfies OpenClawConfig;
-
-    const result = await runDoctor({ cfg, store });
-
-    expect(result.store).toEqual(store);
+    const selected = codexEntry({ modelOverrideSource: "user" });
+    const result = await runEntry(selected);
+    expect(result.store).toEqual({ [result.key]: selected });
     expect(result.warnings.join("\n")).toContain("explicit Codex model overrides");
     expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
   });
 
   it("keeps configured owner model state while clearing a stale runtime pin", async () => {
-    const sessionKey = "agent:main:telegram:direct:4";
-    const store = {
-      [sessionKey]: entry({
-        providerOverride: "openai-codex",
-        modelOverride: "gpt-5.4",
-        modelOverrideSource: "auto",
-        modelProvider: "openai-codex",
-        model: "gpt-5.4",
-        agentHarnessId: "codex",
-      }),
-    };
     const cfg = {
       agents: {
         defaults: {
@@ -522,12 +473,12 @@ describe("doctor session state provider routes", () => {
       },
     } satisfies OpenClawConfig;
 
-    const result = await runDoctor({ cfg, store });
-    const repaired = result.store[sessionKey] as unknown as Record<string, unknown>;
-
-    expect(repaired.providerOverride).toBe("openai-codex");
-    expect(repaired.modelOverride).toBe("gpt-5.4");
-    expect(repaired.modelProvider).toBe("openai-codex");
-    expect(repaired.agentHarnessId).toBeUndefined();
+    const result = await runEntry(codexEntry(), cfg);
+    expect(result.row).toMatchObject({
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-5.4",
+      modelProvider: "openai-codex",
+    });
+    expect(result.row?.agentHarnessId).toBeUndefined();
   });
 });
