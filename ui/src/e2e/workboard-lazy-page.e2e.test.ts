@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { createWorkboardCard } from "../../../extensions/workboard/browser/lib/workboard/test/index-helpers.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installWorkboardPage } from "./workboard-page.test-support.ts";
@@ -27,13 +26,18 @@ suite.define(() => {
             },
           ];
           const cards = [
-            createWorkboardCard({
+            {
               id: "ops-ready",
               title: "Review release",
               status: "ready",
+              priority: "normal",
+              labels: [],
+              position: 1_000,
+              createdAt: 1,
+              updatedAt: 2,
               agentId: "main",
               metadata: { automation: { boardId: "ops" } },
-            }),
+            },
           ];
           await installWorkboardPage(page, suite.server.baseUrl, "ops", {
             "workboard.boards.list": { boards },

@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { createWorkboardCard } from "../../../extensions/workboard/browser/lib/workboard/test/index-helpers.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { board as emptyBoard, seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
@@ -31,16 +30,18 @@ const boardSnapshot = {
 };
 
 const statuses = ["ready", "running", "done"] as const;
-const cards = statuses.map((status, index) =>
-  createWorkboardCard({
-    id: `card-${status}`,
-    title: `${status} card`,
-    status,
-    position: (index + 1) * 1_000,
-    agentId: "main",
-    metadata: { automation: { boardId: "platform" } },
-  }),
-);
+const cards = statuses.map((status, index) => ({
+  id: `card-${status}`,
+  title: `${status} card`,
+  status,
+  priority: "normal",
+  labels: [],
+  position: (index + 1) * 1_000,
+  createdAt: 1,
+  updatedAt: 2,
+  agentId: "main",
+  metadata: { automation: { boardId: "platform" } },
+}));
 
 suite.define(() => {
   it("keeps paged cards visible in the compact grid at desktop and mobile widths", async () => {

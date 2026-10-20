@@ -345,7 +345,13 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("tolerates timeout-only provider overlays when selecting a Foundry model", async () => {
-    const config = makeConfig({ baseUrl: "", models: [], timeoutSeconds: 120 });
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          [providerId]: { baseUrl: "", models: [], timeoutSeconds: 120 },
+        },
+      },
+    };
     await selectModel(config, "gpt-5.4");
     expect(configuredProvider(config)).toMatchObject({ models: [], timeoutSeconds: 120 });
   });
