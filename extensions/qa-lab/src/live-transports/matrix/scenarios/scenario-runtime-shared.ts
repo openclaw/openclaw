@@ -146,9 +146,7 @@ export function buildMatrixReplyArtifact(
   event: MatrixQaObservedEvent,
   token?: string,
 ): MatrixQaReplyArtifact {
-  const replyBody = event.body?.trim();
   return {
-    bodyPreview: truncateMatrixQaPreview(replyBody),
     eventId: event.eventId,
     mentions: event.mentions,
     relatesTo: event.relatesTo,

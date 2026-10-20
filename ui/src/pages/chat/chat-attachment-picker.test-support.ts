@@ -23,11 +23,7 @@ export function renderAttachmentHarness(
   getAttachments: () => ChatAttachment[],
   onAttachmentsChange: (attachments: ChatAttachment[]) => void,
 ) {
-  return renderChatView({
-    attachments: getAttachments(),
-    getAttachments,
-    onAttachmentsChange,
-  });
+  return renderChatView({ attachments: getAttachments(), getAttachments, onAttachmentsChange });
 }
 
 export async function renderSettledPastedTextAttachment(
@@ -37,10 +33,7 @@ export async function renderSettledPastedTextAttachment(
   try {
     const container = renderChatView(overrides);
     await waitForSolid(() =>
-      expectDefined(
-        container.querySelector<HTMLElement>("openclaw-chat-pasted-text"),
-        "pasted text attachment",
-      ),
+      expectDefined(container.querySelector("openclaw-chat-pasted-text"), "pasted text attachment"),
     );
     flush();
     expect(read).toHaveBeenCalledOnce();
@@ -48,8 +41,7 @@ export async function renderSettledPastedTextAttachment(
     if (result.type !== "return") {
       throw result.value;
     }
-    // The excerpt owns a real body read followed by a lazy parser import and a Solid update.
-    // Await those operations instead of racing cold transforms against a polling budget.
+    // Await the body read and lazy parser before flushing the excerpt's Solid update.
     await result.value;
     await vi.dynamicImportSettled();
     flush();
@@ -93,9 +85,5 @@ export function selectAttachmentMenuOption(button: HTMLButtonElement | undefined
 }
 
 export function requireAttachmentInput(container: Element, selector: string, label: string) {
-  const input = container.querySelector<HTMLInputElement>(selector);
-  if (input === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return input;
+  return expectDefined(container.querySelector<HTMLInputElement>(selector), label);
 }

@@ -61,7 +61,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   "config.changed": [READ_SCOPE],
   "agent.identity.changed": [READ_SCOPE],
   "users.prefs.changed": [SESSION_READ_SCOPE],
-  "mentions.changed": [READ_SCOPE],
+  "mentions.changed": [SESSION_READ_SCOPE],
   "skills.changed": [READ_SCOPE],
   "plugins.changed": [READ_SCOPE],
   "plugins.install.progress": [ADMIN_SCOPE],

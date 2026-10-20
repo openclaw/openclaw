@@ -2,8 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
+import { SessionManager } from "../../sessions/session-manager.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../../workspace-bootstrap-read.js";
 import { prepareEmbeddedAttemptBootstrap } from "./attempt-bootstrap-prepare.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
@@ -28,6 +31,7 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
     options: {
       contextInjection?: "always" | "continuation-skip" | "never";
       effectiveWorkspace?: string;
+      isRawModelRun?: boolean;
       attempt?: Partial<EmbeddedRunAttemptParams>;
     } = {},
   ) {
@@ -50,9 +54,178 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
         resolvedWorkspace: sessionWorkspace,
       }),
       hasReadTool: true,
-      isRawModelRun: false,
+      isRawModelRun: options.isRawModelRun ?? false,
     });
   }
+
+  it.each([
+    {
+      mode: "always",
+      pending: false,
+      canonical: true,
+      runKind: "default",
+      contextMode: "full",
+      bootstrapMode: "none",
+      completion: false,
+      injected: true,
+    },
+    {
+      mode: "always",
+      pending: true,
+      canonical: true,
+      runKind: "default",
+      contextMode: "full",
+      bootstrapMode: "full",
+      completion: true,
+      injected: true,
+    },
+    {
+      mode: "continuation-skip",
+      pending: false,
+      canonical: true,
+      runKind: "default",
+      contextMode: "full",
+      bootstrapMode: "none",
+      completion: true,
+      injected: true,
+    },
+    {
+      mode: "continuation-skip",
+      pending: false,
+      canonical: true,
+      runKind: "cron",
+      contextMode: "full",
+      bootstrapMode: "none",
+      completion: false,
+      injected: true,
+    },
+    {
+      mode: "continuation-skip",
+      pending: false,
+      canonical: true,
+      runKind: "heartbeat",
+      contextMode: "full",
+      bootstrapMode: "none",
+      completion: false,
+      injected: true,
+    },
+    {
+      mode: "continuation-skip",
+      pending: false,
+      canonical: true,
+      runKind: "default",
+      contextMode: "lightweight",
+      bootstrapMode: "none",
+      completion: false,
+      injected: false,
+    },
+    {
+      mode: "continuation-skip",
+      pending: true,
+      canonical: false,
+      runKind: "default",
+      contextMode: "full",
+      bootstrapMode: "limited",
+      completion: false,
+      injected: true,
+    },
+    {
+      mode: "never",
+      pending: true,
+      canonical: true,
+      runKind: "default",
+      contextMode: "full",
+      bootstrapMode: "full",
+      completion: false,
+      injected: false,
+    },
+  ] as const)(
+    "completion follows delivered context: $mode / pending=$pending / $runKind / $contextMode",
+    async (testCase) => {
+      const workspace = await makeWorkspace("completion-workspace", {
+        "AGENTS.md": "Workspace instructions",
+        ...(testCase.pending ? { "BOOTSTRAP.md": "Finish the workspace setup." } : {}),
+      });
+      const result = await prepare(workspace, workspace, {
+        contextInjection: testCase.mode,
+        attempt: {
+          isCanonicalWorkspace: testCase.canonical,
+          bootstrapContextRunKind: testCase.runKind,
+          bootstrapContextMode: testCase.contextMode,
+        },
+      });
+
+      expect(result).toMatchObject({
+        bootstrapMode: testCase.bootstrapMode,
+        shouldRecordCompletedBootstrapTurn: testCase.completion,
+      });
+      expect(result.contextFiles.some((file) => file.content === "Workspace instructions")).toBe(
+        testCase.injected,
+      );
+      if (!testCase.injected) {
+        expect(result.contextFiles).toEqual([]);
+        expect(result.bootstrapInjectionStats).toEqual([]);
+      }
+    },
+  );
+
+  it("skips injection for a completed limited-bootstrap continuation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const workspace = state.workspaceDir;
+      await fs.writeFile(path.join(workspace, "AGENTS.md"), "Already delivered instructions");
+      await fs.writeFile(path.join(workspace, "BOOTSTRAP.md"), "Finish the workspace setup.");
+      const sessionTarget = {
+        agentId: "main",
+        sessionId: "completed-bootstrap-session",
+        sessionKey: "agent:main:completed-bootstrap-session",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      };
+      await upsertSessionEntryCore(sessionTarget, {
+        sessionId: sessionTarget.sessionId,
+        updatedAt: Date.now(),
+      });
+      const sessionManager = await SessionManager.openAsync(sessionTarget, workspace);
+      await sessionManager.appendCustomEntryAsync(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, {
+        timestamp: 1,
+      });
+
+      const result = await prepare(workspace, workspace, {
+        contextInjection: "continuation-skip",
+        attempt: {
+          sessionId: sessionTarget.sessionId,
+          sessionKey: sessionTarget.sessionKey,
+          sessionTarget,
+          isCanonicalWorkspace: false,
+        },
+      });
+
+      expect(result).toMatchObject({
+        bootstrapMode: "limited",
+        contextFiles: [],
+        bootstrapInjectionStats: [],
+        shouldRecordCompletedBootstrapTurn: false,
+      });
+    });
+  });
+
+  it.each(["raw", "settled"] as const)(
+    "withholds ambient context for %s model work",
+    async (kind) => {
+      const workspace = await makeWorkspace("isolated-workspace", {
+        "AGENTS.md": "Ambient instructions must stay out",
+      });
+      const result = await prepare(workspace, workspace, {
+        isRawModelRun: kind === "raw",
+        attempt: kind === "settled" ? { operation: "settled-tool-finalization" } : {},
+      });
+
+      expect(result).toMatchObject({
+        contextFiles: [],
+        bootstrapInjectionStats: [],
+        shouldRecordCompletedBootstrapTurn: false,
+      });
+    },
+  );
 
   it("layers execution project instructions after agent bootstrap files", async () => {
     const agentWorkspace = await makeWorkspace("agent-workspace", {

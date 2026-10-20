@@ -306,7 +306,7 @@ export function createGatewayBroadcaster(params: {
     let sessionReadContext: boolean | undefined;
     const hasSessionReadContext = () =>
       (sessionReadContext ??=
-        (event === "users.prefs.changed" && isTargeted) ||
+        ((event === "users.prefs.changed" || event === "mentions.changed") && isTargeted) ||
         (params.canReceiveSessionEvent !== undefined &&
           sessionKeys.length > 0 &&
           sessionKeys.every((key) => key.trim().length > 0)) ||

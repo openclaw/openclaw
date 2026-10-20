@@ -112,6 +112,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/config/sessions/startup-migration.registry-recovery.test.ts",
   "src/gateway/mention-inbox.worker.test.ts",
   "src/gateway/mention-inbox.test.ts",
+  "src/gateway/mention-inbox.guest.test.ts",
   "src/gateway/session-activity-summary-source.test.ts",
   "src/gateway/github-oauth-lifecycle.test.ts",
   "src/gateway/github-oauth-lifecycle.scheduling.test.ts",

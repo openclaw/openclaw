@@ -9,20 +9,21 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+function makeFixture(
+  relative = "src/example.test.ts",
+  contents = 'process.env.HOME = "fixture"; it.skip("fixture", () => {});\n'.repeat(122),
+) {
+  const repoRoot = path.join(tempDirs.make("openclaw-inventory-argv-"), " literal root ");
+  const file = path.join(repoRoot, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, contents);
+  return repoRoot;
+}
+
 describe.each([
   { name: "env mutation", main: runEnvReport },
   { name: "skip inventory", main: runSkipReport },
 ])("$name CLI argument contract", ({ main }) => {
-  function makeFixture() {
-    const repoRoot = path.join(tempDirs.make("openclaw-inventory-argv-"), " literal root ");
-    fs.mkdirSync(path.join(repoRoot, "src"), { recursive: true });
-    fs.writeFileSync(
-      path.join(repoRoot, "src/example.test.ts"),
-      'process.env.HOME = "fixture"; it.skip("fixture", () => {});\n'.repeat(122),
-    );
-    return repoRoot;
-  }
-
   it("uses cwd and the default limit, then honors the last split root and limit", () => {
     const repoRoot = makeFixture();
     vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
@@ -30,21 +31,9 @@ describe.each([
     expect(main([])).toBe(0);
     expect(stdout).toHaveBeenLastCalledWith(expect.stringContaining("... 2 more finding(s)"));
 
-    expect(
-      main([
-        "--repo-root",
-        "unused",
-        "--",
-        "--repo-root",
-        repoRoot,
-        "--limit",
-        "1",
-        "--",
-        "--limit",
-        "0002",
-        "--",
-      ]),
-    ).toBe(0);
+    const roots = ["--repo-root", "unused", "--", "--repo-root", repoRoot];
+    const limits = ["--limit", "1", "--", "--limit", "0002", "--"];
+    expect(main([...roots, ...limits])).toBe(0);
     expect(stdout).toHaveBeenLastCalledWith(expect.stringContaining("... 120 more finding(s)"));
 
     for (const limit of ["0", "000", String(Number.MAX_SAFE_INTEGER)]) {
@@ -73,38 +62,36 @@ describe.each([
   });
 });
 
-describe("shared inventory argument validation", () => {
-  it.each([
-    { argv: ["--limit"], error: "--limit expects a non-negative integer" },
-    ...["-1", "9007199254740992", "--"].map((value) => ({
-      argv: ["--limit", value],
-      error: "--limit expects a non-negative integer",
-    })),
-    { argv: ["--repo-root"], error: "--repo-root expects a path" },
-    { argv: ["--repo-root", "-h"], error: "--repo-root expects a path" },
-    { argv: ["--limit=1"], error: "Unknown argument: --limit=1" },
-    { argv: ["--limit", "1", "--limit", "bad"], error: "--limit expects a non-negative integer" },
-    { argv: ["--limit", "bad", "--limit", "1"], error: "--limit expects a non-negative integer" },
-    { argv: ["--repo-root", "valid", "--repo-root", ""], error: "--repo-root expects a path" },
-    { argv: ["--repo-root", "", "--repo-root", "valid"], error: "--repo-root expects a path" },
-    { argv: ["--unknown", "--limit", "bad"], error: "Unknown argument: --unknown" },
-    { argv: ["--limit", "bad", "--unknown"], error: "--limit expects a non-negative integer" },
-  ])("rejects argv %# before output or scanning, even with help", ({ argv, error }) => {
-    const scan = vi.spyOn(fileUtils, "listRepoFilesSync");
-    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-    for (const args of [argv, ["--help", ...argv], [...argv, "--help"]]) {
-      expect(() => runEnvReport(args)).toThrow(new Error(error));
-    }
-    expect(stdout).not.toHaveBeenCalled();
-    expect(scan).not.toHaveBeenCalled();
-  });
+const limitError = "--limit expects a non-negative integer";
+const rootError = "--repo-root expects a path";
+it.each([
+  { argv: ["--limit"], error: limitError },
+  ...["-1", "9007199254740992", "--"].map((value) => ({
+    argv: ["--limit", value],
+    error: limitError,
+  })),
+  { argv: ["--repo-root"], error: rootError },
+  { argv: ["--repo-root", "-h"], error: rootError },
+  { argv: ["--limit=1"], error: "Unknown argument: --limit=1" },
+  { argv: ["--limit", "1", "--limit", "bad"], error: limitError },
+  { argv: ["--limit", "bad", "--limit", "1"], error: limitError },
+  { argv: ["--repo-root", "valid", "--repo-root", ""], error: rootError },
+  { argv: ["--repo-root", "", "--repo-root", "valid"], error: rootError },
+  { argv: ["--unknown", "--limit", "bad"], error: "Unknown argument: --unknown" },
+  { argv: ["--limit", "bad", "--unknown"], error: limitError },
+])("rejects argv %# before output or scanning, even with help", ({ argv, error }) => {
+  const scan = vi.spyOn(fileUtils, "listRepoFilesSync");
+  const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  for (const args of [argv, ["--help", ...argv], [...argv, "--help"]]) {
+    expect(() => runEnvReport(args)).toThrow(new Error(error));
+  }
+  expect(stdout).not.toHaveBeenCalled();
+  expect(scan).not.toHaveBeenCalled();
 });
 
 it("registers the repeatable include-allowed flag only for the env report", () => {
-  const repoRoot = tempDirs.make("openclaw-inventory-allowed-");
-  fs.mkdirSync(path.join(repoRoot, "src/test-utils"), { recursive: true });
-  fs.writeFileSync(
-    path.join(repoRoot, "src/test-utils/openclaw-test-state.ts"),
+  const repoRoot = makeFixture(
+    "src/test-utils/openclaw-test-state.ts",
     'process.env.HOME = "fixture";',
   );
   const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
