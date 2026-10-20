@@ -65,12 +65,10 @@ async function runScheduler(state: CronServiceState, startup?: StartupOptions): 
   }
   const channelName = `cron-test.${randomUUID()}`;
   const storeKey = cronStoreKey(state.deps.storePath);
-  const lease = createOpenClawStateWorkerLease(
-    captureOpenClawStateWorkerContext(),
-    async (scope) => {
-      await scope.execute({ type: "cron.schedulerStop", input: { storeKey, channelName } });
-    },
-  );
+  const context = captureOpenClawStateWorkerContext();
+  const lease = createOpenClawStateWorkerLease(context, async (scope) => {
+    await scope.execute({ type: "cron.schedulerStop", input: { storeKey, channelName } });
+  });
   try {
     const snapshot = await captureCronSchedulerSnapshot(state);
     const result = await lease.execute({

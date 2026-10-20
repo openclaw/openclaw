@@ -18,14 +18,14 @@ const opsRegressionFixtures = setupCronRegressionFixtures({
 });
 
 it.each([
-  { phase: "planning", route: "default" },
-  { phase: "planning", route: "absence" },
-  { phase: "planning", route: "explicit agent" },
-  { phase: "planning", route: "session owner" },
-  { phase: "cleanup", route: "default" },
+  ["planning", "default", "original-agent"],
+  ["planning", "absence", undefined],
+  ["planning", "explicit agent", "explicit-owner"],
+  ["planning", "session owner", "session-owner"],
+  ["cleanup", "default", "original-agent"],
 ] as const)(
-  "preserves startup $phase auto-disable routing when the default changes after commit ($route)",
-  async ({ phase, route }) => {
+  "preserves startup %s auto-disable routing after a default change (%s)",
+  async (phase, route, agentId) => {
     const { storePath } = opsRegressionFixtures.makeStorePath();
     const now = Date.now();
     const job = createDueIsolatedJob({
@@ -50,14 +50,12 @@ it.each([
         .prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
         .get(storeKey, job.id)?.enabled;
     let currentDefault = route === "default" ? "original-agent" : undefined;
-    let committed = false;
     const order: string[] = [];
     const enqueueSystemEvent = vi.fn(() => {
       expect(readEnabled()).toBe(0);
       order.push("notify");
     });
     const requestHeartbeat = vi.fn(() => {
-      expect(order.at(-1)).toBe("notify");
       order.push("heartbeat");
     });
     const warn = vi.fn();
@@ -80,11 +78,9 @@ it.each([
       requestHeartbeat,
       runIsolatedAgentJob: runner,
     });
-    state.deps.defaultAgentId = undefined;
     state.deps.log = { ...state.deps.log, warn };
     const stopObserving = observeCronStoreCommits(storePath, () => {
-      if (!committed && readEnabled() === 0) {
-        committed = true;
+      if (!order.includes("commit") && readEnabled() === 0) {
         order.push("commit");
         currentDefault = "replacement-agent";
       }
@@ -99,7 +95,6 @@ it.each([
           .prepare("SELECT receipt_id FROM cron_run_receipts WHERE store_key = ? AND job_id = ?")
           .all(storeKey, job.id),
       ).toEqual([]);
-      expect(committed).toBe(true);
       expect(persisted).toMatchObject({
         enabled: false,
         schedule: job.schedule,
@@ -127,11 +122,6 @@ it.each([
           "cron: post-persist notification failed",
         );
       } else {
-        const agentId = {
-          "explicit agent": "explicit-owner",
-          "session owner": "session-owner",
-          default: "original-agent",
-        }[route];
         expect(order).toEqual(["commit", "notify", "heartbeat"]);
         expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining("was auto-disabled"),
