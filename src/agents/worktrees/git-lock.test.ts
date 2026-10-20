@@ -32,6 +32,10 @@ async function lockedReason(repoRoot: string, worktreePath: string): Promise<str
     ?.lockedReason;
 }
 
+function setLock(record: ManagedWorktreeRecord, reason: string) {
+  return git(record.repoRoot, "worktree", "lock", "--reason", reason, record.path);
+}
+
 describe("lockWorktreeForProcess", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -64,14 +68,7 @@ describe("lockWorktreeForProcess", () => {
   it("reclaims a lock left behind by a dead OpenClaw process", async () => {
     const record = await setupWorktree();
     const stalePid = await exitedPid();
-    await git(
-      record.repoRoot,
-      "worktree",
-      "lock",
-      "--reason",
-      `openclaw pid=${stalePid}`,
-      record.path,
-    );
+    await setLock(record, `openclaw pid=${stalePid}`);
     expect(await lockState(record)).toEqual({ kind: "dead", pid: stalePid });
 
     await expect(lockWorktreeForProcess(record)).resolves.toBe(true);
@@ -79,32 +76,15 @@ describe("lockWorktreeForProcess", () => {
     expect(await lockedReason(record.repoRoot, record.path)).toBe(`openclaw pid=${process.pid}`);
   });
 
-  it("keeps a lock held by a live OpenClaw process", async () => {
-    const record = await setupWorktree();
-    // The parent process is alive and is not this process, so the lock must stand.
-    const livePid = process.ppid;
-    await git(
-      record.repoRoot,
-      "worktree",
-      "lock",
-      "--reason",
-      `openclaw pid=${livePid}`,
-      record.path,
-    );
-
-    await expect(lockWorktreeForProcess(record)).rejects.toThrow(/git worktree lock/);
-
-    expect(await lockedReason(record.repoRoot, record.path)).toBe(`openclaw pid=${livePid}`);
-  });
-
-  it("keeps a foreign lock that OpenClaw does not own", async () => {
-    const record = await setupWorktree();
-    await git(record.repoRoot, "worktree", "lock", "--reason", "held by hand", record.path);
-
-    await expect(lockWorktreeForProcess(record)).rejects.toThrow(/git worktree lock/);
-
-    expect(await lockedReason(record.repoRoot, record.path)).toBe("held by hand");
-  });
+  it.each([`openclaw pid=${process.ppid}`, "held by hand"])(
+    "keeps another owner's lock: %s",
+    async (reason) => {
+      const record = await setupWorktree();
+      await setLock(record, reason);
+      await expect(lockWorktreeForProcess(record)).rejects.toThrow(/git worktree lock/);
+      expect(await lockedReason(record.repoRoot, record.path)).toBe(reason);
+    },
+  );
 
   it("reports new and existing same-process lock ownership", async () => {
     const record = await setupWorktree();

@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runCliProcessChild } from "../../cli/cli-process-child.test-helpers.js";
@@ -35,19 +35,14 @@ function migrationFixture() {
     INSERT INTO worktrees (
       id, repo_fingerprint, repo_root, path, branch, base_ref,
       owner_kind, created_at, last_active_at, provisioned_paths_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, '0123456789abcdef', ?, ?, ?, 'HEAD', 'manual', 1, 1, ?)
   `);
   for (const id of ["legacy", "current"]) {
     insert.run(
       id,
-      "0123456789abcdef",
       path.join(root, "repo"),
       path.join(root, id),
       `openclaw/${id}`,
-      "HEAD",
-      "manual",
-      1,
-      1,
       id === "legacy" ? null : "[]",
     );
   }
@@ -126,13 +121,15 @@ describe("native worktree migration ownership", () => {
   it.each(["offline", "inherited maintenance"] as const)("preserves %s migration", async (mode) => {
     const fixture = migrationFixture();
     const facts = new Map();
-    const unsubscribe = worktreeRegistryPublication.subscribeFacts((change) => {
-      if (change.kind === "committed") {
-        for (const [key, fact] of change.receipt.facts) {
-          facts.set(key, fact);
+    onTestFinished(
+      worktreeRegistryPublication.subscribeFacts((change) => {
+        if (change.kind === "committed") {
+          for (const [key, fact] of change.receipt.facts) {
+            facts.set(key, fact);
+          }
         }
-      }
-    });
+      }),
+    );
     const migrate = () => {
       expect(discardLegacyRegistryWorktrees(fixture.env, ["legacy"])).toBe(1);
       expect(facts.get(JSON.stringify(["worktrees", "legacy"]))).toEqual({ kind: "absent" });
@@ -142,26 +139,22 @@ describe("native worktree migration ownership", () => {
         value: { id: "current", path: fixture.rewrite.toPath },
       });
     };
-    try {
-      if (mode === "inherited maintenance") {
-        const owner = await acquireGatewayLock({
-          env: fixture.env,
-          role: "sqlite-maintenance",
-          allowInTests: true,
-          timeoutMs: 0,
-        });
-        expect(owner).not.toBeNull();
-        try {
-          owner!.run(migrate);
-        } finally {
-          await owner?.release();
-        }
-      } else {
-        migrate();
+    if (mode === "inherited maintenance") {
+      const owner = await acquireGatewayLock({
+        env: fixture.env,
+        role: "sqlite-maintenance",
+        allowInTests: true,
+        timeoutMs: 0,
+      });
+      expect(owner).not.toBeNull();
+      try {
+        owner!.run(migrate);
+      } finally {
+        await owner?.release();
       }
-      expect(fixture.rows()).toEqual([{ id: "current", path: fixture.rewrite.toPath }]);
-    } finally {
-      unsubscribe();
+    } else {
+      migrate();
     }
+    expect(fixture.rows()).toEqual([{ id: "current", path: fixture.rewrite.toPath }]);
   });
 });

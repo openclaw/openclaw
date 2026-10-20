@@ -14,6 +14,17 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => vi.restoreAllMocks());
 
+  async function template() {
+    const root = tempDirs.make("openclaw-refs-", refsRoot);
+    const source = path.join(root, "source");
+    const destination = path.join(root, "destination");
+    const backend = await detectWorktreeFilesystemBackend(root, options);
+    assert(backend);
+    expect(backend.id).toBe("refs");
+    await backend.createTemplate(source, options);
+    return { source, destination, backend };
+  }
+
   it("keeps the Windows system volume on native Git checkout", async () => {
     const systemRoot = Object.entries(process.env).find(
       ([key]) => key.toLowerCase() === "systemroot",
@@ -24,13 +35,7 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
 
   describe.skipIf(!refsRoot)("native ReFS (requires OPENCLAW_TEST_REFS_ROOT)", () => {
     it("clones fresh bytes and physical extents with independent writes and exclusive destinations", async () => {
-      const root = tempDirs.make("openclaw-refs-clone-", refsRoot);
-      const source = path.join(root, "source");
-      const destination = path.join(root, "destination");
-      const backend = await detectWorktreeFilesystemBackend(root, options);
-      assert(backend);
-      expect(backend.id).toBe("refs");
-      await backend.createTemplate(source, options);
+      const { source, destination, backend } = await template();
       await fs.mkdir(path.join(source, "nested"));
       const contents = new Map([
         ["empty", Buffer.alloc(0)],
@@ -50,11 +55,13 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
       await backend.cloneTemplate(source, destination, options);
       for (const [name, bytes] of contents) {
         const copied = await fs.stat(path.join(destination, name));
-        expect(copied.atimeMs).toBe(atime.getTime());
-        expect(copied.mtimeMs).toBe(mtime.getTime());
-        expect(copied.birthtimeMs).toBe(sourceBirthtimes.get(name));
+        expect(copied).toMatchObject({
+          atimeMs: atime.getTime(),
+          mtimeMs: mtime.getTime(),
+          birthtimeMs: sourceBirthtimes.get(name),
+          size: bytes.length,
+        });
         expect(await fs.readFile(path.join(destination, name))).toEqual(bytes);
-        expect(copied.size).toBe(bytes.length);
         expect(getRefsFullClusterLcns(path.join(destination, name))).toEqual(
           getRefsFullClusterLcns(path.join(source, name)),
         );
@@ -82,12 +89,7 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
     });
 
     it("preserves literal and dangling file and directory symlinks", async (context) => {
-      const root = tempDirs.make("openclaw-refs-symlink-", refsRoot);
-      const source = path.join(root, "source");
-      const destination = path.join(root, "destination");
-      const backend = await detectWorktreeFilesystemBackend(root, options);
-      assert(backend);
-      await backend.createTemplate(source, options);
+      const { source, destination, backend } = await template();
       await fs.writeFile(path.join(source, "payload"), "data");
       const links = [
         ["link", "payload", "file"],
@@ -120,12 +122,7 @@ describe.skipIf(process.platform !== "win32")("ReFS worktree filesystem", () => 
     });
 
     it("stops before the next file when allocation authority is revoked", async () => {
-      const root = tempDirs.make("openclaw-refs-cancellation-", refsRoot);
-      const source = path.join(root, "source");
-      const destination = path.join(root, "destination");
-      const backend = await detectWorktreeFilesystemBackend(root, options);
-      assert(backend);
-      await backend.createTemplate(source, options);
+      const { source, destination, backend } = await template();
       await fs.writeFile(path.join(source, "a"), "first");
       await fs.writeFile(path.join(source, "b"), "second");
       const prototype = Object.getPrototypeOf(await fsRoot(source)) as Root;
