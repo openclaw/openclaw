@@ -69,34 +69,31 @@ describe("memory index generation lease", () => {
     expect(published).toHaveBeenCalledOnce();
   });
 
-  it("admits another reader into the active generation when no writer is queued", async () => {
+  it.each([false, true])("admits a second reader with queued publication=%s", async (queued) => {
     const events: string[] = [];
-    const generationPath = "/memory-test/shared-reader-generation.sqlite";
+    const generationPath = `/memory-test/second-reader-${queued}.sqlite`;
     const releaseFirstReader = await acquireMemoryIndexReadGeneration(generationPath);
     events.push("first-reader");
-    const releaseNextReader = await acquireMemoryIndexReadGeneration(generationPath);
-    events.push("next-reader");
-    expect(events).toEqual(["first-reader", "next-reader"]);
-    await releaseNextReader();
-    await releaseFirstReader();
-  });
-
-  it("does not admit a new generation reader ahead of queued publication", async () => {
-    const events: string[] = [];
-    const generationPath = "/memory-test/publish-before-reader.sqlite";
-    const releaseFirstReader = await acquireMemoryIndexReadGeneration(generationPath);
-    events.push("first-reader");
-    const publish = withMemoryIndexGeneration(generationPath, "write", async () => {
-      events.push("publish");
-    });
+    const publish = queued
+      ? withMemoryIndexGeneration(generationPath, "write", async () => {
+          events.push("publish");
+        })
+      : Promise.resolve();
     const nextReader = acquireMemoryIndexReadGeneration(generationPath).then(async (release) => {
       events.push("next-reader");
       await release();
     });
-    await Promise.resolve();
-    expect(events).toEqual(["first-reader"]);
-    await releaseFirstReader();
+    if (queued) {
+      await Promise.resolve();
+      expect(events).toEqual(["first-reader"]);
+      await releaseFirstReader();
+    }
     await Promise.all([publish, nextReader]);
-    expect(events).toEqual(["first-reader", "publish", "next-reader"]);
+    expect(events).toEqual(
+      queued ? ["first-reader", "publish", "next-reader"] : ["first-reader", "next-reader"],
+    );
+    if (!queued) {
+      await releaseFirstReader();
+    }
   });
 });

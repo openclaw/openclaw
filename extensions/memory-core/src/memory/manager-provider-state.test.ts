@@ -1,7 +1,4 @@
-import type {
-  OpenClawConfig,
-  ResolvedMemorySearchConfig,
-} from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { describe, expect, it, vi } from "vitest";
 import type { EmbeddingProvider } from "./embeddings.js";
 import {
@@ -14,19 +11,9 @@ const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
 
 vi.mock("./embeddings.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./embeddings.js")>()),
-  resolveEmbeddingProviderIndexIdentity: () => undefined,
   resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
     providerId === "ollama" ? DEFAULT_OLLAMA_EMBEDDING_MODEL : fallbackSourceModel,
 }));
-
-function createProvider(id: string): EmbeddingProvider {
-  return {
-    id,
-    model: `${id}-model`,
-    embed: async () => [0.1, 0.2, 0.3],
-    embedBatch: async (inputs) => inputs.map(() => [0.1, 0.2, 0.3]),
-  };
-}
 
 function createSettings(fallback: "ollama" | "lmstudio"): ResolvedMemorySearchConfig {
   return {
@@ -38,8 +25,14 @@ function createSettings(fallback: "ollama" | "lmstudio"): ResolvedMemorySearchCo
 
 describe("memory provider requests and lifecycle", () => {
   it("resolves a fallback provider as available", () => {
+    const provider: EmbeddingProvider = {
+      id: "openai",
+      model: "openai-model",
+      embed: async () => [0],
+      embedBatch: async (inputs) => inputs.map(() => [0]),
+    };
     const lifecycle = resolveMemoryProviderLifecycle({
-      provider: createProvider("openai"),
+      provider,
       requestedProvider: "local",
       fallbackFrom: "local",
       fallbackReason: "worker crashed",
@@ -72,19 +65,14 @@ describe("memory provider requests and lifecycle", () => {
       },
       ...sharedRemote,
     };
-    const local = { modelPath: "/tmp/synthetic-memory-model.gguf", contextSize: 2048 };
     const forwarded = {
       inputType: "passage",
       queryInputType: "query",
       documentInputType: "document",
       outputDimensionality: 768,
-      local,
+      local: { modelPath: "/tmp/synthetic-memory-model.gguf", contextSize: 2048 },
     };
-    const settings = {
-      ...createSettings("ollama"),
-      ...forwarded,
-      remote,
-    } satisfies ResolvedMemorySearchConfig;
+    const settings = { ...createSettings("ollama"), ...forwarded, remote };
 
     const primaryRequest = resolveMemoryPrimaryProviderRequest({ settings });
     expect(primaryRequest.remote).toBe(remote);
@@ -95,25 +83,24 @@ describe("memory provider requests and lifecycle", () => {
     });
 
     const fallbackRequest = resolveMemoryFallbackProviderRequest({
-      cfg: {} as OpenClawConfig,
+      cfg: {},
       settings,
       currentProviderId: "openai",
     });
 
-    expect(fallbackRequest).toMatchObject({
+    expect(fallbackRequest).toEqual({
       provider: "ollama",
       model: DEFAULT_OLLAMA_EMBEDDING_MODEL,
       fallback: "none",
       remote: sharedRemote,
       ...forwarded,
     });
-    expect(fallbackRequest?.remote).toEqual(sharedRemote);
   });
 
   it("does not activate a fallback that is already the current provider", () => {
     expect(
       resolveMemoryFallbackProviderRequest({
-        cfg: {} as OpenClawConfig,
+        cfg: {},
         settings: createSettings("lmstudio"),
         currentProviderId: "lmstudio",
       }),

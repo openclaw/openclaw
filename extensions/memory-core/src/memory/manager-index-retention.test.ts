@@ -25,16 +25,8 @@ describe("source-wide embedding publication ownership", () => {
     }
   };
   const open = (provider: string, model?: string) =>
-    fixture.getFreshManager(
-      fixture.createConfig({
-        provider,
-        model,
-        batchEnabled: true,
-        cacheEnabled: true,
-        vectorEnabled: false,
-      }),
-      "cli",
-    );
+    fixture.getFreshManager(fixture.createConfig({ provider, model, ...options }), "cli");
+  const options = { batchEnabled: true, cacheEnabled: true, vectorEnabled: false };
   const fts = (db: DatabaseSync, query: string) =>
     db
       .prepare(
@@ -56,13 +48,12 @@ describe("source-wide embedding publication ownership", () => {
 
       expect(fixture.provider.providerRuntimeBatchCalls).toEqual([]);
       const db = Reflect.get(manager, "db") as DatabaseSync;
-      expect(
-        db
-          .prepare(
-            "SELECT path, embedding FROM memory_index_chunks WHERE path IN (?, ?) ORDER BY path",
-          )
-          .all("memory/first.md", "memory/second.md"),
-      ).toEqual(
+      const cached = db
+        .prepare(
+          "SELECT path, embedding FROM memory_index_chunks WHERE path IN (?, ?) ORDER BY path",
+        )
+        .all(...paths);
+      expect(cached).toEqual(
         pathRows.map((row) => ({ ...row, embedding: encodeMemoryEmbedding([1, 1, 0, 0]) })),
       );
       expect(fts(db, "shared")).toEqual(pathRows);
@@ -80,8 +71,7 @@ describe("source-wide embedding publication ownership", () => {
         .prepare("SELECT id, text, embedding FROM memory_index_chunks WHERE path = ? ORDER BY id")
         .all(sourcePath),
     });
-    const firstBefore = readSource("memory/first.md");
-    const secondBefore = readSource("memory/second.md");
+    const before = paths.map(readSource);
     await write(["Updated alpha alpha source.", "Updated beta beta source."]);
     Reflect.set(manager, "dirty", true);
     memoryIndexFixtureWriter(manager).exec(`
@@ -93,8 +83,7 @@ describe("source-wide embedding publication ownership", () => {
       await expect(manager.sync({ reason: "watch" })).rejects.toThrow(
         "injected retained-source publication failure",
       );
-      expect(readSource("memory/first.md")).toEqual(firstBefore);
-      expect(readSource("memory/second.md")).toEqual(secondBefore);
+      expect(paths.map(readSource)).toEqual(before);
       expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     } finally {
       memoryIndexFixtureWriter(manager).exec("DROP TRIGGER fail_retention_source");
