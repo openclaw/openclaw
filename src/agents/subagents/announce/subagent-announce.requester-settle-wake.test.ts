@@ -255,7 +255,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
       makeSettledChild({ runId: "run-old-1", createdAt: 100, startedAt: 100, endedAt: 200 }),
       makeSettledChild({ runId: "run-old-2", createdAt: 100, startedAt: 110, endedAt: 250 }),
-      makeSettledChild({ runId: "run-b" }),
+      makeSettledChild({ runId: "run-b", delivery: { status: "delivered" } }),
     ]);
 
     const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());

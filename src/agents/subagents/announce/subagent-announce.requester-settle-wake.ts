@@ -345,7 +345,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     (entry) => entry.expectsCompletionMessage === true || interruptedContinuations.includes(entry),
   );
   // A yielded batch owns a rearm generation even when its child settles later.
-  // Otherwise a delivered single child clears the batch before its requester wakes.
   const requesterYieldedAfterDelivery =
     selectedState.afterRequesterYield === true ||
     (selectedState.requesterYieldBatch === true && selectedState.rearmGeneration !== undefined);
@@ -357,10 +356,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   // Ordinary nested waves remain owned by the descendant-settle path.
   if (
     !pauseNotice &&
-    (requiredSettled.length === 0 ||
-      (requiredSettled.length < 2 &&
-        !requiredSettled.some((entry) => entry.delivery?.status !== "delivered") &&
-        !requesterYieldedAfterDelivery) ||
+    ((requiredSettled.every((entry) => entry.delivery?.status === "delivered") &&
+      (requiredSettled.length === 0 || !requesterYieldedAfterDelivery)) ||
       (!requesterYieldedAfterDelivery &&
         interruptedContinuations.length === 0 &&
         !hasRequesterCompletionCohort(currentSettledEntry) &&
@@ -369,7 +366,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     await completeBatch(settledBatch, selectedState);
     return false;
   }
-  // Only an owed continuation waits for descendants. A delivered single-child
+  // Only an owed continuation waits for descendants. An entirely delivered
   // wave must not retain its redundant wake behind unrelated running siblings.
   if (waitForDescendants(initialDescendants)) {
     return false;
@@ -421,7 +418,9 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     }
     const preparedFindings = pauseNotice
       ? { text: pauseNotice.acknowledgment, isCurrent: () => true }
-      : await readChildCompletionFindings(completionRows);
+      : await readChildCompletionFindings(
+          completionRows.filter((entry) => entry.delivery?.status !== "delivered"),
+        );
     if (await retireReplacedStore()) {
       return false;
     }

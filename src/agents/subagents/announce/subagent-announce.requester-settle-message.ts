@@ -55,13 +55,18 @@ export function buildRequesterSettleWakeMessage(params: {
       ...(retryInstruction ? [retryInstruction] : []),
     ].join("\n");
   }
+  const deliveredChildren = params.children.filter(
+    (entry) => entry.delivery?.status === "delivered",
+  );
   // The scheduling row need not be the rerouted child. Keep every current
-  // child's producer-owned notice, with stable bytes and one batch-wide cap.
+  // undelivered child's producer-owned notice, with stable bytes and one batch-wide cap.
   const routeNotices = [
     ...new Set(
-      params.children.flatMap(({ completion }) => {
+      params.children.flatMap(({ completion, delivery }) => {
         const reply = completion?.terminalReply;
-        return reply?.disposition === "visible" && reply.modelRouteChange
+        return delivery?.status !== "delivered" &&
+          reply?.disposition === "visible" &&
+          reply.modelRouteChange
           ? [reply.modelRouteChange]
           : [];
       }),
@@ -73,7 +78,9 @@ export function buildRequesterSettleWakeMessage(params: {
     routeNotices.length > REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS
       ? `${truncateUtf16Safe(routeNotices, REQUESTER_SETTLE_WAKE_ROUTE_NOTICE_MAX_CHARS - ROUTE_NOTICE_TRUNCATION.length)}${ROUTE_NOTICE_TRUNCATION}`
       : routeNotices;
-  const recoveryRoster = buildSubagentRestartRecoveryRoster(params.recoveryChildren);
+  const recoveryRoster = buildSubagentRestartRecoveryRoster(
+    params.recoveryChildren.filter((entry) => entry.delivery?.status !== "delivered"),
+  );
   const completionChannel = normalizeMessageChannel(params.completionChannel);
   return [
     params.descendantsUnsettled
@@ -101,6 +108,14 @@ export function buildRequesterSettleWakeMessage(params: {
         ]
       : []),
     "",
+    ...(deliveredChildren.length
+      ? [
+          `Already delivered child results (not repeated): ${deliveredChildren
+            .map((entry) => entry.runId)
+            .toSorted()
+            .join(", ")}.`,
+        ]
+      : []),
     params.findings ??
       "(each child result was announced individually in earlier completion events)",
     ...(retryInstruction ? [retryInstruction] : []),
