@@ -25,22 +25,15 @@ export type GatewayStorageFailure = (typeof STORAGE_ERRORS)[number][0];
 /** Classify native errors before flattening; legacy rows require exact known messages. */
 export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFailure | undefined {
   let reconciliation: GatewayStorageFailure | undefined;
-  let unknownPersistence = false;
   for (const candidate of collectNestedErrorCandidates(error)) {
     const failure = classifyStorageFailure(candidate);
     if (failure === "session_actor_reconciliation") {
       reconciliation = failure;
     } else if (failure) {
       return failure;
-    } else if (
-      isRecord(candidate) &&
-      candidate.name === "SqliteWorkerError" &&
-      candidate.code === "outcome-unknown"
-    ) {
-      unknownPersistence = true;
     }
   }
-  return reconciliation && unknownPersistence ? "SQLITE_IOERR" : reconciliation;
+  return reconciliation;
 }
 
 function classifyStorageFailure(error: unknown): GatewayStorageFailure | undefined {
