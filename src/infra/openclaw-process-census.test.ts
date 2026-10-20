@@ -646,10 +646,22 @@ it.each([
 const references = { runId: "update-run-123", artifactPaths: ["/tmp/retained runtime"] };
 const denied = () => Object.assign(new Error("denied"), { code: "EACCES" });
 
-it("does not let protected systemd login processes block update-repair evidence", () => {
+it("still recognizes a standard systemd user manager", () => {
   rows.set(peer, {
     ppid: 1,
     argv: ["/usr/lib/systemd/systemd", "--user"],
+    uid: 1000,
+    cwd: denied(),
+  });
+  rows.set(peer + 1, { ppid: peer, argv: ["(sd-pam)"], uid: 1000, cwd: denied() });
+
+  expect(inspectOtherOpenClawProcesses()).toEqual({ pids: [] });
+});
+
+it("recognizes systemd user managers with --deserialize=8", () => {
+  rows.set(peer, {
+    ppid: 1,
+    argv: ["/usr/lib/systemd/systemd", "--user", "--deserialize=8"],
     uid: 1000,
     cwd: denied(),
   });
@@ -679,6 +691,18 @@ it("does not let protected systemd login processes block update-repair evidence"
     matchingPids: [],
     unverifiedPids: [peer + 1],
   });
+});
+
+it("does not exempt systemd user managers with an invalid deserialize argument", () => {
+  rows.set(peer, {
+    ppid: 1,
+    argv: ["/usr/lib/systemd/systemd", "--user", "--deserialize=invalid"],
+    uid: 1000,
+    cwd: denied(),
+  });
+  rows.set(peer + 1, { ppid: peer, argv: ["(sd-pam)"], uid: 1000, cwd: denied() });
+
+  expect(inspectOtherOpenClawProcesses()).toMatchObject({ pids: [peer, peer + 1] });
 });
 
 it.each([0, 1000])("requires foreign ownership to exempt non-runtime cwd (UID %i)", (uid) => {

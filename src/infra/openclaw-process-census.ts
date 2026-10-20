@@ -29,11 +29,19 @@ const workerEntrypoints = Object.values(runtimeProcessEntrypoints).flatMap((entr
 ]);
 
 function isStandardSystemdUserManager(command: ProcessCommand | undefined): boolean {
+  if (command === undefined || !("argv" in command)) {
+    return false;
+  }
+  const managerArgs = command.argv.slice(1);
+  const deserializeArg = managerArgs[1];
+  const hasExpectedArgs =
+    managerArgs[0] === "--user" &&
+    (managerArgs.length === 1 ||
+      (managerArgs.length === 2 &&
+        deserializeArg !== undefined &&
+        /^--deserialize=\d+$/u.test(deserializeArg)));
   return (
-    command !== undefined &&
-    "argv" in command &&
-    command.argv.length === 2 &&
-    command.argv[1] === "--user" &&
+    hasExpectedArgs &&
     (command.argv[0] === "/usr/lib/systemd/systemd" || command.argv[0] === "/lib/systemd/systemd")
   );
 }
