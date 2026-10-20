@@ -7,6 +7,7 @@ const callGatewayFromCli = vi.fn();
 const { runtimeLogs, runtimeErrors, defaultRuntime, resetRuntimeCapture } =
   createCliRuntimeCapture();
 
+// mock-isolation: Exercise command registration without opening a live Gateway connection.
 vi.mock("./gateway-rpc.js", () => ({
   addGatewayClientOptions: (command: Command) => command,
   callGatewayFromCli,

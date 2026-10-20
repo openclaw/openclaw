@@ -35,6 +35,7 @@ vi.mock("../../infra/outbound/deliver.js", () => ({
   deliverOutboundPayloadsInternal: mocks.deliverOutboundPayloads,
 }));
 
+// mock-isolation: Delivery routing runs without the process-global plugin hook registry.
 vi.mock("../../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => undefined,
 }));

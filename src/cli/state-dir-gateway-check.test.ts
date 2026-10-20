@@ -17,6 +17,7 @@ vi.mock("../gateway/probe.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/probe.js")>()),
   probeGateway: mocks.probeGateway,
 }));
+// mock-isolation: Compare fixture service commands without inspecting the host service manager.
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: mocks.readServiceCommand }),
 }));

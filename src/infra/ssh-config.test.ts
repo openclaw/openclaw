@@ -4,7 +4,9 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveSshClient } from "./ssh-client.js";
 import { resolveSshConfig } from "./ssh-config.js";
 
+// mock-isolation: Parse fixed SSH output without launching host processes.
 vi.mock("../process/exec.js", () => ({ runCommandWithTimeout: vi.fn() }));
+// mock-isolation: Keep the SSH binary deterministic instead of probing the host PATH.
 vi.mock("./ssh-client.js", () => ({ resolveSshClient: vi.fn(() => "/usr/bin/ssh") }));
 
 const runCommandMock = vi.mocked(runCommandWithTimeout);
