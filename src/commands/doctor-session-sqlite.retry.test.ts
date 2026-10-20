@@ -39,15 +39,8 @@ it.each([
     };
     const storedLegacy = history === "stored-legacy" || history === "stored-legacy-suffix";
     const appendSuffix = history === "suffix" || history === "stored-legacy-suffix";
-    const first = transcriptMessage("one", null, "assistant", "preserved history");
-    const message = {
-      ...first,
-      message: {
-        ...first.message,
-        provider: "openai-codex",
-        api: "openai-codex-responses",
-      },
-    };
+    const message = transcriptMessage("one", null, "assistant", "preserved history");
+    Object.assign(message.message, { provider: "openai-codex", api: "openai-codex-responses" });
     const events: unknown[] = [header, message];
     if (history === "branch") {
       for (const [id, parentId, role, text] of [
@@ -100,11 +93,10 @@ it.each([
     const target = report.targets[0]!;
     const receipt = readMigrationManifest(report.migrationRun?.manifestPath).targets[0]!;
     if (history === "matching" || history === "branch" || storedLegacy || appendSuffix) {
-      expect(target.issues).toEqual([]);
       expect(exitCode).toBe(0);
       expect(receipt.validationBeforeArchive).toBe("passed");
       expect(loadTranscriptEventsSync(scope)).toEqual(appendSuffix ? [...stored, suffix] : stored);
-      expect(target.importedTranscriptEvents).toBe(appendSuffix ? 1 : 0);
+      expect(target).toMatchObject({ issues: [], importedTranscriptEvents: appendSuffix ? 1 : 0 });
       for (const [sourcePath, bytes] of [
         [store.transcriptPath, original],
         [store.storePath, originalIndex],

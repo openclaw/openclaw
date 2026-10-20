@@ -55,19 +55,20 @@ it("revalidates completed migration findings without changing recovery evidence"
       ...missing(scope.sessionKey),
       message: `Transcript file is missing: ${file("older-generation.jsonl")}`,
     };
+    const unresolved = [
+      ...["agent:main:empty", "agent:main:main", "legacy"].map(missing),
+      oldMissing,
+      malformed("broken.jsonl"),
+      { code: "historical_transcript_deferred", message: "Archive remains unverified" },
+    ];
     const issues = [
       ...Array.from({ length: 12 }, (_, i) => active(file(`gone-${i}.jsonl`))),
       active(kept),
       active(file("gone-main.jsonl"), "agent:main:main"),
       missing(scope.sessionKey),
       missing("agent:main:pruned"),
-      missing("agent:main:empty"),
-      missing("agent:main:main"),
-      missing("legacy"),
-      oldMissing,
-      malformed("broken.jsonl"),
       malformed("repaired.jsonl"),
-      { code: "historical_transcript_deferred", message: "Archive remains unverified" },
+      ...unresolved,
     ];
     const { manifest, manifestPath } = createSessionSqliteMigrationRun(state.env, [
       { agentId: "main", sqlitePath, storePath },
@@ -83,12 +84,7 @@ it("revalidates completed migration findings without changing recovery evidence"
           code: "active_sqlite_transcript_jsonl",
           message: `SQLite-backed session has a legacy JSONL transcript awaiting verification: ${kept}. Run openclaw doctor --session-sqlite inspect to check current originals before choosing recovery.`,
         },
-        missing("agent:main:empty"),
-        missing("agent:main:main"),
-        missing("legacy"),
-        oldMissing,
-        malformed("broken.jsonl"),
-        issues.at(-1)!,
+        ...unresolved,
       ].map((issue) => `${storePath}: [${issue.code}] ${issue.message}`),
     );
     expect(fs.readFileSync(manifestPath)).toEqual(original);

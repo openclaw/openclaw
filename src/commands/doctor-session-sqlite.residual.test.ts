@@ -12,6 +12,7 @@ import {
   jsonl,
   messageEvent,
   sessionScope,
+  writeJson,
 } from "./doctor-session-sqlite.fixtures.test-support.js";
 import {
   RECOVERY_TRANSCRIPT_LINES,
@@ -63,21 +64,14 @@ it.each(["matching", "conflicting", "malformed", "pending-plugin"] as const)(
     const siblingDir = path.join(store.stateDir, "agents", "other", "sessions");
     fs.mkdirSync(siblingDir, { recursive: true });
     const siblingStore = path.join(siblingDir, "sessions.json");
-    fs.writeFileSync(
-      siblingStore,
-      JSON.stringify({ "agent:other:main": { sessionId: "new-session", updatedAt: 1000 } }),
-    );
+    writeJson(siblingStore, { "agent:other:main": { sessionId: "new-session", updatedAt: 1000 } });
     const newEvents = [
-      {
-        type: "session",
-        version: 3,
-        id: "new-session",
-      },
+      { type: "session", version: 3, id: "new-session" },
       messageEvent("new", "user", "new"),
     ];
     const index = JSON.parse(fs.readFileSync(store.storePath, "utf8"));
     index["agent:main:new"] = { sessionId: "new-session", updatedAt: 1000 };
-    fs.writeFileSync(store.storePath, JSON.stringify(index));
+    writeJson(store.storePath, index);
     for (const dir of [store.sessionDir, siblingDir]) {
       fs.writeFileSync(path.join(dir, "new-session.jsonl"), jsonl(...newEvents));
     }
