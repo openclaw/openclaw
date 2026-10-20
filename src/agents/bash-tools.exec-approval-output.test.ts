@@ -5,6 +5,7 @@ import {
   formatExecApprovalContinuationSourceOutput as formatOutput,
   resizeExecApprovalContinuationPrompt as resizePrompt,
 } from "./bash-tools.exec-approval-output.js";
+import { appendExecTimeoutRetryGuidance } from "./bash-tools.exec-output.js";
 import { runExecProcess } from "./bash-tools.exec-runtime.js";
 
 const MARKER =
@@ -79,6 +80,12 @@ it("caps only the authenticated output span and preserves the wrapper", () => {
   expect(resizedOutput).not.toMatch(LONE_SURROGATE);
   expect(resized.split(OUTPUT_BEGIN)).toHaveLength(2);
   expect(resized.split(OUTPUT_END)).toHaveLength(2);
+});
+
+it("warns against retrying after a no-output timeout", () => {
+  expect(appendExecTimeoutRetryGuidance("Command timed out.", "no-output-timeout")).toContain(
+    "Do not automatically rerun commands unless repeating them is safe",
+  );
 });
 
 describe("approved exec continuation producer", () => {
