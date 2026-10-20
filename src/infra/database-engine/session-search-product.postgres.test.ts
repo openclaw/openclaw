@@ -38,7 +38,6 @@ const connection = typeof configured === "string" ? configured : undefined;
 const prefix = `sessionsearch_${randomUUID().replaceAll("-", "").slice(0, 10)}`;
 const directories = useAutoCleanupTempDirTracker(afterAll);
 
-// The public asynchronous reader exercises worker admission, committed projections and SQL together.
 describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
   let root: string;
   let suiteEnv: NodeJS.ProcessEnv;
@@ -174,15 +173,12 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
         return payload as T;
       },
     });
-    expect(
-      (
-        await tool.execute("pg-session-search", {
-          query: "harbor beacon",
-          sessionKey: "current",
-          limit: 1,
-        })
-      ).details,
-    ).toMatchObject({
+    const result = await tool.execute("pg-session-search", {
+      query: "harbor beacon",
+      sessionKey: "current",
+      limit: 1,
+    });
+    expect(result.details).toMatchObject({
       results: [
         {
           messageId: "selected-hit",
