@@ -73,21 +73,17 @@ function mockAcpSession(sessionKey: string) {
   sessionStoreMocks.entriesBySessionKey.set(sessionKey, entry);
   acpMocks.readAcpSessionEntry.mockImplementation((params: { sessionKey: string }) =>
     params.sessionKey === sessionKey
-      ? {
-          sessionKey,
-          storeSessionKey: sessionKey,
-          cfg: {},
-          storePath: "/tmp/mock-sessions.json",
-          entry,
-          acp: {
-            backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: "runtime:controller",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: Date.now(),
+      ? completeAcpSessionFixture(
+          {
+            entry,
+            acp: {
+              agent: "codex",
+              runtimeSessionName: "runtime:controller",
+              lastActivityAt: Date.now(),
+            },
           },
-        }
+          { sessionKey, storePath: "/tmp/mock-sessions.json" },
+        )
       : null,
   );
 }

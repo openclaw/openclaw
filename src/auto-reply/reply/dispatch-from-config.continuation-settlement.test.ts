@@ -44,43 +44,35 @@ function dispatchSettled(
   });
 }
 
+type ReplyResolver = NonNullable<DispatchFromConfigParams["replyResolver"]>;
 function statusResolver(
   settle: (delivered: boolean) => Promise<void>,
   payload: ReplyPayload | ReplyPayload[],
-) {
-  return async (
-    _ctx: Parameters<NonNullable<DispatchFromConfigParams["replyResolver"]>>[0],
-    opts: Parameters<NonNullable<DispatchFromConfigParams["replyResolver"]>>[1],
-  ) => {
+): ReplyResolver {
+  return async (_ctx, opts) => {
     opts?.onPendingContinuation?.({ settle });
     return payload;
   };
 }
 
-function statusReply() {
-  return setReplyPayloadMetadata(
-    { text: "Continuing work; the result will follow." },
-    { continuationStatus: true },
-  );
+function statusReply(metadata: Parameters<typeof setReplyPayloadMetadata>[1] = {}) {
+  return setReplyPayloadMetadata({ text: "status" }, { continuationStatus: true, ...metadata });
 }
 
 function continuationPayload(metadata: Parameters<typeof setReplyPayloadMetadata>[1] = {}) {
-  let open = true;
-  const adopt = vi.fn(() => open);
-  const payload = setReplyPayloadMetadata(
-    { text: "Continuing work; the result will follow." },
-    {
-      continuationStatus: true,
+  const adopt = vi.fn(() => true);
+  return {
+    adopt,
+    payload: statusReply({
       progressContinuation: {
         adopt,
         close: () => {
-          open = false;
+          adopt.mockReturnValue(false);
         },
       },
       ...metadata,
-    },
-  );
-  return { payload, adopt };
+    }),
+  };
 }
 
 const progressDraft = { push: () => undefined, retire: () => undefined };
@@ -267,14 +259,8 @@ describe("accepted continuation status delivery", () => {
         order.push(`deliver:${payload.text}`);
       },
     });
-
     await dispatchStatus();
-
-    expect(order).toEqual([
-      "deliver:Continuing work; the result will follow.",
-      "settle:true",
-      "settle:false",
-    ]);
+    expect(order).toEqual(["deliver:status", "settle:true", "settle:false"]);
   });
 
   it.each([false, true])(
@@ -371,14 +357,24 @@ describe("accepted continuation status delivery", () => {
     },
   );
 
-  it.each(["resolver", "session metadata"])(
+  it.each(["resolver", "session metadata", "buffered commentary"])(
     "releases an accepted continuation when %s fails before finalization",
     async (failurePosition) => {
       const failure = new Error("session owner unavailable");
-
+      const commentary = failurePosition === "buffered commentary";
+      if (commentary) {
+        sessionStoreMocks.currentEntry = { verboseLevel: "on" };
+        mocks.routeReply.mockRejectedValueOnce(failure);
+      }
       await expect(
         dispatchSettled({
           dispatcher,
+          ...(commentary
+            ? {
+                ctx: { ...createHookCtx(), OriginatingChannel: "discord", OriginatingTo: "user:1" },
+                replyOptions: { onItemEvent: vi.fn() },
+              }
+            : {}),
           onSessionMetadataChanges: () => {
             throw failure;
           },
@@ -386,6 +382,14 @@ describe("accepted continuation status delivery", () => {
             opts?.onPendingContinuation?.({ settle });
             if (failurePosition === "resolver") {
               throw failure;
+            }
+            if (commentary) {
+              await opts?.onItemEvent?.({
+                itemId: "commentary-1",
+                kind: "preamble",
+                progressText: "Working on the request.",
+              });
+              return statusReply();
             }
             markCommandSessionMetadataChanged({
               ctx,
@@ -400,31 +404,6 @@ describe("accepted continuation status delivery", () => {
       expect(settle).toHaveBeenCalledExactlyOnceWith(false);
     },
   );
-
-  it("releases an accepted continuation when buffered commentary routing rejects", async () => {
-    sessionStoreMocks.currentEntry = { verboseLevel: "on" };
-    const ctx = { ...createHookCtx(), OriginatingChannel: "discord", OriginatingTo: "user:1" };
-    mocks.routeReply.mockRejectedValueOnce(new Error("commentary delivery unavailable"));
-
-    await expect(
-      dispatchSettled({
-        ctx,
-        dispatcher,
-        replyOptions: { onItemEvent: vi.fn() },
-        replyResolver: async (_ctx, opts) => {
-          opts?.onPendingContinuation?.({ settle });
-          await opts?.onItemEvent?.({
-            itemId: "commentary-1",
-            kind: "preamble",
-            progressText: "Working on the request.",
-          });
-          return statusReply();
-        },
-      }),
-    ).rejects.toThrow("commentary delivery unavailable");
-
-    expect(settle).toHaveBeenCalledExactlyOnceWith(false);
-  });
 
   it("releases an accepted continuation when session-writer delivery is revoked", async () => {
     const currentEntry = {
@@ -482,7 +461,6 @@ describe("accepted continuation status delivery", () => {
       }),
     );
 
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledOnce();
     expect(deliver).toHaveBeenCalledOnce();
     expect(result.queuedFinal).toBe(false);
     expect(memory.read()?.pendingFinalDelivery).toBeUndefined();

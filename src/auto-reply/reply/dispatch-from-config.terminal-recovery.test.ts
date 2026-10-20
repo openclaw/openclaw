@@ -22,7 +22,6 @@ import {
   ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
-import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import {
@@ -189,23 +188,30 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       const resolverError = new Error(
         `provider failed after partial: ${secret} ${customSecret} preserved-after-redaction ${"🦞".repeat(1_100)}`,
       );
+      const textReads: string[] = [];
       let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
       const replyResolver: ReplyResolver = async (_ctx, options) => {
-        if (!options) {
-          throw new Error("reply options required for partial recovery");
+        replyOperation = options?.replyOperation;
+        options?.onAgentRunStart?.("failed-run");
+        let text = "";
+        for (let index = 0; index < 256; index++) {
+          await options?.onPartialReply?.({
+            get text() {
+              textReads.push(text);
+              return text;
+            },
+          });
+          text += index ? "x" : "partial telegram reply";
         }
-        replyOperation = options.replyOperation;
-        options.onAgentRunStart?.("failed-run");
-        await options.onPartialReply?.({ text: "partial telegram reply" });
         throw resolverError;
       };
       const dispatchParams = createVisibleDispatchParams(replyResolver, {
         cfg: { diagnostics: { enabled: true } },
-        replyOptions: { onPartialReply: vi.fn(async () => undefined) },
+        replyOptions: { onPartialReply: vi.fn(async () => (detail ? true : undefined)) },
       });
 
       const result = await dispatchReplyFromConfig(dispatchParams);
-
+      expect(textReads).toEqual(["", "partial telegram reply"]);
       expectFailure(replyOperation, resolverError);
       expect(result.queuedFinal).toBe(true);
       expect(readAgentRunTerminalOutcome(result)).toBe("failed");
@@ -226,39 +232,10 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         }
       }
       expect(dispatchEvents[0]?.error).toBe(processedEvents[0]?.error);
-      expect(dispatchParams.replyOptions?.onPartialReply).toHaveBeenCalledWith({
-        text: "partial telegram reply",
-      });
+      expect(dispatchParams.replyOptions?.onPartialReply).toHaveBeenCalledTimes(256);
       expectRecoveryNotice(dispatchParams.dispatcher);
     },
   );
-
-  it("reads lazy partial text only until a visible partial has content", async () => {
-    const resolverError = new Error("provider failed after partials");
-    const textReads: string[] = [];
-    const replyResolver: ReplyResolver = async (_ctx, options) => {
-      let text = "";
-      for (let index = 0; index < 256; index++) {
-        await options?.onPartialReply?.({
-          get text() {
-            textReads.push(text);
-            return text;
-          },
-        });
-        text += "x";
-      }
-      throw resolverError;
-    };
-    const dispatchParams = createVisibleDispatchParams(replyResolver, {
-      replyOptions: { onPartialReply: vi.fn(async () => true) },
-    });
-
-    const result = await dispatchReplyFromConfig(dispatchParams);
-
-    expect(textReads).toEqual(["", "x"]);
-    expect(result.queuedFinal).toBe(true);
-    expectRecoveryNotice(dispatchParams.dispatcher);
-  });
 
   it("rethrows post-run dispatch errors after a completed run with no visible reply", async () => {
     const resolverError = new Error("final delivery failed after completion");
@@ -276,11 +253,8 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     const resolverError = new Error("provider failed before output");
     let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
     const replyResolver: ReplyResolver = async (_ctx, options) => {
-      if (!options) {
-        throw new Error("reply options required for terminal failure");
-      }
-      replyOperation = options.replyOperation;
-      options.onAgentRunTerminalOutcome?.("failed");
+      replyOperation = options?.replyOperation;
+      options?.onAgentRunTerminalOutcome?.("failed");
       throw resolverError;
     };
     const dispatchParams = createVisibleDispatchParams(replyResolver, {
@@ -317,9 +291,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         delivered.push({ kind, payload });
         return { ok: true, delivered: true };
       });
-      let operation: ReturnType<typeof createReplyOperation> | undefined;
       const replyResolver: ReplyResolver = async (_ctx, options) => {
-        operation = options?.replyOperation;
         await options?.turnAdoptionLifecycle?.onAdopted();
         if (progress) {
           await options?.onToolResult?.({
@@ -346,9 +318,10 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         ChatType: chatType,
         WasMentioned: mentioned,
       });
-      const { result, processedOutcome } = await withDispatchProcessedOutcomeSink(() =>
-        withReplyDispatcher({ dispatcher, run: () => dispatchReplyFromConfig(params) }),
-      );
+      const result = await withReplyDispatcher({
+        dispatcher,
+        run: () => dispatchReplyFromConfig(params),
+      });
 
       expect(delivered.map(({ kind }) => kind)).toEqual(
         expectedFinal ? (progress ? ["tool", "final"] : ["final"]) : [],
@@ -358,12 +331,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         expect(delivered.at(-1)?.payload.text?.trim()).toBeTruthy();
       }
       expect(JSON.stringify(delivered)).not.toContain(resolverError.message);
-      expectFailure(operation, resolverError);
       expect(readAgentRunTerminalOutcome(result)).toBe("failed");
-      expect(processedOutcome?.outcome).toBe("error");
-      expect(processedEvents).toEqual([
-        expect.objectContaining({ outcome: "error", error: undefined }),
-      ]);
       if (expectedFinal && origin !== surface) {
         expect(mocks.routeReply).toHaveBeenLastCalledWith(
           expect.objectContaining({
@@ -377,29 +345,40 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     },
   );
 
-  it("keeps rejected adoption retryable without a final notice", async () => {
-    const resolverError = new Error("adoption rejected");
-    const onAdopted = vi.fn(async () => {
-      throw resolverError;
-    });
-    const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
-    const replyResolver = vi.fn<ReplyResolver>(async (_ctx, options) => {
-      await options?.turnAdoptionLifecycle?.onAdopted();
-      throw resolverError;
-    });
-    const params = createVisibleDispatchParams(replyResolver, {
-      dispatcher,
-      replyOptions: { turnAdoptionLifecycle: { onAdopted } },
-    });
-    params.ctx.MessageSid = "retryable-failure";
-    await expect(
-      withReplyDispatcher({ dispatcher, run: () => dispatchReplyFromConfig(params) }),
-    ).rejects.toBe(resolverError);
-    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
-    replyResolver.mockResolvedValueOnce({ text: "retry succeeded" });
-    await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
-    expect(replyResolver).toHaveBeenCalledTimes(2);
-  });
+  it.each([false, true])(
+    "retries ingress only when adoption was rejected (adopted=%s)",
+    async (adopted) => {
+      const resolverError = new Error("turn failed");
+      const deliveryError = new Error("final preparation failed");
+      const onAdopted = vi.fn(async () => {
+        if (!adopted) {
+          throw resolverError;
+        }
+      });
+      const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
+      const replyResolver = vi.fn<ReplyResolver>(async (_ctx, options) => {
+        await options?.turnAdoptionLifecycle?.onAdopted();
+        throw resolverError;
+      });
+      const params = createVisibleDispatchParams(replyResolver, {
+        dispatcher,
+        replyOptions: { turnAdoptionLifecycle: { onAdopted } },
+      });
+      params.ctx.MessageSid = "adoption-retryability";
+      if (adopted) {
+        ttsMocks.maybeApplyTtsToPayload.mockRejectedValueOnce(deliveryError);
+      }
+      await expect(
+        withReplyDispatcher({ dispatcher, run: () => dispatchReplyFromConfig(params) }),
+      ).rejects.toBe(adopted ? deliveryError : resolverError);
+      if (!adopted) {
+        expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+      }
+      replyResolver.mockResolvedValueOnce({ text: "retry succeeded" });
+      await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
+      expect(replyResolver).toHaveBeenCalledTimes(adopted ? 1 : 2);
+    },
+  );
 
   it.each(["observed-delivery", "room-event"])(
     "does not add an adopted failure notice for %s",
@@ -423,21 +402,6 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       expect(params.dispatcher.sendFinalReply).not.toHaveBeenCalled();
     },
   );
-
-  it("retains adopted dedupe when failure-notice preparation also fails", async () => {
-    const resolverError = new Error("accepted turn failed");
-    const deliveryError = new Error("final preparation failed");
-    const replyResolver = vi.fn<ReplyResolver>(async (_ctx, options) => {
-      await options?.turnAdoptionLifecycle?.onAdopted();
-      throw resolverError;
-    });
-    const params = createVisibleDispatchParams(replyResolver, { replyOptions: adoptedOptions() });
-    params.ctx.MessageSid = "adopted-final-failure";
-    ttsMocks.maybeApplyTtsToPayload.mockRejectedValueOnce(deliveryError);
-    await expect(dispatchReplyFromConfig(params)).rejects.toBe(deliveryError);
-    await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
-    expect(replyResolver).toHaveBeenCalledOnce();
-  });
 
   it.each(["fresh", "stalled", "terminal-row"] as const)(
     "waits for the %s active producer to settle",

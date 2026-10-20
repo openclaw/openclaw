@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
+import { modelDefinition, providerConfig } from "../../agents/model-auth.fixtures.test-support.js";
 import type { buildModelAliasIndex as BuildModelAliasIndex } from "../../agents/model-selection.js";
 import type { createModelVisibilityPolicy as CreateModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -72,14 +72,10 @@ export function registerModelStatusDirectiveTests(harness: ModelStatusTestHarnes
       defaultModel: model,
       cfg: {
         commands: { text: true },
-        models: {
-          providers: {
-            openrouter: {
-              baseUrl: "https://openrouter.example.test/api/v1",
-              models: [modelDefinition(model, { name: "Gemini via OpenRouter" })],
-            },
-          },
-        },
+        ...providerConfig("openrouter", {
+          baseUrl: "https://openrouter.example.test/api/v1",
+          models: [modelDefinition(model, { name: "Gemini via OpenRouter" })],
+        }),
       },
       allowedModelCatalog: [
         { provider: "google", id: "gemini-3-flash-preview" },
