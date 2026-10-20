@@ -144,10 +144,6 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
         releaseTheme?.();
       };
     });
-    const postTheme = (frame: HTMLIFrameElement) => {
-      const origin = new URL(frame.src).origin;
-      postWidgetTheme(frame, origin);
-    };
     const empty = (description: string, openUrl?: string | null) => (
       <PanelEmptyState
         icon={<Icon name="messageSquare" />}
@@ -208,7 +204,9 @@ function DiscussionPanel(props: DiscussionProps, host: SolidBridgeElement<Discus
               src={embedUrl}
               title={t("chat.sessionDiscussion.frameTitle")}
               sandbox="allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
-              onLoad={(event) => postTheme(event.currentTarget)}
+              onLoad={(event) =>
+                postWidgetTheme(event.currentTarget, new URL(event.currentTarget.src).origin)
+              }
             />
           ) : (
             empty(
