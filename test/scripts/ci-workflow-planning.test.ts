@@ -129,7 +129,7 @@ describe("PostgreSQL conformance selection", () => {
     const workflow = parse(
       readFileSync(".github/workflows/postgres-conformance-weekly.yml", "utf8"),
     );
-    expect(Object.keys(workflow.on).sort()).toEqual(["schedule", "workflow_dispatch"]);
+    expect(Object.keys(workflow.on).toSorted()).toEqual(["schedule", "workflow_dispatch"]);
     expect(workflow.on.schedule).toEqual([{ cron: "43 6 * * 1" }]);
     const job = workflow.jobs["postgres-conformance"];
     expect(job.strategy["max-parallel"]).toBe(1);
