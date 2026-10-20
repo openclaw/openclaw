@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError, formatCliFailureLines } from "../failure-output.js";
 import type { CliGatewayStateDirOutcome } from "../state-dir-gateway-check.js";
 import { registerPreActionHooks } from "./preaction.js";
 
@@ -50,7 +51,16 @@ describe("state-store preAction guard", () => {
   it("refuses before bootstrap and action", async () => {
     mocks.check.mockResolvedValueOnce({ kind: "refuse", message: "state stores differ" });
 
-    await expect(program.parseAsync(process.argv)).rejects.toThrow("state stores differ");
+    const error = await program.parseAsync(process.argv).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(ExpectedCliError);
+    expect(
+      formatCliFailureLines({
+        title: "The CLI command failed.",
+        error,
+        argv: process.argv,
+        env: {},
+      }),
+    ).toEqual(["state stores differ"]);
 
     expect(mocks.check).toHaveBeenCalledWith({ command: "openclaw configure" });
     expect(mocks.ensureBootstrap).not.toHaveBeenCalled();
@@ -63,6 +73,7 @@ describe("state-store preAction guard", () => {
     await expect(program.parseAsync(process.argv)).resolves.toBe(program);
 
     expect(mocks.debug).toHaveBeenCalledWith("state-store guard unavailable: inspection failed");
+    expect(mocks.log).not.toHaveBeenCalled();
     expect(mocks.action).toHaveBeenCalledOnce();
   });
 

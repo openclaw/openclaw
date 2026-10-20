@@ -82,7 +82,8 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
   if (outcome.kind === "warn") {
     defaultRuntime.log(outcome.message);
   } else if (outcome.kind === "refuse") {
-    throw new Error(outcome.message);
+    const { throwExpectedCliError } = await import("../failure-output.js");
+    throwExpectedCliError(outcome.message);
   }
 }
 

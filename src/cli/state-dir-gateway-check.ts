@@ -13,7 +13,7 @@ import { ADMIN_SCOPE } from "../gateway/method-scopes.js";
 import { isLoopbackGatewayUrl } from "../gateway/net.js";
 import { probeGateway } from "../gateway/probe.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { quoteCliArg } from "./quote-cli-arg.js";
+import { quoteCliArg, quotePowerShellArg } from "./quote-cli-arg.js";
 
 const STATE_DIR_CHECK_TIMEOUT_MS = 3_000;
 export type GatewayHello = Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0];
@@ -94,14 +94,21 @@ export function compareCliGatewayStateDirs(params: {
       message: `CLI and ${params.source} use different ${detail}. Local commands may read or write state the Gateway does not use.`,
     };
   }
+  const command = params.command ?? "openclaw configure";
+  const posixRepair = `OPENCLAW_STATE_DIR=${quoteCliArg(gatewayStateDir)} OPENCLAW_CONFIG_PATH=${quoteCliArg(gatewayConfigPath)} ${command}`;
+  const windows = process.platform === "win32";
+  const repair = windows
+    ? `& { $previousTarget=@($env:OPENCLAW_STATE_DIR, $env:OPENCLAW_CONFIG_PATH); try { $env:OPENCLAW_STATE_DIR=${quotePowerShellArg(gatewayStateDir)}; $env:OPENCLAW_CONFIG_PATH=${quotePowerShellArg(gatewayConfigPath)}; & ${command} } finally { $env:OPENCLAW_STATE_DIR=$previousTarget[0]; $env:OPENCLAW_CONFIG_PATH=$previousTarget[1] } }`
+    : posixRepair;
   return {
     kind: "refuse",
     message: [
       `No credentials or configuration were written. CLI and ${params.source} use different ${detail}.`,
-      `Fix: run OPENCLAW_STATE_DIR=${quoteCliArg(gatewayStateDir)} OPENCLAW_CONFIG_PATH=${quoteCliArg(gatewayConfigPath)} ${params.command ?? "openclaw configure"}.`,
+      `Fix: ${windows ? "in PowerShell, " : ""}run ${repair}.`,
       params.source === "live Gateway"
         ? "To write another local store intentionally, stop the running Gateway first."
         : "To write another local store intentionally, uninstall or reconfigure the divergent Gateway service first.",
+      ...(windows ? [`For bash or zsh, run ${posixRepair}.`] : []),
     ].join(" "),
   };
 }

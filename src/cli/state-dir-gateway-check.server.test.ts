@@ -1,4 +1,4 @@
-import { fork, type ChildProcess } from "node:child_process";
+import { fork, spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -140,6 +140,43 @@ describe("state-dir guard with a real token Gateway", () => {
     expect(outcome.message).toContain(gatewayStateDir);
     expect(outcome.message).toContain("live Gateway");
   });
+
+  it.skipIf(process.platform !== "win32")(
+    "runs the suggested PowerShell repair command for a real Gateway mismatch",
+    async () => {
+      const outcome = await checkCliGatewayStateDir({
+        command: "openclaw channels add",
+        config: { gateway: { mode: "local", port, auth: { mode: "token", token } } },
+      });
+      if (outcome.kind !== "refuse") {
+        throw new Error("expected authenticated path mismatch refusal");
+      }
+      const suggested = /Fix: (?:in PowerShell, )?run (.+?)\. To write another local store/u.exec(
+        outcome.message,
+      )?.[1];
+      if (!suggested) {
+        throw new Error(`expected executable repair command: ${outcome.message}`);
+      }
+      const script = [
+        '$ErrorActionPreference = "Stop"',
+        "$env:OPENCLAW_STATE_DIR = 'outer-state'",
+        "$env:OPENCLAW_CONFIG_PATH = 'outer-config'",
+        'function openclaw { Write-Output "INSIDE=$env:OPENCLAW_STATE_DIR|$env:OPENCLAW_CONFIG_PATH" }',
+        suggested,
+        'Write-Output "AFTER=$env:OPENCLAW_STATE_DIR|$env:OPENCLAW_CONFIG_PATH"',
+      ].join("\n");
+      const result = spawnSync(
+        "powershell.exe",
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(
+        `INSIDE=${gatewayStateDir}|${path.join(gatewayStateDir, "openclaw.json")}`,
+      );
+      expect(result.stdout).toContain("AFTER=outer-state|outer-config");
+    },
+  );
 
   it("warns when a tokenless CLI can prove only the Gateway protocol", async () => {
     await expect(
