@@ -21,25 +21,34 @@ afterEach(() => {
   vi.resetAllMocks();
 });
 const placement = { section: "memory", panel: "overview" } as const;
-function fixture() {
+type SettingsView = ControlUiSettingsView | ControlUiChannelSettingsView;
+const memoryView = (panel: "overview" | "memories" = "overview"): ControlUiSettingsView => ({
+  placement: { ...placement, panel },
+  mount: vi.fn(),
+});
+const channelView = (channelId = "custom"): ControlUiChannelSettingsView => ({
+  placement: { section: "channels", panel: "detail", channelId },
+  mount: vi.fn(),
+});
+function fixture(views: SettingsView[] = [memoryView()]) {
   packaged.push({
     pluginId: "fixture",
     revision: "built-revision",
     bundledDistribution: { packageName: "fixture", packageVersion: "1.0.0" },
     activation: "settings-only",
-    settingsViews: [placement],
+    settingsViews: views.map((view) => view.placement),
     entry: "/packaged/index.js",
     styles: ["/packaged/index.css"],
     imports: [],
   });
-  const view: ControlUiSettingsView = { placement, mount: vi.fn() };
+  const view = views[0]!;
   const activate = vi.fn();
   const stop = vi.fn();
   const style = document.createElement("link");
   style.media = "not all";
   const module = {
     pluginId: "fixture",
-    settingsViews: [view],
+    settingsViews: views,
     default: { id: "fixture", activate },
   };
   vi.mocked(loadControlUiPluginAssets).mockImplementation(
@@ -53,44 +62,42 @@ function fixture() {
     throw new Error("Settings loading must not read the active catalog");
   });
   runtimes.push(runtime);
-  const load = (target: ControlUiSettingsView["placement"] = placement) =>
-    runtime.loadSettingsView(target, new AbortController().signal);
-  const channel = { section: "channels", panel: "detail", channelId: "custom" } as const;
-  return { runtime, view, activate, stop, style, module, load, channel };
+  const load = (target = view) =>
+    target.placement.section === "memory"
+      ? runtime.loadSettingsView(target.placement, new AbortController().signal)
+      : runtime.loadSettingsView(target.placement, new AbortController().signal);
+  return { runtime, view, activate, stop, style, module, load };
 }
-it("loads packaged Settings independently and retires its assets with the runtime", async () => {
-  const f = fixture();
-  const loaded = await f.load();
-  expect(loaded.view).toBe(f.view);
-  expect(f.style.media).toBe("all");
-  expect(f.activate).not.toHaveBeenCalled();
-  expect(f.runtime.hasPlugins).toBe(false);
-  f.runtime.dispose();
-  expect(loaded.signal.aborted).toBe(true);
-  expect(f.stop).toHaveBeenCalledOnce();
-  loaded.dispose();
-  expect(f.stop).toHaveBeenCalledOnce();
-});
+it.each(["overview", "memories", "channel"] as const)(
+  "loads and disposes packaged %s without activation",
+  async (kind) => {
+    const selected = kind === "channel" ? channelView() : memoryView(kind);
+    const f = fixture(kind === "memories" ? [memoryView(), selected] : [selected]);
+    const loaded = await f.load(selected);
+    expect(loaded.view).toBe(selected);
+    expect(f.style.media).toBe("all");
+    expect(f.activate).not.toHaveBeenCalled();
+    expect(f.runtime.hasPlugins).toBe(false);
+    if (kind === "channel") {
+      await expect(f.load(channelView("foreign"))).rejects.toThrow("one packaged owner");
+    }
+    if (kind === "memories") {
+      loaded.dispose();
+    } else {
+      f.runtime.dispose();
+    }
+    expect(loaded.signal.aborted).toBe(true);
+    expect(f.stop).toHaveBeenCalledOnce();
+    loaded.dispose();
+    expect(f.stop).toHaveBeenCalledOnce();
+  },
+);
 it("does not start a Settings view after disposal during its lazy import", async () => {
   const f = fixture();
   const pending = f.runtime.loadSettingsView(placement, new AbortController().signal);
   f.runtime.dispose();
   await expect(pending).rejects.toThrow("The plugin UI runtime has ended.");
   expect(loadControlUiPluginAssets).not.toHaveBeenCalled();
-});
-it("selects Memories from a package that also owns Overview without runtime activation", async () => {
-  const f = fixture();
-  const memories: ControlUiSettingsView = {
-    placement: { section: "memory", panel: "memories" },
-    mount: vi.fn(),
-  };
-  packaged[0]!.settingsViews = [placement, memories.placement];
-  f.module.settingsViews.push(memories);
-  const loaded = await f.load(memories.placement);
-  expect(loaded.view).toBe(memories);
-  expect(f.activate).not.toHaveBeenCalled();
-  loaded.dispose();
-  expect(f.stop).toHaveBeenCalledOnce();
 });
 it("rejects ambiguous packaged placement owners before loading code", async () => {
   const f = fixture();
@@ -122,38 +129,9 @@ it.each(["owner", "placement", "duplicate"])(
   },
 );
 
-it("binds channel settings loading to the declared channel without runtime activation", async () => {
-  const f = fixture();
-  const view: ControlUiChannelSettingsView = {
-    placement: f.channel,
-    mount: vi.fn(),
-  };
-  packaged[0]!.settingsViews = [view.placement];
-  vi.mocked(loadControlUiPluginAssets).mockResolvedValue({
-    pluginId: "fixture",
-    settingsViews: [view],
-    default: { id: "fixture", activate: f.activate },
-  });
-  const loaded = await f.runtime.loadSettingsView(view.placement, new AbortController().signal);
-  expect(loaded.view).toBe(view);
-  expect(f.activate).not.toHaveBeenCalled();
-  await expect(
-    f.runtime.loadSettingsView(
-      { ...view.placement, channelId: "foreign" },
-      new AbortController().signal,
-    ),
-  ).rejects.toThrow("one packaged owner");
-  f.runtime.dispose();
-  expect(loaded.signal.aborted).toBe(true);
-});
 it("rejects module channel identity drift even when section and panel match", async () => {
-  const f = fixture();
-  packaged[0]!.settingsViews = [f.channel];
-  vi.mocked(loadControlUiPluginAssets).mockResolvedValue({
-    pluginId: "fixture",
-    settingsViews: [{ placement: { ...f.channel, channelId: "foreign" }, mount: vi.fn() }],
-  });
-  await expect(f.runtime.loadSettingsView(f.channel, new AbortController().signal)).rejects.toThrow(
-    "Invalid or duplicate",
-  );
+  const view = channelView();
+  const f = fixture([view]);
+  f.module.settingsViews = [{ ...view, placement: { ...view.placement, channelId: "foreign" } }];
+  await expect(f.load()).rejects.toThrow("Invalid or duplicate");
 });

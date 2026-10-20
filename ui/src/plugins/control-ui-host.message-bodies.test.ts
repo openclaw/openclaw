@@ -112,61 +112,54 @@ describe("plugin session message body admission", () => {
     expect(store.current().stopped).toBe(0);
   });
 
-  it("includes existing interest in initial and reconnect handshakes without extra admission requests", () => {
-    const listener = vi.fn();
-    const stop = listen("early", listener);
-    store.gateway.start();
-    expect(store.current().opts.includeSessionMessageBodies).toBe(true);
-    store.current().request.mockResolvedValue({ subscribed: true });
-    hello();
-    emit(fullPayload);
-    expect(listener).toHaveBeenCalledExactlyOnceWith(fullPayload);
-    expect(store.current().request).not.toHaveBeenCalledWith(
-      "sessions.subscribe",
-      expect.anything(),
-    );
-
-    store.current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
-    expect(store.current().opts.includeSessionMessageBodies).toBe(true);
-    hello();
-    emit(fullPayload);
-    expect(listener).toHaveBeenCalledTimes(2);
-    expect(store.current().request).not.toHaveBeenCalledWith(
-      "sessions.subscribe",
-      expect.anything(),
-    );
-    stop();
-    expectInterest(false);
-  });
-
-  it("admits interest registered after connect parameters were sent and retires it with the activation", async () => {
-    store.gateway.start();
-    expect(store.current().opts.includeSessionMessageBodies).toBeUndefined();
-    store.current().request.mockResolvedValue({ subscribed: true });
-    const listener = vi.fn();
-    listen("connecting", listener);
-    hello();
-    expectInterest(true);
-    emit(rosterPayload);
-    expect(listener).not.toHaveBeenCalled();
-    await Promise.resolve();
-    emit(fullPayload);
-    expect(listener).toHaveBeenCalledExactlyOnceWith(fullPayload);
-    disposers.pop()?.();
-    expectInterest(false);
-    emit(fullPayload);
-    expect(listener).toHaveBeenCalledOnce();
-  });
-
-  it("reverts interest removed after the handshake parameters were sent", () => {
-    const stop = listen("retiring", vi.fn());
-    store.gateway.start();
-    expect(store.current().opts.includeSessionMessageBodies).toBe(true);
-    stop();
-    store.current().request.mockResolvedValue({ subscribed: true });
-    hello();
-    expectInterest(false);
-  });
+  it.each(["early", "connecting", "retiring"])(
+    "negotiates %s listener interest",
+    async (timing) => {
+      const listener = vi.fn();
+      const stop = timing === "connecting" ? undefined : listen(timing, listener);
+      store.gateway.start();
+      expect(store.current().opts.includeSessionMessageBodies).toBe(
+        timing === "connecting" ? undefined : true,
+      );
+      store.current().request.mockResolvedValue({ subscribed: true });
+      if (timing === "connecting") {
+        listen(timing, listener);
+      }
+      if (timing === "retiring") {
+        stop?.();
+      }
+      hello();
+      if (timing === "retiring") {
+        expectInterest(false);
+        return;
+      }
+      if (timing === "connecting") {
+        expectInterest(true);
+        emit(rosterPayload);
+        expect(listener).not.toHaveBeenCalled();
+        await Promise.resolve();
+      }
+      emit(fullPayload);
+      expect(listener).toHaveBeenCalledExactlyOnceWith(fullPayload);
+      if (timing === "early") {
+        expect(bodyRequests()).toEqual([]);
+        store.current().opts.onClose?.({ code: 1006, reason: "reconnecting", willRetry: true });
+        expect(store.current().opts.includeSessionMessageBodies).toBe(true);
+        hello();
+        emit(fullPayload);
+        expect(listener).toHaveBeenCalledTimes(2);
+        expect(bodyRequests()).toEqual([]);
+        stop?.();
+      } else {
+        disposers.pop()?.();
+      }
+      expectInterest(false);
+      if (timing === "connecting") {
+        emit(fullPayload);
+        expect(listener).toHaveBeenCalledOnce();
+      }
+    },
+  );
 
   it("reports rejected admission and retries only when another listener registers", async () => {
     start();

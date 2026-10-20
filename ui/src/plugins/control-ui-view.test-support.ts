@@ -1,12 +1,55 @@
 import { vi } from "vitest";
-import type { ControlUiHost, ControlUiReplacement } from "../../../src/plugin-sdk/control-ui.js";
+import type {
+  ControlUiHost,
+  ControlUiReplacement,
+  ControlUiSurfaceProps,
+  ControlUiViewContext,
+} from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
 
-export function replacement<S extends "workspace" | "composer">(
+type Surface = "workspace" | "composer";
+type ViewContext<S extends Surface> = ControlUiViewContext<ControlUiSurfaceProps[S]>;
+
+export function composerProps(
+  overrides: Partial<ControlUiSurfaceProps["composer"]> = {},
+): ControlUiSurfaceProps["composer"] {
+  return {
+    sessionKey: "main",
+    agentId: "main",
+    draft: "",
+    canSend: true,
+    sending: false,
+    disabledReason: null,
+    setDraft: vi.fn(),
+    send: async () => true,
+    ...overrides,
+  };
+}
+
+export function replacement<S extends Surface>(
   surface: S,
   mount: ControlUiReplacement<S>["mount"],
 ): ControlUiReplacement<S> {
   return { id: "fixture", label: "Fixture", surface, mount };
+}
+
+export function recordReplacement<S extends Surface>(
+  surface: S,
+  content: string | ((context: ViewContext<S>) => string),
+  updates = false,
+) {
+  const contexts: ViewContext<S>[] = [];
+  const roots: HTMLElement[] = [];
+  const dispose = vi.fn();
+  const mount = vi.fn((container: HTMLElement, context: ViewContext<S>) => {
+    roots.push(container);
+    contexts.push(context);
+    container.textContent = typeof content === "string" ? content : content(context);
+    return updates
+      ? { dispose, update: (next: typeof context) => contexts.push(next) }
+      : { dispose };
+  });
+  return { view: replacement(surface, mount), contexts, roots, dispose, mount };
 }
 
 export function createViewRuntime(
