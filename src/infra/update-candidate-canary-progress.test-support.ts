@@ -91,6 +91,7 @@ export function registerCanaryProgressWorkerTests(
     "source-replaced",
     "interrupted-after-acceptance",
     "uncertain",
+    "overloaded",
   ] as const)(
     "persists streamed candidate progress through its admitted worker (%s)",
     async (outcome) => {
@@ -184,6 +185,15 @@ export function registerCanaryProgressWorkerTests(
       if (outcome === "uncertain") {
         worker.mockImplementationOnce(runWorker).mockRejectedValueOnce(unknown);
       }
+      if (outcome === "overloaded") {
+        // The state worker broker saturates and rejects the first streamed
+        // progress write at admission; the write never runs.
+        worker
+          .mockImplementationOnce(runWorker)
+          .mockRejectedValueOnce(
+            new SqliteWorkerError("SQLite worker queue capacity reached", "overloaded"),
+          );
+      }
       let commits = 0;
       admission.beforeGrant = (stage) => {
         // Initial admission warms the writer before streamed snapshot receipts.
@@ -240,6 +250,38 @@ export function registerCanaryProgressWorkerTests(
             }),
           );
           expect(mocks.spawn).not.toHaveBeenCalled();
+          return;
+        }
+        if (outcome === "overloaded") {
+          const result = await pending;
+          // Validation continues past a broker-overloaded progress write.
+          expect(result.status).toBe("ok");
+          expect(mocks.spawn).toHaveBeenCalled();
+          const display = stderr.mock.calls.flat().join("\n");
+          expect(display).toContain("candidate-doctor:");
+          expect(display).toContain(
+            "State database is busy; streamed update progress is not being recorded. The update will continue.",
+          );
+          expect(
+            stderr.mock.calls.filter(([line]) =>
+              String(line).includes("streamed update progress is not being recorded"),
+            ),
+          ).toHaveLength(1);
+          expect(stdout).not.toHaveBeenCalled();
+          const saved = await getUpdateRunAsync(run.runId, { env });
+          // The dropped admission receipt stays dropped: the initial snapshot
+          // begin row never lands, and later streamed writes still record.
+          expect(
+            saved?.steps.find(
+              (step) =>
+                step.step === "candidate-state-snapshot" &&
+                step.status === "in_progress" &&
+                step.detail === "Preparing update checks",
+            ),
+          ).toBeUndefined();
+          expect(saved?.steps).toEqual(
+            expect.arrayContaining([expect.objectContaining(snapshotStep)]),
+          );
           return;
         }
         const result = await pending;

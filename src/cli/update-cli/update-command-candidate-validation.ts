@@ -4,6 +4,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryReadJson } from "../../infra/json-files.js";
+import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
 import { assertUpdateDatabaseEngineContexts } from "../../infra/update-database-engine-admission.js";
 import { createUpdateDoctorConfigWarningStep } from "../../infra/update-doctor-config.js";
@@ -89,6 +90,7 @@ export async function validateUpdateCandidateWithProgress(
       deadline.assertCurrent();
     };
     const writeOptions = run ? { ...params.writeOptions, signal: deadline.signal } : undefined;
+    const droppedProgressWarning = { reported: false };
     const originalContext = writeOptions?.context;
     const source = originalContext
       ? prepareOpenClawStateReadSource({
@@ -129,6 +131,20 @@ export async function validateUpdateCandidateWithProgress(
             await recordUpdateRunStepAsync(run.runId, step, {
               ...writeOptions,
               context: source?.workerContext(),
+            }).catch((error: unknown) => {
+              // Streamed progress rows are advisory journal entries. A broker
+              // overload rejects before the write runs, so drop the row, warn
+              // once, and keep validation moving; step receipts and phase
+              // records still own the run journal.
+              if (!isSqliteWorkerError(error, "overloaded")) {
+                throw error;
+              }
+              if (!droppedProgressWarning.reported) {
+                droppedProgressWarning.reported = true;
+                defaultRuntime[execution.opts.json ? "error" : "log"](
+                  "[update] State database is busy; streamed update progress is not being recorded. The update will continue.",
+                );
+              }
             });
           }
           assertCurrent();
