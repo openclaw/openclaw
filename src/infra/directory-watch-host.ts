@@ -20,6 +20,16 @@ type Host = {
 // exits without closing them once its input ends.
 const HOST_SCRIPT = `
 const fs = require("node:fs");
+const { Worker } = require("node:worker_threads");
+// A close can hold this loop on fseventsd for minutes, leaving end of input
+// unread; the worker still ends the helper once its caller process is gone.
+new Worker(
+  "const caller = " + Number(process.argv[1]) +
+    "; setInterval(() => process.ppid === caller || process.kill(process.pid, 'SIGKILL'), 1000);",
+  { eval: true },
+)
+  .on("error", () => {})
+  .unref();
 const watches = new Map();
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 let buffered = "";
@@ -56,9 +66,11 @@ let host: Host | undefined;
 let nextId = 0;
 
 function startHost(): Host {
-  const child = spawn(process.execPath, ["-e", HOST_SCRIPT], {
+  // The caller passes its PID so a helper that starts after it died still exits.
+  const child = spawn(process.execPath, ["-e", HOST_SCRIPT, String(process.pid)], {
     stdio: ["pipe", "pipe", "ignore"],
-    // Terminal signals reach the caller first; the helper exits when its input ends.
+    // Terminal signals reach the caller first; the helper exits when its input ends
+    // or its caller is gone.
     detached: true,
     env: { ...process.env, NODE_OPTIONS: undefined },
   });

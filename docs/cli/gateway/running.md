@@ -35,6 +35,7 @@ openclaw gateway run   # equivalent, explicit form
     - `SIGUSR2` triggers an in-process restart when authorized. `commands.restart` (default: enabled) gates externally-sent `SIGUSR2`; set it to `false` to block manual OS-signal restarts. The agent-facing `gateway` tool is read-only; agents request restart through the `openclaw` delegation tool. Effective Full Access, including Default (Full Access), authorizes permitted delegated changes without an approval prompt; restricted runs require human approval. See [Delegated setup and repair](/gateway/permission-modes#delegated-setup-and-repair).
     - `SIGUSR1` is reserved for Node's inspector, so attaching a debugger does not restart the Gateway. Prefer `openclaw gateway restart` for restarts; update manual restart scripts to send `SIGUSR2`.
     - `SIGINT`/`SIGTERM` stop the process but do not restore custom terminal state — if you wrap the CLI in a TUI or raw-mode input, restore the terminal yourself before exit.
+    - A foreground Gateway does not follow the lifetime of the process that started it. OpenClaw's own launchers, such as Node runtime recovery, forward stop signals and stop their Gateway when they exit. A shell or wrapper script that does not forward signals leaves the Gateway serving after the wrapper is killed. Signal the Gateway process itself (process title `openclaw-gateway`), or forward signals from the wrapper (for example `exec openclaw gateway run`).
 
   </Accordion>
 </AccordionGroup>
