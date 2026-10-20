@@ -5,12 +5,8 @@ import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-con
 
 function createIndex(
   pluginId: string,
-  options: {
-    doctorContractFile?: InstalledPluginIndex["plugins"][number]["doctorContractFile"];
-    doctorContractHash?: string;
-    generatedAtMs?: number;
-    packageBuild?: InstalledPluginIndex["plugins"][number]["packageBuild"];
-  } = {},
+  plugin: Partial<InstalledPluginIndex["plugins"][number]> = {},
+  generatedAtMs = 1,
 ): InstalledPluginIndex {
   return {
     version: 1,
@@ -18,7 +14,7 @@ function createIndex(
     compatRegistryVersion: "test",
     migrationVersion: 1,
     policyHash: "policy",
-    generatedAtMs: options.generatedAtMs ?? 1,
+    generatedAtMs,
     installRecords: {},
     diagnostics: [],
     plugins: [
@@ -26,21 +22,13 @@ function createIndex(
         pluginId,
         manifestPath: `/plugins/${pluginId}/openclaw.plugin.json`,
         manifestHash: `${pluginId}-manifest-hash`,
-        ...(options.doctorContractHash ? { doctorContractHash: options.doctorContractHash } : {}),
-        ...(options.doctorContractFile ? { doctorContractFile: options.doctorContractFile } : {}),
-        packageBuild: options.packageBuild ?? {
-          openclawVersion: "test",
-          bundledDist: false,
-        },
+        packageBuild: { openclawVersion: "test", bundledDist: false },
         rootDir: `/plugins/${pluginId}`,
         origin: "global",
         enabled: true,
-        startup: {
-          sidecar: false,
-          memory: false,
-          agentHarnesses: [],
-        },
+        startup: { sidecar: false, memory: false, agentHarnesses: [] },
         compat: [],
+        ...plugin,
       },
     ],
   };
@@ -68,25 +56,14 @@ describe("plugin control-plane context", () => {
   });
 
   it("tracks doctor contract content but ignores index generation time", () => {
-    const makeIndex = (options: Parameters<typeof createIndex>[1] = {}) =>
-      createIndex("demo", { doctorContractHash: "contract-a", ...options });
+    const makeIndex = (plugin: Parameters<typeof createIndex>[1] = {}, time = 1) =>
+      createIndex("demo", { doctorContractHash: "contract-a", ...plugin }, time);
     const baseIndex = makeIndex();
-    const changedContractIndex = makeIndex({ doctorContractHash: "contract-b" });
-    const regeneratedIndex = makeIndex({ generatedAtMs: 2 });
-    const retimedContractIndex = makeIndex({
-      doctorContractFile: { size: 10, mtimeMs: 20, ctimeMs: 30 },
-    });
-    const rebuiltIndex = makeIndex({
-      packageBuild: { openclawVersion: "next", bundledDist: false },
-    });
     const buildOnlyIndex = makeIndex({ packageBuild: { openclawVersion: "test" } });
     const withoutBuildIndex: InstalledPluginIndex = {
       ...buildOnlyIndex,
       plugins: buildOnlyIndex.plugins.map(({ packageBuild: _packageBuild, ...plugin }) => plugin),
     };
-    const bundledDistIndex = makeIndex({
-      packageBuild: { openclawVersion: "test", bundledDist: true },
-    });
     const reorderedIndexSource = makeIndex();
     const { pluginId, ...reorderedPlugin } = reorderedIndexSource.plugins[0]!;
     const reorderedIndex: InstalledPluginIndex = {
@@ -101,18 +78,21 @@ describe("plugin control-plane context", () => {
         activationFingerprint: "activation-a",
       });
 
-    for (const fingerprint of [
-      resolveInstalledManifestRegistryIndexFingerprint,
-      resolveControlPlaneFingerprint,
-    ]) {
-      const base = fingerprint(baseIndex);
-      expect(fingerprint(changedContractIndex)).not.toBe(base);
-      expect(fingerprint(regeneratedIndex)).toBe(base);
-      expect(fingerprint(retimedContractIndex)).toBe(base);
-      expect(fingerprint(rebuiltIndex)).toBe(base);
-      expect(fingerprint(withoutBuildIndex)).toBe(fingerprint(buildOnlyIndex));
-      expect(fingerprint(bundledDistIndex)).not.toBe(base);
-      expect(fingerprint(reorderedIndex)).toBe(base);
+    const fingerprints = (index: InstalledPluginIndex) => [
+      resolveInstalledManifestRegistryIndexFingerprint(index),
+      resolveControlPlaneFingerprint(index),
+    ];
+    const base = fingerprints(baseIndex);
+    for (const [candidate, equal] of [
+      [makeIndex({ doctorContractHash: "contract-b" }), false],
+      [makeIndex({}, 2), true],
+      [makeIndex({ doctorContractFile: { size: 10, mtimeMs: 20, ctimeMs: 30 } }), true],
+      [makeIndex({ packageBuild: { openclawVersion: "next", bundledDist: false } }), true],
+      [makeIndex({ packageBuild: { openclawVersion: "test", bundledDist: true } }), false],
+      [reorderedIndex, true],
+    ] as const) {
+      expect(fingerprints(candidate).map((value, i) => value === base[i])).toEqual([equal, equal]);
     }
+    expect(fingerprints(withoutBuildIndex)).toEqual(fingerprints(buildOnlyIndex));
   });
 });

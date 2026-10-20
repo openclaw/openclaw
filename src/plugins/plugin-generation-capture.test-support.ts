@@ -66,22 +66,17 @@ export function captureResources() {
 
 export function observeFileIo(filename: string, trackCopies = true) {
   const original = fs.statSync(filename);
-  const readSync = fs.readSync;
-  const readFileSync = fs.readFileSync;
-  const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
-  const createBatch = fsSafeAdvanced.createRootFileCopyBatchSync;
-  const writeSync = fs.writeSync;
+  const { readSync, readFileSync, writeSync } = fs;
+  const { copyRootFileSync, createRootFileCopyBatchSync: createBatch } = fsSafeAdvanced;
   const empty = () => ({ originalBytes: 0, capturedBytes: 0, wholeFileReads: 0, largestBuffer: 0 });
   let current: ReturnType<typeof empty> | undefined;
   let copies = new Set<string>();
-  const recordCopy = (stat: fs.Stats) => {
-    if (current && stat.size === original.size) {
-      copies.add(`${stat.dev}:${stat.ino}`);
-    }
-  };
-  const recordCopiedFile = (copied: ReturnType<typeof fsSafeAdvanced.copyRootFileSync>) => {
+  const recordCopiedFile = <T extends { fd: number }>(copied: T): T => {
     if (current) {
-      recordCopy(fs.fstatSync(copied.fd));
+      const stat = fs.fstatSync(copied.fd);
+      if (stat.size === original.size) {
+        copies.add(`${stat.dev}:${stat.ino}`);
+      }
     }
     return copied;
   };
@@ -90,11 +85,11 @@ export function observeFileIo(filename: string, trackCopies = true) {
       const length = Reflect.apply(readSync, fs, args);
       const stat = fs.fstatSync(args[0]);
       if (current && stat.size === original.size) {
-        if (stat.dev === original.dev && stat.ino === original.ino) {
-          current.originalBytes += length;
-        } else {
-          current.capturedBytes += length;
-        }
+        const key =
+          stat.dev === original.dev && stat.ino === original.ino
+            ? "originalBytes"
+            : "capturedBytes";
+        current[key] += length;
         if (Buffer.isBuffer(args[1])) {
           current.largestBuffer = Math.max(
             current.largestBuffer,
@@ -125,34 +120,32 @@ export function observeFileIo(filename: string, trackCopies = true) {
           }),
           vi.spyOn(fs, "writeSync").mockImplementation((...args) => {
             const length = Reflect.apply(writeSync, fs, args);
-            if (current) {
-              recordCopy(fs.fstatSync(args[0]));
-            }
+            recordCopiedFile({ fd: args[0] });
             return length;
           }),
         ]
       : []),
   ];
+  const begin = () => {
+    const counts = (current = empty());
+    copies = new Set();
+    return {
+      result<T>(value: T) {
+        return { value, io: { ...counts, copies: copies.size } };
+      },
+      [Symbol.dispose]() {
+        current = undefined;
+      },
+    };
+  };
   return {
     measure<T>(run: () => T) {
-      const counts = empty();
-      current = counts;
-      copies = new Set();
-      try {
-        return { value: run(), io: { ...counts, copies: copies.size } };
-      } finally {
-        current = undefined;
-      }
+      using measurement = begin();
+      return measurement.result(run());
     },
     async measureAsync<T>(run: () => Promise<T>) {
-      const counts = empty();
-      current = counts;
-      copies = new Set();
-      try {
-        return { value: await run(), io: { ...counts, copies: copies.size } };
-      } finally {
-        current = undefined;
-      }
+      using measurement = begin();
+      return measurement.result(await run());
     },
     restore: () => spies.forEach((spy) => spy.mockRestore()),
   };

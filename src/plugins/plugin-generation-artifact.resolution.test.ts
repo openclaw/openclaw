@@ -6,14 +6,11 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as jitiFactory from "./jiti-factory.js";
 import { createPluginCaptureResolver } from "./plugin-capture-resolution.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import { writeTree } from "./plugin-generation-capture.test-support.js";
+import { captureResources, writeTree } from "./plugin-generation-capture.test-support.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.restoreAllMocks());
 
 it.each([false, true])(
   "bounds resolution work for fifty TypeScript imports (custody: %s)",
@@ -40,52 +37,43 @@ it.each([false, true])(
       captureStack(target, constructor);
     });
     const capture = async () => {
-      const artifact = capturePluginGenerationArtifact(root, entry, (run) => run());
-      try {
-        for (let index = 0; index < 25; index++) {
-          expect(
-            fs.readFileSync(artifact.resolve(path.join(root, `part-${index}/value.ts`)), "utf8"),
-          ).toBe(`export const value = ${index};`);
-        }
-        expect.soft(createResolver.mock.calls.length).toBeLessThanOrEqual(custody ? 3 : 1);
-        expect(resolutionErrors).toBe(0);
-      } finally {
-        await artifact.disposeAsync();
+      await using resources = captureResources();
+      const artifact = resources.keep(capturePluginGenerationArtifact(root, entry, (run) => run()));
+      for (let index = 0; index < 25; index++) {
+        expect(
+          fs.readFileSync(artifact.resolve(path.join(root, `part-${index}/value.ts`)), "utf8"),
+        ).toBe(`export const value = ${index};`);
       }
+      expect.soft(createResolver.mock.calls.length).toBeLessThanOrEqual(custody ? 3 : 1);
+      expect(resolutionErrors).toBe(0);
     };
-    if (custody) {
-      await withPluginGenerationSourceCustody(capture);
-    } else {
-      await capture();
-    }
+    await (custody ? withPluginGenerationSourceCustody(capture) : capture());
   },
 );
 
 it.each(["value.js", "value.js.ts", "value.js/index.js", "value.js.json", "value.js.mjs.js"])(
   "matches Jiti's TypeScript sibling selection alongside %s",
-  (selected) => {
+  async (selected) => {
+    await using resources = captureResources();
     const root = temp.make("plugin-resolution-precedence-");
     const entry = path.join(root, "index.ts");
     const winner = path.join(root, selected);
-    fs.mkdirSync(path.dirname(winner), { recursive: true });
-    fs.writeFileSync(winner, selected.endsWith(".json") ? "{}" : "export const value = 1;");
-    fs.writeFileSync(path.join(root, "value.ts"), "export const value = 2;");
-    fs.writeFileSync(entry, 'import "./value.js";');
+    writeTree(root, {
+      [selected]: selected.endsWith(".json") ? "{}" : "export const value = 1;",
+      "value.ts": "export const value = 2;",
+      "index.ts": 'import "./value.js";',
+    });
     // Native loader hooks can select a TS sibling before Jiti's final require fallback.
     const expected = fileURLToPath(
       jitiFactory
         .createJiti(entry, { fsCache: false, moduleCache: false, tryNative: false })
         .esmResolve(path.join(root, "value.js"), { conditions: ["node", "module-sync", "import"] }),
     );
-    const artifact = capturePluginGenerationArtifact(root, entry);
-    try {
-      expect(artifact.hasSource(expected)).toBe(true);
-      expect(artifact.hasSource(expected === winner ? path.join(root, "value.ts") : winner)).toBe(
-        false,
-      );
-    } finally {
-      artifact.dispose();
-    }
+    const artifact = resources.keep(capturePluginGenerationArtifact(root, entry));
+    expect(artifact.hasSource(expected)).toBe(true);
+    expect(artifact.hasSource(expected === winner ? path.join(root, "value.ts") : winner)).toBe(
+      false,
+    );
   },
 );
 
@@ -107,16 +95,13 @@ it("resolves package alias targets from the importing source", () => {
   );
 });
 
-it("leaves a looping TypeScript sibling unresolved during capture", () => {
+it("leaves a looping TypeScript sibling unresolved during capture", async () => {
+  await using resources = captureResources();
   const root = temp.make("plugin-resolution-loop-");
   const entry = path.join(root, "index.ts");
   fs.writeFileSync(entry, 'import "./value.js";');
   fs.symlinkSync("value.ts", path.join(root, "value.ts"), "file");
-  const artifact = capturePluginGenerationArtifact(root, entry);
-  try {
-    expect(artifact.hasSource(entry)).toBe(true);
-    expect(artifact.hasSource(path.join(root, "value.ts"))).toBe(false);
-  } finally {
-    artifact.dispose();
-  }
+  const artifact = resources.keep(capturePluginGenerationArtifact(root, entry));
+  expect(artifact.hasSource(entry)).toBe(true);
+  expect(artifact.hasSource(path.join(root, "value.ts"))).toBe(false);
 });

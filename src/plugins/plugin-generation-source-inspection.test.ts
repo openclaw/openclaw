@@ -127,37 +127,33 @@ it("inspects a captured cyclic dependency graph without following its dependency
   expect(followedLinks.size).toBe(0);
 });
 
-it.for(
-  ["#selected", "inspection-conditions/selected"].flatMap((specifier) =>
-    ["import", "require"].map((kind) => ({ specifier, kind })),
-  ),
-)(
-  "inspects the module-sync target for $kind $specifier without evaluation",
-  ({ specifier, kind }) => {
-    const root = temp.make("plugin-inspection-conditions-");
-    const entryFile = path.join(root, kind === "import" ? "index.mjs" : "index.cjs");
-    const selected = path.join(root, "sync.mjs");
-    const selection = { "module-sync": "./sync.mjs", default: "./fallback.mjs" };
-    writeTree(root, {
-      "package.json": {
-        name: "inspection-conditions",
-        type: "module",
-        imports: { "#selected": selection },
-        exports: { "./selected": selection },
-      },
-    });
-    for (const file of [selected, path.join(root, "fallback.mjs")]) {
-      fs.writeFileSync(file, "throw new Error('inspection must not evaluate plugin code');");
-    }
-    fs.writeFileSync(
-      entryFile,
+it.each([
+  ["#selected", "import"],
+  ["#selected", "require"],
+  ["inspection-conditions/selected", "import"],
+  ["inspection-conditions/selected", "require"],
+])("inspects the module-sync target for %s via %s without evaluation", (specifier, kind) => {
+  const root = temp.make("plugin-inspection-conditions-");
+  const entryFile = path.join(root, kind === "import" ? "index.mjs" : "index.cjs");
+  const selected = path.join(root, "sync.mjs");
+  const selection = { "module-sync": "./sync.mjs", default: "./fallback.mjs" };
+  const unevaluated = "throw new Error('inspection must not evaluate plugin code');";
+  writeTree(root, {
+    "package.json": {
+      name: "inspection-conditions",
+      type: "module",
+      imports: { "#selected": selection },
+      exports: { "./selected": selection },
+    },
+    "sync.mjs": unevaluated,
+    "fallback.mjs": unevaluated,
+    [path.basename(entryFile)]:
       kind === "import"
         ? `import ${JSON.stringify(specifier)};`
         : `require(${JSON.stringify(specifier)});`,
-    );
+  });
 
-    const inspection = inspectPluginSourceDependencies([{ rootDir: root, entryFile }]);
-    expect(inspection.unresolved).toEqual([]);
-    expect(inspection.references).toEqual([{ source: entryFile, specifier, target: selected }]);
-  },
-);
+  const inspection = inspectPluginSourceDependencies([{ rootDir: root, entryFile }]);
+  expect(inspection.unresolved).toEqual([]);
+  expect(inspection.references).toEqual([{ source: entryFile, specifier, target: selected }]);
+});
