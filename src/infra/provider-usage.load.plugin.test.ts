@@ -65,12 +65,7 @@ it("routes synthetic usage to the Codex hook with the original OpenAI account co
     auth: [{ ...auth, hookProvider: "codex" }],
   });
   expect(result).toEqual(expected);
-  expect(mocks.resolve).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      provider: "codex",
-      context: expect.objectContaining(auth),
-    }),
-  );
+  expect(mocks.resolve.mock.calls).toMatchObject([[{ provider: "codex", context: auth }]]);
 });
 
 it.each([false, true])("routes plugin fetch with explicit override=%s", async (explicit) => {
@@ -90,13 +85,8 @@ it.each([false, true])("routes plugin fetch with explicit override=%s", async (e
     }
     return;
   }
-  expect(mocks.proxyAgent).toHaveBeenCalledExactlyOnceWith(
-    { httpsProxy: "http://proxy.test:8080" },
-    undefined,
-    env,
-  );
-  expect(mocks.fetch).toHaveBeenCalledExactlyOnceWith(
-    url,
-    expect.objectContaining({ dispatcher: mocks.dispatcher }),
-  );
+  expect(mocks.proxyAgent.mock.calls).toEqual([
+    [{ httpsProxy: "http://proxy.test:8080" }, undefined, env],
+  ]);
+  expect(mocks.fetch.mock.calls).toMatchObject([[url, { dispatcher: mocks.dispatcher }]]);
 });

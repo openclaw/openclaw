@@ -48,46 +48,29 @@ vi.mock("./kysely-sync.js", async () => {
 
 const database = new DatabaseSync("inert-apns-kernel");
 const token = "abcd1234".repeat(4);
-function directRow(nodeId: string): RegistrationRow {
+function registrationRow(nodeId: string, relay = false): RegistrationRow {
   return {
     node_id: nodeId,
-    transport: "direct",
-    token,
-    relay_handle: null,
-    send_grant: null,
-    installation_id: null,
-    relay_origin: null,
+    transport: relay ? "relay" : "direct",
+    token: relay ? null : token,
+    relay_handle: relay ? "synthetic-relay" : null,
+    send_grant: relay ? "synthetic-send-grant" : null,
+    installation_id: relay ? "synthetic-installation" : null,
+    relay_origin: relay ? "https://ios-push-relay.openclaw.ai" : null,
     topic: "ai.openclaw.ios",
-    environment: "sandbox",
-    distribution: null,
-    token_debug_suffix: null,
+    environment: relay ? "production" : "sandbox",
+    distribution: relay ? "official" : null,
+    token_debug_suffix: relay ? "abcd1234" : null,
     updated_at_ms: 7,
   };
 }
-function relayRow(nodeId: string): RegistrationRow {
-  return {
-    ...directRow(nodeId),
-    transport: "relay",
-    token: null,
-    relay_handle: "synthetic-relay",
-    send_grant: "synthetic-send-grant",
-    installation_id: "synthetic-installation",
-    relay_origin: "https://ios-push-relay.openclaw.ai",
-    environment: "production",
-    distribution: "official",
-    token_debug_suffix: "abcd1234",
-  };
-}
 
-beforeEach(() => {
-  vi.resetAllMocks();
-  queries.all.mockReturnValue({ rows: [] });
-});
+beforeEach(() => vi.resetAllMocks());
 
 it("looks up IDs in bounded chunks and decodes both transports", () => {
   const nodeIds = Array.from({ length: 501 }, (_, index) => `node-${index}`);
   const finalId = "node-500";
-  const stored = [directRow("node-0"), relayRow(finalId)];
+  const stored = [registrationRow("node-0"), registrationRow(finalId, true)];
   const bindings: unknown[][] = [];
   queries.all.mockImplementation((_database, query) => {
     const parameters = query.compile().parameters;
@@ -130,7 +113,7 @@ it.each([
 ])("rejects an %s first chunk before querying the next chunk", (name, storedToken) => {
   const nodeIds = Array.from({ length: 501 }, (_, index) => `node-${index}`);
   queries.all.mockReturnValueOnce({
-    rows: [directRow("node-0"), { ...directRow("node-1"), token: storedToken }],
+    rows: [registrationRow("node-0"), { ...registrationRow("node-1"), token: storedToken }],
   });
   queries.all.mockImplementationOnce(() => {
     throw new Error("The next chunk must not run before decoding the first chunk");

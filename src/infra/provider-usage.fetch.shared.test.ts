@@ -5,38 +5,34 @@ import { fetchJson, fetchUsageJson, readUsageJson } from "./provider-usage.fetch
 
 const url = "https://example.com/usage";
 const responseFetch = (response: Response) => withFetchPreconnect(async () => response);
+const streamResponse = (source: UnderlyingSource<Uint8Array>) =>
+  new Response(new ReadableStream<Uint8Array>(source));
 const request = (fetchFn: typeof fetch, init: RequestInit = {}, timeout = 1000) =>
   fetchJson(url, init, timeout, fetchFn);
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["deadline", "caller"] as const)(
-  "keeps %s cancellation active after headers",
-  async (source) => {
-    const deadline = new AbortController();
-    const caller = new AbortController();
-    vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
-    const reason = new Error("cancelled while reading");
-    const fetchFn = withFetchPreconnect(
-      async (_input: URL | RequestInfo, init?: RequestInit) =>
-        new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(new TextEncoder().encode("{"));
-              init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), {
-                once: true,
-              });
-            },
-          }),
-        ),
-    );
-    const response = await request(fetchFn, { signal: caller.signal });
-    const body = response.text();
-    const rejected = expect(body).rejects.toBe(reason);
-    (source === "deadline" ? deadline : caller).abort(reason);
-    await rejected;
-  },
-);
+it.each(["deadline", "caller"] as const)("keeps %s cancellation after headers", async (source) => {
+  const deadline = new AbortController();
+  const caller = new AbortController();
+  vi.spyOn(AbortSignal, "timeout").mockReturnValue(deadline.signal);
+  const reason = new Error("cancelled while reading");
+  const fetchFn = withFetchPreconnect(
+    async (_input: URL | RequestInfo, { signal }: RequestInit = {}) =>
+      streamResponse({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{"));
+          signal?.addEventListener("abort", () => controller.error(signal.reason), {
+            once: true,
+          });
+        },
+      }),
+  );
+  const response = await request(fetchFn, { signal: caller.signal });
+  const rejected = expect(response.text()).rejects.toBe(reason);
+  (source === "deadline" ? deadline : caller).abort(reason);
+  await rejected;
+});
 
 it("caps oversized request timeouts before scheduling", async () => {
   const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValue(new AbortController().signal);
@@ -45,18 +41,17 @@ it("caps oversized request timeouts before scheduling", async () => {
 });
 
 it("cancels non-OK bodies and reports configured token expiration", async () => {
-  const response = Response.json({ error: "expired" }, { status: 403 });
+  const response = new Response("unread", { status: 403 });
   const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
-  expect(
-    await fetchUsageJson({
-      provider: "openai",
-      url,
-      init: {},
-      timeoutMs: 1000,
-      fetchFn: responseFetch(response),
-      tokenExpiredStatuses: [401, 403],
-    }),
-  ).toEqual({
+  const result = await fetchUsageJson({
+    provider: "openai",
+    url,
+    init: {},
+    timeoutMs: 1000,
+    fetchFn: responseFetch(response),
+    tokenExpiredStatuses: [401, 403],
+  });
+  expect(result).toEqual({
     ok: false,
     snapshot: {
       provider: "openai",
@@ -71,15 +66,13 @@ it("cancels non-OK bodies and reports configured token expiration", async () => 
 it("bounds response bytes and cancels an oversized stream", async () => {
   let pulls = 0;
   const cancel = vi.fn(async () => undefined);
-  const response = new Response(
-    new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pulls += 1;
-        controller.enqueue(new Uint8Array(pulls === 1 ? 16 * 1024 * 1024 + 1 : 1));
-      },
-      cancel,
-    }),
-  );
+  const response = streamResponse({
+    pull(controller) {
+      pulls += 1;
+      controller.enqueue(new Uint8Array(pulls === 1 ? 16 * 1024 * 1024 + 1 : 1));
+    },
+    cancel,
+  });
   expect(await readUsageJson("anthropic", response)).toEqual({
     ok: false,
     snapshot: expect.objectContaining({

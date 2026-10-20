@@ -9,22 +9,22 @@ import {
   type ApnsRegistration,
 } from "./push-apns-store.js";
 
+type Execute = (
+  context: OpenClawStateWorkerContext,
+  command: { type: string; input: unknown },
+) => Promise<unknown>;
 const mocks = vi.hoisted(() => {
   const native = vi.fn(() => {
     throw new Error("APNs lookup must not open host SQLite");
   });
   return {
-    execute:
-      vi.fn<
-        (
-          context: OpenClawStateWorkerContext,
-          command: { type: string; input: unknown },
-        ) => Promise<unknown>
-      >(),
+    execute: vi.fn<Execute>(),
     native,
     forbid: (...names: string[]) => Object.fromEntries(names.map((name) => [name, native])),
   };
 });
+const expectCommand = (type: string, input: unknown) =>
+  expect(mocks.execute.mock.calls[0]?.[1]).toEqual({ type, input });
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
 }));
@@ -75,22 +75,16 @@ it.each([
   { nodeId: "x".repeat(257), failure: undefined },
   { nodeId: "device-a", failure: new Error("invalid APNs registration row") },
 ])("keeps the single lookup's worker result for $nodeId", async ({ nodeId, failure }) => {
-  mocks.execute.mockImplementation(async () => {
-    if (failure) {
-      throw failure;
-    }
-    return null;
-  });
+  mocks.execute.mockImplementation(() =>
+    failure ? Promise.reject(failure) : Promise.resolve(null),
+  );
   const pending = loadApnsRegistration(` ${nodeId} `, "/synthetic/apns-a");
   if (failure) {
     await expect(pending).rejects.toBe(failure);
   } else {
     await expect(pending).resolves.toBeNull();
   }
-  expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
-    type: "apns.registration.read",
-    input: nodeId,
-  });
+  expectCommand("apns.registration.read", nodeId);
 });
 it("captures the original inputs and relative state path before waiting", async () => {
   const ready = createDeferredCore<Map<string, ApnsRegistration>>();
@@ -110,10 +104,7 @@ it("captures the original inputs and relative state path before waiting", async 
   expect(mocks.execute.mock.calls[0]?.[0].admission.databasePath).toBe(
     path.join("/synthetic/original/relative-state", "state/openclaw.sqlite"),
   );
-  expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
-    type: "apns.registrations.read",
-    input: ["device-a", "missing"],
-  });
+  expectCommand("apns.registrations.read", ["device-a", "missing"]);
 });
 it.each([false, new Error("cleanup refused")])(
   "awaits conditional cleanup without host SQLite: %s",
@@ -140,9 +131,10 @@ it.each([false, new Error("cleanup refused")])(
       await outcome;
       expect(completed).toHaveBeenCalledWith(result);
     }
-    expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
-      type: "apns.registration.clearIfCurrent",
-      input: { nodeId: "device-a", registration, nowMs: expect.any(Number) },
+    expectCommand("apns.registration.clearIfCurrent", {
+      nodeId: "device-a",
+      registration,
+      nowMs: expect.any(Number),
     });
   },
 );

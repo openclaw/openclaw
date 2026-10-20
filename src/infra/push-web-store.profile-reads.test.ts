@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -34,28 +34,23 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function createDatabase(profiles = false) {
-  const stateDir = tempDirs.make("web-push-profile-reads-");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const database = openOpenClawStateDatabase({ env });
-  if (profiles) {
-    ensureUserProfilesSchema({ env, database });
-    database.db
-      .prepare("INSERT INTO user_profiles(id, created_at, updated_at) VALUES (?, 1, 1)")
-      .run("person");
-  }
-  const workerEnv = profiles ? { OPENCLAW_STATE_DIR: stateDir } : env;
-  return {
-    stateDir,
-    database,
-    workerEnv,
-    runtime: {
-      open: () => database,
-      stateOptions: () => ({ path: database.path, env: workerEnv }),
-    },
-  };
+let database: OpenClawStateDatabase;
+let stateDir: string;
+let env: NodeJS.ProcessEnv;
+const runtime = { open: () => database, stateOptions: () => ({ path: database.path, env }) };
+beforeEach(() => {
+  stateDir = tempDirs.make("web-push-profile-reads-");
+  env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  database = openOpenClawStateDatabase({ env });
+});
+function addProfile() {
+  ensureUserProfilesSchema({ env, database });
+  database.db
+    .prepare("INSERT INTO user_profiles(id, created_at, updated_at) VALUES (?, 1, 1)")
+    .run("person");
+  env = { OPENCLAW_STATE_DIR: stateDir };
 }
-function observe(database: OpenClawStateDatabase, match: (sql: string) => boolean = () => true) {
+function observe(match: (sql: string) => boolean = () => true) {
   const counter = trackSqliteStatementExecutions(
     requireNativeSqliteDatabase(database.db),
     ["reads"],
@@ -71,9 +66,8 @@ const expectAdmission = (profileId: string | null, bindingCurrent: boolean) =>
   });
 
 it("reuses admitted Web Push columns without another schema transaction", () => {
-  const { database, workerEnv, runtime } = createDatabase();
-  const statements = observe(database);
-  const subscriptions = runWithSqliteWorkerStateContext({ environment: workerEnv }, () =>
+  const statements = observe();
+  const subscriptions = runWithSqliteWorkerStateContext({ environment: env }, () =>
     webPushOperations["webPush.listWebPushSubscriptions"](undefined, runtime),
   );
   expect(subscriptions).toEqual([]);
@@ -81,15 +75,15 @@ it("reuses admitted Web Push columns without another schema transaction", () => 
 });
 
 it("resolves repeated Web Push profile references once per mutation and rereads the next mutation", () => {
-  const { database, workerEnv, runtime } = createDatabase(true);
-  const counter = observe(database, (sql) => /\bfrom\s+"user_profiles"/i.test(sql));
+  addProfile();
+  const counter = observe((sql) => /\bfrom\s+"user_profiles"/i.test(sql));
   admission.request.mockImplementation(() => expect(database.db.isTransaction).toBe(true));
   const execute = (
     original: string | null = "person",
     current: string | null = "person",
     bound: string | null = "person",
   ) =>
-    runWithSqliteWorkerStateContext({ environment: workerEnv }, () =>
+    runWithSqliteWorkerStateContext({ environment: env }, () =>
       webPushOperations["webPush.deleteBoundWebPushSubscription"](
         {
           endpointHash: "missing-endpoint",
@@ -142,7 +136,7 @@ it("resolves repeated Web Push profile references once per mutation and rereads 
 });
 
 it("refuses a worker preference update after the previously admitted profile is removed", async () => {
-  const { stateDir, database } = createDatabase(true);
+  addProfile();
   const endpoint = "https://push.example.test/profile-lifecycle";
   const guard: WebPushMutationGuard = {
     family: "worker",
