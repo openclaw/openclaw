@@ -57,7 +57,7 @@ import {
 } from "./subagent-registry.js";
 import {
   prepareSubagentRecoveryFixture,
-  writeSubagentSessionEntry,
+  writeChildSession,
 } from "./subagent-registry.persistence.test-support.js";
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
@@ -67,6 +67,30 @@ import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 const { worker, gateway } = fixture;
+const controllerSessionKey = "agent:main:main";
+const controller = {
+  controllerSessionKey,
+  controllerAgentId: "main",
+  callerSessionKey: controllerSessionKey,
+  callerIsSubagent: false,
+  controlScope: "children" as const,
+};
+function register(
+  options: Pick<Parameters<typeof registerSubagentRun>[0], "runId" | "childSessionKey" | "task"> &
+    Partial<Parameters<typeof registerSubagentRun>[0]>,
+) {
+  return registerSubagentRun({
+    childAgentId: "main",
+    requesterSessionKey: controllerSessionKey,
+    requesterAgentId: "main",
+    requesterDisplayKey: "main",
+    cleanup: "keep",
+    expectsCompletionMessage: false,
+    ...options,
+  });
+}
+const writeSession = (sessionKey: string, defaultSessionId: string, lifecycleRevision: string) =>
+  writeChildSession(fixture.stateDir, sessionKey, defaultSessionId, lifecycleRevision);
 
 it.each([
   "normal retirement",
@@ -75,37 +99,18 @@ it.each([
   "successor registration write rollback",
   "new direct child after retirement",
 ])("preserves captured cancellation ownership through %s", async (transition) => {
-  const controllerSessionKey = "agent:main:main";
   const ancestorKey = "agent:main:subagent:retiring-ancestor";
   const childKey = "agent:main:subagent:captured-child";
   const now = Date.now();
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-  const storePath = await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: ancestorKey,
-    defaultSessionId: "ancestor-session",
-    lifecycleRevision: "ancestor-revision",
-  });
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: childKey,
-    defaultSessionId: "child-session",
-    lifecycleRevision: "child-revision",
-  });
+  const storePath = await writeSession(ancestorKey, "ancestor-session", "ancestor-revision");
+  await writeSession(childKey, "child-session", "child-revision");
   if (transition === "retirement with retained predecessor") {
-    await registerSubagentRun({
+    await register({
       runId: "predecessor",
       childSessionKey: ancestorKey,
-      childAgentId: "main",
       sessionEntry: loadSessionEntry({ storePath, sessionKey: ancestorKey }),
-      requesterSessionKey: controllerSessionKey,
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
       task: "older reservation",
-      cleanup: "keep",
-      expectsCompletionMessage: false,
       collect: true,
       queued: true,
     });
@@ -114,18 +119,13 @@ it.each([
     ["ancestor", ancestorKey, controllerSessionKey, false],
     ["child", childKey, ancestorKey, true],
   ] as const) {
-    await registerSubagentRun({
+    await register({
       runId,
       childSessionKey,
-      childAgentId: "main",
       sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
       requesterSessionKey: owner,
       controllerSessionKey: owner,
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
       task: runId,
-      cleanup: "keep",
-      expectsCompletionMessage: false,
       collect,
       queued: collect,
     });
@@ -153,13 +153,7 @@ it.each([
   try {
     const result = await killAllControlledSubagentRuns({
       cfg: getRuntimeConfig(),
-      controller: {
-        controllerSessionKey,
-        controllerAgentId: "main",
-        callerSessionKey: controllerSessionKey,
-        callerIsSubagent: false,
-        controlScope: "children",
-      },
+      controller,
       runs: [ancestor],
       beforeKill: async () => {
         // The retry already holds the child. Real reconciliation, not a map edit,
@@ -227,50 +221,39 @@ it.each([
               options,
             ),
           );
-          const register = () =>
-            registerSubagentRun({
+          const registerSuccessor = () =>
+            register({
               runId: "successor",
               childSessionKey: ancestorKey,
-              childAgentId: "main",
               sessionEntry: loadSessionEntry({ storePath, sessionKey: ancestorKey }),
-              requesterSessionKey: controllerSessionKey,
-              requesterAgentId: "main",
-              requesterDisplayKey: "main",
               task: "successor",
-              cleanup: "keep",
               queued: true,
-              expectsCompletionMessage: false,
             });
           try {
-            await expect(register()).rejects.toThrow("Queued subagent registry persistence failed");
+            await expect(registerSuccessor()).rejects.toThrow(
+              "Queued subagent registry persistence failed",
+            );
             expect(subagentRuns.has("successor")).toBe(false);
             expect(loadSubagentRegistryFromSqlite().has("successor")).toBe(false);
           } finally {
             worker.mockImplementation(runSubagentStateWorkerOperation);
           }
         } else if (transition === "new direct child after retirement") {
-          await writeSubagentSessionEntry({
-            stateDir: fixture.stateDir,
-            agentId: "main",
-            sessionKey: "agent:main:subagent:late-child",
-            defaultSessionId: "late-child-session",
-            lifecycleRevision: "late-child-revision",
-          });
-          await registerSubagentRun({
+          await writeSession(
+            "agent:main:subagent:late-child",
+            "late-child-session",
+            "late-child-revision",
+          );
+          await register({
             runId: "late",
             childSessionKey: "agent:main:subagent:late-child",
-            childAgentId: "main",
             sessionEntry: {
               sessionId: "late-child-session",
               lifecycleRevision: "late-child-revision",
             },
             requesterSessionKey: ancestorKey,
-            requesterAgentId: "main",
-            requesterDisplayKey: "main",
             task: "late",
-            cleanup: "keep",
             queued: true,
-            expectsCompletionMessage: false,
             collect: true,
           });
           enqueueSwarmRun({
@@ -317,42 +300,28 @@ it.each([
     transition,
   })),
 ])("handles $transition during $boundary admission drain", async ({ boundary, transition }) => {
-  const controllerSessionKey = "agent:main:main";
   const ancestorKey = "agent:main:subagent:draining-ancestor";
   const childKey = "agent:main:subagent:draining-child";
   const now = Date.now();
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
-  const storePath = await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: ancestorKey,
-    defaultSessionId: "draining-ancestor-session",
-    lifecycleRevision: "draining-ancestor-revision",
-  });
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: childKey,
-    defaultSessionId: "draining-child-session",
-    lifecycleRevision: "draining-child-revision",
-  });
+  const storePath = await writeSession(
+    ancestorKey,
+    "draining-ancestor-session",
+    "draining-ancestor-revision",
+  );
+  await writeSession(childKey, "draining-child-session", "draining-child-revision");
   for (const [runId, childSessionKey, owner, collect] of [
     ["draining-ancestor", ancestorKey, controllerSessionKey, false],
     ["draining-child", childKey, ancestorKey, true],
   ] as const) {
-    await registerSubagentRun({
+    await register({
       runId,
       childSessionKey,
-      childAgentId: "main",
       sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
       requesterSessionKey: owner,
       requesterTurnRunId: collect ? "draining-ancestor" : undefined,
       controllerSessionKey: owner,
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
       task: runId,
-      cleanup: "keep",
-      expectsCompletionMessage: false,
       collect,
       queued: collect,
     });
@@ -385,13 +354,6 @@ it.each([
     onStartFailure: () => true,
   });
   const cfg = getRuntimeConfig();
-  const controller = {
-    controllerSessionKey,
-    controllerAgentId: "main",
-    callerSessionKey: controllerSessionKey,
-    callerIsSubagent: false,
-    controlScope: "children" as const,
-  };
   const pending =
     boundary === "bulk"
       ? killAllControlledSubagentRuns({ cfg, controller, runs: [ancestor] })
@@ -503,17 +465,12 @@ it.each(["default", "template", "fixed JSON-style", "exact SQLite"])(
       storePath: foreignStorePath,
       sessionKey: childSessionKey,
     });
-    await registerSubagentRun({
+    await register({
       runId: "fixed-store-child",
       childSessionKey,
       childAgentId: "other",
       sessionEntry: loadSessionEntry({ storePath, sessionKey: childSessionKey }),
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
       task: "cross-agent child",
-      cleanup: "keep",
-      expectsCompletionMessage: false,
     });
     const abort = vi.fn();
     const handle = createEmbeddedRunHandle({ abort, runId: "fixed-store-child" });
@@ -540,13 +497,7 @@ it.each(["default", "template", "fixed JSON-style", "exact SQLite"])(
     try {
       const result = await killAllControlledSubagentRuns({
         cfg: { ...getRuntimeConfig(), session: { store } },
-        controller: {
-          controllerSessionKey: "agent:main:main",
-          controllerAgentId: "main",
-          callerSessionKey: "agent:main:main",
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
+        controller,
         runs: [subagentRuns.get("fixed-store-child")!],
       });
       expect(abort, JSON.stringify(result)).toHaveBeenCalledOnce();
@@ -573,7 +524,7 @@ it.each(["default", "template", "fixed JSON-style", "exact SQLite"])(
 it("does not create a missing child database while binding cancellation", async () => {
   const childSessionKey = "agent:missing:subagent:unprepared";
   const databasePath = path.join(fixture.stateDir, "agents/missing/agent/openclaw-agent.sqlite");
-  await registerSubagentRun({
+  await register({
     runId: "unprepared",
     childSessionKey,
     childAgentId: "missing",
@@ -581,14 +532,9 @@ it("does not create a missing child database while binding cancellation", async 
       sessionId: "unprepared-session",
       lifecycleRevision: "unprepared-revision",
     },
-    requesterSessionKey: "agent:main:main",
-    requesterAgentId: "main",
-    requesterDisplayKey: "main",
     task: "missing session",
-    cleanup: "keep",
     collect: true,
     queued: true,
-    expectsCompletionMessage: false,
   });
   const dispatch = vi.fn(async () => {});
   enqueueSwarmRun({
@@ -604,13 +550,7 @@ it("does not create a missing child database while binding cancellation", async 
     await expect(
       killAllControlledSubagentRuns({
         cfg: getRuntimeConfig(),
-        controller: {
-          controllerSessionKey: "agent:main:main",
-          controllerAgentId: "main",
-          callerSessionKey: "agent:main:main",
-          callerIsSubagent: false,
-          controlScope: "children",
-        },
+        controller,
         runs: [subagentRuns.get("unprepared")!],
         beforeKill: async () => {
           expect(existsSync(databasePath)).toBe(false);

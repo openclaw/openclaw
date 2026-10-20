@@ -56,6 +56,34 @@ const fixture = useSubagentControlFixture();
 beforeEach(async () => {
   await captureRuntimeConfigAsyncReader()();
 });
+function registration(runId: string, sessionKey: string, task = "original") {
+  return {
+    runId,
+    childSessionKey: sessionKey,
+    childAgentId: "main",
+    sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
+    requesterSessionKey: "agent:main:main",
+    requesterAgentId: "main",
+    requesterDisplayKey: "main",
+    task,
+    cleanup: "keep" as const,
+    expectsCompletionMessage: false,
+  };
+}
+async function subagentsTool(config = getRuntimeConfig(), agentSessionKey = "agent:main:main") {
+  const tool = (
+    await createOpenClawToolsAsync({
+      config,
+      agentSessionKey,
+      workspaceDir: fixture.stateDir,
+      disableMessageTool: true,
+    })
+  ).find((candidate) => candidate.name === "subagents");
+  if (!tool) {
+    throw new Error("Missing registered subagents tool");
+  }
+  return tool;
+}
 
 // Native fixture handles must remain attached to their admitted controller turn until cleanup.
 async function admitNativeRun(
@@ -112,18 +140,7 @@ it.each(["caller admission", "session generation"] as const)(
       { agentId: "main", sessionKey },
       { sessionId, updatedAt: Date.now(), lifecycleRevision: "original" },
     );
-    await registerSubagentRun({
-      runId,
-      childSessionKey: sessionKey,
-      childAgentId: "main",
-      sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
-      requesterSessionKey: "agent:main:main",
-      requesterAgentId: "main",
-      requesterDisplayKey: "main",
-      task: "Stop admitted work",
-      cleanup: "keep",
-      expectsCompletionMessage: false,
-    });
+    await registerSubagentRun(registration(runId, sessionKey, "Stop admitted work"));
     const caller = new AbortController();
     const abort = vi.fn();
     const handle = createEmbeddedRunHandle({ runId, abort });
@@ -157,17 +174,7 @@ it.each(["caller admission", "session generation"] as const)(
         options,
       ),
     );
-    const tool = (
-      await createOpenClawToolsAsync({
-        config: getRuntimeConfig(),
-        agentSessionKey: "agent:main:main",
-        workspaceDir: fixture.stateDir,
-        disableMessageTool: true,
-      })
-    ).find((candidate) => candidate.name === "subagents");
-    if (!tool) {
-      throw new Error("Missing registered subagents tool");
-    }
+    const tool = await subagentsTool();
     // The session-rotation cell deliberately writes through the native fixture owner.
     const sql = retirement === "caller admission" ? observeMainThreadSql() : undefined;
     sql?.calibrate();
@@ -222,34 +229,13 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
         { agentId: "main", sessionKey },
         { sessionId, updatedAt: Date.now(), lifecycleRevision: "same-session" },
       );
-      const registration = {
-        runId,
-        childSessionKey: sessionKey,
-        childAgentId: "main",
-        sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
-        requesterSessionKey: "agent:main:main",
-        requesterAgentId: "main",
-        requesterDisplayKey: "main",
-        task: "original",
-        cleanup: "keep" as const,
-        expectsCompletionMessage: false,
-      };
-      await registerSubagentRun(registration);
+      const originalRegistration = registration(runId, sessionKey);
+      await registerSubagentRun(originalRegistration);
       const original = subagentRuns.get(runId)!;
       if (kind === "cold hydration") {
         subagentRuns.clear();
       }
-      const tool = (
-        await createOpenClawToolsAsync({
-          config: getRuntimeConfig(),
-          agentSessionKey: "agent:main:main",
-          workspaceDir: fixture.stateDir,
-          disableMessageTool: true,
-        })
-      ).find((candidate) => candidate.name === "subagents");
-      if (!tool) {
-        throw new Error("Missing registered subagents tool");
-      }
+      const tool = await subagentsTool();
       registryState.clearSubagentRunsReadCacheForTest();
       const entered = createDeferred();
       const release = createDeferred();
@@ -275,7 +261,7 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
           }),
         ]);
         if (kind === "same-ID replacement") {
-          await registerSubagentRun({ ...registration, task: "successor" });
+          await registerSubagentRun({ ...originalRegistration, task: "successor" });
         } else {
           // The existing startup owner hydrates the persisted row; this is not an absence witness.
           expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBeGreaterThan(0);
@@ -465,19 +451,10 @@ it.each([
         },
       );
       await registerSubagentRun({
-        runId: id,
-        childSessionKey: key(id),
-        childAgentId: "main",
-        sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(id) })
-          ?.entry,
+        ...registration(id, key(id), id),
         requesterSessionKey: requester,
-        requesterAgentId: "main",
-        requesterDisplayKey: "main",
-        task: id,
-        cleanup: "keep",
         collect: queued && id === runId,
         queued: queued && id === runId,
-        expectsCompletionMessage: false,
       });
     }
     if (missingStore) {
@@ -491,18 +468,7 @@ it.each([
       const nativeRun = await admitNativeRun(sessionId, key(id), handle);
       handles.push({ id, sessionId, handle, abort, nativeRun });
     }
-    const tool = (
-      await createOpenClawToolsAsync({
-        config,
-        agentSessionKey: requester,
-        workspaceDir: fixture.stateDir,
-        disableMessageTool: true,
-      })
-    ).find((candidate) => candidate.name === "subagents");
-    expect(tool, "core must register the native subagents tool").toBeDefined();
-    if (!tool) {
-      throw new Error("Missing registered subagents tool");
-    }
+    const tool = await subagentsTool(config, requester);
     const completedAtBeforeStop = earlierSuccess ? fixtureStartedAt + 1 : Date.now();
     clock?.mockReturnValue(fixtureStartedAt + 2);
     if (completesDuringStop) {

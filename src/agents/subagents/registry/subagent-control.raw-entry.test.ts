@@ -64,49 +64,101 @@ vi.mock("./subagent-registry-run-manager.js", { spy: true });
 
 const fixture = useSubagentControlFixture();
 const manager = vi.mocked(createSubagentRunManager).mock.results[0]!.value;
+const rawConfig = (): OpenClawConfig => ({
+  agents: {
+    ownership: "explicit",
+    entries: { main: {}, research: {} },
+    defaults: { workspace: fixture.stateDir },
+  },
+  tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
+});
+function queueFollowup(
+  config: OpenClawConfig,
+  agentId: string,
+  sessionKey: string,
+  sessionId: string,
+  storePath: string,
+  prompt: string,
+) {
+  const followup = createQueueTestRun({ prompt });
+  Object.assign(followup.run, { agentId, sessionKey, sessionId, config });
+  const target = captureSessionTarget({
+    storeScope: storePath,
+    sessionKey,
+    agentId,
+    incarnation: sessionId,
+  });
+  enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false);
+  return { followup, target };
+}
+function expectNoSessionEffects() {
+  for (const effect of [
+    fixture.cleanup,
+    fixture.gateway,
+    fixture.capture,
+    fixture.announce,
+    fixture.wake,
+  ]) {
+    expect(effect).not.toHaveBeenCalled();
+  }
+}
+function nativeController(storePath: string, sessionKey: string, sessionId: string, runId: string) {
+  return registerChatAbortController({
+    target: captureSessionTarget({
+      storeScope: storePath,
+      sessionKey,
+      agentId: "main",
+      incarnation: sessionId,
+    }),
+    runId,
+    sessionKey,
+    sessionId,
+    kind: "agent",
+    timeoutMs: 60_000,
+  });
+}
+async function rawChild(
+  agentId: string,
+  sessionId = `${agentId}-global`,
+  parentId = `${agentId}-parent`,
+) {
+  const parentKey = `agent:${agentId}:dashboard:parent`;
+  const storePath = await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId,
+    sessionKey: parentKey,
+    defaultSessionId: parentId,
+  });
+  await replaceSessionEntry(
+    { agentId, storePath, sessionKey: "global" },
+    {
+      sessionId,
+      lifecycleRevision: `${sessionId}-revision`,
+      updatedAt: Date.now(),
+      spawnedBy: parentKey,
+      parentSessionKey: parentKey,
+      spawnDepth: 1,
+      createdVia: "spawn",
+      createdActor: { type: "agent", id: agentId },
+    },
+  );
+  return { storePath, parentKey };
+}
 
 // sessions.create composition is proven separately. These rows retain its
 // spawnedBy/spawnDepth contract; the actual send tool must create the run record.
 it("cancelling a watched main/global child preserves the other agent's work", async () => {
   const owner = "main";
   const foreignAgent = "research";
-  const parentKey = `agent:${owner}:dashboard:parent`;
   const childId = `${owner}-global-session`;
   const foreignId = `${foreignAgent}-global-session`;
-  const cfg: OpenClawConfig = {
-    agents: {
-      ownership: "explicit",
-      entries: { main: {}, research: {} },
-      defaults: { workspace: fixture.stateDir },
-    },
-    tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-  };
+  const cfg = rawConfig();
   setRuntimeConfigSnapshot(cfg);
-  const childStorePath = await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: owner,
-    sessionKey: "global",
-    defaultSessionId: childId,
-  });
-  await replaceSessionEntry(
-    { agentId: owner, storePath: childStorePath, sessionKey: "global" },
-    {
-      sessionId: childId,
-      lifecycleRevision: `${childId}-revision`,
-      updatedAt: Date.now(),
-      spawnedBy: parentKey,
-      parentSessionKey: parentKey,
-      spawnDepth: 1,
-      createdVia: "spawn",
-      createdActor: { type: "agent", id: owner },
-    },
+  const { storePath: childStorePath, parentKey } = await rawChild(
+    owner,
+    childId,
+    `${owner}-parent-session`,
   );
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: owner,
-    sessionKey: parentKey,
-    defaultSessionId: `${owner}-parent-session`,
-  });
   const foreignStorePath = await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
     agentId: foreignAgent,
@@ -158,20 +210,14 @@ it("cancelling a watched main/global child preserves the other agent's work", as
     undefined,
     foreignAgent,
   );
-  const followup = createQueueTestRun({ prompt: "Other agent's queued followup" });
-  Object.assign(followup.run, {
-    agentId: foreignAgent,
-    sessionKey: "global",
-    sessionId: foreignId,
-    config: cfg,
-  });
-  const foreignTarget = captureSessionTarget({
-    storeScope: foreignStorePath,
-    sessionKey: "global",
-    agentId: foreignAgent,
-    incarnation: foreignId,
-  });
-  enqueueFollowupRun("global", followup, { mode: "followup" }, "none", undefined, false);
+  const { followup, target: foreignTarget } = queueFollowup(
+    cfg,
+    foreignAgent,
+    "global",
+    foreignId,
+    foreignStorePath,
+    "Other agent's queued followup",
+  );
   const childTarget = captureSessionTarget({
     storeScope: childStorePath,
     sessionKey: "global",
@@ -249,14 +295,7 @@ it("cancelling a watched main/global child preserves the other agent's work", as
 });
 
 async function prepareWatchedRawChildren() {
-  const cfg: OpenClawConfig = {
-    agents: {
-      ownership: "explicit",
-      entries: { main: {}, research: {} },
-      defaults: { workspace: fixture.stateDir },
-    },
-    tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-  };
+  const cfg = rawConfig();
   setRuntimeConfigSnapshot(cfg);
   let sequence = 0;
   const callGateway: AgentToolGatewayRequestCaller = async (request) => {
@@ -269,27 +308,7 @@ async function prepareWatchedRawChildren() {
   };
   const children = new Map<string, { storePath: string; parentKey: string }>();
   for (const agentId of ["main", "research"]) {
-    const parentKey = `agent:${agentId}:dashboard:parent`;
-    const storePath = await writeSubagentSessionEntry({
-      stateDir: fixture.stateDir,
-      agentId,
-      sessionKey: parentKey,
-      defaultSessionId: `${agentId}-parent`,
-    });
-    await replaceSessionEntry(
-      { agentId, storePath, sessionKey: "global" },
-      {
-        sessionId: `${agentId}-global`,
-        lifecycleRevision: `${agentId}-global-revision`,
-        updatedAt: Date.now(),
-        spawnedBy: parentKey,
-        parentSessionKey: parentKey,
-        spawnDepth: 1,
-        createdVia: "spawn",
-        createdActor: { type: "agent", id: agentId },
-      },
-    );
-    children.set(agentId, { storePath, parentKey });
+    children.set(agentId, await rawChild(agentId));
   }
   const send = (agentId: string, turn: string, mode: "followup" | "steer" = "followup") =>
     createSessionsSendTool({
@@ -674,20 +693,14 @@ it.each(["admin", "bulk", "tool"] as const)(
     expect(getSubagentRunByRunId("main-legacy")?.childAgentId).toBeUndefined();
     const before = structuredClone(research);
     const sessionBefore = loadSessionEntry({ agentId: "main", storePath, sessionKey: "global" });
-    const followup = createQueueTestRun({ prompt: "Retained queued followup" });
-    Object.assign(followup.run, {
-      agentId: "research",
-      sessionKey: "global",
-      sessionId: "legacy-global",
-      config: cfg,
-    });
-    const target = captureSessionTarget({
-      storeScope: storePath,
-      sessionKey: "global",
-      agentId: "research",
-      incarnation: "legacy-global",
-    });
-    enqueueFollowupRun("global", followup, { mode: "followup" }, "none", undefined, false);
+    const { followup, target } = queueFollowup(
+      cfg,
+      "research",
+      "global",
+      "legacy-global",
+      storePath,
+      "Retained queued followup",
+    );
 
     try {
       if (action === "admin") {
@@ -786,32 +799,13 @@ it.each([
     const legacyRun = getSubagentRunByRunId("unbound-incarnation")!;
     const nextBefore = structuredClone(getSubagentRunByRunId("next-incarnation"));
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-    const nativeRun = registerChatAbortController({
-      target: captureSessionTarget({
-        storeScope: storePath,
-        sessionKey,
-        agentId: "main",
-        incarnation: "original-session",
-      }),
-      runId: legacyRun.runId,
+    const nativeRun = nativeController(storePath, sessionKey, "original-session", legacyRun.runId);
+    const successorRun = nativeController(
+      storePath,
       sessionKey,
-      sessionId: "original-session",
-      kind: "agent",
-      timeoutMs: 60_000,
-    });
-    const successorRun = registerChatAbortController({
-      target: captureSessionTarget({
-        storeScope: storePath,
-        sessionKey,
-        agentId: "main",
-        incarnation: sessionBefore!.sessionId,
-      }),
-      runId: "next-incarnation",
-      sessionKey,
-      sessionId: sessionBefore!.sessionId,
-      kind: "agent",
-      timeoutMs: 60_000,
-    });
+      sessionBefore!.sessionId,
+      "next-incarnation",
+    );
     const nativeReleased = createDeferred();
     const nativeEntered = createDeferred();
     nativeRun.controller.signal.addEventListener("abort", () => nativeReleased.resolve(), {
@@ -847,20 +841,14 @@ it.each([
     if (bindNativeRun) {
       bindGatewayContextResolver(legacyRun, () => context);
     }
-    const followup = createQueueTestRun({ prompt: "Successor's queued followup" });
-    Object.assign(followup.run, {
-      agentId: "main",
+    const { followup, target } = queueFollowup(
+      cfg,
+      "main",
       sessionKey,
-      sessionId: sessionBefore!.sessionId,
-      config: cfg,
-    });
-    const target = captureSessionTarget({
-      storeScope: storePath,
-      sessionKey,
-      agentId: "main",
-      incarnation: sessionBefore!.sessionId,
-    });
-    enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false);
+      sessionBefore!.sessionId,
+      storePath,
+      "Successor's queued followup",
+    );
     fixture.worker.mockClear();
     try {
       expect(
@@ -896,11 +884,7 @@ it.each([
       expect(getSubagentRunByRunId("next-incarnation")).toEqual(nextBefore);
       expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })).toEqual(sessionBefore);
       expect(getExistingFollowupQueue(sessionKey, target)?.items).toContain(followup);
-      expect(fixture.cleanup).not.toHaveBeenCalled();
-      expect(fixture.gateway).not.toHaveBeenCalled();
-      expect(fixture.capture).not.toHaveBeenCalled();
-      expect(fixture.announce).not.toHaveBeenCalled();
-      expect(fixture.wake).not.toHaveBeenCalled();
+      expectNoSessionEffects();
     } finally {
       clearGatewayContextResolver(legacyRun);
       nativeReleased.resolve();
@@ -952,20 +936,14 @@ it.each(["registration", "execution target"] as const)(
     const handle = createEmbeddedRunHandle({ runId, abort });
     abort.mockImplementation(() => detachActiveEmbeddedRun(sessionId, handle, sessionKey));
     attachActiveEmbeddedRun(sessionId, handle, sessionKey, storePath, undefined, "main");
-    const followup = createQueueTestRun({ prompt: "Successor's queued followup" });
-    Object.assign(followup.run, {
-      agentId: "main",
+    const { followup, target } = queueFollowup(
+      { session: { store: storePath } },
+      "main",
       sessionKey,
       sessionId,
-      config: { session: { store: storePath } },
-    });
-    const target = captureSessionTarget({
-      storeScope: storePath,
-      sessionKey,
-      agentId: "main",
-      incarnation: sessionBefore!.sessionId,
-    });
-    enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false);
+      storePath,
+      "Successor's queued followup",
+    );
     fixture.worker.mockClear();
     try {
       expect(
@@ -997,11 +975,7 @@ it.each(["registration", "execution target"] as const)(
       expect(loadSessionEntry(scope)).toEqual(sessionBefore);
       expect(getExistingFollowupQueue(sessionKey, target)?.items).toContain(followup);
       expect(abort).toHaveBeenCalledTimes(identitySource === "registration" ? 1 : 0);
-      expect(fixture.cleanup).not.toHaveBeenCalled();
-      expect(fixture.gateway).not.toHaveBeenCalled();
-      expect(fixture.capture).not.toHaveBeenCalled();
-      expect(fixture.announce).not.toHaveBeenCalled();
-      expect(fixture.wake).not.toHaveBeenCalled();
+      expectNoSessionEffects();
     } finally {
       await detachActiveEmbeddedRun(sessionId, handle, sessionKey);
       clearSessionQueues([sessionKey], target);

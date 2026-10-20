@@ -11,79 +11,32 @@ const owned = {
   requesterSessionKey: "agent:parent:main",
   childSessionIdentity: identity,
 };
+const noIdentity = { childSessionIdentity: undefined };
+const sessionOnly = { sessionId: identity.sessionId };
+const noRevision = { childSessionIdentity: sessionOnly };
 
 describe("subagent child authority policy", () => {
   it.each([
-    { name: "verified qualified owner", entry: owned, current: identity, status: "verified" },
-    {
-      name: "recorded identity without a current observation",
-      entry: owned,
-      current: undefined,
-      status: "verified",
-    },
-    {
-      name: "verified raw owner",
-      entry: { ...owned, childSessionKey: "global", childAgentId: "worker" },
-      current: identity,
-      status: "verified",
-    },
-    {
-      name: "missing original identity",
-      entry: { ...owned, childSessionIdentity: undefined },
-      current: identity,
-      status: "legacy-unverified",
-    },
-    {
-      name: "missing original revision",
-      entry: { ...owned, childSessionIdentity: { sessionId: identity.sessionId } },
-      current: identity,
-      status: "legacy-unverified",
-    },
-    {
-      name: "missing both revisions",
-      entry: { ...owned, childSessionIdentity: { sessionId: identity.sessionId } },
-      current: { sessionId: identity.sessionId },
-      status: "legacy-unverified",
-    },
-    {
-      name: "unknown child owner",
-      entry: { ...owned, childSessionKey: "global" },
-      current: identity,
-      status: "mismatch",
-    },
-    {
-      name: "unknown legacy requester",
-      entry: { ...owned, childSessionIdentity: undefined, requesterSessionKey: "global" },
-      current: identity,
-      status: "mismatch",
-    },
-    {
-      name: "conflicting explicit owner",
-      entry: { ...owned, childAgentId: "other" },
-      current: identity,
-      status: "mismatch",
-    },
-    {
-      name: "changed session",
-      entry: owned,
-      current: { ...identity, sessionId: "replacement-session" },
-      status: "mismatch",
-    },
-    {
-      name: "changed revision",
-      entry: owned,
-      current: { ...identity, lifecycleRevision: "replacement-revision" },
-      status: "mismatch",
-    },
-    {
-      name: "lost known revision",
-      entry: owned,
-      current: { sessionId: identity.sessionId },
-      status: "mismatch",
-    },
-    { name: "lost known session", entry: owned, current: null, status: "mismatch" },
-  ])("$name", ({ entry, current, status }) => {
-    const result = resolveSubagentChildAuthority(entry, current);
+    ["verified qualified owner", {}, identity, "verified"],
+    ["unobserved current identity", {}, undefined, "verified"],
+    ["raw owner", { childSessionKey: "global", childAgentId: "worker" }, identity, "verified"],
+    ["missing original identity", noIdentity, identity, "legacy-unverified"],
+    ["missing original revision", noRevision, identity, "legacy-unverified"],
+    ["missing both revisions", noRevision, sessionOnly, "legacy-unverified"],
+    ["unknown child owner", { childSessionKey: "global" }, identity, "mismatch"],
+    ["unknown requester", { ...noIdentity, requesterSessionKey: "global" }, identity, "mismatch"],
+    ["conflicting explicit owner", { childAgentId: "other" }, identity, "mismatch"],
+    ["changed session", {}, { ...identity, sessionId: "replacement-session" }, "mismatch"],
+    [
+      "changed revision",
+      {},
+      { ...identity, lifecycleRevision: "replacement-revision" },
+      "mismatch",
+    ],
+    ["lost known revision", {}, sessionOnly, "mismatch"],
+    ["lost known session", {}, null, "mismatch"],
+  ] as const)("%s", (_name, entry, current, status) => {
+    const result = resolveSubagentChildAuthority({ ...owned, ...entry }, current);
     expect(result.status).toBe(status);
     if (result.status !== "mismatch") {
       expect(result.childAgentId).toBe("worker");

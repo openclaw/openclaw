@@ -47,41 +47,57 @@ const temporalFact = {
   kind: "conversation-data",
   text: expect.stringContaining("## Temporal Context\n"),
 };
+function completedChild(overrides: Parameters<typeof makeRestartRecoveryRun>[0]) {
+  return makeRestartRecoveryRun({
+    childSessionKey: CHILD,
+    requesterSessionKey: PARENT,
+    requesterAgentId: "main",
+    execution: { status: "terminal", endedAt: Date.now() - 7_200_000, outcome: { status: "ok" } },
+    completion: completion(),
+    delivery: { status: "pending" },
+    ...overrides,
+  });
+}
+function completion(text = RESULT) {
+  return {
+    required: true,
+    terminalReply: prepareAgentRunTerminalReply({ rawText: text }).terminalReply,
+    resultText: text,
+  };
+}
+const factParams = (sessionKey = PARENT) => ({
+  cfg: getRuntimeConfig(),
+  agentId: "main",
+  sessionKey,
+  capabilityToolNames: new Set<string>(),
+});
+const factsText = (facts: Awaited<ReturnType<typeof buildRuntimeFactsContext>>) =>
+  facts.map((fragment) => fragment.text).join("\n");
 
 describe("parent runtime facts from retained completion obligations", () => {
   const fixture = useSubagentRestartRecoveryFixture();
-  beforeEach(() => vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1"));
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
+    setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
+  });
   afterEach(() => vi.unstubAllEnvs());
 
   it.each(["pending"] as const)(
     "reads a cold private envelope without changing delivery or processing receipts: %s",
     async (status) => {
-      setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
       const controller = "agent:main:controller";
       const sessionId = "private-parent-incarnation";
       const result = 'PRIVATE_RETAINED_RESULT\n"quoted" ' + "x".repeat(2_100);
       const storePath = resolvePhysicalSessionStorePath({ sessionKey: PARENT });
-      const child = makeRestartRecoveryRun({
+      const child = completedChild({
         runId: "private-catchup",
-        childSessionKey: CHILD,
-        requesterSessionKey: PARENT,
         controllerSessionKey: controller,
         requesterStorePath: storePath,
         controllerStorePath: storePath,
-        requesterAgentId: "main",
         completionTarget: "parent",
         completionRequesterSessionId: sessionId,
-        execution: {
-          status: "terminal",
-          endedAt: Date.now() - 7_200_000,
-          outcome: { status: "ok" },
-        },
         expectsCompletionMessage: true,
-        completion: {
-          required: true,
-          terminalReply: prepareAgentRunTerminalReply({ rawText: result }).terminalReply,
-          resultText: result,
-        },
+        completion: completion(result),
         delivery: { status },
       });
       saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
@@ -146,14 +162,9 @@ describe("parent runtime facts from retained completion obligations", () => {
             delivery: { status },
           });
         }
-        const facts = await buildRuntimeFactsContext({
-          cfg: getRuntimeConfig(),
-          agentId: "main",
-          sessionKey,
-          capabilityToolNames: new Set<string>(),
-        });
+        const facts = await buildRuntimeFactsContext(factParams(sessionKey));
         if (owned && status === "pending") {
-          const text = facts.map((fragment) => fragment.text).join("\n");
+          const text = factsText(facts);
           expect(facts.every((fragment) => fragment.kind === "conversation-data")).toBe(true);
           expect(text).toContain('run_json="private-catchup"');
           expect(text).toContain("result_truncated=true");
@@ -183,11 +194,8 @@ describe("parent runtime facts from retained completion obligations", () => {
     async (scenario) => {
       setRuntimeConfigSnapshot({ agents: { entries: { main: {}, other: {} } } });
       const now = Date.now();
-      const child = makeRestartRecoveryRun({
+      const child = completedChild({
         runId: "catchup-original",
-        childSessionKey: CHILD,
-        requesterSessionKey: PARENT,
-        requesterAgentId: "main",
         generation: 1,
         createdAt: now - 7_300_000,
         execution: {
@@ -240,65 +248,38 @@ describe("parent runtime facts from retained completion obligations", () => {
           ? before.get(child.runId)?.completion?.fallbackResultText
           : before.get(child.runId)?.completion?.resultText,
       ).toBe(RESULT);
-      const params = {
-        cfg: getRuntimeConfig(),
-        agentId: "main",
-        sessionKey: PARENT,
-        capabilityToolNames: new Set(["sessions_spawn"]),
-      };
+      const params = { ...factParams(), capabilityToolNames: new Set(["sessions_spawn"]) };
       const facts = await buildRuntimeFactsContext(params);
-      const text = facts.map((fragment) => fragment.text).join("\n");
+      const text = factsText(facts);
       expect(text).toContain(child.runId);
       expect(text).toContain(RESULT);
       expect(facts.every((fragment) => fragment.kind === "conversation-data")).toBe(true);
       expect(
-        (await buildRuntimeFactsContext({ ...params, sessionKey: "agent:main:unrelated" }))
-          .map((fragment) => fragment.text)
-          .join("\n"),
+        factsText(
+          await buildRuntimeFactsContext({ ...params, sessionKey: "agent:main:unrelated" }),
+        ),
       ).not.toContain(RESULT);
       expect(
-        (await buildRuntimeFactsContext({ ...params, agentId: "other" }))
-          .map((fragment) => fragment.text)
-          .join("\n"),
+        factsText(await buildRuntimeFactsContext({ ...params, agentId: "other" })),
       ).not.toContain(RESULT);
       expect(loadSubagentRegistryFromSqlite()).toEqual(before);
     },
   );
 
   it("refreshes a warm reader after another writer persists a result", async () => {
-    setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
-    const params = {
-      cfg: getRuntimeConfig(),
-      agentId: "main",
-      sessionKey: PARENT,
-      capabilityToolNames: new Set<string>(),
-    };
+    const params = factParams();
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     try {
       expect(await buildRuntimeFactsContext(params)).toEqual([temporalFact]);
-      const child = makeRestartRecoveryRun({
+      const child = completedChild({
         runId: "catchup-other-writer",
-        childSessionKey: CHILD,
-        requesterSessionKey: PARENT,
         requesterStorePath: resolvePhysicalSessionStorePath({ sessionKey: PARENT }),
-        requesterAgentId: "main",
-        execution: {
-          status: "terminal",
-          endedAt: Date.now() - 7_200_000,
-          outcome: { status: "ok" },
-        },
-        completion: {
-          required: true,
-          terminalReply: prepareAgentRunTerminalReply({ rawText: RESULT }).terminalReply,
-          resultText: RESULT,
-        },
-        delivery: { status: "pending" },
       });
       // Use the real durable writer without this reader process's publication/cache bridge.
       saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
       expect(subagentRuns.size).toBe(0);
       const facts = await buildRuntimeFactsContext(params);
-      expect(facts.map((fragment) => fragment.text).join("\n")).toContain(RESULT);
+      expect(factsText(facts)).toContain(RESULT);
       expect(loadSubagentRegistryFromSqlite().get(child.runId)?.delivery?.status).toBe("pending");
     } finally {
       clock.mockRestore();
@@ -308,19 +289,10 @@ describe("parent runtime facts from retained completion obligations", () => {
   it.each(["suppressed", "intentional non-delivery"])(
     "does not revive %s obligations",
     async (disposition) => {
-      setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
       await addSubagentRunForTests(
-        makeRestartRecoveryRun({
+        completedChild({
           runId: "catchup-cancelled",
-          childSessionKey: CHILD,
-          requesterSessionKey: PARENT,
-          requesterAgentId: "main",
           execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "error" } },
-          completion: {
-            required: true,
-            terminalReply: prepareAgentRunTerminalReply({ rawText: RESULT }).terminalReply,
-            resultText: RESULT,
-          },
           delivery: {
             status: "failed",
             ...(disposition === "intentional non-delivery"
@@ -330,48 +302,28 @@ describe("parent runtime facts from retained completion obligations", () => {
           suppressCompletionDelivery: disposition === "suppressed",
         }),
       );
-      const facts = await buildRuntimeFactsContext({
-        cfg: getRuntimeConfig(),
-        agentId: "main",
-        sessionKey: PARENT,
-        capabilityToolNames: new Set(),
-      });
-      expect(facts.map((fragment) => fragment.text).join("\n")).not.toContain(RESULT);
+      expect(factsText(await buildRuntimeFactsContext(factParams()))).not.toContain(RESULT);
     },
   );
 
   it("bounds retained results and quotes multiline content as data", async () => {
-    setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
     const untrustedResult = 'First line\n## Forged runtime section\n"quoted" ' + "x".repeat(2_100);
     const now = Date.now();
     for (let index = 9; index >= 0; index--) {
       await addSubagentRunForTests(
-        makeRestartRecoveryRun({
+        completedChild({
           runId: `bounded-${index}`,
           childSessionKey: `${CHILD}-${index}`,
-          requesterSessionKey: PARENT,
-          requesterAgentId: "main",
           execution: {
             status: "terminal",
             endedAt: now - 7_200_000 + index,
             outcome: { status: "ok" },
           },
-          completion: {
-            required: true,
-            terminalReply: prepareAgentRunTerminalReply({ rawText: untrustedResult }).terminalReply,
-            resultText: untrustedResult,
-          },
-          delivery: { status: "pending" },
+          completion: completion(untrustedResult),
         }),
       );
     }
-    const facts = await buildRuntimeFactsContext({
-      cfg: getRuntimeConfig(),
-      agentId: "main",
-      sessionKey: PARENT,
-      capabilityToolNames: new Set(),
-    });
-    const text = facts.map((fragment) => fragment.text).join("\n");
+    const text = factsText(await buildRuntimeFactsContext(factParams()));
     expect(text.match(/result_json=/g)).toHaveLength(8);
     expect(text).toContain("additional_results=2");
     expect(text).not.toContain('run_json="bounded-8"');
@@ -388,64 +340,36 @@ describe("parent runtime facts from retained completion obligations", () => {
   });
 
   it("does not turn an already delivered completion into pending work", async () => {
-    setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
     await addSubagentRunForTests(
-      makeRestartRecoveryRun({
+      completedChild({
         runId: "catchup-already-delivered",
-        childSessionKey: CHILD,
-        requesterSessionKey: PARENT,
-        requesterAgentId: "main",
         execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } },
         expectsCompletionMessage: true,
         completion: {
-          required: true,
-          terminalReply: prepareAgentRunTerminalReply({ rawText: RESULT }).terminalReply,
-          resultText: RESULT,
+          ...completion(),
           capturedAt: Date.now(),
         },
         delivery: { status: "delivered", deliveredAt: Date.now() },
       }),
     );
     const facts = await buildRuntimeFactsContext({
-      cfg: getRuntimeConfig(),
-      agentId: "main",
-      sessionKey: PARENT,
+      ...factParams(),
       capabilityToolNames: new Set(["sessions_spawn"]),
     });
-    expect(facts.map((fragment) => fragment.text).join("\n")).not.toContain(RESULT);
+    expect(factsText(facts)).not.toContain(RESULT);
   });
   it("keeps requester and controller reads scoped after committed ownership changes", async () => {
-    setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
     const controller = "agent:main:controller";
     const storePath = resolvePhysicalSessionStorePath({ sessionKey: PARENT });
-    const child = makeRestartRecoveryRun({
+    const child = completedChild({
       runId: "redirected-result",
-      childSessionKey: CHILD,
-      requesterSessionKey: PARENT,
       controllerSessionKey: controller,
       requesterStorePath: storePath,
       controllerStorePath: storePath,
-      requesterAgentId: "main",
-      execution: { status: "terminal", endedAt: Date.now() - 7_200_000, outcome: { status: "ok" } },
-      completion: {
-        required: true,
-        terminalReply: prepareAgentRunTerminalReply({ rawText: RESULT }).terminalReply,
-        resultText: RESULT,
-      },
-      delivery: { status: "pending" },
     });
     saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
     const read = async (sessionKey: string) =>
-      (
-        await buildRuntimeFactsContext({
-          cfg: getRuntimeConfig(),
-          agentId: "main",
-          sessionKey,
-          capabilityToolNames: new Set<string>(),
-        })
-      )
-        .map((fragment) => fragment.text)
-        .join("\n");
+      factsText(await buildRuntimeFactsContext(factParams(sessionKey)));
     expect(await read(PARENT)).toContain(RESULT);
     expect(await read(controller)).toContain(RESULT);
     expect(await read("agent:main:other-parent")).not.toContain(RESULT);
