@@ -3,6 +3,9 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { withTelegramNativeOwners } from "./telegram-native-owner.test-support.js";
 
+const denied = "You are not authorized to use this command.";
+const failed = "⚠️ Command failed. Please try again later.";
+
 it.each([
   ["enabled", "open", undefined, true],
   ["group disabled", "disabled", undefined, false],
@@ -10,8 +13,8 @@ it.each([
   ["topic overrides disabled group", "disabled", "open", true],
 ] as const)(
   "preserves real topic routing and room admission for linked native owners: %s",
-  async (_name, groupPolicy, topicPolicy, allowed) => {
-    await withTelegramNativeOwners(async ({ cfg, invokeTopic, handler, driver }) => {
+  (_name, groupPolicy, topicPolicy, allowed) =>
+    withTelegramNativeOwners(async ({ cfg, invokeTopic, handler, driver }) => {
       cfg.channels!.telegram!.groups = {
         "-10012345": {
           groupPolicy,
@@ -36,17 +39,15 @@ it.each([
         expect(driver.deliveries()).toEqual([{ replies: [{ text: "TELEGRAM-OWNER-OK" }] }]);
       } else {
         expect(handler).not.toHaveBeenCalled();
-        expect(driver.sentMessages()).toEqual([]);
-        expect(driver.deliveries()).toEqual([]);
+        expect([driver.sentMessages(), driver.deliveries()]).toEqual([[], []]);
       }
-    });
-  },
+    }),
 );
 
 it.each(["linked", "provider allowlist", "global allowlist", "unlinked", "asserted"] as const)(
   "admits native owner commands only with current linked authority: %s",
-  async (denial) => {
-    await withTelegramNativeOwners(async ({ cfg, invoke, handler, driver }) => {
+  (denial) =>
+    withTelegramNativeOwners(async ({ cfg, invoke, handler, driver }) => {
       if (denial === "provider allowlist") {
         cfg.commands!.allowFrom = { telegram: ["999999"] };
       }
@@ -73,23 +74,21 @@ it.each(["linked", "provider allowlist", "global allowlist", "unlinked", "assert
         expect(driver.sentMessages()).toEqual([
           {
             chatId: denial === "unlinked" ? 300 : 100,
-            text: "You are not authorized to use this command.",
+            text: denied,
           },
         ]);
         expect(driver.deliveries()).toEqual([]);
       }
-    }, denial === "asserted");
-  },
+    }, denial === "asserted"),
 );
 
-it("rejects stale native plugin owner authority after demotion", async () => {
-  await withTelegramNativeOwners(async ({ invoke, handler, admins, driver }) => {
+it("rejects stale native plugin owner authority after demotion", () =>
+  withTelegramNativeOwners(async ({ invoke, handler, admins, driver }) => {
     const entered = createDeferredCore();
     const finish = createDeferredCore();
     let effects = 0;
     handler.mockImplementation(async (ctx) => {
-      expect(ctx.senderIsOwner).toBe(true);
-      expect(ctx.assertOwnerCurrent).toBeTypeOf("function");
+      expect(ctx).toMatchObject({ senderIsOwner: true, assertOwnerCurrent: expect.any(Function) });
       entered.resolve();
       await finish.promise;
       ctx.assertOwnerCurrent?.();
@@ -107,22 +106,19 @@ it("rejects stale native plugin owner authority after demotion", async () => {
       expect(effects).toBe(0);
       expect(driver.deliveries()).toEqual([
         expect.objectContaining({
-          replies: [
-            expect.objectContaining({ text: "⚠️ Command failed. Please try again later." }),
-          ],
+          replies: [expect.objectContaining({ text: failed })],
         }),
       ]);
     } finally {
       finish.resolve();
       await pending;
     }
-  });
-});
+  }));
 
 it.each([false, true])(
   "retains linked owner authority through native provider login (revoke=%s)",
-  async (revoke) => {
-    await withTelegramNativeOwners(async ({ cfg, admins, driver }) => {
+  (revoke) =>
+    withTelegramNativeOwners(async ({ cfg, admins, driver }) => {
       cfg.agents = { defaults: { model: "openai/gpt-5.5" } };
       const finish = createDeferredCore();
       const notified = createDeferredCore();
@@ -164,6 +160,5 @@ it.each([false, true])(
           await notified.promise;
         }
       }
-    });
-  },
+    }),
 );

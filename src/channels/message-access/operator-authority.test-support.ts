@@ -19,9 +19,11 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { buildChannelInboundEventContext } from "../inbound-event/context.js";
-import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
-import { createHostChannelIngressRuntime } from "./runtime.js";
+import {
+  createHostIngressFixture,
+  ingressInput,
+  ingressMessage,
+} from "./host-ingress.test-support.js";
 
 export function createCommandOwnerTestGateway(cfg: OpenClawConfig) {
   // SAFETY: Ingress authority only consumes runtime config from this synthetic Gateway.
@@ -47,17 +49,12 @@ export async function withAdminIngress(
 ) {
   const registry = channelId === "slack" ? captureActivePluginRegistrySnapshot() : undefined;
   if (registry) {
+    const plugin = createChannelTestPluginBase({
+      id: "slack",
+      config: { formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }) },
+    });
     stageActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "slack",
-          plugin: createChannelTestPluginBase({
-            id: "slack",
-            config: { formatAllowFrom: ({ allowFrom }) => formatAllowFromLowercase({ allowFrom }) },
-          }),
-          source: "test",
-        },
-      ]),
+      createTestRegistry([{ pluginId: "slack", plugin, source: "test" }]),
       null,
       "default",
     );
@@ -86,18 +83,18 @@ export async function createAdminIngressFixture(
   const cfg: OpenClawConfig = {
     channels: { [channelId]: { accounts: { team: { allowFrom: ["*"] } } } },
     commands: { ownerAllowFrom: ["whatsapp:15550000000"] },
-    gateway: { roles: createCommandOwnerTestRoles() },
+    gateway:
+      authority === "role"
+        ? { roles: createCommandOwnerTestRoles() }
+        : {
+            auth: {
+              identityScopes: {
+                "ada@example.test": ["operator.admin"],
+                "grace@example.test": ["operator.admin"],
+              },
+            },
+          },
   };
-  if (authority === "identity-grant") {
-    cfg.gateway = {
-      auth: {
-        identityScopes: {
-          "ada@example.test": ["operator.admin"],
-          "grace@example.test": ["operator.admin"],
-        },
-      },
-    };
-  }
   const admins = ["ada", "grace"].map((name, index) => {
     const profile = ensureProfileForEmail(`${name}@example.test`);
     setUserProfileRole(profile.id, "admin");
@@ -116,67 +113,35 @@ export async function createAdminIngressFixture(
   };
   await activatePolicy({});
   setRuntimeConfigSnapshot(cfg);
-  let live = true;
-  let gateway = createCommandOwnerTestGateway(cfg);
-  const owner = {
-    channelId,
-    isLive: () => live,
-    resolveGatewayContext: () => gateway,
-  };
-  const unregister = () => {
-    live = false;
-  };
-  const ingressRuntime = createHostChannelIngressRuntime(owner);
-  const buildContext = createHostChannelInboundEventContextBuilder(
-    buildChannelInboundEventContext,
-    owner,
-  );
+  const host = createHostIngressFixture(channelId, cfg);
   const key = `agent:main:${channelId}:channel:maintainers`;
   const context = async (senderId: string, verified = true, accountId = "team") => {
-    const ingress = await ingressRuntime.resolveStable({
-      channelId,
+    const message = ingressMessage(channelId, key, senderId, {
       accountId,
-      identity: { authentication: "verified" },
-      subject: {
-        stableId: senderId,
-        ...(verified ? {} : { authentication: { stableId: "asserted" as const } }),
-      },
-      conversation: { kind: "direct", id: "conversation" },
-      contextBinding: {
-        agentId: "main",
-        sessionKey: key,
-        messageId: senderId,
-        inboundEventKind: "user_request",
-      },
-      dmPolicy: "open",
-      groupPolicy: "disabled",
-      allowFrom: ["*"],
-      useDefaultPairingStore: false,
-    });
-    return await buildContext({
-      channel: channelId,
-      accountId,
-      messageId: senderId,
-      from: `${channelId}:${senderId}`,
-      sender: { id: senderId },
-      conversation: { kind: "direct", id: "conversation" },
-      route: { agentId: "main", routeSessionKey: key },
-      reply: { to: `${channelId}:${senderId}` },
       message: { rawBody: "Assign this session to the requester" },
-      channelIngress: ingress,
     });
+    const ingress = await host.ingress.resolveStable(
+      ingressInput(message, {
+        identity: { authentication: "verified" },
+        subject: {
+          stableId: senderId,
+          ...(verified ? {} : { authentication: { stableId: "asserted" as const } }),
+        },
+      }),
+    );
+    return await host.buildContext({ ...message, channelIngress: ingress });
   };
   return {
     cfg,
     activatePolicy,
     state,
     admins,
-    gateway,
+    gateway: host.gateway,
     context,
     replaceGatewayContext: (replacement?: GatewayRequestContext) => {
-      gateway = replacement ?? createCommandOwnerTestGateway(cfg);
+      host.replaceGatewayContext(replacement ?? createCommandOwnerTestGateway(cfg));
     },
-    unregister,
-    retire: unregister,
+    unregister: host.retire,
+    retire: host.retire,
   };
 }

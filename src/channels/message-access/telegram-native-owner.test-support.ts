@@ -23,19 +23,9 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import {
-  buildChannelInboundEventContext,
-  type BuildChannelInboundEventContextAsyncParams,
-  type BuildChannelInboundEventContextParams,
-  type BuiltChannelInboundEventContext,
-} from "../inbound-event/context.js";
-import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
 import type { ChannelPlugin } from "../plugins/types.public.js";
-import {
-  createCommandOwnerTestGateway,
-  createCommandOwnerTestRoles,
-} from "./operator-authority.test-support.js";
-import { createHostChannelIngressRuntime } from "./runtime.js";
+import { createHostIngressFixture } from "./host-ingress.test-support.js";
+import { createCommandOwnerTestRoles } from "./operator-authority.test-support.js";
 
 type TelegramNativeCommandTestDriver = {
   invoke: (input?: {
@@ -107,10 +97,8 @@ async function createFixture(asserted: boolean, state: OpenClawTestState) {
     linkUserChannelIdentity(profile.id, identity);
     return { profile, identity };
   });
-  let live = true;
-  const gateway = createCommandOwnerTestGateway(cfg);
-  const host = { channelId: "telegram", isLive: () => live, resolveGatewayContext: () => gateway };
-  const ingress = createHostChannelIngressRuntime(host);
+  const host = createHostIngressFixture("telegram", cfg);
+  const { ingress, buildContext } = host;
   const handler = vi.fn(async (ctx: PluginCommandContext) => {
     ctx.assertOwnerCurrent?.();
     return { text: "TELEGRAM-OWNER-OK" };
@@ -123,19 +111,6 @@ async function createFixture(asserted: boolean, state: OpenClawTestState) {
       handler,
     }),
   ).toEqual({ ok: true });
-  const buildHostContext = createHostChannelInboundEventContextBuilder(
-    buildChannelInboundEventContext,
-    host,
-  );
-  function buildContext(
-    input: BuildChannelInboundEventContextAsyncParams,
-  ): Promise<BuiltChannelInboundEventContext>;
-  function buildContext(
-    input: BuildChannelInboundEventContextParams,
-  ): BuiltChannelInboundEventContext;
-  function buildContext(input: BuildChannelInboundEventContextParams) {
-    return buildHostContext(input);
-  }
   const runtime = createPluginRuntimeMock({
     channel: {
       inbound: {
@@ -172,7 +147,7 @@ async function createFixture(asserted: boolean, state: OpenClawTestState) {
     invoke: (senderId = 100) => driver.invoke({ senderId }),
     invokeTopic: () => driver.invoke({ group: true, chatId: -10012345, threadId: 42 }),
     close: () => {
-      live = false;
+      host.retire();
       driver.close();
     },
   };

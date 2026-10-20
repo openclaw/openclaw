@@ -1,15 +1,16 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { prepareChannelRunAdmission } from "../../auto-reply/reply/channel-run-admission.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
-import { buildChannelInboundEventContext } from "../inbound-event/context.js";
-import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
 import {
   admitChildSessionPublication,
   bindChildSessionPublication,
   copyChildSessionPublication,
   readChildSessionPublication,
 } from "./child-session-publication.js";
-import { createHostChannelIngressRuntime } from "./runtime.js";
+import {
+  createHostIngressFixture,
+  ingressInput,
+  ingressMessage,
+} from "./host-ingress.test-support.js";
 
 const parentKey = "agent:main:test:group:thread";
 const childClaim = {
@@ -30,73 +31,42 @@ const prepareAdmission = (sourceContext: object, runId = "publication-admission"
   });
 
 async function fixture(kind = "public") {
-  let active = true;
-  const gateway = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
-  const owner = { channelId: "test", isLive: () => active, resolveGatewayContext: () => gateway };
-  const input = {
-    channelId: "test",
-    accountId: "default",
-    subject: { stableId: "author" },
-    conversation: { kind: "group" as const, id: "thread" },
-    contextBinding: {
-      agentId: "main",
-      sessionKey: parentKey,
-      messageId: "post",
-      inboundEventKind: "user_request" as const,
-    },
-    dmPolicy: "disabled" as const,
-    groupPolicy: "open" as const,
-    useDefaultPairingStore: false,
-    childSessionPublication:
-      kind === "absent"
-        ? undefined
-        : {
-            audience: "public" as const,
-            assertCurrent: () => {
-              if (!active) {
-                throw new Error("revoked");
-              }
-            },
-          },
+  const host = createHostIngressFixture();
+  const assertCurrent = () => {
+    if (!host.owner.isLive()) {
+      throw new Error("revoked");
+    }
   };
-  const ingress = await createHostChannelIngressRuntime(owner).resolveStable(input);
-  const context = await createHostChannelInboundEventContextBuilder(
-    buildChannelInboundEventContext,
-    owner,
-  )({
-    channel: "test",
-    accountId: "default",
-    messageId: "post",
-    from: "test:thread",
-    sender: { id: "author" },
+  const message = ingressMessage("test", parentKey, "author", {
     conversation: { kind: "group", id: "thread" },
+  });
+  const ingress = await host.ingress.resolveStable(
+    ingressInput(message, {
+      dmPolicy: "disabled",
+      groupPolicy: "open",
+      allowFrom: undefined,
+      childSessionPublication:
+        kind === "absent" ? undefined : { audience: "public", assertCurrent },
+    }),
+  );
+  const context = await host.buildContext({
+    ...message,
     route: {
       agentId: "main",
       routeSessionKey: kind === "retargeted" ? "agent:main:other" : parentKey,
     },
-    reply: { to: "test:thread" },
-    message: { body: "Public request", rawBody: "Public request" },
     channelIngress: kind === "forged" ? { ...ingress } : ingress,
   });
   const run = { runId: "run", instanceId: "instance" };
   const followup = {};
   copyChildSessionPublication(context, followup);
-  admitChildSessionPublication(followup, run, () => {
-    if (!active) {
-      throw new Error("run closed");
-    }
-  });
-  return {
-    context,
-    publication: readChildSessionPublication(run),
-    close: () => {
-      active = false;
-    },
-  };
+  admitChildSessionPublication(followup, run, assertCurrent);
+  return { context, publication: readChildSessionPublication(run), close: host.retire };
 }
 
-describe("trusted ingress child publication", () => {
-  it("renews once before admission without renewing later revocation", async () => {
+it.each(["source revocation", "run closure"])(
+  "expires admitted publication on %s",
+  async (phase) => {
     let current = true;
     const context = {};
     const prepare = vi.fn(async () => () => {
@@ -108,9 +78,11 @@ describe("trusted ingress child publication", () => {
       context,
       parentKey,
       () => {
-        throw new Error("stale original snapshot");
+        if (phase === "source revocation") {
+          throw new Error("stale original snapshot");
+        }
       },
-      prepare,
+      phase === "source revocation" ? prepare : undefined,
     );
     const admission = prepareAdmission(context, "renewed-publication");
     try {
@@ -118,71 +90,53 @@ describe("trusted ingress child publication", () => {
       const publication = readChildSessionPublication(admitted.operationalRunInstance);
       expect(publication).toBeDefined();
       expect(() => publication?.assertCurrent()).not.toThrow();
-      current = false;
-      await admission.admit("embedded");
-      await publication?.prepare();
-      expect(prepare).toHaveBeenCalledOnce();
-      expect(() => publication?.assertCurrent()).toThrow("revoked after admission");
+      if (phase === "source revocation") {
+        current = false;
+        await admission.admit("embedded");
+        await publication?.prepare();
+        expect(prepare).toHaveBeenCalledOnce();
+      } else {
+        admission.close();
+      }
+      expect(() => publication?.assertCurrent()).toThrow(
+        phase === "source revocation" ? "revoked after admission" : "run is no longer active",
+      );
     } finally {
       admission.close();
     }
-  });
-  it("binds through actual channel-run admission and rejects use after it closes", async () => {
-    const context = {};
-    bindChildSessionPublication(context, parentKey, () => {});
-    const preparation = prepareAdmission(context);
-    try {
-      const admitted = await preparation.admit("embedded");
-      const publication = readChildSessionPublication(admitted.operationalRunInstance);
-      expect(publication).toBeDefined();
-      expect(() => publication!.assertCurrent()).not.toThrow();
-      preparation.close();
-      expect(() => publication!.assertCurrent()).toThrow("run is no longer active");
-    } finally {
-      preparation.close();
-    }
-  });
+  },
+);
 
-  it.each(["public", "absent", "retargeted", "forged"])(
-    "accepts only an exact host handoff: %s",
-    async (kind) => {
-      const f = await fixture(kind);
-      expect(Boolean(f.publication)).toBe(kind === "public");
-    },
-  );
-  it("never transfers to a later turn or grandchild and expires with the source", async () => {
-    const f = await fixture();
-    const later = { runId: "later", instanceId: "later" };
-    admitChildSessionPublication(f.context, later, () => {});
-    expect(readChildSessionPublication(later)).toBeUndefined();
-    expect(() => f.publication!.claim(childClaim)).not.toThrow();
-    expect(() =>
-      f.publication!.claim({
-        ...childClaim,
-        sessionKey: "agent:main:dashboard:second",
-        entry: { sessionId: "second", updatedAt: 1 },
-      }),
-    ).not.toThrow();
-    f.close();
-    expect(() => f.publication!.assertCurrent()).toThrow();
-  });
-  it.each(["existing", "fork", "private", "incognito", "other-parent"])(
-    "rejects %s targets",
-    async (kind) => {
-      const f = await fixture();
-      expect(() =>
-        f.publication!.claim({
-          ...childClaim,
-          entry: {
-            ...childClaim.entry,
-            ...(kind === "private" ? { visibility: "draft" as const } : {}),
-            incognito: kind === "incognito" ? true : undefined,
-          },
-          parentSessionKey: kind === "other-parent" ? "agent:main:other" : parentKey,
-          isNew: kind !== "existing",
-          fork: kind === "fork",
-        }),
-      ).toThrow();
-    },
-  );
+it.each(["public", "absent", "retargeted", "forged"])(
+  "accepts only an exact host handoff: %s",
+  async (kind) => {
+    const f = await fixture(kind);
+    expect(Boolean(f.publication)).toBe(kind === "public");
+  },
+);
+it("never transfers to a later turn or grandchild and expires with the source", async () => {
+  const f = await fixture();
+  const later = { runId: "later", instanceId: "later" };
+  admitChildSessionPublication(f.context, later, () => {});
+  expect(readChildSessionPublication(later)).toBeUndefined();
+  expect(() => f.publication!.claim(childClaim)).not.toThrow();
+  expect(() =>
+    f.publication!.claim({
+      ...childClaim,
+      sessionKey: "agent:main:dashboard:second",
+      entry: { sessionId: "second", updatedAt: 1 },
+    }),
+  ).not.toThrow();
+  f.close();
+  expect(() => f.publication!.assertCurrent()).toThrow();
+});
+it.each([
+  ["existing", { isNew: false }],
+  ["fork", { fork: true }],
+  ["private", { entry: { ...childClaim.entry, visibility: "draft" } }],
+  ["incognito", { entry: { ...childClaim.entry, incognito: true } }],
+  ["other-parent", { parentSessionKey: "agent:main:other" }],
+] as const)("rejects %s targets", async (_kind, overrides) => {
+  const f = await fixture();
+  expect(() => f.publication!.claim({ ...childClaim, ...overrides })).toThrow();
 });

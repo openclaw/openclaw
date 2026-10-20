@@ -16,10 +16,12 @@ import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { resolveConfiguredBinding } from "../plugins/configured-binding-registry.js";
 import { withTelegramNativeOwners } from "./telegram-native-owner.test-support.js";
 
+const unavailable = "Configured ACP binding is unavailable right now. Please try again.";
+
 it.each(["current", "capability lookup", "accepted control"])(
   "retains native Telegram owner authority during configured ACP preparation: %s",
-  async (phase) => {
-    await withTelegramNativeOwners(async ({ cfg, state, admins, invokeTopic, handler, driver }) => {
+  (phase) =>
+    withTelegramNativeOwners(async ({ cfg, state, admins, invokeTopic, handler, driver }) => {
       const backendId = "telegram-native-owner-proof";
       cfg.acp = { enabled: true, backend: backendId, allowedAgents: ["main"] };
       cfg.session = { store: state.path("native-acp-sessions.json") };
@@ -97,9 +99,7 @@ it.each(["current", "capability lookup", "accepted control"])(
             configOptions: [...acceptedOptions].map(([id, currentValue]) => ({ id, currentValue })),
           };
         },
-        async close() {
-          effects.push("close");
-        },
+        async close() {},
         async cancel() {},
         runTurn() {
           throw new Error("Native preparation must not start a provider turn");
@@ -139,25 +139,19 @@ it.each(["current", "capability lookup", "accepted control"])(
           expect(driver.deliveries()).toEqual([{ replies: [{ text: "TELEGRAM-OWNER-OK" }] }]);
         } else {
           expect(handler).not.toHaveBeenCalled();
-          expect(driver.sentMessages()).toEqual([
-            {
-              chatId: -10012345,
-              text: "Configured ACP binding is unavailable right now. Please try again.",
-            },
-          ]);
+          expect(driver.sentMessages()).toEqual([{ chatId: -10012345, text: unavailable }]);
           expect(driver.deliveries()).toEqual([]);
           expect(effects).toEqual(phase === "capability lookup" ? [] : ["configure:model"]);
         }
         if (phase === "capability lookup") {
           expect(after).toEqual(before);
         } else {
-          expect(after.kind).toBe("ready");
-          if (after.kind === "ready") {
-            expect(after.meta.runtimeOptions).toMatchObject({
-              model: spec.model,
-              thinking: phase === "current" ? "high" : "off",
-            });
-          }
+          expect(after).toMatchObject({
+            kind: "ready",
+            meta: {
+              runtimeOptions: { model: spec.model, thinking: phase === "current" ? "high" : "off" },
+            },
+          });
         }
       } finally {
         finish.resolve();
@@ -169,6 +163,5 @@ it.each(["current", "capability lookup", "accepted control"])(
           managerTesting.resetAcpSessionManagerForTests();
         }
       }
-    });
-  },
+    }),
 );

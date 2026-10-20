@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import type { SessionParticipantIdentity } from "../../config/sessions/session-participant-identity.js";
-import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import {
   buildChannelInboundEventContext,
@@ -10,12 +9,27 @@ import { createHostChannelInboundEventContextBuilder } from "../inbound-event/ho
 import {
   consumeChannelAdmissionEvidence,
   createChannelAdmissionAudit,
-  readChannelContextAdmissionEvidence,
+  readChannelContextAdmissionEvidence as readEvidence,
   readChannelContextGatewayContextResolver,
 } from "./admission-evidence.js";
-import { createHostChannelIngressRuntime } from "./runtime.js";
+import {
+  createHostIngressFixture,
+  ingressInput,
+  ingressMessage,
+} from "./host-ingress.test-support.js";
 
 const recordParticipant = vi.hoisted(() => vi.fn());
+const remote = { domain: "workspace-one", idKind: "user-id", id: "profile-collision" };
+const identities: SessionParticipantIdentity[] = [
+  { type: "remote", pluginId: "test", ...remote },
+  {
+    type: "observation",
+    pluginId: "test",
+    accountId: "local",
+    senderKind: "unknown",
+    id: "unknown",
+  },
+];
 vi.mock("../../sessions/session-participant-recording.js", () => ({
   recordSessionParticipantBestEffort: recordParticipant,
 }));
@@ -33,132 +47,87 @@ it.each([
   "preserves accepted product identity and exact host ownership: %s",
   async (scenario) => {
     recordParticipant.mockClear();
-    let live = true;
     const auditEnabled = scenario.includes("during");
     const audit = createChannelAdmissionAudit({ enabled: auditEnabled });
-    let gateway = {
-      getRuntimeConfig: () => ({}),
-      channelAdmissionAudit: audit,
-    } as GatewayRequestContext;
-    const owner = {
-      channelId: "test",
-      isLive: () => live,
-      resolveGatewayContext: () => gateway,
-    };
-    const resolveIngress = createHostChannelIngressRuntime(owner).resolveStable;
+    const host = createHostIngressFixture("test", {}, { channelAdmissionAudit: audit });
     const key = "agent:main:test:dm:conversation";
     const resolveParticipant = vi.fn((subject: { stableId?: string | number | null }) =>
-      subject.stableId === "unknown"
-        ? undefined
-        : {
-            domain: "workspace-one",
-            idKind: "user-id",
-            id: String(subject.stableId),
-          },
+      subject.stableId === "unknown" ? undefined : { ...remote, id: String(subject.stableId) },
     );
     try {
       const sources =
         scenario === "mixed" ? ["profile-collision", "unknown"] : ["profile-collision"];
       const ingress = [];
       const startedAt = Date.now();
+      const messageFor = (sender: string) =>
+        ingressMessage("test", key, sender, { accountId: "local" });
       for (const sender of sources) {
         ingress.push(
-          await resolveIngress({
-            channelId: "test",
-            accountId: "local",
-            identity: { resolveParticipant },
-            subject: { stableId: sender },
-            conversation: { kind: "direct", id: "conversation" },
-            contextBinding: {
-              agentId: "main",
-              sessionKey: key,
-              messageId: sender,
-              inboundEventKind: "user_request",
-            },
-            dmPolicy: scenario === "gateway-replaced-during-ingress" ? "pairing" : "open",
-            groupPolicy: "disabled",
-            allowFrom: scenario === "denied" ? [] : ["*"],
-            useDefaultPairingStore: false,
-            readStoreAllowFrom: async () => {
-              await Promise.resolve();
-              if (scenario === "gateway-replaced-during-ingress") {
-                gateway = Object.assign({}, gateway);
-              }
-              return [];
-            },
-          }),
+          await host.ingress.resolveStable(
+            ingressInput(messageFor(sender), {
+              identity: { resolveParticipant },
+              dmPolicy: scenario === "gateway-replaced-during-ingress" ? "pairing" : "open",
+              allowFrom: scenario === "denied" ? [] : ["*"],
+              readStoreAllowFrom: async () => {
+                await Promise.resolve();
+                if (scenario === "gateway-replaced-during-ingress") {
+                  host.replaceGatewayContext();
+                }
+                return [];
+              },
+            }),
+          ),
         );
       }
       expect(resolveParticipant).toHaveBeenCalledTimes(sources.length);
       expect(ingress[0]?.ingress.admission).toBe(scenario === "denied" ? "drop" : "dispatch");
-      live = scenario !== "stale";
+      if (scenario === "stale") {
+        host.retire();
+      }
       const context = await createHostChannelInboundEventContextBuilder(
         async (params: BuildChannelInboundEventContextParams) => {
           await Promise.resolve();
           if (scenario === "gateway-replaced-during-context") {
-            gateway = Object.assign({}, gateway);
+            host.replaceGatewayContext();
           }
           if (scenario === "retired-during-context") {
-            live = false;
+            host.retire();
           }
           return buildChannelInboundEventContext(params);
         },
-        owner,
+        host.owner,
       )({
-        channel: "test",
-        accountId: "local",
-        messageId: sources.at(-1),
-        from: "test:conversation",
-        sender: { id: sources.at(-1) },
-        conversation: { kind: "direct", id: "conversation" },
+        ...messageFor(sources.at(-1)!),
         route: {
           agentId: "main",
           routeSessionKey: scenario === "retargeted" ? "agent:main:other" : key,
         },
-        reply: { to: "test:conversation" },
-        message: { rawBody: "hello" },
         channelIngress: ingress,
       });
       const target = { agentId: "main", sessionKey: key, storePath: "/unused" };
       recordAcceptedSessionParticipantInput({ ...context }, target);
       recordAcceptedSessionParticipantInput(context, target);
       if (scenario === "qualified" || scenario === "mixed") {
-        const identities: SessionParticipantIdentity[] = [
-          {
-            type: "remote",
-            pluginId: "test",
-            domain: "workspace-one",
-            idKind: "user-id",
-            id: "profile-collision",
-          },
-        ];
-        if (scenario === "mixed") {
-          identities.push({
-            type: "observation",
-            pluginId: "test",
-            accountId: "local",
-            senderKind: "unknown",
-            id: "unknown",
-          });
-        }
         expect(recordParticipant.mock.calls).toEqual(
-          identities.map((identity) => [{ ...target, identity, promptedAt: expect.any(Number) }]),
+          identities
+            .slice(0, sources.length)
+            .map((identity) => [{ ...target, identity, promptedAt: expect.any(Number) }]),
         );
         expect(recordParticipant.mock.calls[0]?.[0].promptedAt).toBeGreaterThanOrEqual(startedAt);
       } else {
         expect(recordParticipant).not.toHaveBeenCalled();
       }
       if (auditEnabled) {
-        expect(
-          consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(context)),
-        ).toMatchObject({ ingressState: "unknown" });
+        expect(consumeChannelAdmissionEvidence(readEvidence(context))).toMatchObject({
+          ingressState: "unknown",
+        });
         expect(readChannelContextGatewayContextResolver(context)).toBeUndefined();
       } else {
-        expect(readChannelContextAdmissionEvidence(context)).toBeUndefined();
+        expect(readEvidence(context)).toBeUndefined();
       }
       expect(ingress[0]).not.toHaveProperty("participant");
     } finally {
-      live = false;
+      host.retire();
       audit.close();
     }
   },
