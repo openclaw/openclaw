@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -531,7 +532,9 @@ describe("Memory observation lifecycle", () => {
     entry.dirty();
     await vi.advanceTimersByTimeAsync(0);
     expect(calls(onChange, onUnavailable)).toEqual([1, 0]);
-    expect(warnings).toHaveBeenCalledWith("memory sync failed (watch): " + String(failure));
+    expect(warnings).toHaveBeenCalledWith(
+      "memory sync failed (watch): " + formatErrorMessage(failure),
+    );
     expect(vi.getTimerCount()).toBe(0);
 
     entry.dirty();

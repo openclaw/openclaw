@@ -1,6 +1,6 @@
 import type { Worker } from "node:worker_threads";
 import { resolveWorkspaceWorkerArgv } from "openclaw/plugin-sdk/agent-workspace-runtime";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createSubsystemLogger,
@@ -298,7 +298,7 @@ export class LocalMemoryFileWatcher {
     this.syncing = Promise.resolve()
       .then(() => this.options.runInBackgroundContext(() => this.options.onChange()))
       .catch((error: unknown) => {
-        log.warn(`memory sync failed (watch): ${String(error)}`);
+        log.warn(`memory sync failed (watch): ${formatErrorMessage(error)}`);
       })
       .finally(() => {
         this.syncing = undefined;

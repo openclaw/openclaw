@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySyncParams } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { LocalMemoryFileWatcher } from "./local-file-watcher.js";
@@ -137,7 +138,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
 
   protected syncInBackground(params: MemorySyncParams, failureReason = params.reason): void {
     const failed = (err: unknown) => {
-      log.warn(`memory sync failed (${failureReason}): ${String(err)}`);
+      log.warn(`memory sync failed (${failureReason}): ${formatErrorMessage(err)}`);
     };
     try {
       this.runInBackgroundContext(() => {

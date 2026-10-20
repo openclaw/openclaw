@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   watch,
   resolveFsObservationMode,
@@ -580,7 +581,7 @@ export class MemoryFileWatcher {
             if (!this.closed) {
               // Do not spin indefinitely on a persistent metadata/indexing failure.
               this.pendingChange = this.revision !== revision;
-              log.warn("memory sync failed (watch): " + String(error));
+              log.warn("memory sync failed (watch): " + formatErrorMessage(error));
             }
           })
           .finally(() => {
