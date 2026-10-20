@@ -26,10 +26,47 @@ function notReady(): Error {
   );
 }
 
+type ClientCredentialReceiptState = {
+  phase: "copied" | "complete";
+  receipt: ClientCredentialReceipt;
+};
+
+/** The receipt is a cross-process migration-phase guard, including in-place copied → complete transitions. */
+export function readClientCredentialAdmission(database: DatabaseSync): {
+  version: number;
+  stored: ClientCredentialReceiptState | null;
+} {
+  // sqlite-allow-raw -- Read the native header and its migration receipt in one bounded statement.
+  const row = database
+    .prepare(`
+    SELECT header.user_version, receipt.source_store, receipt.phase
+    FROM pragma_user_version AS header
+    LEFT JOIN client_credential_migration AS receipt ON receipt.version = 1
+  `)
+    .get();
+  if (!row || typeof row.user_version !== "number") {
+    throw notReady();
+  }
+  const localPath = database.location();
+  return {
+    version: row.user_version,
+    stored:
+      row.source_store === null
+        ? null
+        : {
+            phase: row.phase === "complete" ? "complete" : "copied",
+            receipt: parseClientCredentialReceipt(
+              String(row.source_store),
+              localPath ? path.dirname(path.dirname(localPath)) : undefined,
+            ),
+          },
+  };
+}
+
 export function readClientCredentialReceipt(
   database: DatabaseSync,
   rootPath?: string,
-): { phase: "copied" | "complete"; receipt: ClientCredentialReceipt } | null {
+): ClientCredentialReceiptState | null {
   const db = getNodeSqliteKysely<ClientCredentialDatabase>(database);
   const row = executeSqliteQueryTakeFirstSync(
     database,
@@ -142,9 +179,10 @@ function prepareClientCredentialReceipt(
   env: NodeJS.ProcessEnv,
   initialize: boolean,
   readOnly = false,
+  knownReceipt = readClientCredentialReceipt(database),
 ) {
+  let stored = knownReceipt;
   const sharedFile = readClientCredentialFileIdentity(resolveOpenClawStateSqlitePath(env));
-  let stored = readClientCredentialReceipt(database);
   if (!stored && initialize && !sharedFile) {
     assertClientCredentialLegacyReady(null, env);
     const receipt = emptyClientCredentialReceipt();
@@ -229,13 +267,18 @@ export function assertClientCredentialStoreReady(
 export function admitClientCredentialStore(
   database: DatabaseSync,
   env: NodeJS.ProcessEnv,
-  options: { initialize: boolean; readOnly: boolean },
+  options: {
+    initialize: boolean;
+    readOnly: boolean;
+    stored?: ClientCredentialReceiptState | null;
+  },
 ): void {
   const stored = prepareClientCredentialReceipt(
     database,
     env,
     options.initialize,
     options.readOnly,
+    options.stored,
   );
   assertClientCredentialLegacyReady(database, env, !options.readOnly, stored.receipt);
 }
