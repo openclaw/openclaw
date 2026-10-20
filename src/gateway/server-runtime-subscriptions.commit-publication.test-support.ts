@@ -24,7 +24,7 @@ export function registerCommittedTranscriptPublicationTests(
     };
   },
 ) {
-  const { createParams, start, transcriptBroadcastMocks, warn } = fixture;
+  const { createParams, start, transcriptBroadcastMocks: mocks, warn } = fixture;
   const target = {
     agentId: "main",
     sessionId: "committed-session",
@@ -32,9 +32,9 @@ export function registerCommittedTranscriptPublicationTests(
     storePath: "/tmp/openclaw-committed-transcript.sqlite",
   };
   it.for([1, 3])(
-    "retains %s committing roots through transcript publication and shutdown",
+    "retains %s roots until shutdown publishes committed transcripts",
     async (count, { signal }) => {
-      transcriptBroadcastMocks.useActualHandler = true;
+      mocks.useActualHandler = true;
       const readEntered = createDeferred();
       const releaseRead = createDeferred();
       const published = createDeferred();
@@ -44,7 +44,7 @@ export function registerCommittedTranscriptPublicationTests(
         content: [{ type: "text", text: "committed completion" }],
         __openclaw: { transcriptPosition: { source: "committed-generation", rawSeq: 1 } },
       };
-      transcriptBroadcastMocks.readMessageById.mockImplementationOnce(async () => {
+      mocks.readMessageById.mockImplementationOnce(async () => {
         const readSignal = getAsyncWorkSignal();
         readEntered.resolve();
         await releaseRead.promise;
@@ -66,12 +66,14 @@ export function registerCommittedTranscriptPublicationTests(
         },
       });
       const unsubs = start({ ...params, getSessionRowProjection: () => projection });
-      const admissions = Array.from({ length: count }, () =>
-        tryBeginGatewayRootWorkAdmission("test:committed-transcript-publisher"),
-      );
-      if (admissions.some((admission) => !admission)) {
-        throw new Error("Transcript publisher admission was closed");
-      }
+      const admissions = Array.from({ length: count }, () => {
+        const admission = tryBeginGatewayRootWorkAdmission("test:committed-transcript-publisher");
+        if (!admission) {
+          throw new Error("Transcript publisher admission was closed");
+        }
+        return admission;
+      });
+      const releaseAdmissions = () => admissions.forEach((admission) => admission.release());
       let shutdown: Promise<void> | undefined;
       try {
         const emitCommitted = (index: number) =>
@@ -90,9 +92,7 @@ export function registerCommittedTranscriptPublicationTests(
         for (let index = 1; index < count; index++) {
           await emitCommitted(index);
         }
-        for (const admission of admissions) {
-          admission!.release();
-        }
+        releaseAdmissions();
         await producer.drain();
         expect(getActiveGatewayRootWorkCount()).toBe(count);
         shutdown = unsubs.agentUnsub();
@@ -104,30 +104,25 @@ export function registerCommittedTranscriptPublicationTests(
         releaseRead.resolve();
         await withinTest(publicationBeforeShutdown, signal);
         await shutdown;
-        const expectPublication = (nth: number, event: string, payload: object) =>
-          expect(params.broadcastToConnIds).toHaveBeenNthCalledWith(
-            nth,
-            event,
-            expect.objectContaining({ sessionKey: target.sessionKey, ...payload }),
-            new Set(["conn-transcript"]),
-            expect.objectContaining({ sessionEventSubscriptionKeys: [target.sessionKey] }),
-          );
-        expectPublication(1, "session.message", {
-          messageId: "committed-message-0",
-          message: expect.objectContaining({ content: storedMessage.content }),
-        });
-        expect(transcriptBroadcastMocks.readMessageById).toHaveBeenCalledOnce();
-        expect(params.broadcastToConnIds).toHaveBeenCalledTimes(count === 1 ? 1 : 2);
-        if (count > 1) {
-          expectPublication(2, "sessions.changed", { phase: "message" });
-        }
+        const publication = (event: string, payload: object) => [
+          event,
+          expect.objectContaining({ sessionKey: target.sessionKey, ...payload }),
+          new Set(["conn-transcript"]),
+          expect.objectContaining({ sessionEventSubscriptionKeys: [target.sessionKey] }),
+        ];
+        expect(params.broadcastToConnIds.mock.calls).toEqual([
+          publication("session.message", {
+            messageId: "committed-message-0",
+            message: expect.objectContaining({ content: storedMessage.content }),
+          }),
+          ...(count > 1 ? [publication("sessions.changed", { phase: "message" })] : []),
+        ]);
+        expect(mocks.readMessageById).toHaveBeenCalledOnce();
         expect(warn).not.toHaveBeenCalled();
         expect(getActiveGatewayRootWorkCount()).toBe(0);
       } finally {
         releaseRead.resolve();
-        for (const admission of admissions) {
-          admission?.release();
-        }
+        releaseAdmissions();
         await producer.drain();
         await shutdown;
         projection.dispose();

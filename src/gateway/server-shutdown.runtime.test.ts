@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   runtime: {
@@ -83,22 +83,18 @@ vi.mock("../agents/subagents/registry/subagent-session-cleanup.js", () => ({
 
 const { prepareGatewayShutdownRuntime } = await import("./server-shutdown.runtime.js");
 
-describe("gateway shutdown runtime", () => {
-  it("resolves every shutdown dependency during preparation", async () => {
-    const runtime = await prepareGatewayShutdownRuntime();
-    expect(runtime).toEqual(state.runtime);
-    expect(state.preparePluginRegistryShutdown).toHaveBeenCalledOnce();
-    expect(state.runtime.waitForPluginCacheRetirement).not.toHaveBeenCalled();
-    expect(state.runtime.drainSessionEventPublications).not.toHaveBeenCalled();
-    state.artifactsAvailable = false;
-    try {
-      expect(runtime.drainSessionEventPublications).toBe(
-        state.runtime.drainSessionEventPublications,
-      );
-      await runtime.waitForPluginCacheRetirement();
-      expect(state.runtime.waitForPluginCacheRetirement).toHaveBeenCalledOnce();
-    } finally {
-      state.artifactsAvailable = true;
-    }
-  });
+it("resolves every shutdown dependency during preparation", async () => {
+  const runtime = await prepareGatewayShutdownRuntime();
+  expect(runtime).toEqual(state.runtime);
+  expect(state.preparePluginRegistryShutdown).toHaveBeenCalledOnce();
+  expect(state.runtime.waitForPluginCacheRetirement).not.toHaveBeenCalled();
+  expect(state.runtime.drainSessionEventPublications).not.toHaveBeenCalled();
+  state.artifactsAvailable = false;
+  try {
+    expect(runtime.drainSessionEventPublications).toBe(state.runtime.drainSessionEventPublications);
+    await runtime.waitForPluginCacheRetirement();
+    expect(state.runtime.waitForPluginCacheRetirement).toHaveBeenCalledOnce();
+  } finally {
+    state.artifactsAvailable = true;
+  }
 });
