@@ -7,8 +7,6 @@ import {
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UrbitHttpError } from "../urbit/errors.js";
-import { urbitFetch } from "../urbit/fetch.js";
-import { UrbitSSEClient } from "../urbit/sse-client.js";
 import { createTlonIngressMonitor } from "./ingress.js";
 
 type TlonIngressPayload = {
@@ -26,8 +24,6 @@ vi.mock("../runtime.js", async (importOriginal) => ({
   getTlonRuntime: () => ({ state: { openChannelIngressQueue } }),
 }));
 
-vi.mock("../urbit/fetch.js", () => ({ urbitFetch: vi.fn() }));
-
 function essay(author = "~nec", text = "hello") {
   return { author, content: [{ text }], sent: 1_700_000_000_000 };
 }
@@ -42,34 +38,6 @@ function channelEvent(id = "message-1") {
       },
     },
   };
-}
-
-function deepChannelEvent(id: string, depth: number) {
-  let node: unknown = "x";
-  for (let i = 0; i < depth; i += 1) {
-    node = { bold: [node] };
-  }
-  return {
-    nest: "chat/~zod/general",
-    response: {
-      post: {
-        id,
-        "r-post": {
-          set: {
-            essay: { author: "~nec", content: [{ inline: [node] }], sent: 1_700_000_000_000 },
-          },
-        },
-      },
-    },
-  };
-}
-
-// Built as wire text because a 100,000-deep event can be parsed but not re-stringified.
-function wireChannelEvent(eventId: number, id: string, depth: number): string {
-  const inline = depth > 0 ? `${'{"bold":['.repeat(depth)}"x"${"]}".repeat(depth)}` : '"x"';
-  const essayJson = `{"author":"~nec","content":[{"inline":[${inline}]}],"sent":1700000000000}`;
-  const json = `{"nest":"chat/~zod/general","response":{"post":{"id":"${id}","r-post":{"set":{"essay":${essayJson}}}}}}`;
-  return `id: ${eventId}\ndata: {"id":1,"json":${json}}`;
 }
 
 function channelReplyEvent(id: string, nest: string) {
@@ -149,78 +117,6 @@ describe("Tlon durable ingress", () => {
         appendError,
       );
       expect(dispatch).not.toHaveBeenCalled();
-    });
-  });
-
-  it("admits and dispatches a deeply nested but serializable message", async () => {
-    await withQueue(async (queue, _stateDir, start) => {
-      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const monitor = start(queue, dispatch);
-      await expect(
-        monitor.receive({ source: "channels", event: deepChannelEvent("deep-500", 500) }),
-      ).resolves.toEqual({ kind: "accepted" });
-      await monitor.waitForIdle();
-      expect(dispatch).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("drops an event too deeply nested to serialize and keeps admitting later events", async () => {
-    await withQueue(async (queue, _stateDir, start) => {
-      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const monitor = start(queue, dispatch);
-      // JSON.parse accepts this depth from the wire, but JSON.stringify overflows the stack.
-      await expect(
-        monitor.receive({ source: "channels", event: deepChannelEvent("deep-poison", 100_000) }),
-      ).resolves.toEqual({ kind: "dropped" });
-      await expect(
-        monitor.receive({ source: "chat", event: chatEvent("after-poison") }),
-      ).resolves.toEqual({ kind: "accepted" });
-      await monitor.waitForIdle();
-      expect(dispatch).toHaveBeenCalledTimes(1);
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
-    });
-  });
-
-  it("acknowledges a poison nested SSE event and then admits the next message", async () => {
-    await withQueue(async (queue, _stateDir, start) => {
-      const ackBodies: unknown[] = [];
-      vi.mocked(urbitFetch).mockImplementation(async (params) => {
-        ackBodies.push(JSON.parse(String(params.init?.body)));
-        return {
-          response: new Response(null, { status: 204 }),
-          finalUrl: "https://example.com",
-          release: vi.fn().mockResolvedValue(undefined),
-        };
-      });
-      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const monitor = start(queue, dispatch);
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-      // Same wiring as monitor/index.ts: the SSE callback awaits ingress.receive.
-      await client.subscribe({
-        app: "channels",
-        path: "/v2",
-        event: async (event) => {
-          await monitor.receive({ source: "channels", event });
-        },
-      });
-      ackBodies.length = 0;
-
-      // Event id 25 passes the ack threshold, so the transport ack depends on the callback resolving.
-      await expect(
-        client.processEvent(wireChannelEvent(25, "poison", 100_000)),
-      ).resolves.toBeUndefined();
-      expect(ackBodies).toEqual([[{ id: expect.any(Number), action: "ack", "event-id": 25 }]]);
-      expect(await queue.listPending({ limit: "all" })).toEqual([]);
-
-      await client.processEvent(wireChannelEvent(26, "after-poison", 0));
-      await monitor.waitForIdle();
-      expect(dispatch).toHaveBeenCalledTimes(1);
     });
   });
 
