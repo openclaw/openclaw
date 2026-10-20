@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -45,21 +46,12 @@ export const {
 } = await import("./commands-compact.runtime.js");
 export const { handleCompactCommand } = await import("./commands-compact.js");
 
-export function buildCompactParams(
-  commandBodyNormalized: string,
-  cfg: OpenClawConfig,
-): HandleCommandsParams {
+export function buildCompactParams(body: string, cfg: OpenClawConfig): HandleCommandsParams {
   return {
     cfg,
-    ctx: {
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      CommandSource: "text",
-      CommandBody: commandBodyNormalized,
-      commandText: commandBodyNormalized,
-    },
+    ctx: { CommandSource: "text", commandText: body },
     command: {
-      commandBodyNormalized,
+      commandBodyNormalized: body,
       isAuthorizedSender: true,
       senderIsOwner: false,
       senderId: "owner",
@@ -94,22 +86,16 @@ export function startCompactActiveRun(
   params: HandleCommandsParams,
   options: { abortable?: boolean; settleOnCancel?: boolean; onCancel?: () => void } = {},
 ) {
+  const { sessionKey, storePath, agentId = "main" } = params;
   const sessionId = params.sessionEntry?.sessionId;
-  if (!sessionId || !params.storePath) {
-    throw new Error("Active compaction fixture requires session and store identities");
-  }
+  assert(sessionId && storePath, "Active compaction fixture requires session and store identities");
   const target = captureSessionTarget({
-    storeScope: params.storePath,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId ?? "main",
+    storeScope: storePath,
+    sessionKey,
+    agentId,
     incarnation: sessionId,
   });
-  const operation = createReplyOperation({
-    sessionKey: params.sessionKey,
-    sessionId,
-    resetTriggered: false,
-    target,
-  });
+  const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false, target });
   const cancel = vi.fn(() => {
     options.onCancel?.();
     if (options.settleOnCancel !== false) {
@@ -128,9 +114,7 @@ export function startCompactActiveRun(
 function requireFirstArg<Args extends unknown[]>(mock: { mock: { calls: Args[] } }) {
   return (index = 0): Args[0] => {
     const call = mock.mock.calls[index];
-    if (!call?.[0]) {
-      throw new Error(`Mock call ${index} missing`);
-    }
+    assert(call?.[0], `Mock call ${index} missing`);
     return call[0];
   };
 }
@@ -145,8 +129,6 @@ export const requireResolveSessionAgentIdCall = requireFirstArg(resolveSessionAg
 
 export function requireResolveAgentDirCall(index = 0) {
   const call = resolveAgentDirMock.mock.calls[index] as [OpenClawConfig, string] | undefined;
-  if (!call) {
-    throw new Error(`resolveAgentDir call ${index} missing`);
-  }
+  assert(call, `resolveAgentDir call ${index} missing`);
   return call;
 }

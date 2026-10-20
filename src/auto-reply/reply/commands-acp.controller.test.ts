@@ -16,7 +16,6 @@ import { buildCommandTestParams } from "./commands.test-harness.js";
 type Fixture = Parameters<Parameters<typeof withAcpCancellationFixture>[0]>[0];
 type CommandFixture = Fixture & { hook: ReturnType<typeof vi.fn> };
 
-/** Runs one /acp command from a Discord conversation that targets the fixture session. */
 async function runAcpCommand(f: Fixture, body: string) {
   const params = buildCommandTestParams(body, f.target.cfg, {
     Provider: "discord",
@@ -31,7 +30,6 @@ async function runAcpCommand(f: Fixture, body: string) {
   return await handleAcpCommand(params, true);
 }
 
-/** Starts a manager turn the way an agent RPC does, outside any channel dispatch. */
 function startTurn(
   f: Fixture,
   requestId: string,
@@ -84,10 +82,8 @@ it.each(["running", "idle"] as const)("/acp cancel stops an %s backend", async (
       await entered.promise;
     }
     try {
-      const result = await runAcpCommand(f, "/acp cancel");
-      expect(result?.reply?.text).toContain(
-        `Cancel requested for ACP session ${f.target.sessionKey}`,
-      );
+      const reply = (await runAcpCommand(f, "/acp cancel"))?.reply?.text;
+      expect(reply).toContain(`Cancel requested for ACP session ${f.target.sessionKey}`);
       await Promise.all(pending);
       expect(f.cancel).toHaveBeenCalledOnce();
       expect(f.hook).toHaveBeenCalledOnce();
@@ -139,9 +135,9 @@ it("/acp steer waits for the target's running turn, then returns its output", as
       );
       release.resolve();
       await running;
-      const result = await steer;
+      const reply = (await steer)?.reply?.text;
       expect(order).toEqual(["running:end", "steer:start"]);
-      expect(result?.reply?.text).toContain("steered output");
+      expect(reply).toContain("steered output");
     } finally {
       release.resolve();
       await Promise.allSettled([running, steer]);

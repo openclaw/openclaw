@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { SkillCommandSpec } from "../../skills/types.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import { handleDashboardCommand } from "./commands-dashboard.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -8,11 +7,9 @@ import type { HandleCommandsParams } from "./commands-types.js";
 const controlUiSkill: SkillCommandSpec = {
   name: "control-ui",
   skillName: "control-ui",
-  displayName: "Control UI",
   description: "Operate the Control UI and build session dashboards.",
   skillFile: "/bundled/skills/control-ui/SKILL.md",
   skillSource: "bundled",
-  modelVisible: true,
 };
 const workspaceControlUiSkill: SkillCommandSpec = {
   ...controlUiSkill,
@@ -24,23 +21,15 @@ const releaseNotesSkill: SkillCommandSpec = {
   skillName: "release-notes",
   description: "Summarize release notes.",
   skillFile: "/workspace/skills/release-notes/SKILL.md",
-  modelVisible: true,
 };
 const controlUiSelections = [{ name: "control-ui", path: controlUiSkill.skillFile }];
 
 function buildParams(body: string, skills: SkillCommandSpec[] = [controlUiSkill]) {
   return {
-    cfg: {},
-    ctx: {
-      Provider: INTERNAL_MESSAGE_CHANNEL,
-      Surface: INTERNAL_MESSAGE_CHANNEL,
-      CommandSource: "text",
-      BodyForAgent: body,
-    },
+    ctx: { BodyForAgent: body },
     command: {
       commandBodyNormalized: body,
       isAuthorizedSender: true,
-      rawBodyNormalized: body,
     },
     skillCommands: skills,
   } as unknown as HandleCommandsParams;

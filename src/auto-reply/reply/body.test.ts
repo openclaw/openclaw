@@ -40,10 +40,7 @@ it("preserves interrupted work for recovery when a prepared foreground turn cann
   });
   assert(owner.kind === "claimed", "foreground recovery owner was not acquired");
   fixture.setEntry(owner.entry);
-  const body = applySessionHints({
-    baseBody: "organize my sessions",
-    abortedLastRun: true,
-  });
+  const body = applySessionHints({ baseBody: "organize my sessions", abortedLastRun: true });
   expect(body).toContain("organize my sessions");
 
   const controller = fixture.controller({ admissionRunId: "new-input" });
