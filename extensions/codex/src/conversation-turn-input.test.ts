@@ -36,6 +36,13 @@ function expectImages(
   ).toEqual([{ type: "text", text: "look", text_elements: [] }, ...images]);
 }
 
+const localImage = (imagePath: string): CodexUserInput => ({ type: "localImage", path: imagePath });
+const remoteImage = (url: string): CodexUserInput => ({ type: "image", url });
+const png = (imagePath: string): PluginHookMediaFact => ({
+  path: imagePath,
+  contentType: "image/png",
+});
+
 describe("codex conversation turn input", () => {
   it("preserves sparse mixed media associations and source order", () => {
     const inlineImage = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
@@ -48,55 +55,48 @@ describe("codex conversation turn input", () => {
         { url: inlineImage, contentType: "image/gif" },
       ],
       [
-        { type: "image", url: "https://example.test/first.webp" },
-        { type: "localImage", path: "/tmp/photo" },
-        { type: "image", url: inlineImage },
+        remoteImage("https://example.test/first.webp"),
+        localImage("/tmp/photo"),
+        remoteImage(inlineImage),
       ],
     );
   });
 
   it("preserves separately attached copies of the same image", () => {
     expectImages(
-      [
-        { path: "/tmp/photo.png", contentType: "image/png" },
-        { path: "/tmp/photo.png", contentType: "image/png" },
-      ],
-      [
-        { type: "localImage", path: "/tmp/photo.png" },
-        { type: "localImage", path: "/tmp/photo.png" },
-      ],
+      [png("/tmp/photo.png"), png("/tmp/photo.png")],
+      [localImage("/tmp/photo.png"), localImage("/tmp/photo.png")],
     );
   });
 
   it("uses staged remote-cache paths instead of original iMessage attachment paths", () => {
     const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
     const stagedPath = "/tmp/openclaw-proof/.openclaw/media/remote-cache/imessage/photo.jpg";
-    expectImages(
-      [{ path: stagedPath, contentType: "image/jpeg" }],
-      [{ type: "localImage", path: stagedPath }],
-      { channelId: "imessage", originalMedia: [{ path: rawPath, contentType: "image/jpeg" }] },
-    );
+    expectImages([{ path: stagedPath, contentType: "image/jpeg" }], [localImage(stagedPath)], {
+      channelId: "imessage",
+      originalMedia: [{ path: rawPath, contentType: "image/jpeg" }],
+    });
   });
 
   it.each([
-    {
-      media: { path: "/tmp/photo", kind: "image" },
-      image: { type: "localImage", path: "/tmp/photo" },
-      label: "image kind without MIME type or extension",
-    },
-    {
-      media: { url: "//cdn.example.test/photo.webp" },
-      image: { type: "image", url: "//cdn.example.test/photo.webp" },
-      label: "protocol-relative remote URL",
-    },
-    {
-      media: { url: "C:\\OpenClaw QA\\photo.png", contentType: "image/png" },
-      image: { type: "localImage", path: "C:\\OpenClaw QA\\photo.png" },
-      label: "Windows local path",
-    },
-  ] satisfies { media: PluginHookMediaFact; image: CodexUserInput; label: string }[])(
-    "recognizes $label",
-    ({ media, image }) => {
+    [
+      "image kind without MIME type or extension",
+      { path: "/tmp/photo", kind: "image" },
+      localImage("/tmp/photo"),
+    ],
+    [
+      "protocol-relative remote URL",
+      { url: "//cdn.example.test/photo.webp" },
+      remoteImage("//cdn.example.test/photo.webp"),
+    ],
+    [
+      "Windows local path",
+      { url: "C:\\OpenClaw QA\\photo.png", contentType: "image/png" },
+      localImage("C:\\OpenClaw QA\\photo.png"),
+    ],
+  ] satisfies [string, PluginHookMediaFact, CodexUserInput][])(
+    "recognizes %s",
+    (_label, media, image) => {
       expectImages([media], [image]);
     },
   );
@@ -112,7 +112,7 @@ describe("codex conversation turn input", () => {
             contentType: "image/png",
           },
         ],
-        [{ type: "localImage", path: imagePath }],
+        [localImage(imagePath)],
       );
     },
   );
@@ -129,7 +129,7 @@ describe("codex conversation turn input", () => {
     () => {
       expectImages(
         [{ url: "FiLe:///tmp/photo%5Cname.png", contentType: "image/png" }],
-        [{ type: "localImage", path: "/tmp/photo\\name.png" }],
+        [localImage("/tmp/photo\\name.png")],
       );
     },
   );
@@ -141,10 +141,7 @@ describe("codex conversation turn input", () => {
         { url: "/tmp/staged-photo.png", contentType: "image/png" },
         { url: pathToFileURL(secondImagePath).href, contentType: "image/jpeg" },
       ],
-      [
-        { type: "localImage", path: "/tmp/staged-photo.png" },
-        { type: "localImage", path: secondImagePath },
-      ],
+      [localImage("/tmp/staged-photo.png"), localImage(secondImagePath)],
     );
   });
 });

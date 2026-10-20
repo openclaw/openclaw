@@ -3,6 +3,7 @@ import type {
   PluginHookInboundClaimEvent,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { Mock } from "vitest";
+import { threadStartResult } from "./app-server/codex-app-server.test-fixtures.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
 import { handleCodexConversationBindingResolved } from "./conversation-binding-hooks.js";
 
@@ -22,19 +23,18 @@ export function createConversationClaimFixtures(
     sessionKey?: string,
     conversation = { channel: "telegram", conversationId: "5185575566" },
   ) {
-    const pluginBinding: PluginConversationBinding = {
-      bindingId: "binding-1",
-      pluginId: "codex",
-      pluginRoot: getRoot(),
-      ...conversation,
-      accountId: "default",
-      boundAt: Date.now(),
-      data,
-    };
     return {
       channelId: conversation.channel,
       ...(sessionKey === undefined ? {} : { sessionKey }),
-      pluginBinding,
+      pluginBinding: {
+        bindingId: "binding-1",
+        pluginId: "codex",
+        pluginRoot: getRoot(),
+        ...conversation,
+        accountId: "default",
+        boundAt: Date.now(),
+        data,
+      } satisfies PluginConversationBinding,
     };
   }
 
@@ -98,25 +98,9 @@ export function conversationThreadStartResult(
     serviceTier: null,
     activePermissionProfile: null,
     thread: {
-      id: threadId,
-      sessionId: "session-1",
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd,
-      projectId: null,
+      ...threadStartResult(threadId, cwd).thread,
       cliVersion: "0.149.0",
-      source: "unknown",
       ...(canAcceptDirectInput !== undefined ? { canAcceptDirectInput } : {}),
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
     },
   };
 }

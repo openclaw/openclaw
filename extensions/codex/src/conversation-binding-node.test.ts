@@ -5,6 +5,10 @@ import {
   createConversationInspection,
 } from "./app-server/session-binding.test-helpers.js";
 import { handleCodexConversationInboundClaim } from "./conversation-binding-hooks.js";
+import {
+  conversationMessage,
+  createConversationClaimFixtures,
+} from "./conversation-binding.test-helpers.js";
 
 const publicBindingMocks = vi.hoisted(() => ({
   readBinding: vi.fn<() => { bindingId: string } | null>(),
@@ -46,49 +50,41 @@ describe("Codex node conversation bindings", () => {
   it.each(["unchanged", "detached", "replaced", "policy-refused"])(
     "revalidates a queued node binding that is %s",
     async (bindingState) => {
+      const bindingStore = createCodexTestBindingStore();
+      const { conversationClaimContext } = createConversationClaimFixtures(
+        () => "/synthetic/codex",
+        bindingStore,
+      );
+      const nodeSession = {
+        nodeId: "mb-m5",
+        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+        agentId: "main",
+        cwd: "/repo",
+      };
       const firstTurn = createDeferred<void>();
       const resumeCodexCliSessionOnNode = vi.fn(async () => {
         await firstTurn.promise;
         return {
           ok: true as const,
-          sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+          sessionId: nodeSession.sessionId,
           text: "done",
         };
       });
 
       const claim = () =>
         handleCodexConversationInboundClaim(
-          {
-            content: "continue the task",
+          conversationMessage("continue the task", {
             senderIsOwner: true,
             channel: "webchat",
-            isGroup: false,
-            commandAuthorized: true,
             sessionKey: "node-session",
-          },
+          }),
+          conversationClaimContext(
+            { kind: "codex-cli-node-session", version: 1, ...nodeSession },
+            "node-session",
+            { channel: "webchat", conversationId: "node-session" },
+          ),
           {
-            channelId: "webchat",
-            sessionKey: "node-session",
-            pluginBinding: {
-              bindingId: "binding-1",
-              pluginId: "codex",
-              pluginRoot: "/synthetic/codex",
-              channel: "webchat",
-              accountId: "default",
-              conversationId: "node-session",
-              boundAt: Date.now(),
-              data: {
-                kind: "codex-cli-node-session",
-                version: 1,
-                nodeId: "mb-m5",
-                sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
-                agentId: "main",
-                cwd: "/repo",
-              },
-            },
-          },
-          {
-            bindingStore: createCodexTestBindingStore(),
+            bindingStore,
             config: { tools: { exec: { host: "node", node: "mb-m5" } } },
             resumeCodexCliSessionOnNode,
             timeoutMs: 1234,
@@ -124,12 +120,9 @@ describe("Codex node conversation bindings", () => {
         bindingState === "unchanged" ? 2 : 1,
       );
       expect(resumeCodexCliSessionOnNode).toHaveBeenCalledWith({
-        nodeId: "mb-m5",
-        sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
-        agentId: "main",
+        ...nodeSession,
         sessionKey: "node-session",
         prompt: "continue the task",
-        cwd: "/repo",
         timeoutMs: 1234,
       });
     },

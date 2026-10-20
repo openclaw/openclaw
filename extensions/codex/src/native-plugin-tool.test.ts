@@ -78,6 +78,17 @@ function toolFixture(params?: {
   return { tool, request, read, context };
 }
 
+async function expectWorkspace(params: Parameters<typeof toolFixture>[0], workspace: string) {
+  const { tool, request } = toolFixture(params);
+  await tool?.execute("list-plugins", {});
+  expect(request).toHaveBeenCalledWith(
+    expect.anything(),
+    "plugin/list",
+    { cwds: [workspace] },
+    expect.anything(),
+  );
+}
+
 describe("native Codex plugin discovery tool", () => {
   it("is available only for owner turns even when native plugin policy is disabled", () => {
     expect(toolFixture().tool?.name).toBe("codex_plugins");
@@ -121,23 +132,8 @@ describe("native Codex plugin discovery tool", () => {
   });
 
   it("falls back to the current workspace and then the configured default", async () => {
-    const activeWorkspace = toolFixture({ workspaceDir: "/active/workspace" });
-    await activeWorkspace.tool?.execute("active", {});
-    expect(activeWorkspace.request).toHaveBeenCalledWith(
-      expect.anything(),
-      "plugin/list",
-      { cwds: ["/active/workspace"] },
-      expect.anything(),
-    );
-
-    const configuredWorkspace = toolFixture({ configWorkspaceDir: "/configured/workspace" });
-    await configuredWorkspace.tool?.execute("configured", {});
-    expect(configuredWorkspace.request).toHaveBeenCalledWith(
-      expect.anything(),
-      "plugin/list",
-      { cwds: ["/configured/workspace"] },
-      expect.anything(),
-    );
+    await expectWorkspace({ workspaceDir: "/active/workspace" }, "/active/workspace");
+    await expectWorkspace({ configWorkspaceDir: "/configured/workspace" }, "/configured/workspace");
   });
 
   it.each(["metadata", "thread", "workspace", "config"] as const)(
