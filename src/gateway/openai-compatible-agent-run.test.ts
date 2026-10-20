@@ -30,23 +30,19 @@ vi.mock("../commands/agent.js", () => ({ agentCommandFromGatewayIngress: vi.fn()
 const completedResult = { payloads: [], meta: { durationMs: 0 } };
 type CommandOptions = Parameters<typeof agentCommandFromGatewayIngress>[0];
 type RunParams = Parameters<typeof runOpenAiCompatibleAgentCommand>[0];
+const roleDefinitions = {
+  visitor: {
+    sessions: { others: "view" },
+    agents: ["main"],
+    scopes: ["operator.sessions.read", "operator.sessions.write"],
+    sandbox: "required",
+  },
+  blocked: { sessions: { others: "none" }, agents: [], scopes: [] },
+} satisfies NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>["definitions"];
 
 function createOperatorRunFixture() {
   const cfg: OpenClawConfig = {
-    gateway: {
-      roles: {
-        default: "visitor",
-        definitions: {
-          visitor: {
-            sessions: { others: "view" },
-            agents: ["main"],
-            scopes: ["operator.sessions.read", "operator.sessions.write"],
-            sandbox: "required",
-          },
-          blocked: { sessions: { others: "none" }, agents: [], scopes: [] },
-        },
-      },
-    },
+    gateway: { roles: { default: "visitor", definitions: structuredClone(roleDefinitions) } },
   };
   setRuntimeConfigSnapshot(cfg);
   const person = ensureProfileForEmail("visitor@example.test");
@@ -106,7 +102,15 @@ function disableUploads(cfg: OpenClawConfig) {
   setRuntimeConfigSnapshot({ ...cfg, gateway: { ...cfg.gateway, uploads: { enabled: false } } });
 }
 
-function startPendingCommand(params: RunParams) {
+async function withPendingCommand(
+  params: RunParams,
+  run: (pending: {
+    options: CommandOptions;
+    authority: NonNullable<CommandOptions["operatorAuthority"]>;
+    settlement: ReturnType<typeof createDeferred<typeof completedResult>>;
+    running: ReturnType<typeof runOpenAiCompatibleAgentCommand>;
+  }) => Promise<void>,
+) {
   const entered = createDeferred<CommandOptions>();
   const settlement = createDeferred<typeof completedResult>();
   vi.mocked(agentCommandFromGatewayIngress).mockImplementation(async (options) => {
@@ -114,20 +118,20 @@ function startPendingCommand(params: RunParams) {
     return await settlement.promise;
   });
   const running = runOpenAiCompatibleAgentCommand(params);
-  return {
-    settlement,
-    running,
-    entered: Promise.race([
+  try {
+    const options = await Promise.race([
       entered.promise,
       running.then(() => {
         throw new Error("Command finished without receiving operator authority");
       }),
-    ]),
-    close: async () => {
-      settlement.resolve(completedResult);
-      await running.catch(() => {});
-    },
-  };
+    ]);
+    const authority = options.operatorAuthority;
+    assert(authority, "Expected the original operator authority");
+    await run({ options, authority, settlement, running });
+  } finally {
+    settlement.resolve(completedResult);
+    await running.catch(() => {});
+  }
 }
 
 describe("OpenAI-compatible operator run authority", () => {
@@ -139,35 +143,33 @@ describe("OpenAI-compatible operator run authority", () => {
     "retains the original source through command settlement and detached work (reject=%s)",
     (reject) =>
       withOperatorRunFixture(async (fixture) => {
-        const { entered, settlement, running, close } = startPendingCommand(fixture.params);
         const failure = new Error("command failed");
         let child: ReturnType<typeof prepareAgentRunAdmission> | undefined;
         try {
-          const options = await entered;
-          const authority = options.operatorAuthority;
-          assert(authority, "Expected the original operator authority");
-          expect(authority.profileId).toBe(fixture.person.id);
-          expect(authority.scopes).toEqual(["operator.sessions.write"]);
-          expect(() => authority.assertCurrent()).not.toThrow();
-          child = prepareRun(fixture.cfg, authority);
-          const childContext = await child.admit("embedded");
-          if (reject) {
-            settlement.reject(failure);
-            await expect(running).rejects.toBe(failure);
-          } else {
-            settlement.resolve(completedResult);
-            await expect(running).resolves.toBe(completedResult);
-          }
-          fixture.request.abort();
-          expect(options.abortSignal?.aborted).toBe(true);
-          expect(authority.signal?.aborted).toBe(false);
-          const childAuthority = readAdmittedRunOperatorAuthority(childContext);
-          assert(childAuthority, "Detached work lost its original operator authority");
-          expect(() => childAuthority.assertCurrent()).not.toThrow();
-          child.close();
-          expect(() => authority.assertCurrent()).toThrow(/no longer active/);
+          await withPendingCommand(fixture.params, async (pending) => {
+            const { options, authority, settlement, running } = pending;
+            expect(authority.profileId).toBe(fixture.person.id);
+            expect(authority.scopes).toEqual(["operator.sessions.write"]);
+            expect(() => authority.assertCurrent()).not.toThrow();
+            child = prepareRun(fixture.cfg, authority);
+            const childContext = await child.admit("embedded");
+            if (reject) {
+              settlement.reject(failure);
+              await expect(running).rejects.toBe(failure);
+            } else {
+              settlement.resolve(completedResult);
+              await expect(running).resolves.toBe(completedResult);
+            }
+            fixture.request.abort();
+            expect(options.abortSignal?.aborted).toBe(true);
+            expect(authority.signal?.aborted).toBe(false);
+            const childAuthority = readAdmittedRunOperatorAuthority(childContext);
+            assert(childAuthority, "Detached work lost its original operator authority");
+            expect(() => childAuthority.assertCurrent()).not.toThrow();
+            child.close();
+            expect(() => authority.assertCurrent()).toThrow(/no longer active/);
+          });
         } finally {
-          await close();
           child?.close();
         }
       }),
@@ -185,11 +187,8 @@ describe("OpenAI-compatible operator run authority", () => {
           context.getRuntimeConfig = () => tentative;
           context.getCommittedRuntimeConfig = () => committed;
         }
-        const { entered, settlement, running, close } = startPendingCommand(fixture.params);
-        try {
-          const options = await entered;
-          const authority = options.operatorAuthority;
-          assert(authority, "Expected the original operator authority");
+        await withPendingCommand(fixture.params, async (pending) => {
+          const { options, authority, settlement, running } = pending;
           if (changed === "grant") {
             fixture.source.abort(new Error("Visitor access ended"));
             expect(options.abortSignal?.aborted).toBe(true);
@@ -203,9 +202,7 @@ describe("OpenAI-compatible operator run authority", () => {
               gateway: {
                 roles: {
                   default: "blocked",
-                  definitions: {
-                    blocked: { sessions: { others: "none" }, agents: [], scopes: [] },
-                  },
+                  definitions: { blocked: roleDefinitions.blocked },
                 },
               },
             };
@@ -218,9 +215,7 @@ describe("OpenAI-compatible operator run authority", () => {
           expect(() => authority.assertCurrent()).toThrow();
           settlement.resolve(completedResult);
           await expect(running).rejects.toThrow();
-        } finally {
-          await close();
-        }
+        });
       }),
   );
 
@@ -321,119 +316,109 @@ describe("OpenAI-compatible operator run authority", () => {
   );
 });
 
-describe("OpenAI-compatible command admission", () => {
-  it.each([false, true])(
-    "keeps authority until custody transfers (already admitted=%s)",
-    async (alreadyAdmitted) => {
-      const prepared = createDeferred();
-      const proceed = createDeferred();
-      const executed = vi.fn();
-      let current = true;
-      vi.mocked(agentCommandFromGatewayIngress).mockImplementationOnce(async (opts) => {
-        const context = {
-          operationalRunInstance: { runId: "http-run", instanceId: "http-instance" },
-        };
-        if (alreadyAdmitted) {
-          await opts.onAdmittedRunContext?.(context);
-        }
-        prepared.resolve();
-        await proceed.promise;
-        opts.assertSourceCurrent?.();
-        if (!alreadyAdmitted) {
-          await opts.onAdmittedRunContext?.(context);
-        }
-        executed();
-        return {
-          payloads: [{ text: "settled", mediaUrl: null }],
-          meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "settled" } },
-        };
-      });
-      const pending = runOpenAiCompatibleAgentCommand({
-        message: "probe",
-        sessionKey: "agent:main:main",
-        runId: "http-run",
-        messageChannel: "webchat",
-        senderIsOwner: true,
-        requestAuth: {
-          authMethod: "token",
-          trustDeclaredOperatorScopes: false,
-          operatorRoleActor: { kind: "system" },
-        },
-        operatorScopes: ["operator.admin"],
-        hasCurrentClientAuthority: () => current,
-      });
-      await prepared.promise;
-      current = false;
-      proceed.resolve();
+it.each([false, true])(
+  "OpenAI-compatible command keeps authority until custody transfers (already admitted=%s)",
+  async (alreadyAdmitted) => {
+    const prepared = createDeferred();
+    const proceed = createDeferred();
+    const executed = vi.fn();
+    let current = true;
+    vi.mocked(agentCommandFromGatewayIngress).mockImplementationOnce(async (opts) => {
+      const context = {
+        operationalRunInstance: { runId: "http-run", instanceId: "http-instance" },
+      };
       if (alreadyAdmitted) {
-        await expect(pending).resolves.toMatchObject({ payloads: [{ text: "settled" }] });
-        expect(executed).toHaveBeenCalledOnce();
-      } else {
-        await expect(pending).rejects.toThrow("Gateway requester authority changed");
-        expect(executed).not.toHaveBeenCalled();
+        await opts.onAdmittedRunContext?.(context);
       }
-    },
-  );
-});
-
-describe("OpenAI-compatible agent run terminal metadata", () => {
-  it.each([
-    { meta: undefined, stopReason: undefined, calls: undefined },
-    { meta: { pendingToolCalls: "invalid" }, stopReason: undefined, calls: undefined },
-    {
-      meta: {
-        stopReason: "tool_calls",
-        pendingToolCalls: [
-          null,
-          { id: 7, name: "ignored", arguments: "{}" },
-          { id: " call_1 ", name: " get_weather ", arguments: { city: "Taipei" } },
-        ],
-      },
-      stopReason: "tool_calls",
-      calls: [{ id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' }],
-    },
-    {
-      meta: {
-        stopReason: 42,
-        pendingToolCalls: [{ id: "call_1", name: "get_weather", arguments: "{}" }],
-      },
-      stopReason: undefined,
-      calls: [{ id: "call_1", name: "get_weather", arguments: "{}" }],
-    },
-  ])(
-    "normalizes terminal metadata without accepting malformed calls: $meta",
-    ({ meta, stopReason, calls }) => {
-      expect(readOpenAiHttpRunTerminal({ meta })).toEqual({
-        runFailed: false,
-        stopReason,
-        pendingToolCalls: calls,
-      });
-    },
-  );
-});
-
-describe("OpenAI-compatible agent error envelopes", () => {
-  it.each([
-    ["a Gateway-cancelled run", () => AbortSignal.abort().reason, 500, "agent run was cancelled"],
-    [
-      "a provider transport timeout",
-      () => new FailoverError("This operation was aborted", { reason: "timeout" }),
-      504,
-      "upstream provider timeout",
-    ],
-    [
-      "an abort caused by a timeout",
-      () =>
-        createAbortError("This operation was aborted", {
-          cause: new DOMException("The operation was aborted due to timeout", "TimeoutError"),
-        }),
-      504,
-      "upstream provider timeout",
-    ],
-  ] as const)("reports %s", (_name, error, status, message) => {
-    expect(resolveOpenAiCompatibleAgentError(error())).toEqual({
-      status,
-      error: { message, type: "api_error" },
+      prepared.resolve();
+      await proceed.promise;
+      opts.assertSourceCurrent?.();
+      if (!alreadyAdmitted) {
+        await opts.onAdmittedRunContext?.(context);
+      }
+      executed();
+      return {
+        payloads: [{ text: "settled", mediaUrl: null }],
+        meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "settled" } },
+      };
     });
+    const pending = runOpenAiCompatibleAgentCommand({
+      message: "probe",
+      sessionKey: "agent:main:main",
+      runId: "http-run",
+      messageChannel: "webchat",
+      senderIsOwner: true,
+      requestAuth: {
+        authMethod: "token",
+        trustDeclaredOperatorScopes: false,
+        operatorRoleActor: { kind: "system" },
+      },
+      operatorScopes: ["operator.admin"],
+      hasCurrentClientAuthority: () => current,
+    });
+    await prepared.promise;
+    current = false;
+    proceed.resolve();
+    if (alreadyAdmitted) {
+      await expect(pending).resolves.toMatchObject({ payloads: [{ text: "settled" }] });
+      expect(executed).toHaveBeenCalledOnce();
+    } else {
+      await expect(pending).rejects.toThrow("Gateway requester authority changed");
+      expect(executed).not.toHaveBeenCalled();
+    }
+  },
+);
+const weatherCall = { id: "call_1", name: "get_weather", arguments: "{}" };
+it.each([
+  [undefined, undefined, undefined],
+  [{ pendingToolCalls: "invalid" }, undefined, undefined],
+  [
+    {
+      stopReason: "tool_calls",
+      pendingToolCalls: [
+        null,
+        { id: 7, name: "ignored", arguments: "{}" },
+        { id: " call_1 ", name: " get_weather ", arguments: { city: "Taipei" } },
+      ],
+    },
+    "tool_calls",
+    [{ id: "call_1", name: "get_weather", arguments: '{"city":"Taipei"}' }],
+  ],
+  [
+    { stopReason: 42, pendingToolCalls: [weatherCall] },
+    undefined,
+    [{ id: "call_1", name: "get_weather", arguments: "{}" }],
+  ],
+] as const)(
+  "normalizes OpenAI-compatible terminal metadata without accepting malformed calls: %o",
+  (meta, stopReason, calls) => {
+    expect(readOpenAiHttpRunTerminal({ meta })).toEqual({
+      runFailed: false,
+      stopReason,
+      pendingToolCalls: calls,
+    });
+  },
+);
+it.each([
+  ["a Gateway-cancelled run", () => AbortSignal.abort().reason, 500, "agent run was cancelled"],
+  [
+    "a provider transport timeout",
+    () => new FailoverError("This operation was aborted", { reason: "timeout" }),
+    504,
+    "upstream provider timeout",
+  ],
+  [
+    "an abort caused by a timeout",
+    () =>
+      createAbortError("This operation was aborted", {
+        cause: new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+      }),
+    504,
+    "upstream provider timeout",
+  ],
+] as const)("OpenAI-compatible error envelope reports %s", (_name, error, status, message) => {
+  expect(resolveOpenAiCompatibleAgentError(error())).toEqual({
+    status,
+    error: { message, type: "api_error" },
   });
 });

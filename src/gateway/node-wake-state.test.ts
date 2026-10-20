@@ -54,25 +54,24 @@ describe("node wake lifecycle ownership", () => {
     ).toEqual([undefined, undefined]);
   });
 
-  it("releases an idle lifecycle without retaining owner state", () => {
-    const lifecycle = captureNodeWakeLifecycle("node-idle");
-
-    releaseNodeWakeLifecycle("node-idle", lifecycle);
-
-    expect(lifecycle.aborted).toBe(true);
-    expect(getNodeWakeStateSnapshot("node-idle")).toBeUndefined();
-  });
-
-  it("clears throttle state without aborting an active lifecycle", async () => {
-    const lifecycle = captureNodeWakeLifecycle("node-active");
-    await wake("node-active", true);
-
-    clearNodeWakeState("node-active");
-
-    expect(lifecycle.aborted).toBe(false);
-    expect(getNodeWakeStateSnapshot("node-active")?.lastWakeAtMs).toBeUndefined();
-    releaseNodeWakeLifecycle("node-active", lifecycle);
-  });
+  it.each([false, true])(
+    "releases idle state but retains an active lifecycle (active=%s)",
+    async (active) => {
+      const lifecycle = captureNodeWakeLifecycle("node-1");
+      if (active) {
+        await wake("node-1", true);
+        clearNodeWakeState("node-1");
+      } else {
+        releaseNodeWakeLifecycle("node-1", lifecycle);
+      }
+      expect(lifecycle.aborted).toBe(!active);
+      const snapshot = getNodeWakeStateSnapshot("node-1");
+      expect(active ? snapshot?.lastWakeAtMs : snapshot).toBeUndefined();
+      if (active) {
+        releaseNodeWakeLifecycle("node-1", lifecycle);
+      }
+    },
+  );
 });
 
 describe("node wake coordination", () => {

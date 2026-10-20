@@ -55,8 +55,9 @@ describe("normalizeNodePluginToolDescriptors", () => {
     expect(tools.map((tool) => tool.descriptor.name)).toEqual(["srv_echo"]);
   });
 
-  it("prefers matching registered metadata and caps its description", () => {
-    const tools = normalize([descriptor("demo_echo")], {
+  it("distinguishes registered metadata from node-supplied metadata and caps its description", () => {
+    const tools = normalize([descriptor("demo_echo"), descriptor("demo_status", "demo.status")], {
+      allowedCommands: ["demo.echo", "demo.status"],
       registeredDescriptors: registered({
         name: "demo_echo",
         description: `  ${"r".repeat(1200)}  `,
@@ -69,14 +70,6 @@ describe("normalizeNodePluginToolDescriptors", () => {
       type: "object",
       properties: { text: { type: "string" } },
     });
-  });
-
-  it("marks descriptors by whether gateway registration backs them", () => {
-    const tools = normalize([descriptor("demo_echo"), descriptor("demo_status", "demo.status")], {
-      allowedCommands: ["demo.echo", "demo.status"],
-      registeredDescriptors: registered({ name: "demo_echo", description: "Registered echo" }),
-    });
-
     expect(
       tools.map((tool) => ({ name: tool.descriptor.name, registered: tool.registered })),
     ).toEqual([
