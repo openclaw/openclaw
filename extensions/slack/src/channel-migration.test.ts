@@ -25,24 +25,16 @@ describe("migrateSlackChannelConfig", () => {
     expect(cfg.channels.slack.channels).toEqual({ C999: { requireMention: false } });
   });
 
-  it("migrates account-scoped channels", () => {
-    const cfg = createSlackAccountChannelConfig("primary", { C123: { requireMention: true } });
+  it.each([
+    ["primary", { requireMention: true }],
+    ["Primary", {}],
+  ] as const)("migrates account-scoped channels for %s", (accountId, channel) => {
+    const cfg = createSlackAccountChannelConfig(accountId, { C123: channel });
+    const expected = structuredClone(channel);
     expect(migrate(cfg, "primary").migrated).toBe(true);
-    expect(
-      expectDefined(cfg.channels.slack.accounts.primary, "primary Slack account").channels,
-    ).toEqual({
-      C999: { requireMention: true },
-    });
-  });
-
-  it("matches account ids case-insensitively", () => {
-    const cfg = createSlackAccountChannelConfig("Primary", { C123: {} });
-    expect(migrate(cfg, "primary").migrated).toBe(true);
-    expect(
-      expectDefined(cfg.channels.slack.accounts.Primary, "Primary Slack account").channels,
-    ).toEqual({
-      C999: {},
-    });
+    expect(expectDefined(cfg.channels.slack.accounts[accountId], "Slack account").channels).toEqual(
+      { C999: expected },
+    );
   });
 
   it("does not borrow channels from a case alias when the exact account has none", () => {

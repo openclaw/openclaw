@@ -6,10 +6,6 @@ import {
 
 const title = "Quarterly revenue";
 const categories = ["Q1", "Q2"];
-const segments = [
-  { label: "Americas", value: 52 },
-  { label: "Europe", value: 31 },
-];
 const datum = (label: string, value: number) => ({ label, value });
 
 describe("Slack data visualization blocks", () => {
@@ -47,7 +43,10 @@ describe("Slack data visualization blocks", () => {
         type: "chart",
         chartType: "pie",
         title: "Requests by region",
-        segments,
+        segments: [
+          { label: "Americas", value: 52 },
+          { label: "Europe", value: 31 },
+        ],
       }),
     ).toEqual({
       type: "data_visualization",
@@ -59,36 +58,26 @@ describe("Slack data visualization blocks", () => {
     });
   });
 
-  it("rejects values that Slack would reject instead of clipping or changing data", () => {
-    expect(
-      buildSlackDataVisualizationBlock({
-        type: "chart",
-        chartType: "pie",
-        title: "Invalid",
-        segments: [{ label: "Zero", value: 0 }],
-      }),
-    ).toBeUndefined();
-    expect(
-      buildSlackDataVisualizationBlock({
-        type: "chart",
-        chartType: "bar",
-        title: "Invalid",
-        categories,
-        series: [{ name: "Revenue", values: [1] }],
-      }),
-    ).toBeUndefined();
-    expect(
-      buildSlackDataVisualizationBlock({
-        type: "chart",
-        chartType: "area",
-        title: "Invalid",
-        categories: ["Q1"],
-        series: Array.from({ length: 13 }, (_, index) => ({
-          name: `Series ${String(index)}`,
-          values: [index],
-        })),
-      }),
-    ).toBeUndefined();
+  const invalid = { type: "chart" as const, title: "Invalid" };
+  it.each([
+    { ...invalid, chartType: "pie" as const, segments: [{ label: "Zero", value: 0 }] },
+    {
+      ...invalid,
+      chartType: "bar" as const,
+      categories,
+      series: [{ name: "Revenue", values: [1] }],
+    },
+    {
+      ...invalid,
+      chartType: "area" as const,
+      categories: ["Q1"],
+      series: Array.from({ length: 13 }, (_, index) => ({
+        name: `Series ${index}`,
+        values: [index],
+      })),
+    },
+  ])("rejects invalid $chartType data without clipping", (input) => {
+    expect(buildSlackDataVisualizationBlock(input)).toBeUndefined();
   });
 
   it("orders inbound data by axis categories instead of array position", () => {
