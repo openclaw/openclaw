@@ -87,14 +87,16 @@ export function createHarness(params?: {
     queueMicrotask(() => socket.open());
     return socket;
   };
-  const onAudio: Mock<RealtimeVoiceBridgeCallbacks["onAudio"]> = vi.fn();
-  const onClearAudio: Mock<RealtimeVoiceBridgeCallbacks["onClearAudio"]> = vi.fn();
-  const onTranscript: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onTranscript"]>> = vi.fn();
-  const onToolCall: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onToolCall"]>> = vi.fn();
-  const onReady: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onReady"]>> = vi.fn();
-  const onError: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onError"]>> = vi.fn();
-  const onClose: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onClose"]>> = vi.fn();
-  const onEvent: Mock<NonNullable<RealtimeVoiceBridgeCallbacks["onEvent"]>> = vi.fn();
+  const callbacks = {
+    onAudio: vi.fn<RealtimeVoiceBridgeCallbacks["onAudio"]>(),
+    onClearAudio: vi.fn<RealtimeVoiceBridgeCallbacks["onClearAudio"]>(),
+    onTranscript: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onTranscript"]>>(),
+    onToolCall: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onToolCall"]>>(),
+    onReady: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onReady"]>>(),
+    onError: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onError"]>>(),
+    onClose: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onClose"]>>(),
+    onEvent: vi.fn<NonNullable<RealtimeVoiceBridgeCallbacks["onEvent"]>>(),
+  };
   const logger: { warn: Mock<PluginLogger["warn"]> } = { warn: vi.fn() };
   const bridge = new OpenAIQuicksilverVoiceBridge(
     {
@@ -108,33 +110,13 @@ export function createHarness(params?: {
           : { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
       resolveAuth: params?.resolveAuth ?? (async () => ({ type: "api-key", token: "test-key" })),
       mediaSocketFactory: fakeQuicksilverMediaSocket(webSocketFactory),
-      onAudio,
-      onClearAudio,
-      onTranscript,
-      onToolCall,
+      ...callbacks,
       handleDelegationInput: params?.handleDelegationInput,
-      onReady,
-      onError,
-      onClose,
-      onEvent,
       logger,
     },
     openAIRealtimeHost,
   );
-  return {
-    bridge,
-    connections,
-    logger,
-    onAudio,
-    onClearAudio,
-    onClose,
-    onError,
-    onEvent,
-    onReady,
-    onToolCall,
-    onTranscript,
-    socket,
-  };
+  return { bridge, connections, logger, ...callbacks, socket };
 }
 
 export function sentEvents(socket: FakeSocket): Array<Record<string, unknown>> {

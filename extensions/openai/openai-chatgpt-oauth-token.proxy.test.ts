@@ -30,55 +30,20 @@ afterEach(() => {
 
 describe("OpenAI token proxy routing", () => {
   it.each([
-    { operation: "exchange", name: "HTTPS_PROXY", variable: "HTTPS_PROXY", proxied: true },
-    { operation: "exchange", name: "HTTP_PROXY fallback", variable: "HTTP_PROXY", proxied: true },
-    {
-      operation: "exchange",
-      name: "NO_PROXY bypass",
-      variable: "HTTPS_PROXY",
-      noProxy: "auth.openai.com",
-      proxied: false,
-    },
-    { operation: "exchange", name: "no configured proxy", proxied: false },
-    { operation: "exchange", name: "ALL_PROXY alone", variable: "ALL_PROXY", proxied: false },
-    {
-      operation: "exchange",
-      name: "empty lowercase override",
-      variable: "HTTPS_PROXY",
-      lowerEmpty: true,
-      proxied: false,
-    },
-    {
-      operation: "exchange",
-      name: "managed proxy",
-      variable: "HTTPS_PROXY",
-      managed: true,
-      proxied: true,
-    },
-    {
-      operation: "exchange",
-      name: "retired owner",
-      variable: "HTTPS_PROXY",
-      retired: true,
-      proxied: false,
-    },
-    {
-      operation: "exchange",
-      name: "aborted caller",
-      variable: "HTTPS_PROXY",
-      aborted: true,
-      proxied: false,
-    },
-    { operation: "refresh", name: "HTTPS_PROXY", variable: "HTTPS_PROXY", proxied: true },
-    {
-      operation: "refresh",
-      name: "aborted caller",
-      variable: "HTTPS_PROXY",
-      aborted: true,
-      proxied: false,
-    },
-  ])("preserves $operation $name behavior", async (scenario) => {
-    const { operation } = scenario;
+    ["exchange", "HTTPS_PROXY", "HTTPS_PROXY", true],
+    ["exchange", "HTTP_PROXY fallback", "HTTP_PROXY", true],
+    ["exchange", "NO_PROXY bypass", "HTTPS_PROXY", false],
+    ["exchange", "no configured proxy", undefined, false],
+    ["exchange", "ALL_PROXY alone", "ALL_PROXY", false],
+    ["exchange", "empty lowercase override", "HTTPS_PROXY", false],
+    ["exchange", "managed proxy", "HTTPS_PROXY", true],
+    ["exchange", "retired owner", "HTTPS_PROXY", false],
+    ["exchange", "aborted caller", "HTTPS_PROXY", false],
+    ["refresh", "HTTPS_PROXY", "HTTPS_PROXY", true],
+    ["refresh", "aborted caller", "HTTPS_PROXY", false],
+  ] as const)("preserves %s %s behavior", async (operation, name, variable, proxied) => {
+    const aborted = name === "aborted caller";
+    const retired = name === "retired owner";
     for (const key of [
       "HTTP_PROXY",
       "HTTPS_PROXY",
@@ -109,22 +74,22 @@ describe("OpenAI token proxy routing", () => {
     if (!address || typeof address === "string") {
       throw new Error("Expected a TCP proxy address");
     }
-    if (scenario.variable) {
-      vi.stubEnv(scenario.variable, `http://127.0.0.1:${address.port}`);
+    if (variable) {
+      vi.stubEnv(variable, `http://127.0.0.1:${address.port}`);
     }
-    vi.stubEnv("NO_PROXY", scenario.noProxy ?? "");
-    if (scenario.lowerEmpty) {
+    vi.stubEnv("NO_PROXY", name === "NO_PROXY bypass" ? "auth.openai.com" : "");
+    if (name === "empty lowercase override") {
       vi.stubEnv("https_proxy", "");
     }
-    if (scenario.managed) {
+    if (name === "managed proxy") {
       vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
     }
     const controller = new AbortController();
-    if (scenario.aborted) {
+    if (aborted) {
       controller.abort();
     }
     const assertCurrent = vi.fn(() => {
-      if (scenario.retired) {
+      if (retired) {
         throw new Error("owner retired");
       }
     });
@@ -142,21 +107,19 @@ describe("OpenAI token proxy routing", () => {
           : await refreshOpenAIAccessToken("synthetic-refresh", options);
 
       expect(result).toMatchObject({ type: "failed", operation });
-      expect(destinations).toEqual(scenario.proxied ? ["auth.openai.com:443"] : []);
-      if (scenario.aborted) {
+      expect(destinations).toEqual(proxied ? ["auth.openai.com:443"] : []);
+      if (aborted) {
         expect(result).toMatchObject({ cancelled: true, summary: "Login cancelled" });
         expect(assertCurrent).not.toHaveBeenCalled();
-      } else if (scenario.retired) {
+      } else if (retired) {
         expect(result).toMatchObject({ summary: expect.stringContaining("owner retired") });
         expect(assertCurrent).toHaveBeenCalledOnce();
-      } else if (scenario.proxied) {
+      } else if (proxied) {
         expect(assertCurrent).toHaveBeenCalledOnce();
       } else {
         expect(result).toMatchObject({ summary: expect.stringContaining("direct DNS selected") });
       }
-      expect(directLookup).toHaveBeenCalledTimes(
-        scenario.proxied || scenario.retired || scenario.aborted ? 0 : 1,
-      );
+      expect(directLookup).toHaveBeenCalledTimes(proxied || retired || aborted ? 0 : 1);
     } finally {
       for (const socket of sockets) {
         socket.destroy();

@@ -26,17 +26,26 @@ const codexPackage = JSON.parse(
 );
 const modelsUrl = `https://chatgpt.com/backend-api/codex/models?client_version=${codexPackage.dependencies["@openai/codex"]}`;
 
+function catalogGuard(models: Record<string, unknown>[], release = vi.fn(async () => undefined)) {
+  return vi.fn<LiveModelCatalogFetchGuard>(async ({ url }) => ({
+    response: Response.json({ models }),
+    finalUrl: url,
+    release,
+  }));
+}
+
 async function discoverCodexModels(params: {
   discoveryApiKey: string;
   accountId?: string;
   fetchGuard: LiveModelCatalogFetchGuard;
 }) {
-  mocks.resolveApiKeyForProvider.mockResolvedValue({
+  const auth = {
     mode: "oauth",
     apiKey: params.discoveryApiKey,
     source: "profile",
     profileId: "openai:chatgpt",
-  });
+  };
+  mocks.resolveApiKeyForProvider.mockResolvedValue(auth);
   mocks.resolveProviderAuthProfileMetadata.mockReturnValue({
     profileId: "openai:chatgpt",
     accountId: params.accountId,
@@ -50,12 +59,7 @@ async function discoverCodexModels(params: {
     return guarded.response;
   });
   const result = await buildOpenAIProvider().catalog?.run({
-    resolveProviderAuth: () => ({
-      mode: "oauth",
-      apiKey: params.discoveryApiKey,
-      profileId: "openai:chatgpt",
-      source: "profile",
-    }),
+    resolveProviderAuth: () => auth,
     resolveProviderApiKey: () => ({
       apiKey: params.discoveryApiKey,
       discoveryApiKey: params.discoveryApiKey,
@@ -75,19 +79,11 @@ describe("OpenAI discovered subscription models", () => {
   afterEach(() => vi.restoreAllMocks());
   it("reports the Codex binary version that runs turns as client_version", async () => {
     codexClient.resolveCodexClientVersion.mockResolvedValueOnce("0.162.1");
-    const requestedUrls: string[] = [];
-    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async ({ url }) => {
-      requestedUrls.push(url);
-      return {
-        response: Response.json({ models: [{ slug: "gpt-5.5", visibility: "list" }] }),
-        finalUrl: url,
-        release: async () => undefined,
-      };
-    });
+    const fetchGuard = catalogGuard([{ slug: "gpt-5.5", visibility: "list" }]);
 
     await discoverCodexModels({ discoveryApiKey: "oauth-token-installed-codex", fetchGuard });
 
-    expect(requestedUrls).toEqual([
+    expect(fetchGuard.mock.calls.map(([{ url }]) => url)).toEqual([
       "https://chatgpt.com/backend-api/codex/models?client_version=0.162.1",
     ]);
     expect(codexClient.resolveCodexClientVersion).toHaveBeenCalledWith({
@@ -109,36 +105,28 @@ describe("OpenAI discovered subscription models", () => {
     "maps discovered $modelId with active window $contextWindow into a ChatGPT response model",
     async ({ modelId, contextWindow, contextTokens }) => {
       const release = vi.fn(async () => undefined);
-      const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
-        response: Response.json({
-          models: [
-            {
-              slug: modelId,
-              display_name: modelId,
-              visibility: "list",
-              supported_reasoning_levels: [
-                { effort: "medium", description: "medium" },
-                { effort: "high", description: "high" },
-              ],
-              context_window: contextWindow,
-              max_context_window: 1_050_000,
-              max_output_tokens: 128_000,
-            },
-            {
-              slug: "hidden-review-model",
-              display_name: "Hidden Review Model",
-              visibility: "hide",
-            },
-            {
-              slug: "internal-fallback-model",
-              display_name: "Internal Fallback Model",
-              visibility: "none",
-            },
-          ],
-        }),
-        finalUrl: "https://chatgpt.com/backend-api/codex/models?client_version=1.0.0",
+      const fetchGuard = catalogGuard(
+        [
+          {
+            slug: modelId,
+            display_name: modelId,
+            visibility: "list",
+            supported_reasoning_levels: [
+              { effort: "medium", description: "medium" },
+              { effort: "high", description: "high" },
+            ],
+            context_window: contextWindow,
+            max_context_window: 1_050_000,
+            max_output_tokens: 128_000,
+          },
+          ...["hide", "none"].map((visibility) => ({
+            slug: `hidden-${visibility}`,
+            display_name: `Hidden ${visibility}`,
+            visibility,
+          })),
+        ],
         release,
-      }));
+      );
 
       const provider = await discoverCodexModels({
         discoveryApiKey: "oauth-token",
@@ -146,8 +134,7 @@ describe("OpenAI discovered subscription models", () => {
         fetchGuard,
       });
 
-      expect(provider?.api).toBe("openai-chatgpt-responses");
-      expect(provider?.auth).toBe("oauth");
+      expect(provider).toMatchObject({ api: "openai-chatgpt-responses", auth: "oauth" });
       expect(provider?.models.map((model) => model.id)).toEqual([modelId]);
       expect(provider?.models[0]).toMatchObject({
         baseUrl: "https://chatgpt.com/backend-api/codex",

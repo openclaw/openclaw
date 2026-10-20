@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { RtpPacket } from "werift";
 import { openAIRealtimeHost } from "./realtime-host.js";
 import {
   type OpenAIQuicksilverPendingAudio,
@@ -27,7 +28,7 @@ type TestableAudioPeer = {
     };
     transceiver: {
       sender: {
-        sendRtp(packet: unknown): Promise<void>;
+        sendRtp(packet: RtpPacket): Promise<void>;
       };
     };
   };
@@ -43,10 +44,7 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
     let peerCallbacks:
       | Parameters<typeof OpenAIQuicksilverAudioPeer.create>[0]["callbacks"]
       | undefined;
-    let resolvePeer: ((peer: OpenAIQuicksilverAudioPeerContract) => void) | undefined;
-    const peerPromise = new Promise<OpenAIQuicksilverAudioPeerContract>((resolve) => {
-      resolvePeer = resolve;
-    });
+    const pendingPeer = Promise.withResolvers<OpenAIQuicksilverAudioPeerContract>();
     const onError = vi.fn();
     const bridge = new OpenAIQuicksilverGatewayBridge(
       {
@@ -66,7 +64,7 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
         })),
         createPeer: vi.fn((callbacks) => {
           peerCallbacks = callbacks;
-          return peerPromise;
+          return pendingPeer.promise;
         }),
         fetchImpl: vi.fn(async () => createCallResponse("v=answer\r\n", "rtc_pending_audio")),
         webSocketFactory: () => new FakeSocket(),
@@ -118,7 +116,7 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
     const copy = vi.spyOn(Buffer.prototype, "copy");
     try {
       try {
-        resolvePeer?.(peer);
+        pendingPeer.resolve(peer);
         await connection;
 
         expect(copy).not.toHaveBeenCalled();
@@ -139,21 +137,13 @@ describe("GPT-Live gateway microphone audio pipeline", () => {
         Array.from({ length: MAX_PENDING_RELAY_FRAMES }, (_, index) => index + 7),
       );
       expect(sendRtp).toHaveBeenCalledTimes(MAX_PENDING_RELAY_FRAMES);
-      const packets = sendRtp.mock.calls.map(
-        ([packet]) =>
-          packet as {
-            header: { payloadType: number; sequenceNumber: number; timestamp: number };
-            payload: Buffer;
-          },
-      );
+      const packets = sendRtp.mock.calls.map(([packet]) => packet);
       expect(packets.every((packet) => packet.header.payloadType === 111)).toBe(true);
       expect(packets.every((packet) => packet.payload.length > 0)).toBe(true);
-      expect(packets.at(-1)?.header.sequenceNumber).toBe(
-        (initialSequenceNumber + MAX_PENDING_RELAY_FRAMES - 1) & 0xffff,
-      );
-      expect(packets.at(-1)?.header.timestamp).toBe(
-        (initialTimestamp + (MAX_PENDING_RELAY_FRAMES - 1) * 960) >>> 0,
-      );
+      expect(packets.at(-1)?.header).toMatchObject({
+        sequenceNumber: (initialSequenceNumber + MAX_PENDING_RELAY_FRAMES - 1) & 0xffff,
+        timestamp: (initialTimestamp + (MAX_PENDING_RELAY_FRAMES - 1) * 960) >>> 0,
+      });
       expect(onError).not.toHaveBeenCalled();
     } finally {
       await bridge.close();

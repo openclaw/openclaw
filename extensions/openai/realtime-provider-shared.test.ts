@@ -10,57 +10,36 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-function makeStreamingResponse(params: { chunkCount: number; chunkSize: number }): {
-  response: Response;
-  getReadCount: () => number;
-  wasCanceled: () => boolean;
-} {
-  let readCount = 0;
-  let canceled = false;
-  const chunk = new Uint8Array(params.chunkSize);
-  const response = new Response(
-    new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (readCount >= params.chunkCount) {
-          controller.close();
-          return;
-        }
-        readCount += 1;
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        canceled = true;
-      },
-    }),
-    { status: 200, headers: { "Content-Type": "application/json" } },
-  );
-  return { response, getReadCount: () => readCount, wasCanceled: () => canceled };
-}
-
 function guardedFetch(response: Response): void {
   fetchWithSsrFGuardMock.mockResolvedValue({ response, release: vi.fn() });
+}
+
+function createSecret(
+  overrides: Partial<Parameters<typeof createOpenAIRealtimeClientSecret>[0]> = {},
+  label?: string,
+) {
+  return createOpenAIRealtimeClientSecret(
+    {
+      authToken: "sk-test",
+      auditContext: "test",
+      session: { model: "gpt-4o-realtime-preview" },
+      ...overrides,
+    },
+    openAIRealtimeHost,
+    label,
+  );
 }
 
 describe("createOpenAIRealtimeClientSecret", () => {
   it("returns client secret from a well-formed response", async () => {
     guardedFetch(
-      new Response(
-        JSON.stringify({
-          client_secret: { value: "eph-secret-abc" },
-          expires_at: Math.floor(Date.now() / 1000) + 60,
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
+      Response.json({
+        client_secret: { value: "eph-secret-abc" },
+        expires_at: Math.floor(Date.now() / 1000) + 60,
+      }),
     );
 
-    const result = await createOpenAIRealtimeClientSecret(
-      {
-        authToken: "sk-test",
-        auditContext: "test",
-        session: { model: "gpt-4o-realtime-preview" },
-      },
-      openAIRealtimeHost,
-    );
+    const result = await createSecret();
 
     expect(result.value).toBe("eph-secret-abc");
     expect(typeof result.expiresAt).toBe("number");
@@ -71,40 +50,48 @@ describe("createOpenAIRealtimeClientSecret", () => {
 
   it("bounds oversized success response and cancels the stream", async () => {
     // 20 MiB in 1 MiB chunks — well over the 16 MiB cap
-    const streamed = makeStreamingResponse({ chunkCount: 20, chunkSize: 1024 * 1024 });
-    guardedFetch(streamed.response);
-
-    await expect(
-      createOpenAIRealtimeClientSecret(
-        {
-          authToken: "sk-test",
-          auditContext: "test",
-          session: { model: "gpt-4o-realtime-preview" },
-        },
-        openAIRealtimeHost,
+    let readCount = 0;
+    const cancel = vi.fn();
+    const chunk = new Uint8Array(1024 * 1024);
+    guardedFetch(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (readCount >= 20) {
+              controller.close();
+            } else {
+              readCount += 1;
+              controller.enqueue(chunk);
+            }
+          },
+          cancel,
+        }),
+        { headers: { "Content-Type": "application/json" } },
       ),
-    ).rejects.toThrow(/openai\.realtime-session/);
+    );
 
-    expect(streamed.wasCanceled()).toBe(true);
-    expect(streamed.getReadCount()).toBeLessThan(20);
+    await expect(createSecret()).rejects.toThrow(/openai\.realtime-session/);
+
+    expect(cancel).toHaveBeenCalled();
+    expect(readCount).toBeLessThan(20);
   });
 
   it("replaces rejected transcription API-key details with bounded guidance", async () => {
     guardedFetch(
-      new Response(JSON.stringify({ error: { message: "Incorrect API key provided: secret" } }), {
-        status: 401,
-      }),
+      Response.json(
+        { error: { message: "Incorrect API key provided: secret" } },
+        {
+          status: 401,
+        },
+      ),
     );
 
     await expect(
-      createOpenAIRealtimeClientSecret(
+      createSecret(
         {
-          authToken: "sk-test",
-          auditContext: "test",
           session: { type: "transcription" },
           authRejectedMessage: "Update the transcription API key",
         },
-        openAIRealtimeHost,
         "OpenAI Realtime transcription",
       ),
     ).rejects.toThrow("Update the transcription API key");
