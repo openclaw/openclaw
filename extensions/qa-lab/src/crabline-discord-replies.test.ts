@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import { startOpenClawCrablineAdapter } from "@openclaw/crabline";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -23,9 +24,7 @@ it("relays Discord message bytes unchanged while rewriting transport endpoints",
     });
     let socket: WebSocket | undefined;
     try {
-      if (!relay || adapter.manifest.provider !== "discord") {
-        throw new Error("Discord relay did not start");
-      }
+      assert(relay && adapter.manifest.provider === "discord", "Discord relay did not start");
       const manifest = adapter.manifest;
       const headers = { authorization: `Bot ${manifest.botToken}` };
       const relayOrigin = new URL(relay.apiBaseUrl).origin;
@@ -80,28 +79,26 @@ it("relays Discord message bytes unchanged while rewriting transport endpoints",
         const response = await fetch(messagesUrl, { method: "POST", headers, body: form });
         expect(response.ok).toBe(true);
         const message: unknown = await response.json();
-        if (!isRecord(message) || typeof message.id !== "string") {
-          throw new Error("Discord reply omitted its message ID");
-        }
+        assert(
+          isRecord(message) && typeof message.id === "string",
+          "Discord reply omitted its message ID",
+        );
         const event = await delivered.promise;
         const retainedResponse = await fetch(`${messagesUrl}/${message.id}`, { headers });
         expect(retainedResponse.ok).toBe(true);
         for (const received of [message, event, await retainedResponse.json()]) {
           expect(received).toMatchObject(payload);
-          if (!isRecord(received) || !Array.isArray(received.attachments)) {
-            throw new Error("Discord reply omitted its attachments");
-          }
+          assert(
+            isRecord(received) && Array.isArray(received.attachments),
+            "Discord reply omitted its attachments",
+          );
           expect(received.attachments).toHaveLength(1);
           const attachment: unknown = received.attachments[0];
           expect(attachment).toMatchObject({ description: text });
-          if (!isRecord(attachment)) {
-            throw new Error("Discord attachment is invalid");
-          }
+          assert(isRecord(attachment), "Discord attachment is invalid");
           for (const field of ["url", "proxy_url"]) {
             const url = attachment[field];
-            if (typeof url !== "string") {
-              throw new Error(`Discord attachment omitted ${field}`);
-            }
+            assert(typeof url === "string", `Discord attachment omitted ${field}`);
             expect(new URL(url).origin).toBe(relayOrigin);
             const download = await fetch(url);
             expect(download.ok).toBe(true);

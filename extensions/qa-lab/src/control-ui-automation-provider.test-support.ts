@@ -18,11 +18,8 @@ export async function startAutomationProvider() {
   const requests = new Map<string, Record<string, unknown>>();
   const results = new Map<string, string>();
   const toolAvailability = new Map<string, boolean>();
-  const observedRequests: Array<{
-    marker: string | null;
-    inputTypes: unknown[];
-    hasOutput: boolean;
-  }> = [];
+  const observedRequests: { marker: string | null; inputTypes: unknown[]; hasOutput: boolean }[] =
+    [];
   const failures: Array<{
     method: string | undefined;
     url: string | undefined;

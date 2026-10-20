@@ -3,7 +3,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect } from "vitest";
-import { createQaBusState } from "./bus-state.js";
+import { createQaBusState, type QaBusState } from "./bus-state.js";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 
@@ -86,18 +86,19 @@ export async function postJson<T = unknown>(
 
 export async function withTransport(
   channel: OpenClawCrablineChannelDriverSelection["channel"],
-  run: (transport: CrablineTransport, outputDir: string) => Promise<void>,
+  run: (transport: CrablineTransport, outputDir: string, state: QaBusState) => Promise<void>,
   transportPolicy?: Parameters<typeof createQaCrablineTransportAdapter>[0]["transportPolicy"],
+  state = createQaBusState(),
 ) {
   await withTempDir("qa-crabline-transport-", async (outputDir) => {
     const transport = await createQaCrablineTransportAdapter({
       outputDir,
       selection: createSelection(channel),
-      state: createQaBusState(),
+      state,
       transportPolicy,
     });
     try {
-      await run(transport, outputDir);
+      await run(transport, outputDir, state);
     } finally {
       await transport.cleanupAfterGatewayStop();
     }

@@ -27,6 +27,13 @@ function captureReportedArgv(command: string): string[] {
   return argv;
 }
 
+function subcommand(parent: Command, name: string) {
+  return expectDefined(
+    parent.commands.find((entry) => entry.name() === name),
+    name,
+  );
+}
+
 function selectReportedCommands(scenarios: QaSeedScenarioWithSource[]) {
   const matches = scenarios.flatMap((scenario) => findQaScenarioMatches([scenario], scenario.id));
   const report = renderQaScenarioMatchesMarkdownReport({ query: "selected scenarios", matches });
@@ -37,14 +44,7 @@ function selectReportedCommands(scenarios: QaSeedScenarioWithSource[]) {
     expect(argv.slice(0, 4)).toEqual(["pnpm", "openclaw", "qa", "suite"]);
     const program = new Command();
     registerQaLabCli(program);
-    const qa = expectDefined(
-      program.commands.find((entry) => entry.name() === "qa"),
-      "qa",
-    );
-    const suite = expectDefined(
-      qa.commands.find((entry) => entry.name() === "suite"),
-      "suite",
-    );
+    const suite = subcommand(subcommand(program, "qa"), "suite");
     // Parse the real options without running the suite action or starting a provider.
     expect(suite.parseOptions(argv.slice(4))).toEqual({ operands: [], unknown: [] });
     const opts = suite.opts<{
@@ -63,14 +63,9 @@ function selectReportedCommands(scenarios: QaSeedScenarioWithSource[]) {
       providerMode,
       primaryModel: defaultQaModelForMode(providerMode),
     });
-    expect(
-      selected.map(({ id }) => id),
-      command,
-    ).toEqual(opts.scenario);
-    return {
-      driver: opts.channelDriver ?? "qa-channel",
-      ids: selected.map(({ id }) => id),
-    };
+    const ids = selected.map(({ id }) => id);
+    expect(ids, command).toEqual(opts.scenario);
+    return { driver: opts.channelDriver ?? "qa-channel", ids };
   });
 }
 

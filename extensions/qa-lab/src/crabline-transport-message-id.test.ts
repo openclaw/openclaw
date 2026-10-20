@@ -1,7 +1,5 @@
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { createQaBusState } from "./bus-state.js";
-import { createQaCrablineTransportAdapter } from "./crabline-transport.js";
+import { withTransport } from "./crabline-transport.test-support.js";
 
 const PROVIDER_CASES = [
   {
@@ -22,75 +20,40 @@ describe("Crabline provider-native inbound message identity", () => {
   it.each(PROVIDER_CASES)(
     "keeps $channel message IDs consistent across the returned message and bus state",
     async ({ channel, conversation, senderId, nativeMessageId }) => {
-      await withTempDir("qa-crabline-message-id-", async (outputDir) => {
-        const busState = createQaBusState();
-        const transport = await createQaCrablineTransportAdapter({
-          outputDir,
-          selection: {
-            capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-            channel,
-            channelDriver: "crabline",
-            providerReadinessArtifactPath: "crabline-provider-readiness.json",
-          },
-          state: busState,
+      await withTransport(channel, async (transport, _outputDir, busState) => {
+        const inbound = await transport.sendInbound({
+          conversation,
+          senderId,
+          senderName: "Alice",
+          text: `${channel} provider-native identity`,
         });
+        const snapshot = transport.state.getSnapshot();
 
-        try {
-          const inbound = await transport.sendInbound({
-            conversation,
-            senderId,
-            senderName: "Alice",
-            text: `${channel} provider-native identity`,
-          });
-          const snapshot = transport.state.getSnapshot();
-
-          expect(inbound.id).toMatch(nativeMessageId);
-          expect(snapshot.messages).toContainEqual(
-            expect.objectContaining({ direction: "inbound", id: inbound.id }),
-          );
-          expect(snapshot.events).toContainEqual(
+        expect(inbound.id).toMatch(nativeMessageId);
+        expect(snapshot.messages).toContainEqual(
+          expect.objectContaining({ direction: "inbound", id: inbound.id }),
+        );
+        for (const events of [snapshot.events, busState.poll().events]) {
+          expect(events).toContainEqual(
             expect.objectContaining({
               kind: "inbound-message",
               message: expect.objectContaining({ id: inbound.id }),
             }),
           );
-          expect(busState.poll().events).toContainEqual(
-            expect.objectContaining({
-              kind: "inbound-message",
-              message: expect.objectContaining({ id: inbound.id }),
-            }),
-          );
-          expect(transport.state.readMessage({ messageId: inbound.id })).toMatchObject({
-            direction: "inbound",
-            id: inbound.id,
-          });
-        } finally {
-          await transport.cleanupAfterGatewayStop?.();
         }
+        expect(transport.state.readMessage({ messageId: inbound.id })).toMatchObject({
+          direction: "inbound",
+          id: inbound.id,
+        });
       });
     },
   );
 
   it("preserves Telegram message IDs repeated across independent chats", async () => {
-    await withTempDir("qa-crabline-colliding-message-ids-", async (outputDir) => {
-      const busState = createQaBusState();
-      const createTelegramTransport = async (name: string) =>
-        await createQaCrablineTransportAdapter({
-          outputDir: `${outputDir}/${name}`,
-          selection: {
-            capabilityMatrixPath: "crabline-channel-driver-capabilities.json",
-            channel: "telegram",
-            channelDriver: "crabline",
-            providerReadinessArtifactPath: "crabline-provider-readiness.json",
-          },
-          state: busState,
-        });
-      const firstTransport = await createTelegramTransport("first");
-
-      try {
-        const secondTransport = await createTelegramTransport("second");
-
-        try {
+    await withTransport("telegram", async (firstTransport, _outputDir, busState) => {
+      await withTransport(
+        "telegram",
+        async (secondTransport) => {
           const first = await firstTransport.sendInbound({
             conversation: { id: "-1001234567890", kind: "group" },
             senderId: "100001",
@@ -108,29 +71,23 @@ describe("Crabline provider-native inbound message identity", () => {
             first.conversation.id,
             second.conversation.id,
           ]);
-          expect(snapshot.events).toEqual([
-            expect.objectContaining({
-              message: expect.objectContaining({
-                id: first.id,
-                conversation: expect.objectContaining({ id: first.conversation.id }),
+          expect(snapshot.events).toEqual(
+            [first, second].map((message) =>
+              expect.objectContaining({
+                message: expect.objectContaining({
+                  id: message.id,
+                  conversation: expect.objectContaining({ id: message.conversation.id }),
+                }),
               }),
-            }),
-            expect.objectContaining({
-              message: expect.objectContaining({
-                id: second.id,
-                conversation: expect.objectContaining({ id: second.conversation.id }),
-              }),
-            }),
-          ]);
+            ),
+          );
           expect(() => busState.readMessage({ messageId: first.id })).toThrow(
             `qa-bus message id is ambiguous for selected account: ${first.id}`,
           );
-        } finally {
-          await secondTransport.cleanupAfterGatewayStop?.();
-        }
-      } finally {
-        await firstTransport.cleanupAfterGatewayStop?.();
-      }
+        },
+        undefined,
+        busState,
+      );
     });
   });
 });
