@@ -11,25 +11,19 @@ import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
 import { portalHandlers } from "./portals.js";
 
-const portal = {
+const publicPortal = {
   id: "p3000",
   title: "App",
   port: 3000,
   listenPort: 43123,
-  tokenQuery: `openclaw_portal=${"a".repeat(64)}`,
-  url: `http://127.0.0.1:43123/?openclaw_portal=${"a".repeat(64)}`,
   publicUrl: "http://127.0.0.1:43123/",
   createdAtMs: 1,
-} satisfies PortalOpenResult;
-
-const publicPortal = {
-  id: portal.id,
-  title: portal.title,
-  port: portal.port,
-  listenPort: portal.listenPort,
-  publicUrl: portal.publicUrl,
-  createdAtMs: portal.createdAtMs,
 };
+const portal = {
+  ...publicPortal,
+  tokenQuery: `openclaw_portal=${"a".repeat(64)}`,
+  url: `http://127.0.0.1:43123/?openclaw_portal=${"a".repeat(64)}`,
+} satisfies PortalOpenResult;
 
 function createService(overrides: Partial<GatewayPortalService> = {}): GatewayPortalService {
   return {
@@ -76,8 +70,6 @@ describe("portal gateway methods", () => {
       close: vi.fn(async () => {
         portals = [];
       }),
-      closeWorkerPortals: vi.fn(async () => {}),
-      closeAll: vi.fn(async () => {}),
     });
     const { invoke, broadcast } = harness(service);
 
@@ -112,14 +104,11 @@ describe("portal gateway methods", () => {
   it("returns portal credentials only to write-capable operators", async () => {
     const service = createService({ list: () => [portal] });
 
-    const readResponse = await harness(service, ["operator.read"]).invoke("portal.list", {});
-    expect(readResponse.mock.calls[0]?.[1]).toEqual({ portals: [publicPortal] });
-
-    const writeResponse = await harness(service, ["operator.write"]).invoke("portal.list", {});
-    expect(writeResponse.mock.calls[0]?.[1]).toEqual({ portals: [portal] });
-
-    const adminResponse = await harness(service, ["operator.admin"]).invoke("portal.list", {});
-    expect(adminResponse.mock.calls[0]?.[1]).toEqual({ portals: [portal] });
+    const list = async (scope: string) =>
+      (await harness(service, [scope]).invoke("portal.list", {})).mock.calls[0]?.[1];
+    expect(await list("operator.read")).toEqual({ portals: [publicPortal] });
+    expect(await list("operator.write")).toEqual({ portals: [portal] });
+    expect(await list("operator.admin")).toEqual({ portals: [portal] });
   });
 
   it("rejects malformed requests before service access and reports absent transports", async () => {
@@ -145,9 +134,6 @@ describe("portal gateway methods", () => {
       open: vi.fn(async () => {
         throw new Error("portal bind failed");
       }),
-      close: vi.fn(async () => {}),
-      closeWorkerPortals: vi.fn(async () => {}),
-      closeAll: vi.fn(async () => {}),
     });
 
     const response = await harness(service).invoke("portal.open", { port: 3000 });
@@ -183,9 +169,11 @@ describe("portal gateway methods", () => {
     ]);
     createGatewayBroadcaster({ clients }).broadcast("portal.changed", { portals: [portal] });
 
-    expect(events.get("pairing")).toEqual([]);
-    expect(events.get("node")).toEqual([]);
-    expect(events.get("read")).toEqual(["portal.changed"]);
-    expect(events.get("write")).toEqual(["portal.changed"]);
+    expect(Object.fromEntries(events)).toEqual({
+      pairing: [],
+      node: [],
+      read: ["portal.changed"],
+      write: ["portal.changed"],
+    });
   });
 });

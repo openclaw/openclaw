@@ -1,12 +1,4 @@
-// Gateway e2e proof: real delivery routes change approval response behavior.
-//
-// Without turn-source fields: plugin.approval.request expires immediately with
-// {decision: null} because there is no approval client and no turn-source route.
-//
-// With a connected approval-capable client: the approval stays alive and
-// returns {status: "accepted"} because it has a real delivery route.
-//
-// This test runs against a real gateway server with no Telegram required.
+// Real Gateway proof of approval delivery, reviewer binding, and hook execution gating.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -49,7 +41,60 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
   let requester: Awaited<ReturnType<typeof connectGatewayClient>>;
   let toolCaller: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
   let approvalClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-  let connectApprovalClient: () => Promise<Awaited<ReturnType<typeof connectGatewayClient>>>;
+
+  const connect = (options: Omit<Parameters<typeof connectGatewayClient>[0], "url">) =>
+    connectGatewayClient({ url, token, timeoutMs: 60_000, ...options });
+  const requestApproval = () =>
+    requester.request("plugin.approval.request", {
+      pluginId: "test-plugin",
+      title: "Confirm action",
+      description: "Plugin wants to perform an action",
+      twoPhase: true,
+      timeoutMs: 10_000,
+    });
+  const invokeTool = (client: typeof requester, name: string, confirm?: boolean) =>
+    client.request("tools.invoke", {
+      name,
+      agentId: "main",
+      sessionKey: "main",
+      args: {},
+      ...(confirm === undefined ? {} : { confirm }),
+    });
+  const expectToolText = (result: unknown, text: string) =>
+    expect(result).toMatchObject({ ok: true, output: { content: [{ type: "text", text }] } });
+  async function connectReviewer(clientDisplayName: string, toolName?: string) {
+    const decision: {
+      value: "allow-once" | "deny";
+      settled: ReturnType<typeof createDeferredCore>;
+    } = {
+      value: "allow-once",
+      settled: createDeferredCore(),
+    };
+    const client = await connect({
+      clientDisplayName,
+      scopes: [APPROVALS_SCOPE],
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
+      onEvent: (event) => {
+        const payload = event.payload as
+          | { id?: unknown; request?: { toolName?: unknown } }
+          | undefined;
+        if (
+          event.event !== "plugin.approval.requested" ||
+          typeof payload?.id !== "string" ||
+          (toolName !== undefined && payload.request?.toolName !== toolName)
+        ) {
+          return;
+        }
+        void client
+          .request("plugin.approval.resolve", { id: payload.id, decision: decision.value })
+          .then(
+            () => decision.settled.resolve(),
+            (error) => decision.settled.reject(error),
+          );
+      },
+    });
+    return { client, decision };
+  }
 
   beforeEach(async () => {
     envSnapshot = captureEnv(TEST_ENV_KEYS);
@@ -169,25 +214,12 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
       }),
     );
 
-    // No operator approval client; only a requester with write and approvals scopes.
-    // This is the state that triggers the no-route expiry in the unfixed code.
-    requester = await connectGatewayClient({
-      url,
-      token,
+    // A requester is not a delivery route: it lacks the approvals capability.
+    requester = await connect({
       clientDisplayName: "plugin-approval requester",
       scopes: [WRITE_SCOPE, APPROVALS_SCOPE],
       requestTimeoutMs: 10_000,
-      timeoutMs: 60_000,
     });
-    connectApprovalClient = () =>
-      connectGatewayClient({
-        url,
-        token,
-        clientDisplayName: "plugin approval client",
-        scopes: [APPROVALS_SCOPE],
-        caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
-        timeoutMs: 60_000,
-      });
   });
 
   afterEach(async () => {
@@ -210,31 +242,20 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
 
   // The E2E setup retires active plugins after each `it`, so each test owns a fresh Gateway.
   it("expires with decision:null when no turn-source route and no approval client", async () => {
-    // This is the bug: without turn-source fields, the gateway expires the record
-    // immediately (decision: null) because there is no delivery route.
-    const result = await requester.request("plugin.approval.request", {
-      pluginId: "test-plugin",
-      title: "Confirm action",
-      description: "Plugin wants to perform an action",
-      twoPhase: true,
-      timeoutMs: 10_000,
-      // No turnSourceChannel/turnSourceTo/turnSourceAccountId/turnSourceThreadId
-    });
+    const result = await requestApproval();
 
     expect(result).toMatchObject({ decision: null });
     expect((result as { id?: string }).id).toMatch(/^plugin:/);
   });
 
   it("returns accepted when a real approval client is connected", async () => {
-    approvalClient = await connectApprovalClient();
-
-    const result = await requester.request("plugin.approval.request", {
-      pluginId: "test-plugin",
-      title: "Confirm action",
-      description: "Plugin wants to perform an action",
-      twoPhase: true,
-      timeoutMs: 10_000,
+    approvalClient = await connect({
+      clientDisplayName: "plugin approval client",
+      scopes: [APPROVALS_SCOPE],
+      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
     });
+
+    const result = await requestApproval();
 
     expect(result).toMatchObject({ status: "accepted" });
     expect((result as { id?: string }).id).toMatch(/^plugin:/);
@@ -245,52 +266,17 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
   });
 
   it("routes a plugin tool approval only to the host-selected reviewer device", async () => {
-    if (approvalClient) {
-      await disconnectGatewayClient(approvalClient);
-      approvalClient = undefined;
-    }
-    toolCaller = await connectGatewayClient({
-      url,
-      token,
+    toolCaller = await connect({
       clientDisplayName: "write-only plugin tool caller",
       scopes: [WRITE_SCOPE],
-      timeoutMs: 60_000,
     });
-    const decided = createDeferredCore();
     // The reviewer shares the helper's default test device identity with the tool caller.
-    const reviewer = await connectGatewayClient({
-      url,
-      token,
-      clientDisplayName: "same-device reviewer",
-      scopes: [APPROVALS_SCOPE],
-      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
-      onEvent: (event) => {
-        if (event.event !== "plugin.approval.requested") {
-          return;
-        }
-        const id = (event.payload as { id?: unknown } | undefined)?.id;
-        if (typeof id === "string") {
-          void reviewer
-            .request("plugin.approval.resolve", { id, decision: "allow-once" })
-            .then(() => decided.resolve(), decided.reject);
-        }
-      },
-      timeoutMs: 60_000,
-    });
+    const reviewer = await connectReviewer("same-device reviewer");
     try {
-      const result = await toolCaller.request("tools.invoke", {
-        name: "approval_route_probe",
-        agentId: "main",
-        sessionKey: "main",
-        args: {},
-      });
-      expect(result).toMatchObject({
-        ok: true,
-        output: { content: [{ type: "text", text: "allow-once" }] },
-      });
-      await decided.promise;
+      expectToolText(await invokeTool(toolCaller, "approval_route_probe"), "allow-once");
+      await reviewer.decision.settled.promise;
     } finally {
-      await disconnectGatewayClient(reviewer);
+      await disconnectGatewayClient(reviewer.client);
     }
 
     for (const deniedReviewer of [
@@ -298,9 +284,7 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
       { scopes: ["operator.read"] },
     ]) {
       let receivedRequests = 0;
-      const untrusted = await connectGatewayClient({
-        url,
-        token,
+      const untrusted = await connect({
         clientDisplayName: "unmatched reviewer",
         ...deniedReviewer,
         caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
@@ -309,19 +293,9 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
             receivedRequests += 1;
           }
         },
-        timeoutMs: 60_000,
       });
       try {
-        const result = await toolCaller.request("tools.invoke", {
-          name: "approval_route_probe",
-          agentId: "main",
-          sessionKey: "main",
-          args: {},
-        });
-        expect(result).toMatchObject({
-          ok: true,
-          output: { content: [{ type: "text", text: "cancelled" }] },
-        });
+        expectToolText(await invokeTool(toolCaller, "approval_route_probe"), "cancelled");
         expect(receivedRequests).toBe(0);
       } finally {
         await disconnectGatewayClient(untrusted);
@@ -330,61 +304,27 @@ describe("plugin.approval.request delivery routing (real gateway)", () => {
   });
 
   it("honors a generic plugin hook approval from a write-only caller", async () => {
-    const caller = await connectGatewayClient({
-      url,
-      token,
+    const caller = await connect({
       clientDisplayName: "write-only hook caller",
       scopes: [WRITE_SCOPE],
       requestTimeoutMs: 15_000,
-      timeoutMs: 60_000,
     });
-    let decision: "allow-once" | "deny" = "allow-once";
-    let decided = createDeferredCore();
-    const reviewer = await connectGatewayClient({
-      url,
-      token,
-      clientDisplayName: "same-device hook reviewer",
-      scopes: [APPROVALS_SCOPE],
-      caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
-      onEvent: (event) => {
-        const payload = event.payload as
-          | { id?: unknown; request?: { toolName?: unknown } }
-          | undefined;
-        if (
-          event.event !== "plugin.approval.requested" ||
-          payload?.request?.toolName !== "approval_hook_probe" ||
-          typeof payload.id !== "string"
-        ) {
-          return;
-        }
-        void reviewer
-          .request("plugin.approval.resolve", { id: payload.id, decision })
-          .then(() => decided.resolve(), decided.reject);
-      },
-      timeoutMs: 60_000,
-    });
-    const invoke = () =>
-      caller.request("tools.invoke", {
-        name: "approval_hook_probe",
-        agentId: "main",
-        sessionKey: "main",
-        args: {},
-        confirm: true,
-      });
+    const { client: reviewer, decision } = await connectReviewer(
+      "same-device hook reviewer",
+      "approval_hook_probe",
+    );
+    const invoke = () => invokeTool(caller, "approval_hook_probe", true);
     try {
       const allowed = await invoke();
-      expect(allowed).toMatchObject({
-        ok: true,
-        output: { content: [{ type: "text", text: "HOOK_EXECUTED" }] },
-      });
-      await decided.promise;
+      expectToolText(allowed, "HOOK_EXECUTED");
+      await decision.settled.promise;
       expect(await fs.readFile(hookExecutionPath, "utf8")).toBe("executed\n");
 
-      decision = "deny";
-      decided = createDeferredCore();
+      decision.value = "deny";
+      decision.settled = createDeferredCore();
       const denied = await invoke();
       expect(denied).toMatchObject({ ok: false, requiresApproval: true });
-      await decided.promise;
+      await decision.settled.promise;
       expect(await fs.readFile(hookExecutionPath, "utf8")).toBe("executed\n");
     } finally {
       await disconnectGatewayClient(reviewer);
