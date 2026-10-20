@@ -57,6 +57,12 @@ function createInput(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function expectResourceCleanup(fields: Record<string, unknown>) {
+  expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
+    expect.objectContaining(fields),
+  );
+}
+
 describe("cleanupEmbeddedAttemptSessionPhase", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -87,9 +93,7 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
     expect(hoisted.clearToolSearchCatalog).toHaveBeenCalledWith({
       catalogRef: input.toolSearchCatalogRef,
     });
-    expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
-      expect.objectContaining({ aborted: false }),
-    );
+    expectResourceCleanup({ aborted: false });
     expect(input.transcriptLifecycle.beginCleanup).toHaveBeenCalledOnce();
     expect(input.transcriptLifecycle.dispose).toHaveBeenCalledOnce();
     expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("completed", null, undefined);
@@ -101,9 +105,7 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
 
     await cleanupEmbeddedAttemptSessionPhase(input as never);
 
-    expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
-      expect.objectContaining({ aborted: true }),
-    );
+    expectResourceCleanup({ aborted: true });
     expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith("completed", null, undefined);
   });
 
@@ -138,13 +140,11 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
     expect(hoisted.cleanupEmbeddedAttemptResources).not.toHaveBeenCalled();
     drain.resolve();
     await cleanup;
-    expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
-      expect.objectContaining({
-        aborted: true,
-        abortSignal: controller.signal,
-        abortSettlePromise: abortSettle.promise,
-      }),
-    );
+    expectResourceCleanup({
+      aborted: true,
+      abortSignal: controller.signal,
+      abortSettlePromise: abortSettle.promise,
+    });
     expect(buildAbortSettlePromise).toHaveBeenCalledOnce();
     expect(input.transcriptLifecycle.dispose).toHaveBeenCalledOnce();
     expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledOnce();
@@ -165,9 +165,7 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
 
     await cleanupEmbeddedAttemptSessionPhase(input as never);
 
-    expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
-      expect.objectContaining({ aborted: true }),
-    );
+    expectResourceCleanup({ aborted: true });
     expect(input.emitDiagnosticRunCompleted).toHaveBeenCalledWith(
       "error",
       expect.objectContaining({ message: "request aborted" }),

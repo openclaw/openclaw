@@ -52,8 +52,7 @@ describe("native video at the session conversion boundary", () => {
       },
       [{ path: currentPath, contentType: "video/mp4", kind: "video" }],
     );
-    // No persisted media here: only the runtime carrier can preserve this clip.
-    // Both prompt and sender projections replace the current message object.
+    // Prompt/sender projection must preserve media held only by the runtime carrier.
     const currentTranscript: PersistedUserTurnMessage = {
       role: "user",
       content: "Current video",
@@ -70,9 +69,8 @@ describe("native video at the session conversion boundary", () => {
       timestamp: 3,
     };
     const original: AgentMessage[] = [historical, current, carrier];
-    const originalJson = JSON.stringify(original);
-    const queuedJson = JSON.stringify(queued);
-    const transcriptJson = JSON.stringify(currentTranscript);
+    const inputs = [original, queued, currentTranscript];
+    const originalJson = JSON.stringify(inputs);
     const project = async (messages: AgentMessage[]) => {
       const normalized = normalizeMessagesForLlmBoundary(messages, {
         sessionVersion: 4,
@@ -96,20 +94,17 @@ describe("native video at the session conversion boundary", () => {
     for (const messages of [original, [...original, queued]]) {
       const provider = await project(messages);
       expect(provider.messages).toHaveLength(messages.length);
-      expect(videoBlocks(provider.messages[0])).toEqual([
-        { type: "video", data: historicalVideo.toString("base64"), mimeType: "video/mp4" },
-      ]);
-      expect(videoBlocks(provider.messages[1])).toEqual([
-        { type: "video", data: currentVideo.toString("base64"), mimeType: "video/mp4" },
-      ]);
-      expect(provider.messages[1]?.content).toContainEqual({
-        type: "text",
-        text: expect.stringContaining("Projected current video"),
-      });
-      expect(provider.messages[1]?.content).toContainEqual({
-        type: "text",
-        text: expect.stringContaining("Video sender"),
-      });
+      for (const [index, video] of [historicalVideo, currentVideo].entries()) {
+        expect(videoBlocks(provider.messages[index])).toEqual([
+          { type: "video", data: video.toString("base64"), mimeType: "video/mp4" },
+        ]);
+      }
+      for (const text of ["Projected current video", "Video sender"]) {
+        expect(provider.messages[1]?.content).toContainEqual({
+          type: "text",
+          text: expect.stringContaining(text),
+        });
+      }
       expect(provider.messages[2]).toMatchObject({
         runtimeContextCarrier: true,
         runtimeContextCarrierRetained: true,
@@ -120,8 +115,6 @@ describe("native video at the session conversion boundary", () => {
         expect(videoBlocks(provider.messages[3])).toEqual([]);
       }
     }
-    expect(JSON.stringify(original)).toBe(originalJson);
-    expect(JSON.stringify(queued)).toBe(queuedJson);
-    expect(JSON.stringify(currentTranscript)).toBe(transcriptJson);
+    expect(JSON.stringify(inputs)).toBe(originalJson);
   });
 });

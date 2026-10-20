@@ -1,8 +1,8 @@
 import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
 import { createAgentCleanupScope } from "../../run-cleanup-timeout.js";
-import type { AgentSession } from "../../sessions/index.js";
 import {
   clearEmbeddedSessionPromptStates,
   retainEmbeddedSessionPromptState,
@@ -13,14 +13,6 @@ import {
   createEmbeddedAttemptSessionSettleTracker,
 } from "./attempt-session-settle.js";
 import { createEmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
-
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
 
 it("releases prompt payloads while completed attempts' resource owners remain reachable", () => {
   class PromptPayload extends Set<string> {}
@@ -151,9 +143,7 @@ describe("createEmbeddedAttemptSessionSettleTracker", () => {
     const prompt = deferred();
     const abort = deferred();
     const abortSession = vi.fn(() => abort.promise);
-    const tracker = createEmbeddedAttemptSessionSettleTracker({
-      abort: abortSession,
-    } as unknown as Pick<AgentSession, "abort">);
+    const tracker = createEmbeddedAttemptSessionSettleTracker({ abort: abortSession });
 
     void tracker.trackPromptSettlePromise(prompt.promise);
     const abortReason = new Error("stop");
@@ -179,7 +169,7 @@ describe("createEmbeddedAttemptSessionSettleTracker", () => {
   it("settles rejected prompt work without leaking it into later cleanup", async () => {
     const tracker = createEmbeddedAttemptSessionSettleTracker({
       abort: async () => undefined,
-    } as unknown as Pick<AgentSession, "abort">);
+    });
     void tracker.trackPromptSettlePromise(Promise.reject(new Error("prompt failed")));
 
     await expect(tracker.buildAbortSettlePromise()).resolves.toBeUndefined();

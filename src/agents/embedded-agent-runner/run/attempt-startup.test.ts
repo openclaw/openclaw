@@ -2,6 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillSnapshot } from "../../../skills/types.js";
 import { prepareEmbeddedSkills } from "../skill-runtime.js";
 
+const prepare = (attempt: Parameters<typeof prepareEmbeddedSkills>[0]["attempt"]) =>
+  prepareEmbeddedSkills({
+    includeCodeModeSkills: true,
+    attempt,
+    effectiveWorkspace: "/tmp/workspace",
+    sandbox: null,
+    sessionAgentId: "main",
+  });
+
 const mocks = vi.hoisted(() => ({
   applySkillEnvOverrides: vi.fn(),
   applySkillEnvOverridesFromSnapshot: vi.fn(),
@@ -61,41 +70,24 @@ describe("prepareEmbeddedSkills", () => {
       });
 
       await expect(
-        prepareEmbeddedSkills({
-          includeCodeModeSkills: true,
-          attempt: {
-            config: {},
-            skillsSnapshot: hasSnapshot ? { prompt: "skills prompt", skills: [] } : undefined,
-          },
-          effectiveWorkspace: "/tmp/workspace",
-          sandbox: null,
-          sessionAgentId: "main",
+        prepare({
+          config: {},
+          skillsSnapshot: hasSnapshot ? { prompt: "skills prompt", skills: [] } : undefined,
         }),
       ).rejects.toThrow("skill reader preparation failed");
       expect(restore).toHaveBeenCalledOnce();
-      expect(
-        hasSnapshot ? mocks.applySkillEnvOverridesFromSnapshot : mocks.applySkillEnvOverrides,
-      ).toHaveBeenCalledOnce();
-      expect(
-        hasSnapshot ? mocks.applySkillEnvOverrides : mocks.applySkillEnvOverridesFromSnapshot,
-      ).not.toHaveBeenCalled();
+      expect(mocks.applySkillEnvOverridesFromSnapshot).toHaveBeenCalledTimes(hasSnapshot ? 1 : 0);
+      expect(mocks.applySkillEnvOverrides).toHaveBeenCalledTimes(hasSnapshot ? 0 : 1);
     },
   );
 
   it("does not load skills or apply their environment during settled finalization", async () => {
-    const prepared = await prepareEmbeddedSkills({
-      includeCodeModeSkills: true,
-      attempt: { operation: "settled-tool-finalization" },
-      effectiveWorkspace: "/tmp/workspace",
-      sandbox: null,
-      sessionAgentId: "main",
-    });
+    const prepared = await prepare({ operation: "settled-tool-finalization" });
 
     expect(prepared.skillsPrompt).toBe("");
     expect(prepared.skillsSnapshotForRun).toBeUndefined();
-    expect(mocks.applySkillEnvOverrides).not.toHaveBeenCalled();
-    expect(mocks.applySkillEnvOverridesFromSnapshot).not.toHaveBeenCalled();
-    expect(mocks.prepareInstalledSkillCatalog).not.toHaveBeenCalled();
-    expect(mocks.mapSandboxSkillEntriesForPrompt).not.toHaveBeenCalled();
+    for (const mock of Object.values(mocks)) {
+      expect(mock).not.toHaveBeenCalled();
+    }
   });
 });
