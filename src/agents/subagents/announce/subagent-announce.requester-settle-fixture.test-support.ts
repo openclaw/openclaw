@@ -31,24 +31,22 @@ type FindRun = (
   sessionKey: string,
   matches?: (entry: SubagentRunRecord) => boolean,
 ) => SubagentRunRecord | undefined;
-export const { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts } = vi.hoisted(
-  () => ({
-    readDescendantFacts: vi.fn<
-      (
-        params: Parameters<typeof createRequesterDescendantReader>[0],
-      ) => ReturnType<ReturnType<typeof createRequesterDescendantReader>>
-    >(async () => ({ unsettled: false, active: 0 })),
-    findTranscriptEventMock: vi.fn<
-      typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent
-    >(async () => undefined),
-    registryRuntimeMock: {
-      getLatestLiveSubagentRunByChildSessionKey: vi.fn<FindRun>(() => undefined),
-      listSubagentRunsForRequester: vi.fn(
-        (_requesterSessionKey: string): SubagentRunRecord[] => [],
-      ),
-    },
-  }),
-);
+const { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts } = vi.hoisted(() => ({
+  readDescendantFacts: vi.fn<
+    (
+      params: Parameters<typeof createRequesterDescendantReader>[0],
+    ) => ReturnType<ReturnType<typeof createRequesterDescendantReader>>
+  >(async () => ({ unsettled: false, active: 0 })),
+  findTranscriptEventMock: vi.fn<
+    typeof import("../../../config/sessions/session-accessor.js").findTranscriptEvent
+  >(async () => undefined),
+  registryRuntimeMock: {
+    getLatestLiveSubagentRunByChildSessionKey: vi.fn<FindRun>(() => undefined),
+    listSubagentRunsForRequester: vi.fn((_requesterSessionKey: string): SubagentRunRecord[] => []),
+  },
+}));
+
+export { registryRuntimeMock, findTranscriptEventMock, readDescendantFacts };
 
 // mock-isolation: settlement reads only the requester wave and its live session owners.
 vi.mock("../registry/subagent-registry-read.js", () => registryRuntimeMock);

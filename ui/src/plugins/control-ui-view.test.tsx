@@ -474,7 +474,7 @@ describe("native UI built-in delegation", () => {
     const failure = new Error("Deferred page unavailable");
     let failUpdate = false;
     let invalidate = () => {};
-    const { host, reportError } = mountSurface(
+    const { host, reportError, listeners } = mountSurface(
       replacement("workspace", (container, context) => {
         roots.push(container);
         signals.push(context.signal);
@@ -501,7 +501,9 @@ describe("native UI built-in delegation", () => {
     expect(dispose).toHaveBeenCalledOnce();
     expect(reportError).toHaveBeenCalledExactlyOnceWith("review", failure);
     expect(view.querySelector("[role=alert]")?.textContent).toContain(failure.message);
-    invalidate();
+    for (const notify of listeners) {
+      notify();
+    }
     await view.updateComplete;
     expect(roots).toHaveLength(1);
     expect(reportError).toHaveBeenCalledOnce();
