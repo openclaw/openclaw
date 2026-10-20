@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -115,6 +116,59 @@ let serviceNodeRunner: string;
 let before: PreManagedServiceStop;
 let stopped = false;
 const schemas = { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: OPENCLAW_AGENT_SCHEMA_VERSION };
+
+function executePackageUpdate(
+  opts: UpdateCommandOptions,
+  shouldRestart: boolean,
+  packageUpdateNodeRunner?: string,
+) {
+  const fence = opts.run!.executorFence!;
+  return executeMutableUpdate({
+    executionGuards: createUpdateCommandExecutionGuards(opts, rootB),
+    root: rootB,
+    packageUpdateNodeRunner,
+    installKind: "package",
+    updateInstallKind: "package",
+    switchToGit: false,
+    timeoutMs: 30000,
+    updateStepTimeoutMs: 30000,
+    startedAt: Date.now(),
+    progress: {},
+    stop: () => {},
+    channel: "stable",
+    tag: "2026.9.5",
+    opts,
+    shouldRestart,
+    packageInstallSpec: "openclaw@2026.9.5",
+    packageTargetVersion: "2026.9.5",
+    managedServiceRootRedirect: null,
+    managedServiceRoot: rootA,
+    recoveryState: { triageTarget: { env: state.env } },
+    prepareMutableUpdate: async () => fence.assertCurrent(),
+  });
+}
+
+function rollbackOriginal(
+  opts: UpdateCommandOptions,
+  original: Awaited<ReturnType<typeof observeOriginalManagedServiceRuntime>>,
+  allowGatewayRestart: boolean,
+) {
+  return readConfigFileSnapshot({ observe: false }).then((configSnapshot) =>
+    rollbackFailedUpdate({
+      definitionRecovery: {},
+      result: { status: "error", mode: "npm", root: rootB, steps: [], durationMs: 0 },
+      previousRoot: rootB,
+      previousSchemaVersions: schemas,
+      originalManagedServiceRuntime: original,
+      configSnapshot,
+      opts,
+      preManagedServiceStop: before,
+      allowGatewayRestart,
+      timeoutMs: 30000,
+    }),
+  );
+}
+
 beforeEach(async () => {
   vi.clearAllMocks();
   vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
@@ -249,18 +303,20 @@ beforeEach(async () => {
     }
     return { ...before, stopped, running: !stopped };
   });
-  mocks.inspect.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
+  const healthyRuntime = async ({
+    expectedVersion,
+    expectedBuildId,
+  }: {
+    expectedVersion?: string;
+    expectedBuildId?: string;
+  }) => ({
     healthy: true,
     runtime: { status: "running", pid: 4242 },
     gatewayVersion: expectedVersion,
     gatewayBuildId: expectedBuildId,
-  }));
-  mocks.health.mockImplementation(async ({ expectedVersion, expectedBuildId }) => ({
-    healthy: true,
-    runtime: { status: "running", pid: 4242 },
-    gatewayVersion: expectedVersion,
-    gatewayBuildId: expectedBuildId,
-  }));
+  });
+  mocks.inspect.mockImplementation(healthyRuntime);
+  mocks.health.mockImplementation(healthyRuntime);
   mocks.restart.mockImplementation(async (params, action, preserve) => {
     params.assertCurrent();
     expect(action).toBe("restart");
@@ -439,32 +495,12 @@ it.for([
       const fence = await executor.enter(rootB, { serviceRoot: rootA });
       const admitted = { ...run, executorFence: fence };
       opts.run = admitted;
-      execution = await executeMutableUpdate({
-        executionGuards: createUpdateCommandExecutionGuards(opts, rootB),
-        root: rootB,
-        // Package transport is modeled; A must not use this separately selected B runner.
-        packageUpdateNodeRunner: state.path("selected-B-node"),
-        installKind: "package",
-        updateInstallKind: "package",
-        switchToGit: false,
-        timeoutMs: 30000,
-        updateStepTimeoutMs: 30000,
-        startedAt: Date.now(),
-        progress: {},
-        stop: () => {},
-        channel: "stable",
-        tag: "2026.9.5",
+      // A must not use the separately selected B runner.
+      execution = await executePackageUpdate(
         opts,
-        shouldRestart: scenario !== "no-restart",
-        packageInstallSpec: "openclaw@2026.9.5",
-        packageTargetVersion: "2026.9.5",
-        managedServiceRootRedirect: null,
-        managedServiceRoot: rootA,
-        recoveryState: { triageTarget: { env: state.env } },
-        prepareMutableUpdate: async () => {
-          fence.assertCurrent();
-        },
-      });
+        scenario !== "no-restart",
+        state.path("selected-B-node"),
+      );
       if (scenario === "authority-lost") {
         fence.assertCurrent();
         return;
@@ -475,9 +511,7 @@ it.for([
         version: "2026.9.4",
         buildId: "build-B",
       });
-      if (!execution) {
-        throw new Error("missing execution");
-      }
+      assert(execution, "missing execution");
       final = await finishUpdate({
         ...execution,
         root: rootB,
@@ -641,18 +675,7 @@ it("refuses B ledger admission independently from compatible service A state", a
     db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     db.close();
     const parentBytes = await fs.readFile(resolveOpenClawStateSqlitePath(parentEnv));
-    const compensation = rollbackFailedUpdate({
-      definitionRecovery: {},
-      result: { status: "error", mode: "npm", root: rootB, steps: [], durationMs: 0 },
-      previousRoot: rootB,
-      previousSchemaVersions: schemas,
-      originalManagedServiceRuntime: original,
-      configSnapshot: await readConfigFileSnapshot({ observe: false }),
-      opts,
-      preManagedServiceStop: before,
-      allowGatewayRestart: false,
-      timeoutMs: 30000,
-    });
+    const compensation = rollbackOriginal(opts, original, false);
     // Main's existing admission checks A and B before selecting compensation.
     await expect(compensation).resolves.toMatchObject({
       rolledBack: false,
@@ -740,30 +763,7 @@ it.each([
         observeOriginalManagedServiceRuntime({ root: rootB, opts }, before),
       ).rejects.toMatchObject({ reason: "original-service-unverified" });
     }
-    const execution = await executeMutableUpdate({
-      executionGuards: createUpdateCommandExecutionGuards(opts, rootB),
-      root: rootB,
-      installKind: "package",
-      updateInstallKind: "package",
-      switchToGit: false,
-      timeoutMs: 30000,
-      updateStepTimeoutMs: 30000,
-      startedAt: Date.now(),
-      progress: {},
-      stop: () => {},
-      channel: "stable",
-      tag: "2026.9.5",
-      opts,
-      shouldRestart: scenario !== "no-restart",
-      packageInstallSpec: "openclaw@2026.9.5",
-      packageTargetVersion: "2026.9.5",
-      managedServiceRootRedirect: null,
-      managedServiceRoot: rootA,
-      recoveryState: { triageTarget: { env: state.env } },
-      prepareMutableUpdate: async () => {
-        fence.assertCurrent();
-      },
-    });
+    const execution = await executePackageUpdate(opts, scenario !== "no-restart");
     expect(execution, execution?.failure?.detail).not.toBeNull();
     if (scenario === "no-restart") {
       expect(activated, execution?.failure?.detail).toBe(true);
@@ -804,9 +804,7 @@ it.each([false, true])(
       run.executorFence = await executor.enter(rootB, { serviceRoot: rootA });
       const opts: UpdateCommandOptions = { json: true, run };
       const original = await observeOriginalManagedServiceRuntime({ root: rootB, opts }, before);
-      if (!original) {
-        throw new Error("original service fixture was not observed");
-      }
+      assert(original, "original service fixture was not observed");
       const { runUpdatedInstallGatewayCommand } = await vi.importActual<
         typeof import("./update-command-service-command.js")
       >("./update-command-service-command.js");
@@ -858,18 +856,7 @@ it.each([false, true])(
       expect(original.definition.reboundRuntimePin).toBe(
         mutated ? original.definition.runtimePin?.revision : undefined,
       );
-      await rollbackFailedUpdate({
-        definitionRecovery: {},
-        result: { status: "error", mode: "npm", root: rootB, steps: [], durationMs: 0 },
-        previousRoot: rootB,
-        previousSchemaVersions: schemas,
-        originalManagedServiceRuntime: original,
-        configSnapshot: await readConfigFileSnapshot({ observe: false }),
-        opts,
-        preManagedServiceStop: before,
-        allowGatewayRestart: mutated,
-        timeoutMs: 30000,
-      });
+      await rollbackOriginal(opts, original, mutated);
       expect(mocks.nativeInstall).not.toHaveBeenCalled();
       expect(mocks.nativeRestart).toHaveBeenCalledTimes(mutated ? 1 : 0);
       expect(mocks.running).toBe(true);

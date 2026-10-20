@@ -19,7 +19,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
-import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import * as sourceRuntime from "./update-command-runtime.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
@@ -197,20 +197,10 @@ export function taskRecovery(record: (phase: string) => void = () => {}) {
   };
 }
 
-export const successfulPluginUpdate: PostCorePluginUpdateResult = {
+export const successfulPluginUpdate = createPostCorePluginUpdateResult({
   status: "ok",
-  changed: false,
-  sync: {
-    changed: false,
-    switchedToBundled: [],
-    switchedToNpm: [],
-    warnings: [],
-    errors: [],
-  },
-  npm: { changed: false, outcomes: [] },
-  integrityDrifts: [],
   warnings: [],
-};
+});
 
 export function registerForegroundFinalizationTests({
   tempDirs,
@@ -488,17 +478,17 @@ export function registerServiceInstallationConvergenceTests(
         };
         mocks.revalidateService.mockResolvedValue(serviceUpdateVerdict);
         mocks.readServiceState.mockResolvedValue(managedServiceState(process.env));
+        const serviceObservation = {
+          inspected: true,
+          runtimeInspected: true,
+          running: true,
+          serviceEnv: process.env,
+          serviceUpdateVerdict,
+        };
         let originalRunning = true;
         mocks.stopService.mockImplementationOnce(async () => {
           originalRunning = false;
-          return {
-            stopped: true,
-            inspected: true,
-            runtimeInspected: true,
-            running: true,
-            serviceEnv: process.env,
-            serviceUpdateVerdict,
-          };
+          return { ...serviceObservation, stopped: true };
         });
         mocks.restartService.mockImplementationOnce(async ({ result }) => {
           expect(originalRunning).toBe(true);
@@ -525,14 +515,7 @@ export function registerServiceInstallationConvergenceTests(
               steps: [],
               durationMs: 1,
             },
-            preManagedServiceStop: {
-              stopped: false,
-              inspected: true,
-              runtimeInspected: true,
-              running: true,
-              serviceEnv: process.env,
-              serviceUpdateVerdict,
-            },
+            preManagedServiceStop: { ...serviceObservation, stopped: false },
           },
         );
         expect(mocks.restartService).toHaveBeenCalledTimes(drift && restart ? 1 : 0);

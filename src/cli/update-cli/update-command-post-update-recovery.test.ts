@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -426,15 +427,7 @@ describe("failed update recovery restart", () => {
           status,
         },
         {
-          windowsTaskAutoStartRecovery: {
-            suspended: Promise.resolve(true),
-            beginMutation: () => {},
-            assertRecoveryCurrent: () => {},
-            restore,
-            handoff: () => {},
-            complete,
-            interrupted: () => false,
-          },
+          windowsTaskAutoStartRecovery: { ...windowsTaskAutoStartRecovery, restore, complete },
         },
       );
       expect(restore).not.toHaveBeenCalled();
@@ -503,10 +496,10 @@ describe("failed update recovery restart", () => {
         expect(failure.detail).toContain(result.reason);
         if (original) {
           const combined = failure.cause;
-          expect(combined).toBeInstanceOf(AggregateError);
-          if (!(combined instanceof AggregateError)) {
-            throw new Error("Expected both original and restoration failures");
-          }
+          assert(
+            combined instanceof AggregateError,
+            "Expected both original and restoration failures",
+          );
           expect(combined.errors).toEqual([original, restoreError]);
           expect(combined.cause).toBe(restoreError);
           expect(failure.detail).toContain(original.message);
@@ -599,9 +592,7 @@ describe("failed update recovery restart", () => {
       );
 
       const recorded = getUpdateRun(run.runId, { env });
-      if (!recorded) {
-        throw new Error("Expected the failed update run to remain recorded");
-      }
+      assert(recorded, "Expected the failed update run to remain recorded");
       const version = pid === 7376 ? "2026.9.3" : undefined;
       expect(recorded.origin.nextAction).toContain(
         `The gateway is running${version ? ` ${version}` : ""} but did not pass verification`,
@@ -662,17 +653,13 @@ describe("failed package update recovery safety", () => {
           retained = value;
         },
       });
-      if (!retained) {
-        throw new Error("The package owner did not retain its recovery transaction.");
-      }
+      assert(retained, "The package owner did not retain its recovery transaction.");
       expect((await retained.rollback(() => {})).exitCode).toBe(1);
       expect(renameSpy).toHaveBeenCalledWith(retained.backupRoot, packageRoot);
     } finally {
       renameSpy.mockRestore();
     }
-    if (!retained) {
-      throw new Error("The package owner did not retain its recovery transaction.");
-    }
+    assert(retained, "The package owner did not retain its recovery transaction.");
     const transaction = retained;
     expect(result.status).toBe("failed");
     const backupRuntime = path.join(transaction.backupRoot, "dist", "index.js");
@@ -824,9 +811,7 @@ describe("failed package update recovery safety", () => {
         },
       );
       const recorded = getUpdateRun(run.runId, { env });
-      if (!recorded) {
-        throw new Error("Expected the completed update to remain recorded");
-      }
+      assert(recorded, "Expected the completed update to remain recorded");
       if (operatorEdit) {
         expect(failure.result.reason).toBe("state-migrated-no-rollback");
         expect(recorded.status).toBe("failed");

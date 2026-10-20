@@ -58,7 +58,13 @@ async function createDoctorFixture() {
   await fs.writeFile(path.join(root, "dist", "entry.js"), "export {};\n");
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "2026.9.4" }));
   await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
-  return { root, env };
+  const doctor = (overrides: Partial<Parameters<typeof runPackageUpdateDoctor>[0]> = {}) =>
+    runPackageUpdateDoctor({ root, managedServiceEnv: env, progress: {}, ...overrides });
+  return { root, env, doctor };
+}
+
+function processResult(code = 0, stderr = "") {
+  return { code, stdout: "", stderr, signal: null, killed: false, termination: "exit" as const };
 }
 
 it.each([
@@ -69,7 +75,7 @@ it.each([
 ])(
   "runs the candidate Doctor with full integrity requested=$requested supported=$supported",
   async ({ requested, supported }) => {
-    const { root, env } = await createDoctorFixture();
+    const { root, doctor } = await createDoctorFixture();
     const calls = path.join(root, "doctor-calls.jsonl");
     await fs.writeFile(
       path.join(root, "dist", "entry.js"),
@@ -84,13 +90,10 @@ if (args.includes("--help")) {
 }
 `,
     );
-    const result = await runPackageUpdateDoctor({
-      root,
+    const result = await doctor({
       nodeRunner: process.execPath,
       fullIntegrityCheck: requested,
-      managedServiceEnv: env,
       timeoutMs: 5_000,
-      progress: {},
     });
     expect(result?.exitCode).toBe(0);
     const argv = (await fs.readFile(calls, "utf8"))
@@ -111,7 +114,7 @@ it.each([
 ])(
   "defers package replacement state handoff ($restart, contention=$contention, wrapped=$wrapped)",
   async ({ restart, contention, wrapped }) => {
-    const { root, env } = await createDoctorFixture();
+    const { root, env, doctor } = await createDoctorFixture();
     const cause = contention
       ? new GatewayStateOwnerContentionError(resolveOpenClawStateSqlitePath(env))
       : new SqliteSchemaVersionError("This OpenClaw build cannot open your existing data.");
@@ -120,10 +123,8 @@ it.each([
     const spawn = vi.spyOn(processRunner, "runCommandWithTimeout");
     const onStepComplete = vi.fn();
     const results: UpdateStepResult[] = [];
-    const operation = runPackageUpdateDoctor({
-      root,
+    const operation = doctor({
       restart,
-      managedServiceEnv: env,
       results,
       progress: { onStepComplete },
       onConfigSnapshot: vi.fn(),
@@ -161,7 +162,7 @@ it.each([
 it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as const)(
   "runs Doctor with %s include capture without broadening rollback ownership",
   async (includeState) => {
-    const { root, env } = await createDoctorFixture();
+    const { root, env, doctor } = await createDoctorFixture();
     const originalRaw = '{"logging":{"$include":"./logging.json"}}\n';
     const includePath = path.join(root, "logging.json");
     const originalInclude = '{"level":"info"}\n';
@@ -215,25 +216,17 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
               }
             : { status: "ok", configHash: "unchanged" },
         });
-        return {
-          code: completeGraph ? UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE : 0,
-          stdout: "",
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return processResult(completeGraph ? UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE : 0);
       });
     const onConfigSnapshot = vi.fn();
     const onStepComplete = vi.fn();
     const stateRead = vi.spyOn(stateSnapshots, "withOpenClawStateDatabaseReadSnapshot");
 
     const step = await runPackagePostInstallVerification(root, (candidateRoot, results) =>
-      runPackageUpdateDoctor({
+      doctor({
         root: candidateRoot,
         timeoutMs: 1_000,
         progress: { onStepComplete },
-        managedServiceEnv: env,
         onConfigSnapshot,
         results,
       }),
@@ -293,15 +286,13 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
 );
 
 it("does not spawn Doctor when the installed runtime has no entrypoint", async () => {
-  const { root, env } = await createDoctorFixture();
+  const { root, doctor } = await createDoctorFixture();
   await fs.rm(path.join(root, "dist", "entry.js"));
   const spawn = vi
     .spyOn(processRunner, "runCommandWithTimeout")
     .mockRejectedValue(new Error("Doctor must not spawn without an installed entrypoint."));
 
-  await expect(
-    runPackageUpdateDoctor({ root, timeoutMs: 1_000, progress: {}, managedServiceEnv: env }),
-  ).resolves.toBeNull();
+  await expect(doctor({ timeoutMs: 1_000 })).resolves.toBeNull();
   expect(spawn).not.toHaveBeenCalled();
 });
 
@@ -316,7 +307,7 @@ it.each([
 ] as const)(
   "retains Doctor receipts and completion for $cause (exit $exitCode)",
   async ({ cause, exitCode }) => {
-    const { root, env } = await createDoctorFixture();
+    const { root, env, doctor } = await createDoctorFixture();
     const writerReceipt = cause === "success" || cause === "advisory" || cause === "refusal";
     const advisory = cause === "advisory" || cause === "refusal";
     const reason = cause === "refusal" ? "include-ownership" : undefined;
@@ -374,13 +365,11 @@ it.each([
         );
       }
       return {
-        code: exitCode,
-        stdout: "",
-        stderr: outputLimitExceeded ? "Doctor output exceeded its capture limit." : "",
-        signal: null,
-        killed: false,
+        ...processResult(
+          exitCode,
+          outputLimitExceeded ? "Doctor output exceeded its capture limit." : "",
+        ),
         ...(!writerReceipt ? { outputLimitExceeded } : {}),
-        termination: "exit",
       };
     });
 
@@ -388,10 +377,8 @@ it.each([
       ? undefined
       : { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
     const steps: UpdateStepResult[] = [];
-    const step = await runPackageUpdateDoctor({
-      root,
+    const step = await doctor({
       timeoutMs: 1_000,
-      managedServiceEnv: env,
       progress: run
         ? createUpdateRunProgress(
             run,
@@ -452,7 +439,7 @@ it.each([
 );
 
 it("leaves the run ledger unchanged while the activation Doctor child is pending", async () => {
-  const { root, env } = await createDoctorFixture();
+  const { root, env, doctor } = await createDoctorFixture();
   // Ledger receipts still need real worker scheduling and monotonic clocks.
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   const { runId } = createUpdateRun({ trigger: "control-ui" }, { env });
@@ -472,12 +459,10 @@ it("leaves the run ledger unchanged while the activation Doctor child is pending
     const resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
     assert(resultPath, "Missing Doctor result path");
     await writeUpdatePostInstallDoctorResult({ resultPath, result: { status: "ok" } });
-    return { code: 0, stdout: "", stderr: "", signal: null, killed: false, termination: "exit" };
+    return processResult();
   });
-  const running = runPackageUpdateDoctor({
-    root,
+  const running = doctor({
     timeoutMs: ABANDONED_UPDATE_RUN_MS * 2,
-    managedServiceEnv: env,
     progress,
   });
 
@@ -518,7 +503,7 @@ it("leaves the run ledger unchanged while the activation Doctor child is pending
 });
 
 it("records the activation Doctor's traced sections on its step and run record", async () => {
-  const { root, env } = await createDoctorFixture();
+  const { root, env, doctor } = await createDoctorFixture();
   vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", undefined);
   const { runId } = createUpdateRun({ trigger: "cli" }, { env });
   adoptUpdateRun(runId, { env });
@@ -557,13 +542,11 @@ it("records the activation Doctor's traced sections on its step and run record",
     const resultPath = options.env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV];
     assert(resultPath, "Missing Doctor result path");
     await writeUpdatePostInstallDoctorResult({ resultPath, result: { status: "ok" } });
-    return { code: 0, stdout: "", stderr, signal: null, killed: false, termination: "exit" };
+    return processResult(0, stderr);
   });
 
-  const step = await runPackageUpdateDoctor({
-    root,
+  const step = await doctor({
     timeoutMs: 60_000,
-    managedServiceEnv: env,
     progress,
   });
 
@@ -587,7 +570,7 @@ it.each([
 ] as const)(
   "retains failed Doctor evidence for $receiptKind receipt (cleanup uncertain: $cleanupUncertain, reporting fails: $reportingFails)",
   async ({ receiptKind, cleanupUncertain, reportingFails }) => {
-    const { root, env } = await createDoctorFixture();
+    const { doctor } = await createDoctorFixture();
     const failed = new Error(
       "Doctor process failed before returning an exit status.",
       cleanupUncertain ? { cause: new CommandProcessCleanupError() } : undefined,
@@ -631,12 +614,10 @@ it.each([
     const steps: UpdateStepResult[] = [];
     const onConfigSnapshot = vi.fn();
 
-    const error = await runPackageUpdateDoctor({
-      root,
+    const error = await doctor({
       timeoutMs: 1_000,
       progress: { onStepComplete },
       results: steps,
-      managedServiceEnv: env,
       onConfigSnapshot,
     }).catch((cause: unknown) => cause);
 
@@ -697,7 +678,7 @@ it.each([
 );
 
 it("completes Doctor as failed when config attribution cannot read the settled output", async () => {
-  const { root, env } = await createDoctorFixture();
+  const { env, doctor } = await createDoctorFixture();
   const onStepComplete = vi.fn();
   const onConfigSnapshot = vi.fn();
   const steps: UpdateStepResult[] = [];
@@ -714,22 +695,13 @@ it("completes Doctor as failed when config attribution cannot read the settled o
     });
     await fs.rename(env.OPENCLAW_CONFIG_PATH, `${env.OPENCLAW_CONFIG_PATH}.previous`);
     await fs.mkdir(env.OPENCLAW_CONFIG_PATH);
-    return {
-      code: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
-      stdout: "",
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    };
+    return processResult(UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE);
   });
 
-  const error = await runPackageUpdateDoctor({
-    root,
+  const error = await doctor({
     timeoutMs: 1_000,
     progress: { onStepComplete },
     results: steps,
-    managedServiceEnv: env,
     onConfigSnapshot,
   }).catch((cause: unknown) => cause);
 
