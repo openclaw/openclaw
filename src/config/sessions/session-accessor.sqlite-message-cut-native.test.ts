@@ -21,7 +21,9 @@ import {
 
 const { createSession } = useSessionMessageCutFixtures();
 
-function nativeOwner(env: NodeJS.ProcessEnv) {
+async function nativeOwner() {
+  const { env, scope } = await createSession();
+  const before = loadSessionEntry(scope);
   let binding: string | undefined = "native-history-before-cut";
   let finalized = false;
   const registry = createEmptyPluginRegistry();
@@ -62,8 +64,9 @@ function nativeOwner(env: NodeJS.ProcessEnv) {
   registry.agentHarnesses.push({ harness, pluginId: record.id, source: "runtime" });
   markPluginRegistryActive(registry);
   return {
-    binding: () => binding,
-    finalized: () => finalized,
+    scope,
+    before,
+    read: () => ({ entry: loadSessionEntry(scope), binding, finalized }),
     run: (mode: "rewind" | "switch" | "fork", entryId = "user-2") =>
       withPluginRuntimeRegistryScope(registry, () => {
         const params = { agentId, env, sessionKey, entryId };
@@ -76,29 +79,31 @@ function nativeOwner(env: NodeJS.ProcessEnv) {
   };
 }
 
-it.each(["rewind", "switch", "fork"] as const)(
-  "preserves source context only when the committed cut is a fork (%s)",
-  async (mode) => {
-    const { env, scope } = await createSession();
-    const before = loadSessionEntry(scope);
-    const owner = nativeOwner(env);
-    const result = await owner.run(mode, mode === "switch" ? "off-path-user" : "user-2");
-
-    expect(result.status).toBe("created");
-    if (mode === "fork") {
-      expect(loadSessionEntry(scope)).toEqual(before);
-    } else {
-      expect(loadSessionEntry(scope)?.previousSessionId).toBe(scope.sessionId);
-    }
-    expect(owner.binding()).toBe(mode === "fork" ? "native-history-before-cut" : undefined);
-    expect(owner.finalized()).toBe(mode !== "fork");
-  },
-);
+it.each([
+  ["rewind", "user-2", "created"],
+  ["switch", "off-path-user", "created"],
+  ["fork", "user-2", "created"],
+  ["rewind", "missing", "missing-entry"],
+  ["rewind", "assistant-1", "not-user-message"],
+  ["rewind", "off-path-user", "off-active-path"],
+  ["switch", "missing", "missing-entry"],
+  ["switch", "user-1", "not-branch-tip"],
+  ["switch", "assistant-2", "already-active"],
+] as const)("%s at %s: %s preserves or resets native context", async (mode, entryId, status) => {
+  const owner = await nativeOwner();
+  expect((await owner.run(mode, entryId)).status).toBe(status);
+  const reset = status === "created" && mode !== "fork";
+  expect(owner.read()).toEqual({
+    entry: reset
+      ? expect.objectContaining({ previousSessionId: owner.scope.sessionId })
+      : owner.before,
+    binding: reset ? undefined : "native-history-before-cut",
+    finalized: reset,
+  });
+});
 
 it("preserves native context when the worker cut commit is refused", async () => {
-  const { env, scope } = await createSession();
-  const owner = nativeOwner(env);
-  const before = loadSessionEntry(scope);
+  const owner = await nativeOwner();
   const fault = probe.admission(admission, (request, grant, callback) => {
     const facts = isRecord(request.facts) ? request.facts.publication : undefined;
     if (request.stage === "commit" && isRecord(facts) && facts.kind === "session-native-binding") {
@@ -111,25 +116,9 @@ it("preserves native context when the worker cut commit is refused", async () =>
   } finally {
     fault.mockRestore();
   }
-  expect(loadSessionEntry(scope)).toEqual(before);
-  expect(owner.binding()).toBe("native-history-before-cut");
-  expect(owner.finalized()).toBe(false);
-});
-
-it.each([
-  ["rewind", "missing", "missing-entry"],
-  ["rewind", "assistant-1", "not-user-message"],
-  ["rewind", "off-path-user", "off-active-path"],
-  ["switch", "missing", "missing-entry"],
-  ["switch", "user-1", "not-branch-tip"],
-  ["switch", "assistant-2", "already-active"],
-] as const)("preserves native context after %s rejects %s", async (mode, entryId, status) => {
-  const { env, scope } = await createSession();
-  const before = loadSessionEntry(scope);
-  const owner = nativeOwner(env);
-  const result = await owner.run(mode, entryId);
-  expect(result.status).toBe(status);
-  expect(loadSessionEntry(scope)).toEqual(before);
-  expect(owner.binding()).toBe("native-history-before-cut");
-  expect(owner.finalized()).toBe(false);
+  expect(owner.read()).toEqual({
+    entry: owner.before,
+    binding: "native-history-before-cut",
+    finalized: false,
+  });
 });
