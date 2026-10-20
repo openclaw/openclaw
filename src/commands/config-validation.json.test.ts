@@ -4,48 +4,32 @@ import {
   withConsoleLogsRoutedToStderrForJson,
 } from "../cli/json-output-mode.js";
 import { requireValidConfig, requireValidConfigFileSnapshot } from "./config-validation.js";
+import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
-const reads = vi.hoisted(() => ({
-  read: vi.fn(),
-  write: vi.fn(),
-}));
+const reads = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn() }));
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: reads.read,
   readConfigFileSnapshotForWrite: reads.write,
 }));
 
 const configPath = "/synthetic/openclaw.json";
-function invalidSnapshot() {
-  return {
-    path: configPath,
-    exists: true,
-    valid: false,
-    raw: "{}",
-    parsed: {},
-    sourceConfig: {},
-    config: {},
-    issues: [
-      { path: " ", message: "Invalid root", allowedValues: [] },
-      {
-        path: "mode",
-        message: "Choose a mode",
-        allowedValues: ["local"],
-        allowedValuesHiddenCount: 2,
-      },
-    ],
-    warnings: [],
-    legacyIssues: [],
-  };
-}
-function runtime() {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-    writeStdout: vi.fn(),
-    writeJson: vi.fn<(value: unknown) => void>(),
-  };
-}
+const invalidSnapshot = {
+  ...baseConfigSnapshot,
+  path: configPath,
+  valid: false,
+  sourceConfig: {},
+  issues: [
+    { path: " ", message: "Invalid root", allowedValues: [] },
+    {
+      path: "mode",
+      message: "Choose a mode",
+      allowedValues: ["local"],
+      allowedValuesHiddenCount: 2,
+    },
+  ],
+  warnings: [],
+};
+const runtime = () => ({ ...createTestRuntime(), writeJson: vi.fn<(value: unknown) => void>() });
 async function withJsonOutput<T>(run: () => Promise<T>) {
   return withConsoleLogsRoutedToStderrForJson(
     ["node", "openclaw", "agents", "list", "--json"],
@@ -56,27 +40,25 @@ async function withJsonOutput<T>(run: () => Promise<T>) {
     { restoreChanges: true },
   );
 }
-function expectedFailure() {
-  return {
-    ok: false,
-    error: { type: "cli_error", message: `OpenClaw config is invalid: ${configPath}` },
-    repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
-    issues: [
-      { path: "<root>", message: "Invalid root" },
-      {
-        path: "mode",
-        message: "Choose a mode",
-        allowedValues: ["local"],
-        allowedValuesHiddenCount: 2,
-      },
-    ],
-  };
-}
+const expectedFailure = {
+  ok: false,
+  error: { type: "cli_error", message: `OpenClaw config is invalid: ${configPath}` },
+  repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
+  issues: [
+    { path: "<root>", message: "Invalid root" },
+    {
+      path: "mode",
+      message: "Choose a mode",
+      allowedValues: ["local"],
+      allowedValuesHiddenCount: 2,
+    },
+  ],
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
-  reads.read.mockResolvedValue(invalidSnapshot());
-  reads.write.mockResolvedValue({ snapshot: invalidSnapshot(), writeOptions: {} });
+  reads.read.mockResolvedValue(invalidSnapshot);
+  reads.write.mockResolvedValue({ snapshot: invalidSnapshot, writeOptions: {} });
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -94,7 +76,7 @@ describe("command invalid-config JSON", () => {
       name: "ExitError",
       code: 1,
     });
-    expect(rt.writeJson).toHaveBeenCalledExactlyOnceWith(expectedFailure(), 2);
+    expect(rt.writeJson).toHaveBeenCalledExactlyOnceWith(expectedFailure, 2);
     expect(order).toEqual(["json", "exit"]);
     expect(rt.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(rt.log).not.toHaveBeenCalled();
@@ -102,7 +84,7 @@ describe("command invalid-config JSON", () => {
   });
 
   it("returns valid config without writing any failure document", async () => {
-    const snapshot = { ...invalidSnapshot(), valid: true, config: { plugins: {} } };
+    const snapshot = { ...invalidSnapshot, valid: true, config: { plugins: {} } };
     reads.read.mockResolvedValue(snapshot);
     const rt = runtime();
     expect(await withJsonOutput(() => requireValidConfigFileSnapshot(rt))).toBe(snapshot);

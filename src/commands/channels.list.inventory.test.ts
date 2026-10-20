@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -12,9 +11,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
 }));
 
-vi.mock("../config/config.js", () => ({
-  readConfigFileSnapshot: mocks.readConfigFileSnapshot,
-}));
+vi.mock("../config/config.js", () => ({ readConfigFileSnapshot: mocks.readConfigFileSnapshot }));
 vi.mock("../cli/command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: async ({ config }: { config: OpenClawConfig }) => ({
     resolvedConfig: config,
@@ -70,46 +67,28 @@ describe("channels list installed inventory", () => {
     mocks.callGateway.mockReset().mockRejectedValue(new Error("gateway unavailable"));
   });
 
-  it.each([true])(
-    "keeps disabled installed channels distinct from missing ones: json=%s",
-    async (json) => {
-      const runtime = createTestRuntime();
+  it("keeps disabled installed channels distinct from missing ones in JSON", async () => {
+    const runtime = createTestRuntime();
 
-      await channelsListCommand({ all: true, json }, runtime);
+    await channelsListCommand({ all: true, json: true }, runtime);
 
-      const output = runtime.log.mock.calls[0]?.[0];
-      expect(typeof output).toBe("string");
-      if (typeof output !== "string") {
-        throw new Error("expected channel inventory output");
-      }
-      if (json) {
-        expect(JSON.parse(output)).toEqual({
-          chat: {
-            "installed-chat": {
-              accounts: [],
-              label: "installed-chat",
-              installed: true,
-              origin: "available",
-            },
-            "missing-chat": {
-              accounts: [],
-              label: "missing-chat",
-              installed: false,
-              origin: "installable",
-            },
-          },
-        });
-        expect(mocks.callGateway).not.toHaveBeenCalled();
-      } else {
-        expect(stripAnsi(output)).toContain(
-          "- installed-chat: installed, not configured, disabled",
-        );
-        expect(stripAnsi(output)).toContain(
-          "- missing-chat: not installed, not configured, disabled",
-        );
-      }
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-    },
-  );
+    const output = runtime.log.mock.calls[0]?.[0];
+    expect(typeof output).toBe("string");
+    if (typeof output !== "string") {
+      throw new Error("expected channel inventory output");
+    }
+    expect(JSON.parse(output)).toEqual({
+      chat: {
+        "installed-chat": inventoryEntry("installed-chat", true, "available"),
+        "missing-chat": inventoryEntry("missing-chat", false, "installable"),
+      },
+    });
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
 });
+
+function inventoryEntry(label: string, installed: boolean, origin: string) {
+  return { accounts: [], label, installed, origin };
+}

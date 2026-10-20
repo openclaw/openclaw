@@ -1,4 +1,3 @@
-// Daemon install plan tests cover shared install plan validation and platform warning helpers.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,13 +8,35 @@ import {
   resolveDaemonServicePathDirs,
 } from "./daemon-install-plan.shared.js";
 
+async function withTempDir(run: (root: string) => unknown) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daemon-plan-")));
+  try {
+    await run(root);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function writeFile(file: string, text = "") {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+  return file;
+}
+
+function discover(entrypoint: string, binDir: string) {
+  return resolveDaemonServicePathDirs({
+    argv: ["node", entrypoint, "gateway", "install"],
+    env: { PATH: binDir },
+    platform: "darwin",
+  });
+}
+
 describe("resolveDaemonInstallRuntimeInputs", () => {
   it.skipIf(process.platform === "win32")(
     "keeps a persisted runtime pin instead of selecting system Node",
-    async () => {
-      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daemon-pin-")));
-      const pinned = path.join(root, "node");
-      try {
+    () =>
+      withTempDir(async (root) => {
+        const pinned = path.join(root, "node");
         fs.symlinkSync(resolveTestNodeExecPath(), pinned);
         await expect(
           resolveDaemonInstallRuntimeInputs({
@@ -25,10 +46,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
             devMode: false,
           }),
         ).resolves.toEqual({ devMode: false, runtime: "node", runtimePath: pinned });
-      } finally {
-        fs.rmSync(root, { recursive: true, force: true });
-      }
-    },
+      }),
   );
 
   it("detects src ts entrypoints when devMode is not overridden", async () => {
@@ -57,62 +75,33 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
 describe("resolveDaemonServicePathDirs openclaw discovery", () => {
   it.skipIf(process.platform === "win32")(
     "finds the PATH shim that resolves to the active package entrypoint",
-    () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-daemon-path-"));
-      try {
+    () =>
+      withTempDir((root) => {
         const binDir = path.join(root, "bin");
         const packageDir = path.join(root, "lib", "node_modules", "openclaw");
-        const entrypoint = path.join(packageDir, "openclaw.mjs");
+        const entrypoint = writeFile(path.join(packageDir, "openclaw.mjs"));
         fs.mkdirSync(binDir, { recursive: true });
-        fs.mkdirSync(packageDir, { recursive: true });
-        fs.writeFileSync(entrypoint, "");
         fs.symlinkSync(entrypoint, path.join(binDir, "openclaw"));
 
-        expect(
-          resolveDaemonServicePathDirs({
-            argv: ["node", entrypoint, "gateway", "install"],
-            env: { PATH: binDir },
-            platform: "darwin",
-          }),
-        ).toEqual([binDir]);
-      } finally {
-        fs.rmSync(root, { recursive: true, force: true });
-      }
-    },
+        expect(discover(entrypoint, binDir)).toEqual([binDir]);
+      }),
   );
 
   it.skipIf(process.platform === "win32")(
     "ignores unrelated openclaw commands elsewhere on PATH",
-    () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-daemon-path-"));
-      try {
+    () =>
+      withTempDir((root) => {
         const binDir = path.join(root, "bin");
-        const activeEntrypoint = path.join(root, "active", "openclaw.mjs");
-        const otherEntrypoint = path.join(root, "other", "openclaw.mjs");
+        const activeEntrypoint = writeFile(path.join(root, "active", "openclaw.mjs"));
+        const otherEntrypoint = writeFile(path.join(root, "other", "openclaw.mjs"));
         fs.mkdirSync(binDir, { recursive: true });
-        fs.mkdirSync(path.dirname(activeEntrypoint), { recursive: true });
-        fs.mkdirSync(path.dirname(otherEntrypoint), { recursive: true });
-        fs.writeFileSync(activeEntrypoint, "");
-        fs.writeFileSync(otherEntrypoint, "");
         for (const entrypoint of [activeEntrypoint, otherEntrypoint]) {
-          fs.writeFileSync(
-            path.join(path.dirname(entrypoint), "package.json"),
-            '{"name":"openclaw"}',
-          );
+          writeFile(path.join(path.dirname(entrypoint), "package.json"), '{"name":"openclaw"}');
         }
         fs.symlinkSync(otherEntrypoint, path.join(binDir, "openclaw"));
 
-        expect(
-          resolveDaemonServicePathDirs({
-            argv: ["node", activeEntrypoint, "gateway", "install"],
-            env: { PATH: binDir },
-            platform: "darwin",
-          }),
-        ).toBeUndefined();
-      } finally {
-        fs.rmSync(root, { recursive: true, force: true });
-      }
-    },
+        expect(discover(activeEntrypoint, binDir)).toBeUndefined();
+      }),
   );
 });
 
