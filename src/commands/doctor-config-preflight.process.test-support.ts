@@ -184,22 +184,20 @@ export function seedPluginStateSidecar(stateDir: string, canonicalCreatedAt: num
   });
   closeOpenClawStateDatabaseForTest();
 
-  const shared = new DatabaseSync(sharedPath);
-  try {
-    shared
-      .prepare(`
+  const insert = `
         INSERT INTO plugin_state_entries (
           plugin_id, namespace, entry_key, value_json, created_at, expires_at
         ) VALUES (?, ?, ?, ?, ?, ?)
-      `)
+      `;
+  {
+    using shared = new DatabaseSync(sharedPath);
+    shared
+      .prepare(insert)
       .run("discord", "components", "interaction:1", '{"ok":false}', canonicalCreatedAt, null);
-  } finally {
-    shared.close();
   }
 
-  const sidecar = new DatabaseSync(sidecarPath);
-  try {
-    sidecar.exec(`
+  using sidecar = new DatabaseSync(sidecarPath);
+  sidecar.exec(`
       CREATE TABLE plugin_state_entries (
         plugin_id TEXT NOT NULL,
         namespace TEXT NOT NULL,
@@ -210,17 +208,10 @@ export function seedPluginStateSidecar(stateDir: string, canonicalCreatedAt: num
         PRIMARY KEY (plugin_id, namespace, entry_key)
       );
     `);
-    sidecar
-      .prepare(`
-        INSERT INTO plugin_state_entries (
-          plugin_id, namespace, entry_key, value_json, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      // Keep retired sidecar data distinct from the canonical row.
-      .run("discord", "components", "interaction:1", '{"ok":true}', 3_000, null);
-  } finally {
-    sidecar.close();
-  }
+  sidecar
+    .prepare(insert)
+    // Keep retired sidecar data distinct from the canonical row.
+    .run("discord", "components", "interaction:1", '{"ok":true}', 3_000, null);
 }
 
 export function seedV17AdditiveRepairDatabase(
@@ -232,11 +223,10 @@ export function seedV17AdditiveRepairDatabase(
   closeOpenClawStateDatabaseForTest();
   const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const database = new DatabaseSync(databasePath);
-  try {
-    seedOpenClawAgentSchemaV21(database);
-    removeCanonicalValidationFromHistoricalAgentFixture(database);
-    database.exec(`
+  using database = new DatabaseSync(databasePath);
+  seedOpenClawAgentSchemaV21(database);
+  removeCanonicalValidationFromHistoricalAgentFixture(database);
+  database.exec(`
       DROP TABLE session_participants;
       DROP TRIGGER session_conversations_route_context_invalidate_after_update;
       ALTER TABLE session_conversations DROP COLUMN route_context_json;
@@ -244,8 +234,8 @@ export function seedV17AdditiveRepairDatabase(
       PRAGMA user_version = 17;
       UPDATE schema_meta SET schema_version = 17;
     `);
-    if (options.participantDependency) {
-      database.exec(`
+  if (options.participantDependency) {
+    database.exec(`
         CREATE TABLE session_participants (
           session_key TEXT NOT NULL,
           actor_type TEXT NOT NULL,
@@ -259,9 +249,6 @@ export function seedV17AdditiveRepairDatabase(
         ) STRICT;
         CREATE INDEX idx_test_participant_dependency ON session_participants(actor_id);
       `);
-    }
-  } finally {
-    database.close();
   }
   return databasePath;
 }

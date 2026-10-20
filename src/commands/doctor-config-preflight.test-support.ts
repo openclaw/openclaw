@@ -13,19 +13,21 @@ import { retireIdleOpenClawStateReadWorkers } from "../state/openclaw-state-read
 import { withEnvAsync } from "../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 
-type DoctorFixtureObservation = {
-  id: number;
-  suite: "billing-route" | "preflight";
-  started: number;
-  nextStep: number;
-  pending: Map<number, string>;
-  omittedPending: number;
-  events: Array<{ phase: string; event: "started" | "settled"; elapsedMs: number }>;
-  bodySettled: boolean;
-  fixtureSettled: boolean;
-  testFinished: boolean;
+class DoctorFixtureObservation {
+  readonly started = performance.now();
+  nextStep = 0;
+  readonly pending = new Map<number, string>();
+  omittedPending = 0;
+  readonly events: Array<{ phase: string; event: "started" | "settled"; elapsedMs: number }> = [];
+  bodySettled = false;
+  fixtureSettled = false;
+  testFinished = false;
   ownsHome?: () => boolean;
-};
+  constructor(
+    readonly id: number,
+    readonly suite: "billing-route" | "preflight",
+  ) {}
+}
 
 const fixtureObservation = new AsyncLocalStorage<DoctorFixtureObservation>();
 const activeObservations = new Set<DoctorFixtureObservation>();
@@ -101,18 +103,7 @@ export function useDoctorConfigPreflightHome(diagnostic?: DoctorFixtureObservati
     if (!diagnostic) {
       return withDoctorConfigPreflightHome(run);
     }
-    const observation: DoctorFixtureObservation = {
-      id: ++nextObservation,
-      suite: diagnostic,
-      started: performance.now(),
-      nextStep: 0,
-      pending: new Map(),
-      omittedPending: 0,
-      events: [],
-      bodySettled: false,
-      fixtureSettled: false,
-      testFinished: false,
-    };
+    const observation = new DoctorFixtureObservation(++nextObservation, diagnostic);
     activeObservations.add(observation);
     onTestFinished(({ task }) => {
       observation.testFinished = true;
