@@ -13,6 +13,7 @@ import {
   assertTransactionUsable,
   runSqliteReadSnapshotSync,
 } from "../../infra/sqlite-transaction.js";
+import { groupPluginRecords as groupRecords } from "../../plugins/record-groups.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -301,13 +302,7 @@ export function readTranscriptExportSnapshotsFromDatabase(
         end += 1;
       }
       const batch = reads.slice(start, end);
-      const bySession = new Map<string, TranscriptExportRead[]>();
-      for (const read of batch) {
-        const sessionId = read.request.resolved.sessionId;
-        const targets = bySession.get(sessionId) ?? [];
-        targets.push(read);
-        bySession.set(sessionId, targets);
-      }
+      const bySession = groupRecords(batch, (read) => read.request.resolved.sessionId);
       const rows = iterateSqliteQuerySync(
         database.db,
         getSessionKysely(database.db)
