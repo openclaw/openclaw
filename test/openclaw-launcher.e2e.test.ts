@@ -10,7 +10,7 @@ import { builtinModules } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveOpenClawCompileCacheDirectory } from "../node-compile-cache.mjs";
 import { parseNodeReleaseVersion } from "../node-version.mjs";
 import {
@@ -75,6 +75,29 @@ async function seedCache(root: string, cache: string) {
   }
   await fs.mkdir(directory, { recursive: true });
   return directory;
+}
+
+function maintenanceObserver(setup: string, onStart: string) {
+  return `
+        import cp from "node:child_process";
+        import { syncBuiltinESMExports } from "node:module";
+        ${setup}
+        let started;
+        globalThis.maintenanceStarted = new Promise(resolve => { started = resolve; });
+        const originalSpawn = cp.spawn;
+        cp.spawn = function(command, args, options) {
+          const child = originalSpawn(command, args, options);
+          if (args.includes("--maintain")) {
+            ${onStart}
+            globalThis.maintenanceCompleted = new Promise(resolve => child.once("exit", resolve));
+            // Observe completion even though the production child is detached.
+            child.unref = () => {};
+            started();
+          }
+          return child;
+        };
+        syncBuiltinESMExports();
+      `;
 }
 
 async function makeLauncherFixture(
@@ -249,12 +272,63 @@ function hasBunRuntime(): boolean {
 
 describe("openclaw launcher", () => {
   const fixtures = createFixtureLifetime();
+  let root: string;
 
+  beforeEach(async () => {
+    root = await makeLauncherFixture(fixtures);
+  });
   afterEach(() => fixtures.cleanup());
+
+  function withRespawnChild(
+    options: {
+      entry: (readyPath: string) => string;
+      source?: boolean;
+      args?: string[];
+      cache?: string;
+      pipe?: boolean;
+      readyName?: string;
+    },
+    check: (child: {
+      launcher: ReturnType<typeof spawn>;
+      pid: number;
+      output: () => string;
+    }) => Promise<void>,
+  ) {
+    return fixtures.run(async () => {
+      if (options.source !== false) {
+        await addGitMarker(root);
+      }
+      const ready = path.join(root, options.readyName ?? "child-info.json");
+      await writeEntry(root, options.entry(ready));
+      const launcher = spawn(
+        process.execPath,
+        [path.join(root, "openclaw.mjs"), ...(options.args ?? [])],
+        {
+          detached: true,
+          cwd: root,
+          env: launcherEnv({
+            NODE_COMPILE_CACHE: path.join(root, options.cache ?? ".node-compile-cache"),
+          }),
+          stdio: options.pipe ? ["ignore", "pipe", "pipe"] : "ignore",
+        },
+      );
+      trackLauncherClose(launcher);
+      let output = "";
+      launcher.stdout?.on("data", (chunk: Buffer) => {
+        output += chunk.toString();
+      });
+      launcher.stderr?.resume();
+      try {
+        const { pid } = await waitForJsonFile<{ pid: number }>(ready, 5000);
+        await check({ launcher, pid, output: () => output });
+      } finally {
+        await settleLauncherFixture(fixtures, launcher);
+      }
+    });
+  }
 
   describe("browser native transport dispatch", () => {
     it("uses only the fixed native artifact before pending package repair or ordinary CLI startup", async () => {
-      const root = await makeLauncherFixture(fixtures);
       const native = path.join(root, "dist", "extensions", "browser", "native-host-entry.js");
       await fs.mkdir(path.dirname(native), { recursive: true });
       await fs.writeFile(native, 'setTimeout(() => process.stdout.write("native-frame"), 10);');
@@ -275,7 +349,6 @@ describe("openclaw launcher", () => {
     it.each(["unsupported", "missing", "broken"])(
       "does not install or enter the CLI for an %s native runtime",
       async (kind) => {
-        const root = await makeLauncherFixture(fixtures);
         const execArgv: string[] = [];
         if (kind === "unsupported") {
           const preload = path.join(root, "unsupported-node.mjs");
@@ -316,7 +389,6 @@ describe("openclaw launcher", () => {
       ["browser", "extension", "native-host-extra"],
       ["browser", "status"],
     ])("keeps sibling %j on ordinary CLI startup", async (...args) => {
-      const root = await makeLauncherFixture(fixtures);
       await writeEntry(root, 'process.stdout.write("ordinary CLI");');
       const child = runLauncher(root, [...args], {
         timeout: 20_000,
@@ -338,7 +410,6 @@ describe("openclaw launcher", () => {
         pendingLifecycle?: boolean;
       } = {},
     ) {
-      const root = await makeLauncherFixture(fixtures);
       const home = fixtures.createTempDir("openclaw-launcher-home with spaces-");
       const nodePath = path.join(
         home,
@@ -515,30 +586,18 @@ describe("openclaw launcher", () => {
       },
     );
 
-    it.each([
-      { label: "non-TTY", tty: false, args: ["status"], env: {}, exitCode: 1 },
-      { label: "CI", tty: true, args: ["status"], env: { CI: "1" }, exitCode: 1 },
-      { label: "JSON", tty: true, args: ["status", "--json"], env: {}, exitCode: 1 },
-      {
-        label: "non-interactive",
-        tty: true,
-        args: ["onboard", "--non-interactive"],
-        env: {},
-        exitCode: 1,
-      },
-      { label: "yes flag", tty: true, args: ["update", "--yes"], env: {}, exitCode: 1 },
-      { label: "hook relay", tty: true, args: ["hooks", "relay"], env: {}, exitCode: 1 },
-      {
-        label: "Gmail foreground",
-        tty: true,
-        args: ["webhooks", "gmail", "run"],
-        env: {},
-        exitCode: 1,
-      },
-    ])("does not prompt or install for $label", async ({ tty, args, env, exitCode }) => {
+    it.each<[string, boolean, string[], NodeJS.ProcessEnv]>([
+      ["non-TTY", false, ["status"], {}],
+      ["CI", true, ["status"], { CI: "1" }],
+      ["JSON", true, ["status", "--json"], {}],
+      ["non-interactive", true, ["onboard", "--non-interactive"], {}],
+      ["yes flag", true, ["update", "--yes"], {}],
+      ["hook relay", true, ["hooks", "relay"], {}],
+      ["Gmail foreground", true, ["webhooks", "gmail", "run"], {}],
+    ])("does not prompt or install for %s", async (_label, tty, args, env) => {
       const fixture = await prepareRecovery({ tty });
       const result = fixture.run("y\n", args, env);
-      expect(result.status, result.stderr).toBe(exitCode);
+      expect(result.status, result.stderr).toBe(1);
       expect(result.stderr).not.toContain("Update NodeJS:");
       await expectAbsent(fixture.installLog);
     });
@@ -702,7 +761,6 @@ describe("openclaw launcher", () => {
     ["triage", "--json"],
     ["triage", "--non-interactive"],
   ])("admits packaged diagnostics on unsupported Node: %j", async (...args) => {
-    const root = await makeLauncherFixture(fixtures);
     await writeFixture(
       root,
       "package.json",
@@ -725,11 +783,10 @@ describe("openclaw launcher", () => {
   });
 
   it("admits lossless Node builds outside the support table while retaining the major floor", async () => {
-    const fixtureRoot = await makeLauncherFixture(fixtures);
-    await writeEntry(fixtureRoot, 'process.stdout.write("runtime-loaded\\n");\n');
+    await writeEntry(root, 'process.stdout.write("runtime-loaded\\n");\n');
 
     for (const version of NODE_RELEASE_VERSION_CASES) {
-      const mockNodeVersionPath = path.join(fixtureRoot, `mock-node-version-${version}.mjs`);
+      const mockNodeVersionPath = path.join(root, `mock-node-version-${version}.mjs`);
       await fs.writeFile(
         mockNodeVersionPath,
         [
@@ -741,11 +798,11 @@ describe("openclaw launcher", () => {
       );
 
       const result = runNode(
-        fixtureRoot,
+        root,
         [
           "--import",
           pathToFileURL(mockNodeVersionPath).href,
-          path.join(fixtureRoot, "openclaw.mjs"),
+          path.join(root, "openclaw.mjs"),
           "gateway",
           "start",
         ],
@@ -766,8 +823,7 @@ describe("openclaw launcher", () => {
   });
 
   it("prints recovery guidance before legacy-incompatible modules can load", async () => {
-    const fixtureRoot = await makeLauncherFixture(fixtures);
-    const legacyRuntimePath = path.join(fixtureRoot, "mock-legacy-runtime.mjs");
+    const legacyRuntimePath = path.join(root, "mock-legacy-runtime.mjs");
     await fs.writeFile(
       legacyRuntimePath,
       [
@@ -778,8 +834,8 @@ describe("openclaw launcher", () => {
     );
 
     const result = runNode(
-      fixtureRoot,
-      ["--import", pathToFileURL(legacyRuntimePath).href, path.join(fixtureRoot, "openclaw.mjs")],
+      root,
+      ["--import", pathToFileURL(legacyRuntimePath).href, path.join(root, "openclaw.mjs")],
       {},
       testNodeExecPath,
     );
@@ -792,9 +848,8 @@ describe("openclaw launcher", () => {
   });
 
   it("rejects Bun without node:sqlite even when its Node compatibility version is new enough", async () => {
-    const fixtureRoot = await makeLauncherFixture(fixtures);
-    await writeEntry(fixtureRoot, 'process.stdout.write("unexpected-bun-runtime\\n");\n');
-    const mockRuntime = path.join(fixtureRoot, "mock-bun-runtime.mjs");
+    await writeEntry(root, 'process.stdout.write("unexpected-bun-runtime\\n");\n');
+    const mockRuntime = path.join(root, "mock-bun-runtime.mjs");
     await fs.writeFile(
       mockRuntime,
       [
@@ -809,10 +864,10 @@ describe("openclaw launcher", () => {
       "utf8",
     );
 
-    const result = runNode(fixtureRoot, [
+    const result = runNode(root, [
       "--import",
       pathToFileURL(mockRuntime).href,
-      path.join(fixtureRoot, "openclaw.mjs"),
+      path.join(root, "openclaw.mjs"),
     ]);
 
     expect(result.status).toBe(1);
@@ -825,7 +880,6 @@ describe("openclaw launcher", () => {
   it.each(["transitive", "missing", "unbuilt"])(
     "reports the %s entry failure without masking its cause",
     async (kind) => {
-      const root = await makeLauncherFixture(fixtures);
       if (kind === "transitive") {
         await writeEntry(root, 'import "missing-openclaw-launcher-dep";\nexport {};\n');
       } else if (kind === "unbuilt") {
@@ -848,12 +902,11 @@ describe("openclaw launcher", () => {
   );
 
   it("executes an entry.mjs-only compiled entry through the root launcher", async () => {
-    const fixtureRoot = await makeLauncherFixture(fixtures);
-    await addCompiledMjsEntryFixture(fixtureRoot);
+    await addCompiledMjsEntryFixture(root);
 
     const result = spawnSync(
       process.execPath,
-      ["--import", import.meta.resolve("tsx"), path.join(fixtureRoot, "openclaw.mjs"), "--profile"],
+      ["--import", import.meta.resolve("tsx"), path.join(root, "openclaw.mjs"), "--profile"],
       {
         cwd: process.cwd(),
         env: launcherEnv({ OPENCLAW_NO_RESPAWN: "1" }),
@@ -869,8 +922,7 @@ describe("openclaw launcher", () => {
   it.runIf(process.env.OPENCLAW_TEST_BUN_LAUNCHER === "1" && hasBunRuntime())(
     "gates the real Bun runtime on node:sqlite availability",
     async () => {
-      const fixtureRoot = await makeLauncherFixture(fixtures);
-      await writeEntry(fixtureRoot, "process.stdout.write('bun entry ran\\n');\n");
+      await writeEntry(root, "process.stdout.write('bun entry ran\\n');\n");
 
       const bunBin = process.env.BUN_BIN ?? "bun";
       // Bun >=1.4 (Rust rewrite) ships node:sqlite and may run the CLI; older
@@ -882,7 +934,7 @@ describe("openclaw launcher", () => {
       );
       const bunHasNodeSqlite = probe.status === 0;
 
-      const result = runLauncher(fixtureRoot, [], {}, bunBin);
+      const result = runLauncher(root, [], {}, bunBin);
 
       if (bunHasNodeSqlite) {
         expect(result.status).toBe(0);
@@ -901,7 +953,6 @@ describe("openclaw launcher", () => {
     "keeps real Bun update config reads in one child per handoff",
     async () => {
       const { writeStableRootRuntimeAliases } = await import("../scripts/runtime-postbuild.mts");
-      const root = await makeLauncherFixture(fixtures);
       const dist = path.join(root, "dist");
       const events = path.join(root, "config-reader-events.jsonl");
       await writeFixture(root, "package.json", '{"type":"module"}');
@@ -989,10 +1040,8 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   );
 
   async function helpFixture(metadata: Record<string, unknown>, entry: string) {
-    const root = await makeLauncherFixture(fixtures);
     await writeFixture(root, "dist/cli-startup-metadata.json", JSON.stringify(metadata));
     await writeEntry(root, entry);
-    return root;
   }
 
   it.each([
@@ -1023,7 +1072,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   ])(
     "serves cached help without loading runtime owners: $args",
     async ({ args, metadata, expected }) => {
-      const root = await helpFixture(
+      await helpFixture(
         metadata,
         "throw new Error('help fast path must not import runtime resource owners');\n",
       );
@@ -1055,7 +1104,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       ["--container=demo", "browser", "--help"],
     ].map((args) => ({ args, env: {}, echoArgs: false })),
   ])("defers cached help to runtime dispatch: $args $env", async ({ args, env, echoArgs }) => {
-    const root = await helpFixture(
+    await helpFixture(
       {
         rootHelpText: "PRECOMPUTED root help\n",
         browserHelpText: "PRECOMPUTED browser help\n",
@@ -1075,7 +1124,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   it.each(["explicit", "nodes", "home", "tilde", "legacy", "include"])(
     "consults the %s config before serving cached help",
     async (mode) => {
-      const root = await helpFixture(
+      await helpFixture(
         mode === "nodes"
           ? { nodesHelpText: "PRECOMPUTED nodes help\n" }
           : { rootHelpText: "PRECOMPUTED memory help\n" },
@@ -1122,7 +1171,6 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   it.each(["source", "configured", "default", "empty"])(
     "selects compile cache policy for a %s launcher",
     async (mode) => {
-      const root = await makeLauncherFixture(fixtures);
       const tmpRoot = fixtures.createTempDir("openclaw-launcher-tmp-");
       const cwd = mode === "empty" ? fixtures.createTempDir("openclaw-launcher-cwd-") : root;
       if (mode === "source") {
@@ -1169,34 +1217,23 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
 
   it.runIf(process.platform !== "win32").each(["cooperative", "ignored"])(
     "settles SIGTERM shutdown when the respawn child is %s",
-    async (mode) =>
-      fixtures.run(async () => {
-        const root = await makeLauncherFixture(fixtures);
-        await addGitMarker(root);
-        const childInfoPath = path.join(root, "child-info.json");
-        const signalPath = path.join(root, "sigterm-received.txt");
-        await writeEntry(
-          root,
-          [
-            'import { writeFileSync } from "node:fs";',
-            'process.title = "openclaw-launcher-sigterm-test-child";',
-            mode === "cooperative"
-              ? `process.on("SIGTERM", () => { writeFileSync(${JSON.stringify(signalPath)}, "SIGTERM\\n"); process.exit(0); });`
-              : 'process.on("SIGTERM", () => {});',
-            `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
-            "setInterval(() => {}, 1000);",
-            "",
-          ].join("\n"),
-        );
-        const launcher = spawn(process.execPath, [path.join(root, "openclaw.mjs")], {
-          detached: true,
-          cwd: root,
-          env: launcherEnv({ NODE_COMPILE_CACHE: path.join(root, ".node-compile-cache") }),
-          stdio: "ignore",
-        });
-        trackLauncherClose(launcher);
-        try {
-          const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
+    async (mode) => {
+      const signalPath = path.join(root, "sigterm-received.txt");
+      await withRespawnChild(
+        {
+          entry: (childInfoPath) =>
+            [
+              'import { writeFileSync } from "node:fs";',
+              'process.title = "openclaw-launcher-sigterm-test-child";',
+              mode === "cooperative"
+                ? `process.on("SIGTERM", () => { writeFileSync(${JSON.stringify(signalPath)}, "SIGTERM\\n"); process.exit(0); });`
+                : 'process.on("SIGTERM", () => {});',
+              `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
+              "setInterval(() => {}, 1000);",
+              "",
+            ].join("\n"),
+        },
+        async ({ launcher, pid }) => {
           launcher.kill("SIGTERM");
           await expect(waitForProcessClose(launcher, "launcher", 5000)).resolves.toEqual({
             code: mode === "cooperative" ? 0 : null,
@@ -1207,64 +1244,41 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           } else {
             expect(isProcessAlive(launcher.pid)).toBe(false);
           }
-          expect(isProcessAlive(childInfo.pid)).toBe(false);
-        } finally {
-          await settleLauncherFixture(fixtures, launcher);
-        }
-      }),
+          expect(isProcessAlive(pid)).toBe(false);
+        },
+      );
+    },
   );
 
   it.runIf(process.platform !== "win32").each([true, false])(
     "preserves foreground Gmail shutdown grace with compile cache (source=%s)",
-    async (sourceCheckout) =>
-      fixtures.run(async () => {
-        const fixtureRoot = await makeLauncherFixture(fixtures);
-        if (sourceCheckout) {
-          await addGitMarker(fixtureRoot);
-        }
-        const readyPath = path.join(fixtureRoot, "gmail-ready.json");
-        const stoppedPath = path.join(fixtureRoot, "gmail-stopped.txt");
-        await writeEntry(
-          fixtureRoot,
-          [
-            'import { writeFileSync } from "node:fs";',
-            `process.on("SIGTERM", () => setTimeout(() => { writeFileSync(${JSON.stringify(stoppedPath)}, "stopped"); process.exit(0); }, 3025));`,
-            `writeFileSync(${JSON.stringify(readyPath)}, JSON.stringify({ pid: process.pid }));`,
-            "setInterval(() => {}, 1000);",
-          ].join("\n"),
-        );
-        const launcher = spawn(
-          process.execPath,
-          [
-            path.join(fixtureRoot, "openclaw.mjs"),
-            "webhooks",
-            "--profile",
-            "fixture",
-            "gmail",
-            "run",
-          ],
-          {
-            detached: true,
-            cwd: fixtureRoot,
-            env: launcherEnv({ NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-cache") }),
-            stdio: "ignore",
-          },
-        );
-        trackLauncherClose(launcher);
-        let ownerPid: number | undefined;
-        try {
-          ownerPid = (await waitForJsonFile<{ pid: number }>(readyPath, 5000)).pid;
+    async (sourceCheckout) => {
+      const stoppedPath = path.join(root, "gmail-stopped.txt");
+      await withRespawnChild(
+        {
+          source: sourceCheckout,
+          readyName: "gmail-ready.json",
+          cache: ".node-cache",
+          args: ["webhooks", "--profile", "fixture", "gmail", "run"],
+          entry: (readyPath) =>
+            [
+              'import { writeFileSync } from "node:fs";',
+              `process.on("SIGTERM", () => setTimeout(() => { writeFileSync(${JSON.stringify(stoppedPath)}, "stopped"); process.exit(0); }, 3025));`,
+              `writeFileSync(${JSON.stringify(readyPath)}, JSON.stringify({ pid: process.pid }));`,
+              "setInterval(() => {}, 1000);",
+            ].join("\n"),
+        },
+        async ({ launcher, pid }) => {
           launcher.kill("SIGTERM");
           await expect(waitForProcessClose(launcher, "foreground Gmail", 5000)).resolves.toEqual({
             code: 0,
             signal: null,
           });
           await expect(fs.readFile(stoppedPath, "utf8")).resolves.toBe("stopped");
-          expect(isProcessAlive(ownerPid)).toBe(false);
-        } finally {
-          await settleLauncherFixture(fixtures, launcher);
-        }
-      }),
+          expect(isProcessAlive(pid)).toBe(false);
+        },
+      );
+    },
   );
 
   it.runIf(process.platform !== "win32").each([
@@ -1273,71 +1287,47 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
     { signal: "SIGKILL" as const, target: "child" },
   ])(
     "propagates $signal after output closes when the respawn $target is signaled",
-    async (testCase) =>
-      fixtures.run(async () => {
-        const fixtureRoot = await makeLauncherFixture(fixtures);
-        await addGitMarker(fixtureRoot);
-        const childInfoPath = path.join(fixtureRoot, "child-info.json");
-        const expectedOutput = "signal-output\n".repeat(32 * 1024);
-        await writeEntry(
-          fixtureRoot,
-          [
-            'import { writeFileSync } from "node:fs";',
-            `process.stdout.write(${JSON.stringify(expectedOutput)}, () => writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid })));`,
-            'process.title = "openclaw-launcher-default-signal-test-child";',
-            "setInterval(() => {}, 1000);",
-            "",
-          ].join("\n"),
-        );
-
-        const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
-          detached: true,
-          cwd: fixtureRoot,
-          env: launcherEnv({
-            NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
-          }),
-          stdio: ["ignore", "pipe", "pipe"],
-        });
-        trackLauncherClose(launcher);
-        let output = "";
-        launcher.stdout.on("data", (chunk: Buffer) => {
-          output += chunk.toString();
-        });
-        launcher.stderr.resume();
-        let respawnChildPid: number | undefined;
-
-        try {
-          const childInfo = await waitForJsonFile<{ pid: number }>(childInfoPath, 5000);
-          respawnChildPid = childInfo.pid;
-
+    async (testCase) => {
+      const expectedOutput = "signal-output\n".repeat(32 * 1024);
+      await withRespawnChild(
+        {
+          pipe: true,
+          entry: (childInfoPath) =>
+            [
+              'import { writeFileSync } from "node:fs";',
+              `process.stdout.write(${JSON.stringify(expectedOutput)}, () => writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid })));`,
+              'process.title = "openclaw-launcher-default-signal-test-child";',
+              "setInterval(() => {}, 1000);",
+              "",
+            ].join("\n"),
+        },
+        async ({ launcher, pid, output }) => {
           if (testCase.target === "launcher") {
             launcher.kill(testCase.signal);
           } else {
-            process.kill(respawnChildPid, testCase.signal);
+            process.kill(pid, testCase.signal);
           }
 
           await expect(waitForProcessClose(launcher, "launcher", 5000)).resolves.toEqual({
             code: null,
             signal: testCase.signal,
           });
-          expect(output).toBe(expectedOutput);
-          expect(isProcessAlive(respawnChildPid)).toBe(false);
-        } finally {
-          await settleLauncherFixture(fixtures, launcher);
-        }
-      }),
+          expect(output()).toBe(expectedOutput);
+          expect(isProcessAlive(pid)).toBe(false);
+        },
+      );
+    },
   );
 
   it("preserves an explicit exit 143 from a compile-cache respawn child", async () => {
-    const fixtureRoot = await makeLauncherFixture(fixtures);
-    await addGitMarker(fixtureRoot);
+    await addGitMarker(root);
     await writeEntry(
-      fixtureRoot,
+      root,
       'process.stdout.write(process.env.OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED ?? "0", () => process.exit(143));\n',
     );
 
-    const result = runLauncher(fixtureRoot, [], {
-      env: launcherEnv({ NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache") }),
+    const result = runLauncher(root, [], {
+      env: launcherEnv({ NODE_COMPILE_CACHE: path.join(root, ".node-compile-cache") }),
     });
 
     expect(result.stdout).toBe("1");
@@ -1348,22 +1338,21 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   it.runIf(process.platform !== "win32")(
     "respawns symlinked source-checkout launchers without inherited NODE_COMPILE_CACHE",
     async () => {
-      const fixtureRoot = await makeLauncherFixture(fixtures);
-      await addGitMarker(fixtureRoot);
-      await addCompileCacheProbe(fixtureRoot);
+      await addGitMarker(root);
+      await addCompileCacheProbe(root);
       const linkParent = fixtures.createTempDir("openclaw-launcher-link-");
       await fs.appendFile(
-        path.join(fixtureRoot, "dist", "entry.js"),
+        path.join(root, "dist", "entry.js"),
         '\nprocess.stdout.write("\\n" + process.argv[1]);\n',
       );
       for (const prefix of ["invoked", "on-path"]) {
-        const root = path.join(linkParent, prefix);
-        await fs.mkdir(path.join(root, "lib", "node_modules"), { recursive: true });
-        await fs.mkdir(path.join(root, "bin"));
-        await fs.symlink(fixtureRoot, path.join(root, "lib", "node_modules", "openclaw"), "dir");
+        const linkRoot = path.join(linkParent, prefix);
+        await fs.mkdir(path.join(linkRoot, "lib", "node_modules"), { recursive: true });
+        await fs.mkdir(path.join(linkRoot, "bin"));
+        await fs.symlink(root, path.join(linkRoot, "lib", "node_modules", "openclaw"), "dir");
         await fs.symlink(
           "../lib/node_modules/openclaw/openclaw.mjs",
-          path.join(root, "bin", "openclaw"),
+          path.join(linkRoot, "bin", "openclaw"),
         );
       }
       const launcher = path.join(linkParent, "invoked", "bin", "openclaw");
@@ -1390,9 +1379,8 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
     ["source", "preload-without-entry"],
     ["packaged", "preload-without-entry"],
   ] as const)("a %s cli-entry %s restarts the actual launcher", async (kind, invocation) => {
-    const fixtureRoot = await makeLauncherFixture(fixtures);
     await writeFixture(
-      fixtureRoot,
+      root,
       "package.json",
       JSON.stringify({
         name: "openclaw",
@@ -1402,10 +1390,10 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       }),
     );
     if (kind === "source") {
-      await addSourceTreeMarker(fixtureRoot);
+      await addSourceTreeMarker(root);
     }
     await writeEntry(
-      fixtureRoot,
+      root,
       [
         'import module from "node:module";',
         "process.stdout.write(JSON.stringify({",
@@ -1417,8 +1405,8 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         "}));",
       ].join("\n"),
     );
-    const hostMarker = path.join(fixtureRoot, "host-executions.txt");
-    const host = path.join(fixtureRoot, "host.mjs");
+    const hostMarker = path.join(root, "host-executions.txt");
+    const host = path.join(root, "host.mjs");
     if (invocation !== "preload-without-entry") {
       await fs.writeFile(
         host,
@@ -1438,16 +1426,16 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           ? ["--import", "openclaw/cli-entry", host, "proof-argument"]
           : ["--import", "openclaw/cli-entry"];
     const result = runNode(
-      fixtureRoot,
+      root,
       args,
-      { env: launcherEnv({ NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache") }) },
+      { env: launcherEnv({ NODE_COMPILE_CACHE: path.join(root, ".node-compile-cache") }) },
       testNodeExecPath,
     );
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toBe("");
     expect(JSON.parse(result.stdout)).toEqual({
-      launcher: path.join(fixtureRoot, "openclaw.mjs"),
+      launcher: path.join(root, "openclaw.mjs"),
       args: invocation === "preload-without-entry" ? [] : ["proof-argument"],
       cache: kind === "source" ? "disabled" : "enabled",
       sourceRespawn: kind === "source" ? "1" : "0",
@@ -1461,13 +1449,12 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   it.runIf(process.platform !== "win32")(
     "preserves a packaged pnpm project path through compile-cache respawn",
     async () => {
-      const fixtureRoot = await makeLauncherFixture(fixtures);
-      await writeFixture(fixtureRoot, "package.json", '{"version":"2026.8.1"}\n');
-      await writeEntry(fixtureRoot, 'process.stdout.write(process.argv[1] ?? "");\n');
+      await writeFixture(root, "package.json", '{"version":"2026.8.1"}\n');
+      await writeEntry(root, 'process.stdout.write(process.argv[1] ?? "");\n');
       const globalRoot = fixtures.createTempDir("openclaw-pnpm-global-");
       const packageRoot = path.join(globalRoot, "v11", "active", "node_modules", "openclaw");
       await fs.mkdir(path.dirname(packageRoot), { recursive: true });
-      await fs.symlink(fixtureRoot, packageRoot, "dir");
+      await fs.symlink(root, packageRoot, "dir");
       const launcher = path.join(packageRoot, "openclaw.mjs");
 
       const result = spawnSync(process.execPath, [launcher], {
@@ -1484,16 +1471,15 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   it.runIf(process.platform !== "win32")(
     "does not respawn native hook relays for packaged compile-cache scoping",
     async () => {
-      const fixtureRoot = await makeLauncherFixture(fixtures);
-      await writeFixture(fixtureRoot, "package.json", '{"version":"2026.4.29"}\n');
+      await writeFixture(root, "package.json", '{"version":"2026.4.29"}\n');
       await writeEntry(
-        fixtureRoot,
+        root,
         'process.stdout.write(process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED ?? "0");\n',
       );
 
-      const result = runLauncher(fixtureRoot, ["hooks", "relay"], {
+      const result = runLauncher(root, ["hooks", "relay"], {
         env: launcherEnv({
-          NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+          NODE_COMPILE_CACHE: path.join(root, ".node-compile-cache"),
         }),
       });
 
@@ -1505,42 +1491,22 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   it.each(["denied writes", "denied workers", "denied replacement", "unrestricted"] as const)(
     "keeps packaged cache maintenance within Node permissions: %s",
     async (mode) => {
-      const fixtureRoot = await makeLauncherFixture(fixtures);
-      const cache = path.join(fixtureRoot, "cache");
+      const cache = path.join(root, "cache");
       const retired = path.join(cache, "openclaw", "old", "build-retired");
       const expiredEntry = path.join(retired, "sentinel");
       await fs.mkdir(retired, { recursive: true });
       await fs.writeFile(expiredEntry, "preserve restricted cache");
       const expired = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
-      const directory = await seedCache(fixtureRoot, cache);
+      const directory = await seedCache(root, cache);
       await fs.utimes(expiredEntry, expired, expired);
       await fs.utimes(path.join(cache, "openclaw"), expired, expired);
-      const preload = path.join(fixtureRoot, "observe-maintenance.mjs");
+      const preload = path.join(root, "observe-maintenance.mjs");
       await fs.writeFile(
         preload,
-        `
-        import cp from "node:child_process";
-        import { syncBuiltinESMExports } from "node:module";
-        globalThis.maintenanceStarts = 0;
-        let started;
-        globalThis.maintenanceStarted = new Promise(resolve => { started = resolve; });
-        const originalSpawn = cp.spawn;
-        cp.spawn = function(command, args, options) {
-          const child = originalSpawn(command, args, options);
-          if (args.includes("--maintain")) {
-            globalThis.maintenanceStarts++;
-            globalThis.maintenanceCompleted = new Promise(resolve => child.once("exit", resolve));
-            // Keep this observer alive until the detached child has completed.
-            child.unref = () => {};
-            started();
-          }
-          return child;
-        };
-        syncBuiltinESMExports();
-      `,
+        maintenanceObserver("globalThis.maintenanceStarts = 0;", "globalThis.maintenanceStarts++;"),
       );
       await writeEntry(
-        fixtureRoot,
+        root,
         `
         if (!process.permission) {
           await globalThis.maintenanceStarted;
@@ -1555,17 +1521,15 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           : [
               "--permission",
               "--allow-fs-read=*",
-              ...(mode === "denied writes"
-                ? ["--allow-worker"]
-                : [`--allow-fs-write=${fixtureRoot}`]),
+              ...(mode === "denied writes" ? ["--allow-worker"] : [`--allow-fs-write=${root}`]),
             ];
       const result = runNode(
-        fixtureRoot,
+        root,
         [
           ...permissionArgs,
           "--import",
           pathToFileURL(preload).href,
-          path.join(fixtureRoot, "openclaw.mjs"),
+          path.join(root, "openclaw.mjs"),
         ],
         {
           env: launcherEnv({
@@ -1595,9 +1559,8 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   it.each(["execArgv", "NODE_OPTIONS"] as const)(
     "does not replay a packaged CLI preload in detached maintenance via %s",
     async (source) => {
-      const fixtureRoot = await makeLauncherFixture(fixtures);
       await writeFixture(
-        fixtureRoot,
+        root,
         "package.json",
         JSON.stringify({
           name: "openclaw",
@@ -1606,34 +1569,19 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           exports: { "./cli-entry": "./openclaw.mjs" },
         }),
       );
-      const log = path.join(fixtureRoot, "preload-events.jsonl");
-      const preload = path.join(fixtureRoot, "observe-preload.mjs");
+      const log = path.join(root, "preload-events.jsonl");
+      const preload = path.join(root, "observe-preload.mjs");
       await fs.writeFile(
         preload,
-        `
-        import fs from "node:fs";
-        import cp from "node:child_process";
-        import { syncBuiltinESMExports } from "node:module";
+        maintenanceObserver(
+          `import fs from "node:fs";
         const record = event => fs.appendFileSync(${JSON.stringify(log)}, event + "\\n");
-        record("preload");
-        let started;
-        globalThis.maintenanceStarted = new Promise(resolve => { started = resolve; });
-        const originalSpawn = cp.spawn;
-        cp.spawn = function(command, args, options) {
-          const child = originalSpawn(command, args, options);
-          if (args.includes("--maintain")) {
-            record("maintenance");
-            globalThis.maintenanceCompleted = new Promise(resolve => child.once("exit", resolve));
-            child.unref = () => {};
-            started();
-          }
-          return child;
-        };
-        syncBuiltinESMExports();
-      `,
+        record("preload");`,
+          'record("maintenance");',
+        ),
       );
       await writeEntry(
-        fixtureRoot,
+        root,
         `
         import fs from "node:fs";
         await globalThis.maintenanceStarted;
@@ -1641,14 +1589,14 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
         fs.appendFileSync(${JSON.stringify(log)}, "entry\\n");
       `,
       );
-      const host = path.join(fixtureRoot, "host.mjs");
+      const host = path.join(root, "host.mjs");
       await fs.writeFile(host, "");
-      const cache = path.join(fixtureRoot, "cache");
-      const directory = await seedCache(fixtureRoot, cache);
+      const cache = path.join(root, "cache");
+      const directory = await seedCache(root, cache);
       await fs.utimes(path.join(cache, "openclaw"), new Date(0), new Date(0));
       const preloads = ["--import", pathToFileURL(preload).href, "--import", "openclaw/cli-entry"];
       const result = runNode(
-        fixtureRoot,
+        root,
         [...(source === "execArgv" ? preloads : []), host],
         {
           env: launcherEnv({
@@ -1671,16 +1619,15 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   );
 
   it("prunes an oversized cache after the packaged command exits", async () => {
-    const fixtureRoot = await makeLauncherFixture(fixtures);
-    const cache = path.join(fixtureRoot, "cache");
-    const directory = await seedCache(fixtureRoot, cache);
+    const cache = path.join(root, "cache");
+    const directory = await seedCache(root, cache);
     const bytecode = path.join(directory, "oversized");
     const handle = await fs.open(bytecode, "w");
     await handle.truncate(600 * 1024 * 1024);
     await handle.close();
     await fs.utimes(path.join(cache, "openclaw"), new Date(0), new Date(0));
-    const cacheModule = path.join(fixtureRoot, "node-compile-cache.mjs");
-    const completedPath = path.join(fixtureRoot, "completed");
+    const cacheModule = path.join(root, "node-compile-cache.mjs");
+    const completedPath = path.join(root, "completed");
     const original = await fs.readFile(cacheModule, "utf8");
     // The maintenance child cannot prune until its launching CLI has exited.
     await fs.writeFile(
@@ -1700,7 +1647,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       ${original}
     `,
     );
-    const preload = path.join(fixtureRoot, "observe-detached.mjs");
+    const preload = path.join(root, "observe-detached.mjs");
     await fs.writeFile(
       preload,
       `
@@ -1713,7 +1660,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       cp.spawn = function(command, args, options) {
         if (!args.includes("--maintain")) return originalSpawn(command, args, options);
         const child = originalSpawn(command, args, { ...options, stdio: ["ignore", "ignore", "ignore", "ipc"] });
-        fs.writeFileSync(${JSON.stringify(path.join(fixtureRoot, "child-pid"))}, String(child.pid));
+        fs.writeFileSync(${JSON.stringify(path.join(root, "child-pid"))}, String(child.pid));
         child.once("message", () => { child.channel.unref(); started(); });
         return child;
       };
@@ -1721,7 +1668,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
     `,
     );
     await writeEntry(
-      fixtureRoot,
+      root,
       `
       await globalThis.maintenanceStarted;
       process.stdout.write("command-completed");
@@ -1729,8 +1676,8 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
     );
     try {
       const result = runNode(
-        fixtureRoot,
-        ["--import", pathToFileURL(preload).href, path.join(fixtureRoot, "openclaw.mjs")],
+        root,
+        ["--import", pathToFileURL(preload).href, path.join(root, "openclaw.mjs")],
         {
           env: launcherEnv({
             NODE_OPTIONS: undefined,
@@ -1751,7 +1698,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       expect((await fs.stat(path.join(cache, "openclaw"))).mtimeMs).toBeGreaterThan(0);
     } finally {
       if (!(await fs.stat(completedPath).catch(() => undefined))) {
-        const pid = await fs.readFile(path.join(fixtureRoot, "child-pid"), "utf8").catch(() => "");
+        const pid = await fs.readFile(path.join(root, "child-pid"), "utf8").catch(() => "");
         if (pid) {
           try {
             process.kill(Number(pid));
@@ -1764,19 +1711,18 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
   });
 
   it("scopes packaged launcher compile cache inside configured cache roots", async () => {
-    const fixtureRoot = await makeLauncherFixture(fixtures);
-    await writeFixture(fixtureRoot, "package.json", '{"version":"2026.4.29"}\n');
+    await writeFixture(root, "package.json", '{"version":"2026.4.29"}\n');
     await writeEntry(
-      fixtureRoot,
+      root,
       [
         'import module from "node:module";',
         "process.stdout.write(JSON.stringify({ directory: module.getCompileCacheDir?.(), respawn: process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED }));",
       ].join("\n"),
     );
 
-    const result = runLauncher(fixtureRoot, [], {
+    const result = runLauncher(root, [], {
       env: launcherEnv({
-        NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+        NODE_COMPILE_CACHE: path.join(root, ".node-compile-cache"),
       }),
     });
 
@@ -1784,7 +1730,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
     const original = JSON.parse(result.stdout) as { directory: string };
     expect(original.directory).toContain(path.join(".node-compile-cache", "openclaw", "2026.4.29"));
 
-    const child = runLauncher(fixtureRoot, [], {
+    const child = runLauncher(root, [], {
       env: launcherEnv({
         NODE_COMPILE_CACHE: path.dirname(original.directory),
         OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: undefined,
@@ -1805,11 +1751,10 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
     "disabled-empty",
     "cache-empty",
   ])("keeps Gateway main uncached and shares the worker cache base: %s", async (mode) => {
-    const fixtureRoot = await makeLauncherFixture(fixtures);
     const tmpRoot = fixtures.createTempDir("openclaw-launcher-cache-");
-    await writeFixture(fixtureRoot, "package.json", '{"version":"2026.9.6"}\n');
+    await writeFixture(root, "package.json", '{"version":"2026.9.6"}\n');
     if (mode === "source") {
-      await addGitMarker(fixtureRoot);
+      await addGitMarker(root);
     }
     // Separate compiled copies exercise the same cross-chunk boundary as runtime
     // entry/worker consumers, without reading or seeding a private owner slot.
@@ -1828,7 +1773,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
           loader: "ts",
         },
         format: "esm",
-        outfile: path.join(fixtureRoot, "dist", name),
+        outfile: path.join(root, "dist", name),
         platform: "node",
         target: "node24",
       });
@@ -1845,7 +1790,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       }
     }
     await writeEntry(
-      fixtureRoot,
+      root,
       `import assert from "node:assert/strict";
          import { getCompileCacheDir } from "node:module";
          import { Worker } from "node:worker_threads";
@@ -1855,7 +1800,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
          import { enableOpenClawCompileCache } from "./cache-owner.mjs";
          const before = { ...process.env };
          // Direct entry and launcher consumers share the same worker cache owner.
-         enableOpenClawCompileCache({ currentFile: ${JSON.stringify(path.join(fixtureRoot, mode === "source" ? "src/entry.ts" : "dist/entry.js"))}, installRoot: ${JSON.stringify(fixtureRoot)} });
+         enableOpenClawCompileCache({ currentFile: ${JSON.stringify(path.join(root, mode === "source" ? "src/entry.ts" : "dist/entry.js"))}, installRoot: ${JSON.stringify(root)} });
          const parentDirectory = getCompileCacheDir() ?? null;
          const a = resolveA();
          const b = resolveB();
@@ -1891,11 +1836,11 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
          process.stdout.write("cache-base:verified");`,
     );
     const args = [
-      path.join(fixtureRoot, mode === "direct" ? "dist/entry.js" : "openclaw.mjs"),
+      path.join(root, mode === "direct" ? "dist/entry.js" : "openclaw.mjs"),
       ...(mode === "foreign" ? ["status"] : ["gateway", "run"]),
     ];
     if (mode === "foreign") {
-      const preload = path.join(fixtureRoot, "foreign.mjs");
+      const preload = path.join(root, "foreign.mjs");
       await fs.writeFile(
         preload,
         `import assert from "node:assert/strict";
@@ -1906,7 +1851,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       args.unshift("--import", pathToFileURL(preload).href);
     }
     if (mode === "inherited-windows") {
-      const preload = path.join(fixtureRoot, "windows-execve.mjs");
+      const preload = path.join(root, "windows-execve.mjs");
       await fs.writeFile(
         preload,
         `Object.defineProperty(process, "platform", { value: "win32" });
@@ -1915,7 +1860,7 @@ console.log(JSON.stringify({ parent: process.pid, bun: process.versions.bun, mar
       args.unshift("--import", pathToFileURL(preload).href);
     }
     const result = runNode(
-      fixtureRoot,
+      root,
       args,
       {
         env: launcherEnv({

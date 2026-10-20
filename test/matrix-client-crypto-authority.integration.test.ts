@@ -15,6 +15,7 @@ vi.mock("node:dns/promises", async (importOriginal) => ({
 
 const DNS_ANSWER: LookupAddress[] = [{ address: "127.0.0.1", family: 4 }];
 const PROFILE = { displayname: "Nested Matrix reader" };
+const withAuthority = <T>(run: () => Promise<T>) => withChannelReadAuthority(() => undefined, run);
 
 class SdkCallbackMatrixClient extends MatrixClient {
   async runSdkDecryptionCallback(callback: () => Promise<void>): Promise<void> {
@@ -34,9 +35,7 @@ class SdkCallbackMatrixClient extends MatrixClient {
 }
 
 beforeEach(() => {
-  vi.unstubAllGlobals();
-  lookup.mockReset();
-  lookup.mockResolvedValue(DNS_ANSWER);
+  lookup.mockReset().mockResolvedValue(DNS_ANSWER);
 });
 
 afterEach(() => {
@@ -44,50 +43,43 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it.each([
-  { scope: "closed", closeB: true },
-  { scope: "active", closeB: false },
-])("honors $scope B authority inside a mocked SDK decryption callback", async ({ closeB }) => {
-  const dnsStarted = createDeferred<void>();
-  const dnsResult = createDeferred<LookupAddress[]>();
-  const finishB = createDeferred<void>();
-  const requestReady = createDeferred<{
-    request: ReturnType<MatrixClient["getUserProfile"]>;
-  }>();
-  lookup.mockImplementationOnce(() => {
-    dnsStarted.resolve();
-    return dnsResult.promise;
-  });
-  const runtimeFetch = vi.fn<typeof fetch>(async () => Response.json(PROFILE));
-  vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
-    Agent: function MockAgent() {},
-    EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
-    ProxyAgent: function MockProxyAgent() {},
-    fetch: runtimeFetch,
-  });
-  const client = new SdkCallbackMatrixClient("http://127.0.0.1:8008", "fixture-token", {
-    ssrfPolicy: { allowPrivateNetwork: true },
-  });
-  let decryption: Promise<void> | undefined;
-  let nestedRequest: ReturnType<MatrixClient["getUserProfile"]> | undefined;
+it.each([true, false])(
+  "honors nested B authority (closed=%s) in an SDK callback",
+  async (closeB) => {
+    const dnsStarted = createDeferred<void>();
+    const dnsResult = createDeferred<LookupAddress[]>();
+    const finishB = createDeferred<void>();
+    const requestReady = createDeferred<{
+      request: ReturnType<MatrixClient["getUserProfile"]>;
+    }>();
+    lookup.mockImplementationOnce(() => {
+      dnsStarted.resolve();
+      return dnsResult.promise;
+    });
+    const runtimeFetch = vi.fn<typeof fetch>(async () => Response.json(PROFILE));
+    vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", {
+      Agent: function MockAgent() {},
+      EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
+      ProxyAgent: function MockProxyAgent() {},
+      fetch: runtimeFetch,
+    });
+    const client = new SdkCallbackMatrixClient("http://127.0.0.1:8008", "fixture-token", {
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+    let decryption: Promise<void> | undefined;
+    let nestedRequest: ReturnType<MatrixClient["getUserProfile"]> | undefined;
 
-  try {
-    await withChannelReadAuthority(
-      () => undefined,
-      async () => {
-        decryption = client.runSdkDecryptionCallback(async () => {
-          await withChannelReadAuthority(
-            () => undefined,
-            async () => {
-              const request = client.getUserProfile("@nested:example.org");
-              nestedRequest = request;
-              await dnsStarted.promise;
-              requestReady.resolve({ request });
-              await finishB.promise;
-              return { request };
-            },
-          );
-        });
+    try {
+      await withAuthority(async () => {
+        decryption = client.runSdkDecryptionCallback(() =>
+          withAuthority(async () => {
+            const request = client.getUserProfile("@nested:example.org");
+            nestedRequest = request;
+            await dnsStarted.promise;
+            requestReady.resolve({ request });
+            await finishB.promise;
+          }),
+        );
         const { request } = await requestReady.promise;
         if (closeB) {
           finishB.resolve();
@@ -105,12 +97,12 @@ it.each([
 
         finishB.resolve();
         await decryption;
-      },
-    );
-  } finally {
-    finishB.resolve();
-    dnsResult.resolve(DNS_ANSWER);
-    await Promise.allSettled([decryption, nestedRequest]);
-    await client.stopWithoutPersist();
-  }
-});
+      });
+    } finally {
+      finishB.resolve();
+      dnsResult.resolve(DNS_ANSWER);
+      await Promise.allSettled([decryption, nestedRequest]);
+      await client.stopWithoutPersist();
+    }
+  },
+);

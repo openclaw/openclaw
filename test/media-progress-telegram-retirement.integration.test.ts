@@ -9,32 +9,20 @@ import {
 import { createMediaGenerationTaskLifecycle } from "../src/agents/tools/media-generate-background-shared.js";
 import { projectAgentToolActivity } from "../src/infra/agent-activity-events.js";
 
-// Root-owned integration: the media activity owner settles the card Telegram retained.
 const { createTelegramDispatchHttpFixture } = await loadTelegramDispatchHttpFixture();
 const http = createTelegramDispatchHttpFixture();
 const sessionKey = "agent:main:telegram:group:-100";
-const waitingText = "Waiting for the image.";
-
 const planStep = "Draw the wedding portrait";
+const tool = { name: "exec", toolCallId: "generate" };
 
-it.each<{ label: string; outcomes: ("delivered" | "failed")[]; maxLines?: number; plan?: true }>([
-  { label: "a delivered image", outcomes: ["delivered"] },
-  { label: "a failed image", outcomes: ["failed"] },
-  { label: "a delivered then a failed image", outcomes: ["delivered", "failed"] },
-  { label: "a failed then a delivered image", outcomes: ["failed", "delivered"] },
-  // Bounded cards keep the failure ahead of later rows and the turn's plan.
-  {
-    label: "a failed then a delivered image on a one-line card",
-    outcomes: ["failed", "delivered"],
-    maxLines: 1,
-  },
-  {
-    label: "a failed image on a one-line card with a plan",
-    outcomes: ["failed"],
-    maxLines: 1,
-    plan: true,
-  },
-])("keeps the quiet card until $label settles", async ({ outcomes, maxLines, plan }) => {
+it.each<{ outcomes: ("delivered" | "failed")[]; maxLines?: number; plan?: true }>([
+  { outcomes: ["delivered"] },
+  { outcomes: ["failed"] },
+  { outcomes: ["delivered", "failed"] },
+  { outcomes: ["failed", "delivered"] },
+  { outcomes: ["failed", "delivered"], maxLines: 1 },
+  { outcomes: ["failed"], maxLines: 1, plan: true },
+])("retires the quiet card after settlement: %j", async ({ outcomes, maxLines, plan }) => {
   onTestFinished(resetGeneratedMediaTaskActivityForTests);
   const runs = outcomes.map((outcome, index) => ({
     outcome,
@@ -55,16 +43,11 @@ it.each<{ label: string; outcomes: ("delivered" | "failed")[]; maxLines?: number
           steps: [{ step: planStep, status: "in_progress" }],
         });
       }
-      await http.emitToolStart(options, { name: "exec", phase: "start", toolCallId: "generate" });
+      await http.emitToolStart(options, { ...tool, phase: "start" });
       await http.waitForBotApiCall((call) => call.method === "sendMessage");
       // The wrapper ends once the detached media run has started.
       await options?.onItemEvent?.(
-        projectAgentToolActivity({
-          toolCallId: "generate",
-          name: "exec",
-          phase: "result",
-          isError: false,
-        }),
+        projectAgentToolActivity({ ...tool, phase: "result", isError: false }),
       );
     },
     {
@@ -74,7 +57,7 @@ it.each<{ label: string; outcomes: ("delivered" | "failed")[]; maxLines?: number
         ? { streaming: { mode: "progress", progress: { toolProgress: false, maxLines } } }
         : undefined,
       finalReply: setReplyPayloadMetadata(
-        { text: waitingText },
+        { text: "Waiting for the image." },
         {
           progressContinuation: {
             adopt: (draft) =>

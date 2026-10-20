@@ -1,23 +1,15 @@
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../scripts/lib/vitest-report-capture.mts";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
+import { withRunnerFixture } from "./non-isolated-runner.fixture-support.ts";
 import { sqliteLifecycleFixtureFiles } from "./non-isolated-runner.sqlite-fixtures.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
-const require = createRequire(import.meta.url);
-
-async function verifySqliteOwnerRetirement(signal: AbortSignal) {
-  const fixtureRoots = path.join(repoRoot, ".artifacts", "non-isolated-sqlite-lifecycle");
-  await fs.mkdir(fixtureRoots, { recursive: true });
-  // openclaw-temp-dir: allow retains an unjoined or failed child fixture for diagnosis.
-  const root = await fs.mkdtemp(path.join(fixtureRoots, "run-"));
-  try {
-    const vitestDir = path.dirname(require.resolve("vitest/package.json"));
-    await fs.symlink(path.dirname(vitestDir), path.join(root, "node_modules"), "junction");
+it("retires settled SQLite owners and attributes retained custody without poisoning the next file", (context) => {
+  const run = withRunnerFixture("non-isolated-sqlite-lifecycle", async ({ root, args, env }) => {
     const files = sqliteLifecycleFixtureFiles();
     for (const [name, content] of Object.entries(files)) {
       await fs.writeFile(path.join(root, name), content);
@@ -42,36 +34,19 @@ export default defineConfig({
 });
 `,
     );
-    const env = Object.fromEntries(
-      Object.entries(process.env).filter(
-        ([key]) =>
-          !key.startsWith("VITEST") &&
-          !key.startsWith("OPENCLAW_VITEST") &&
-          key !== "GITHUB_ACTIONS" &&
-          key !== "FORCE_COLOR",
-      ),
-    );
     const reportPath = path.join(root, "report.json");
     const result = await runVitestShutdownCommand({
       bin: process.execPath,
       args: [
-        path.join(vitestDir, "vitest.mjs"),
-        "run",
-        "--root",
-        root,
-        "--config",
-        path.join(root, "vitest.config.ts"),
-        "--configLoader",
-        "runner",
-        "--reporter=verbose",
+        ...args,
         "--reporter=json",
         `--reporter=${path.join(repoRoot, "scripts/lib/vitest-report-capture.mts")}`,
         `--outputFile.json=${reportPath}`,
       ],
       cwd: repoRoot,
-      env: { ...env, NO_COLOR: "1" },
+      env: { ...env, FORCE_COLOR: undefined, NO_COLOR: "1" },
       maxBytes: 4 * 1024 * 1024,
-      signal,
+      signal: context.signal,
     });
     expect(result.code, result.stdout + result.stderr).toBe(1);
     const output = result.stdout + result.stderr;
@@ -135,17 +110,7 @@ export default defineConfig({
       processTimedOut: false,
       ended: { reason: "failed", unhandledErrors: 0, failedModules: 1, suiteErrors: 2 },
     });
-    await fs.rm(root, { recursive: true, force: true });
-  } catch (error) {
-    if (error instanceof Error) {
-      error.message += `; retained fixture ${root}`;
-    }
-    throw error;
-  }
-}
-
-it("retires settled SQLite owners and attributes retained custody without poisoning the next file", (context) => {
-  const run = verifySqliteOwnerRetirement(context.signal);
+  });
   context.onTestFinished(() => run);
   return run;
 });
