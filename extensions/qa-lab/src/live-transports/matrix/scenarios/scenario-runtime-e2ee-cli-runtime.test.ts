@@ -20,6 +20,12 @@ vi.mock("openclaw/plugin-sdk/temp-path", () => ({
   resolvePreferredOpenClawTmpDir: () => fixture.tempRoot,
 }));
 
+const account = {
+  accountId: "self",
+  accessToken: "test-access-token",
+  deviceId: "TEST-DEVICE",
+  userId: "@self:matrix-qa.test",
+};
 const constructors = [
   {
     name: "setup",
@@ -33,13 +39,7 @@ const constructors = [
   {
     name: "self-verification",
     create: (context: MatrixQaScenarioContext) =>
-      createMatrixQaCliSelfVerificationRuntime({
-        context,
-        accountId: "self",
-        accessToken: "test-access-token",
-        deviceId: "TEST-DEVICE",
-        userId: "@self:matrix-qa.test",
-      }),
+      createMatrixQaCliSelfVerificationRuntime({ context, ...account }),
   },
 ];
 
@@ -47,12 +47,9 @@ const recoveryConstructor = {
   name: "recovery",
   create: async (context: MatrixQaScenarioContext) => {
     const runtime = await createMatrixQaRecoveryCliRuntime({
-      accountId: "self",
-      accessToken: "test-access-token",
+      ...account,
       context,
-      deviceId: "TEST-DEVICE",
       label: "recovery",
-      userId: "@self:matrix-qa.test",
     });
     return { ...runtime, rootDir: runtime.artifactDir };
   },
@@ -61,6 +58,7 @@ const recoveryConstructor = {
 describe("Matrix CLI construction", () => {
   let root: string;
   let outputDir: string;
+  const context = () => createMatrixQaE2eeTestContext({ outputDir, gatewayRuntimeEnv: {} });
   beforeEach(async () => {
     const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
     vi.mocked(fs.writeFile).mockReset().mockImplementation(actual.writeFile);
@@ -90,9 +88,7 @@ describe("Matrix CLI construction", () => {
   describe.each([...constructors, recoveryConstructor])("$name", ({ create }) => {
     it("removes its temp root on an actual filesystem setup failure", async () => {
       await fs.writeFile(outputDir, "not a directory");
-      await expect(
-        create(createMatrixQaE2eeTestContext({ outputDir, gatewayRuntimeEnv: {} })),
-      ).rejects.toMatchObject({ code: "ENOTDIR" });
+      await expect(create(context())).rejects.toMatchObject({ code: "ENOTDIR" });
       expect(await fs.readdir(fixture.tempRoot)).toEqual([]);
       expect(await fs.readFile(outputDir, "utf8")).toBe("not a directory");
     });
@@ -102,15 +98,14 @@ describe("Matrix CLI construction", () => {
       const cleanupFailure = new Error("temp removal failed");
       vi.mocked(fs.writeFile).mockRejectedValueOnce(setupFailure);
       vi.mocked(fs.rm).mockRejectedValueOnce(cleanupFailure);
-      await expect(
-        create(createMatrixQaE2eeTestContext({ outputDir, gatewayRuntimeEnv: {} })),
-      ).rejects.toMatchObject({ cause: setupFailure, errors: [setupFailure, cleanupFailure] });
+      await expect(create(context())).rejects.toMatchObject({
+        cause: setupFailure,
+        errors: [setupFailure, cleanupFailure],
+      });
     });
 
     it("keeps successful private state until disposal and preserves the artifact directory", async () => {
-      const runtime = await create(
-        createMatrixQaE2eeTestContext({ outputDir, gatewayRuntimeEnv: {} }),
-      );
+      const runtime = await create(context());
       const privateRoot = path.dirname(runtime.configPath);
       try {
         const config = JSON.parse(await fs.readFile(runtime.configPath, "utf8"));

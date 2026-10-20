@@ -9,7 +9,10 @@ vi.mock("./scenario-runtime-shared.js", async (importOriginal) => ({
 
 import { createMatrixQaE2eeTestContext } from "./scenario-runtime-e2ee.test-helpers.js";
 import { runGeneratedImageDeliveryScenario, testing } from "./scenario-runtime-media.js";
-import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
+import type {
+  createMatrixQaScenarioClient,
+  MatrixQaScenarioContext,
+} from "./scenario-runtime-shared.js";
 
 describe("Matrix voice preflight reply matching", () => {
   it("accepts punctuation differences in the transcribed marker", () => {
@@ -27,16 +30,8 @@ function createGeneratedImageContext(
   observedEvents: MatrixQaScenarioContext["observedEvents"] = [],
 ): MatrixQaScenarioContext {
   return createMatrixQaE2eeTestContext({
-    baseUrl: "http://127.0.0.1:28008",
-    driverAccessToken: "driver-token",
-    driverUserId: "@driver:matrix-qa.test",
     observedEvents,
-    observerAccessToken: "observer-token",
-    observerUserId: "@observer:matrix-qa.test",
     roomId,
-    sutAccessToken: "sut-token",
-    sutUserId: "@sut:matrix-qa.test",
-    syncStreams: {},
     timeoutMs: 180_000,
     topology: {
       defaultRoomId: roomId,
@@ -61,13 +56,25 @@ function createGeneratedImageContext(
   });
 }
 
+function primeGeneratedImageClient(
+  waitForOptionalRoomEvent: ReturnType<
+    typeof createMatrixQaScenarioClient
+  >["waitForOptionalRoomEvent"],
+) {
+  const sendTextMessage = vi.fn(async () => "$driver-trigger");
+  primeMatrixQaDriverScenarioClient.mockResolvedValue({
+    client: { sendTextMessage, waitForOptionalRoomEvent },
+    startSince: "start",
+  });
+  return sendTextMessage;
+}
+
 describe("Matrix generated image delivery", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
   it("sends one trigger and accepts one fresh top-level image", async () => {
-    const sendTextMessage = vi.fn(async () => "$driver-trigger");
     const waitForOptionalRoomEvent = vi.fn(async ({ predicate }) => {
       const event = {
         attachment: { filename: "generated.png", kind: "image" as const },
@@ -82,10 +89,7 @@ describe("Matrix generated image delivery", () => {
       expect(predicate(event)).toBe(true);
       return { event, matched: true as const, since: "next" };
     });
-    primeMatrixQaDriverScenarioClient.mockResolvedValue({
-      client: { sendTextMessage, waitForOptionalRoomEvent },
-      startSince: "start",
-    });
+    const sendTextMessage = primeGeneratedImageClient(waitForOptionalRoomEvent);
 
     const result = await runGeneratedImageDeliveryScenario(createGeneratedImageContext());
 
@@ -105,24 +109,13 @@ describe("Matrix generated image delivery", () => {
       type: "m.room.message",
     }));
     observedEvents.push({
-      body: "other room",
+      ...observedEvents[0],
       eventId: "$other-room",
-      kind: "message",
       roomId: "!other:matrix-qa.test",
-      sender: "@sut:matrix-qa.test",
-      type: "m.room.message",
     });
-    const sendTextMessage = vi.fn(async () => "$driver-trigger");
-    primeMatrixQaDriverScenarioClient.mockResolvedValue({
-      client: {
-        sendTextMessage,
-        waitForOptionalRoomEvent: vi.fn(async () => ({
-          matched: false as const,
-          since: "next",
-        })),
-      },
-      startSince: "start",
-    });
+    const sendTextMessage = primeGeneratedImageClient(
+      vi.fn(async () => ({ matched: false as const, since: "next" })),
+    );
 
     const error = await runGeneratedImageDeliveryScenario(
       createGeneratedImageContext(observedEvents),

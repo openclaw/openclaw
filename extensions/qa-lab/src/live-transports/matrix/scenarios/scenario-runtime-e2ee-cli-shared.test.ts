@@ -30,127 +30,96 @@ describe("Matrix QA destructive CLI JSON boundary", () => {
   const rawDetail = "GET /_matrix/client/v3/sync?access_token=abcdef1234567890ghij";
   const redactedDetail = "GET /_matrix/client/v3/sync?access_token=abcdef…ghij";
   const stdout = ` {"success":false,"backup":{"matchesDecryptionKey":null,"extra":false},"imported":0,"values":[0,false,null,""],"detail":"${rawDetail}"}\n`;
-  const redactedStdout = ` {"success":false,"backup":{"matchesDecryptionKey":null,"extra":false},"imported":0,"values":[0,false,null,""],"detail":"${redactedDetail}"}\n`;
   const stderr = `{"fallback":true,"detail":"${rawDetail}"}`;
-  const redactedStderr = `{"fallback":true,"detail":"${redactedDetail}"}`;
 
   it.each([
-    {
-      name: "returns authoritative stdout and both redacted artifacts",
-      outcome: "success",
-      stdout,
+    ["returns authoritative stdout and redacted artifacts", "success", stdout, stderr],
+    ["rejects malformed stdout despite valid stderr", "stdout", `  {]\n${rawDetail}\n`, stderr],
+    ["labels malformed stderr when stdout is blank", "stderr", " \n", `\t{]\n${rawDetail}  `],
+    [
+      "rejects malformed status fields after preserving redacted artifacts",
+      "status",
+      `{"backup":{"decryptionKeyCached":"yes"},"detail":"${rawDetail}"}`,
       stderr,
-      expectedStdout: redactedStdout,
-      expectedStderr: redactedStderr,
-    },
-    {
-      name: "rejects malformed stdout without falling back to valid stderr",
-      outcome: "stdout",
-      stdout: `  {]\n${rawDetail}\n`,
-      stderr,
-      expectedStdout: `  {]\n${redactedDetail}\n`,
-      expectedStderr: redactedStderr,
-    },
-    {
-      name: "labels malformed stderr when stdout is blank",
-      outcome: "stderr",
-      stdout: " \n",
-      stderr: `\t{]\n${rawDetail}  `,
-      expectedStdout: " \n",
-      expectedStderr: `\t{]\n${redactedDetail}  `,
-    },
-    {
-      name: "rejects malformed status fields after preserving redacted artifacts",
-      outcome: "status",
-      stdout: `{"backup":{"decryptionKeyCached":"yes"},"detail":"${rawDetail}"}`,
-      stderr,
-      expectedStdout: `{"backup":{"decryptionKeyCached":"yes"},"detail":"${redactedDetail}"}`,
-      expectedStderr: redactedStderr,
-    },
-    {
-      name: "rejects empty streams without a JSON parser cause",
-      outcome: "empty",
-      stdout: " \n",
-      stderr: "\t ",
-      expectedStdout: " \n",
-      expectedStderr: "\t ",
-    },
-  ])(
-    "$name",
-    async ({ outcome, stdout: output, stderr: errorOutput, expectedStdout, expectedStderr }) => {
-      const root = tempDirs.make("matrix-qa-json-");
-      const artifactDir = path.join(root, "artifacts");
-      const artifacts = {
-        stdoutPath: path.join(artifactDir, "json-output.stdout.txt"),
-        stderrPath: path.join(artifactDir, "json-output.stderr.txt"),
-      };
-      const result: MatrixQaCliRunResult = {
-        args,
-        exitCode: 7,
-        stdout: output,
-        stderr: errorOutput,
-      };
-      const run = vi.fn<MatrixQaCliRuntime["run"]>().mockResolvedValue(result);
-      const runtime: MatrixQaCliRuntime = {
-        artifactDir,
-        configPath: path.join(root, "config.json"),
-        stateDir: path.join(root, "state"),
-        dispose: async () => undefined,
-        run,
-        start: () => {
-          throw new Error("The JSON wrapper must not start an interactive CLI session");
-        },
-      };
-      const pending = runMatrixQaCliJson({
-        args,
-        allowNonZero: true,
-        stdin: "fixture-input\n",
-        timeoutMs: 1_234,
-        label: "json-output",
-        runtime,
+    ],
+    ["rejects empty streams without a JSON parser cause", "empty", " \n", "\t "],
+  ])("%s", async (_name, outcome, output, errorOutput) => {
+    const root = tempDirs.make("matrix-qa-json-");
+    const artifactDir = path.join(root, "artifacts");
+    const artifacts = {
+      stdoutPath: path.join(artifactDir, "json-output.stdout.txt"),
+      stderrPath: path.join(artifactDir, "json-output.stderr.txt"),
+    };
+    const result: MatrixQaCliRunResult = {
+      args,
+      exitCode: 7,
+      stdout: output,
+      stderr: errorOutput,
+    };
+    const run = vi.fn<MatrixQaCliRuntime["run"]>().mockResolvedValue(result);
+    const runtime: MatrixQaCliRuntime = {
+      artifactDir,
+      configPath: path.join(root, "config.json"),
+      stateDir: path.join(root, "state"),
+      dispose: async () => undefined,
+      run,
+      start: () => {
+        throw new Error("The JSON wrapper must not start an interactive CLI session");
+      },
+    };
+    const pending = runMatrixQaCliJson({
+      args,
+      allowNonZero: true,
+      stdin: "fixture-input\n",
+      timeoutMs: 1_234,
+      label: "json-output",
+      runtime,
+    });
+    if (outcome === "success") {
+      const actual = await pending;
+      expect(actual.result).toBe(result);
+      expect(actual.payload).toStrictEqual({
+        success: false,
+        backup: { matchesDecryptionKey: null, extra: false },
+        imported: 0,
+        values: [0, false, null, ""],
+        detail: rawDetail,
       });
-      if (outcome === "success") {
-        const actual = await pending;
-        expect(actual.result).toBe(result);
-        expect(actual.payload).toStrictEqual({
-          success: false,
-          backup: { matchesDecryptionKey: null, extra: false },
-          imported: 0,
-          values: [0, false, null, ""],
-          detail: rawDetail,
+      expect(actual.artifacts).toEqual(artifacts);
+    } else {
+      const failure = await pending.catch((caught: unknown) => caught);
+      expect(failure).toBeInstanceOf(Error);
+      const error = failure as Error;
+      if (outcome === "status") {
+        expect(error).toMatchObject({
+          name: "ZodError",
+          issues: [{ code: "invalid_type", path: ["backup", "decryptionKeyCached"] }],
         });
-        expect(actual.artifacts).toEqual(artifacts);
+      } else if (outcome === "empty") {
+        expect(error.message).toBe(`${command} did not print JSON`);
+        expect(error).not.toHaveProperty("cause");
       } else {
-        const failure = await pending.catch((caught: unknown) => caught);
-        expect(failure).toBeInstanceOf(Error);
-        const error = failure as Error;
-        if (outcome === "status") {
-          expect(error).toMatchObject({
-            name: "ZodError",
-            issues: [{ code: "invalid_type", path: ["backup", "decryptionKeyCached"] }],
-          });
-        } else if (outcome === "empty") {
-          expect(error.message).toBe(`${command} did not print JSON`);
-          expect(error).not.toHaveProperty("cause");
-        } else {
-          expect(error.cause).toBeInstanceOf(SyntaxError);
-          expect(error.message).toBe(
-            `${command} printed invalid JSON: ${(error.cause as Error).message}\n${outcome}:\n{]\n${redactedDetail}`,
-          );
-        }
+        expect(error.cause).toBeInstanceOf(SyntaxError);
+        expect(error.message).toBe(
+          `${command} printed invalid JSON: ${(error.cause as Error).message}\n${outcome}:\n{]\n${redactedDetail}`,
+        );
       }
-      expect(readFileSync(artifacts.stdoutPath, "utf8")).toBe(expectedStdout);
-      expect(readFileSync(artifacts.stderrPath, "utf8")).toBe(expectedStderr);
-      expect(run).toHaveBeenCalledExactlyOnceWith(args, {
-        allowNonZero: true,
-        stdin: "fixture-input\n",
-        timeoutMs: 1_234,
-      });
-      if (process.platform !== "win32") {
-        expect((await stat(artifactDir)).mode & 0o777).toBe(0o700);
-        expect((await stat(artifacts.stdoutPath)).mode & 0o777).toBe(0o600);
-        expect((await stat(artifacts.stderrPath)).mode & 0o777).toBe(0o600);
-      }
-    },
-  );
+    }
+    expect(readFileSync(artifacts.stdoutPath, "utf8")).toBe(
+      output.replaceAll(rawDetail, redactedDetail),
+    );
+    expect(readFileSync(artifacts.stderrPath, "utf8")).toBe(
+      errorOutput.replaceAll(rawDetail, redactedDetail),
+    );
+    expect(run).toHaveBeenCalledExactlyOnceWith(args, {
+      allowNonZero: true,
+      stdin: "fixture-input\n",
+      timeoutMs: 1_234,
+    });
+    if (process.platform !== "win32") {
+      expect((await stat(artifactDir)).mode & 0o777).toBe(0o700);
+      expect((await stat(artifacts.stdoutPath)).mode & 0o777).toBe(0o600);
+      expect((await stat(artifacts.stderrPath)).mode & 0o777).toBe(0o600);
+    }
+  });
 });

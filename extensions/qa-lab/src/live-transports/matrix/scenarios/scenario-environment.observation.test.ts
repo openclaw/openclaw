@@ -1,4 +1,3 @@
-// QA Lab Matrix tests cover scenario environment readiness boundaries.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockMatrixQaHttp } from "../substrate/http.test-support.js";
 
@@ -26,6 +25,11 @@ afterEach(() => {
 
 describe("matrix scenario observation", () => {
   it("resets passive observers without acknowledging encrypted-device messages", async () => {
+    const configSnapshots = [
+      { config: {} },
+      { hash: "config-hash" },
+      { appliedConfigHash: "config-hash", configRevisionHash: "config-hash", hash: "config-hash" },
+    ];
     let configReadCount = 0;
     const gateway = {
       baseUrl: "http://127.0.0.1:12345",
@@ -34,19 +38,7 @@ describe("matrix scenario observation", () => {
       workspaceDir: "/tmp/matrix-qa/workspace",
       call: vi.fn(async (method: string) => {
         if (method === "config.get") {
-          configReadCount += 1;
-          const phase = (configReadCount - 1) % 3;
-          if (phase === 0) {
-            return { config: {} };
-          }
-          if (phase === 1) {
-            return { hash: "config-hash" };
-          }
-          return {
-            appliedConfigHash: "config-hash",
-            configRevisionHash: "config-hash",
-            hash: "config-hash",
-          };
+          return configSnapshots[configReadCount++ % configSnapshots.length];
         }
         if (method === "config.patch") {
           return { hash: "config-hash", changedPaths: [], noop: true, ok: true };
