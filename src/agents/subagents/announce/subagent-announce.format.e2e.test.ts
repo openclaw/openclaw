@@ -1238,7 +1238,6 @@ describe("subagent announce formatting", () => {
         deliver: false,
         channel: undefined,
         to: undefined,
-        role: undefined,
       },
       whatsappOrigin,
     ),
@@ -1264,6 +1263,7 @@ describe("subagent announce formatting", () => {
       expect(call).toMatchObject({ expectFinal: true });
     }
     if (kind === "nested") {
+      expect(call.params?.role).toBeUndefined();
       expectInputProvenance(call.params, workerKey);
     }
   });
