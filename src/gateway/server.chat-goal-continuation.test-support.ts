@@ -9,7 +9,6 @@ import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/sess
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import type { RespondFn } from "./server-methods/types.js";
 
-/** Reuse the suite's admission, queue and reply owners; only provider execution is simulated. */
 export function registerGoalAutomaticContinuationCases(
   scope: () => { agentId: string; sessionKey: string; sessionId: string; storePath: string },
   runEmbeddedAgent: MockInstance<typeof executeEmbeddedAgent>,
@@ -20,12 +19,8 @@ export function registerGoalAutomaticContinuationCases(
   goalStart: (message: string) => Record<string, unknown>,
   userMessages: () => readonly unknown[],
 ) {
-  const result = (
-    sessionId: string,
-    text: string,
-    aborted?: boolean,
-  ): Awaited<ReturnType<typeof executeEmbeddedAgent>> => ({
-    payloads: aborted ? [] : [{ text }],
+  const result = (sessionId: string, aborted?: boolean) => ({
+    payloads: aborted ? [] : [{ text: "More work remains." }],
     meta: {
       durationMs: 0,
       stopReason: aborted ? "aborted" : "end_turn",
@@ -35,20 +30,23 @@ export function registerGoalAutomaticContinuationCases(
   });
   const expectDrained = async () =>
     expect((await waitForGatewayActiveWork(30_000)).drained).toBe(true);
+  const setGoalStatus = (status: "complete" | "paused") =>
+    patchSessionEntryCore(scope(), (entry) => ({
+      goal: entry.goal ? { ...entry.goal, status } : undefined,
+    }));
+  const start = async (message: string) =>
+    expect((await rpc("chat.send", goalStart(message))).mock.calls[0]?.[0]).toBe(true);
   it("nudges consecutive normal final turns until the same Goal is complete", async () => {
     const completed = createDeferred();
     runEmbeddedAgent.mockImplementation(async (params) => {
       const calls = runEmbeddedAgent.mock.calls.length;
       if (calls === 3) {
-        await patchSessionEntryCore(scope(), (entry) => ({
-          goal: entry.goal ? { ...entry.goal, status: "complete" } : undefined,
-        }));
+        await setGoalStatus("complete");
         completed.resolve();
       }
-      return result(params.sessionId, calls === 3 ? "Verified the goal." : "More work remains.");
+      return result(params.sessionId);
     });
-    const started = await rpc("chat.send", goalStart("Finish a three-turn checklist"));
-    expect(started.mock.calls[0]?.[0]).toBe(true);
+    await start("Finish a three-turn checklist");
     await completed.promise;
     await expectDrained();
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(3);
@@ -68,6 +66,7 @@ export function registerGoalAutomaticContinuationCases(
     let continuationSignal: AbortSignal | undefined;
     let continuationRunId: string | undefined;
     runEmbeddedAgent.mockImplementation(async (params) => {
+      const { sessionId: id, sessionFile: file, replyOperation: operation } = params;
       const second = runEmbeddedAgent.mock.calls.length === 2;
       if (second) {
         continuationRunId = params.runId;
@@ -90,31 +89,19 @@ export function registerGoalAutomaticContinuationCases(
           isCompacting: () => false,
           queueMessage: async () => {},
         };
-        params.replyOperation?.attachBackend(backend);
-        attachActiveEmbeddedRun(
-          params.sessionId,
-          backend,
-          sessionKey,
-          params.sessionFile,
-          "main",
-          params.replyOperation,
-        );
+        operation?.attachBackend(backend);
+        attachActiveEmbeddedRun(id, backend, sessionKey, file, "main", operation);
         secondStarted.resolve();
         try {
           await released.promise;
         } finally {
-          detachActiveEmbeddedRun(params.sessionId, backend, sessionKey, params.sessionFile);
-          params.replyOperation?.detachBackend(backend);
+          detachActiveEmbeddedRun(id, backend, sessionKey, file);
+          operation?.detachBackend(backend);
         }
       }
-      return result(
-        params.sessionId,
-        "The goal is not complete yet.",
-        continuationSignal?.aborted === true,
-      );
+      return result(id, continuationSignal?.aborted === true);
     });
-    const started = await rpc("chat.send", goalStart("Keep working until stopped"));
-    expect(started.mock.calls[0]?.[0]).toBe(true);
+    await start("Keep working until stopped");
     try {
       await secondStarted.promise;
       const stopped = await rpc("sessions.abort", { key: sessionKey, runId: continuationRunId });
@@ -122,9 +109,7 @@ export function registerGoalAutomaticContinuationCases(
       expect(continuationSignal?.aborted).toBe(true);
     } finally {
       if (continuationSignal?.aborted !== true) {
-        await patchSessionEntryCore(scope(), (entry) => ({
-          goal: entry.goal ? { ...entry.goal, status: "paused" } : undefined,
-        }));
+        await setGoalStatus("paused");
       }
       released.resolve();
     }

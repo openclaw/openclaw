@@ -21,7 +21,6 @@ import { installConnectedControlUiServerSuite } from "./test-with-server.js";
 
 type ConnectedServerReady = Parameters<typeof installConnectedControlUiServerSuite>[0];
 
-/** Install one isolated connected Gateway and session-store lifecycle for a chat test file. */
 export function installGatewayServerChatTestSuite(
   onReady: ConnectedServerReady,
   waitForConnectWork?: () => Promise<void>,
@@ -60,71 +59,51 @@ export function installGatewayServerChatTestSuite(
   afterAll(mainSessionStore.dispose);
 
   const socket = () => expectDefined(ws, "connected Gateway socket");
-  const expectRunStatus = (res: Awaited<ReturnType<typeof rpcReq>>, status: string) =>
-    expect(res).toMatchObject({ ok: true, payload: { status } });
-  const expectAgentWaitTimeout = (res: Awaited<ReturnType<typeof rpcReq>>, error?: string) => {
-    expectRunStatus(res, "timeout");
-    if (error !== undefined) {
-      expect(res.payload).toMatchObject({ error, pendingError: true });
-    }
-  };
-  const expectAgentWaitStartedAt = (res: Awaited<ReturnType<typeof rpcReq>>, startedAt: number) => {
-    expectRunStatus(res, "ok");
-    expect(res.payload?.startedAt).toBe(startedAt);
-  };
-  const sendChatAndExpectStarted = async (runId: string, message = "/context list") => {
-    const res = await rpcReq(socket(), "chat.send", {
-      sessionKey: "main",
-      message,
-      idempotencyKey: runId,
-    });
-    expectRunStatus(res, "started");
-    return res;
-  };
-  const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000, target = socket()) => {
-    const res = await rpcReq(target, "agent.wait", { runId, timeoutMs });
-    expectRunStatus(res, "ok");
-    return res;
-  };
-  const waitForAgentRunDrained = async (runId: string, target = socket()) => {
-    await expectDefined(requestExecution, "request execution observer").waitForCompletion(runId);
-    await waitForConnectWork?.();
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-    await waitForAgentRunOk(runId, 0, target);
-  };
-  const abortChatRun = async (runId: string) => {
-    const res = await rpcReq(socket(), "chat.abort", { sessionKey: "main", runId });
+  const request = async (method: string, params: unknown, status?: string, target = socket()) => {
+    const res = await rpcReq(target, method, params);
     expect(res.ok).toBe(true);
+    if (status !== undefined) {
+      expect(res.payload?.status).toBe(status);
+    }
     return res;
   };
-  const mockBlockedChatReply = () => {
-    const blockedReply = createDeferred();
-    mockGetReplyFromConfigOnce(async (_ctx, opts) => {
-      await new Promise<void>((resolve) => {
-        void blockedReply.promise.then(resolve);
-        if (opts?.abortSignal?.aborted) {
-          resolve();
-        } else {
-          opts?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
-        }
-      });
-      return undefined;
-    });
-    return blockedReply.resolve;
-  };
-
   return {
-    abortChatRun,
-    expectAgentWaitStartedAt,
-    expectAgentWaitTimeout,
+    abortChatRun: (runId: string) => request("chat.abort", { sessionKey: "main", runId }),
+    expectAgentWaitStartedAt: (res: Awaited<ReturnType<typeof rpcReq>>, startedAt: number) =>
+      expect(res).toMatchObject({ ok: true, payload: { status: "ok", startedAt } }),
+    expectAgentWaitTimeout(res: Awaited<ReturnType<typeof rpcReq>>, error?: string) {
+      expect(res).toMatchObject({ ok: true, payload: { status: "timeout" } });
+      if (error !== undefined) {
+        expect(res.payload).toMatchObject({ error, pendingError: true });
+      }
+    },
     expectRecordFields,
     get requestExecution() {
       return expectDefined(requestExecution, "request execution observer");
     },
-    mockBlockedChatReply,
-    sendChatAndExpectStarted,
+    mockBlockedChatReply() {
+      const blockedReply = createDeferred();
+      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+        await new Promise<void>((resolve) => {
+          void blockedReply.promise.then(resolve);
+          if (opts?.abortSignal?.aborted) {
+            resolve();
+          } else {
+            opts?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          }
+        });
+      });
+      return blockedReply.resolve;
+    },
+    sendChatAndExpectStarted: (runId: string, message = "/context list") =>
+      request("chat.send", { sessionKey: "main", message, idempotencyKey: runId }, "started"),
     settleGatewayFixture,
-    waitForAgentRunDrained,
+    async waitForAgentRunDrained(runId: string, target = socket()) {
+      await expectDefined(requestExecution, "request execution observer").waitForCompletion(runId);
+      await waitForConnectWork?.();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      await request("agent.wait", { runId, timeoutMs: 0 }, "ok", target);
+    },
     withMainSessionStore: mainSessionStore.run,
   };
 }

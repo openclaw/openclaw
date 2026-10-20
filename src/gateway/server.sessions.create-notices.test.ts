@@ -9,7 +9,7 @@ import {
   attachGatewayLocalUserIngress,
   prepareGatewayLocalUserIngress,
 } from "./local-user-ingress.js";
-import type { GatewayClient } from "./server-methods/types.js";
+import type { TrustedSessionCreation } from "./session-creation-provenance.js";
 import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
@@ -38,9 +38,7 @@ test("sessions.create preserves creation and notices after an unknown signal out
     params: Record<string, unknown>,
     creator: Parameters<typeof directSessionReq>[2] = { client: client as never },
   ) => directSessionReq<{ key?: string; entry?: SessionEntry }>("sessions.create", params, creator);
-  const syntheticClient = (
-    sessionCreation?: NonNullable<GatewayClient["internal"]>["sessionCreation"],
-  ) => ({
+  const syntheticClient = (sessionCreation?: TrustedSessionCreation) => ({
     client: {
       connect: { scopes: ["operator.write"] },
       internal: { syntheticClient: true, sessionCreation },
@@ -73,18 +71,16 @@ test("sessions.create preserves creation and notices after an unknown signal out
   );
 
   const notices = drainSystemEvents("agent:main:main");
-  expect(notices).toHaveLength(1);
-  expect(notices[0]).toContain("New session created");
-  expect(notices[0]).toContain("Investigate build failure");
-  expect(notices[0]).toContain(profileId);
-  expect(notices[0]).toContain(key);
-  expect(notices[0]).toContain("operator");
+  expect(notices).toEqual([expect.stringContaining("New session created")]);
+  for (const text of ["Investigate build failure", profileId, key, "operator"]) {
+    expect(notices[0]).toContain(text);
+  }
 
   const existing = await create({ key });
   expect(existing.ok).toBe(true);
   expect(peekSystemEvents("agent:main:main")).toEqual([]);
   expect((await listSessionStateEventsSince(key, "main", 0, 20)).events).toHaveLength(1);
-  const described = await directSessionReq<{ session: { key: string } }>(
+  const described = await directSessionReq(
     "sessions.describe",
     { key },
     { client: client as never },

@@ -1,7 +1,8 @@
-// Real Gateway proof: execute only on a machine with isolated SQLite coordination.
 import { expect, it } from "vitest";
 import type { WebSocket } from "ws";
 import type { SessionCatalogHost } from "../../packages/gateway-protocol/src/index.js";
+import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
@@ -13,13 +14,6 @@ import {
 } from "./test-helpers.server.js";
 
 installGatewayTestHooks({ scope: "suite" });
-
-type CatalogResponse = {
-  type: "res";
-  id: string;
-  ok: boolean;
-  payload?: { catalogs: Array<{ id: string; hosts: unknown[] }> };
-};
 
 it("shares a held catalog RPC after 128 distinct catalog results settle", async ({ signal }) => {
   const token = "catalog-sharing-proof-token";
@@ -36,7 +30,7 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
   };
   const publishHeldHosts: Array<() => void> = [];
   const providerRuns: Promise<SessionCatalogHost[]>[] = [];
-  const requests: Promise<CatalogResponse>[] = [];
+  const requests: Promise<ResponseFrame>[] = [];
   const expectCatalog = (response: unknown, id: string, hosts: SessionCatalogHost[] = []) =>
     expect(response).toMatchObject({ ok: true, payload: { catalogs: [{ id, hosts }] } });
   let heldCalls = 0;
@@ -89,7 +83,7 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
     const socket = ws;
     const request = (catalogId: string, search: string, progressId?: string) => {
       const id = `catalog-${requests.length}`;
-      const response = onceMessage<CatalogResponse>(
+      const response = onceMessage<ResponseFrame>(
         socket,
         (frame) => frame.type === "res" && frame.id === id,
       );
@@ -99,12 +93,7 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
       return response;
     };
     const leader = request(heldCatalogId, "held", "leader-progress");
-    await Promise.race([
-      started.promise,
-      leader.then(() => {
-        throw new Error("held catalog returned before provider admission");
-      }),
-    ]);
+    await awaitGateBeforeSettlement(started.promise, leader, "provider admission");
     for (let index = 0; index < 128; index += 1) {
       expectCatalog(await request(completedCatalogId, `completed-${index}`), completedCatalogId);
     }

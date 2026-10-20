@@ -42,13 +42,12 @@ export function registerMcpAuthCommitEffects(f: McpAuthCommitEffectFixture) {
   it("rolls back the token write when authority is withdrawn at its commit hook", async () => {
     await f.seed();
     const before = await f.stored();
-    expect(
-      await oauthCoordinator.recordMcpOAuthAuthorizationRequired({
-        identity: f.identity(),
-        rejectedAccessToken: "fixture-access",
-        scope: "expanded",
-      }),
-    ).toBe(true);
+    const required = await oauthCoordinator.recordMcpOAuthAuthorizationRequired({
+      identity: f.identity(),
+      rejectedAccessToken: "fixture-access",
+      scope: "expanded",
+    });
+    expect(required).toBe(true);
     const started = await f.begin();
     let observed: McpOAuthLoginLifecycle | undefined;
     f.observeLogin((login) => {
