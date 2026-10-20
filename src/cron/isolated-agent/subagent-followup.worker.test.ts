@@ -72,58 +72,67 @@ function holdCompactWorkerReply() {
   return { entered: entered.promise, release: release.resolve, read };
 }
 
+function persistChild(child = completedChild()) {
+  saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
+  clearSubagentRunsReadCacheForTest();
+  return child;
+}
+
+async function withPendingReply(
+  run: (
+    gate: ReturnType<typeof holdCompactWorkerReply>,
+    pending: Promise<string | undefined>,
+  ) => Promise<void>,
+  work?: AsyncWorkScope,
+) {
+  const gate = holdCompactWorkerReply();
+  const read = () => readDescendantSubagentFallbackReply({ sessionKey, runStartedAt: 10 });
+  const pending = work ? work.track(read) : read();
+  void pending.catch(() => {});
+  try {
+    expect(
+      await Promise.race([gate.entered.then(() => "worker"), pending.then(() => "completed")]),
+    ).toBe("worker");
+    await run(gate, pending);
+  } finally {
+    gate.release();
+    await pending.catch(() => {});
+    await work?.drain();
+    gate.read.mockRestore();
+  }
+}
+
 it("keeps the host responsive while Cron descendant fallback awaits a real worker", async () => {
-  await withOpenClawTestState(
-    { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
-    async () => {
-      openOpenClawStateDatabase();
-      const child = completedChild();
-      saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
-      clearSubagentRunsReadCacheForTest();
-      const gate = holdCompactWorkerReply();
-      const parent = observeParentSqlite();
-      let settled = false;
-      const pending = readDescendantSubagentFallbackReply({ sessionKey, runStartedAt: 10 });
-      const outcome = pending.finally(() => {
-        settled = true;
-      });
-      void outcome.catch(() => {});
-      try {
-        expect(parent.counts).toEqual(emptySqliteCounts());
-        expect(
-          await Promise.race([gate.entered.then(() => "worker"), outcome.then(() => "completed")]),
-        ).toBe("worker");
+  await withPersistedCronRuns(async () => {
+    persistChild();
+    const parent = observeParentSqlite();
+    try {
+      expect(parent.counts).toEqual(emptySqliteCounts());
+      await withPendingReply(async (gate, pending) => {
+        let settled = false;
+        const outcome = pending.finally(() => {
+          settled = true;
+        });
+        void outcome.catch(() => {});
         await nextTurn();
         expect(settled).toBe(false);
         expect(parent.counts).toEqual(emptySqliteCounts());
         gate.release();
         expect(await outcome).toBe("Completed child answer");
         expect(parent.counts).toEqual(emptySqliteCounts());
-      } finally {
-        gate.release();
-        await outcome.catch(() => {});
-        parent.restore();
-        gate.read.mockRestore();
-        clearSubagentRunsReadCacheForTest();
-      }
-    },
-  );
+      });
+    } finally {
+      parent.restore();
+    }
+  });
 });
 
 it.each(["update", "delete", "successor", "other requester"] as const)(
   "uses a committed %s published while the Cron worker reply is pending",
   async (change) => {
     await withPersistedCronRuns(async () => {
-      const child = completedChild();
-      saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
-      clearSubagentRunsReadCacheForTest();
-      const gate = holdCompactWorkerReply();
-      const pending = readDescendantSubagentFallbackReply({ sessionKey, runStartedAt: 10 });
-      void pending.catch(() => {});
-      try {
-        expect(
-          await Promise.race([gate.entered.then(() => "worker"), pending.then(() => "completed")]),
-        ).toBe("worker");
+      const child = persistChild();
+      await withPendingReply(async (gate, pending) => {
         const replacement = {
           ...completedChild("Current child answer"),
           ...(change === "successor" || change === "other requester"
@@ -151,11 +160,7 @@ it.each(["update", "delete", "successor", "other requester"] as const)(
         expect(await pending).toBe(
           change === "delete" || change === "other requester" ? undefined : "Current child answer",
         );
-      } finally {
-        gate.release();
-        await pending.catch(() => {});
-        gate.read.mockRestore();
-      }
+      });
     });
   },
 );
@@ -164,20 +169,11 @@ it.each(["close", "caller cancellation"] as const)(
   "refuses Cron fallback after %s during the worker read",
   async (change) => {
     await withPersistedCronRuns(async () => {
-      const child = completedChild();
-      saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
-      clearSubagentRunsReadCacheForTest();
+      persistChild();
       const context = captureOpenClawStateWorkerContext();
-      const gate = holdCompactWorkerReply();
       const work = new AsyncWorkScope();
-      const pending = work.track(() =>
-        readDescendantSubagentFallbackReply({ sessionKey, runStartedAt: 10 }),
-      );
-      const outcome = pending.catch((error: unknown) => error);
-      try {
-        expect(
-          await Promise.race([gate.entered.then(() => "worker"), outcome.then(() => "completed")]),
-        ).toBe("worker");
+      await withPendingReply(async (gate, pending) => {
+        const outcome = pending.catch((error: unknown) => error);
         if (change === "caller cancellation") {
           const reason = new Error("Cron read owner canceled");
           work.beginClose(reason);
@@ -191,12 +187,7 @@ it.each(["close", "caller cancellation"] as const)(
             message: expect.stringMatching(/read admission/u),
           });
         }
-      } finally {
-        gate.release();
-        await outcome;
-        await work.drain();
-        gate.read.mockRestore();
-      }
+      }, work);
     });
   },
 );
@@ -219,8 +210,7 @@ it.each(["running", "yielded", "queued delivery"] as const)(
             ? { status: "in_progress", disposition: "session_queued" }
             : { status: "not_required" },
       });
-      saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
-      clearSubagentRunsReadCacheForTest();
+      persistChild(child);
       expect(await hasUnsettledCronDescendants(sessionKey)).toBe(true);
     });
   },

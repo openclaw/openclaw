@@ -43,6 +43,19 @@ async function resolveAfterAdvancingTimers<T>(promise: Promise<T>, advanceMs = 1
   return promise;
 }
 
+function waitSummary(params: Partial<Parameters<typeof waitForDescendantSubagentSummary>[0]> = {}) {
+  return waitForDescendantSubagentSummary({
+    sessionKey: "cron-session",
+    initialReply: "on it",
+    timeoutMs: 100,
+    observedActiveDescendants: true,
+    ...params,
+  });
+}
+
+const fallbackReply = () =>
+  readDescendantSubagentFallbackReply({ sessionKey: "test-session", runStartedAt: 1000 });
+
 function createDescendantRun(params?: {
   runId?: string;
   childSessionKey?: string;
@@ -51,7 +64,6 @@ function createDescendantRun(params?: {
   endedAt?: number;
   active?: boolean;
   resultText?: string | null;
-  hasInternalTranscript?: boolean;
 }): SubagentRunRecord {
   const endedAt = params?.endedAt ?? 2000;
   return {
@@ -62,20 +74,9 @@ function createDescendantRun(params?: {
     task: params?.task ?? "task-1",
     cleanup: params?.cleanup ?? "keep",
     createdAt: 1000,
-    execution: params?.hasInternalTranscript
-      ? {
-          status: "terminal",
-          endedAt,
-          transcriptTarget: {
-            agentId: "main",
-            sessionId: "internal-run",
-            sessionKey: "agent:main:internal-session-effects:run",
-            storePath: "/tmp/test-store",
-          },
-        }
-      : params?.active
-        ? { status: "running" }
-        : { status: "terminal", endedAt, outcome: { status: "ok" } },
+    execution: params?.active
+      ? { status: "running" }
+      : { status: "terminal", endedAt, outcome: { status: "ok" } },
     ...(params?.resultText === undefined
       ? {}
       : {
@@ -91,8 +92,6 @@ function createDescendantRun(params?: {
 }
 
 describe("readDescendantSubagentFallbackReply", () => {
-  const runStartedAt = 1000;
-
   it.each([
     {
       name: "visible",
@@ -132,9 +131,7 @@ describe("readDescendantSubagentFallbackReply", () => {
       vi.mocked(listDescendantRunsForRequester).mockResolvedValue([descendant]);
       vi.mocked(readLatestAssistantReply).mockResolvedValue("stale child transcript");
 
-      await expect(
-        readDescendantSubagentFallbackReply({ sessionKey: "test-session", runStartedAt }),
-      ).resolves.toBe(expected);
+      await expect(fallbackReply()).resolves.toBe(expected);
     },
   );
 
@@ -151,9 +148,7 @@ describe("readDescendantSubagentFallbackReply", () => {
       vi.mocked(listDescendantRunsForRequester).mockResolvedValue([descendant]);
       vi.mocked(readLatestAssistantReply).mockResolvedValue("stale child transcript");
       vi.mocked(readLatestAssistantReply).mockClear();
-      await expect(
-        readDescendantSubagentFallbackReply({ sessionKey: "test-session", runStartedAt }),
-      ).resolves.toBeUndefined();
+      await expect(fallbackReply()).resolves.toBeUndefined();
       expect(readLatestAssistantReply).not.toHaveBeenCalled();
     },
   );
@@ -171,11 +166,7 @@ describe("readDescendantSubagentFallbackReply", () => {
         resultText: "useful output",
       }),
     ]);
-    const result = await readDescendantSubagentFallbackReply({
-      sessionKey: "test-session",
-      runStartedAt,
-    });
-    expect(result).toBe("useful output");
+    await expect(fallbackReply()).resolves.toBe("useful output");
   });
 
   it("returns undefined when completion result is null", async () => {
@@ -186,11 +177,7 @@ describe("readDescendantSubagentFallbackReply", () => {
       }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
-    const result = await readDescendantSubagentFallbackReply({
-      sessionKey: "test-session",
-      runStartedAt,
-    });
-    expect(result).toBeUndefined();
+    await expect(fallbackReply()).resolves.toBeUndefined();
   });
 
   it("ignores descendants that ended before run started", async () => {
@@ -198,11 +185,7 @@ describe("readDescendantSubagentFallbackReply", () => {
       createDescendantRun({ endedAt: 900, resultText: "stale output from previous run" }),
     ]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue(undefined);
-    const result = await readDescendantSubagentFallbackReply({
-      sessionKey: "test-session",
-      runStartedAt,
-    });
-    expect(result).toBeUndefined();
+    await expect(fallbackReply()).resolves.toBeUndefined();
   });
 });
 
@@ -222,12 +205,7 @@ describe("waitForDescendantSubagentSummary", () => {
 
   it("returns initialReply immediately when no active descendants and observedActiveDescendants=false", async () => {
     vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
-    const result = await waitForDescendantSubagentSummary({
-      sessionKey: "cron-session",
-      initialReply: "on it",
-      timeoutMs: 100,
-      observedActiveDescendants: false,
-    });
+    const result = await waitSummary({ observedActiveDescendants: false });
     expect(result).toBe("on it");
     expect(callGateway).not.toHaveBeenCalled();
   });
@@ -250,10 +228,11 @@ describe("waitForDescendantSubagentSummary", () => {
     }, 0);
 
     try {
-      const result = await waitForDescendantSubagentSummary({
+      const result = await waitSummary({
         sessionKey: "test-session",
         initialReply: parentReply,
         timeoutMs: 300,
+        observedActiveDescendants: undefined,
       });
 
       expect(result).toBe("The successor completed the report.");
@@ -270,12 +249,7 @@ describe("waitForDescendantSubagentSummary", () => {
     vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
     vi.mocked(readLatestAssistantReply).mockResolvedValue("on it\n\nMEDIA:/workspace/report.png");
 
-    const resultPromise = waitForDescendantSubagentSummary({
-      sessionKey: "cron-session",
-      initialReply: "on it",
-      timeoutMs: 100,
-      observedActiveDescendants: true,
-    });
+    const resultPromise = waitSummary();
 
     const result = await resolveAfterAdvancingTimers(resultPromise);
 
@@ -346,7 +320,7 @@ describe("waitForDescendantSubagentSummary", () => {
       }
 
       let settled = false;
-      const resultPromise = waitForDescendantSubagentSummary({
+      const resultPromise = waitSummary({
         sessionKey: cronSessionKey,
         initialReply: cronReply,
         timeoutMs: 500,
@@ -378,12 +352,7 @@ describe("waitForDescendantSubagentSummary", () => {
     vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(true);
     vi.mocked(readLatestAssistantReply).mockResolvedValue("Partial results are available.");
 
-    const resultPromise = waitForDescendantSubagentSummary({
-      sessionKey: "test-session",
-      initialReply: "on it",
-      timeoutMs: 60,
-      observedActiveDescendants: true,
-    });
+    const resultPromise = waitSummary({ sessionKey: "test-session", timeoutMs: 60 });
     expect(await resolveAfterAdvancingTimers(resultPromise, 60)).toBeUndefined();
     expect(callGateway).not.toHaveBeenCalled();
     expect(vi.getTimerCount()).toBe(0);
@@ -410,11 +379,11 @@ describe("waitForDescendantSubagentSummary", () => {
       return { status: "ok" };
     });
 
-    const resultPromise = waitForDescendantSubagentSummary({
+    const resultPromise = waitSummary({
       sessionKey: "test-session",
-      initialReply: "on it",
       timeoutMs: 500,
       abortSignal: controller.signal,
+      observedActiveDescendants: undefined,
     });
     await vi.advanceTimersByTimeAsync(20);
     controller.abort(new Error("cron cancelled"));
@@ -430,12 +399,7 @@ describe("waitForDescendantSubagentSummary", () => {
       vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
       vi.mocked(readLatestAssistantReply).mockResolvedValue(parentReply);
 
-      const resultPromise = waitForDescendantSubagentSummary({
-        sessionKey: "cron-session",
-        initialReply: "on it",
-        timeoutMs: 100,
-        observedActiveDescendants: true,
-      });
+      const resultPromise = waitSummary();
 
       const result = await resolveAfterAdvancingTimers(resultPromise);
 
@@ -452,12 +416,7 @@ describe("waitForDescendantSubagentSummary", () => {
     vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
     vi.mocked(readLatestAssistantReply).mockResolvedValueOnce("on it").mockResolvedValue(synthesis);
 
-    const result = await waitForDescendantSubagentSummary({
-      sessionKey: "cron-session",
-      initialReply: undefined,
-      timeoutMs: 100,
-      observedActiveDescendants: true,
-    });
+    const result = await waitSummary({ initialReply: undefined });
 
     expect(result).toBe(synthesis);
   });

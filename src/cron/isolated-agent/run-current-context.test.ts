@@ -1,21 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildCurrentConversationContextBlock } from "./run-current-context.js";
 
-const sourceSessionEntry = {
-  sessionId: "source-session",
-  updatedAt: 0,
+const contextParams = {
+  agentId: "main",
+  sourceSessionEntry: { sessionId: "source-session", updatedAt: 0 },
+  sourceSessionKey: "agent:main:telegram:direct:42",
+  storePath: "/tmp/store.sqlite",
 };
 
 async function buildContext(messages: unknown[]) {
-  return await buildCurrentConversationContextBlock(
-    {
-      agentId: "main",
-      sourceSessionEntry,
-      sourceSessionKey: "agent:main:telegram:direct:42",
-      storePath: "/tmp/store.sqlite",
-    },
-    { readSessionMessages: vi.fn().mockResolvedValue(messages) },
-  );
+  return await buildCurrentConversationContextBlock(contextParams, {
+    readSessionMessages: vi.fn().mockResolvedValue(messages),
+  });
+}
+
+function assistantText(text: string, phase: string) {
+  return {
+    type: "text",
+    text,
+    textSignature: JSON.stringify({ v: 1, id: `item_${phase}`, phase }),
+  };
 }
 
 describe("buildCurrentConversationContextBlock", () => {
@@ -44,24 +48,8 @@ describe("buildCurrentConversationContextBlock", () => {
         {
           role: "assistant",
           content: [
-            {
-              type: "text",
-              text: "internal reasoning",
-              textSignature: JSON.stringify({
-                v: 1,
-                id: "item_commentary",
-                phase: "commentary",
-              }),
-            },
-            {
-              type: "text",
-              text: "Visible answer",
-              textSignature: JSON.stringify({
-                v: 1,
-                id: "item_final",
-                phase: "final_answer",
-              }),
-            },
+            assistantText("internal reasoning", "commentary"),
+            assistantText("Visible answer", "final_answer"),
           ],
         },
       ]),
@@ -90,15 +78,9 @@ describe("buildCurrentConversationContextBlock", () => {
   it("returns undefined for empty or unreadable transcripts", async () => {
     await expect(buildContext([])).resolves.toBeUndefined();
     await expect(
-      buildCurrentConversationContextBlock(
-        {
-          agentId: "main",
-          sourceSessionEntry,
-          sourceSessionKey: "agent:main:telegram:direct:42",
-          storePath: "/tmp/store.sqlite",
-        },
-        { readSessionMessages: vi.fn().mockRejectedValue(new Error("unreadable")) },
-      ),
+      buildCurrentConversationContextBlock(contextParams, {
+        readSessionMessages: vi.fn().mockRejectedValue(new Error("unreadable")),
+      }),
     ).resolves.toBeUndefined();
   });
 });

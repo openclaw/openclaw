@@ -28,10 +28,8 @@ describe("runCronIsolatedAgentTurn fallback transcript turn", () => {
           )
         ).runWithModelFallback,
       );
-      const calls: RunEmbeddedAgentParams[] = [];
       const userKeys: string[] = [];
       runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
-        calls.push(params);
         const recorder = expectDefined(params.userTurnTranscriptRecorder, "candidate recorder");
         const message = expectDefined(await recorder.resolveMessage(), "scheduled user input");
         userKeys.push(expectDefined(message.idempotencyKey, "scheduled user key"));
@@ -60,10 +58,7 @@ describe("runCronIsolatedAgentTurn fallback transcript turn", () => {
           override: dispatched ? params.prompt : undefined,
         });
         expect(promptState.suppressNextUserMessagePersistence).toBe(true);
-        return {
-          payloads: [{ text: "fallback report" }],
-          meta: { agentMeta: {} },
-        };
+        return { payloads: [{ text: "fallback report" }], meta: { agentMeta: {} } };
       });
 
       const result = await runCronIsolatedAgentTurn(
@@ -79,20 +74,23 @@ describe("runCronIsolatedAgentTurn fallback transcript turn", () => {
       );
 
       expect(result).toMatchObject({ status: "ok" });
+      const calls = runEmbeddedAgentMock.mock.calls.map(([params]) => params);
       expect(calls.map((call) => `${call.provider}/${call.model}`)).toEqual([PRIMARY, FALLBACK]);
       const [primary, fallback] = calls;
       expect(fallback?.userTurnTranscriptRecorder).toBe(primary?.userTurnTranscriptRecorder);
       expect(fallback?.sessionId).toBe(primary?.sessionId);
       expect(fallback?.runId).toBe(primary?.runId);
       expect(userKeys).toEqual([userKeys[0], userKeys[0]]);
-      expect(primary?.modelRoutingProvenance).toMatchObject({
+      const requestedModel = {
         requestedProvider: "openai",
         requestedModel: "gpt-5.4",
+      };
+      expect(primary?.modelRoutingProvenance).toMatchObject({
+        ...requestedModel,
         stage: "initial",
       });
       expect(fallback?.modelRoutingProvenance).toMatchObject({
-        requestedProvider: "openai",
-        requestedModel: "gpt-5.4",
+        ...requestedModel,
         stage: "fallback",
         fallbackReason: "timeout",
       });
