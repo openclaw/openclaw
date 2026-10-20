@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import * as setup from "./model-setup-fixtures.test-support.ts";
 import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -11,25 +12,19 @@ const suite = createControlUiE2eSuite({
 suite.define(() => {
   it("retries the saved sign-in and waits for explicit activation after verification", async () => {
     await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
+      setup.setupContext({
         reducedMotion: "reduce",
         viewport: { width: 1280, height: 900 },
-      },
+      }),
       async ({ page }) => {
         const kind = "saved-auth:openai:replacement";
         const modelRef = "openai/gpt-5";
-        const confirmation = {
-          done: false,
-          status: "running",
-          step: {
-            id: "activate-saved-sign-in",
-            type: "confirm",
-            message: "Connection verified. Activate this saved sign-in?",
-            initialValue: false,
-          },
-        };
+        const confirmation = setup.runningStep(
+          "activate-saved-sign-in",
+          "confirm",
+          "Connection verified. Activate this saved sign-in?",
+          { initialValue: false },
+        );
         const gateway = await installSetupGateway(page, {
           agentModel: modelRef,
           models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }],
@@ -40,38 +35,25 @@ suite.define(() => {
             "wizard.next",
           ],
           methodResponses: {
-            "config.get": {
-              config: { agents: { defaults: { model: modelRef } } },
-              sourceConfig: { agents: { defaults: { model: modelRef } } },
-              hash: "saved-replacement",
-              raw: JSON.stringify({ agents: { defaults: { model: modelRef } } }),
-              valid: true,
-              issues: [],
-            },
-            "openclaw.setup.detect": {
+            "config.get": setup.configSnapshot(
+              { agents: { defaults: { model: modelRef } } },
+              "saved-replacement",
+            ),
+            "openclaw.setup.detect": setup.makeDetection({
               candidates: [
-                {
-                  kind,
+                setup.candidate(kind, "Saved OpenAI sign-in", modelRef, {
                   brandId: "openai",
-                  label: "Saved OpenAI sign-in",
                   detail: "Saved but inactive. Test this sign-in again to activate it.",
-                  modelRef,
-                  recommended: false,
-                  credentials: true,
-                },
+                }),
               ],
-              manualProviders: [],
               configuredModel: modelRef,
               setupComplete: true,
-              workspace: "/tmp/openclaw-e2e",
-            },
-            "openclaw.setup.activate.start": { done: false, status: "running" },
-            "wizard.next": {
-              done: true,
-              status: "error",
-              error: "Connection test failed. Your saved sign-in is inactive. Try again.",
-              activationRejection: { disposition: "rejected-before-promotion", status: "auth" },
-            },
+            }),
+            "openclaw.setup.activate.start": setup.runningWizard(),
+            "wizard.next": setup.activationFailure(
+              "Connection test failed. Your saved sign-in is inactive. Try again.",
+              "auth",
+            ),
           },
         });
         await openModelSetup(page, suite.server.baseUrl);
@@ -114,11 +96,7 @@ suite.define(() => {
         await gateway.setMethodResponse("wizard.next", confirmation);
         await retry.click();
         await dialog.getByText(confirmation.step.message, { exact: true }).waitFor();
-        await gateway.setMethodResponse("wizard.next", {
-          done: true,
-          status: "done",
-          modelActivation: { modelRef },
-        });
+        await gateway.setMethodResponse("wizard.next", setup.activated(modelRef));
         await dialog.getByRole("button", { name: "Yes", exact: true }).click();
         await page.locator(".model-setup-success").waitFor();
         expect((await gateway.waitForRequest("wizard.next")).params).toMatchObject({
@@ -134,9 +112,11 @@ suite.define(() => {
             sessionId: expect.any(String),
           });
         }
-        expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(0);
-        expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
-        expect(await gateway.getRequests("config.set")).toHaveLength(0);
+        await setup.expectRequestCounts(gateway, {
+          "openclaw.setup.auth.start": 0,
+          "models.authLogin": 0,
+          "config.set": 0,
+        });
         await page.screenshot({ path: path.join(suite.artifactDir, "activated.png") });
       },
     );

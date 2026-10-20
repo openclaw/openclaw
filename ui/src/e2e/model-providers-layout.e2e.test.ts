@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openPicker } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Models settings layout and discovery" });
 const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
@@ -44,14 +45,7 @@ suite.define(() => {
                   { id: "work", name: "Work" },
                 ],
               },
-              "config.get": {
-                config,
-                sourceConfig: config,
-                hash: "models-layout",
-                raw: JSON.stringify(config),
-                valid: true,
-                issues: [],
-              },
+              "config.get": configSnapshot(config, "models-layout"),
               "models.list": catalog,
               "models.authStatus": {
                 ts: Date.now(),

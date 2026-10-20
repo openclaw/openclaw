@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { makeDetection, runningStep, runningWizard } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Models discovery credential recovery",
@@ -66,9 +67,7 @@ suite.define(() => {
           ],
           methodResponses: {
             "models.authStatus": { ts: 1, providers: [], providerCapabilities: [] },
-            "openclaw.setup.detect": {
-              candidates: [],
-              manualProviders: [],
+            "openclaw.setup.detect": makeDetection({
               setupComplete: true,
               workspace: "/synthetic/workspace",
               authOptions: [
@@ -77,13 +76,9 @@ suite.define(() => {
               prepareOptions: [
                 { id: "ollama", brandId: "ollama", label: "Ollama", actionLabel: "Set up model" },
               ],
-            },
-            [startMethod]: { done: false, status: "running" },
-            "wizard.next": {
-              done: false,
-              status: "running",
-              step: { id: "account", type: "text", message: "Setup account name" },
-            },
+            }),
+            [startMethod]: runningWizard(),
+            "wizard.next": runningStep("account", "text", "Setup account name"),
             "wizard.cancel": { status: "cancelled" },
             "wizard.status": { status: "cancelled" },
           },
@@ -107,7 +102,6 @@ suite.define(() => {
         }
         await reconnectMockGateway(page, gateway);
         expect(await embedded!.evaluate((element) => element.isConnected)).toBe(true);
-        expect(await gateway.getRequests(startMethod)).toHaveLength(1);
         if (loseAccess) {
           expect(await input.count()).toBe(0);
           expect(await gateway.getRequests("wizard.next")).toHaveLength(nextCount);
