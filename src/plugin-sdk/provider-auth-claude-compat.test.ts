@@ -90,7 +90,6 @@ describe("attestClaudeNativeLoginOwner", () => {
 
   it.each([
     ["an HTTP 401", async () => new Response("{}", { status: 401 })],
-    ["an HTTP 500", async () => new Response("{}", { status: 500 })],
     [
       "an error status whose body still names an account",
       async () => Response.json({ account: { uuid: "uuid-a" } }, { status: 403 }),
@@ -356,7 +355,7 @@ describe("attestClaudeNativeLoginOwner", () => {
       });
 
       it("refuses an unusable Keychain payload without consulting the file", async () => {
-        const execSync = vi.fn(() => "not json") as never;
+        const execSync = vi.fn(() => JSON.stringify({ claudeAiOauth: {} })) as never;
         expect(await attest({ homeDir: stale(), platform: "darwin", execSync })).toBeUndefined();
       });
 

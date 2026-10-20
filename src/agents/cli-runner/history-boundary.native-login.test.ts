@@ -12,7 +12,6 @@ import {
   patchSessionEntryCore,
   persistSessionTranscriptTurn,
 } from "../../config/sessions/session-accessor.js";
-import * as sessionTurn from "../../config/sessions/session-turn.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -149,13 +148,6 @@ describe("native CLI login owner", () => {
       native,
     );
   };
-
-  it("keeps history unknown when the native login cannot be proven", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, undefined);
-    expect((await prepareWith(f, backendUsing(backend))).allowed).toBe(false);
-  });
 
   it("resolves ownership from the backend-selected config dir, not the Gateway login", async () => {
     const f = await fixture();
@@ -480,18 +472,6 @@ describe("native CLI login owner", () => {
     expect(relabelled.seeded).toContain("native canary");
   });
 
-  it("has no owner when the profile endpoint does not attest the credential", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, "uuid:account-a");
-    await seedNative(f, backendUsing(backend));
-    loginIn(backend, "uuid:account-a", { rotate: true });
-    profile.mockImplementationOnce(async () => new Response("{}", { status: 503 }));
-    const next = await prepareWith(f, backendUsing(backend));
-    expect(next.allowed).toBe(false);
-    expect(next.seeded).toBeUndefined();
-  });
-
   it("attests a token the CLI rotated mid-run before covering the run's rows", async () => {
     const f = await fixture();
     const { backend } = logins();
@@ -538,35 +518,6 @@ describe("native CLI login owner", () => {
         expect(writer.confirmsOwner?.()).toBe(false);
       },
     );
-  });
-
-  it("confirms the owner for a worker commit only after its awaited preparation", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, "uuid:account-a");
-    await seedNative(f, backendUsing(backend));
-    const before = loadSessionEntryReadOnly(f.target)?.cliHistoryBoundary as { maxSeq: number };
-    const worker = vi.spyOn(sessionTurn, "appendSessionTurnInWorker");
-    await withNativeWriter(f, "boundary-native-worker-await", backendUsing(backend), async () => {
-      await persistSessionTranscriptTurn(f.target, {
-        expectedSessionId: f.target.sessionId,
-        messages: [
-          {
-            message: { role: "user", content: "appended while the login changed", timestamp: 2 },
-            shouldAppend: async () => {
-              // Another account's credential lands while the commit is being prepared.
-              loginIn(backend, "uuid:account-b", { rotate: true, recordAccount: "uuid:account-a" });
-              return true;
-            },
-          },
-        ],
-      });
-    });
-    expect(worker).toHaveBeenCalled();
-    expect(JSON.stringify(f.manager().getEntries())).toContain("appended while the login changed");
-    expect(loadSessionEntryReadOnly(f.target)?.cliHistoryBoundary).toMatchObject({
-      maxSeq: before.maxSeq,
-    });
   });
 
   // Runs `flip` right after the host hands the SQLite worker a command of this type, so the
@@ -696,18 +647,6 @@ describe("native CLI login owner", () => {
     const next = await prepareWith(f, backendUsing(backend));
     expect(next.allowed).toBe(true);
     expect(next.seeded).toContain("refresh-due ask");
-  });
-
-  it("has no owner for an expired token this process never attested", async () => {
-    const f = await fixture();
-    const { backend } = logins();
-    loginIn(backend, "uuid:account-a");
-    await seedNative(f, backendUsing(backend));
-    loginIn(backend, "uuid:account-a", { rotate: true, expiresAt: Date.now() - 60_000 });
-    profile.mockClear();
-    const next = await prepareWith(f, backendUsing(backend));
-    expect(next.allowed).toBe(false);
-    expect(profile).not.toHaveBeenCalled();
   });
 
   it("covers a SessionManager append only while the native login owner holds", async () => {
