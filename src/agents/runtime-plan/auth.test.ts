@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ metadata: vi.fn() }));
 
+// mock-isolation: Keep provider alias tests independent of installed plugin metadata and registry state.
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.metadata,
 }));

@@ -81,6 +81,7 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => ({
     };
   },
 }));
+// mock-isolation: Keep schema ownership proof off real SQLite workers; model transport in-process.
 vi.mock("../infra/sqlite-worker-store.js", () => ({
   runSqliteWorkerStoreOperation: async (
     store: CleanupStore,
