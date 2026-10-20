@@ -166,21 +166,36 @@ describe("inworldTTS", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("includes temperature and sampleRateHertz when provided", async () => {
+  it("includes temperature, sampleRateHertz, and speakingRate when provided", async () => {
     queueResponse(audio("audio"));
     const options = {
       voiceId: "Ashley",
       modelId: "inworld-tts-1.5-mini",
       temperature: 0.8,
     };
-    await synthesize({ ...options, sampleRateHertz: 22_050, audioEncoding: "PCM" });
+    await synthesize({
+      ...options,
+      sampleRateHertz: 22_050,
+      audioEncoding: "PCM",
+      speakingRate: 1.3,
+    });
     const body = lastGuardRequest().init?.body;
     assert(typeof body === "string", "expected request body to be a string");
     expect(JSON.parse(body)).toEqual({
       ...options,
       text: "test",
-      audioConfig: { audioEncoding: "PCM", sampleRateHertz: 22_050 },
+      audioConfig: { audioEncoding: "PCM", sampleRateHertz: 22_050, speakingRate: 1.3 },
     });
+  });
+
+  it("sends deliveryMode for inworld-tts-2", async () => {
+    queueResponse(audio("audio"));
+    await synthesize({ modelId: "inworld-tts-2", deliveryMode: "CREATIVE" });
+    const body = lastGuardRequest().init?.body;
+    assert(typeof body === "string", "expected request body to be a string");
+    const callBody = JSON.parse(body);
+    expect(callBody.modelId).toBe("inworld-tts-2");
+    expect(callBody.deliveryMode).toBe("CREATIVE");
   });
 
   it("uses custom base URL", async () => {
