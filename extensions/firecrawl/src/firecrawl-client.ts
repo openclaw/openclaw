@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   asPositiveFiniteNumber,
@@ -385,6 +386,7 @@ export async function runFirecrawlSearch(
     JSON.stringify({
       type: "firecrawl-search",
       provider: providerId,
+      credential: apiKey ? hash("sha256", apiKey, "hex") : undefined,
       q: params.query,
       count,
       baseUrl,
