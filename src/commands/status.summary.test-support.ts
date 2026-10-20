@@ -9,27 +9,16 @@ type StatusSummaryRuntime = typeof import("../status/summary.runtime.js").status
 type SessionStore = Record<string, Record<string, unknown>>;
 
 export function registerStatusSummaryWalCases(getSummary: GetStatusSummary): void {
-  it.each([false])("preserves WAL facts with includeSensitive=%s", async (includeSensitive) => {
+  it("preserves WAL facts without sensitive storage details", async () => {
     const error = "SYNTHETIC_PRIVATE_STORAGE_DETAIL";
-    const sqliteWal = createSqliteWalHealth({
-      state: "error",
-      walBytes: 1024,
-      databaseBytes: 4096,
-      logFrames: null,
-      checkpointedFrames: null,
-      consecutiveBlocked: 0,
-      error,
-    });
+    const sqliteWal = createSqliteWalHealth({ state: "error", error });
     const observation = vi
       .spyOn(stateDatabaseCache, "readOpenClawStateWalHealth")
       .mockReturnValueOnce(sqliteWal);
     try {
-      const summary = await getSummary({ includeSensitive });
-      expect(summary.sqliteWal).toEqual({
-        ...sqliteWal,
-        error: includeSensitive ? error : undefined,
-      });
-      expect(JSON.stringify(summary).includes(error)).toBe(includeSensitive);
+      const summary = await getSummary({ includeSensitive: false });
+      expect(summary.sqliteWal).toEqual({ ...sqliteWal, error: undefined });
+      expect(JSON.stringify(summary)).not.toContain(error);
     } finally {
       observation.mockRestore();
     }
@@ -79,32 +68,25 @@ export function registerStatusSummarySessionRowCases(params: {
     });
 
     it("keeps status available when static catalog lookup fails", async () => {
-      vi.mocked(
-        params.getStatusSummaryRuntime().resolveConfiguredStatusModelRef,
-      ).mockReturnValueOnce({
+      const runtime = params.getStatusSummaryRuntime();
+      vi.mocked(runtime.resolveConfiguredStatusModelRef).mockReturnValueOnce({
         provider: "broken-provider",
         model: "broken-model",
       });
       params.rejectProviderStaticModel(new Error("static catalog unavailable"));
-      vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
-        undefined,
-      );
+      vi.mocked(runtime.resolveContextTokensForModel).mockReturnValue(undefined);
 
       await expect(params.getStatusSummary()).resolves.toMatchObject({
         sessions: {
-          defaults: {
-            model: "broken-model",
-            contextTokens: null,
-          },
+          defaults: { model: "broken-model", contextTokens: null },
         },
       });
     });
 
     it("rejects a stale runtime window after a same-model harness change", async () => {
-      vi.mocked(params.getStatusSummaryRuntime().resolveContextTokensForModel).mockReturnValue(
-        1_000_000,
-      );
-      vi.mocked(params.getStatusSummaryRuntime().resolveSessionRuntime).mockReturnValue({
+      const runtime = params.getStatusSummaryRuntime();
+      vi.mocked(runtime.resolveContextTokensForModel).mockReturnValue(1_000_000);
+      vi.mocked(runtime.resolveSessionRuntime).mockReturnValue({
         id: "codex",
         label: "OpenAI Codex",
       });
