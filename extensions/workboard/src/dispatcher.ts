@@ -378,7 +378,7 @@ async function runWorkboardDispatch(
       if (worker?.archivedAt !== undefined) {
         const message = `Worker session "${sessionKey}" is archived. Run openclaw sessions delete ${sessionKey} so the next dispatch starts a fresh worker, or restore the session.`;
         await params.store
-          .addWorkerLog(card.id, { level: "warn", message, sessionKey })
+          .addWorkerLog(card.id, { level: "warning", message, sessionKey })
           .catch(() => undefined);
         throw new Error(message);
       }

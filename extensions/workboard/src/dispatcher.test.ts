@@ -90,7 +90,7 @@ describe("dispatchAndStartWorkboardCards", () => {
         expect(current).toMatchObject({ status: "ready", metadata: { failureCount: 1 } });
         expect(current?.metadata?.claim).toBeUndefined();
         expect(current?.metadata?.workerLogs).toContainEqual(
-          expect.objectContaining({ level: "warn", message: expect.stringContaining(recovery) }),
+          expect.objectContaining({ level: "warning", message: expect.stringContaining(recovery) }),
         );
         read.mockResolvedValue(
           assignment === "assigned" ? undefined : { sessionId: "restored-worker", updatedAt: 2 },
