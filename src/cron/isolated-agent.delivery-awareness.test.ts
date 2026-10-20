@@ -1,6 +1,6 @@
 import "./isolated-agent.mocks.js";
 import path from "node:path";
-import { beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, expect, it } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -76,10 +76,9 @@ it("adds the exact run-session inspection link only to the final visible payload
   }
   expect(sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
   const finalText = `final cron summary\nInspect: https://control.example/console/chat/main/${sessionKey.replace(/^agent:main:/, "").replaceAll(":", "/")}`;
-  expect(vi.mocked(deps.telegram).mock.calls).toEqual([
-    ["123", "first cron update", expect.any(Object)],
-    ["123", finalText, expect.any(Object)],
-  ]);
+  expect(deps.telegram).toHaveBeenNthCalledWith(1, "123", "first cron update", expect.any(Object));
+  expect(deps.telegram).toHaveBeenNthCalledWith(2, "123", finalText, expect.any(Object));
+  expect(deps.telegram).toHaveBeenCalledTimes(2);
   expect(peekSystemEvents("agent:main:main")).toEqual([]);
   expect(peekSystemEvents("agent:main:global")).toEqual([]);
   expect(peekSystemEventEntries("agent:other:global")).toEqual([]);
