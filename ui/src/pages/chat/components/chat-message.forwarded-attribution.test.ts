@@ -30,6 +30,7 @@ let view: ReturnType<typeof createMessageGroupHarness>;
 const query = (selector: string) => container.querySelector<HTMLElement>(selector);
 const required = (selector: string) => expectDefined(query(selector), selector);
 const text = (selector: string) => query(selector)?.textContent;
+const attributionSelector = ".chat-group--forwarded .chat-reply-attribution";
 const sessionKey = "agent:research:report";
 const mainSession = { sessionKey: "agent:main:main", agentId: "main" };
 const provenance = { kind: "inter_session", sourceTool: "sessions_send" };
@@ -80,21 +81,10 @@ function renderFrame(
   input: AgentRunFrameRenderItem | MessageGroup,
   options: NativeMessageGroupOptions = {},
 ) {
-  const frame: AgentRunFrameRenderItem =
-    input.kind === "group"
-      ? {
-          kind: "agent-run-frame",
-          key: "forwarded-frame",
-          runId: "forwarded-tools",
-          boundaryId: "forwarded-boundary",
-          outcome: { kind: "completed", actionOwner: null },
-          parts: [input],
-        }
-      : input;
   return mountSolid(
     () =>
       createComponent(AgentRunFrame, {
-        frame,
+        frame: input.kind === "group" ? { ...completedFrame, parts: [input] } : input,
         options: {
           streamOptions: {},
           renderGroupOptions: () => ({ showReasoning: true, ...options }),
@@ -105,6 +95,14 @@ function renderFrame(
     { container },
   );
 }
+
+const completedFrame = {
+  kind: "agent-run-frame" as const,
+  key: "forwarded-frame",
+  runId: "forwarded-tools",
+  boundaryId: "forwarded-boundary",
+  outcome: { kind: "completed" as const, actionOwner: null },
+};
 
 function openReport(key = "click") {
   const opened = vi.fn();
@@ -228,10 +226,10 @@ it.each([false, true])("preserves sender attribution (forwarded=%s)", async (for
   const attribution = required(
     ".chat-group--forwarded .chat-group-messages > .chat-reply-attribution",
   );
-  const link = attribution?.querySelector<HTMLAnchorElement>(
+  const link = attribution.querySelector<HTMLAnchorElement>(
     'a.markdown-session-link[data-session-key="agent:main:main"]',
   );
-  expect(attribution?.textContent).toContain("From");
+  expect(attribution.textContent).toContain("From");
   expect(link).toMatchObject({ textContent: "agent:main:main", tabIndex: 0 });
   const bubble = required(".chat-group--forwarded .chat-bubble");
   expect(attribution.nextElementSibling).toBe(bubble);
@@ -244,7 +242,7 @@ it.each([false, true])("preserves sender attribution (forwarded=%s)", async (for
   await titler.decorate(sourceLink, true);
   expect(sourceLink.textContent).toBe("Main session");
   renderGroup(group);
-  const retained = query(".chat-group--forwarded .chat-reply-attribution a");
+  const retained = query(`${attributionSelector} a`);
   expect(retained?.textContent).toBe("Main session");
   expect(retained?.hasAttribute("title")).toBe(false);
 });
@@ -291,9 +289,7 @@ it.each([
   expect(chip.classList.contains("markdown-session-link--titled")).toBe(true);
   const isCronRun = key.includes(":cron:");
   expect(chip.getAttribute("data-session-key")).toBe(isCronRun ? null : key);
-  const attributionText =
-    text(".chat-group--forwarded .chat-reply-attribution")?.replace(/\s+/g, " ").trim() ?? "";
-  expect(attributionText).not.toContain("—");
+  expect(text(attributionSelector) ?? "").not.toContain("—");
   const { titler, request } = titlerFor(key, "Client session title");
   await titler.decorate(chip, true);
   expect(chip.textContent?.trim()).toBe(chipText);
