@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
+import { text as readBody } from "node:stream/consumers";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withFastReplyConfig } from "../../../../src/auto-reply/reply/get-reply-fast-path.test-support.js";
 import {
@@ -11,7 +12,6 @@ import {
 } from "../../../../src/config/config.js";
 import { resetConfigOverrides } from "../../../../src/config/runtime-overrides.js";
 import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
-import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import type { CronJob } from "../../../../src/cron/types.js";
 import type { GatewayClient } from "../../../../src/gateway/client.js";
 import type { SessionsListResult } from "../../../../src/gateway/session-utils.types.js";
@@ -56,10 +56,7 @@ type CronEvent = {
   jobId: string;
   status?: string;
   error?: string;
-  runId?: string;
-  sessionId?: string;
   sessionKey?: string;
-  nextRunAtMs?: number;
 };
 
 // Only the host clock is replaced, using the existing Gateway startup seam.
@@ -159,6 +156,12 @@ it(
       [stateDir, workspaceDir, bundledPluginsDir].map((dir) => fs.mkdir(dir, { recursive: true })),
     );
     const token = randomUUID();
+    const controlUi = {
+      origin: "http://127.0.0.1",
+      clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      scopes: ["operator.admin"],
+    };
     const sessionKey = "agent:main:dashboard:" + randomUUID();
     const continuation = "Continue the authorized task in this conversation.";
     const waiting = "Authorized continuation will check again.";
@@ -223,11 +226,7 @@ it(
         bindError: "continuation provider did not bind",
         onRequest: async (request, response) => {
           try {
-            const chunks: Buffer[] = [];
-            for await (const chunk of request) {
-              chunks.push(Buffer.from(chunk));
-            }
-            const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as ProviderRequest;
+            const body = JSON.parse(await readBody(request)) as ProviderRequest;
             const reply = (text: string) =>
               writeOpenAiResponsesText(response, {
                 text,
@@ -242,6 +241,11 @@ it(
               reply("Authorized continuation proof");
               return;
             }
+            const expectUpdated = (callId: string) =>
+              expect(JSON.parse(toolOutput(body, callId))).toMatchObject({
+                status: "updated",
+                sessionKey,
+              });
             switch (step++) {
               case 0:
                 writeToolCall(response, "automations", "create", {
@@ -264,8 +268,10 @@ it(
                 break;
               case 1: {
                 const job = JSON.parse(toolOutput(body, "create")) as CronJob;
-                expect(job).toMatchObject({ sessionTarget: "session:" + sessionKey });
-                expect(job.id).toEqual(expect.any(String));
+                expect(job).toMatchObject({
+                  sessionTarget: "session:" + sessionKey,
+                  id: expect.any(String),
+                });
                 jobId = job.id;
                 reply("Authorized continuation scheduled.");
                 break;
@@ -284,10 +290,7 @@ it(
                 writeToolCall(response, "sessions", "pin", { action: "patch", pinned: true });
                 break;
               case 4:
-                expect(JSON.parse(toolOutput(body, "pin"))).toMatchObject({
-                  status: "updated",
-                  sessionKey,
-                });
+                expectUpdated("pin");
                 writeToolCall(response, "automations", "rearm", { action: "next_check", in: "5s" });
                 break;
               case 5:
@@ -306,10 +309,7 @@ it(
                 });
                 break;
               case 7:
-                expect(JSON.parse(toolOutput(body, "finish"))).toMatchObject({
-                  status: "updated",
-                  sessionKey,
-                });
+                expectUpdated("finish");
                 reply(completed);
                 break;
               default:
@@ -322,43 +322,33 @@ it(
           }
         },
       });
-      const modelConfig = createOpenAiResponsesModelConfig({
+      const config = createOpenAiResponsesModelConfig({
         baseUrl: provider.baseUrl,
         providerId: "mock-openai",
         modelId: "qa-authorized-continuation",
         reasoning: false,
         toolProfile: "full",
       });
-      const config: OpenClawConfig = {
-        ...modelConfig,
-        agents: {
-          ...modelConfig.agents,
-          defaults: {
-            ...modelConfig.agents?.defaults,
-            workspace: workspaceDir,
-            models: {
-              "mock-openai/qa-authorized-continuation": {
-                agentRuntime: { id: "openclaw" },
-                params: { transport: "sse", openaiWsWarmup: false },
-              },
-            },
-          },
-          entries: { main: {} },
+      // The fixture factory owns these initialized objects.
+      const agents = config.agents!;
+      agents.defaults!.workspace = workspaceDir;
+      agents.defaults!.models = {
+        "mock-openai/qa-authorized-continuation": {
+          agentRuntime: { id: "openclaw" },
+          params: { transport: "sse", openaiWsWarmup: false },
         },
-        tools: {
-          allow: ["automations", "sessions", "github_publish"],
-          toolSearch: { enabled: false },
-        },
-        gateway: { auth: { mode: "token", token } },
       };
+      agents.entries = { main: {} };
+      config.tools = {
+        allow: ["automations", "sessions", "github_publish"],
+        toolSearch: { enabled: false },
+      };
+      config.gateway = { auth: { mode: "token", token } };
       gateway = await startGatewayWithClient({
         cfg: config,
         configPath,
         token,
-        origin: "http://127.0.0.1",
-        clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-        scopes: ["operator.admin"],
+        ...controlUi,
         onEvent: (event) => {
           if (event.event !== "cron") {
             return;
@@ -389,14 +379,15 @@ it(
       }
       withFastReplyConfig(runtimeConfig);
       const observer = gateway.client;
+      const readSession = async (client: GatewayClient) =>
+        (await client.request<SessionsListResult>("sessions.list", {})).sessions.find(
+          (row) => row.key === sessionKey,
+        );
       await observer.request("sessions.subscribe", {});
       creator = await connectGatewayClient({
         url: "ws://127.0.0.1:" + gateway.port,
         token,
-        origin: "http://127.0.0.1",
-        clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-        scopes: ["operator.admin"],
+        ...controlUi,
       });
       const started = await creator.request<{ runId: string }>("chat.send", {
         sessionKey,
@@ -421,9 +412,7 @@ it(
         sessionTarget: "session:" + sessionKey,
         enabled: true,
       });
-      const originalSession = (
-        await observer.request<SessionsListResult>("sessions.list", {})
-      ).sessions.find((row) => row.key === sessionKey);
+      const originalSession = await readSession(observer);
       expect(originalSession?.sessionId).toEqual(expect.any(String));
       await disconnectGatewayClient(creator);
       creator = undefined;
@@ -444,11 +433,9 @@ it(
         payload: before.payload,
         sessionTarget: before.sessionTarget,
         schedule: before.schedule,
+        state: { nextRunAtMs: expect.any(Number) },
       });
-      expect(rearmed.state.nextRunAtMs).toEqual(expect.any(Number));
-      const pinned = (
-        await observer.request<SessionsListResult>("sessions.list", {})
-      ).sessions.find((row) => row.key === sessionKey);
+      const pinned = await readSession(observer);
       expect(pinned).toMatchObject({ sessionId: originalSession?.sessionId, pinned: true });
       const nextRunAtMs = rearmed.state.nextRunAtMs;
       if (nextRunAtMs === undefined) {
@@ -484,9 +471,7 @@ it(
         token,
         scopes: ["operator.admin"],
       });
-      const finalSession = (
-        await gateway.client.request<SessionsListResult>("sessions.list", {})
-      ).sessions.find((row) => row.key === sessionKey);
+      const finalSession = await readSession(gateway.client);
       expect(finalSession).toMatchObject({
         sessionId: originalSession?.sessionId,
         pinned: false,

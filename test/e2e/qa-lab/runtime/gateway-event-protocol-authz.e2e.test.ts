@@ -17,37 +17,25 @@ import {
 
 installGatewayTestHooks({ scope: "suite" });
 
-type RecordingSocket = ReturnType<typeof makeRecordingSocket>;
-
-function makeRecordingSocket() {
-  const sent: Array<{ event?: string }> = [];
-  return {
-    readyState: WebSocket.OPEN,
-    bufferedAmount: 0,
-    close: vi.fn(),
-    sent,
-    send: vi.fn((raw: string) => {
-      sent.push(JSON.parse(raw) as { event?: string });
-    }),
-  };
-}
-
-function makeClient(
-  connId: string,
-  socket: RecordingSocket,
-  role: "node" | "operator",
-  scopes: string[],
-): GatewayWsClient {
-  return {
+function makeClient(connId: string, role: "node" | "operator", scopes: string[]) {
+  const events: string[] = [];
+  const client: GatewayWsClient = {
     connId,
     connect: { role, scopes } as GatewayWsClient["connect"],
-    socket: socket as unknown as GatewayWsClient["socket"],
     usesSharedGatewayAuth: false,
+    socket: {
+      readyState: WebSocket.OPEN,
+      bufferedAmount: 0,
+      close: vi.fn(),
+      send: vi.fn((raw: string) => {
+        const frame = JSON.parse(raw) as { event?: string };
+        if (frame.event) {
+          events.push(frame.event);
+        }
+      }),
+    } as unknown as GatewayWsClient["socket"],
   };
-}
-
-function sentEvents(socket: RecordingSocket): string[] {
-  return socket.sent.flatMap((frame) => (frame.event ? [frame.event] : []));
+  return { client, events };
 }
 
 function waitForClose(ws: WebSocket): Promise<{ code: number; reason: string }> {
@@ -58,9 +46,7 @@ function waitForClose(ws: WebSocket): Promise<{ code: number; reason: string }> 
   });
 }
 
-afterEach(() => {
-  resetDiagnosticEventsForTest();
-});
+afterEach(resetDiagnosticEventsForTest);
 
 describe("Gateway event and protocol authorization", () => {
   it("applies the production event recipient matrix and rejects unsafe plugin broadcasts", () => {
@@ -77,12 +63,10 @@ describe("Gateway event and protocol authorization", () => {
       ["operator", ["operator.write"], writeEvents],
       ["operator", ["operator.admin"], writeEvents],
     ];
-    const sockets = recipients.map(() => makeRecordingSocket());
-    const clients = new GatewayClientRegistry(
-      recipients.map(([role, scopes], index) =>
-        makeClient(String(index), sockets[index]!, role, scopes),
-      ),
+    const recordings = recipients.map(([role, scopes], index) =>
+      makeClient(String(index), role, scopes),
     );
+    const clients = new GatewayClientRegistry(recordings.map(({ client }) => client));
     const { broadcast, broadcastPluginEvent } = createGatewayBroadcaster({ clients });
 
     broadcast("chat", { sessionKey: "agent:main:main", message: "scoped" });
@@ -92,7 +76,7 @@ describe("Gateway event and protocol authorization", () => {
     broadcastPluginEvent("plugin.example.write", { revision: 3 }, "operator.write");
 
     for (const [index, recipient] of recipients.entries()) {
-      expect(sentEvents(sockets[index]!)).toEqual(recipient[2]);
+      expect(recordings[index]!.events).toEqual(recipient[2]);
     }
 
     const unsafe = broadcastPluginEvent as unknown as (
@@ -100,15 +84,13 @@ describe("Gateway event and protocol authorization", () => {
       payload: unknown,
       scope: string,
     ) => void;
-    expect(() => unsafe("example.invalid", {}, "operator.read")).toThrow(
-      "invalid plugin gateway event",
-    );
-    expect(() => unsafe("plugin.approval.requested", {}, "operator.read")).toThrow(
-      "invalid plugin gateway event",
-    );
-    expect(() => unsafe("plugin.example.invalid", {}, "operator.approvals")).toThrow(
-      "invalid plugin gateway event scope",
-    );
+    for (const [event, scope, error] of [
+      ["example.invalid", "operator.read", "invalid plugin gateway event"],
+      ["plugin.approval.requested", "operator.read", "invalid plugin gateway event"],
+      ["plugin.example.invalid", "operator.approvals", "invalid plugin gateway event scope"],
+    ]) {
+      expect(() => unsafe(event!, {}, scope!)).toThrow(error);
+    }
   });
 
   it.each([
