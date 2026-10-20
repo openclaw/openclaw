@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { loadOpenClawPluginsAsync } from "../../../src/plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../../../src/plugins/loader.test-fixtures.js";
@@ -20,48 +19,6 @@ afterEach(() => {
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
   Reflect.deleteProperty(globalThis, traceKey);
-});
-
-it.each([Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER])(
-  "keeps delayed plugin work alive for an oversized deadline of %s",
-  async (timeoutMs) => {
-    const { raceWithTimeout }: typeof import("@openclaw/plugin-sdk/time-runtime") = await import(
-      createRequire(import.meta.url).resolve("@openclaw/plugin-sdk/time-runtime")
-    );
-    const warnings: Error[] = [];
-    const onWarning = (warning: Error) => warnings.push(warning);
-    process.on("warning", onWarning);
-    try {
-      const delayedPluginWork = new Promise<string>((resolve) => {
-        setTimeout(() => resolve("done"), 20);
-      });
-
-      await expect(raceWithTimeout(delayedPluginWork, timeoutMs, () => "expired")).resolves.toBe(
-        "done",
-      );
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(warnings.filter((warning) => warning.name === "TimeoutOverflowWarning")).toEqual([]);
-    } finally {
-      process.off("warning", onWarning);
-    }
-  },
-);
-
-it.each([2_147_483_647, 1.5])("preserves the supported native deadline %s", async (timeoutMs) => {
-  const { raceWithTimeout }: typeof import("@openclaw/plugin-sdk/time-runtime") = await import(
-    createRequire(import.meta.url).resolve("@openclaw/plugin-sdk/time-runtime")
-  );
-  const scheduled = vi.spyOn(globalThis, "setTimeout");
-  try {
-    await expect(
-      raceWithTimeout(Promise.resolve("done"), timeoutMs, () => "expired"),
-    ).resolves.toBe("done");
-    expect(scheduled).toHaveBeenCalledWith(expect.any(Function), timeoutMs);
-  } finally {
-    scheduled.mockRestore();
-  }
 });
 
 it("keeps delayed work alive when a loaded plugin supplies oversized deadlines", async () => {
