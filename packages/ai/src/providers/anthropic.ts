@@ -85,8 +85,14 @@ async function* iterateAnthropicEvents(
     }
 
     try {
-      const event = parseJsonWithRepair(sse.data) as RawMessageStreamEvent;
-      yield event;
+      let event: unknown;
+      try {
+        // Repair heuristics must not rewrite valid escapes in seeded tool input.
+        event = JSON.parse(sse.data);
+      } catch {
+        event = parseJsonWithRepair(sse.data);
+      }
+      yield event as RawMessageStreamEvent;
     } catch (error) {
       throw streamFragmentError(error);
     }
