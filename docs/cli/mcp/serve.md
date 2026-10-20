@@ -157,6 +157,18 @@ This gives MCP clients one place to:
     - sends text only
 
   </Accordion>
+  <Accordion title="sessions_history">
+    Reads bounded, sanitized history from the owner's main agent session. The target is fixed to `agent:main:main`; callers cannot supply another session key or agent id.
+  </Accordion>
+  <Accordion title="sessions_send">
+    Sends an inter-session message to the owner's main agent session. The target is fixed to `agent:main:main`; callers provide only the message and optional delivery behavior.
+  </Accordion>
+  <Accordion title="memory_search">
+    Searches the memory sources configured for the main agent. Callers can choose the normal memory query controls, but cannot select another agent.
+  </Accordion>
+  <Accordion title="memory_get">
+    Reads a bounded exact excerpt from memory available to the main agent. Callers cannot select another agent or workspace.
+  </Accordion>
   <Accordion title="permissions_list_open">
     Lists pending exec/plugin approval requests the bridge has observed since it connected to the Gateway.
   </Accordion>
@@ -285,6 +297,7 @@ That means:
 - `messages_send` can only reply through an existing stored route
 - approval state is live/in-memory only for the current bridge session
 - bridge auth should use the same Gateway token or password controls you would trust for any other remote Gateway client
+- `sessions_history`, `sessions_send`, `memory_search`, and `memory_get` request owner scope and are hard-bound to the `main` agent and `agent:main:main`; the MCP schemas expose no arbitrary agent or session target
 
 If a conversation is missing from `conversations_list`, the usual cause is not MCP configuration. It is missing or incomplete route metadata in the underlying Gateway session.
 

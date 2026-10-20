@@ -6954,7 +6954,6 @@
 ["src/mcp/channel-bridge.startup.test.ts","../../packages/gateway-protocol/src/client-info.js","e7d9c87b6b553ba0c12c11a2611a9f3a9d3ac91e2728c26ea3f02ace7b28102f",1]
 ["src/mcp/channel-bridge.startup.test.ts","../gateway/client-bootstrap.js","cf52de6c0fe9c7c1535e5ec238845f9408e4073522c7bde36cd3e75617bc4f4f",1]
 ["src/mcp/channel-bridge.startup.test.ts","../gateway/client.js","bb4b8a80ae2e68130829f809d118dd16e2ee9a16016ae528472ab5e4983cd45f",1]
-["src/mcp/channel-bridge.startup.test.ts","../gateway/method-scopes.js","5ed7689f8601b5da7409ba069bb4730b386223939ffdd48c1434de4a77895bbe",1]
 ["src/mcp/channel-server.shutdown-unhandled-rejection.test.ts","./channel-bridge.js","3486360bb7cef577343286f98544406ccc3961f6b9f6f26d8c88d938dd1ce10f",1]
 ["src/mcp/channel-server.shutdown-unhandled-rejection.test.ts","./channel-tools.js","a0ed59ce1063f79ecda5b462863d88213c763cbca5ea7954d437ac948c7c88c5",1]
 ["src/media-generation/registry.test.ts","../plugins/capability-provider-runtime.js","21bf5be22d522e62b83355626d53c00266707236752cdc430c850b528410d132",1]

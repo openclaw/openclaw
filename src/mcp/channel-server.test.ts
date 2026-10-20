@@ -117,6 +117,51 @@ async function flushMcpNotifications() {
 }
 
 describe("openclaw channel mcp server", () => {
+  test("exposes only fixed main-session history, send, and memory targets", async () => {
+    const mcp = await connectMcpWithoutGateway();
+    const gatewayRequest = vi.fn(async (method: string, params: Record<string, unknown>) => {
+      expect(method).toBe("tools.invoke");
+      return { ok: true, toolName: params.name, output: { accepted: params } };
+    });
+    attachReadyGateway(mcp.bridge, gatewayRequest);
+
+    const cases = [
+      ["sessions_history", { limit: 5 }],
+      ["sessions_send", { message: "hello", mode: "notify" }],
+      ["memory_search", { query: "decision", corpus: "memory" }],
+      ["memory_get", { path: "MEMORY.md", from: 1, lines: 10 }],
+    ] as const;
+    for (const [name, args] of cases) {
+      await mcp.call(name, args);
+    }
+
+    expect(gatewayRequest).toHaveBeenCalledTimes(4);
+    for (const [index, [name, args]] of cases.entries()) {
+      expect(gatewayRequest.mock.calls[index]?.[1]).toEqual({
+        name,
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        args:
+          name === "sessions_history" || name === "sessions_send"
+            ? { ...args, sessionKey: "agent:main:main" }
+            : args,
+      });
+    }
+  });
+
+  test("does not advertise session or agent target arguments on fixed main tools", async () => {
+    const mcp = await connectMcpWithoutGateway();
+    const listed = await mcp.client.listTools();
+    for (const name of ["sessions_history", "sessions_send", "memory_search", "memory_get"]) {
+      const tool = listed.tools.find((candidate) => candidate.name === name);
+      expect(tool).toBeDefined();
+      expect(tool?.inputSchema.properties).not.toHaveProperty("sessionKey");
+      expect(tool?.inputSchema.properties).not.toHaveProperty("session_key");
+      expect(tool?.inputSchema.properties).not.toHaveProperty("agentId");
+      expect(tool?.inputSchema.properties).not.toHaveProperty("agent_id");
+    }
+  });
+
   test("returns conversation and message payloads in primary MCP content", async () => {
     const sessionKey = "agent:main:telegram:direct:1";
     const mcp = await connectMcpWithoutGateway();

@@ -50,6 +50,15 @@ const QUEUE_LIMIT = 1_000;
 const PENDING_CLAUDE_PERMISSION_TTL_MS = 60 * 60 * 1_000;
 const PENDING_APPROVAL_DEFAULT_TTL_MS = 30 * 60 * 1_000;
 const PENDING_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
+const MAIN_AGENT_ID = "main";
+const MAIN_SESSION_KEY = "agent:main:main";
+
+type GatewayToolInvokeResult = {
+  ok: boolean;
+  toolName: string;
+  output?: unknown;
+  error?: { code?: string; message?: string };
+};
 
 /** Connects the MCP server surface to a Gateway client and queues channel events for polling. */
 export class OpenClawChannelBridge {
@@ -98,7 +107,7 @@ export class OpenClawChannelBridge {
       { resolveGatewayClientBootstrap },
       { GatewayClient: GatewayClientCtor },
       { startGatewayClientWhenEventLoopReady },
-      { APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE },
+      { ADMIN_SCOPE, APPROVALS_SCOPE, READ_SCOPE, WRITE_SCOPE },
       { GATEWAY_CLIENT_CAPS, GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES },
     ] = await Promise.all([
       import("../gateway/client-bootstrap.js"),
@@ -134,7 +143,9 @@ export class OpenClawChannelBridge {
       clientVersion: VERSION,
       mode: GATEWAY_CLIENT_MODES.CLI,
       caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
-      scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE],
+      // The main-session tools are owner-only. The Gateway still validates
+      // the authenticated connection before granting this requested scope.
+      scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE, ADMIN_SCOPE],
       requestTimeoutMs: 180_000,
       onEvent: (event) => {
         void this.dispatchGatewayEvent(event);
@@ -247,6 +258,28 @@ export class OpenClawChannelBridge {
       messageId,
     });
     return result.ok === true ? (result.message ?? null) : null;
+  }
+
+  /** Invoke a deliberately narrow tool surface against the owner's main agent session. */
+  async invokeMainTool(
+    toolName: "sessions_history" | "sessions_send" | "memory_search" | "memory_get",
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    await this.waitUntilReady();
+    const toolArgs =
+      toolName === "sessions_history" || toolName === "sessions_send"
+        ? { ...args, sessionKey: MAIN_SESSION_KEY }
+        : args;
+    const response = await this.requestGateway<GatewayToolInvokeResult>("tools.invoke", {
+      name: toolName,
+      agentId: MAIN_AGENT_ID,
+      sessionKey: MAIN_SESSION_KEY,
+      args: toolArgs,
+    });
+    if (!response.ok) {
+      throw new Error(response.error?.message ?? toolName + " failed");
+    }
+    return response.output;
   }
 
   /** Send a reply using the same channel route stored on the conversation. */

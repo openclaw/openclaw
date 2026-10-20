@@ -27,6 +27,67 @@ export function getChannelMcpCapabilities(claudeChannelMode: "off" | "on" | "aut
 }
 
 export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChannelBridge): void {
+  const mainToolResult = (result: unknown) => ({
+    content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+    structuredContent: { result },
+  });
+
+  server.registerTool(
+    "sessions_history",
+    {
+      description: "Read bounded, sanitized history from the owner's main OpenClaw session.",
+      inputSchema: z.object({
+        limit: z.number().int().min(1).max(1000).optional(),
+        offset: z.number().int().min(0).optional(),
+        pendingBefore: z.number().int().min(1).optional(),
+        includeTools: z.boolean().optional(),
+      }),
+    },
+    async (args) => mainToolResult(await bridge.invokeMainTool("sessions_history", args)),
+  );
+
+  server.registerTool(
+    "sessions_send",
+    {
+      description: "Send a message only to the owner's main OpenClaw session.",
+      inputSchema: z.object({
+        message: z.string().min(1),
+        timeoutSeconds: z.number().int().min(0).optional(),
+        watch: z.boolean().optional(),
+        mode: z.enum(["notify", "steer", "followup"]).optional(),
+      }),
+    },
+    async (args) => mainToolResult(await bridge.invokeMainTool("sessions_send", args)),
+  );
+
+  server.registerTool(
+    "memory_search",
+    {
+      description: "Search memory for the owner's main OpenClaw agent.",
+      inputSchema: z.object({
+        query: z.string().min(1),
+        maxResults: z.number().int().min(1).optional(),
+        minScore: z.number().optional(),
+        corpus: z.enum(["memory", "wiki", "all", "sessions"]).optional(),
+      }),
+    },
+    async (args) => mainToolResult(await bridge.invokeMainTool("memory_search", args)),
+  );
+
+  server.registerTool(
+    "memory_get",
+    {
+      description: "Read an exact memory excerpt for the owner's main OpenClaw agent.",
+      inputSchema: z.object({
+        path: z.string().min(1),
+        from: z.number().int().min(1).optional(),
+        lines: z.number().int().min(1).optional(),
+        corpus: z.enum(["memory", "wiki", "all"]).optional(),
+      }),
+    },
+    async (args) => mainToolResult(await bridge.invokeMainTool("memory_get", args)),
+  );
+
   server.registerTool(
     "conversations_list",
     {
