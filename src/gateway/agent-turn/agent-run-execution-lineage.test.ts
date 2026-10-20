@@ -20,14 +20,12 @@ function childFacts(runtime: "acp" | "subagent", withToken: boolean, depth = 1) 
     sessionKey: "agent:parent:main",
     operationalRunInstance,
     delegatedAuthority: { ...delegatedAuthority, kind: "local" },
-    ...(withToken
-      ? {
-          executionIdentity: createExecutionIdentityAdmissionToken("parent-run", {
-            contextId: "parent-context",
-            executionId: "parent-execution",
-          }),
-        }
-      : {}),
+    ...(withToken && {
+      executionIdentity: createExecutionIdentityAdmissionToken("parent-run", {
+        contextId: "parent-context",
+        executionId: "parent-execution",
+      }),
+    }),
     sessionSpawnContext: withAgentRuntimeExecutionLineage(
       { inheritedToolPolicy: { version: 1, allow: ["read"], deny: ["exec"] } },
       {

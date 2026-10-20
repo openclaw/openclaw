@@ -101,13 +101,9 @@ describe.each(sessionCases)(
         await dispatchAgentRunFromGateway(params);
 
         const [frame] = params.io.emitFinal.mock.calls[0] ?? [];
-        expect(frame).toEqual([
+        expect(frame).toMatchObject([
           true,
-          expect.objectContaining({
-            result: expect.objectContaining({
-              payloads: [expect.objectContaining({ text: privateReply })],
-            }),
-          }),
+          { result: { payloads: [{ text: privateReply }] } },
           undefined,
         ]);
         const output = JSON.stringify(

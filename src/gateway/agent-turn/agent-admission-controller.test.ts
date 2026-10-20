@@ -19,23 +19,20 @@ function admission(sessionKey: string, runId: string, sessionId: string, expecte
     entry: { sessionId, updatedAt: 1 },
     admittedSessionId: sessionId,
   };
-  const context = createDirectChatContext({ getRuntimeConfig: () => ({}) });
-  const io = createAgentTurnIo(vi.fn());
-  const agentDedupeKeys = [runId];
-  const controller = createAgentAdmissionController({
+  const common = {
     runId,
-    agentDedupeKeys,
+    agentDedupeKeys: [runId],
+    context: createDirectChatContext({ getRuntimeConfig: () => ({}) }),
+    io: createAgentTurnIo(vi.fn()),
+  };
+  const controller = createAgentAdmissionController({
+    ...common,
     expectedSession: expected ? { sessionId } : undefined,
-    context,
-    io,
     dedupeLifecycle: createAgentDedupeLifecycle({
+      ...common,
       cfg: {},
       request: { message: "continue", idempotencyKey: runId },
-      runId,
-      agentDedupeKeys,
       suppressVisibleSessionEffects: false,
-      context,
-      io,
     }),
     getRequestedSessionKey: () => sessionKey,
     getResolvedSessionKey: () => sessionKey,

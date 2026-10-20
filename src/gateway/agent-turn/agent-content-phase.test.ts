@@ -10,7 +10,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { createChatRunState } from "../server-chat-state.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { prepareAgentContentPhase } from "./agent-content-phase.js";
 import type { AgentTurnContext } from "./types.js";
 
@@ -60,23 +60,15 @@ async function contentFixture(agentId: string, primary = "main-vision", global =
     ] satisfies ModelCatalogEntry[],
     routeVariants: [],
   }));
-  const context: AgentTurnContext = {
-    addChatRun: vi.fn(),
-    agentRunSeq: new Map(),
-    broadcast: vi.fn(),
-    broadcastToConnIds: vi.fn(),
-    chatRunState: createChatRunState(),
-    dedupe: new Map(),
+  const context = createDirectChatContext({
     deps: {},
     getRuntimeConfig: () => cfg,
     trackExecution: async (work) => await work(),
-    getSessionEventSubscriberConnIds: () => new Set(),
     loadGatewayModelCatalog: vi.fn(async () => []),
     loadGatewayModelCatalogSnapshot,
     logGateway: createSubsystemLogger("test/agent-content"),
-    nodeSendToSession: vi.fn(),
     removeChatRun: vi.fn(() => undefined),
-  };
+  });
   return {
     testState,
     cfg,

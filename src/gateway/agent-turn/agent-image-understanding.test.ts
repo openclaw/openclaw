@@ -52,11 +52,6 @@ const configuredVision: OpenClawConfig = {
 let workspaceDir: string;
 let imagePath: string;
 
-async function expectFailure(result: ReturnType<typeof prepare>, providerCalls = 0) {
-  await expect(result).rejects.toThrow("Image attachments could not be analyzed.");
-  expect(describeImage).toHaveBeenCalledTimes(providerCalls);
-}
-
 function prepare(
   cfg = configuredVision,
   execution?: MediaExecutionContext,
@@ -111,35 +106,36 @@ it("sends pixels to the configured vision provider and gives the text primary it
   });
 });
 
-it("names the configuration step when no vision provider is configured", async () => {
-  await expect(prepare({})).rejects.toThrow(
-    "Configure agents.defaults.imageModel or tools.media.models with an available vision model, then retry.",
+it.each([
+  ["missing provider", undefined],
+  ["empty response", undefined],
+  ["channel scope denial", { channel: "webchat" }],
+  ["group scope denial", { chatType: "group" }],
+] as const)("rejects image input for %s", async (failure, source) => {
+  if (failure === "empty response") {
+    describeImage.mockResolvedValue({ text: "   " });
+  }
+  const cfg: OpenClawConfig =
+    failure === "missing provider"
+      ? {}
+      : source
+        ? {
+            ...configuredVision,
+            tools: {
+              media: {
+                ...configuredVision.tools?.media,
+                image: { scope: { default: "allow", rules: [{ action: "deny", match: source }] } },
+              },
+            },
+          }
+        : configuredVision;
+  await expect(prepare(cfg, undefined, source)).rejects.toThrow(
+    failure === "missing provider"
+      ? "Configure agents.defaults.imageModel or tools.media.models with an available vision model, then retry."
+      : "Image attachments could not be analyzed.",
   );
-  expect(describeImage).not.toHaveBeenCalled();
+  expect(describeImage).toHaveBeenCalledTimes(failure === "empty response" ? 1 : 0);
 });
-
-it("rejects an empty vision response instead of silently discarding the image", async () => {
-  describeImage.mockResolvedValue({ text: "   " });
-
-  await expectFailure(prepare(), 1);
-});
-
-it.each([{ channel: "webchat" }, { chatType: "group" as const }])(
-  "honors image scope restrictions for %j before sending pixels",
-  async (source) => {
-    const cfg: OpenClawConfig = {
-      ...configuredVision,
-      tools: {
-        media: {
-          ...configuredVision.tools?.media,
-          image: { scope: { default: "allow", rules: [{ action: "deny", match: source }] } },
-        },
-      },
-    };
-
-    await expectFailure(prepare(cfg, undefined, source));
-  },
-);
 
 it.each(["preparation", "adapter"] as const)(
   "rejects revoked authority during %s",
@@ -180,7 +176,10 @@ it.each(["preparation", "adapter"] as const)(
       });
     }
 
-    await expectFailure(prepare(configuredVision, execution), phase === "adapter" ? 1 : 0);
+    await expect(prepare(configuredVision, execution)).rejects.toThrow(
+      "Image attachments could not be analyzed.",
+    );
+    expect(describeImage).toHaveBeenCalledTimes(phase === "adapter" ? 1 : 0);
     expect(sendPixels).not.toHaveBeenCalled();
     if (phase === "adapter") {
       expect(adapterSignal).toBe(controller.signal);

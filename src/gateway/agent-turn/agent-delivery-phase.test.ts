@@ -1,12 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
-import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
-import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
+import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 
 const mocks = vi.hoisted(() => ({
   resolveAgentDeliveryPlanWithSessionRoute: vi.fn(),
@@ -23,10 +22,15 @@ vi.mock("../../infra/outbound/channel-selection.js", () => ({
 }));
 
 const { resolveAgentDeliveryPhase } = await import("./agent-delivery-phase.js");
+type DeliveryParams = Parameters<typeof resolveAgentDeliveryPhase>[0];
+const privateMessage = "synthetic-private-delivery-error";
 
-function deliveryParams(
-  overrides: Partial<Parameters<typeof resolveAgentDeliveryPhase>[0]>,
-): Parameters<typeof resolveAgentDeliveryPhase>[0] {
+function expectDiagnostics(value: unknown, ordinary: boolean, soft = false) {
+  const matcher = (soft ? expect.soft : expect)(JSON.stringify(value));
+  (ordinary ? matcher : matcher.not).toContain(privateMessage);
+}
+
+function deliveryParams(overrides: Partial<DeliveryParams>): DeliveryParams {
   return {
     request: { message: "synthetic prompt", deliver: true, idempotencyKey: "private-delivery" },
     cfg: {},
@@ -43,155 +47,121 @@ function deliveryParams(
   };
 }
 
-describe("resolveAgentDeliveryPhase", () => {
-  beforeEach(() => {
-    for (const mock of Object.values(mocks)) {
-      mock.mockReset();
+beforeEach(() => {
+  Object.values(mocks).forEach((mock) => mock.mockReset());
+});
+
+for (const scope of ["local", "foreign Gateway", "foreign store"] as const) {
+  it(`observes active session runs only in the selected scope: ${scope}`, async ({ signal }) => {
+    const localResolver: GatewayContextResolver = () => undefined;
+    const foreignResolver: GatewayContextResolver = () => undefined;
+    const storePath = "/synthetic/agent-delivery/local/sessions.db";
+    const sessionKey = "agent:main:delivery-scope";
+    const sessionId = "delivery-scope-session";
+    const target = captureSessionTarget({
+      storeScope:
+        scope === "foreign store" ? "/synthetic/agent-delivery/other/sessions.db" : storePath,
+      sessionKey,
+      incarnation: sessionId,
+      agentId: "main",
+    });
+    const source = withPluginRuntimeGatewayContextResolver(
+      scope === "foreign Gateway" ? foreignResolver : localResolver,
+      () =>
+        registerChatAbortController({
+          runId: "active-delivery-run",
+          sessionKey,
+          sessionId,
+          agentId: "main",
+          timeoutMs: 60_000,
+          target,
+        }),
+    );
+    if (!source.entry) {
+      throw new Error("Expected fresh delivery source admission");
+    }
+    let releaseClaim: (() => void) | undefined;
+    const context = { resolveGatewayContext: localResolver } as DeliveryParams["context"];
+    const onRunObserved = vi.fn();
+    mocks.resolveAgentDeliveryPlanWithSessionRoute.mockResolvedValue({ baseDelivery: {} });
+    try {
+      releaseClaim = await withinTest(claimRpcSourceForTest(source.entry), signal);
+      await resolveAgentDeliveryPhase(
+        deliveryParams({
+          request: { message: "observe", idempotencyKey: "new-delivery-run" },
+          resolvedSessionKey: sessionKey,
+          resolvedSessionAgentId: "main",
+          storePath,
+          runId: "new-delivery-run",
+          context,
+          onRunObserved,
+        }),
+      );
+      expect(onRunObserved.mock.calls.map(([runId]) => runId)).toEqual(
+        scope === "local" ? ["new-delivery-run", "active-delivery-run"] : ["new-delivery-run"],
+      );
+    } finally {
+      releaseClaim?.();
+      source.cleanup();
+      await source.entry.input.settlement.promise;
     }
   });
+}
 
-  for (const scope of ["local", "foreign Gateway", "foreign store"] as const) {
-    it(`observes active session runs only in the selected scope: ${scope}`, async ({ signal }) => {
-      const localResolver: GatewayContextResolver = () => undefined;
-      const foreignResolver: GatewayContextResolver = () => undefined;
-      const storePath = "/synthetic/agent-delivery/local/sessions.db";
-      const sessionKey = "agent:main:delivery-scope";
-      const sessionId = "delivery-scope-session";
-      const target = captureSessionTarget({
-        storeScope:
-          scope === "foreign store" ? "/synthetic/agent-delivery/other/sessions.db" : storePath,
-        sessionKey,
-        incarnation: sessionId,
-        agentId: "main",
+describe.each([
+  ["ordinary", "ordinary", false],
+  ["Incognito key", "incognito-private", false],
+  ["Incognito entry", "private-entry", true],
+] as const)("%s delivery diagnostics", (name, suffix, incognito) => {
+  it.each(["target", "channel"] as const)(
+    "preserves strict and best-effort %s failures without private error logs",
+    async (source) => {
+      const ordinary = name === "ordinary";
+      const failure = new Error(privateMessage);
+      if (ordinary && source === "target") {
+        Object.assign(failure, { code: "INVALID_TARGET" });
+      }
+      mocks.resolveAgentDeliveryPlanWithSessionRoute.mockResolvedValue({
+        baseDelivery: {},
+        resolvedChannel: source === "target" ? "telegram" : "webchat",
+        ...(source === "target" ? { targetResolutionError: failure } : {}),
       });
-      const source = withPluginRuntimeGatewayContextResolver(
-        scope === "foreign Gateway" ? foreignResolver : localResolver,
-        () =>
-          registerChatAbortController({
-            runId: "active-delivery-run",
-            sessionKey,
-            sessionId,
-            agentId: "main",
-            timeoutMs: 60_000,
-            target,
-          }),
-      );
-      if (!source.entry) {
-        throw new Error("Expected fresh delivery source admission");
-      }
-      const entered = createDeferred();
-      const release = createDeferred();
-      const active = withSessionTurn(
-        { sessionKey, sessionId, target, controllerInput: source.entry.input },
-        async (operation) => {
-          if (!operation) {
-            throw new Error("Expected admitted delivery turn");
-          }
-          markReplyOperationExecutionStarted(operation);
-          operation.setPhase("running");
-          entered.resolve();
-          await release.promise;
+      mocks.resolveAgentOutboundTarget.mockReturnValue({
+        resolvedTarget: { ok: false, error: failure },
+      });
+      mocks.resolveMessageChannelSelection.mockRejectedValue(failure);
+      const respond = vi.fn();
+      const info = vi.fn();
+      const params = deliveryParams({
+        sessionEntry: {
+          sessionId: "private-session",
+          updatedAt: 1,
+          ...(incognito ? { incognito: true as const } : {}),
         },
-      );
-      const context = { resolveGatewayContext: localResolver } as Parameters<
-        typeof resolveAgentDeliveryPhase
-      >[0]["context"];
-      const onRunObserved = vi.fn();
-      mocks.resolveAgentDeliveryPlanWithSessionRoute.mockResolvedValue({ baseDelivery: {} });
-      try {
-        await withinTest(entered.promise, signal);
-        await resolveAgentDeliveryPhase(
-          deliveryParams({
-            request: { message: "observe", idempotencyKey: "new-delivery-run" },
-            resolvedSessionKey: sessionKey,
-            resolvedSessionAgentId: "main",
-            storePath,
-            runId: "new-delivery-run",
-            context,
-            onRunObserved,
-          }),
-        );
-        expect(onRunObserved.mock.calls.map(([runId]) => runId)).toEqual(
-          scope === "local" ? ["new-delivery-run", "active-delivery-run"] : ["new-delivery-run"],
-        );
-      } finally {
-        release.resolve();
-        await active;
-        source.cleanup();
-        await source.entry.input.settlement.promise;
+        resolvedSessionKey: `agent:main:dashboard:${suffix}`,
+        context: { logGateway: { info } } as never,
+        respond,
+      });
+
+      expect(await resolveAgentDeliveryPhase(params)).toBeUndefined();
+      if (ordinary && source === "target") {
+        expect(respond).toHaveBeenCalledWith(false, undefined, {
+          code: ErrorCodes.INVALID_REQUEST,
+          message: `${privateMessage} | INVALID_TARGET`,
+        });
       }
-    });
-  }
+      const [error, metadata] = respond.mock.calls[0]?.slice(2) ?? [];
+      expect(error?.message).toContain(privateMessage);
+      const diagnostics = { errorMessage: error?.message, ...metadata };
+      expectDiagnostics(diagnostics, ordinary, !ordinary);
 
-  describe.each([
-    { name: "ordinary", sessionKey: "agent:main:dashboard:ordinary", incognito: false },
-    {
-      name: "Incognito key",
-      sessionKey: "agent:main:dashboard:incognito-private",
-      incognito: false,
+      respond.mockClear();
+      expect(await resolveAgentDeliveryPhase({ ...params, bestEffortDeliver: true })).toMatchObject(
+        { deliver: true },
+      );
+      expect(respond).not.toHaveBeenCalled();
+      expect(info).toHaveBeenCalledOnce();
+      expectDiagnostics(info.mock.calls, ordinary);
     },
-    { name: "Incognito entry", sessionKey: "agent:main:dashboard:private-entry", incognito: true },
-  ])("$name delivery diagnostics", ({ name, sessionKey, incognito }) => {
-    it.each(["target", "channel"] as const)(
-      "preserves strict and best-effort %s failures without private error logs",
-      async (source) => {
-        const privateMessage = "synthetic-private-delivery-error";
-        const failure = new Error(privateMessage);
-        if (name === "ordinary" && source === "target") {
-          Object.assign(failure, { code: "INVALID_TARGET" });
-        }
-        mocks.resolveAgentDeliveryPlanWithSessionRoute.mockResolvedValue({
-          baseDelivery: {},
-          resolvedChannel: source === "target" ? "telegram" : "webchat",
-          ...(source === "target" ? { targetResolutionError: failure } : {}),
-        });
-        mocks.resolveAgentOutboundTarget.mockReturnValue({
-          resolvedTarget: { ok: false, error: failure },
-        });
-        mocks.resolveMessageChannelSelection.mockRejectedValue(failure);
-        const respond = vi.fn();
-        const info = vi.fn();
-        const params = deliveryParams({
-          sessionEntry: {
-            sessionId: "private-session",
-            updatedAt: 1,
-            ...(incognito ? { incognito: true as const } : {}),
-          },
-          resolvedSessionKey: sessionKey,
-          context: { logGateway: { info } } as never,
-          respond,
-        });
-
-        expect(await resolveAgentDeliveryPhase(params)).toBeUndefined();
-        if (name === "ordinary" && source === "target") {
-          expect(respond).toHaveBeenCalledWith(false, undefined, {
-            code: ErrorCodes.INVALID_REQUEST,
-            message: `${privateMessage} | INVALID_TARGET`,
-          });
-        }
-        const response = respond.mock.calls[0];
-        const error = response?.[2];
-        const metadata = response?.[3];
-        expect(error?.message).toContain(privateMessage);
-        const diagnostics = { errorMessage: error?.message, ...metadata };
-        if (name === "ordinary") {
-          expect(JSON.stringify(diagnostics)).toContain(privateMessage);
-        } else {
-          expect.soft(JSON.stringify(diagnostics)).not.toContain(privateMessage);
-        }
-
-        respond.mockClear();
-        expect(
-          await resolveAgentDeliveryPhase({ ...params, bestEffortDeliver: true }),
-        ).toMatchObject({ deliver: true });
-        expect(respond).not.toHaveBeenCalled();
-        expect(info).toHaveBeenCalledOnce();
-        if (name === "ordinary") {
-          expect(JSON.stringify(info.mock.calls)).toContain(privateMessage);
-        } else {
-          expect(JSON.stringify(info.mock.calls)).not.toContain(privateMessage);
-        }
-      },
-    );
-  });
+  );
 });
