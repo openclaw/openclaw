@@ -25,3 +25,19 @@ export function resolveSqliteBrokerWorkerCount(): number {
 
 // History and search retain the same bounded isolate budget as other readers.
 export const SESSION_TRANSCRIPT_FOREGROUND_WORKERS = resolveWorkerPoolSize("reader");
+
+export function resolveUpdateHashWorkerCount(): number {
+  // Bun/Linux reports host memory rather than the process's cgroup allowance.
+  if (process.versions.bun && process.platform === "linux") {
+    return 0;
+  }
+  const available = process.availableMemory();
+  if (!Number.isSafeInteger(available) || available <= 0) {
+    return 0;
+  }
+  // Reserve half for inventory growth and the parent, budgeting 256 MiB per isolate.
+  return Math.max(
+    0,
+    Math.min(4, availableParallelism() - 1, Math.floor(available / 2 / (256 * 1024 * 1024))),
+  );
+}

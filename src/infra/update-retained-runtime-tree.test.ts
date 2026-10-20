@@ -106,6 +106,13 @@ async function fixture(setup?: (source: string) => Promise<void>) {
   };
 }
 
+it("rejects hardlinked files larger than their inventory budget", async () => {
+  const f = await fixture();
+  await fs.chmod(f.worker, 0o644);
+  await fs.appendFile(f.worker, "// grew after inventory\n");
+  await expect(f.link()).rejects.toThrow("Plugin entry changed after snapshot inventory");
+});
+
 it.each([false, true])(
   "preserves plugin safety (existing manifest twin=%s)",
   async (existingTwin) => {

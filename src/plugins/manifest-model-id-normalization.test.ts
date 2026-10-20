@@ -11,8 +11,9 @@ import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-// Registers the canonical ESM owner in transformed Vitest workers; cold native
-// resolution is covered by plugin-metadata-snapshot-required.native.test.ts.
+// Registers the snapshot resolver in the runtime bridge slot. Production and
+// jiti load it via the bridge's require fallback; vitest workers lack a CJS TS
+// hook, so the no-snapshot fallback path needs the ESM registration.
 import {
   projectPluginMetadataSnapshot,
   resolvePluginMetadataSnapshot,

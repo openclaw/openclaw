@@ -1,4 +1,4 @@
-// Verifies lifecycle snapshot loading, ownership facts, and worker transfers.
+// Verifies lifecycle snapshot loading, ownership facts, and immutable boundaries.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import { normalizeStaticProviderModelId } from "../agents/model-ref-shared.js";
@@ -346,7 +346,7 @@ describe("plugin metadata snapshot", () => {
     );
   });
 
-  it("reuses prepared snapshots across module instances", async () => {
+  it("reuses frozen snapshots across module instances", async () => {
     const snapshot = restorePluginMetadataSnapshot(createPluginMetadataSnapshotFixture());
     vi.resetModules();
     const reloaded = await import("./plugin-metadata-snapshot.js");
@@ -820,7 +820,7 @@ describe("plugin metadata snapshot", () => {
   });
 
   it.each([false, true])(
-    "restores prepared normalization and ownership facts (worker: %s)",
+    "freezes a cloned index instead of caller-owned records (worker: %s)",
     (worker) => {
       const index = makeIndex();
       mockRegistrySnapshot(index);
@@ -839,6 +839,17 @@ describe("plugin metadata snapshot", () => {
       expect(snapshot.owners.modelIdNormalizationPolicies.get("demo")).toEqual({
         aliases: { raw: "prepared-model" },
       });
+      const callerRecord = index.plugins[0];
+      const snapshotRecord = snapshot.index.plugins[0];
+      if (!callerRecord || !snapshotRecord) {
+        throw new Error("expected metadata records");
+      }
+
+      callerRecord.pluginId = "caller-mutated";
+      expect(snapshotRecord.pluginId).toBe("demo");
+      expect(() => {
+        snapshotRecord.pluginId = "snapshot-mutated";
+      }).toThrow();
     },
   );
 });

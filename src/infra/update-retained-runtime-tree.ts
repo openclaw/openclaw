@@ -121,8 +121,12 @@ export async function linkUpdateCandidatePluginTrees(
         await copyEntry(entry, destination);
         counts.copied += 1;
       } else {
-        if (!(await fs.lstat(destination)).isFile()) {
+        const linked = await fs.lstat(destination);
+        if (!linked.isFile()) {
           throw new Error(`Retained runtime entry is not a regular file: ${entry.path}`);
+        }
+        if (linked.size > entry.size) {
+          throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
         }
         counts.linked += 1;
       }

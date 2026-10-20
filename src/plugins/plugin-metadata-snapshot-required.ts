@@ -36,16 +36,6 @@ export function getCurrentPluginMetadataSnapshotRequiredRuntime(
 }
 
 /** Loads metadata through its canonical owner without suppressing discovery errors. */
-export function resolvePluginMetadataSnapshotRuntime(
-  params: Parameters<SnapshotLoaderModule["resolvePluginMetadataSnapshot"]>[0],
-): ReturnType<SnapshotLoaderModule["resolvePluginMetadataSnapshot"]> {
-  const reader =
-    snapshotReaderSlot.resolvePluginMetadataSnapshot ??
-    loadRequiredSnapshotReaders().resolvePluginMetadataSnapshot;
-  return reader(params);
-}
-
-/** Loads metadata through its canonical owner without suppressing discovery errors. */
 export function loadPluginMetadataSnapshotRuntime(
   params: Parameters<SnapshotLoaderModule["loadPluginMetadataSnapshot"]>[0],
 ): ReturnType<SnapshotLoaderModule["loadPluginMetadataSnapshot"]> {

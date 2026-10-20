@@ -1,14 +1,19 @@
+import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { ignoreMissingPath as ignoreMissingUpdateCandidateFile } from "./errno.js";
+import { hashFileMutationSnapshotSync, sameFileMutationMetadata } from "./file-descriptor.js";
 import { hasNodeErrorCode, isPathInside } from "./path-guards.js";
 import {
   captureUpdateCandidatePluginCodeLink,
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
 import { runUpdateCandidatePluginTasks } from "./update-candidate-plugin-tasks.js";
-import type { UpdateCandidatePluginTreePlan } from "./update-candidate-plugin-tree-schema.js";
+import type {
+  UpdateCandidatePluginEntry,
+  UpdateCandidatePluginTreePlan,
+} from "./update-candidate-plugin-tree-schema.js";
 import { createRuntimePathLookup } from "./update-runtime-path-index.js";
 import { prepareRuntimeRelocations, relocateRuntimePath } from "./update-runtime-relocation.js";
 
@@ -25,7 +30,46 @@ export const isUpdateCandidateHostLauncher = (file: string) =>
   path.basename(path.dirname(file)) === ".bin" &&
   ["openclaw", "openclaw.cmd", "openclaw.ps1"].includes(path.basename(file));
 
-/** Rebase the private plan and preserve source/destination confinement. */
+export function assertUpdateCandidatePluginEntryStat(
+  entry: UpdateCandidatePluginEntry,
+  current: BigIntStats,
+): void {
+  const sameKind =
+    entry.kind === "directory"
+      ? current.isDirectory()
+      : entry.kind === "file"
+        ? current.isFile()
+        : current.isSymbolicLink();
+  const sameIdentity = current.dev.toString() === entry.dev && current.ino.toString() === entry.ino;
+  const sameMode = Number(current.mode & 0o7777n) === entry.mode;
+  if (!sameKind || !sameIdentity || !sameMode) {
+    throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
+  }
+  if (entry.kind === "file") {
+    const expected = {
+      dev: BigInt(entry.dev),
+      ino: BigInt(entry.ino),
+      size: BigInt(entry.size),
+      birthtimeNs: BigInt(entry.birthtimeNs),
+      mtimeNs: BigInt(entry.mtimeNs),
+      ctimeNs: BigInt(entry.ctimeNs),
+      mode: BigInt(entry.mode | constants.S_IFREG),
+      uid: BigInt(entry.uid),
+      gid: BigInt(entry.gid),
+    };
+    if (
+      !sameFileMutationMetadata(expected, current) ||
+      (current.ctimeNs !== expected.ctimeNs &&
+        hashFileMutationSnapshotSync(entry.path, expected) !== entry.sha256)
+    ) {
+      throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
+    }
+  } else if (entry.kind === "symlink" && current.size !== BigInt(entry.size)) {
+    throw new Error(`Plugin entry changed after snapshot inventory: ${entry.path}`);
+  }
+}
+
+/** Rebase the admitted plan onto the caller's state directory and check its bindings still hold. */
 export function resolveUpdateCandidatePluginTreeTargets(
   plan: MaterializablePlan,
   params: { targetStateDir: string; candidateRoot: string },
@@ -59,6 +103,24 @@ export function resolveUpdateCandidatePluginTreeTargets(
     }
     return path.join(owner[1], path.relative(owner[0], source));
   };
+  const assertBindings = async () => {
+    await runUpdateCandidatePluginTasks([
+      ...plan.moduleBindings.map(([source, real]) => async () => {
+        if ((await fs.realpath(source)) !== real) {
+          throw new Error(`Plugin module owner changed after snapshot inventory: ${source}`);
+        }
+      }),
+      ...plan.edges.map((edge) => async () => {
+        const target = path.resolve(path.dirname(edge.source), await fs.readlink(edge.source));
+        const real = await fs
+          .realpath(edge.source)
+          .catch((error: unknown) => ignoreUnresolvedPluginLink(error) ?? target);
+        if (target !== edge.target || real !== edge.real) {
+          throw new Error(`Plugin link changed after snapshot inventory: ${edge.source}`);
+        }
+      }),
+    ]);
+  };
   return {
     privateRoot,
     candidateRoot,
@@ -75,6 +137,7 @@ export function resolveUpdateCandidatePluginTreeTargets(
       rebase(target),
     ]),
     destinationFor,
+    assertBindings,
   };
 }
 

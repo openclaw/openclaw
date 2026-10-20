@@ -4,10 +4,21 @@ const entryFields = {
   path: z.string(),
   size: z.number().int().nonnegative(),
   mode: z.number().int().nonnegative(),
+  dev: z.string(),
+  ino: z.string(),
 };
 const UpdateCandidatePluginEntrySchema = z.discriminatedUnion("kind", [
   z.object({ ...entryFields, kind: z.literal("directory") }),
-  z.object({ ...entryFields, kind: z.literal("file") }),
+  z.object({
+    ...entryFields,
+    kind: z.literal("file"),
+    birthtimeNs: z.string(),
+    mtimeNs: z.string(),
+    ctimeNs: z.string(),
+    uid: z.string(),
+    gid: z.string(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/u),
+  }),
   z.object({
     ...entryFields,
     kind: z.literal("symlink"),
@@ -26,5 +37,7 @@ export const UpdateCandidatePluginTreePlanSchema = z.object({
   hostLinks: z.array(z.string()),
   relocations: z.array(z.object({ sourceRoot: z.string(), destinationRoot: z.string() })),
   aliases: z.array(z.tuple([z.string(), z.string()])),
+  moduleBindings: z.array(z.tuple([z.string(), z.string()])),
+  edges: z.array(z.object({ source: z.string(), target: z.string(), real: z.string() })),
 });
 export type UpdateCandidatePluginTreePlan = z.infer<typeof UpdateCandidatePluginTreePlanSchema>;

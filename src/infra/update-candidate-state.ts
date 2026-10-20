@@ -210,6 +210,15 @@ export async function readUpdateCandidateStateInventoryInProcess(
   await fs.mkdir(input.targetStateDir, { recursive: true, mode: 0o700 });
   const planPath = path.join(input.targetStateDir, UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME);
   await fs.writeFile(planPath, "", { mode: 0o600, flag: "wx" });
+  let progressAt = Date.now();
+  const onProgress = async () => {
+    const now = Date.now();
+    if (now - progressAt < 1000) {
+      return;
+    }
+    progressAt = now;
+    await fs.utimes(planPath, new Date(now), new Date(now));
+  };
   const { prepareUpdateCandidatePlugins } = await import("./update-candidate-plugins.js");
   const files = await collectUpdateCandidateDatabasePaths(input);
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
@@ -223,6 +232,7 @@ export async function readUpdateCandidateStateInventoryInProcess(
       ...input,
       sharedStateDatabasePath,
       sharedStatePluginIndex,
+      onProgress,
     });
     await fs.writeFile(planPath, JSON.stringify(plugins));
     return {

@@ -67,6 +67,21 @@ export type {
 
 export { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-env.js";
 
+function freezeSnapshotValue<T>(value: T, seen = new WeakSet<object>()): T {
+  // Freeze plain facts once; internal Map/Set consumers honor their readonly types.
+  if (!value || typeof value !== "object" || Object.isFrozen(value)) {
+    return value;
+  }
+  if (seen.has(value)) {
+    return value;
+  }
+  seen.add(value);
+  for (const entry of Object.values(value)) {
+    freezeSnapshotValue(entry, seen);
+  }
+  return Object.freeze(value);
+}
+
 function indexesMatch(
   left: InstalledPluginIndex | undefined,
   right: InstalledPluginIndex | undefined,
@@ -80,10 +95,11 @@ function indexesMatch(
   );
 }
 
-/** Prepares process-local facts; worker transfers must use restorePluginMetadataSnapshot. */
+/** Freezes prepared process-local facts; worker transfers must use restorePluginMetadataSnapshot. */
 export function finalizePluginMetadataSnapshot(
   snapshot: PluginMetadataSnapshot,
 ): PluginMetadataSnapshot {
+  freezeSnapshotValue(snapshot);
   bindPluginMetadataSnapshotCache(snapshot);
   const cache = getPluginMetadataSnapshotCache(snapshot);
   preparePluginNativeAdmissions(snapshot.index, cache);
@@ -91,7 +107,7 @@ export function finalizePluginMetadataSnapshot(
   return snapshot;
 }
 
-/** Restores process-local behavior after a snapshot crosses a worker boundary. */
+/** Restores process-local behavior and immutability after a snapshot crosses a worker boundary. */
 export function restorePluginMetadataSnapshot(
   snapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">,
 ): PluginMetadataSnapshot {
@@ -194,6 +210,10 @@ function buildPluginMetadataOwnerMaps(
     }
   }
 
+  // These maps and arrays are private until this transfer to the snapshot.
+  for (const map of Object.values(owners)) {
+    map.forEach((pluginIds) => Object.freeze(pluginIds));
+  }
   const channelAccountKeyPolicies = new Map<
     string,
     NonNullable<PluginManifestRecord["channelAccountKeyPolicies"]>[string]
@@ -296,13 +316,13 @@ export function projectPluginMetadataSnapshot(
     return cached;
   }
   const selected = new Set(selectedIds);
-  const projected = {
+  const projected = freezeSnapshotValue({
     ...rebasePluginMetadataSnapshotManifestRegistry(snapshot, {
       plugins: snapshot.plugins.filter((plugin) => selected.has(plugin.id)),
       diagnostics: snapshot.manifestRegistry.diagnostics,
     }),
     pluginIds: selectedIds,
-  };
+  });
   bindPluginMetadataSnapshotCache(projected, cache);
   registerProviderPolicyOwnerIndexes(projected, cache);
   cache.metadata.projectionSources.set(projected, snapshot);
@@ -615,15 +635,20 @@ export function buildPluginMetadataSnapshot(
   params: Pick<LoadPluginMetadataSnapshotParams, "config" | "env">,
 ): Omit<PluginMetadataSnapshot, "normalizePluginId"> {
   const startedAt = performance.now();
-  const manifestFacts = buildPluginMetadataManifestFacts(input.manifestRegistry, input.index);
+  const index = structuredClone(input.index);
+  const registryIndex =
+    input.registryIndex === input.index ? index : structuredClone(input.registryIndex);
+  const manifestFacts = buildPluginMetadataManifestFacts(input.manifestRegistry, index);
   const ownerMapsMs = performance.now() - startedAt;
   return {
     ...input,
+    index,
+    registryIndex,
     ...manifestFacts,
     configFingerprint: resolvePluginControlPlaneFingerprint({
       config: params.config,
       env: params.env,
-      index: input.index,
+      index,
       policyHash: input.policyHash,
       workspaceDir: input.workspaceDir,
     }),

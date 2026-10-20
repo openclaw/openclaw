@@ -252,6 +252,7 @@ export async function prepareUpdateCandidatePlugins(
   params: UpdateCandidatePluginProjectionParams & {
     sharedStateDatabasePath?: string;
     sharedStatePluginIndex?: UpdateCandidatePluginIndex;
+    onProgress?: () => void | Promise<void>;
   },
 ): Promise<UpdateCandidatePluginPlan> {
   const sourceRoot = path.resolve(params.stateDir);
@@ -351,6 +352,7 @@ export async function prepareUpdateCandidatePlugins(
     project,
     targetStateDir,
     candidateRoot: params.candidateRoot,
+    onProgress: params.onProgress,
   });
   const aliases: UpdateCandidatePluginPlan["aliases"] = [];
   for (const { source, real, file, preserveBasename } of locators) {

@@ -1,10 +1,14 @@
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { assertDirectoryIdentitySync, type DirectoryIdentity } from "@openclaw/fs-safe/advanced";
+import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
 import type { Root } from "./fs-safe.js";
 import {
   createUpdateCandidatePluginPool,
   runUpdateCandidatePluginTasks,
 } from "./update-candidate-plugin-tasks.js";
+import { assertUpdateCandidatePluginEntryStat } from "./update-candidate-plugin-tree-links.js";
 import type { UpdateCandidatePluginEntry } from "./update-candidate-plugin-tree-schema.js";
 
 export type UpdateCandidatePluginFileRequest = {
@@ -18,7 +22,7 @@ export type UpdateCandidatePluginFileReply =
   | { type: "copied" }
   | { type: "failed"; error: Error; code?: string; details?: unknown };
 
-/** Keep the same confined publication in both execution paths. */
+/** Keep identical inventory, containment, and byte checks in both execution paths. */
 export async function copyUpdateCandidatePluginFile(
   request: UpdateCandidatePluginFileRequest,
   destinationRoot: Root,
@@ -46,8 +50,15 @@ export async function copyUpdateCandidatePluginFileBytes(
     maxBytes: entry.size,
     mode: entry.mode | 0o600,
     sourceHardlinks: "allow",
-    assertBeforeMutation,
+    assertBeforeMutation: () => {
+      assertBeforeMutation();
+      assertUpdateCandidatePluginEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true }));
+    },
   });
+  const copiedStat = await fs.lstat(destination, { bigint: true });
+  if (hashFileMutationSnapshotSync(destination, copiedStat) !== entry.sha256) {
+    throw new Error(`Copied plugin bytes differ from snapshot inventory: ${entry.path}`);
+  }
 }
 
 /** Drain the complete file phase before the tree owner can publish links or clean up. */
@@ -61,7 +72,7 @@ export async function copyUpdateCandidatePluginFiles(
   },
 ): Promise<void> {
   const { privateRoot, rootIdentity, destinationRoot, destinationFor } = params;
-  // Guarded publication contains synchronous work. Promise concurrency
+  // Guarded publication and hashing contain synchronous work. Promise concurrency
   // alone leaves large snapshots on one CPU; retain the four-file admission bound
   // while sharing that work across snapshot-owned isolates.
   const pool =
