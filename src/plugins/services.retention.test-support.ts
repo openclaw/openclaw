@@ -82,8 +82,10 @@ try {
   assert.equal(counts.starts - counts.stops, 1, "Exactly one service must remain active");
   assert.deepEqual(retained, [], "Completed generation or publication state retained");
 } finally {
-  await handle
-    .stop({ strict: true })
-    .then(() => assert.equal(counts.starts, counts.stops, "Unsettled service stop"))
-    .finally(() => scheduler.stop());
+  try {
+    await handle.stop({ strict: true });
+    assert.equal(counts.starts, counts.stops, "Unsettled service stop");
+  } finally {
+    await scheduler.stop();
+  }
 }
