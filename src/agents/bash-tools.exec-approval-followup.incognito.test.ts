@@ -63,37 +63,36 @@ async function session(name: string, owner = actor) {
   expect(
     await handle.storage!.mutate({ type: "session.entry.create", input: { entry } }, authority),
   ).toMatchObject({ kind: "committed" });
+  const followup = {
+    approvalId: name,
+    agentId: "main",
+    sessionKey,
+    expectedSessionId: name,
+    resultText: `Exec finished (gateway id=${name}, code 0)\nprivate result`,
+    turnSourceChannel: "telegram",
+    turnSourceTo: "123",
+    internalRuntimeHandoffId: `handoff-${name}`,
+  };
   return {
     entry,
     binding,
     target: { agentId: "main", sessionKey, storePath: owner.path },
-    followup: {
-      approvalId: name,
-      agentId: "main",
-      sessionKey,
-      expectedSessionId: name,
-      resultText: `Exec finished (gateway id=${name}, code 0)\nprivate result`,
-      turnSourceChannel: "telegram",
-      turnSourceTo: "123",
-      internalRuntimeHandoffId: `handoff-${name}`,
-    },
+    send: (overrides: Partial<Parameters<typeof sendExecApprovalFollowup>[0]> = {}) =>
+      runWithSessionActorStorage(binding, () =>
+        sendExecApprovalFollowup({ ...followup, ...overrides }),
+      ),
   };
 }
 
 it("delivers matching actor completion and denial without consulting native sessions", async () => {
   const fixture = await session("current");
-  await runWithSessionActorStorage(fixture.binding, async () => {
-    await expect(sendExecApprovalFollowup({ ...fixture.followup, direct: true })).resolves.toBe(
-      true,
-    );
-    await expect(
-      sendExecApprovalFollowup({
-        ...fixture.followup,
-        direct: true,
-        resultText: "Exec denied (gateway id=current, approval-timeout): uname -a",
-      }),
-    ).resolves.toBe(true);
-  });
+  await expect(fixture.send({ direct: true })).resolves.toBe(true);
+  await expect(
+    fixture.send({
+      direct: true,
+      resultText: "Exec denied (gateway id=current, approval-timeout): uname -a",
+    }),
+  ).resolves.toBe(true);
   expect(vi.mocked(sendMessage).mock.calls.map(([request]) => request.content)).toEqual([
     "private result",
     "Command did not run: approval timed out.",
@@ -104,21 +103,18 @@ it("delivers matching actor completion and denial without consulting native sess
 it.each(["reset", "rebound", "close"] as const)(
   "suppresses fallback after actor %s during the session-resume wait",
   async (change) => {
-    const owner = actor;
-    const fixture = await session(change, owner);
+    const fixture = await session(change);
     const requested = createDeferredCore();
     const resume = createDeferredCore<Record<string, unknown>>();
     vi.mocked(callGatewayTool).mockImplementationOnce(() => {
       requested.resolve();
       return resume.promise;
     });
-    const result = runWithSessionActorStorage(fixture.binding, () =>
-      sendExecApprovalFollowup(fixture.followup),
-    );
+    const result = fixture.send();
     try {
       await awaitGateBeforeSettlement(requested.promise, result, "Followup settled before resume");
       if (change === "close") {
-        owner.closeSession(fixture.target.sessionKey);
+        actor.closeSession(fixture.target.sessionKey);
       } else {
         await runWithSessionActorStorage(fixture.binding, () =>
           replaceSessionEntry(fixture.target, {
@@ -140,11 +136,7 @@ it.each(["reset", "rebound", "close"] as const)(
 it("keeps a closed session absent without creating a replacement", async () => {
   const fixture = await session("absent");
   actor.closeSession(fixture.target.sessionKey);
-  await expect(
-    runWithSessionActorStorage(fixture.binding, () =>
-      sendExecApprovalFollowup({ ...fixture.followup, direct: true }),
-    ),
-  ).resolves.toBe(false);
+  await expect(fixture.send({ direct: true })).resolves.toBe(false);
   expect(actor.readSession(fixture.target.sessionKey, authority)).toBeUndefined();
   expect(callGatewayTool).not.toHaveBeenCalled();
   expect(sendMessage).not.toHaveBeenCalled();

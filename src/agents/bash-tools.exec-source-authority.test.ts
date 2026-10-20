@@ -25,9 +25,7 @@ beforeEach(() => {
   supervisorMock.spawn.mockReset();
 });
 
-afterEach(() => {
-  resetProcessRegistryForTests();
-});
+afterEach(() => resetProcessRegistryForTests());
 
 function createExecOperatorSource() {
   const controller = new AbortController();
@@ -108,8 +106,7 @@ describe("registered exec source authority", () => {
       expect(cancelGuest).toHaveBeenCalledWith("manual-cancel");
       expect(cancelStaff).not.toHaveBeenCalled();
       await cleanupStarted.promise;
-      expect(guest.session.finalizing).toBe(true);
-      expect(guest.session.exited).toBe(false);
+      expect(guest.session).toMatchObject({ finalizing: true, exited: false });
       expect(source.release).not.toHaveBeenCalled();
 
       const replacement = createExecOperatorSource();

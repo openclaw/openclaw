@@ -17,6 +17,16 @@ const boundary = vi.hoisted(() => ({
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function trackLaunch<Args extends unknown[], Result>(launch: (...args: Args) => Promise<Result>) {
+  return async (...args: Args) => {
+    boundary.before();
+    const result = await launch(...args);
+    boundary.nativeLaunches += 1;
+    boundary.after();
+    return result;
+  };
+}
+
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => boundary.supervisor,
 }));
@@ -24,26 +34,12 @@ vi.mock("../process/spawn-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process/spawn-utils.js")>();
   return {
     ...actual,
-    spawnAndWait: async (...args: Parameters<typeof actual.spawnAndWait>) => {
-      boundary.before();
-      const result = await actual.spawnAndWait(...args);
-      boundary.nativeLaunches += 1;
-      boundary.after();
-      return result;
-    },
+    spawnAndWait: trackLaunch(actual.spawnAndWait),
   };
 });
 vi.mock("../process/terminal-pty.js", async (importOriginal) => {
   const { spawnTerminalPty } = await importOriginal<typeof import("../process/terminal-pty.js")>();
-  return {
-    spawnTerminalPty: async (...args: Parameters<typeof spawnTerminalPty>) => {
-      boundary.before();
-      const result = await spawnTerminalPty(...args);
-      boundary.nativeLaunches += 1;
-      boundary.after();
-      return result;
-    },
-  };
+  return { spawnTerminalPty: trackLaunch(spawnTerminalPty) };
 });
 
 describe.runIf(process.platform !== "win32")("launch policy and construction authority", () => {
