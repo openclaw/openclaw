@@ -1,6 +1,3 @@
-/**
- * Channel test fixtures shared by gateway tests.
- */
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.adapters.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
@@ -58,69 +55,26 @@ const createStubChannelPlugin = (params: StubChannelOptions): ChannelPlugin => (
 });
 
 export function createDefaultGatewayTestChannels() {
-  return [
+  const channels: StubChannelOptions[] = [
+    { id: "whatsapp", label: "WhatsApp" },
     {
-      pluginId: "whatsapp",
-      source: "test" as const,
-      plugin: createStubChannelPlugin({ id: "whatsapp", label: "WhatsApp" }),
+      id: "telegram",
+      label: "Telegram",
+      summary: { tokenSource: "none", lastProbeAt: null },
     },
-    {
-      pluginId: "telegram",
-      source: "test" as const,
-      plugin: createStubChannelPlugin({
-        id: "telegram",
-        label: "Telegram",
-        summary: { tokenSource: "none", lastProbeAt: null },
-      }),
-    },
-    {
-      pluginId: "discord",
-      source: "test" as const,
-      plugin: createStubChannelPlugin({ id: "discord", label: "Discord" }),
-    },
-    {
-      pluginId: "slack",
-      source: "test" as const,
-      plugin: createStubChannelPlugin({ id: "slack", label: "Slack" }),
-    },
-    {
-      pluginId: "signal",
-      source: "test" as const,
-      plugin: createStubChannelPlugin({
-        id: "signal",
-        label: "Signal",
-        summary: { lastProbeAt: null },
-      }),
-    },
-    {
-      pluginId: "imessage",
-      source: "test" as const,
-      plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),
-    },
-    {
-      pluginId: "msteams",
-      source: "test" as const,
-      plugin: createStubChannelPlugin({ id: "msteams", label: "Microsoft Teams" }),
-    },
-    {
-      pluginId: "matrix",
-      source: "test" as const,
-      plugin: createStubChannelPlugin({ id: "matrix", label: "Matrix" }),
-    },
-    {
-      pluginId: "zalo",
-      source: "test" as const,
-      plugin: createStubChannelPlugin({ id: "zalo", label: "Zalo" }),
-    },
-    {
-      pluginId: "zalouser",
-      source: "test" as const,
-      plugin: createStubChannelPlugin({ id: "zalouser", label: "Zalo Personal" }),
-    },
-    {
-      pluginId: "imessage",
-      source: "test" as const,
-      plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),
-    },
+    { id: "discord", label: "Discord" },
+    { id: "slack", label: "Slack" },
+    { id: "signal", label: "Signal", summary: { lastProbeAt: null } },
+    { id: "imessage", label: "iMessage" },
+    { id: "msteams", label: "Microsoft Teams" },
+    { id: "matrix", label: "Matrix" },
+    { id: "zalo", label: "Zalo" },
+    { id: "zalouser", label: "Zalo Personal" },
+    { id: "imessage", label: "iMessage" },
   ];
+  return channels.map((channel) => ({
+    pluginId: channel.id,
+    source: "test" as const,
+    plugin: createStubChannelPlugin(channel),
+  }));
 }

@@ -20,6 +20,10 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function override(key: string, value: string | number | undefined) {
+  return value === undefined ? {} : { [key]: value };
+}
+
 async function fetchStubSpeechAudio(
   url: string,
   init: RequestInit,
@@ -52,86 +56,67 @@ const createStubSpeechProvider = (params: StubSpeechProviderOptions): SpeechProv
       fileExtension: ".mp3",
       voiceCompatible: true,
     })),
-  listVoices: async () =>
-    (params.voices ?? []).map((voiceId) => ({
-      id: voiceId,
-      name: voiceId,
-    })),
+  listVoices: async () => (params.voices ?? []).map((id) => ({ id, name: id })),
 });
 
 export function createDefaultGatewayTestSpeechProviders() {
-  return [
+  const providers: StubSpeechProviderOptions[] = [
     {
-      pluginId: "openai",
-      source: "test" as const,
-      provider: createStubSpeechProvider({
-        id: "openai",
-        label: "OpenAI",
-        voices: ["alloy", "nova"],
-        resolveTalkOverrides: ({ params }) => ({
-          ...(normalizeOptionalString(params.voiceId) == null
-            ? {}
-            : { voice: normalizeOptionalString(params.voiceId) }),
-          ...(normalizeOptionalString(params.modelId) == null
-            ? {}
-            : { model: normalizeOptionalString(params.modelId) }),
-          ...(asNumber(params.speed) == null ? {} : { speed: asNumber(params.speed) }),
-        }),
-        synthesize: async (req) => {
-          const config = req.providerConfig as Record<string, unknown>;
-          const overrides = (req.providerOverrides ?? {}) as Record<string, unknown>;
-          const body = JSON.stringify({
-            input: req.text,
-            model:
-              normalizeOptionalString(overrides.model) ??
-              normalizeOptionalString(config.modelId) ??
-              "gpt-4o-mini-tts",
-            voice:
-              normalizeOptionalString(overrides.voice) ??
-              normalizeOptionalString(config.voiceId) ??
-              "alloy",
-            ...(asNumber(overrides.speed) == null ? {} : { speed: asNumber(overrides.speed) }),
-          });
-          const audioBuffer = await fetchStubSpeechAudio(
-            "https://api.openai.com/v1/audio/speech",
-            {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body,
-            },
-            "openai",
-          );
-          return {
-            audioBuffer,
-            outputFormat: "mp3",
-            fileExtension: ".mp3",
-            voiceCompatible: false,
-          };
-        },
+      id: "openai",
+      label: "OpenAI",
+      voices: ["alloy", "nova"],
+      resolveTalkOverrides: ({ params }) => ({
+        ...override("voice", normalizeOptionalString(params.voiceId)),
+        ...override("model", normalizeOptionalString(params.modelId)),
+        ...override("speed", asNumber(params.speed)),
       }),
+      synthesize: async (req) => {
+        const config = req.providerConfig as Record<string, unknown>;
+        const overrides = (req.providerOverrides ?? {}) as Record<string, unknown>;
+        const body = JSON.stringify({
+          input: req.text,
+          model:
+            normalizeOptionalString(overrides.model) ??
+            normalizeOptionalString(config.modelId) ??
+            "gpt-4o-mini-tts",
+          voice:
+            normalizeOptionalString(overrides.voice) ??
+            normalizeOptionalString(config.voiceId) ??
+            "alloy",
+          ...override("speed", asNumber(overrides.speed)),
+        });
+        const audioBuffer = await fetchStubSpeechAudio(
+          "https://api.openai.com/v1/audio/speech",
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body,
+          },
+          "openai",
+        );
+        return {
+          audioBuffer,
+          outputFormat: "mp3",
+          fileExtension: ".mp3",
+          voiceCompatible: false,
+        };
+      },
     },
     {
-      pluginId: TALK_TEST_PROVIDER_ID,
-      source: "test" as const,
-      provider: createStubSpeechProvider({
-        id: TALK_TEST_PROVIDER_ID,
-        label: TALK_TEST_PROVIDER_LABEL,
-        voices: ["stub-default-voice", "stub-alt-voice"],
-        resolveTalkOverrides: ({ params }) => ({
-          ...(normalizeOptionalString(params.voiceId) == null
-            ? {}
-            : { voiceId: normalizeOptionalString(params.voiceId) }),
-          ...(normalizeOptionalString(params.modelId) == null
-            ? {}
-            : { modelId: normalizeOptionalString(params.modelId) }),
-          ...(normalizeOptionalString(params.outputFormat) == null
-            ? {}
-            : { outputFormat: normalizeOptionalString(params.outputFormat) }),
-          ...(asNumber(params.latencyTier) == null
-            ? {}
-            : { latencyTier: asNumber(params.latencyTier) }),
-        }),
+      id: TALK_TEST_PROVIDER_ID,
+      label: TALK_TEST_PROVIDER_LABEL,
+      voices: ["stub-default-voice", "stub-alt-voice"],
+      resolveTalkOverrides: ({ params }) => ({
+        ...override("voiceId", normalizeOptionalString(params.voiceId)),
+        ...override("modelId", normalizeOptionalString(params.modelId)),
+        ...override("outputFormat", normalizeOptionalString(params.outputFormat)),
+        ...override("latencyTier", asNumber(params.latencyTier)),
       }),
     },
   ];
+  return providers.map((provider) => ({
+    pluginId: provider.id,
+    source: "test" as const,
+    provider: createStubSpeechProvider(provider),
+  }));
 }
