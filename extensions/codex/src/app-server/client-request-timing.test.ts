@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useClientHarnesses } from "./client-harness.test-support.js";
 import type { CodexAppServerClient } from "./client.js";
 import { createClientHarness } from "./test-support.js";
 
@@ -7,14 +8,8 @@ type Harness = ReturnType<typeof createClientHarness>;
 type RequestOptions = NonNullable<Parameters<CodexAppServerClient["request"]>[2]>;
 type Page = { data: Array<{ id: string }> };
 
-const harnesses: Harness[] = [];
+const createHarness = useClientHarnesses();
 const page: Page = { data: [{ id: "native-thread" }] };
-
-function createHarness(options: Parameters<typeof createClientHarness>[0] = {}) {
-  const harness = createClientHarness({ autoEmitExit: false, ...options });
-  harnesses.push(harness);
-  return harness;
-}
 
 function read(harness: Harness, options: RequestOptions = {}) {
   const request = harness.client.request<Page>(
@@ -38,15 +33,6 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(1_000);
   vi.spyOn(Math, "random").mockReturnValue(0);
-});
-
-afterEach(() => {
-  for (const harness of harnesses.splice(0)) {
-    harness.client.close();
-    harness.emitExit();
-  }
-  vi.restoreAllMocks();
-  vi.useRealTimers();
 });
 
 describe("Codex request timing", () => {

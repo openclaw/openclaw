@@ -4,20 +4,19 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/text-chunking";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   projectCodexCatalogNativeResponse,
   projectCodexCatalogNativeThread,
 } from "../session-catalog-native-projection.js";
+import { useClientHarnesses } from "./client-harness.test-support.js";
 import * as messageDecoder from "./client-message-decoder.js";
 import type { JsonObject } from "./protocol.js";
-import { createClientHarness } from "./test-support.js";
 
-const harnesses: ReturnType<typeof createClientHarness>[] = [];
+const makeHarness = useClientHarnesses();
 
 function createHarness() {
-  const harness = createClientHarness({ autoEmitExit: false });
-  harnesses.push(harness);
+  const harness = makeHarness();
   return Object.assign(harness, {
     list: (
       params: JsonObject = {},
@@ -28,29 +27,25 @@ function createHarness() {
   });
 }
 
-function requestId(harness: ReturnType<typeof createClientHarness>, index = 0): string | number {
+function requestId(harness: ReturnType<typeof makeHarness>, index = 0): string | number {
   return (JSON.parse(harness.writes[index]!) as { id: string | number }).id;
 }
 
-async function startWorker(harness: ReturnType<typeof createClientHarness>) {
-  const submitted = vi.spyOn(WorkerTaskPool.prototype, "run");
-  const request = harness.client.request("thread/list", {}, { catalogPreview: true });
-  harness.send({ id: requestId(harness), result: { data: [], unused: "x".repeat(64 * 1024) } });
+async function startWorker(harness: ReturnType<typeof createHarness>) {
+  const request = harness.list();
+  harness.reply({ data: [], unused: "x".repeat(64 * 1024) });
   await request;
   const pool = submitted.mock.contexts[0];
-  submitted.mockRestore();
+  submitted.mockClear();
   assert(pool instanceof WorkerTaskPool);
   return pool;
 }
 
-afterEach(async () => {
-  for (const harness of harnesses.splice(0)) {
-    harness.client.close();
-    harness.emitExit();
-    await harness.client.closeAndWait();
-  }
-  vi.restoreAllMocks();
-  vi.useRealTimers();
+let parse: MockInstance<typeof messageDecoder.parseCodexAppServerMessage>;
+let submitted: MockInstance<WorkerTaskPool["run"]>;
+beforeEach(() => {
+  parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
+  submitted = vi.spyOn(WorkerTaskPool.prototype, "run");
 });
 
 describe("Codex catalog worker transport", () => {
@@ -72,7 +67,7 @@ describe("Codex catalog worker transport", () => {
     expect(pool.getSnapshot().workers).toBe(0);
     expect(harness.stdinDestroyed).toBe(false);
     expect(harness.client.getCloseError()).toBeUndefined();
-    const submitted = vi.spyOn(pool, "run");
+    const pageSubmitted = vi.spyOn(pool, "run");
     const page = harness.list();
     const outcome = nextAction === "close" ? expect(page).rejects.toThrow(/closed/u) : page;
     harness.reply({ data: [{ id: "queued" }], unused: "x".repeat(64 * 1024) }, 1);
@@ -88,7 +83,7 @@ describe("Codex catalog worker transport", () => {
     }
     try {
       await Promise.resolve();
-      expect(submitted).not.toHaveBeenCalled();
+      expect(pageSubmitted).not.toHaveBeenCalled();
       expect(closed).toBe(false);
     } finally {
       release.resolve();
@@ -96,10 +91,10 @@ describe("Codex catalog worker transport", () => {
     if (closing) {
       await closing;
       await outcome;
-      expect(submitted).not.toHaveBeenCalled();
+      expect(pageSubmitted).not.toHaveBeenCalled();
     } else {
       await expect(page).resolves.toEqual({ data: [{ id: "queued", projectId: null }] });
-      expect(submitted).toHaveBeenCalledOnce();
+      expect(pageSubmitted).toHaveBeenCalledOnce();
       expect(pool.getSnapshot().workers).toBe(1);
     }
   });
@@ -133,7 +128,6 @@ describe("Codex catalog worker transport", () => {
     { name: "UTF-8 above the bound", bytes: 64 * 1024 + 1, character: "猫", worker: true },
   ])("projects $name with byte-bounded inline decoding", async ({ bytes, character, worker }) => {
     const harness = createHarness();
-    const submitted = vi.spyOn(WorkerTaskPool.prototype, "run");
     const request = harness.list({ limit: 64 }, { catalogRows: 1 });
     const response = {
       result: {
@@ -164,11 +158,9 @@ describe("Codex catalog worker transport", () => {
   });
 
   it.each([1, 100_000])(
-    "projects thread metadata without trimming history with %i native payload repetitions",
+    "projects metadata without trimming history (%i repeats)",
     async (repeats) => {
       const harness = createHarness();
-      const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
-      const submitted = vi.spyOn(WorkerTaskPool.prototype, "run");
       const thread = {
         id: "native-thread",
         projectId: "project-1",
@@ -220,10 +212,9 @@ describe("Codex catalog worker transport", () => {
   );
 
   it.each([0, 1])(
-    "projects result-first pages with %i admitted rows before following notifications",
+    "orders result-first pages before notifications (%i rows)",
     async (catalogRows) => {
       const harness = createHarness();
-      const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
       const delivered = createDeferred<void>();
       const observed: string[] = [];
       const following = { method: "turn/completed", params: { threadId: "selected" } };
@@ -322,10 +313,9 @@ describe("Codex catalog worker transport", () => {
   });
 
   it.each([1, 100_000])(
-    "discards late cancelled catalog pages with %i preview repeats without disturbing the next request",
+    "discards cancelled pages without disturbing the next (%i repeats)",
     async (repeats) => {
       const harness = createHarness();
-      const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
       const abort = new AbortController();
       const cancelled = harness.list({ limit: 64 }, { signal: abort.signal });
       const rejection = expect(cancelled).rejects.toThrow(/aborted/u);
@@ -364,10 +354,9 @@ describe("Codex catalog worker transport", () => {
   });
 
   it("logs only malformed worker frame sizes and accepts the next catalog frame", async () => {
+    const harness = createHarness();
     const token = `synthetic-secret-${"padding".repeat(500)}`;
     const contentMarker = "synthetic-private-worker-tool-result-猫";
-    const harness = createHarness();
-    const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
     const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const request = harness.list();
     const malformed = `{"id":${JSON.stringify(requestId(harness))},"result":{"token":${JSON.stringify(token)},"data":[{"id":"thread","preview":"${contentMarker} invalid \\q`;
@@ -385,7 +374,6 @@ describe("Codex catalog worker transport", () => {
   });
   it("rejects oversized catalog frames before decoding and accepts the next response", async () => {
     const harness = createHarness();
-    const submitted = vi.spyOn(WorkerTaskPool.prototype, "run");
     const request = harness.list();
     const rejected = expect(request).rejects.toThrow("exceeds 8 MiB");
     harness.reply({ data: [{ id: "huge", preview: "x".repeat(8 * 1024 * 1024) }] });
@@ -408,11 +396,9 @@ describe("Codex catalog worker transport", () => {
   });
 
   it.each([64 * 1024 * 1024, 64 * 1024 * 1024 + 1])(
-    "bounds singleton worker parsing at 64 MiB for a %i-byte response",
+    "bounds singleton parsing at 64 MiB (%i bytes)",
     async (bytes) => {
       const harness = createHarness();
-      const submitted = vi.spyOn(WorkerTaskPool.prototype, "run");
-      const parse = vi.spyOn(messageDecoder, "parseCodexAppServerMessage");
       const request = harness.list({ limit: 1 });
       const expected = {
         data: [{ id: "bounded", projectId: null, catalogError: "oversized-thread" }],

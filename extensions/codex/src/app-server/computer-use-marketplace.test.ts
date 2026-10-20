@@ -90,18 +90,19 @@ describe("managed Codex bundled marketplace", () => {
 async function writeCandidate(root: string): Promise<MacOSDesktopCodexAppPathCandidate> {
   const appBundlePath = path.join(root, "ChatGPT.app");
   const bundledMarketplacePath = path.join(appBundlePath, "openai-bundled");
-  await fs.mkdir(path.join(bundledMarketplacePath, ".agents", "plugins"), { recursive: true });
-  await fs.mkdir(path.join(bundledMarketplacePath, "plugins", "computer-use", ".codex-plugin"), {
-    recursive: true,
+  const writeJson = async (relativePath: string, value: unknown) => {
+    const target = path.join(bundledMarketplacePath, relativePath);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, JSON.stringify(value));
+  };
+  await writeJson(".agents/plugins/marketplace.json", {
+    name: "openai-bundled",
+    plugins: [{ name: "computer-use" }],
   });
-  await fs.writeFile(
-    path.join(bundledMarketplacePath, ".agents", "plugins", "marketplace.json"),
-    JSON.stringify({ name: "openai-bundled", plugins: [{ name: "computer-use" }] }),
-  );
-  await fs.writeFile(
-    path.join(bundledMarketplacePath, "plugins", "computer-use", ".codex-plugin", "plugin.json"),
-    JSON.stringify({ name: "computer-use", version: "1.0.0" }),
-  );
+  await writeJson("plugins/computer-use/.codex-plugin/plugin.json", {
+    name: "computer-use",
+    version: "1.0.0",
+  });
   return {
     appName: "ChatGPT.app",
     appBundlePath,

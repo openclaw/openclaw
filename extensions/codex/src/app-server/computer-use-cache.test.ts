@@ -2,11 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
-import type { ResolvedCodexComputerUseConfig } from "./config.js";
+import { resolveCodexComputerUseConfig } from "./config.js";
 import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 describe("Codex Computer Use shared plugin cache", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const config = resolveCodexComputerUseConfig({
+    env: {},
+    overrides: { enabled: true, autoInstall: true, pluginCacheMode: "shared" },
+  });
 
   function fixture() {
     const root = tempDirs.make("openclaw-computer-use-cache-");
@@ -16,7 +20,7 @@ describe("Codex Computer Use shared plugin cache", () => {
     ) =>
       ensureCodexComputerUseSharedPluginCache({
         codexHome,
-        config: computerUseConfig(),
+        config,
         ...options,
       });
     return { root, codexHome, reconcile };
@@ -31,11 +35,11 @@ describe("Codex Computer Use shared plugin cache", () => {
     await writeBundledComputerUsePlugin(chatGptMarketplacePath, "2.0.0");
     await writeBundledComputerUsePlugin(legacyCodexMarketplacePath, "1.0.0");
 
-    const result = await reconcile({
-      bundledMarketplacePathCandidates: [chatGptMarketplacePath, legacyCodexMarketplacePath],
-    });
-
-    expect(result).toBe(true);
+    expect(
+      await reconcile({
+        bundledMarketplacePathCandidates: [chatGptMarketplacePath, legacyCodexMarketplacePath],
+      }),
+    ).toBe(true);
     expect(
       await fs.readdir(path.join(codexHome, "plugins", "cache", "openai-bundled", "computer-use")),
     ).toEqual(["2.0.0"]);
@@ -59,14 +63,13 @@ describe("Codex Computer Use shared plugin cache", () => {
     await fs.writeFile(path.join(priorCachePath, "live-client-marker"), "in use");
     await fs.symlink(bundledPluginRoot, activeCachePath, "dir");
 
-    const result = await reconcile({ bundledMarketplacePath });
-
-    expect(result).toBe(true);
+    expect(await reconcile({ bundledMarketplacePath })).toBe(true);
     await expect(
       fs.readFile(path.join(priorCachePath, "live-client-marker"), "utf8"),
     ).resolves.toBe("in use");
-    expect((await fs.lstat(activeCachePath)).isDirectory()).toBe(true);
-    expect((await fs.lstat(activeCachePath)).isSymbolicLink()).toBe(false);
+    const cacheBefore = await fs.lstat(activeCachePath);
+    expect(cacheBefore.isDirectory()).toBe(true);
+    expect(cacheBefore.isSymbolicLink()).toBe(false);
     await expect(
       fs.readFile(path.join(activeCachePath, ".codex-plugin", "plugin.json"), "utf8"),
     ).resolves.toBe(JSON.stringify({ name: "computer-use", version: "1.0.857" }));
@@ -74,11 +77,11 @@ describe("Codex Computer Use shared plugin cache", () => {
     expect((await fs.lstat(path.join(activeCachePath, "external-link"))).isSymbolicLink()).toBe(
       true,
     );
-    const cacheBefore = await fs.lstat(activeCachePath);
     await reconcile({ bundledMarketplacePath });
-    const cacheAfter = await fs.lstat(activeCachePath);
-    expect(cacheAfter.ino).toBe(cacheBefore.ino);
-    expect(cacheAfter.mtimeMs).toBe(cacheBefore.mtimeMs);
+    expect(await fs.lstat(activeCachePath)).toMatchObject({
+      ino: cacheBefore.ino,
+      mtimeMs: cacheBefore.mtimeMs,
+    });
     await fs.access(priorCachePath);
   });
 
@@ -112,14 +115,19 @@ describe("Codex Computer Use shared plugin cache", () => {
     await fs.mkdir(path.join(cacheRoot, "1.0.101"), { recursive: true });
     await fs.mkdir(path.join(cacheRoot, "1.0.102"), { recursive: true });
 
-    const result = await reconcile({
-      bundledMarketplacePath: path.join(root, "missing-bundled-marketplace"),
-      config: computerUseConfig({
-        marketplacePath: path.join(root, "custom-marketplace", ".agents/plugins/marketplace.json"),
+    expect(
+      await reconcile({
+        bundledMarketplacePath: path.join(root, "missing-bundled-marketplace"),
+        config: {
+          ...config,
+          marketplacePath: path.join(
+            root,
+            "custom-marketplace",
+            ".agents/plugins/marketplace.json",
+          ),
+        },
       }),
-    });
-
-    expect(result).toBe(false);
+    ).toBe(false);
     await fs.access(path.join(cacheRoot, "1.0.101"));
     await fs.access(path.join(cacheRoot, "1.0.102"));
   });
@@ -133,30 +141,10 @@ async function writeBundledComputerUsePlugin(
   bundledMarketplacePath: string,
   version: string,
 ): Promise<void> {
-  const bundledPluginRoot = path.join(bundledMarketplacePath, "plugins", "computer-use");
-  await fs.mkdir(path.join(bundledPluginRoot, ".codex-plugin"), { recursive: true });
-  await fs.writeFile(
-    path.join(bundledPluginRoot, ".codex-plugin", "plugin.json"),
-    JSON.stringify({ name: "computer-use", version }),
+  const manifest = path.join(
+    bundledMarketplacePath,
+    "plugins/computer-use/.codex-plugin/plugin.json",
   );
-}
-
-function computerUseConfig(
-  overrides: Partial<ResolvedCodexComputerUseConfig> = {},
-): ResolvedCodexComputerUseConfig {
-  return {
-    enabled: true,
-    autoInstall: true,
-    marketplaceDiscoveryTimeoutMs: 60_000,
-    liveTestTimeoutMs: 60_000,
-    toolCallTimeoutMs: 60_000,
-    healthCheckEnabled: false,
-    healthCheckIntervalMinutes: 60,
-    pluginCacheMode: "shared",
-    strictReadiness: false,
-    autoRepair: false,
-    pluginName: "computer-use",
-    mcpServerName: "computer-use",
-    ...overrides,
-  };
+  await fs.mkdir(path.dirname(manifest), { recursive: true });
+  await fs.writeFile(manifest, JSON.stringify({ name: "computer-use", version }));
 }
