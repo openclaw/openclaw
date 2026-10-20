@@ -9,7 +9,11 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createOperatorApprovalSessionEventRuntime } from "../operator-approval-session-events.js";
 import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import {
+  roleClient,
+  rolePolicyConfig,
+  sharingPolicyClient,
+} from "../session-sharing.test-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
@@ -34,13 +38,7 @@ it.each(["operator.read", "operator.sessions.read"])(
       replaceSessionEntrySync(scope, entry);
       const client = { ...roleClient("view", "metadata-reader"), connId: "metadata-reader" };
       client.connect.scopes = [readScope, "operator.approvals"];
-      client.connect.device = {
-        id: "metadata-device",
-        publicKey: "key",
-        signature: "signature",
-        signedAt: 1,
-        nonce: "nonce",
-      };
+      client.connect.device = sharingPolicyClient({ deviceId: "metadata-device" }).connect.device;
       const subscribers = createSessionMessageSubscriberRegistry();
       const runtime = createOperatorApprovalSessionEventRuntime({
         clients: [client],
@@ -58,24 +56,16 @@ it.each(["operator.read", "operator.sessions.read"])(
           return prepared;
         },
       });
-      const cases: Array<{ name: string; update: Partial<SessionEntry>; allowed: boolean }> = [
-        { name: "unchanged", update: {}, allowed: true },
-        {
-          name: "activity and label",
-          update: { updatedAt: 2, label: "Still working", totalTokens: 123 },
-          allowed: true,
-        },
-        { name: "visibility revoked", update: { visibility: "draft" }, allowed: false },
-        { name: "session replaced", update: { sessionId: "replacement" }, allowed: false },
-        {
-          name: "lifecycle replaced",
-          update: { lifecycleRevision: "replacement" },
-          allowed: false,
-        },
-        { name: "incognito enabled", update: { incognito: true }, allowed: false },
+      const cases: [name: string, update: Partial<SessionEntry>, allowed: boolean][] = [
+        ["unchanged", {}, true],
+        ["activity and label", { updatedAt: 2, label: "Still working", totalTokens: 123 }, true],
+        ["visibility revoked", { visibility: "draft" }, false],
+        ["session replaced", { sessionId: "replacement" }, false],
+        ["lifecycle replaced", { lifecycleRevision: "replacement" }, false],
+        ["incognito enabled", { incognito: true }, false],
       ];
       try {
-        for (const { name, update, allowed } of cases) {
+        for (const [name, update, allowed] of cases) {
           replaceSessionEntrySync(scope, entry);
           const replayMutation = vi.fn(() =>
             replaceSessionEntrySync(scope, { ...entry, ...update }),

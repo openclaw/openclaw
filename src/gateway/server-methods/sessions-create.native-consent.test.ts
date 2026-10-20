@@ -5,12 +5,14 @@ import {
   registerNative,
   useNativeProcessFixture,
 } from "../../agents/harness/acp-native-process.test-support.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import type * as ModelRuntimeChoice from "../../agents/model-runtime-choice.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { coreGatewayHandlers } from "./core-handlers.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
@@ -42,14 +44,11 @@ it.each([
               api: "openai-completions",
               baseUrl: "https://native.invalid",
               models: [
-                {
-                  id: "selected",
+                modelDefinition("selected", {
                   name: "Selected",
                   reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   maxTokens: 1024,
-                },
+                }),
               ],
             },
           },
@@ -69,32 +68,24 @@ it.each([
       const profile = ensureProfileForEmail("native-creation@example.test");
       const scopes = admin ? ["operator.admin"] : ["operator.write"];
       const client: GatewayClient = {
+        ...sharingPolicyClient({ scopes }),
         connId: "native-creation",
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          role: "operator",
-          scopes,
-          client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-        },
-        ...(profiled
-          ? {
-              authenticatedUserProfile: {
-                profileId: profile.id,
-                displayName: null,
-                hasAvatar: false,
-                updatedAt: 1,
-              },
-              internal: {
-                operatorRunAuthority: createAdmittedRunOperatorAuthority({
-                  profileId: profile.id,
-                  scopes,
-                  assertCurrent() {},
-                }),
-              },
-            }
-          : {}),
       };
+      if (profiled) {
+        client.authenticatedUserProfile = {
+          profileId: profile.id,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        };
+        client.internal = {
+          operatorRunAuthority: createAdmittedRunOperatorAuthority({
+            profileId: profile.id,
+            scopes,
+            assertCurrent() {},
+          }),
+        };
+      }
       const context = createDirectChatContext({ getRuntimeConfig: () => config });
       context.readPreparedGatewayModelCatalog = async () => {
         const catalog = await context.loadGatewayModelCatalogSnapshot();

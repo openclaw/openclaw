@@ -13,7 +13,10 @@ import {
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -23,33 +26,42 @@ import { sessionRewindHandlers } from "./sessions-rewind.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+async function prepareTranscript(state: OpenClawTestState, sessionId: string) {
+  const cfg = { agents: { entries: { main: {} } } };
+  await state.writeConfig(cfg);
+  const scope = {
+    agentId: "main",
+    sessionKey: `agent:main:dashboard:${sessionId}`,
+    sessionId,
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+  };
+  await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
+  for (const content of ["First question", "Second question", "Third question"]) {
+    await appendTranscriptMessage(scope, {
+      cwd: state.workspaceDir,
+      message: { role: "user", content, timestamp: 1 },
+    });
+  }
+  return {
+    scope,
+    context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+    target: captureSessionTarget({
+      storeScope: scope.storePath,
+      sessionKey: scope.sessionKey,
+      incarnation: sessionId,
+      agentId: scope.agentId,
+    }),
+  };
+}
+
 it.each(["committed", "failed"] as const)(
   "waits for a %s reply owner to finish its transcript write before compacting",
   async (outcome) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = { agents: { entries: { main: {} } } };
-      await state.writeConfig(cfg);
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:dashboard:terminal-compact",
-        sessionId: "terminal-compact",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      };
-      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-      for (const content of ["First question", "Second question", "Third question"]) {
-        await appendTranscriptMessage(scope, {
-          cwd: state.workspaceDir,
-          message: { role: "user", content, timestamp: 1 },
-        });
-      }
+      const { scope, context, target } = await prepareTranscript(state, "terminal-compact");
       const operation = createReplyOperation({
         ...scope,
-        target: captureSessionTarget({
-          storeScope: scope.storePath,
-          sessionKey: scope.sessionKey,
-          incarnation: scope.sessionId,
-          agentId: scope.agentId,
-        }),
+        target,
         resetTriggered: false,
       });
       if (outcome === "failed") {
@@ -75,7 +87,7 @@ it.each(["committed", "failed"] as const)(
             client: null,
             isWebchatConnect: () => false,
             respond,
-            context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+            context,
           },
           undefined,
           undefined,
@@ -118,31 +130,11 @@ it.each(["compact", "rewind"] as const)(
   "refuses %s immediately when a newer live admission coexists with an older terminal writer",
   async (action) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const cfg = { agents: { entries: { main: {} } } };
-      await state.writeConfig(cfg);
-      const scope = {
-        agentId: "main",
-        sessionKey: "agent:main:dashboard:live-settlement",
-        sessionId: "live-settlement",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      };
-      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-      for (const content of ["First question", "Second question", "Third question"]) {
-        await appendTranscriptMessage(scope, {
-          cwd: state.workspaceDir,
-          message: { role: "user", content, timestamp: 1 },
-        });
-      }
-      const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+      const { scope, context, target } = await prepareTranscript(state, "live-settlement");
       const terminal = registerChatAbortController({
         runId: "older-terminal",
         ...scope,
-        target: captureSessionTarget({
-          storeScope: scope.storePath,
-          sessionKey: scope.sessionKey,
-          incarnation: scope.sessionId,
-          agentId: scope.agentId,
-        }),
+        target,
         timeoutMs: 60_000,
         projectSessionActive: false,
       });

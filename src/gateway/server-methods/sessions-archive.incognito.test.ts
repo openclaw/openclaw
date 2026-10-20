@@ -99,16 +99,21 @@ async function restore(key: string, entry: SessionEntry, placement: PlacementCon
   }
 }
 
-it("prepares archive and restores an admitted human turn without opening host SQLite", async () => {
-  const key = "agent:main:dashboard:incognito-archive";
+async function seedArchive(key: string, sessionId: string) {
   const entry: SessionEntry = {
-    sessionId: "archive",
+    sessionId,
     lifecycleRevision: "archive-original",
     updatedAt: Date.now(),
     incognito: true,
     archivedAt: 1,
   };
   await replaceSessionEntry({ sessionKey: key, storePath }, entry);
+  return entry;
+}
+
+it("prepares archive and restores an admitted human turn without opening host SQLite", async () => {
+  const key = "agent:main:dashboard:incognito-archive";
+  const entry = await seedArchive(key, "archive");
   const sql = observeHostDataSql();
   try {
     const prepared = await archive(key, entry);
@@ -127,14 +132,7 @@ it.each(["archive", "restore"] as const)(
   "refuses %s after its same-ID row changes lifecycle during placement preparation",
   async (operation) => {
     const key = `agent:main:dashboard:incognito-${operation}-replacement`;
-    const entry: SessionEntry = {
-      sessionId: operation,
-      lifecycleRevision: "archive-original",
-      updatedAt: Date.now(),
-      incognito: true,
-      archivedAt: 1,
-    };
-    await replaceSessionEntry({ sessionKey: key, storePath }, entry);
+    const entry = await seedArchive(key, operation);
     const entered = createDeferred();
     const resume = createDeferred();
     const placement: PlacementContext = {
