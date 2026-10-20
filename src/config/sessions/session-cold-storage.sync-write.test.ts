@@ -8,10 +8,10 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import {
-  appendTranscriptMessageSync,
-  persistCompactionBoundaryWithSessionEntrySync,
+  appendTranscriptMessageSync as appendMessage,
+  persistCompactionBoundaryWithSessionEntrySync as persistBoundary,
   loadTranscriptEventsSync,
-  replaceTranscriptSuffixEventsSync,
+  replaceTranscriptSuffixEventsSync as replaceSuffix,
   replaceSessionEntrySync,
 } from "./session-accessor.js";
 import {
@@ -106,45 +106,31 @@ it("refuses synchronous writes to cold current history without mutating or resto
   );
   const event = { type: "custom", id: "sync-custom", customType: "sync-write", data: {} };
   const message = { role: "user", content: "A new synchronous message", timestamp: 20 };
+  const boundary = {
+    type: "compaction" as const,
+    id: "sync-boundary",
+    parentId: "original-user",
+    timestamp: new Date(20).toISOString(),
+    summary: "Compacted",
+    firstKeptEntryId: "original-user",
+    tokensBefore: 100,
+  };
+  const latch = { sessionId: scope.sessionId, activeBytes: 2048, maxBytes: 1024 };
   const mutations = {
     "append event": () => appendTranscriptEventSync(scope, event),
     "append event snapshot": () => appendTranscriptEventSnapshotSync(scope, event),
-    "append message": () =>
-      appendTranscriptMessageSync(scope, { message, eventId: "sync-message" }),
+    "append message": () => appendMessage(scope, { message, eventId: "sync-message" }),
     "append message snapshot": () =>
       appendTranscriptMessageSnapshotSync(scope, { message, eventId: "sync-message-snapshot" }),
     "replace transcript": () => replaceTranscriptEventsSync(scope, [event]),
     "replace full suffix": () =>
-      replaceTranscriptSuffixEventsSync(scope, expectedTranscript, expectedTranscript.slice(0, 1)),
+      replaceSuffix(scope, expectedTranscript, expectedTranscript.slice(0, 1)),
     "replace incremental suffix": () =>
-      replaceTranscriptSuffixEventsSync(
-        scope,
-        expectedTranscript.slice(1),
-        [],
-        1,
-        undefined,
-        undefined,
-        true,
-      ),
+      replaceSuffix(scope, expectedTranscript.slice(1), [], 1, undefined, undefined, true),
     "compaction boundary": () =>
-      persistCompactionBoundaryWithSessionEntrySync(scope, {
-        prepared: {
-          scope,
-          event: {
-            type: "compaction",
-            id: "sync-boundary",
-            parentId: "original-user",
-            timestamp: new Date(20).toISOString(),
-            summary: "Compacted",
-            firstKeptEntryId: "original-user",
-            tokensBefore: 100,
-          },
-        },
-        transcriptByteCompactionLatch: {
-          sessionId: scope.sessionId,
-          activeBytes: 2048,
-          maxBytes: 1024,
-        },
+      persistBoundary(scope, {
+        prepared: { scope, event: boundary },
+        transcriptByteCompactionLatch: latch,
       }),
   };
   for (const [name, run] of Object.entries(mutations)) {

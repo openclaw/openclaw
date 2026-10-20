@@ -1,4 +1,4 @@
-import { expect, it as baseIt, vi } from "vitest";
+import { assert, expect, it as baseIt, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
@@ -73,6 +73,22 @@ function counts<Key extends string>(
 const entrySelection = (f: Fixture, exact = true, sessionKey = f.target.sessionKey) =>
   ({ kind: "entry", sessionKey, exact }) as const;
 const entrySnapshot = (f: Fixture) => readSessionEntryPatchSnapshot(f.database, entrySelection(f));
+const messageEvent = (id: string, parentId: string | null, content: string, role = "user") => ({
+  type: "message" as const,
+  id,
+  parentId,
+  message: { role, content },
+});
+const headerEvent = (f: Fixture) => ({
+  type: "session",
+  id: f.scope.sessionId,
+  version: 3,
+  cwd: "/synthetic",
+});
+const steer = <T extends { message: object }>(event: T, steerTargetRunId: string) => ({
+  ...event,
+  message: { ...event.message, __openclaw: { steerTargetRunId } },
+});
 const rewrite = (
   f: Fixture,
   seq: number,
@@ -82,6 +98,12 @@ const rewrite = (
   rewriteSqliteTranscriptEventRowsInTransaction(f.database, f.scope, [
     { seq, expectedEventJson, event },
   ]);
+async function commit(f: Fixture, command: Mutation) {
+  await f.prepare(command);
+  const result = f.mutate(command);
+  assert(result.kind === "committed");
+  return result;
+}
 
 function activityCommand(
   f: Fixture,
@@ -211,23 +233,20 @@ it("autocommits consecutive resident contributions", ({ actor: f }) => {
   f.read();
   const input = participantInput();
   f.participant(input);
-  const sql = trackSqliteStatementExecutions(f.database.db, ["contribution", "read"], (text) =>
-    /^insert into "session_participants"/iu.test(text)
-      ? "contribution"
-      : /^select\b/iu.test(text)
-        ? "read"
-        : null,
-  );
-  const exec = vi.spyOn(f.database.db, "exec");
-  try {
+  {
+    using sql = counts(f, ["contribution", "read"], (text) =>
+      /^insert into "session_participants"/iu.test(text)
+        ? "contribution"
+        : /^select\b/iu.test(text)
+          ? "read"
+          : null,
+    );
+    using exec = vi.spyOn(f.database.db, "exec");
     f.participant({ ...input, promptedAt: 20 });
     f.participant({ ...input, promptedAt: 30 });
     expect(f.read().participants).toMatchObject([participantRecord("peer", 3, 10, 30)]);
     expect(sql.counts).toEqual({ contribution: 2, read: 0 });
     expect(exec.mock.calls.some(([text]) => /BEGIN|COMMIT/iu.test(text))).toBe(false);
-  } finally {
-    exec.mockRestore();
-    sql.restore();
   }
   f.restartActor();
   expect(f.read().participants).toMatchObject([{ contributionCount: 3, lastPromptedAt: 30 }]);
@@ -243,16 +262,13 @@ it("refuses contributions before writing and survives publication failure", ({ a
   }
   f.hooks.admit = undefined;
   expect(f.read().participants).toMatchObject([{ contributionCount: 1 }]);
-  const publish = vi
-    .spyOn(participantCache, "publishSessionEntryCacheParticipantUpdate")
-    .mockImplementation(() => {
+  {
+    using publish = vi.spyOn(participantCache, "publishSessionEntryCacheParticipantUpdate");
+    publish.mockImplementation(() => {
       throw new Error("participant publication failed");
     });
-  try {
     expect(f.participant({ ...input, promptedAt: 20 })).toMatchObject({ value: "updated" });
     expect(f.read().participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 20 }]);
-  } finally {
-    publish.mockRestore();
   }
   f.restartActor();
   expect(f.read().participants).toMatchObject([{ contributionCount: 2, lastPromptedAt: 20 }]);
@@ -325,19 +341,10 @@ it("keeps entry and transcript owners' writes resident across patches", async ({
     .run(f.target.sessionKey);
   transaction(f, () =>
     appendTranscriptEventsInTransaction(f.database, f.scope, [
+      { ...headerEvent(f), timestamp: "2026-01-01T00:00:00Z" },
       {
-        type: "session",
-        id: f.scope.sessionId,
-        version: 3,
-        timestamp: "2026-01-01T00:00:00Z",
-        cwd: "/synthetic",
-      },
-      {
-        type: "message",
-        id: "before-patch",
-        parentId: null,
+        ...messageEvent("before-patch", null, "retain this input"),
         timestamp: "2026-01-01T00:00:01Z",
-        message: { role: "user", content: "retain this input" },
       },
     ]),
   );
@@ -401,10 +408,9 @@ it("keeps entry and transcript owners' writes resident across patches", async ({
       version: { ...before.version, sequence: before.version.sequence + 2 },
     });
     const accounting = activityCommand(f, "activity-20", 20);
-    await f.prepare(accounting);
-    expect(f.mutate(accounting)).toMatchObject({
-      kind: "committed",
-      receipt: { postimage: { entry: { updatedAt: 20, label: "entry owner committed" } } },
+    expect((await commit(f, accounting)).receipt.postimage.entry).toMatchObject({
+      updatedAt: 20,
+      label: "entry owner committed",
     });
     const append: Mutation = {
       type: "session.actor.appendTranscriptEvent",
@@ -425,8 +431,7 @@ it("keeps entry and transcript owners' writes resident across patches", async ({
         }),
       },
     };
-    await f.prepare(append);
-    expect(f.mutate(append).kind).toBe("committed");
+    await commit(f, append);
     expect(entrySnapshot(f)[0]?.row?.transcriptWatermark).toEqual({
       sessionId: f.scope.sessionId,
       generation: expect.any(String),
@@ -538,23 +543,13 @@ it.each(["entry", "target"] as const)(
   },
 );
 
-const question = {
-  type: "message",
-  id: "question",
-  parentId: null,
-  message: { role: "user", content: "A question about 🦞" },
-};
-const answer = {
-  type: "message",
-  id: "answer",
-  parentId: "question",
-  message: { role: "assistant", content: "An answer" },
-};
+const question = messageEvent("question", null, "A question about 🦞");
+const answer = messageEvent("answer", "question", "An answer", "assistant");
 
 const storedBytes = (event: unknown) => Buffer.byteLength(JSON.stringify(event)) + 1;
 
 function seed(f: Fixture, prettyQuestion = false) {
-  const header = { type: "session", id: f.scope.sessionId, version: 3, cwd: "/synthetic" };
+  const header = headerEvent(f);
   const questionJson = JSON.stringify(question, null, prettyQuestion ? 2 : undefined);
   transaction(f, () => {
     appendTranscriptEventInTransaction(f.database, f.scope, header);
@@ -623,13 +618,8 @@ it("tracks rewritten bytes in compact receipts, including rollback", ({ actor: f
   expect(context.receipt().facts?.contextMetadata).toBeUndefined();
   context.expectAccounting(2, Buffer.byteLength(questionJson) + 1 + storedBytes(answer));
 
-  const rewritten = {
-    ...question,
-    message: { ...question.message, __openclaw: { steerTargetRunId: "committed-next-run" } },
-  };
-  transaction(f, () => {
-    rewrite(f, 1, questionJson, rewritten);
-  });
+  const rewritten = steer(question, "committed-next-run");
+  transaction(f, () => rewrite(f, 1, questionJson, rewritten));
   // The compact publication updates exact totals without copying row metadata.
   expect(context.receipt().facts?.contextMetadata).toBeUndefined();
   const expected = { eventCount: 2, byteSize: storedBytes(rewritten) + storedBytes(answer) };
@@ -639,13 +629,7 @@ it("tracks rewritten bytes in compact receipts, including rollback", ({ actor: f
     serializedBytes: storedBytes(header) + expected.byteSize,
   });
 
-  const rolledBack = {
-    ...rewritten,
-    message: {
-      ...rewritten.message,
-      __openclaw: { steerTargetRunId: "uncommitted-run-with-a-different-size" },
-    },
-  };
+  const rolledBack = steer(rewritten, "uncommitted-run-with-a-different-size");
   expect(() =>
     transaction(f, () => {
       rewrite(f, 1, JSON.stringify(rewritten), rolledBack);
@@ -677,12 +661,11 @@ it.each(["reset", "compaction", "leaf"] as const)(
                 tokensBefore: 20,
               }
             : { type: kind, id: "control", parentId: "answer", reason: "new" };
-      const tail = {
-        ...question,
-        id: "tail",
-        parentId: kind === "leaf" ? "question" : "control",
-        message: { role: "user", content: "Continue in the selected window" },
-      };
+      const tail = messageEvent(
+        "tail",
+        kind === "leaf" ? "question" : "control",
+        "Continue in the selected window",
+      );
       transaction(f, () => {
         appendTranscriptEventsInTransaction(f.database, f.scope, [control, tail], {
           scheduleProjectionReconcile: false,
@@ -709,12 +692,9 @@ it.each(["reset", "compaction", "leaf"] as const)(
 it("accounts for appends and rewrites beyond the resident window without scans", async ({
   actor: f,
 }) => {
-  const events = Array.from({ length: 600 }, (_, index) => ({
-    type: "message",
-    id: `message-${index}`,
-    parentId: index === 0 ? null : `message-${index - 1}`,
-    message: { role: "user", content: "x" },
-  }));
+  const events = Array.from({ length: 600 }, (_, index) =>
+    messageEvent(`message-${index}`, index === 0 ? null : `message-${index - 1}`, "x"),
+  );
   transaction(f, () =>
     appendTranscriptEventsInTransaction(f.database, f.scope, events, {
       scheduleProjectionReconcile: false,
@@ -728,11 +708,8 @@ it("accounts for appends and rewrites beyond the resident window without scans",
   const originalBytes = events.reduce((total, event) => total + storedBytes(event), 0);
   context.expectAccounting(events.length, originalBytes);
   const appended = {
-    type: "message" as const,
-    id: "after-window",
-    parentId: events.at(-1)!.id,
+    ...messageEvent("after-window", events.at(-1)!.id, question.message.content),
     timestamp: "2026-01-01T00:00:00.000Z",
-    message: question.message,
   };
   const command: Mutation = {
     type: "session.actor.appendTranscriptEvent",
@@ -755,17 +732,11 @@ it("accounts for appends and rewrites beyond the resident window without scans",
       },
     },
   };
-  const rewritten = {
-    ...appended,
-    message: { ...appended.message, __openclaw: { steerTargetRunId: "new-run" } },
-  };
-  await f.prepare(command);
-  expect(f.mutate(command)).toMatchObject({ kind: "committed" });
+  const rewritten = steer(appended, "new-run");
+  await commit(f, command);
   context.install();
   context.expectAccounting(events.length + 1, originalBytes + storedBytes(appended));
-  transaction(f, () => {
-    rewrite(f, events.length, JSON.stringify(appended), rewritten);
-  });
+  transaction(f, () => rewrite(f, events.length, JSON.stringify(appended), rewritten));
   context.expectAccounting(events.length + 1, originalBytes + storedBytes(rewritten));
   expect(stats.counts.aggregate).toBe(0);
   expect(
@@ -796,11 +767,7 @@ it("retains an oversized actor until replaced by another oversized actor", async
 
   const initial = f.read();
   const command = activityCommand(f, "oversized-activity", 2);
-  await f.prepare(command);
-  const committed = f.mutate(command);
-  if (committed.kind !== "committed") {
-    throw new Error("Expected the oversized sole actor to commit without rehydration");
-  }
+  const committed = await commit(f, command);
   expect(committed.failure).toBeUndefined();
   expect(f.reply()).toEqual({ kind: "committed" });
   expect(committed.receipt.afterVersion).toEqual({
