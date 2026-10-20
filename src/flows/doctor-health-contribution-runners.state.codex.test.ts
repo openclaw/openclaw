@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { runCodexSessionRouteHealth } from "./doctor-health-contribution-runners.state.js";
 import {
   createDoctorHealthFlowContext,
@@ -14,57 +14,50 @@ vi.mock("../commands/doctor/shared/codex-route-warnings.js", () => ({
   maybeRepairCodexSessionRoutes: mocks.maybeRepairCodexSessionRoutes,
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note: mocks.note,
-}));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
-describe("Codex session doctor health owner", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.maybeRepairCodexSessionRoutes.mockResolvedValue({
-      scannedStores: 1,
-      repairedStores: 1,
-      repairedSessions: 1,
-      changes: [],
-      warnings: [],
-    });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.maybeRepairCodexSessionRoutes.mockResolvedValue({
+    changes: [],
+    warnings: [],
   });
+});
 
-  it("applies the exact ephemeral auth map after earlier session migration owners", async () => {
-    const authProfileIdMap = new Map([["openai-codex:default", "openai:chatgpt-default"]]);
-    const retiredModelRefConfig = { agents: { defaults: { model: "openai/retired-model" } } };
-    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-session-owner" };
-    const ctx = createDoctorHealthFlowContext({
-      env,
-      prompter: createDoctorPrompterFixture(true),
-      configResult: {
-        openAICodexAuthProfileIdMap: authProfileIdMap,
-        retiredModelRefConfig,
-        blockedCodexModelIdentities: ["codex\0gpt-5.6-sol"],
-      },
-    });
-
-    await runCodexSessionRouteHealth(ctx);
-
-    expect(mocks.maybeRepairCodexSessionRoutes).toHaveBeenCalledWith({
-      cfg: ctx.cfg,
-      env,
-      shouldRepair: true,
-      authProfileIdMap,
+it("applies the exact ephemeral auth map after earlier session migration owners", async () => {
+  const authProfileIdMap = new Map([["openai-codex:default", "openai:chatgpt-default"]]);
+  const retiredModelRefConfig = { agents: { defaults: { model: "openai/retired-model" } } };
+  const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-session-owner" };
+  const ctx = createDoctorHealthFlowContext({
+    env,
+    prompter: createDoctorPrompterFixture(true),
+    configResult: {
+      openAICodexAuthProfileIdMap: authProfileIdMap,
       retiredModelRefConfig,
-      blockedModelIdentities: new Set(["codex\0gpt-5.6-sol"]),
-    });
+      blockedCodexModelIdentities: ["codex\0gpt-5.6-sol"],
+    },
   });
 
-  it("keeps preview mode read-only without inventing an auth migration map", async () => {
-    const ctx = createDoctorHealthFlowContext({ env: {} });
+  await runCodexSessionRouteHealth(ctx);
 
-    await runCodexSessionRouteHealth(ctx);
+  expect(mocks.maybeRepairCodexSessionRoutes).toHaveBeenCalledWith({
+    cfg: ctx.cfg,
+    env,
+    shouldRepair: true,
+    authProfileIdMap,
+    retiredModelRefConfig,
+    blockedModelIdentities: new Set(["codex\0gpt-5.6-sol"]),
+  });
+});
 
-    expect(mocks.maybeRepairCodexSessionRoutes).toHaveBeenCalledWith({
-      cfg: ctx.cfg,
-      env: {},
-      shouldRepair: false,
-    });
+it("keeps preview mode read-only without inventing an auth migration map", async () => {
+  const ctx = createDoctorHealthFlowContext({ env: {} });
+
+  await runCodexSessionRouteHealth(ctx);
+
+  expect(mocks.maybeRepairCodexSessionRoutes).toHaveBeenCalledWith({
+    cfg: ctx.cfg,
+    env: {},
+    shouldRepair: false,
   });
 });

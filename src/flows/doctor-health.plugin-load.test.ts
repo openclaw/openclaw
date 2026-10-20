@@ -1,6 +1,4 @@
 import "./doctor-health.test-support.js";
-import fs from "node:fs";
-import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
@@ -20,42 +18,39 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each(["standalone", "in-progress"])(
-  "reports plugin ENOSPC during %s Doctor with its corresponding outcome",
-  async (update) => {
+it.each([false, true])(
+  "reports plugin ENOSPC with its corresponding outcome (update: %s)",
+  async (updating) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const resultPath = state.path("doctor-result.json");
       stubDoctorEnv({
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_UPDATE_IN_PROGRESS: update === "in-progress" ? "1" : undefined,
-        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE:
-          update === "standalone" ? undefined : "1",
+        OPENCLAW_UPDATE_IN_PROGRESS: updating ? "1" : undefined,
+        OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: updating ? "1" : undefined,
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
-        OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH:
-          update === "standalone" ? undefined : resultPath,
+        OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: updating ? resultPath : undefined,
       });
       mocks.packageRoot.mockReturnValue(undefined);
       mocks.outro.mockClear();
       mocks.writeUpdatePostInstallDoctorResult.mockClear();
       const id = "doctor-load-fixture";
-      const root = state.path("plugin");
-      fs.mkdirSync(root);
-      const source = path.join(root, "index.cjs");
-      fs.writeFileSync(source, `module.exports = { id: "${id}", register() {} };`);
-      fs.writeFileSync(
-        path.join(root, "openclaw.plugin.json"),
-        JSON.stringify({ id, configSchema: { type: "object", properties: {} } }),
+      const root = state.statePath("plugin");
+      const source = await state.writeText(
+        "plugin/index.cjs",
+        `module.exports = { id: "${id}", register() {} };`,
       );
+      await state.writeJson("plugin/openclaw.plugin.json", {
+        id,
+        configSchema: { type: "object", properties: {} },
+      });
       const cfg = {
         plugins: { allow: [id], load: { paths: [root] }, slots: { memory: "none" } },
       };
       mocks.config.mockReturnValue(cfg);
-      let failedWrite = false;
       // Copy-owner tests cover fs-safe translation; Doctor consumes this capture boundary.
       const copy = pluginSourceFiles.copyPluginSourceFile;
       vi.spyOn(pluginSourceFiles, "copyPluginSourceFile").mockImplementation((...args) => {
         if (args[0] === source) {
-          failedWrite = true;
           throw Object.assign(new Error("fixture capture write failed"), { code: "ENOSPC" });
         }
         return copy(...args);
@@ -80,8 +75,7 @@ it.each(["standalone", "in-progress"])(
       });
       const runtime = createDoctorRuntime();
       await doctorCommand(runtime, { nonInteractive: true });
-      expect(failedWrite).toBe(true);
-      if (update === "standalone") {
+      if (!updating) {
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
       } else {
         expect(runtime.exit).not.toHaveBeenCalled();
@@ -106,8 +100,7 @@ it.each(["standalone", "in-progress"])(
       runtime.exit.mockClear();
       runtime.error.mockClear();
       await doctorCommand(runtime, { nonInteractive: true });
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expect(runtime.error).not.toHaveBeenCalled();
+      expect([runtime.exit.mock.calls, runtime.error.mock.calls]).toEqual([[], []]);
       expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
     });
   },

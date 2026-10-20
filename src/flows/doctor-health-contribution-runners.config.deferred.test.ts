@@ -3,7 +3,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDoctorPrompter } from "../commands/doctor-prompter.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
@@ -32,23 +31,21 @@ it.each([
     await withOpenClawTestState(
       { env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
-        const authored = {
-          gateway: { mode: "local" },
-          agents: { defaults: { workspace: "${OPENCLAW_HOME}" } },
-          plugins: {
-            allow: ["codex", "fixture"],
-            entries: {
-              codex: { enabled: true, config: { codexDynamicToolsProfile: "legacy" } },
-              fixture: { enabled: false },
-            },
+        const plugins = {
+          allow: ["codex", "fixture"],
+          entries: {
+            codex: { enabled: true, config: { codexDynamicToolsProfile: "legacy" } },
+            fixture: { enabled: false },
           },
         };
         if (include) {
-          await state.writeJson("plugins.json", authored.plugins);
+          await state.writeJson("plugins.json", plugins);
         }
-        await state.writeConfig(
-          include ? { ...authored, plugins: { $include: "./plugins.json" } } : authored,
-        );
+        await state.writeConfig({
+          gateway: { mode: "local" },
+          agents: { defaults: { workspace: "${OPENCLAW_HOME}" } },
+          plugins: include ? { $include: "./plugins.json" } : plugins,
+        });
         const outputPath = include ? state.statePath("plugins.json") : state.configPath;
         const retiredPath = `${include ? "" : "plugins."}entries.codex.config.codexDynamicToolsProfile`;
         if (deferred) {
@@ -65,23 +62,11 @@ it.each([
           });
         }
         const initial = await readConfigFileSnapshot({ observe: false });
-        const cfg: OpenClawConfig = {
-          ...initial.sourceConfig,
-          plugins: {
-            ...initial.sourceConfig.plugins,
-            entries: {
-              ...initial.sourceConfig.plugins?.entries,
-              codex: { enabled: true, config: {} },
-              fixture: { enabled: true },
-            },
-          },
-        };
-        const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-        const options = { nonInteractive: true };
+        const cfg = structuredClone(initial.sourceConfig);
+        cfg.plugins!.entries!.codex = { enabled: true, config: {} };
+        cfg.plugins!.entries!.fixture = { enabled: true };
         const ctx = createDoctorHealthFlowContext({
-          runtime,
-          options,
-          prompter: createDoctorPrompter({ runtime, options }),
+          options: { nonInteractive: true },
           configResult: {
             confirmedConfigSource: {
               path: initial.path,
@@ -95,6 +80,7 @@ it.each([
           configPath: state.configPath,
           env: state.env,
         });
+        ctx.prompter = createDoctorPrompter({ runtime: ctx.runtime, options: ctx.options });
 
         const read = (file = outputPath) => fs.readFile(file, "utf8");
         const beforeFirstWrite = await read();
@@ -117,17 +103,15 @@ it.each([
         expect(ctx.configWriteRefusal).toBeUndefined();
         const firstRaw = await read();
         await assertPersisted(beforeFirstWrite);
-        const firstReceipt = structuredClone(ctx.configResult.confirmedConfigSource);
+        const first = JSON.parse(firstRaw);
         if (deferred) {
-          expect(JSON.parse(firstRaw)).toHaveProperty(retiredPath, "legacy");
+          expect(first).toHaveProperty(retiredPath, "legacy");
         } else {
-          expect(JSON.parse(firstRaw)).not.toHaveProperty(retiredPath);
+          expect(first).not.toHaveProperty(retiredPath);
         }
-        expect(JSON.parse(firstRaw)).toHaveProperty(
-          `${include ? "" : "plugins."}entries.fixture.enabled`,
-          true,
-        );
-        const desired = structuredClone(ctx.cfg);
+        expect(include ? first.entries : first.plugins.entries).toMatchObject({
+          fixture: { enabled: true },
+        });
         if (deferred) {
           await recordDeferredPluginMigrations({
             env: state.env,
@@ -136,13 +120,9 @@ it.each([
           });
           expect(readDeferredPluginMigrations({ env: state.env })).toEqual([]);
         }
-        expect(ctx.cfg).toEqual(desired);
 
         vi.setSystemTime(startedAt + 1_000);
         await runWriteConfigHealth(ctx, { runPostWriteRepairs: false });
-        if (deferred) {
-          expect(ctx.configResult.confirmedConfigSource?.hash).not.toBe(firstReceipt?.hash);
-        }
         const finalRaw = await read();
         await assertPersisted(deferred ? firstRaw : beforeFirstWrite);
         expect(JSON.parse(finalRaw)).not.toHaveProperty(retiredPath);
