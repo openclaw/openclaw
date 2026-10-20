@@ -13,76 +13,43 @@ import * as gateway from "../src/agents/tools/in-process-gateway.js";
 
 const conversationRef = "conv_0123456789abcdef0123456789abcdef";
 const destination = { conversationRef, channel: "qa-channel" };
+const correlated = { ...destination, messageId: "outbound-1", correlationPersisted: true };
+const message = "Synthetic external message";
+const reply = { conversationRef, messageId: "inbound-1", text: "Received", timestamp: 1 };
+
+function delivery(
+  kind: "send" | "turn",
+  receipt: ConversationSendResult | ConversationTurnResult,
+  delivered: boolean,
+  success = true,
+) {
+  const name = `${kind} ${receipt.status} ${"messageId" in receipt ? "with ID" : "without ID"}`;
+  return { name, kind, receipt, delivered, success };
+}
 
 describe("Codex core conversation delivery", () => {
   afterEach(() => vi.restoreAllMocks());
   it.each([
-    {
-      name: "sent without a platform ID",
-      toolName: "conversations_send",
-      receipt: { ...destination, status: "sent" },
-      delivered: true,
-      success: true,
-    },
-    ...(["sent", "queued"] as const).map((status) => ({
-      name: `send ${status} with a platform ID`,
-      toolName: "conversations_send" as const,
-      receipt: { ...destination, status, messageId: "outbound-1" },
-      delivered: status === "sent",
-      success: true,
-    })),
-    {
-      name: "replied",
-      toolName: "conversations_turn",
-      receipt: {
-        ...destination,
-        status: "replied",
-        messageId: "outbound-1",
-        correlationPersisted: true,
-        reply: { conversationRef, messageId: "inbound-1", text: "Received", timestamp: 1 },
-      },
-      delivered: true,
-      success: true,
-    },
-    {
-      name: "peer reply timeout after send",
-      toolName: "conversations_turn",
-      receipt: {
-        ...destination,
-        status: "timeout",
-        messageId: "outbound-1",
-        correlationPersisted: true,
-      },
-      delivered: true,
-      success: false,
-    },
-    ...(["sent", "queued"] as const).map((status) => ({
-      name: `turn ${status} with a correlation error`,
-      toolName: "conversations_turn" as const,
-      receipt: {
-        ...destination,
-        status,
-        messageId: "outbound-1",
-        correlationPersisted: true,
-        error: "No process-local reply waiter remains.",
-      },
-      delivered: status === "sent",
-      success: false,
-    })),
-  ] satisfies Array<{
-    name: string;
-    toolName: "conversations_send" | "conversations_turn";
-    receipt: ConversationSendResult | ConversationTurnResult;
-    delivered: boolean;
-    success: boolean;
-  }>)("records $name without changing the Gateway result", async (testCase) => {
+    delivery("send", { ...destination, status: "sent" }, true),
+    ...(["sent", "queued"] as const).map((status) =>
+      delivery("send", { ...destination, status, messageId: "outbound-1" }, status === "sent"),
+    ),
+    delivery("turn", { ...correlated, status: "replied", reply }, true),
+    delivery("turn", { ...correlated, status: "timeout" }, true, false),
+    ...(["sent", "queued"] as const).map((status) =>
+      delivery(
+        "turn",
+        { ...correlated, status, error: "No process-local reply waiter remains." },
+        status === "sent",
+        false,
+      ),
+    ),
+  ])("records $name without changing the Gateway result", async (testCase) => {
     const callGateway = vi
       .spyOn(gateway, "callAgentToolGatewayRequest")
       .mockResolvedValue(testCase.receipt);
     const createTool =
-      testCase.toolName === "conversations_send"
-        ? createConversationsSendTool
-        : createConversationsTurnTool;
+      testCase.kind === "send" ? createConversationsSendTool : createConversationsTurnTool;
     const tool = createTool({ agentId: "main" });
     const bridge = createCodexDynamicToolBridge({
       tools: [tool],
@@ -96,28 +63,25 @@ describe("Codex core conversation delivery", () => {
         callId: "conversation-call",
         namespace: null,
         tool: tool.name,
-        arguments: { conversationRef, message: "Synthetic external message" },
+        arguments: { conversationRef, message },
       },
       { onAgentToolResult },
     );
 
     expect(callGateway).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        method: testCase.toolName.replace("_", "."),
-        params: expect.objectContaining({ conversationRef, message: "Synthetic external message" }),
+        method: `conversations.${testCase.kind}`,
+        params: expect.objectContaining({ conversationRef, message }),
       }),
     );
     const observed = onAgentToolResult.mock.calls[0]?.[0];
     expect(observed?.result.details).toEqual(testCase.receipt);
     expect(Value.Check(tool.outputSchema!, observed?.result.details)).toBe(true);
-    expect(response.success).toBe(testCase.success);
-    expect(response.terminate).toBeUndefined();
-    expect(bridge.telemetry.didSendViaMessagingTool).toBe(testCase.delivered);
-    expect(bridge.telemetry.messagingToolSentTexts).toEqual(
-      testCase.delivered ? ["Synthetic external message"] : [],
-    );
-    expect(bridge.telemetry.messagingToolSentTargets).toEqual(
-      testCase.delivered
+    expect(response).toMatchObject({ success: testCase.success, terminate: undefined });
+    expect(bridge.telemetry).toMatchObject({
+      didSendViaMessagingTool: testCase.delivered,
+      messagingToolSentTexts: testCase.delivered ? [message] : [],
+      messagingToolSentTargets: testCase.delivered
         ? [
             expect.objectContaining({
               tool: tool.name,
@@ -126,6 +90,6 @@ describe("Codex core conversation delivery", () => {
             }),
           ]
         : [],
-    );
+    });
   });
 });

@@ -167,6 +167,12 @@ Use the same fixture, phases, sampling and machine for both captures.
 Profiling inflates timing: use these tables to prove the hot path runs, then
 measure improvements in separate unprofiled, interleaved runs.
 
+For streaming comparisons, keep both production builds and run complete alternating
+cycles with `--bundle-dir <baseline> --compare-bundle-dir <candidate> --runs 20
+--streaming-reply --transcript-messages 400 --face chat --untraced`. The benchmark
+restores each build's warm state before each run. Streaming comparisons do not
+require the separate `--warm-reload` diagnostics or external probe scripts.
+
 ## Initial baseline
 
 Production UI at `488c0a3850fc`, Blacksmith Testbox, three Sessions reloads with

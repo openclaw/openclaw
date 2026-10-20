@@ -36,40 +36,30 @@ type ImageRuntimeParams = Omit<
   "buffer" | "fileName" | "mime" | "prompt" | "maxTokens" | "timeoutMs"
 >;
 
-type ResolvedImageRuntimeContext = {
-  cfg: ImageRuntimeParams["cfg"];
-  agentDir: string;
-  workspaceDir?: string;
-};
-
 type PreparedImageRuntime = {
   runtimeValue: string;
   model: Model;
+  cfg: ImageRuntimeParams["cfg"];
+  agentDir: string;
+  workspaceDir?: string;
 };
 
 type ImageRuntimeResources = AsyncDisposable & {
   assertResourcesOpen?: () => void;
 };
 
-const resolvedImageRuntimeContexts = new WeakMap<Model, ResolvedImageRuntimeContext>();
-
-export function getResolvedImageRuntimeContext(
-  model: Model,
-): ResolvedImageRuntimeContext | undefined {
-  return resolvedImageRuntimeContexts.get(model);
-}
-
 function bindResolvedImageRuntime(
   params: ImageRuntimeParams,
   apiKey: string,
   model: Model,
 ): PreparedImageRuntime {
-  resolvedImageRuntimeContexts.set(model, {
+  return {
+    runtimeValue: apiKey,
+    model,
     cfg: params.cfg,
     agentDir: params.agentDir,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
-  return { runtimeValue: apiKey, model };
+  };
 }
 
 function formatModelInputCapabilities(input: Model["input"] | undefined): string {

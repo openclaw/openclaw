@@ -3,8 +3,9 @@
 // credentials. The memory adapter passes `fallback: "none"` to this private
 // factory, so do not test fallback activation by bypassing the adapter.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { lmstudioMemoryEmbeddingProviderAdapter } from "../memory-embedding-adapter.js";
+import plugin from "../index.js";
 import { createLmstudioEmbeddingProvider } from "./embedding-provider.js";
 
 const prepareLmstudioModelForInferenceMock = vi.hoisted(() =>
@@ -75,6 +76,14 @@ vi.mock("./runtime.js", async (importOriginal) => {
 });
 
 const EMBEDDING_MODEL = "text-embedding-nomic-embed-text-v1.5";
+
+function requireEmbeddingAdapter() {
+  const adapter = capturePluginRegistration(plugin).embeddingProviders[0];
+  if (!adapter) {
+    throw new Error("LM Studio did not register its embedding provider");
+  }
+  return adapter;
+}
 
 function buildConfig(params: {
   model?: Record<string, unknown>;
@@ -226,7 +235,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       fallback: "none",
       acquireLocalService,
     };
-    const result = await lmstudioMemoryEmbeddingProviderAdapter.create(options);
+    const result = await requireEmbeddingAdapter().create(options);
     if (!result.provider) {
       throw new Error("expected LM Studio embedding provider");
     }
@@ -251,11 +260,10 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       Object.assign(new Error("fixture preload rejected"), { resolvedModelKey: EMBEDDING_MODEL }),
     );
 
-    const result = await lmstudioMemoryEmbeddingProviderAdapter.create({
+    const result = await requireEmbeddingAdapter().create({
       config: buildConfig({ model: { id: requestedVariant } }),
       provider: "lmstudio",
       model: `lmstudio/${requestedVariant}`,
-      fallback: "none",
     });
 
     expect(createRemoteEmbeddingProviderMock).toHaveBeenCalledWith(
@@ -311,7 +319,7 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
       acquireLocalService,
     };
 
-    const result = await lmstudioMemoryEmbeddingProviderAdapter.create(options);
+    const result = await requireEmbeddingAdapter().create(options);
     const provider = result.provider;
     if (!provider) {
       throw new Error("expected LM Studio embedding provider");
@@ -426,11 +434,10 @@ describe("createLmstudioEmbeddingProvider preload context length", () => {
   it("keeps API key rotation out of memory identity without dropping tenant headers", async () => {
     const readIdentity = async (headers: Record<string, string>) =>
       (
-        await lmstudioMemoryEmbeddingProviderAdapter.create({
+        await requireEmbeddingAdapter().create({
           config: buildConfig({ provider: { params: { preload: false } } }),
           provider: "lmstudio",
           model: EMBEDDING_MODEL,
-          fallback: "none",
           remote: { headers },
         })
       ).runtime?.cacheKeyData;

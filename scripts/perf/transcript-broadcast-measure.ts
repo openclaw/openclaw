@@ -33,6 +33,7 @@ import { readBody } from "../e2e/lib/mock-openai-http.mjs";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 import {
+  GATEWAY_PROFILE_CHANNEL,
   controlGatewayProfile,
   readGatewayCpuProfile,
   readGatewayHeapProfile,
@@ -56,6 +57,7 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
     diagnostics: { type: "boolean", default: false },
+    "prep-trace": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "workload-cpu-profile": { type: "boolean", default: false },
     "capture-responses": { type: "boolean", default: false },
@@ -83,6 +85,8 @@ const { values } = parseArgs({
     "recap-burst-interval-ms": { type: "string", default: "50" },
     runs: { type: "string", default: "20" },
     sessions: { type: "string", default: "100" },
+    "history-turns": { type: "string", default: "0" },
+    "seed-history": { type: "boolean", default: false },
     rounds: { type: "string", default: "5" },
     "duration-ms": { type: "string", default: "3600000" },
     "warmup-ms": { type: "string", default: "300000" },
@@ -134,6 +138,13 @@ if (
 }
 const retentionScenario = scenario === "attempt-retention";
 const idleScenario = scenario === "session-idle-retention";
+const historyTurns = integer(values["history-turns"], "--history-turns", 0);
+if ((historyTurns || values["seed-history"]) && !idleScenario) {
+  throw new Error("--history-turns and --seed-history require session-idle-retention");
+}
+if (values["seed-history"] && !historyTurns) {
+  throw new Error("--seed-history requires --history-turns > 0");
+}
 const soakScenario = scenario === "memory-soak";
 const reasoningScenario = retentionScenario || idleScenario || soakScenario;
 if (
@@ -628,6 +639,13 @@ type StreamStartPhases = {
   firstPrimarySseWrittenAtEpochMs?: number;
   completedAtEpochMs?: number;
 };
+type TurnTiming = {
+  runId: string;
+  startedAt: number;
+  providerRequestMs?: number;
+  providerBarrierMs?: number;
+  firstTextMs?: number;
+};
 const epochNow = () => performance.timeOrigin + performance.now();
 function createPollRandom(round: number, client: number) {
   if (values["poll-seed"] === undefined) {
@@ -647,6 +665,7 @@ let cohort:
       id: string;
       expectedCount: number;
       arrivals: Set<number>;
+      turns: Map<number, TurnTiming>;
       toolCallIds: Set<string>;
       outputLimited: Set<string>;
       reasoningSignatures: Map<string, string>;
@@ -777,6 +796,8 @@ const mock = createServer((req, res) => {
           throw new Error(`duplicate primary stream ${index} in cohort ${cohort.id}`);
         }
         cohort.arrivals.add(index);
+        const timing = cohort.turns.get(index)!;
+        timing.providerRequestMs = performance.now() - timing.startedAt;
         cohort.phases.firstPrimaryRequestAtEpochMs ??= epochNow();
         cohort.phases.lastPrimaryRequestAtEpochMs = epochNow();
         if (cohort.arrivals.size === cohort.expectedCount) {
@@ -790,6 +811,7 @@ const mock = createServer((req, res) => {
           cohort.release();
         }
         await cohort.ready;
+        timing.providerBarrierMs = performance.now() - timing.startedAt - timing.providerRequestMs;
       }
       const subagentAnswer = await stressSubagentEvents(body, input, facts.purpose);
       res.writeHead(200, { "content-type": "text/event-stream" });
@@ -1033,6 +1055,8 @@ const env = {
   OPENAI_API_KEY: "synthetic-fixture",
   OPENCLAW_PROFILE: `team-shape-${port}`,
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
+  ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
+  ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
 };
 function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, ipc = false) {
   const log = createWriteStream(path.join(output, `${name}.log`));
@@ -1043,6 +1067,21 @@ function launch(args: string[], name: string, extraEnv: NodeJS.ProcessEnv = {}, 
   });
   child.stdout?.pipe(log, { end: false });
   child.stderr?.pipe(log, { end: false });
+  child.on("message", (message: unknown) => {
+    if (
+      isRecord(message) &&
+      message.channel === GATEWAY_PROFILE_CHANNEL &&
+      message.kind === "agent-text" &&
+      typeof message.atEpochMs === "number"
+    ) {
+      const turn = [...(cohort?.turns.values() ?? [])].find(
+        (candidate) => candidate.runId === message.runId,
+      );
+      if (turn) {
+        turn.firstTextMs ??= message.atEpochMs - performance.timeOrigin - turn.startedAt;
+      }
+    }
+  });
   child.once("close", () => log.end());
   childLogs.push(log);
   if (values.allocations || values["stream-start-allocations"] || values["trace-gc"]) {
@@ -1114,6 +1153,124 @@ const keys = Array.from(
   { length: sessionCount },
   (_, index) => `agent:main:transcript-broadcast-measure-child-${index}`,
 );
+const historySeedPath = path.join(root, "reopen-history.json");
+if (values["seed-history"]) {
+  // Run offline, separately from measurement, using the transcript append owner.
+  mkdirSync(path.join(root, "reopen-history-seed"));
+  process.env = { ...env };
+  const [
+    { SessionManager },
+    { upsertSessionEntryCore, loadExactSessionEntry },
+    { resolveOpenClawAgentSqlitePath },
+    agentDb,
+    stateDb,
+    lifecycle,
+  ] = await Promise.all([
+    import("../../src/agents/sessions/session-manager.js"),
+    import("../../src/config/sessions/session-accessor.js"),
+    import("../../src/state/openclaw-agent-db.paths.js"),
+    import("../../src/state/openclaw-agent-db.js"),
+    import("../../src/state/openclaw-state-db.js"),
+    import("../../src/shared/global-singleton.js"),
+  ]);
+  try {
+    const timestamp = Number(fixture.now);
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+    const parentTarget = { agentId: "main", sessionKey: parentKey, storePath, env };
+    if (loadExactSessionEntry(parentTarget)) {
+      throw new Error("Synthetic reopen parent already exists");
+    }
+    await upsertSessionEntryCore(parentTarget, {
+      sessionId: "reopen-history-parent",
+      updatedAt: timestamp,
+      createdAt: timestamp,
+      lifecycleRevision: "reopen-history-v1",
+      createdVia: "operator",
+      visibility: "shared",
+    });
+    const usage = {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    };
+    for (const [index, sessionKey] of keys.entries()) {
+      const sessionId = `reopen-history-${index}`;
+      const target = { agentId: "main", sessionId, sessionKey, storePath, env };
+      if (loadExactSessionEntry(target)) {
+        throw new Error(`Synthetic reopen session already exists: ${sessionKey}`);
+      }
+      await upsertSessionEntryCore(target, {
+        sessionId,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        lifecycleRevision: "reopen-history-v1",
+        createdVia: "operator",
+        visibility: "shared",
+        parentSessionKey: parentKey,
+        parentSessionId: "reopen-history-parent",
+        parentSessionLifecycleRevision: "reopen-history-v1",
+        spawnDepth: 1,
+      });
+      const manager = await SessionManager.openAsync(target, path.join(root, "workspace"));
+      await manager.appendModelChange("openai", "gpt-4.1");
+      await manager.appendThinkingLevelChange("off");
+      for (let turn = 0; turn < historyTurns; turn++) {
+        const callId = `fixture-${turn}`;
+        const assistant = {
+          role: "assistant" as const,
+          api: "openai-responses" as const,
+          provider: "openai",
+          model: "gpt-4.1",
+          usage,
+          timestamp: timestamp + turn,
+        };
+        await manager.appendMessageAsync({
+          role: "user",
+          content: `Inspect synthetic file ${turn}.`,
+          timestamp: timestamp + turn,
+        });
+        await manager.appendMessageAsync({
+          ...assistant,
+          stopReason: "toolUse",
+          content: [
+            { type: "toolCall", id: callId, name: "read", arguments: { path: "fixture.txt" } },
+          ],
+        });
+        await manager.appendMessageAsync({
+          role: "toolResult",
+          toolCallId: callId,
+          toolName: "read",
+          isError: false,
+          content: [
+            { type: "text", text: `Synthetic file ${turn}.\n${"Fixture content. ".repeat(128)}` },
+          ],
+          timestamp: timestamp + turn,
+        });
+        await manager.appendMessageAsync({
+          ...assistant,
+          stopReason: "stop",
+          content: [{ type: "text", text: `Synthetic inspection ${turn} complete.` }],
+        });
+      }
+      console.log(`SEEDED ${index + 1}/${sessionCount}`);
+    }
+    writeFileSync(historySeedPath, JSON.stringify({ sessionCount, historyTurns }));
+  } finally {
+    await agentDb.closeOpenClawAgentDatabasesAsync();
+    await stateDb.closeOpenClawStateDatabaseAsync();
+    await lifecycle.drainGlobalSingletonLifecycleState();
+  }
+  process.exit(0);
+}
+if (historyTurns) {
+  const seeded = JSON.parse(readFileSync(historySeedPath, "utf8"));
+  if (seeded.sessionCount !== sessionCount || seeded.historyTurns !== historyTurns) {
+    throw new Error("Run --seed-history with matching --sessions and --history-turns first");
+  }
+}
 const connectParams = {
   minProtocol: PROTOCOL_VERSION,
   maxProtocol: PROTOCOL_VERSION,
@@ -1462,6 +1619,7 @@ async function runRound(
     id: randomUUID(),
     expectedCount: roundKeys.length,
     arrivals: new Set(),
+    turns: new Map(),
     toolCallIds: new Set(),
     outputLimited: new Set(),
     reasoningSignatures: new Map(),
@@ -1529,6 +1687,7 @@ async function runRound(
       roundKeys.map(async (sessionKey, index) => {
         const turnStarted = performance.now();
         const runId = randomUUID();
+        current.turns.set(index + 1, { runId, startedAt: turnStarted });
         const image = retentionScenario
           ? promptContent.update(Buffer.alloc(256 * 128 * 4))
           : undefined;
@@ -1584,6 +1743,15 @@ async function runRound(
     return {
       phases: current.phases,
       turnLatencyMs: summarizeLatencies(turnLatencies),
+      providerRequestMs: summarizeLatencies(
+        [...current.turns.values()].flatMap((turn) => turn.providerRequestMs ?? []),
+      ),
+      providerBarrierMs: summarizeLatencies(
+        [...current.turns.values()].flatMap((turn) => turn.providerBarrierMs ?? []),
+      ),
+      firstTextMs: summarizeLatencies(
+        [...current.turns.values()].flatMap((turn) => turn.firstTextMs ?? []),
+      ),
       ...(subagent ? { subagent } : {}),
       ...capture,
     };
@@ -1978,13 +2146,15 @@ try {
   for (let index = 0; index < clientCount; index++) {
     const client = await connectClient(index);
     if (index === 0) {
-      await rpc(client, "sessions.create", {
-        key: parentKey,
-        ...(stressWorktree ? { cwd: stressWorktree } : {}),
-        visibility: "shared",
-        displayName: "Synthetic broadcast parent",
-      });
-      await rpc(client, "sessions.reset", { key: parentKey });
+      if (!historyTurns) {
+        await rpc(client, "sessions.create", {
+          key: parentKey,
+          ...(stressWorktree ? { cwd: stressWorktree } : {}),
+          visibility: "shared",
+          displayName: "Synthetic broadcast parent",
+        });
+        await rpc(client, "sessions.reset", { key: parentKey });
+      }
       if (values["stress-subagents"]) {
         await rpc(client, "sessions.create", {
           key: stressParentKey,
@@ -1994,6 +2164,9 @@ try {
         });
       }
       for (const key of keys) {
+        if (historyTurns) {
+          continue;
+        }
         await rpc(client, "sessions.create", {
           key,
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
@@ -2279,21 +2452,31 @@ try {
     return resources;
   };
   const idleHistories = new Map<string, { messages: number; digest: string }>();
-  const verifyIdleHistories = async (phase: "touched" | "idle" | "reopened") => {
+  const verifyIdleHistories = async (phase: "touched" | "reopened") => {
     for (const sessionKey of keys) {
-      const history = await rpc(sender, "chat.history", { sessionKey, limit: 100 });
-      if (!isRecord(history) || !Array.isArray(history.messages)) {
-        throw new Error(`missing idle-session history: ${sessionKey}`);
+      const messages: unknown[] = [];
+      let offset = 0;
+      while (true) {
+        const history = await rpc(sender, "chat.history", { sessionKey, limit: 100, offset });
+        if (!isRecord(history) || !Array.isArray(history.messages)) {
+          throw new Error(`missing idle-session history: ${sessionKey}`);
+        }
+        messages.unshift(...history.messages);
+        if (!history.hasMore) {
+          break;
+        }
+        if (typeof history.nextOffset !== "number" || history.nextOffset <= offset) {
+          throw new Error(`idle-session history pagination did not advance: ${sessionKey}`);
+        }
+        offset = history.nextOffset;
       }
-      const messages = history.messages;
+      if (messages.length < historyTurns * 4) {
+        throw new Error(`seeded idle-session history was lost: ${sessionKey}`);
+      }
       const digest = (entries: unknown[]) =>
         createHash("sha256").update(JSON.stringify(entries)).digest("hex");
       const previous = idleHistories.get(sessionKey);
-      if (
-        previous &&
-        (digest(messages.slice(0, previous.messages)) !== previous.digest ||
-          (phase === "idle" && messages.length !== previous.messages))
-      ) {
+      if (previous && digest(messages.slice(0, previous.messages)) !== previous.digest) {
         throw new Error(`idle-session transcript changed during ${phase}: ${sessionKey}`);
       }
       const answers = messages.filter(
@@ -2768,7 +2951,7 @@ try {
         }
         idleDiagnostics = await finishIdleDiagnostics();
         postIdleResources = await sampleMemory(true, "post-idle");
-        await verifyIdleHistories("idle");
+        // Verify the retained prefix after reopening; reading it now warms idle workers.
       }
     }
     if (soakScenario) {
@@ -2952,6 +3135,7 @@ try {
     ...(idleScenario
       ? {
           sessionCount,
+          historyTurns,
           idleDurationMs: durationMs,
           promptBytes,
           initialRetainedResources,
@@ -2971,7 +3155,6 @@ try {
                 )
               : undefined,
           transcriptChecks: {
-            unchangedAcrossIdle: idleHistories.size,
             appendOnlyAfterReopen: idleHistories.size,
           },
         }
