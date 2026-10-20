@@ -8,20 +8,7 @@ import type { GatewayClientOptions } from "./client.js";
 
 type DeviceAuthLookupMock = Mock<(...args: unknown[]) => DeviceAuthEntry | null>;
 
-export function registerGatewayCallLocalBackendAuthTests({
-  callGateway,
-  setGatewayConfig,
-  setGatewayNetworkDefaults,
-  setLocalLoopbackGatewayConfig,
-  getRuntimeConfig,
-  getClientOptions,
-  getDeviceIdentity,
-  loadOrCreateDeviceIdentityMock,
-  loadDeviceIdentityIfPresentMock,
-  loadDeviceAuthTokenMock,
-  loadDeviceAuthTokenReadOnlyMock,
-  loadOriginDeviceTokenMock,
-}: {
+export function registerGatewayCallLocalBackendAuthTests(fixture: {
   callGateway: typeof CallGateway;
   setGatewayConfig: (gateway: NonNullable<OpenClawConfig["gateway"]>) => void;
   setGatewayNetworkDefaults: () => void;
@@ -42,53 +29,50 @@ export function registerGatewayCallLocalBackendAuthTests({
     deviceIdentity: null,
   };
   const localAuthNone = () => {
-    setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
-    setGatewayNetworkDefaults();
+    fixture.setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
+    fixture.setGatewayNetworkDefaults();
   };
   it.each([undefined, "read-only"] as const)(
     "fails before connecting when identity storage is unavailable (%s)",
     async (sharedStateMode) => {
-      setGatewayConfig({ mode: "local", auth: { mode: "none" } });
+      fixture.setGatewayConfig({ mode: "local", auth: { mode: "none" } });
       const load =
         sharedStateMode === "read-only"
-          ? loadDeviceIdentityIfPresentMock
-          : loadOrCreateDeviceIdentityMock;
+          ? fixture.loadDeviceIdentityIfPresentMock
+          : fixture.loadOrCreateDeviceIdentityMock;
       load.mockImplementationOnce(() => {
         throw new Error("synthetic unreadable identity storage");
       });
-      await expect(callGateway({ method: "sessions.create", sharedStateMode })).rejects.toThrow(
-        /device identity.*openclaw doctor --fix/is,
-      );
-      expect(getClientOptions()).toBeNull();
+      await expect(
+        fixture.callGateway({ method: "sessions.create", sharedStateMode }),
+      ).rejects.toThrow(/device identity.*openclaw doctor --fix/is);
+      expect(fixture.getClientOptions()).toBeNull();
     },
   );
 
-  it("uses local backend shared auth without a device identity when required", async () => {
-    setLocalLoopbackGatewayConfig();
-
-    await callGateway({
+  const nodeList = (options: Partial<Parameters<typeof fixture.callGateway>[0]> = {}) =>
+    fixture.callGateway({
       method: "node.list",
-      token: "explicit-token",
-      scopes: ["operator.read", "operator.pairing"],
+      scopes: backend.scopes,
       requireLocalBackendSharedAuth: true,
+      ...options,
     });
-
-    expect(getClientOptions()).toMatchObject(backend);
-  });
-
-  it("uses local backend auth-none without a device identity when required", async () => {
-    localAuthNone();
-
-    await callGateway({
-      method: "node.list",
-      scopes: ["operator.read", "operator.pairing"],
-      requireLocalBackendSharedAuth: true,
-    });
-
-    expect(getClientOptions()).toMatchObject(backend);
-    expect(getClientOptions()?.token).toBeUndefined();
-    expect(getClientOptions()?.password).toBeUndefined();
-  });
+  it.each(["shared", "none"])(
+    "uses local backend %s auth without a device identity",
+    async (auth) => {
+      if (auth === "shared") {
+        fixture.setLocalLoopbackGatewayConfig();
+      } else {
+        localAuthNone();
+      }
+      await nodeList(auth === "shared" ? { token: "explicit-token" } : {});
+      expect(fixture.getClientOptions()).toMatchObject(backend);
+      if (auth === "none") {
+        expect(fixture.getClientOptions()?.token).toBeUndefined();
+        expect(fixture.getClientOptions()?.password).toBeUndefined();
+      }
+    },
+  );
 
   it("keeps local auth-none CLI cron.status off device storage", async () => {
     localAuthNone();
@@ -98,14 +82,18 @@ export function registerGatewayCallLocalBackendAuthTests({
       ok: true,
     });
 
-    expect(getClientOptions()).toMatchObject({
+    expect(fixture.getClientOptions()).toMatchObject({
       ...backend,
       scopes: ["operator.read"],
     });
-    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
-    expect(loadDeviceIdentityIfPresentMock).not.toHaveBeenCalled();
-    expect(loadDeviceAuthTokenMock).not.toHaveBeenCalled();
-    expect(loadDeviceAuthTokenReadOnlyMock).not.toHaveBeenCalled();
+    for (const load of [
+      fixture.loadOrCreateDeviceIdentityMock,
+      fixture.loadDeviceIdentityIfPresentMock,
+      fixture.loadDeviceAuthTokenMock,
+      fixture.loadDeviceAuthTokenReadOnlyMock,
+    ]) {
+      expect(load).not.toHaveBeenCalled();
+    }
   });
 
   it.each(["url", "device", "stored auth"])(
@@ -113,7 +101,7 @@ export function registerGatewayCallLocalBackendAuthTests({
     async (kind) => {
       localAuthNone();
       const { callGatewayFromCliRuntime } = await import("../cli/gateway-rpc.runtime.js");
-      loadOriginDeviceTokenMock.mockReturnValue({
+      fixture.loadOriginDeviceTokenMock.mockReturnValue({
         token: "fixture-origin-token",
         role: "operator",
         scopes: ["operator.read"],
@@ -124,57 +112,38 @@ export function registerGatewayCallLocalBackendAuthTests({
         "cron.status",
         {
           json: true,
-          config: getRuntimeConfig(),
-          ...(kind === "url" ? { url: "ws://127.0.0.1:18789" } : {}),
-          ...(kind === "url" ? { token: "fixture-override-token" } : {}),
+          config: fixture.getRuntimeConfig(),
+          ...(kind === "url"
+            ? { url: "ws://127.0.0.1:18789", token: "fixture-override-token" }
+            : {}),
         },
         undefined,
         {
-          ...(kind === "device" ? { deviceIdentity: getDeviceIdentity() } : {}),
+          ...(kind === "device" ? { deviceIdentity: fixture.getDeviceIdentity() } : {}),
           ...(kind === "stored auth" ? { useStoredDeviceAuth: true } : {}),
         },
       );
 
-      expect(getClientOptions()).toMatchObject({
+      expect(fixture.getClientOptions()).toMatchObject({
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
-        deviceIdentity: getDeviceIdentity(),
+        deviceIdentity: fixture.getDeviceIdentity(),
       });
     },
   );
 
-  it("rejects required local backend shared auth for loopback URL overrides", async () => {
-    await expect(
-      callGateway({
-        method: "node.list",
-        url: "ws://127.0.0.1:18789",
-        token: "explicit-token",
-        scopes: ["operator.read", "operator.pairing"],
-        requireLocalBackendSharedAuth: true,
-      }),
-    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
-
-    expect(getClientOptions()).toBeNull();
-  });
-
-  it("rejects required local backend shared auth for remote-mode loopback tunnels", async () => {
-    setGatewayConfig({
-      mode: "remote",
-      remote: {
-        url: "ws://127.0.0.1:18789",
-        token: "remote-token",
-      },
-    });
-    setGatewayNetworkDefaults();
-
-    await expect(
-      callGateway({
-        method: "node.list",
-        scopes: ["operator.read", "operator.pairing"],
-        requireLocalBackendSharedAuth: true,
-      }),
-    ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
-
-    expect(getClientOptions()).toBeNull();
-  });
+  it.each(["URL override", "remote-mode tunnel"])(
+    "rejects required local backend auth for %s",
+    async (kind) => {
+      const url = "ws://127.0.0.1:18789";
+      if (kind === "remote-mode tunnel") {
+        fixture.setGatewayConfig({ mode: "remote", remote: { url, token: "remote-token" } });
+        fixture.setGatewayNetworkDefaults();
+      }
+      await expect(
+        nodeList(kind === "URL override" ? { url, token: "explicit-token" } : {}),
+      ).rejects.toMatchObject({ name: "GatewayLocalBackendSharedAuthUnavailableError" });
+      expect(fixture.getClientOptions()).toBeNull();
+    },
+  );
 }

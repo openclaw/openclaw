@@ -35,6 +35,7 @@ const phased = (value: string, phase: string, id?: string) => ({
   ...text(value),
   textSignature: JSON.stringify({ v: 1, id, phase }),
 });
+const finalText = (value: string) => phased(value, "final_answer");
 const answer = "The train leaves at noon.";
 const reply = [text(answer)];
 const image = { type: "image", url: "/media/proof.png", mimeType: "image/png" };
@@ -61,6 +62,14 @@ function mirror(fields: Record<string, unknown> = {}) {
 }
 const payloadFor = (message: unknown) =>
   projectSessionMessagePayload({ sessionKey: "agent:main:main", message }).payload;
+function expectPrepared(source: Record<string, unknown>, content: unknown[]) {
+  const before = structuredClone(source);
+  const expected = [{ ...source, display: true, content }];
+  const projected = project([source]);
+  expect(projected).toEqual(expected);
+  expect(project(projected)).toEqual(expected);
+  expect(source).toEqual(before);
+}
 
 it("correlates queued deliveries with earlier source rows rather than the adjacent reply", () => {
   const first = assistant();
@@ -92,56 +101,33 @@ it("preserves nontext content beside control-looking text", () => {
   expect(project([source])).toEqual([source]);
 });
 
-it("prepares a raw phased prefix once across nontext content", () => {
-  const suffix = "NO_REPLY\nREADY";
-  const source = assistant({
-    phase: "final_answer",
-    stopReason: "stop",
-    content: [
+it.each([
+  {
+    name: "raw phased prefix",
+    raw: [
       phased("Private commentary", "commentary"),
-      phased("NO_", "final_answer"),
+      finalText("NO_"),
       image,
-      phased(`REPLY\n${suffix}`, "final_answer"),
+      finalText("REPLY\nNO_REPLY\nREADY"),
     ],
-    __openclaw: { id: "raw-prefixed-answer", runId: "native-run", media },
-  });
-  const before = structuredClone(source);
-  const expected = {
-    ...source,
-    display: true,
-    content: [phased("", "final_answer"), image, phased(suffix, "final_answer")],
-  };
-  const projected = project([source]);
-  expect(projected).toEqual([expected]);
-  expect(project(projected)).toEqual([expected]);
-  expect(source).toEqual(before);
-});
-
-it("prepares a trailing control line once across phased text and media", () => {
-  const source = assistant({
-    phase: "final_answer",
-    content: [
-      phased("First part.", "final_answer"),
-      image,
-      phased("Second part.\n\nNO_", "final_answer"),
-      phased("REPLY\n", "final_answer"),
-    ],
-  });
-  const expected = {
-    ...source,
-    display: true,
-    content: [
-      phased("First part.", "final_answer"),
-      image,
-      phased("Second part.", "final_answer"),
-      phased("", "final_answer"),
-    ],
-  };
-  const projected = project([source]);
-  expect(projected).toEqual([expected]);
-  expect(project(projected)).toEqual([expected]);
-  expect(source.content).toContainEqual(phased("REPLY\n", "final_answer"));
-  expect(payloadFor(source)?.message).toMatchObject({ content: expected.content });
+    content: [finalText(""), image, finalText("NO_REPLY\nREADY")],
+    fields: {
+      stopReason: "stop",
+      __openclaw: { id: "raw-prefixed-answer", runId: "native-run", media },
+    },
+  },
+  {
+    name: "trailing control line",
+    raw: [finalText("First part."), image, finalText("Second part.\n\nNO_"), finalText("REPLY\n")],
+    content: [finalText("First part."), image, finalText("Second part."), finalText("")],
+    fields: {},
+  },
+])("prepares $name once across phased text and media", ({ raw, content, fields, name }) => {
+  const source = assistant({ phase: "final_answer", content: raw, ...fields });
+  expectPrepared(source, content);
+  if (name === "trailing control line") {
+    expect(payloadFor(source)?.message).toMatchObject({ content });
+  }
 });
 
 it("prepares raw prefixes before the display cap and preserves prepared or forwarded text", () => {
@@ -320,11 +306,14 @@ describe("correlated channel mirrors in Gateway history", () => {
     expect(displayed).toMatchObject([
       { role: "assistant", __openclaw: { id: "old-answer" } },
       { model: "delivery-mirror", __openclaw: { id: "old-mirror" } },
-      { role: "assistant", __openclaw: { id: "first-new-answer" } },
+      {
+        role: "assistant",
+        __openclaw: { id: "first-new-answer" },
+        content: [thinking, text(answer)],
+      },
       { role: "user", __openclaw: { id: "second-question" } },
       { role: "assistant", __openclaw: { id: "second-new-answer" } },
     ]);
-    expect(displayed[2]).toMatchObject({ content: [thinking, text(answer)] });
     expect(storedRows()).toEqual(beforeRead);
     expect(storedRows().slice(0, oldRows.length)).toEqual(oldRows);
   });
@@ -390,23 +379,17 @@ describe("multimodal display privacy", () => {
   it("keeps text while omitting native image data from display history", () => {
     const png = createNoisyPngBuffer(320, 320);
     const encoded = png.toString("base64");
+    const prefix = Object.freeze(text("keep prefix text"));
+    const suffix = Object.freeze(text("keep suffix text"));
     const message = {
       role: "user",
-      content: [
-        text("keep prefix text"),
-        { type: "image", mimeType: "image/png", data: encoded },
-        text("keep suffix text"),
-      ],
+      content: [prefix, { type: "image", mimeType: "image/png", data: encoded }, suffix],
     };
     const messages = project([message]);
     expect(messages).toMatchObject([
       {
         role: "user",
-        content: [
-          text("keep prefix text"),
-          { type: "image", omitted: true, bytes: png.length },
-          text("keep suffix text"),
-        ],
+        content: [prefix, { type: "image", omitted: true, bytes: png.length }, suffix],
       },
     ]);
     expect(JSON.stringify(messages)).not.toContain(encoded);
@@ -417,40 +400,59 @@ describe("multimodal display privacy", () => {
 
   it("keeps sanitized legacy media in projection and incremental SSE", async () => {
     const data = Buffer.from("inline payload").toString("base64");
+    const source = (type: string, url: string, fields: Record<string, unknown> = {}) => ({
+      type,
+      url,
+      ...fields,
+    });
+    const clean = [
+      {
+        type: "image",
+        mimeType: "image/png",
+        url: "https://media.example/image.png",
+        source: source("base64", "media://inbound/image-claim"),
+      },
+      {
+        type: "audio",
+        mimeType: "audio/wav",
+        audio_url: "media://inbound/audio-claim",
+        source: source("url", "https://media.example/audio.wav", { omitted: true }),
+      },
+      {
+        type: "video",
+        mimeType: "video/mp4",
+        video_url: "https://media.example/video.mp4",
+        source: source("url", "media://inbound/video-claim", { omitted: true }),
+      },
+    ];
+    const privateFields = [
+      {
+        path: "/tmp/private-image.png",
+        url: "https://image-user@media.example/image.png?signature=image-secret#image-fragment",
+        source: source("base64", "media://inbound/image-claim", { data, blob: data }),
+      },
+      {
+        data,
+        filePath: "C:\\private-audio.wav",
+        source: source(
+          "url",
+          "https://audio-user@media.example/audio.wav?token=audio-secret#audio-fragment",
+          { data },
+        ),
+      },
+      {
+        blob: data,
+        localPath: "\\\\server\\share\\private-video.mp4",
+        openclawReasoningReplay: { private: true },
+        video_url:
+          "https://video-user@media.example/video.mp4?X-Amz-Signature=video-secret#video-fragment",
+        source: source("url", "media://inbound/video-claim", { blob: data }),
+      },
+    ];
+    const caption = text("keep mixed media metadata");
     const rawMessage = {
       role: "user",
-      content: [
-        text("keep mixed media metadata"),
-        {
-          type: "image",
-          mimeType: "image/png",
-          path: "/tmp/private-image.png",
-          url: "https://image-user@media.example/image.png?signature=image-secret#image-fragment",
-          source: { type: "base64", data, blob: data, url: "media://inbound/image-claim" },
-        },
-        {
-          type: "audio",
-          mimeType: "audio/wav",
-          data,
-          filePath: "C:\\private-audio.wav",
-          audio_url: "media://inbound/audio-claim",
-          source: {
-            type: "url",
-            data,
-            url: "https://audio-user@media.example/audio.wav?token=audio-secret#audio-fragment",
-          },
-        },
-        {
-          type: "video",
-          mimeType: "video/mp4",
-          blob: data,
-          localPath: "\\\\server\\share\\private-video.mp4",
-          openclawReasoningReplay: { private: true },
-          video_url:
-            "https://video-user@media.example/video.mp4?X-Amz-Signature=video-secret#video-fragment",
-          source: { type: "url", blob: data, url: "media://inbound/video-claim" },
-        },
-      ],
+      content: [caption, ...clean.map((block, index) => ({ ...block, ...privateFields[index] }))],
     };
     const original = structuredClone(rawMessage);
     const state = SessionHistorySseState.fromSnapshot({
@@ -467,37 +469,14 @@ describe("multimodal display privacy", () => {
       (await state.prepareInlineMessage({ message: rawMessage, messageId: "media-message" }))()
         ?.message,
     ]) {
-      expect(message?.role).toBe("user");
       expect(JSON.stringify(message)).not.toContain(data);
       expect(JSON.stringify(message)).not.toMatch(
         /private-|-(?:user|secret|fragment)|openclawReasoningReplay/u,
       );
+      expect(message).toMatchObject({ role: "user" });
       expect(message?.content).toEqual([
-        text("keep mixed media metadata"),
-        {
-          type: "image",
-          mimeType: "image/png",
-          url: "https://media.example/image.png",
-          source: { type: "base64", url: "media://inbound/image-claim" },
-          omitted: true,
-          bytes: 14,
-        },
-        {
-          type: "audio",
-          mimeType: "audio/wav",
-          audio_url: "media://inbound/audio-claim",
-          source: { type: "url", url: "https://media.example/audio.wav", omitted: true },
-          omitted: true,
-          bytes: 14,
-        },
-        {
-          type: "video",
-          mimeType: "video/mp4",
-          video_url: "https://media.example/video.mp4",
-          source: { type: "url", url: "media://inbound/video-claim", omitted: true },
-          omitted: true,
-          bytes: 14,
-        },
+        caption,
+        ...clean.map((block) => Object.assign({}, block, { omitted: true, bytes: 14 })),
       ]);
     }
     expect(rawMessage).toEqual(original);

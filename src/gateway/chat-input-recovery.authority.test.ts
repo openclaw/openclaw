@@ -54,6 +54,33 @@ import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
+type PendingInput = Parameters<typeof stageSessionPendingInput>[1];
+async function interruptInput(
+  target: Parameters<typeof stageSessionPendingInput>[0],
+  runId: string,
+  content: string,
+  fields: Pick<PendingInput["message"], "provenance" | "__openclaw">,
+  requestFingerprint?: PendingInput["requestFingerprint"],
+) {
+  const receipt = expectDefined(
+    await stageSessionPendingInput(target, {
+      runId,
+      requestFingerprint,
+      message: {
+        role: "user",
+        content,
+        timestamp: Date.now(),
+        idempotencyKey: `${runId}:user`,
+        ...fields,
+      },
+      assertCurrent() {},
+    }),
+    "accepted pending input",
+  );
+  receipt.finish("interrupted");
+  await receipt.settled?.();
+}
+
 it.for(["steer", "followup"] as const)(
   "rechecks captured chat operators and resumes their predecessor before %s replay",
   { timeout: 90_000 },
@@ -188,6 +215,22 @@ it.for(["steer", "followup"] as const)(
       await loadOrCreateDeviceIdentityAsync();
       const cases = [];
       const owner = ensureProfileForEmail("owner@example.test");
+      const device = {
+        deviceId: "revoked-replay-device",
+        publicKey: "synthetic-public-key",
+        roles: ["operator"],
+        approvedScopes: ["operator.read", "operator.write"],
+        tokens: {
+          operator: {
+            token: "synthetic-device-token",
+            role: "operator",
+            scopes: ["operator.read", "operator.write"],
+            createdAtMs: 1,
+          },
+        },
+        createdAtMs: 1,
+        approvedAtMs: 1,
+      } satisfies Parameters<typeof createOperatorRecoveryFixture>[0]["device"];
       for (const change of ["unchanged", "role", "device", "membership"] as const) {
         const profile = ensureProfileForEmail(`${change}@example.test`);
         if (change === "unchanged") {
@@ -218,26 +261,7 @@ it.for(["steer", "followup"] as const)(
           sessionKey,
           sessionId,
           sourceRunId: `${runPrefix}-${change}`,
-          ...(change === "device"
-            ? {
-                device: {
-                  deviceId: "revoked-replay-device",
-                  publicKey: "synthetic-public-key",
-                  roles: ["operator"],
-                  approvedScopes: ["operator.read", "operator.write"],
-                  tokens: {
-                    operator: {
-                      token: "synthetic-device-token",
-                      role: "operator",
-                      scopes: ["operator.read", "operator.write"],
-                      createdAtMs: 1,
-                    },
-                  },
-                  createdAtMs: 1,
-                  approvedAtMs: 1,
-                },
-              }
-            : {}),
+          device: change === "device" ? device : undefined,
         });
         const normalized = await normalizeChatSendRequest({
           client: fixture.client,
@@ -287,46 +311,33 @@ it.for(["steer", "followup"] as const)(
             createdActor: { type: "human", source: "profile", id: profile.id },
           });
           const peerRunId = `${runPrefix}-peer`;
-          const peerReceipt = expectDefined(
-            await stageSessionPendingInput(fixture.target, {
-              runId: peerRunId,
-              message: {
-                role: "user",
-                content: "PEER_INPUT",
-                timestamp: Date.now(),
-                idempotencyKey: `${peerRunId}:user`,
-                provenance: {
-                  kind: "inter_session",
-                  sourceTool: "sessions_send",
-                  sourceSessionKey: source.sessionKey,
+          await interruptInput(fixture.target, peerRunId, "PEER_INPUT", {
+            provenance: {
+              kind: "inter_session",
+              sourceTool: "sessions_send",
+              sourceSessionKey: source.sessionKey,
+            },
+            __openclaw: {
+              requesterOrigin: captureRequesterOrigin({
+                sessionKey: source.sessionKey,
+                operatorProfileId: profile.id,
+              }),
+              sessionSendDelivery: {
+                version: 1,
+                runId: peerRunId,
+                source,
+                target: {
+                  agentId: "main",
+                  sessionKey: fixture.target.sessionKey,
+                  sessionId: fixture.target.sessionId,
+                  lifecycleRevision: fixture.entry.lifecycleRevision,
                 },
-                __openclaw: {
-                  requesterOrigin: captureRequesterOrigin({
-                    sessionKey: source.sessionKey,
-                    operatorProfileId: profile.id,
-                  }),
-                  sessionSendDelivery: {
-                    version: 1,
-                    runId: peerRunId,
-                    source,
-                    target: {
-                      agentId: "main",
-                      sessionKey: fixture.target.sessionKey,
-                      sessionId: fixture.target.sessionId,
-                      lifecycleRevision: fixture.entry.lifecycleRevision,
-                    },
-                    sandboxed: false,
-                    message: "PEER_INPUT",
-                    operatorSource: { kind: "gateway", snapshot: recovery.source.snapshot },
-                  },
-                },
+                sandboxed: false,
+                message: "PEER_INPUT",
+                operatorSource: { kind: "gateway", snapshot: recovery.source.snapshot },
               },
-              assertCurrent() {},
-            }),
-            "accepted peer input",
-          );
-          peerReceipt.finish("interrupted");
-          await peerReceipt.settled?.();
+            },
+          });
         } else {
           await replaceSessionEntry(fixture.target, {
             sessionId: fixture.entry.sessionId,
@@ -342,26 +353,18 @@ it.for(["steer", "followup"] as const)(
             addedBy: owner.id,
           });
         }
-        const receipt = expectDefined(
-          await stageSessionPendingInput(fixture.target, {
-            runId: fixture.target.sourceRunId,
-            requestFingerprint: normalized.value.requestIdentity,
-            message: {
-              role: "user",
-              content: `REPLAY_${change.toUpperCase()}`,
-              timestamp: Date.now(),
-              idempotencyKey: `${fixture.target.sourceRunId}:user`,
-              __openclaw: {
-                chatInputRecovery: recovery,
-                chatRequestIdentity: normalized.value.requestIdentity,
-              },
+        await interruptInput(
+          fixture.target,
+          fixture.target.sourceRunId,
+          `REPLAY_${change.toUpperCase()}`,
+          {
+            __openclaw: {
+              chatInputRecovery: recovery,
+              chatRequestIdentity: normalized.value.requestIdentity,
             },
-            assertCurrent() {},
-          }),
-          "accepted pending input",
+          },
+          normalized.value.requestIdentity,
         );
-        receipt.finish("interrupted");
-        await receipt.settled?.();
         cases.push({ change, fixture });
         if (change === "role") {
           setUserProfileRole(profile.id, "revoked");
@@ -382,6 +385,12 @@ it.for(["steer", "followup"] as const)(
         configPath: state.configPath,
         token: "synthetic-replay-token",
       });
+      const client = gateway.client;
+      const expectRunOk = async (runId: string) => {
+        await expect(
+          client.request("agent.wait", { runId, timeoutMs: 30_000 }),
+        ).resolves.toMatchObject({ status: "ok" });
+      };
       await gateway.server.startupSettled;
       await recoveryStarted.promise;
       const successor = {
@@ -432,13 +441,7 @@ it.for(["steer", "followup"] as const)(
       await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-peer`), {
         timeout: 30_000,
       });
-      const peerResult = await gateway.client.request("agent.wait", {
-        runId: `${runPrefix}-peer`,
-        timeoutMs: 30_000,
-      });
-      expect(peerResult, JSON.stringify({ peerResult, startedRuns, replayOrder })).toMatchObject({
-        status: "ok",
-      });
+      await expectRunOk(`${runPrefix}-peer`);
       expect(startedRuns.slice(0, 2)).toEqual([
         `${runPrefix}-recovery-predecessor`,
         `${runPrefix}-peer`,
@@ -446,12 +449,7 @@ it.for(["steer", "followup"] as const)(
       await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-unchanged`), {
         timeout: 30_000,
       });
-      await expect(
-        gateway.client.request("agent.wait", {
-          runId: `${runPrefix}-unchanged`,
-          timeoutMs: 30_000,
-        }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await expectRunOk(`${runPrefix}-unchanged`);
       expect(providerErrors).toEqual([]);
       expect(startedRuns.slice(0, 3)).toEqual([
         `${runPrefix}-recovery-predecessor`,
@@ -463,7 +461,9 @@ it.for(["steer", "followup"] as const)(
       expect(requests.every((body) => body.includes("REPLAY_UNCHANGED"))).toBe(true);
       expect(requests.join("\n")).not.toMatch(/REPLAY_ROLE|REPLAY_DEVICE|REPLAY_MEMBERSHIP/);
       expect(await fs.readFile(effectsPath, "utf8")).toBe("UNCHANGED_OPERATOR");
-      const unchanged = expectDefined(
+      const {
+        fixture: { target, client: unchangedClient },
+      } = expectDefined(
         cases.find(({ change }) => change === "unchanged"),
         "unchanged operator fixture",
       );
@@ -485,21 +485,17 @@ it.for(["steer", "followup"] as const)(
       );
       expect(JSON.parse(metadata)).toMatchObject({
         requester_profile: {
-          id: unchanged.fixture.client.authenticatedUserProfile?.profileId,
+          id: unchangedClient.authenticatedUserProfile?.profileId,
           display_name: "unchanged",
         },
       });
       expect(firstRequestBody).toContain("RECOVERED_PERSONAL_PREFERENCES");
-      await waitForSessionParticipantRecording(unchanged.fixture.target);
-      expect(
-        listSessionParticipantsReadOnly(unchanged.fixture.target).get(
-          unchanged.fixture.target.sessionKey,
-        ),
-      ).toEqual([
+      await waitForSessionParticipantRecording(target);
+      expect(listSessionParticipantsReadOnly(target).get(target.sessionKey)).toEqual([
         expect.objectContaining({
           identity: {
             type: "profile",
-            id: unchanged.fixture.client.authenticatedUserProfile?.profileId,
+            id: unchangedClient.authenticatedUserProfile?.profileId,
           },
           contributionCount: 1,
         }),
@@ -514,16 +510,13 @@ it.for(["steer", "followup"] as const)(
           ]);
         }
       }
-      const client = gateway.client;
       await vi.waitFor(async () => {
         await expect(client.request("chat.send", successor)).resolves.toMatchObject({
           runId: `${runPrefix}-successor`,
           status: "started",
         });
       });
-      await expect(
-        client.request("agent.wait", { runId: `${runPrefix}-successor`, timeoutMs: 30_000 }),
-      ).resolves.toMatchObject({ status: "ok" });
+      await expectRunOk(`${runPrefix}-successor`);
       expect(requests).toHaveLength(3);
       expect(requests.slice(0, 2).join("\n")).not.toContain(successor.message);
       expect(requests.slice(2).every((body) => body.includes(successor.message))).toBe(true);
