@@ -3,6 +3,7 @@ import type {
   EnvironmentsListResult,
   UserProfile,
   ProjectsCheckoutOptionsResult,
+  SystemAgentChatHistoryResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type {
   PluginsCatalogBrowseResult,
@@ -99,6 +100,7 @@ export function createControlUiDefaultResponses(scenario: {
     current: { id: "claw", mode: "system", scope: "gateway", overrides: {} },
   };
   return {
+    "openclaw.chat.history": { turns: [] } satisfies SystemAgentChatHistoryResult,
     "environments.list": {
       environments: [],
       profiles: [],
