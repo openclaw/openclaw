@@ -44,14 +44,12 @@ export class McpEventsService {
   private readonly state: McpEventsState;
   readonly authority: McpEventsSourceAuthority;
   readonly bindings = new Map<string, LiveBinding>();
-  private readonly controller = new AbortController();
   private readonly signal: AbortSignal;
   private readonly scheduled = new Map<
     string,
     ReturnType<McpEventsDependencies["scheduler"]["schedule"]>
   >();
   private readonly work = new Set<Promise<unknown>>();
-  private stopped = false;
   initialization: "restoring" | "reconciling" | "ready" = "restoring";
   private reconcileWork?: Promise<void>;
   private reconcileRequested = false;
@@ -60,14 +58,14 @@ export class McpEventsService {
   constructor(readonly deps: McpEventsDependencies) {
     this.state = createMcpEventsState(deps.runtime);
     this.authority = new McpEventsSourceAuthority(deps.prepareSource, this.assertService);
-    this.signal = AbortSignal.any([this.controller.signal, deps.scheduler.signal]);
+    this.signal = deps.scheduler.signal;
   }
 
   get now() {
     return this.deps.scheduler.now();
   }
   assertService = () => {
-    if (this.stopped || this.signal.aborted) {
+    if (this.signal.aborted) {
       throw new SourceRevokedError("MCP Events service stopped");
     }
   };
@@ -77,7 +75,7 @@ export class McpEventsService {
     return promise;
   }
   private schedule(id: string, atMs: number, run: () => Promise<unknown>, earliest = false) {
-    if (this.stopped || this.signal.aborted) {
+    if (this.signal.aborted) {
       return;
     }
     this.scheduled.set(
@@ -139,11 +137,7 @@ export class McpEventsService {
   }
 
   async stop(): Promise<void> {
-    this.stopped = true;
-    this.controller.abort();
-    for (const job of this.scheduled.values()) {
-      job.cancel();
-    }
+    this.deps.scheduler.beginClose();
     this.scheduled.clear();
     // Ordinary restart retains subscriptions and cursors. It is not a user unsubscribe.
     for (const binding of this.bindings.values()) {
@@ -162,7 +156,7 @@ export class McpEventsService {
   }
 
   requestReconcile() {
-    if (this.stopped) {
+    if (this.signal.aborted) {
       return;
     }
     if (this.initialization === "restoring" || this.reconcileWork) {
@@ -284,7 +278,7 @@ export class McpEventsService {
           // Reconciliation alone creates bindings; retries must not race it into a second subscription.
           await this.reconcile();
         } catch {
-          if (!this.stopped) {
+          if (!this.signal.aborted) {
             this.retrySource(source);
           }
         }
@@ -440,7 +434,7 @@ export class McpEventsService {
           this.now + Math.max(1, Math.floor((result.refreshBefore - this.now) * 0.8));
       });
     } catch (error) {
-      if (!binding.live || this.stopped) {
+      if (!binding.live || this.signal.aborted) {
         return;
       }
       if (error instanceof SourceRevokedError) {
@@ -557,7 +551,7 @@ export class McpEventsService {
       // A refresh in flight may still activate remotely; join it before cleanup.
       await binding.pending?.catch(() => {});
       if (
-        !this.stopped &&
+        !this.signal.aborted &&
         !binding.live &&
         this.bindings.get(binding.facts.bindingId) === binding
       ) {
@@ -594,7 +588,7 @@ export class McpEventsService {
         );
         await this.forgetBinding(binding);
       } catch {
-        if (this.stopped) {
+        if (this.signal.aborted) {
           return;
         }
         await this.mutate(
@@ -679,7 +673,7 @@ export class McpEventsService {
   /** Hooks and durable enqueue wake the existing host scheduler; empty queues have no timer. */
   requestDrain(jobId?: string) {
     if (
-      this.stopped ||
+      this.signal.aborted ||
       (jobId && ![...this.bindings.values()].some((binding) => binding.facts.jobId === jobId))
     ) {
       return;
@@ -718,7 +712,7 @@ export class McpEventsService {
           "mcp-events: ingress inspection/admission unavailable; retained work will retry",
         );
       } finally {
-        if (backlog && !this.stopped) {
+        if (backlog && !this.signal.aborted) {
           this.schedule("drain", this.now + this.drainRetryMs, () => this.drain(), true);
           this.drainRetryMs = Math.min(30_000, this.drainRetryMs * 2);
         }

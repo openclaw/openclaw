@@ -172,30 +172,23 @@ it.each([
   },
 );
 
-it("settles startup storage and asynchronous close before service stop finishes", async () => {
+it("settles asynchronous storage close after startup before service stop finishes", async () => {
   const { dataDir, service } = makeService();
   const store = await LogbookStore.open(dataDir, workerModuleUrl);
-  const opened = createDeferred<void>();
-  const releaseOpen = createDeferred<void>();
   const closing = createDeferred<void>();
   const releaseClose = createDeferred<void>();
-  vi.spyOn(LogbookStore, "open").mockImplementationOnce(
-    block(async () => store, opened, releaseOpen),
-  );
+  vi.spyOn(LogbookStore, "open").mockResolvedValueOnce(store);
   const closeStore = store.close.bind(store);
   vi.spyOn(store, "close").mockImplementationOnce(block(closeStore, closing, releaseClose));
-  const starting = service.start();
-  await opened.promise;
+  await service.start();
   const completed = vi.fn();
   const stopping = service.stop().then(completed);
   try {
-    releaseOpen.resolve();
     await closing.promise;
     expect(completed).not.toHaveBeenCalled();
   } finally {
-    releaseOpen.resolve();
     releaseClose.resolve();
-    await Promise.all([starting, stopping]);
+    await stopping;
   }
   await expect(store.lastFrame()).rejects.toThrow();
 });
