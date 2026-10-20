@@ -76,15 +76,12 @@ describe("sessions.describe catalog projection", () => {
             "main",
             preparedCatalog(
               { levels: [] },
-              {
-                off: null,
-                minimal: null,
-                low: null,
-                medium: null,
-                high: null,
-                xhigh: null,
-                max: null,
-              },
+              Object.fromEntries(
+                ["off", "minimal", "low", "medium", "high", "xhigh", "max"].map((level) => [
+                  level,
+                  null,
+                ]),
+              ),
             ),
           ],
           [

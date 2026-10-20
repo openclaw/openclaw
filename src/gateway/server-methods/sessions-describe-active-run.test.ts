@@ -34,7 +34,22 @@ import {
   requestContext,
   seedSessions,
 } from "./sessions-read-cache.test-support.js";
-import type { RespondFn } from "./types.js";
+import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
+
+async function describeSession(context: GatewayRequestContext, client: GatewayClient, key: string) {
+  const respond = vi.fn<RespondFn>();
+  await sessionByKeyReadHandlers["sessions.describe"]!({
+    req: { type: "req", id: "describe-activity", method: "sessions.describe" },
+    params: { key },
+    context,
+    client,
+    isWebchatConnect: () => false,
+    respond,
+  });
+  expect(respond).toHaveBeenCalledOnce();
+  expect(respond.mock.calls[0]?.[0]).toBe(true);
+  return respond.mock.calls[0]?.[1];
+}
 
 it.each(["chat", "projected"] as const)(
   "describes current %s activity consistently with the roster, independently of the goal",
@@ -64,20 +79,6 @@ it.each(["chat", "projected"] as const)(
         },
       );
       await initializeSessionReadContext(context);
-      const describe = async () => {
-        const responses: Parameters<RespondFn>[] = [];
-        await sessionByKeyReadHandlers["sessions.describe"]!({
-          req: { type: "req", id: "describe-activity", method: "sessions.describe" },
-          params: { key },
-          context,
-          client,
-          isWebchatConnect: () => false,
-          respond: (...response) => responses.push(response),
-        });
-        expect(responses).toHaveLength(1);
-        expect(responses[0]?.[0]).toBe(true);
-        return responses[0]?.[1];
-      };
       const assertActivity = async (
         status: "queued" | "running" | "done",
         hasActiveRun: boolean,
@@ -90,7 +91,7 @@ it.each(["chat", "projected"] as const)(
             ? { activeRunIds: hasActiveRun ? [runId] : [] }
             : {}),
         };
-        const described = await describe();
+        const described = await describeSession(context, client, key);
         expect(described).toMatchObject({ session: expected });
         const roster = await listSessions({ context, client, request: { search: key } });
         expect(roster.sessions).toEqual([expect.objectContaining(expected)]);
@@ -189,19 +190,7 @@ it("projects configured-locator admissions through preparation and queuing witho
         hasActiveRun: active,
         activeRunIds: active ? [runId] : [],
       };
-      const responses: Parameters<RespondFn>[] = [];
-      await sessionByKeyReadHandlers["sessions.describe"]!({
-        req: { type: "req", id: "configured-activity", method: "sessions.describe" },
-        params: { key },
-        context,
-        client,
-        isWebchatConnect: () => false,
-        respond: (...response) => responses.push(response),
-      });
-      expect(responses).toHaveLength(1);
-      expect(responses[0]?.[0]).toBe(true);
-      expect(responses[0]?.[1]).toHaveProperty("session.hasActiveRun", active);
-      expect(responses[0]?.[1]).toMatchObject({ session: expected });
+      expect(await describeSession(context, client, key)).toMatchObject({ session: expected });
       const roster = await listSessions({ context, client, request: { search: key } });
       expect(roster.sessions).toEqual([expect.objectContaining(expected)]);
       const activeRoster = await listSessions({
