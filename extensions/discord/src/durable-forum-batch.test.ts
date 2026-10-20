@@ -18,8 +18,6 @@ vi.mock("openclaw/plugin-sdk/web-media", async () => {
 let discordPlugin: typeof import("./channel.js").discordPlugin;
 let sendMessageDiscord: typeof import("./send.js").sendMessageDiscord;
 
-const DISCORD_TEST_CFG = { channels: { discord: { accounts: { default: {} } } } };
-
 beforeAll(async () => {
   ({ discordPlugin } = await import("./channel.js"));
   ({ sendMessageDiscord } = await import("./send.js"));
@@ -57,21 +55,11 @@ async function runDurableDiscordForumBatch(params: {
     },
   });
   const afterDeliverPayload = vi.fn();
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "discord",
-        source: "test",
-        plugin: {
-          ...discordPlugin,
-          outbound: { ...discordPlugin.outbound, afterDeliverPayload },
-        },
-      },
-    ]),
-  );
+  const plugin = { ...discordPlugin, outbound: { ...discordPlugin.outbound, afterDeliverPayload } };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
   try {
     const result = await sendDurableMessageBatch({
-      cfg: DISCORD_TEST_CFG,
+      cfg: { channels: { discord: { accounts: { default: {} } } } },
       channel: "discord",
       to: `channel:${parentId}`,
       ...(params.threadId ? { threadId: params.threadId } : {}),
@@ -92,10 +80,6 @@ async function runDurableDiscordForumBatch(params: {
       },
       skipQueue: true,
     });
-    expect(result.status).toBe("sent");
-    if (result.status !== "sent") {
-      throw new Error("expected durable Discord forum batch to send");
-    }
     return {
       postPaths: loopback.requests
         .filter((request) => request.method === "POST")
@@ -103,7 +87,7 @@ async function runDurableDiscordForumBatch(params: {
       deliveredThreadIds: afterDeliverPayload.mock.calls.map(
         ([ctx]) => (ctx as { target?: { threadId?: unknown } }).target?.threadId,
       ),
-      receipt: result.receipt,
+      result,
     };
   } finally {
     await loopback.close();
@@ -113,41 +97,29 @@ async function runDurableDiscordForumBatch(params: {
 }
 
 describe("durable Discord forum batches", () => {
-  it.each<ChannelType.GuildForum | ChannelType.GuildMedia>([
-    ChannelType.GuildForum,
-    ChannelType.GuildMedia,
-  ])("keeps a payload batch in one created %s thread", async (parentType) => {
-    const { deliveredThreadIds, postPaths, receipt } = await runDurableDiscordForumBatch({
-      parentType,
-    });
-
-    expect(postPaths).toEqual([
-      `/v10${Routes.threads("700")}`,
-      `/v10${Routes.channelMessages("701")}`,
-      `/v10${Routes.channelMessages("701")}`,
-    ]);
-    expect(deliveredThreadIds).toEqual(["701", "701"]);
-    expect(receipt).toMatchObject({
-      threadId: "701",
-      platformMessageIds: ["starter-1", "message-1", "message-2"],
-    });
-  });
-
-  it("keeps an explicit thread authoritative for the full payload batch", async () => {
-    const { deliveredThreadIds, postPaths, receipt } = await runDurableDiscordForumBatch({
-      parentType: ChannelType.GuildForum,
-      threadId: "900",
-    });
-
-    expect(postPaths).toEqual([
-      `/v10${Routes.channelMessages("900")}`,
-      `/v10${Routes.channelMessages("900")}`,
-      `/v10${Routes.channelMessages("900")}`,
-    ]);
-    expect(deliveredThreadIds).toEqual(["900", "900"]);
-    expect(receipt).toMatchObject({
-      threadId: "900",
-      platformMessageIds: ["message-1", "message-2", "message-3"],
-    });
-  });
+  it.each([
+    [ChannelType.GuildForum, undefined],
+    [ChannelType.GuildMedia, undefined],
+    [ChannelType.GuildForum, "900"],
+  ] as const)(
+    "keeps the %s batch in its created or explicit thread %s",
+    async (parentType, threadId) => {
+      const actual = await runDurableDiscordForumBatch({ parentType, threadId });
+      const target = threadId ?? "701";
+      const messagePath = `/v10/channels/${target}/messages`;
+      expect(actual).toMatchObject({
+        postPaths: [threadId ? messagePath : "/v10/channels/700/threads", messagePath, messagePath],
+        deliveredThreadIds: [target, target],
+        result: {
+          status: "sent",
+          receipt: {
+            threadId: target,
+            platformMessageIds: threadId
+              ? ["message-1", "message-2", "message-3"]
+              : ["starter-1", "message-1", "message-2"],
+          },
+        },
+      });
+    },
+  );
 });

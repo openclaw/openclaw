@@ -26,6 +26,14 @@ beforeAll(async () => {
 
 describe("durable Discord delivery", () => {
   const cfg = { channels: { discord: { token: "test-token" } } };
+  const chunking = { chunkMode: "newline" as const, maxLinesPerMessage: 1, textLimit: 2000 };
+  const chunks = ["first chunk", "second chunk"];
+
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    expect(hoisted.sendMessageDiscordMock.mock.calls.map((call) => call[1])).toEqual(chunks);
+  });
 
   beforeEach(() => {
     resetDiscordOutboundMocks(hoisted);
@@ -37,22 +45,13 @@ describe("durable Discord delivery", () => {
     );
   });
 
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-  });
-
   it("does not replay earlier chunks when a later platform send fails", async () => {
     const result = await sendDurableMessageBatch({
       cfg,
       channel: "discord",
       to: "channel:123456",
       payloads: [{ text: "first chunk\nsecond chunk" }],
-      formatting: {
-        chunkMode: "newline",
-        maxLinesPerMessage: 1,
-        textLimit: 2000,
-      },
+      formatting: chunking,
       skipQueue: true,
     });
 
@@ -62,10 +61,6 @@ describe("durable Discord delivery", () => {
       receipt: { platformMessageIds: ["msg-chunk-1"] },
       sentBeforeError: true,
     });
-    expect(hoisted.sendMessageDiscordMock.mock.calls.map((call) => call[1])).toEqual([
-      "first chunk",
-      "second chunk",
-    ]);
   });
 
   it("keeps accepted Discord chunks visible when monitored reply delivery fails", async () => {
@@ -74,9 +69,7 @@ describe("durable Discord delivery", () => {
       replies: [{ text: "first chunk\nsecond chunk" }],
       target: "channel:123456",
       token: "test-token",
-      textLimit: 2000,
-      maxLinesPerMessage: 1,
-      chunkMode: "newline",
+      ...chunking,
       kind: "final",
     }).then(
       () => undefined,
@@ -93,9 +86,5 @@ describe("durable Discord delivery", () => {
         visibleReplySent: true,
       },
     });
-    expect(hoisted.sendMessageDiscordMock.mock.calls.map((call) => call[1])).toEqual([
-      "first chunk",
-      "second chunk",
-    ]);
   });
 });

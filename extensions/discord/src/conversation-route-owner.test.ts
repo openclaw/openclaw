@@ -36,27 +36,36 @@ function inspect(
   });
 }
 
+function binding(
+  conversation: Parameters<SessionBindingAdapter["resolveByConversation"]>[0],
+  targetSessionKey: string,
+  metadata?: Record<string, string>,
+) {
+  return {
+    bindingId: "binding-1",
+    targetSessionKey,
+    targetKind: "session" as const,
+    conversation,
+    status: "active" as const,
+    boundAt: 1,
+    metadata,
+  };
+}
+
 describe("inspectDiscordConversationRouteOwner", () => {
   let adapter: SessionBindingAdapter;
 
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(
-      createTestRegistry([
-        {
-          pluginId: "discord",
-          source: "test",
-          plugin: {
-            id: "discord",
-            meta: { aliases: [] },
-            conversationBindings: {
-              supportsCurrentConversationBinding: true,
-              createManager: () => ({ stop: () => undefined }),
-            },
-          },
-        },
-      ]),
-    );
+    const plugin = {
+      id: "discord",
+      meta: { aliases: [] },
+      conversationBindings: {
+        supportsCurrentConversationBinding: true,
+        createManager: () => ({ stop: () => undefined }),
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
     adapter = registerAdapter();
   });
@@ -66,45 +75,26 @@ describe("inspectDiscordConversationRouteOwner", () => {
     sessionBindingTesting.resetSessionBindingAdaptersForTests();
   });
 
-  it("uses the direct-user runtime identity without touching liveness", async () => {
-    const touch = vi.fn();
-    const resolveByConversation = vi.fn((conversation) => ({
-      bindingId: "binding-direct",
-      targetSessionKey: "agent:finance:bound",
-      targetKind: "session" as const,
-      conversation,
-      status: "active" as const,
-      boundAt: 1,
-    }));
-    registerAdapter({ resolveByConversation, touch });
-
-    expect(
-      await inspect({
-        conversation: { kind: "direct", peerId: "user-1", nativeChannelId: "dm-1" },
-      }),
-    ).toEqual({ kind: "agent", agentId: "finance" });
-    expect(resolveByConversation).toHaveBeenCalledWith(
-      expect.objectContaining({ conversationId: "user:user-1" }),
-    );
-    expect(touch).not.toHaveBeenCalled();
-  });
-
   it.each([
-    { kind: "group" as const, peerId: "group-dm-1" },
-    { kind: "channel" as const, peerId: "channel-1" },
-  ])(
-    "uses the native channel runtime identity for $kind conversations",
-    async ({ kind, peerId }) => {
-      const resolveByConversation = vi.fn(() => null);
-      registerAdapter({ resolveByConversation });
-
-      await inspect({
-        conversation: { kind, peerId, nativeChannelId: peerId },
-      });
-
-      expect(resolveByConversation).toHaveBeenCalledWith(
-        expect.objectContaining({ conversationId: peerId }),
+    ["direct", "user-1", "dm-1", "user:user-1", "finance"],
+    ["group", "group-dm-1", "group-dm-1", "group-dm-1", "main"],
+    ["channel", "channel-1", "channel-1", "channel-1", "main"],
+  ] as const)(
+    "resolves the %s runtime identity without touching liveness",
+    async (kind, peerId, nativeChannelId, conversationId, agentId) => {
+      const touch = vi.fn();
+      const resolveByConversation = vi.fn((conversation) =>
+        kind === "direct" ? binding(conversation, "agent:finance:bound") : null,
       );
+      registerAdapter({ resolveByConversation, touch });
+      expect(await inspect({ conversation: { kind, peerId, nativeChannelId } })).toEqual({
+        kind: "agent",
+        agentId,
+      });
+      expect(resolveByConversation).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId }),
+      );
+      expect(touch).not.toHaveBeenCalled();
     },
   );
 
@@ -132,19 +122,12 @@ describe("inspectDiscordConversationRouteOwner", () => {
 
   it("preserves explicit plugin ownership independently of the target session key", async () => {
     registerAdapter({
-      resolveByConversation: (conversation) => ({
-        bindingId: "binding-plugin",
-        targetSessionKey: "agent:review:looks-owned",
-        targetKind: "session",
-        conversation,
-        status: "active",
-        boundAt: 1,
-        metadata: {
+      resolveByConversation: (conversation) =>
+        binding(conversation, "agent:review:looks-owned", {
           pluginBindingOwner: "plugin",
           pluginId: "review-plugin",
           pluginRoot: "/plugins/review",
-        },
-      }),
+        }),
     });
 
     expect(await inspect()).toEqual({
