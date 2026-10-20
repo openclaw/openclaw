@@ -509,7 +509,7 @@ export default defineSingleProviderPluginEntry({
           })
         )?.apiKey;
         if (!apiKey) {
-          return;
+          return undefined;
         }
         const providerConfig = await buildClawRouterProviderConfig({
           apiKey,
@@ -518,7 +518,7 @@ export default defineSingleProviderPluginEntry({
         });
         const model = providerConfig.models.find((entry) => entry.id === ctx.modelId);
         if (!model) {
-          return;
+          return undefined;
         }
         return {
           ...model,

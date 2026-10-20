@@ -136,9 +136,9 @@ describe("ollama provider models", () => {
       ),
     );
 
-    expect(first.models?.[0]?.contextWindow).toBe(16_000);
-    expect(second.models?.[0]?.contextWindow).toBe(32_000);
-    expect(third.models?.[0]?.contextWindow).toBe(16_000);
+    expect(first?.models?.[0]?.contextWindow).toBe(16_000);
+    expect(second?.models?.[0]?.contextWindow).toBe(32_000);
+    expect(third?.models?.[0]?.contextWindow).toBe(16_000);
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
