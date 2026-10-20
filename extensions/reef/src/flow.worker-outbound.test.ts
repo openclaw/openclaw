@@ -150,8 +150,7 @@ describe("Reef worker outbound composition", () => {
   ] as const)(
     "refuses %s before recording delivery or dispatching",
     async (_name, model, verdict, category) => {
-      const adapter = guard(allow);
-      adapter.pinnedModel = model;
+      const adapter = { ...guard(allow), pinnedModel: model };
       adapter.classify.mockResolvedValue(verdict as Verdict);
       const id = prepareReefMessageId();
       await expect(
