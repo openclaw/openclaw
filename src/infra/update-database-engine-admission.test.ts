@@ -14,6 +14,28 @@ vi.mock("../snapshot/database-backup.js", async (importOriginal) => ({
 }));
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+const engines = ["sqlite", "postgres"];
+const families = ["state", "agent", "workboard", "logbook", "team-reports"];
+type Context = Parameters<typeof assertUpdateDatabaseEngineContexts>[0][number];
+
+function withDatabase(context: Context, database: OpenClawConfig["database"]): Context {
+  return {
+    ...context,
+    config: {
+      ...context.config,
+      database: {
+        ...database,
+        postgres: { connection: "postgresql://synthetic.invalid/update-admission" },
+      },
+    },
+  };
+}
+
+async function unchanged(file: string, action: () => Promise<unknown>) {
+  const before = await fs.readFile(file);
+  await action();
+  expect(await fs.readFile(file)).toEqual(before);
+}
 
 async function store(engine: "sqlite" | "postgres", enabled = true) {
   const stateDir = directories.make("update-engine-admission-");
@@ -61,9 +83,9 @@ it.each([
 
 it("admits a matching PostgreSQL target without changing its anchor", async () => {
   const { file, context } = await store("postgres");
-  const before = await fs.readFile(file);
-  await assertUpdateDatabaseEngineContexts([context], ["sqlite", "postgres"], ["workboard"]);
-  expect(await fs.readFile(file)).toEqual(before);
+  await unchanged(file, () =>
+    assertUpdateDatabaseEngineContexts([context], engines, ["workboard"]),
+  );
 });
 
 it.each(["sqlite", "postgres"] as const)(
@@ -110,24 +132,9 @@ it.each([
   "admits selected mixed families without changing store bytes (%j)",
   async (database) => {
     const { file, context } = await store("sqlite");
-    const before = await fs.readFile(file);
-    await assertUpdateDatabaseEngineContexts(
-      [
-        {
-          ...context,
-          config: {
-            ...context.config,
-            database: {
-              ...database,
-              postgres: { connection: "postgresql://synthetic.invalid/update-admission" },
-            },
-          },
-        },
-      ],
-      ["sqlite", "postgres"],
-      ["state", "agent", "workboard", "logbook", "team-reports"],
+    await unchanged(file, () =>
+      assertUpdateDatabaseEngineContexts([withDatabase(context, database)], engines, families),
     );
-    expect(await fs.readFile(file)).toEqual(before);
   },
 );
 
@@ -135,18 +142,7 @@ it("checks every context for its selected PostgreSQL family", async () => {
   const { context } = await store("sqlite");
   await expect(
     assertUpdateDatabaseEngineContexts(
-      [
-        context,
-        {
-          ...context,
-          config: {
-            database: {
-              families: { state: { engine: "postgres" } },
-              postgres: { connection: "postgresql://synthetic.invalid/update-admission" },
-            },
-          },
-        },
-      ],
+      [context, withDatabase(context, { families: { state: { engine: "postgres" } } })],
       ["postgres"],
       ["workboard"],
     ),
@@ -155,43 +151,27 @@ it("checks every context for its selected PostgreSQL family", async () => {
 
 it("protects selected PostgreSQL families before any anchor has been created", async () => {
   const { context } = await store("sqlite");
-  const postgres = {
-    ...context,
-    config: {
-      ...context.config,
-      database: {
-        engine: "postgres",
-        postgres: { connection: "postgresql://synthetic.invalid/update-admission" },
-      },
-    } satisfies OpenClawConfig,
-  };
+  const postgres = withDatabase(context, { engine: "postgres" });
   await expect(assertUpdateDatabaseEngineContexts([postgres], ["sqlite"])).rejects.toThrow(
     /target does not support the configured PostgreSQL families.*Reverse-port to SQLite/,
   );
-  // Every selected family has matched capture and rollback support.
   await expect(
-    assertUpdateDatabaseEngineContexts(
-      [postgres],
-      ["sqlite", "postgres"],
-      ["state", "agent", "workboard", "logbook", "team-reports"],
-    ),
+    assertUpdateDatabaseEngineContexts([postgres], engines, families),
   ).resolves.toBeUndefined();
 });
 
 it("leaves a SQLite install unchanged when the target omits its optional declaration", async () => {
   const { file, context } = await store("sqlite");
-  const before = await fs.readFile(file);
-  await assertUpdateDatabaseEngineContexts([context], undefined);
-  expect(await fs.readFile(file)).toEqual(before);
+  await unchanged(file, () => assertUpdateDatabaseEngineContexts([context], undefined));
 });
 
 it("protects a retained PostgreSQL anchor when Workboard is disabled", async () => {
   const { file, context } = await store("postgres", false);
-  const before = await fs.readFile(file);
-  await expect(assertUpdateDatabaseEngineContexts([context], undefined)).rejects.toThrow(
-    /target does not support the PostgreSQL store/,
+  await unchanged(file, () =>
+    expect(assertUpdateDatabaseEngineContexts([context], undefined)).rejects.toThrow(
+      /target does not support the PostgreSQL store/,
+    ),
   );
-  expect(await fs.readFile(file)).toEqual(before);
 });
 
 it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -206,7 +186,7 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     try {
       await expect(fs.lstat(marker)).rejects.toMatchObject({ code: "EACCES" });
       await expect(
-        assertUpdateDatabaseEngineContexts([context], ["sqlite", "postgres"], ["workboard"]),
+        assertUpdateDatabaseEngineContexts([context], engines, ["workboard"]),
       ).resolves.toBeUndefined();
       await expect(assertUpdateDatabaseEngineContexts([context], ["sqlite"])).rejects.toThrow(
         `target does not support the PostgreSQL store at ${file}`,

@@ -14,6 +14,17 @@ describe("private capture marker admission", () => {
   let marker: string;
   let source: string;
   let stateDir: string;
+  const expectInvalidMarker = (file = source) =>
+    expect(() => assertNotUpdateCapturePath(file, stateDir)).toThrow(
+      "Private update capture marker",
+    );
+  function privateDirectory(child = "") {
+    const directory = path.join(root, "private");
+    fs.mkdirSync(path.join(directory, child), { recursive: true });
+    fs.writeFileSync(path.join(directory, markerName), markerContent);
+    fs.writeFileSync(path.join(directory, "raw.txt"), "private bytes");
+    return directory;
+  }
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "capture-marker-"));
     marker = path.join(root, markerName);
@@ -37,9 +48,7 @@ describe("private capture marker admission", () => {
           kind === "version" ? "openclaw-private-update-capture-v2\n" : "x".repeat(4096),
         );
       }
-      expect(() => assertNotUpdateCapturePath(source, stateDir)).toThrow(
-        "Private update capture marker",
-      );
+      expectInvalidMarker();
       expect(fs.readFileSync(source, "utf8")).toBe("synthetic retained bytes");
     },
   );
@@ -47,9 +56,7 @@ describe("private capture marker admission", () => {
   it.skipIf(process.platform === "win32")("refuses a FIFO marker without opening it", () => {
     execFileSync("mkfifo", [marker]);
     const open = vi.spyOn(fs, "openSync");
-    expect(() => assertNotUpdateCapturePath(source, stateDir)).toThrow(
-      "Private update capture marker",
-    );
+    expectInvalidMarker();
     expect(open).not.toHaveBeenCalled();
   });
 
@@ -58,9 +65,7 @@ describe("private capture marker admission", () => {
     () => {
       fs.writeFileSync(marker, markerContent, { mode: 0o000 });
       try {
-        expect(() => assertNotUpdateCapturePath(source, stateDir)).toThrow(
-          "Private update capture marker",
-        );
+        expectInvalidMarker();
       } finally {
         fs.chmodSync(marker, 0o600);
       }
@@ -72,9 +77,7 @@ describe("private capture marker admission", () => {
     const child = path.join(root, "child");
     fs.mkdirSync(child);
     fs.writeFileSync(path.join(child, markerName), markerContent);
-    expect(() => assertNotUpdateCapturePath(path.join(child, "raw.txt"), stateDir)).toThrow(
-      "Private update capture marker",
-    );
+    expectInvalidMarker(path.join(child, "raw.txt"));
   });
 
   it("refuses marker replacement during a bounded read even with identical bytes", () => {
@@ -104,16 +107,11 @@ describe("private capture marker admission", () => {
         return result;
       },
     );
-    expect(() => assertNotUpdateCapturePath(source, stateDir)).toThrow(
-      "Private update capture marker",
-    );
+    expectInvalidMarker();
     expect(replaced).toBe(true);
   });
   it("resolves repeated symlink target components in filesystem order", () => {
-    const privateDir = path.join(root, "private");
-    fs.mkdirSync(path.join(privateDir, "child"), { recursive: true });
-    fs.writeFileSync(path.join(privateDir, markerName), markerContent);
-    fs.writeFileSync(path.join(privateDir, "raw.txt"), "private bytes");
+    const privateDir = privateDirectory("child");
     fs.symlinkSync(
       path.join(privateDir, "child"),
       path.join(root, "hop"),
@@ -126,10 +124,7 @@ describe("private capture marker admission", () => {
     );
   });
   it("assertNotUpdateCapturePath preserves an unresolved target with a trailing directory separator", () => {
-    const privateDir = path.join(root, "private");
-    fs.mkdirSync(privateDir);
-    fs.writeFileSync(path.join(privateDir, markerName), markerContent);
-    fs.writeFileSync(path.join(privateDir, "raw.txt"), "private bytes");
+    privateDirectory();
     const alias = path.join(root, "alias");
     fs.symlinkSync("private/raw.txt/", alias);
     expect(() => assertNotUpdateCapturePath(alias, stateDir)).not.toThrow();

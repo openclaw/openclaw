@@ -28,6 +28,26 @@ const choices = [
   "retained-postgres-agent",
   "retained-sqlite-agent",
 ] as const;
+const schemaVersions = {
+  state: OPENCLAW_STATE_SCHEMA_VERSION,
+  agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+};
+type Fixture = { stateDir: string; shared: string; agent: string; config: OpenClawConfig };
+const contextFor = ({ stateDir, config }: Fixture) => ({
+  config,
+  env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+});
+const inspect = (fixture: Fixture) =>
+  readUpdateStateSchemaVersions({
+    ...fixture,
+    ...contextFor(fixture),
+    additionalPaths: [],
+    preserveSourceArtifacts: true,
+  });
+const admit = (fixture: Fixture, versions = schemaVersions) =>
+  withArtifactPreservingStateReads(() =>
+    checkTargetDatabaseSchemasForContexts(versions, [contextFor(fixture)]),
+  );
 
 async function readArtifacts(files: string[]) {
   return Promise.all(
@@ -51,10 +71,7 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
   const client = new Client({ connectionString: connection });
   const namespaces = new Set<string>();
   let walAgent: ReturnType<typeof openNodeSqliteDatabase> | undefined;
-  const fixtures = new Map<
-    string,
-    { stateDir: string; shared: string; agent: string; config: OpenClawConfig }
-  >();
+  const fixtures = new Map<string, Fixture>();
   beforeAll(async () => {
     await client.connect();
     const stateDescriptor = await statePortProvider.loadDescriptor();
@@ -143,12 +160,7 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
     const fixture = fixtures.get(choice)!;
     const files = [fixture.shared, fixture.agent];
     const before = await readArtifacts(files);
-    const versions = await readUpdateStateSchemaVersions({
-      ...fixture,
-      env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
-      additionalPaths: [],
-      preserveSourceArtifacts: true,
-    });
+    const versions = await inspect(fixture);
     expect(versions).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -168,39 +180,22 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
       const fixture = fixtures.get(choice)!;
       const files = [fixture.shared, fixture.agent];
       const before = await readArtifacts(files);
-      const versions = {
-        state: OPENCLAW_STATE_SCHEMA_VERSION,
-        agent: OPENCLAW_AGENT_SCHEMA_VERSION,
-      };
       for (const kind of ["state", "agent"] as const) {
-        const result = await withArtifactPreservingStateReads(() =>
-          checkTargetDatabaseSchemasForContexts({ ...versions, [kind]: versions[kind] - 1 }, [
-            {
-              config: fixture.config,
-              env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
-            },
-          ]),
-        );
+        const result = await admit(fixture, {
+          ...schemaVersions,
+          [kind]: schemaVersions[kind] - 1,
+        });
         expect(result.indeterminate).toEqual([]);
         expect(result.incompatible).toEqual([
           expect.objectContaining({
             kind,
             path: kind === "state" ? fixture.shared : fixture.agent,
-            foundVersion: versions[kind],
-            supportedVersion: versions[kind] - 1,
+            foundVersion: schemaVersions[kind],
+            supportedVersion: schemaVersions[kind] - 1,
           }),
         ]);
       }
-      const compatible = await withArtifactPreservingStateReads(() =>
-        checkTargetDatabaseSchemasForContexts(versions, [
-          {
-            config: fixture.config,
-            env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
-          },
-        ]),
-      );
-      expect(compatible.indeterminate).toEqual([]);
-      expect(compatible.incompatible).toEqual([]);
+      expect(await admit(fixture)).toMatchObject({ indeterminate: [], incompatible: [] });
       expect(await readArtifacts(files)).toEqual(before);
     },
   );
@@ -219,12 +214,7 @@ describe.skipIf(!connection)("mixed-engine update inventory", () => {
         [version],
       );
       try {
-        const versions = await readUpdateStateSchemaVersions({
-          ...fixture,
-          env: { ...process.env, OPENCLAW_STATE_DIR: fixture.stateDir },
-          additionalPaths: [],
-          preserveSourceArtifacts: true,
-        });
+        const versions = await inspect(fixture);
         expect(versions.find((entry) => entry.path === fixture.agent)).toEqual({
           path: fixture.agent,
           userVersion: version,
