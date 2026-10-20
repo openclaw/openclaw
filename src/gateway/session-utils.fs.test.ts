@@ -24,6 +24,11 @@ let imageData: string;
 let imageBytes: number;
 const requireRecord = createRequireRecord("object", "expected-label");
 const archiveTimestamp = "2026-08-28T00-00-00.000Z";
+const signedText = (text: string, phase: string, id?: string) => ({
+  type: "text",
+  text,
+  textSignature: JSON.stringify({ v: 1, ...(id ? { id } : {}), phase }),
+});
 
 beforeAll(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-fs-test-"));
@@ -655,13 +660,7 @@ describe("buildSessionPreviewItems bounded projection", () => {
     const hidden = 320;
     const sourceMessages = Array.from({ length: visible + hidden }, (_, index) => ({
       role: index < visible ? "assistant" : "toolResult",
-      content: [
-        {
-          type: "text",
-          text: `message ${index}`,
-          textSignature: JSON.stringify({ v: 1, id: `preview-${index}`, phase: "final_answer" }),
-        },
-      ],
+      content: [signedText(`message ${index}`, "final_answer", `preview-${index}`)],
     }));
     const sourceText = JSON.stringify(sourceMessages);
     // SQLite hydration yields fresh blocks, so the per-block signature cache starts cold.
@@ -712,16 +711,8 @@ describe("buildSessionPreviewItems bounded projection", () => {
     {
       role: "assistant",
       content: [
-        {
-          type: "text",
-          text: "private commentary",
-          textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
-        },
-        {
-          type: "text",
-          text: `${"x".repeat(16)}🦊tail`,
-          textSignature: JSON.stringify({ v: 1, phase: "final_answer" }),
-        },
+        signedText("private commentary", "commentary"),
+        signedText(`${"x".repeat(16)}🦊tail`, "final_answer"),
       ],
     },
     { role: "assistant", content: "REPLY_SKIP" },
@@ -754,13 +745,7 @@ describe("buildSessionPreviewItems bounded projection", () => {
         { role: "assistant", content: "last" },
         {
           role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: "commentary only",
-              textSignature: JSON.stringify({ v: 1, phase: "commentary" }),
-            },
-          ],
+          content: [signedText("commentary only", "commentary")],
         },
       ],
       view: undefined,

@@ -31,18 +31,35 @@ import { createRpcSourceForTest, claimRpcSourceForTest } from "./test-helpers.rp
 
 const { createQueuedReservation, requestContext, launchedRunIds } = useQueuedCollectorFixture();
 
+async function reserve(name: string, profile: string) {
+  const client = roleClient("view", profile);
+  client.connId = "parent-requester";
+  client.connect.scopes = ["operator.sessions.write"];
+  setRuntimeConfigSnapshot({ ...getRuntimeConfig(), ...rolePolicyConfig() });
+  const { entry } = await createQueuedReservation(name, {
+    actor: { type: "human", source: "profile", id: client.authenticatedUserProfile!.profileId },
+  });
+  const loaded = await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey);
+  return { client, entry, loaded };
+}
+
+function abort(client: ReturnType<typeof roleClient>, key: string, context = requestContext()) {
+  const respond = vi.fn();
+  const done = handleGatewayRequest({
+    req: { type: "req", id: "collector-stop", method: "sessions.abort", params: { key } },
+    context,
+    client,
+    respond,
+    isWebchatConnect: () => false,
+    extraHandlers: { "sessions.abort": sessionAbortHandlers["sessions.abort"]! },
+  });
+  return { respond, done };
+}
+
 it.each(["active", "queued", "pending-chat"] as const)(
   "narrow collector Stop preserves a same-key prior-incarnation %s producer",
   async (kind) => {
-    const client = roleClient("view", "collector-stop-owner");
-    client.connId = "parent-requester";
-    client.connect.scopes = ["operator.sessions.write"];
-    const cfg = { ...getRuntimeConfig(), ...rolePolicyConfig() };
-    setRuntimeConfigSnapshot(cfg);
-    const { entry } = await createQueuedReservation("reserved", {
-      actor: { type: "human", source: "profile", id: client.authenticatedUserProfile!.profileId },
-    });
-    const loaded = await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey);
+    const { client, entry, loaded } = await reserve("reserved", "collector-stop-owner");
     const childSession = expectDefined(loaded.entry, "collector session");
     expect(childSession.createdActor).toEqual({
       type: "human",
@@ -61,34 +78,25 @@ it.each(["active", "queued", "pending-chat"] as const)(
     const descendantSession = descendant
       ? await loadGatewaySessionEntryReadOnlyAsync(descendant.entry.childSessionKey)
       : undefined;
+    const source = (runId: string, sessionId: string) =>
+      createRpcSourceForTest(
+        { requester: { connectionId: client.connId } },
+        {
+          runId,
+          sessionId,
+          phase: "waiting",
+          agentId: "main",
+          storeScope: expectDefined(descendantSession, "descendant session").storePath,
+          sessionKey: expectDefined(descendant, "descendant").entry.childSessionKey,
+        },
+      );
     const descendantSource = descendant
-      ? createRpcSourceForTest(
-          {
-            requester: { connectionId: client.connId },
-          },
-          {
-            runId: "prior-descendant-input",
-            storeScope: expectDefined(descendantSession, "descendant session").storePath,
-            phase: "waiting",
-            sessionKey: descendant.entry.childSessionKey,
-            agentId: "main",
-            sessionId: "previous-descendant-session",
-          },
-        )
+      ? source("prior-descendant-input", "previous-descendant-session")
       : undefined;
     const descendantOwnedSource = descendant
-      ? createRpcSourceForTest(
-          {
-            requester: { connectionId: client.connId },
-          },
-          {
-            runId: "owned-descendant-input",
-            storeScope: expectDefined(descendantSession, "descendant session").storePath,
-            phase: "waiting",
-            sessionKey: descendant.entry.childSessionKey,
-            agentId: "main",
-            sessionId: expectDefined(descendantSession?.entry, "descendant session").sessionId,
-          },
+      ? source(
+          "owned-descendant-input",
+          expectDefined(descendantSession?.entry, "descendant session").sessionId,
         )
       : undefined;
     const context = requestContext();
@@ -129,20 +137,8 @@ it.each(["active", "queued", "pending-chat"] as const)(
       });
     }
     const originalPending = context.dedupe.get(`${kind}:${oldRunId}`);
-    const respond = vi.fn();
-    await handleGatewayRequest({
-      req: {
-        type: "req",
-        id: "collector-stop",
-        method: "sessions.abort",
-        params: { key: entry.childSessionKey },
-      },
-      context,
-      client,
-      respond,
-      isWebchatConnect: () => false,
-      extraHandlers: { "sessions.abort": sessionAbortHandlers["sessions.abort"]! },
-    });
+    const { respond, done } = abort(client, entry.childSessionKey, context);
+    await done;
     expect(respond).toHaveBeenCalledOnce();
     expect(respond.mock.calls[0]?.[2]).toBeUndefined();
     expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
@@ -182,14 +178,7 @@ it.each(["active", "queued", "pending-chat"] as const)(
 );
 
 it("narrow collector Stop joins owned raw effects without interrupting or waiting for foreign effects", async () => {
-  const client = roleClient("view", "collector-effect-owner");
-  client.connId = "parent-requester";
-  client.connect.scopes = ["operator.sessions.write"];
-  setRuntimeConfigSnapshot({ ...getRuntimeConfig(), ...rolePolicyConfig() });
-  const { entry } = await createQueuedReservation("effect-reserved", {
-    actor: { type: "human", source: "profile", id: client.authenticatedUserProfile!.profileId },
-  });
-  const loaded = await loadGatewaySessionEntryReadOnlyAsync(entry.childSessionKey);
+  const { client, entry, loaded } = await reserve("effect-reserved", "collector-effect-owner");
   const sessionId = expectDefined(loaded.entry, "collector session").sessionId;
   const target = captureSessionTarget({
     storeScope: loaded.storePath,
@@ -250,21 +239,7 @@ it("narrow collector Stop joins owned raw effects without interrupting or waitin
   const raw = own.run(async () => {
     await rawFinish.promise;
   });
-  const context = requestContext();
-  const respond = vi.fn();
-  const stop = handleGatewayRequest({
-    req: {
-      type: "req",
-      id: "collector-effect-stop",
-      method: "sessions.abort",
-      params: { key: entry.childSessionKey },
-    },
-    context,
-    client,
-    respond,
-    isWebchatConnect: () => false,
-    extraHandlers: { "sessions.abort": sessionAbortHandlers["sessions.abort"]! },
-  });
+  const { respond, done: stop } = abort(client, entry.childSessionKey);
   try {
     await interrupted.promise;
     expect(respond).not.toHaveBeenCalled();
