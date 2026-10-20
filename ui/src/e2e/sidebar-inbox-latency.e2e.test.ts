@@ -1,10 +1,12 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { CronJob } from "../api/types.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
-import { createSidebarCustomizationSuite } from "./sidebar-customization.test-support.ts";
+import {
+  createSidebarCustomizationSuite,
+  sidebarCronJob,
+} from "./sidebar-customization.test-support.ts";
 
 const suite = createSidebarCustomizationSuite("Control UI Inbox opening latency");
 
@@ -49,20 +51,14 @@ suite.define(() => {
       viewport: { width: 1440, height: 900 },
     });
     const page = await context.newPage();
-    const jobs: CronJob[] = populated
+    const jobs = populated
       ? [
-          {
+          sidebarCronJob({
             id: "inbox-latency-job",
             name: "Daily report",
-            enabled: true,
-            createdAtMs: 0,
-            updatedAtMs: 0,
-            schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "isolated",
-            wakeMode: "now",
             payload: { kind: "agentTurn", message: "Prepare the report." },
             state: { lastRunStatus: "error", lastError: "Report failed" },
-          },
+          }),
         ]
       : [];
     const gateway = await installMockGateway(page, {

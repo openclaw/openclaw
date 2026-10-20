@@ -7,8 +7,8 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
-import { compactCronJobFixture } from "../test-helpers/cron.ts";
-import { openSidebarPages } from "./sidebar-customization.test-support.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
+import { openSidebarPages, sidebarCronJob } from "./sidebar-customization.test-support.ts";
 
 type SidebarAttentionScopeFlowOptions = {
   artifactDir: string;
@@ -64,22 +64,17 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
   });
   const page = await context.newPage();
   const proofVideo = page.video();
-  const failedJob = (id: string, name: string, agentId: string): CronJob => ({
-    id,
-    agentId,
-    name,
-    enabled: true,
-    createdAtMs: 0,
-    updatedAtMs: 0,
-    schedule: { kind: "every", everyMs: 60_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: { kind: "agentTurn", message: "test" },
-    state: { lastRunStatus: "error", lastError: "Provider request failed" },
+  const mainJob = sidebarCronJob({
+    id: "main-release-digest",
+    name: "Main release digest",
+    agentId: "main",
   });
-  const mainJob = failedJob("main-release-digest", "Main release digest", "main");
-  const writerJob = failedJob("writer-release-digest", "Writer release digest", "writer");
-  const cronResponse = (jobs: Array<ReturnType<typeof failedJob>>) => ({
+  const writerJob = sidebarCronJob({
+    id: "writer-release-digest",
+    name: "Writer release digest",
+    agentId: "writer",
+  });
+  const cronResponse = (jobs: CronJob[]) => ({
     jobs,
     snapshotRevision: `sidebar-agent-scope-${jobs.map((job) => job.id).join("-")}`,
     total: jobs.length,
@@ -100,43 +95,14 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
           { id: "writer", identity: { name: "Writer" }, name: "Writer" },
         ],
       },
-      "cron.list": {
-        cases: [
-          {
-            match: { compact: true, agentId: "main" },
-            response: { ...cronResponse([mainJob]), jobs: [compactCronJobFixture(mainJob)] },
-          },
-          {
-            match: { compact: true, agentId: "writer" },
-            response: { ...cronResponse([writerJob]), jobs: [compactCronJobFixture(writerJob)] },
-          },
-          {
-            match: { compact: true },
-            response: {
-              ...cronResponse([mainJob, writerJob]),
-              jobs: [mainJob, writerJob].map(compactCronJobFixture),
-            },
-          },
-          { match: { agentId: "main" }, response: cronResponse([mainJob]) },
-          { match: { agentId: "writer" }, response: cronResponse([writerJob]) },
-          { response: cronResponse([mainJob, writerJob]) },
-        ],
-      },
+      "cron.list": cronListResponseFixture([
+        { match: { agentId: "main" }, response: cronResponse([mainJob]) },
+        { match: { agentId: "writer" }, response: cronResponse([writerJob]) },
+        { response: cronResponse([mainJob, writerJob]) },
+      ]),
       "models.authStatus": { providers: [], ts: 1 },
     },
   });
-  const waitForCronScope = async (agentId: string | null) => {
-    await expect
-      .poll(async () =>
-        (await gateway.getRequests("cron.list")).some((request) => {
-          const requestParams = request.params as Record<string, unknown> | undefined;
-          return agentId === null
-            ? Boolean(requestParams && !Object.hasOwn(requestParams, "agentId"))
-            : requestParams?.agentId === agentId;
-        }),
-      )
-      .toBe(true);
-  };
   const cronScopeRequestCount = async (agentId: string | null) =>
     (await gateway.getRequests("cron.list")).filter((request) => {
       const requestParams = request.params as Record<string, unknown> | undefined;
@@ -144,6 +110,9 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
         ? Boolean(requestParams && !Object.hasOwn(requestParams, "agentId"))
         : requestParams?.agentId === agentId;
     }).length;
+  const waitForCronScope = async (agentId: string | null) => {
+    await expect.poll(() => cronScopeRequestCount(agentId)).toBeGreaterThan(0);
+  };
 
   try {
     await page.goto(`${params.baseUrl}new`);
@@ -268,36 +237,19 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await expect.poll(() => automationRows.getByText("Writer release digest").count()).toBe(0);
     await sidebar.locator(".sidebar-issues-button").click();
 
-    const writerJobNext = failedJob(
-      "writer-release-digest-next",
-      "Writer release digest",
-      "writer",
-    );
-    await gateway.setMethodResponse("cron.list", {
-      cases: [
-        {
-          match: { compact: true, agentId: "main" },
-          response: { ...cronResponse([mainJob]), jobs: [compactCronJobFixture(mainJob)] },
-        },
-        {
-          match: { compact: true, agentId: "writer" },
-          response: {
-            ...cronResponse([writerJobNext]),
-            jobs: [compactCronJobFixture(writerJobNext)],
-          },
-        },
-        {
-          match: { compact: true },
-          response: {
-            ...cronResponse([mainJob, writerJobNext]),
-            jobs: [mainJob, writerJobNext].map(compactCronJobFixture),
-          },
-        },
+    const writerJobNext = sidebarCronJob({
+      id: "writer-release-digest-next",
+      name: "Writer release digest",
+      agentId: "writer",
+    });
+    await gateway.setMethodResponse(
+      "cron.list",
+      cronListResponseFixture([
         { match: { agentId: "main" }, response: cronResponse([mainJob]) },
         { match: { agentId: "writer" }, response: cronResponse([writerJobNext]) },
         { response: cronResponse([mainJob, writerJobNext]) },
-      ],
-    });
+      ]),
+    );
     const previousAllCount = await cronScopeRequestCount(null);
     await gateway.emitGatewayEvent("cron", {});
     await expect.poll(() => cronScopeRequestCount(null)).toBeGreaterThan(previousAllCount);

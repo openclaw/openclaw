@@ -1,10 +1,10 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { CronJob } from "../api/types.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { sidebarCronJob } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Compact Inbox automation inventory" });
 
@@ -15,19 +15,17 @@ suite.define(() => {
       kind: "agentTurn" as const,
       message: "Review the synthetic daily report. ".repeat(200),
     };
-    const jobs: CronJob[] = Array.from({ length: 55 }, (_, index) => ({
-      id: `automation-${index}`,
-      name: `Daily report ${index}`,
-      agentId: "main",
-      enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      payload,
-      state: { lastRunStatus: "ok", nextRunAtMs: now + 60_000 },
-    }));
+    const jobs = Array.from({ length: 55 }, (_, index) =>
+      sidebarCronJob({
+        id: `automation-${index}`,
+        name: `Daily report ${index}`,
+        agentId: "main",
+        createdAtMs: now,
+        updatedAtMs: now,
+        payload,
+        state: { lastRunStatus: "ok", nextRunAtMs: now + 60_000 },
+      }),
+    );
     jobs[50] = { ...jobs[50]!, name: "Failed daily report", state: { lastStatus: "error" } };
     jobs[51] = {
       ...jobs[51]!,
