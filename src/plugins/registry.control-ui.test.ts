@@ -20,37 +20,38 @@ function fixture() {
         api.session.controls.registerControlUiDescriptor(descriptor);
       },
     });
-  return { config, registry, register };
+  const reject = (message?: string, pluginId = "reports") => {
+    expect(registry.registry.controlUiDescriptors).toEqual([]);
+    expect(registry.registry.diagnostics).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        pluginId,
+        ...(message === undefined ? {} : { message: expect.stringContaining(message) }),
+      }),
+    );
+  };
+  const expectDescriptor = (pluginId: string, descriptor: Partial<PluginControlUiDescriptor>) =>
+    expect(registry.registry.controlUiDescriptors).toEqual([
+      expect.objectContaining({ pluginId, descriptor: expect.objectContaining(descriptor) }),
+    ]);
+  return { config, registry, register, reject, expectDescriptor };
 }
 const tab = { surface: "tab", id: "panel", label: "Reports" } as const;
 
 describe("plugin registry Control UI descriptors", () => {
   it.each(["api", "health"])("rejects HTTP-owned tab slug %j", (slug) => {
-    const { registry, register } = fixture();
+    const { register, reject } = fixture();
     register({ ...tab, slug });
-    expect(registry.registry.controlUiDescriptors).toEqual([]);
-    expect(registry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: "reports",
-        message: expect.stringContaining("descriptor slug requires"),
-      }),
-    );
+    reject("descriptor slug requires");
   });
 
   it("rejects a slug alongside native route placement", () => {
-    const { registry, register } = fixture();
+    const { register, reject } = fixture();
     register(
       { ...tab, placement: "route:reports", slug: "reports" },
       createPluginRecord({ id: "reports", origin: "bundled" }),
     );
-    expect(registry.registry.controlUiDescriptors).toEqual([]);
-    expect(registry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        message: expect.stringContaining("descriptor slug requires"),
-      }),
-    );
+    reject("descriptor slug requires");
   });
 
   it("keeps the first plugin's tab when a later plugin claims its slug", () => {
@@ -76,7 +77,7 @@ describe("plugin registry Control UI descriptors", () => {
   });
 
   it("keeps legacy flat descriptors loadable for shipped JavaScript plugins", () => {
-    const { config, registry } = fixture();
+    const { config, registry, expectDescriptor } = fixture();
     registerTestPlugin({
       registry,
       config,
@@ -89,20 +90,15 @@ describe("plugin registry Control UI descriptors", () => {
         } as never);
       },
     });
-    expect(registry.registry.controlUiDescriptors).toEqual([
-      expect.objectContaining({
-        pluginId: "legacy-descriptor-fixture",
-        descriptor: expect.objectContaining({
-          id: "legacy-card",
-          surface: "session",
-          label: "Legacy Card",
-        }),
-      }),
-    ]);
+    expectDescriptor("legacy-descriptor-fixture", {
+      id: "legacy-card",
+      surface: "session",
+      label: "Legacy Card",
+    });
   });
 
   it("accepts a bundled plugin's matching native route placement", () => {
-    const { registry, register } = fixture();
+    const { register, expectDescriptor } = fixture();
     const descriptor = {
       ...tab,
       placement: "route:workboard",
@@ -112,32 +108,20 @@ describe("plugin registry Control UI descriptors", () => {
       requiredScopes: ["operator.read"],
     } satisfies PluginControlUiDescriptor;
     register(descriptor, createPluginRecord({ id: "workboard", origin: "bundled" }));
-    expect(registry.registry.controlUiDescriptors).toEqual([
-      expect.objectContaining({
-        pluginId: "workboard",
-        descriptor: expect.objectContaining(descriptor),
-      }),
-    ]);
+    expectDescriptor("workboard", descriptor);
   });
 
   it.each([
     { id: "workboard", origin: "workspace" as const },
     { id: "logbook", origin: "bundled" as const },
   ])("rejects unowned native route placement from $origin plugin $id", ({ id, origin }) => {
-    const { registry, register } = fixture();
+    const { register, reject } = fixture();
     register({ ...tab, placement: "route:workboard" }, createPluginRecord({ id, origin }));
-    expect(registry.registry.controlUiDescriptors).toEqual([]);
-    expect(registry.registry.diagnostics).toContainEqual(
-      expect.objectContaining({
-        level: "error",
-        pluginId: id,
-        message: expect.stringContaining("must be owned by its bundled plugin"),
-      }),
-    );
+    reject("must be owned by its bundled plugin", id);
   });
 
   it("diagnoses UI declaration drift without rejecting registration", () => {
-    const { registry, register } = fixture();
+    const { registry, register, expectDescriptor } = fixture();
     register(
       {
         surface: "widget",
@@ -154,26 +138,14 @@ describe("plugin registry Control UI descriptors", () => {
           'Registered UI capability "widget" is missing from uiCapabilities in openclaw.plugin.json.',
       }),
     ]);
-    expect(registry.registry.controlUiDescriptors).toEqual([
-      expect.objectContaining({
-        pluginId: "workboard",
-        descriptor: expect.objectContaining({
-          id: "card",
-          surface: "widget",
-          label: "Workboard card",
-        }),
-      }),
-    ]);
+    expectDescriptor("workboard", { id: "card", surface: "widget", label: "Workboard card" });
   });
 
   it("rejects protocol-relative tab paths that would iframe external content", () => {
     for (const path of ["//attacker.example/panel", "/\\attacker.example/panel"]) {
-      const { registry, register } = fixture();
+      const { register, reject } = fixture();
       register({ ...tab, path });
-      expect(registry.registry.controlUiDescriptors).toEqual([]);
-      expect(registry.registry.diagnostics).toContainEqual(
-        expect.objectContaining({ level: "error", pluginId: "reports" }),
-      );
+      reject();
     }
   });
 });

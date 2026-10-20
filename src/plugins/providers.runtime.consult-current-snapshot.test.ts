@@ -1,12 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   makePluginMetadataIndex as makeIndex,
   makePluginMetadataManifestRegistry,
   setCurrentPluginMetadataSnapshot,
 } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import type { PluginManifestRegistry } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
@@ -42,47 +40,38 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
 import { resolveExternalAuthProfilesWithPlugins } from "./provider-runtime.js";
 import { isPluginProvidersLoadInFlight } from "./providers.runtime.js";
 
-const WORKSPACE = "/workspace/a";
+let request = { config: {}, env: {}, workspaceDir: "/workspace/a" };
 
-function makeManifestRegistry(pluginId = "demo"): PluginManifestRegistry {
-  const registry = makePluginMetadataManifestRegistry(pluginId);
-  // Provider fixtures intentionally declare no command aliases.
-  for (const plugin of registry.plugins) {
-    plugin.commandAliases = [];
-  }
-  return registry;
-}
-
-function registerCurrentSnapshot(config: OpenClawConfig, workspaceDir = WORKSPACE) {
-  const index = makeIndex();
-  index.policyHash = resolveInstalledPluginIndexPolicyHash(config);
+function armFallbackLoad(index = makeIndex()) {
   loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
     source: "runtime",
     snapshot: index,
     diagnostics: [],
   });
-  const snapshot = loadPluginMetadataSnapshot({ config, env: {}, index, workspaceDir });
-  setCurrentPluginMetadataSnapshot(snapshot, { config, env: {}, workspaceDir });
-  loadPluginRegistrySnapshotWithMetadata.mockClear();
-  loadPluginManifestRegistryForInstalledIndex.mockClear();
-  return snapshot;
 }
 
-function armFallbackLoad() {
-  loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-    source: "runtime",
-    snapshot: makeIndex(),
-    diagnostics: [],
-  });
+function registerCurrentSnapshot() {
+  const index = makeIndex();
+  index.policyHash = resolveInstalledPluginIndexPolicyHash(request.config);
+  armFallbackLoad(index);
+  const snapshot = loadPluginMetadataSnapshot({ ...request, index });
+  setCurrentPluginMetadataSnapshot(snapshot, request);
+  loadPluginRegistrySnapshotWithMetadata.mockClear();
+  loadPluginManifestRegistryForInstalledIndex.mockClear();
 }
 
 describe("provider runtime consults the current plugin metadata snapshot", () => {
   beforeEach(() => {
+    request = { config: {}, env: {}, workspaceDir: "/workspace/a" };
     resetPluginRuntimeStateForTest();
     clearPluginMetadataLifecycleCaches();
     loadPluginRegistrySnapshotWithMetadata.mockReset();
     loadPluginManifestRegistryForInstalledIndex.mockReset();
-    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry());
+    const registry = makePluginMetadataManifestRegistry("demo");
+    for (const plugin of registry.plugins) {
+      plugin.commandAliases = [];
+    }
+    loadPluginManifestRegistryForInstalledIndex.mockReturnValue(registry);
   });
 
   afterEach(() => {
@@ -90,40 +79,31 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
     resetPluginRuntimeStateForTest();
   });
 
-  describe("isPluginProvidersLoadInFlight", () => {
-    it("reuses a compatible current snapshot without a direct disk load", () => {
-      const config: OpenClawConfig = {};
-      registerCurrentSnapshot(config);
+  it("reuses a compatible current snapshot for the in-flight check", () => {
+    registerCurrentSnapshot();
+    isPluginProvidersLoadInFlight(request);
 
-      isPluginProvidersLoadInFlight({ config, env: {}, workspaceDir: WORKSPACE });
-
-      expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
-      expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
-    });
-
-    it("falls back to a direct disk load when no current snapshot is registered", () => {
-      armFallbackLoad();
-
-      isPluginProvidersLoadInFlight({ config: {}, env: {}, workspaceDir: WORKSPACE });
-
-      expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalled();
-    });
+    expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
+    expect(loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
   });
 
-  describe("resolveExternalAuthProfilesWithPlugins", () => {
-    it("reuses a compatible current snapshot without a direct disk load", () => {
-      const config: OpenClawConfig = {};
-      registerCurrentSnapshot(config);
+  it("falls back to a direct disk load when no current snapshot is registered", () => {
+    armFallbackLoad();
 
-      const profiles = resolveExternalAuthProfilesWithPlugins({
-        config,
-        env: {},
-        workspaceDir: WORKSPACE,
-        context: { env: {}, store: { version: 1, profiles: {} } },
-      });
+    isPluginProvidersLoadInFlight(request);
 
-      expect(profiles).toEqual([]);
-      expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalled();
+  });
+
+  it("reuses a compatible current snapshot for external auth profiles", () => {
+    registerCurrentSnapshot();
+
+    const profiles = resolveExternalAuthProfilesWithPlugins({
+      ...request,
+      context: { env: {}, store: { version: 1, profiles: {} } },
     });
+
+    expect(profiles).toEqual([]);
+    expect(loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
   });
 });

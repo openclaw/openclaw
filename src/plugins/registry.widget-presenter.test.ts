@@ -17,12 +17,15 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-function currentPresenter(description: string): WidgetPresenter {
+function currentPresenter(
+  description: string,
+  match: Extract<WidgetPresenter, { target: "current_channel" }>["match"] = () => true,
+): WidgetPresenter {
   return {
     target: "current_channel",
     description,
     capabilities: { sourceKinds: ["html"] },
-    match: () => true,
+    match,
     availability: async () => ({ ok: true, value: { available: true } }),
     present: async () => ({
       ok: false,
@@ -31,11 +34,23 @@ function currentPresenter(description: string): WidgetPresenter {
   };
 }
 
+function fixture() {
+  const { config, registry } = createPluginRegistryFixture();
+  const register = (id: string, presenter: WidgetPresenter) =>
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id }),
+      register: (api) => api.registerWidgetPresenter(presenter),
+    });
+  return { registry: registry.registry, register };
+}
+
 describe("plugin widget presenter registry", () => {
   it("registers one presenter for a target and rejects a competing owner", async () => {
-    const { config, registry } = createPluginRegistryFixture();
+    const { registry, register } = fixture();
     const presenter: WidgetPresenter = {
-      target: "node_panel" as const,
+      target: "node_panel",
       description: "Show on a connected device panel",
       availability: async () => ({ ok: true, value: { available: true } }),
       present: async () => ({
@@ -43,25 +58,11 @@ describe("plugin widget presenter registry", () => {
         error: { code: "no_eligible_node", message: "none" },
       }),
     };
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id: "first-presenter" }),
-      register(api) {
-        api.registerWidgetPresenter(presenter);
-      },
-    });
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id: "second-presenter" }),
-      register(api) {
-        api.registerWidgetPresenter(presenter);
-      },
-    });
+    register("first-presenter", presenter);
+    register("second-presenter", presenter);
 
-    expect(registry.registry.widgetPresenters).toHaveLength(1);
-    const selected = registry.registry.widgetPresenters[0]!;
+    expect(registry.widgetPresenters).toHaveLength(1);
+    const selected = registry.widgetPresenters[0]!;
     expect(selected).toMatchObject({
       pluginId: "first-presenter",
       presenter: { target: "node_panel", description: "Show on a connected device panel" },
@@ -77,7 +78,7 @@ describe("plugin widget presenter registry", () => {
         title: "Panel",
       }),
     ).resolves.toEqual({ ok: false, error: { code: "no_eligible_node", message: "none" } });
-    expect(registry.registry.diagnostics).toContainEqual(
+    expect(registry.diagnostics).toContainEqual(
       expect.objectContaining({
         pluginId: "second-presenter",
         message: "widget presenter already registered for node_panel (first-presenter)",
@@ -86,33 +87,22 @@ describe("plugin widget presenter registry", () => {
   });
 
   it("allows multiple contextual presenters while keeping explicit targets unique", () => {
-    const { config, registry } = createPluginRegistryFixture();
+    const { registry, register } = fixture();
     for (const id of ["discord-presenter", "slack-presenter"]) {
-      registerTestPlugin({
-        registry,
-        config,
-        record: createPluginRecord({ id }),
-        register(api) {
-          api.registerWidgetPresenter({
-            target: "current_channel",
-            description: `Present through ${id}`,
-            capabilities: { sourceKinds: ["html"] },
-            match: (context) => context.messageChannel === id.split("-")[0],
-            availability: async () => ({ ok: true, value: { available: true } }),
-            present: async () => ({
-              ok: false,
-              error: { code: "unavailable", message: "not used" },
-            }),
-          });
-        },
-      });
+      register(
+        id,
+        currentPresenter(
+          `Present through ${id}`,
+          (context) => context.messageChannel === id.split("-")[0],
+        ),
+      );
     }
 
-    expect(registry.registry.widgetPresenters.map(({ pluginId }) => pluginId)).toEqual([
+    expect(registry.widgetPresenters.map(({ pluginId }) => pluginId)).toEqual([
       "discord-presenter",
       "slack-presenter",
     ]);
-    expect(registry.registry.diagnostics).toEqual([]);
+    expect(registry.diagnostics).toEqual([]);
   });
 
   it("adopts full-only presenters only from the matching lifecycle owner", () => {
@@ -137,16 +127,16 @@ describe("plugin widget presenter registry", () => {
   it("keeps request-scoped presenters ahead of the active lifecycle registry", () => {
     const active = createEmptyPluginRegistry();
     const scoped = createEmptyPluginRegistry();
-    active.widgetPresenters.push({
-      pluginId: "active",
-      presenter: currentPresenter("Active"),
-      source: "/tmp/active/index.ts",
-    });
-    scoped.widgetPresenters.push({
-      pluginId: "scoped",
-      presenter: currentPresenter("Scoped"),
-      source: "/tmp/scoped/index.ts",
-    });
+    for (const [registry, pluginId, description] of [
+      [active, "active", "Active"],
+      [scoped, "scoped", "Scoped"],
+    ] as const) {
+      registry.widgetPresenters.push({
+        pluginId,
+        presenter: currentPresenter(description),
+        source: `/tmp/${pluginId}/index.ts`,
+      });
+    }
     setActivePluginRegistry(active);
 
     expect(

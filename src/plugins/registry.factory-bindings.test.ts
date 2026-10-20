@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { Type } from "typebox";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
@@ -38,12 +38,24 @@ function createOwner(nativeCatalog = false, id = "factory-owner") {
   builder.registry.plugins.push(record);
   const api = builder.createApi(record, { config: {} });
   const instance = getPluginInstance(record)!;
+  const consumers: ReturnType<typeof instance.retainConsumer>[] = [];
+  onTestFinished(async () => {
+    for (const consumer of consumers) {
+      consumer.release();
+    }
+    await instance.dispose();
+  });
+  const retainConsumer = () => {
+    const consumer = instance.retainConsumer();
+    consumers.push(consumer);
+    return consumer;
+  };
   const expectScope = () => {
     expect(instance.hasActiveCall).toBe(true);
     expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(record.id);
     expect(getPluginRuntimeGatewayRequestScope()?.pluginRegistry).toBe(builder.registry);
   };
-  return { builder, api, instance, expectScope };
+  return { builder, api, instance, expectScope, retainConsumer };
 }
 
 function createTools(expectScope: () => void) {
@@ -78,38 +90,34 @@ describe("registered plugin factory bindings", () => {
   it("keeps provider-normalized tool data native and execution bound to its owner", async () => {
     const { builder, api, instance, expectScope } = createOwner();
     const { payloads, tools } = createTools(expectScope);
-    try {
-      api.registerProvider({
-        id: "factory-provider",
-        label: "Factory provider",
-        auth: [],
-        normalizeToolSchemas({ tools: input }) {
-          expectScope();
-          expect(this.id).toBe("factory-provider");
-          return input;
-        },
+    api.registerProvider({
+      id: "factory-provider",
+      label: "Factory provider",
+      auth: [],
+      normalizeToolSchemas({ tools: input }) {
+        expectScope();
+        expect(this.id).toBe("factory-provider");
+        return input;
+      },
+    });
+    const plugin = builder.registry.providers[0]!.provider;
+    const normalize = () =>
+      normalizeProviderToolSchemasWithPlugin({
+        provider: plugin.id,
+        runtimeHandle: { provider: plugin.id, plugin },
+        allowRuntimePluginLoad: false,
+        context: { provider: plugin.id, tools },
       });
-      const plugin = builder.registry.providers[0]!.provider;
-      const normalize = () =>
-        normalizeProviderToolSchemasWithPlugin({
-          provider: plugin.id,
-          runtimeHandle: { provider: plugin.id, plugin },
-          allowRuntimePluginLoad: false,
-          context: { provider: plugin.id, tools },
-        });
-      const normalized = normalize();
-      assert(normalized);
-      for (const [index, tool] of normalized.entries()) {
-        expect(tool.parameters).toBe(tools[index]!.parameters);
-        const execute = tool.execute;
-        expect(await execute("normalized-call", {})).toBe(payloads[index]);
-      }
-      await instance.dispose();
-      expect(normalize).toThrow("reloaded or disabled");
-      expect(() => normalized[0]!.execute("retired-call", {})).toThrow("reloaded or disabled");
-    } finally {
-      await instance.dispose();
+    const normalized = normalize();
+    assert(normalized);
+    for (const [index, tool] of normalized.entries()) {
+      expect(tool.parameters).toBe(tools[index]!.parameters);
+      const execute = tool.execute;
+      expect(await execute("normalized-call", {})).toBe(payloads[index]);
     }
+    await instance.dispose();
+    expect(normalize).toThrow("reloaded or disabled");
+    expect(() => normalized[0]!.execute("retired-call", {})).toThrow("reloaded or disabled");
   });
 
   it.each(["sync", "callback"] as const)(
@@ -164,58 +172,53 @@ describe("registered plugin factory bindings", () => {
   ])(
     "binds a $kind tool factory's $shape result to its consumer while data crosses by reference",
     async ({ kind, shape }) => {
-      const { builder, api, instance, expectScope } = createOwner();
+      const { builder, api, instance, expectScope, retainConsumer } = createOwner();
       const { names, payloads, tools } = createTools(expectScope);
-      const consumer = instance.retainConsumer();
+      const consumer = retainConsumer();
       const create = () => {
         expectScope();
         return shape === "array" ? tools : tools[0]!;
       };
-      try {
-        api.registerTool(kind === "static" ? tools[0]! : { contextVersion: 2, create }, {
-          names: shape === "single" ? names.slice(0, 1) : names,
-          workspaceAccess: true,
-        });
-        expect(builder.registry.diagnostics).toEqual([]);
-        expect(builder.registry.tools[0]?.workspaceAccess).toBe(true);
-        const factory = builder.registry.tools[0]!.factory;
-        const context = { assertInvocationCurrent() {} };
-        const rootResult = factory(context);
-        assert(rootResult);
-        const rootExecutions = (Array.isArray(rootResult) ? rootResult : [rootResult]).map(
-          (tool) => tool.execute,
-        );
-        const resolved = consumer.wrap(factory)(context);
-        assert(resolved);
-        const retained: Array<() => Promise<unknown>> = [];
-        const delivered: Array<{ details: unknown }> = [];
-        for (const tool of Array.isArray(resolved) ? resolved : [resolved]) {
-          const execute = tool.execute;
-          const result = await execute("synthetic-call", {});
-          expect(tool.name).toBe(names[retained.length]);
-          expect(result).toBe(payloads[retained.length]);
-          delivered.push(result);
-          retained.push(() => execute("late-call", {}));
-        }
-        expect(retained).toHaveLength(shape === "array" ? 2 : 1);
-        consumer.release();
-        for (const execute of retained) {
-          expect(execute).toThrow("consumer is closed");
-        }
-        for (const [index, execute] of rootExecutions.entries()) {
-          expect(await execute("live-root-call", {})).toBe(payloads[index]);
-        }
-        await instance.dispose();
-        for (const execute of rootExecutions) {
-          expect(() => execute("retired-root-call", {})).toThrow("reloaded or disabled");
-        }
-        for (const [index, result] of delivered.entries()) {
-          expect(result.details).toBe(payloads[index]!.details);
-          expect(payloads[index]!.details.read()).toBe(names[index]);
-        }
-      } finally {
-        consumer.release();
-        await instance.dispose();
+      api.registerTool(kind === "static" ? tools[0]! : { contextVersion: 2, create }, {
+        names: shape === "single" ? names.slice(0, 1) : names,
+        workspaceAccess: true,
+      });
+      expect(builder.registry.diagnostics).toEqual([]);
+      expect(builder.registry.tools[0]?.workspaceAccess).toBe(true);
+      const factory = builder.registry.tools[0]!.factory;
+      const context = { assertInvocationCurrent() {} };
+      const rootResult = factory(context);
+      assert(rootResult);
+      const rootExecutions = (Array.isArray(rootResult) ? rootResult : [rootResult]).map(
+        (tool) => tool.execute,
+      );
+      const resolved = consumer.wrap(factory)(context);
+      assert(resolved);
+      const retained: Array<() => Promise<unknown>> = [];
+      const delivered: Array<{ details: unknown }> = [];
+      for (const tool of Array.isArray(resolved) ? resolved : [resolved]) {
+        const execute = tool.execute;
+        const result = await execute("synthetic-call", {});
+        expect(tool.name).toBe(names[retained.length]);
+        expect(result).toBe(payloads[retained.length]);
+        delivered.push(result);
+        retained.push(() => execute("late-call", {}));
+      }
+      expect(retained).toHaveLength(shape === "array" ? 2 : 1);
+      consumer.release();
+      for (const execute of retained) {
+        expect(execute).toThrow("consumer is closed");
+      }
+      for (const [index, execute] of rootExecutions.entries()) {
+        expect(await execute("live-root-call", {})).toBe(payloads[index]);
+      }
+      await instance.dispose();
+      for (const execute of rootExecutions) {
+        expect(() => execute("retired-root-call", {})).toThrow("reloaded or disabled");
+      }
+      for (const [index, result] of delivered.entries()) {
+        expect(result.details).toBe(payloads[index]!.details);
+        expect(payloads[index]!.details.read()).toBe(names[index]);
       }
     },
   );
@@ -223,47 +226,42 @@ describe("registered plugin factory bindings", () => {
   it.each(["apply", "bind"] as const)(
     "keeps registered factory results executable through Function.%s",
     async (helper) => {
-      const { builder, api, instance, expectScope } = createOwner();
+      const { builder, api, instance, expectScope, retainConsumer } = createOwner();
       const { names, payloads, tools } = createTools(expectScope);
-      const consumer = helper === "bind" ? instance.retainConsumer() : undefined;
-      try {
-        api.registerTool(
-          () => {
-            expectScope();
-            return tools[0]!;
-          },
-          { names },
-        );
-        const factory = builder.registry.tools[0]!.factory;
-        const invoke =
-          helper === "bind"
-            ? consumer!.wrap(factory.bind(undefined, {}))
-            : // oxlint-disable-next-line no-useless-call -- The test exercises the boundary's Function.prototype.apply path.
-              () => factory.apply(undefined, [{}]);
-        const tool = invoke();
-        assert(tool && !Array.isArray(tool));
-        const execute = tool.execute;
-        expect(await execute("synthetic-helper-call", {})).toBe(payloads[0]);
-        if (consumer) {
-          consumer.release();
-          expect(() => execute("closed-consumer-call", {})).toThrow("consumer is closed");
-        }
-        await instance.dispose();
-        expect(() => execute("late-helper-call", {})).toThrow(
-          consumer ? "consumer is closed" : "reloaded or disabled",
-        );
-      } finally {
-        consumer?.release();
-        await instance.dispose();
+      const consumer = helper === "bind" ? retainConsumer() : undefined;
+      api.registerTool(
+        () => {
+          expectScope();
+          return tools[0]!;
+        },
+        { names },
+      );
+      const factory = builder.registry.tools[0]!.factory;
+      const invoke =
+        helper === "bind"
+          ? consumer!.wrap(factory.bind(undefined, {}))
+          : // oxlint-disable-next-line no-useless-call -- The test exercises the boundary's Function.prototype.apply path.
+            () => factory.apply(undefined, [{}]);
+      const tool = invoke();
+      assert(tool && !Array.isArray(tool));
+      const execute = tool.execute;
+      expect(await execute("synthetic-helper-call", {})).toBe(payloads[0]);
+      if (consumer) {
+        consumer.release();
+        expect(() => execute("closed-consumer-call", {})).toThrow("consumer is closed");
       }
+      await instance.dispose();
+      expect(() => execute("late-helper-call", {})).toThrow(
+        consumer ? "consumer is closed" : "reloaded or disabled",
+      );
     },
   );
 
   it.each([false, true])(
     "keeps catalog continuation data native and its callback scoped (native gate: %s)",
     async (nativeCatalog) => {
-      const { builder, api, instance, expectScope } = createOwner(nativeCatalog);
-      const consumer = instance.retainConsumer();
+      const { builder, api, instance, expectScope, retainConsumer } = createOwner(nativeCatalog);
+      const consumer = retainConsumer();
       const upstream = {
         kind: "codex-app-server" as const,
         ref: { threadId: "synthetic-thread", nested: ["source"] },
@@ -280,98 +278,88 @@ describe("registered plugin factory bindings", () => {
         },
       };
       let next = result;
-      try {
-        api.registerSessionCatalog({
-          id: "factory-catalog",
-          label: "Factory catalog",
-          supportsProcessHomeIsolation: true,
-          list: async () => [],
-          read: async () => ({ hostId: "synthetic-host", threadId: "synthetic-thread", items: [] }),
-          async continueSession() {
-            expectScope();
-            return next;
-          },
-        });
-        expect(builder.registry.diagnostics).toEqual([]);
-        const provider = builder.registry.sessionCatalogs[0]!.provider;
-        const request = { hostId: "synthetic-host", threadId: "synthetic-thread" };
-        const root = await provider.continueSession!(request);
-        const retained = await consumer.wrap(provider).continueSession!(request);
-        for (const value of [root, retained]) {
-          expect(value.upstream).toBe(upstream);
-          expect(value.conversationBinding).toBe(conversationBinding);
-          expect(structuredClone(value.upstream)).toEqual(upstream);
-          expect(structuredClone(value.conversationBinding)).toEqual(conversationBinding);
-        }
-        const rootCallback = root.afterConversationBound!;
-        const consumerCallback = retained.afterConversationBound!;
-        await consumerCallback();
-        next = plain;
-        expect(await provider.continueSession!(request)).toBe(plain);
-        consumer.release();
-        expect(() => consumerCallback()).toThrow("consumer is closed");
-        await rootCallback();
-        await instance.dispose();
-        expect(() => rootCallback()).toThrow("reloaded or disabled");
-        expect(structuredClone(upstream)).toEqual(upstream);
-      } finally {
-        consumer.release();
-        await instance.dispose();
+      api.registerSessionCatalog({
+        id: "factory-catalog",
+        label: "Factory catalog",
+        supportsProcessHomeIsolation: true,
+        list: async () => [],
+        read: async () => ({ hostId: "synthetic-host", threadId: "synthetic-thread", items: [] }),
+        async continueSession() {
+          expectScope();
+          return next;
+        },
+      });
+      expect(builder.registry.diagnostics).toEqual([]);
+      const provider = builder.registry.sessionCatalogs[0]!.provider;
+      const request = { hostId: "synthetic-host", threadId: "synthetic-thread" };
+      const root = await provider.continueSession!(request);
+      const retained = await consumer.wrap(provider).continueSession!(request);
+      for (const value of [root, retained]) {
+        expect(value.upstream).toBe(upstream);
+        expect(value.conversationBinding).toBe(conversationBinding);
+        expect(structuredClone(value.upstream)).toEqual(upstream);
+        expect(structuredClone(value.conversationBinding)).toEqual(conversationBinding);
       }
+      const rootCallback = root.afterConversationBound!;
+      const consumerCallback = retained.afterConversationBound!;
+      await consumerCallback();
+      next = plain;
+      expect(await provider.continueSession!(request)).toBe(plain);
+      consumer.release();
+      expect(() => consumerCallback()).toThrow("consumer is closed");
+      await rootCallback();
+      await instance.dispose();
+      expect(() => rootCallback()).toThrow("reloaded or disabled");
+      expect(structuredClone(upstream)).toEqual(upstream);
     },
   );
 
   it("binds static channel tool arrays before consumers iterate them", async () => {
-    const { builder, api, instance, expectScope } = createOwner();
+    const { builder, api, instance, expectScope, retainConsumer } = createOwner();
     const { names, payloads, tools } = createTools(expectScope);
-    const consumer = instance.retainConsumer();
-    try {
-      api.registerChannel({
-        plugin: {
+    const consumer = retainConsumer();
+    api.registerChannel({
+      plugin: {
+        id: "factory-channel",
+        meta: {
           id: "factory-channel",
-          meta: {
-            id: "factory-channel",
-            label: "Factory channel",
-            selectionLabel: "Factory channel",
-            docsPath: "/channels/factory-channel",
-            blurb: "Synthetic channel",
-          },
-          capabilities: { chatTypes: ["direct"] },
-          config: { listAccountIds: () => [], resolveAccount: () => undefined },
-          agentTools: tools,
+          label: "Factory channel",
+          selectionLabel: "Factory channel",
+          docsPath: "/channels/factory-channel",
+          blurb: "Synthetic channel",
         },
-      });
-      expect(builder.registry.diagnostics).toEqual([]);
-      const channel = builder.registry.channels[0]!.plugin;
-      const entry = consumer.wrap(channel).agentTools;
-      assert(entry);
-      const registered = typeof entry === "function" ? entry({}) : entry;
-      const retained: Array<() => Promise<unknown>> = [];
-      for (const tool of registered) {
-        const execute = tool.execute;
-        expect(tool.name).toBe(names[retained.length]);
-        expect(await execute("synthetic-channel-call", {})).toBe(payloads[retained.length]);
-        retained.push(() => execute("late-channel-call", {}));
-      }
-      expect(retained).toHaveLength(2);
-      consumer.release();
-      for (const execute of retained) {
-        expect(execute).toThrow("consumer is closed");
-      }
-      const rootEntry = channel.agentTools;
-      assert(rootEntry);
-      const rootTools = typeof rootEntry === "function" ? rootEntry({}) : rootEntry;
-      const rootExecutions = rootTools.map((tool) => tool.execute);
-      for (const [index, execute] of rootExecutions.entries()) {
-        expect(await execute("live-root-channel-call", {})).toBe(payloads[index]);
-      }
-      await instance.dispose();
-      for (const execute of rootExecutions) {
-        expect(() => execute("retired-root-channel-call", {})).toThrow("reloaded or disabled");
-      }
-    } finally {
-      consumer.release();
-      await instance.dispose();
+        capabilities: { chatTypes: ["direct"] },
+        config: { listAccountIds: () => [], resolveAccount: () => undefined },
+        agentTools: tools,
+      },
+    });
+    expect(builder.registry.diagnostics).toEqual([]);
+    const channel = builder.registry.channels[0]!.plugin;
+    const entry = consumer.wrap(channel).agentTools;
+    assert(entry);
+    const registered = typeof entry === "function" ? entry({}) : entry;
+    const retained: Array<() => Promise<unknown>> = [];
+    for (const tool of registered) {
+      const execute = tool.execute;
+      expect(tool.name).toBe(names[retained.length]);
+      expect(await execute("synthetic-channel-call", {})).toBe(payloads[retained.length]);
+      retained.push(() => execute("late-channel-call", {}));
+    }
+    expect(retained).toHaveLength(2);
+    consumer.release();
+    for (const execute of retained) {
+      expect(execute).toThrow("consumer is closed");
+    }
+    const rootEntry = channel.agentTools;
+    assert(rootEntry);
+    const rootTools = typeof rootEntry === "function" ? rootEntry({}) : rootEntry;
+    const rootExecutions = rootTools.map((tool) => tool.execute);
+    for (const [index, execute] of rootExecutions.entries()) {
+      expect(await execute("live-root-channel-call", {})).toBe(payloads[index]);
+    }
+    await instance.dispose();
+    for (const execute of rootExecutions) {
+      expect(() => execute("retired-root-channel-call", {})).toThrow("reloaded or disabled");
     }
   });
 
@@ -390,39 +378,35 @@ describe("registered plugin factory bindings", () => {
         return this.#result;
       }
     }
-    try {
-      api.registerWebSearchProvider({
-        id: "factory-search",
-        label: "Factory search",
-        hint: "Synthetic provider",
-        envVars: [],
-        placeholder: "",
-        signupUrl: "https://example.test",
-        credentialPath: "plugins.entries.factory-owner.config.apiKey",
-        getCredentialValue: () => undefined,
-        setCredentialValue() {},
-        createTool() {
-          expectScope();
-          return new SearchTool();
-        },
-      });
-      expect(builder.registry.diagnostics).toEqual([]);
-      const [provider] = mapRegistryProviders({
-        registry: builder.registry,
-        entries: builder.registry.webSearchProviders,
-      });
-      assert(provider);
-      const tool = provider.createTool({});
-      assert(tool);
-      const execute = tool.execute;
-      const result = await execute({ query: "synthetic" });
-      expect(result).toBe(payload);
-      await instance.dispose();
-      expect(() => execute({ query: "late" })).toThrow("reloaded or disabled");
-      expect(payload.read()).toBe("retained result");
-    } finally {
-      await instance.dispose();
-    }
+    api.registerWebSearchProvider({
+      id: "factory-search",
+      label: "Factory search",
+      hint: "Synthetic provider",
+      envVars: [],
+      placeholder: "",
+      signupUrl: "https://example.test",
+      credentialPath: "plugins.entries.factory-owner.config.apiKey",
+      getCredentialValue: () => undefined,
+      setCredentialValue() {},
+      createTool() {
+        expectScope();
+        return new SearchTool();
+      },
+    });
+    expect(builder.registry.diagnostics).toEqual([]);
+    const [provider] = mapRegistryProviders({
+      registry: builder.registry,
+      entries: builder.registry.webSearchProviders,
+    });
+    assert(provider);
+    const tool = provider.createTool({});
+    assert(tool);
+    const execute = tool.execute;
+    const result = await execute({ query: "synthetic" });
+    expect(result).toBe(payload);
+    await instance.dispose();
+    expect(() => execute({ query: "late" })).toThrow("reloaded or disabled");
+    expect(payload.read()).toBe("retained result");
   });
 });
 
