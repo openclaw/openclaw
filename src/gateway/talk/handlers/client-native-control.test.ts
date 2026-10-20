@@ -26,8 +26,8 @@ import { readOwnedVoiceSessionFacts } from "../../../talk/client-voice-session-s
 import { flushClientVoiceSessionWrites } from "../../../talk/client-voice-session.js";
 import { VoiceTranscriptOperationRegistry } from "../../../talk/voice-transcript.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import * as chatSendHandler from "../../server-methods/chat-send-handler.js";
 import { buildMockOpenAiResponsesProvider } from "../../test-openai-responses-model.js";
-import * as talkAgentConsult from "../agent-consult.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
 import {
   forgetLegacyVoiceBinding,
@@ -658,12 +658,10 @@ describe("native Talk through the public OpenAI plugin registration", () => {
           return selected;
         });
       // Agent execution is downstream of the persisted binding this case protects.
-      const consult = vi
-        .spyOn(talkAgentConsult, "startTalkRealtimeAgentConsult")
-        .mockResolvedValue({
-          ok: true,
-          runId: "synthetic-legacy-run",
-          idempotencyKey: "synthetic-legacy-call",
+      const chatSend = vi
+        .spyOn(chatSendHandler, "handleTrustedInternalChatSend")
+        .mockImplementation(async ({ respond }) => {
+          respond(true, { runId: "synthetic-legacy-run", status: "started" });
         });
       const calls = Promise.all(
         ["first", "second"].map((callId) =>
@@ -683,7 +681,7 @@ describe("native Talk through the public OpenAI plugin registration", () => {
         );
         release.resolve();
         await calls;
-        expect(consult).toHaveBeenCalledTimes(2);
+        expect(chatSend).toHaveBeenCalledTimes(2);
         const binding = readLegacyVoiceBinding(CONNECTION_ID, SESSION_KEY);
         expect(binding).toBeTypeOf("string");
         expect(await resolveOpenClientVoiceSessionId(nativeSessionScope)).toBe(binding);
@@ -691,7 +689,7 @@ describe("native Talk through the public OpenAI plugin registration", () => {
         release.resolve();
         await Promise.allSettled([calls]);
         reader.mockRestore();
-        consult.mockRestore();
+        chatSend.mockRestore();
         forgetLegacyVoiceBinding(
           CONNECTION_ID,
           SESSION_KEY,

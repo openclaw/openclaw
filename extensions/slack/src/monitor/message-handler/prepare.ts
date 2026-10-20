@@ -119,7 +119,6 @@ function mergeSlackAssistantThreadContext(
   return {
     assistantChannelId: primary.assistantChannelId || fallback.assistantChannelId,
     threadTs: primary.threadTs || fallback.threadTs,
-    userId: primary.userId ?? fallback.userId,
     channelId: primary.channelId ?? fallback.channelId,
     teamId: primary.teamId ?? fallback.teamId,
     enterpriseId: primary.enterpriseId !== undefined ? primary.enterpriseId : fallback.enterpriseId,
@@ -148,7 +147,6 @@ function resolveSlackMessageAssistantThreadContext(
   return {
     assistantChannelId,
     threadTs,
-    userId: normalizeOptionalString(thread.user_id) ?? message.user,
     channelId: normalizeOptionalString(context?.channel_id),
     teamId: normalizeOptionalString(context?.team_id),
     enterpriseId:
@@ -176,7 +174,6 @@ async function restoreSlackAssistantThreadContextFromMetadata(params: {
       client: params.eventScope?.client ?? params.ctx.app.client,
       channelId: params.message.channel,
       threadTs,
-      userId: params.message.user,
     });
   } catch (err) {
     logVerbose(

@@ -425,43 +425,6 @@ describe("matrix doctor contract state migrations", () => {
     await expect(queue.enqueue("$near-expiry", {})).resolves.toMatchObject({ kind: "accepted" });
   });
 
-  it("keeps sources when the completion namespace is full and imports them after capacity frees", async () => {
-    const now = Date.now();
-    const storageRootDir = accountStorageRoot(stateDir, "home");
-    const databasePath = writeSqliteDedupeSource(storageRootDir, "home", "$legacy", now - 60_000);
-    const sourceBytes = fs.readFileSync(databasePath);
-    const completionStore = params.context.openPluginStateKeyedStore<{ value: number }>({
-      namespace: "inbound-dedupe-migration-state",
-      maxEntries: 4,
-      overflowPolicy: "reject-new",
-      env: params.env,
-    });
-    for (let index = 0; index < 4; index++) {
-      await completionStore.register(`other-migration-${index}`, { value: index });
-    }
-
-    const result = await migrate(DEDUPE);
-
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining("Failed reserving Matrix inbound dedupe migration completion:"),
-    ]);
-    expect(fs.readFileSync(databasePath)).toEqual(sourceBytes);
-    await expect(completionStore.entries()).resolves.toHaveLength(4);
-    await expect(detect(DEDUPE)).resolves.not.toBeNull();
-
-    await completionStore.delete("other-migration-0");
-
-    await expect(migrate(DEDUPE)).resolves.toEqual(dedupeMigrationResult([storageRootDir], 1));
-    const queue = createChannelIngressQueueForTests({
-      channelId: "matrix",
-      accountId: "home",
-      stateDir,
-    });
-    await expect(queue.enqueue("$legacy", {})).resolves.toMatchObject({ kind: "completed" });
-    await expect(detect(DEDUPE)).resolves.toBeNull();
-  });
-
   it("moves current replay markers to account-scoped ingress after the historical migration completed", async () => {
     const store = params.context.openPluginStateKeyedStore<PersistentDedupeEntry>({
       namespace: resolvePersistentDedupePluginStateNamespace({

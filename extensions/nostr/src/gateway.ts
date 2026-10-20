@@ -388,6 +388,6 @@ export const nostrOutboundAdapter = {
   },
 } satisfies ChannelOutboundAdapter;
 
-export function getActiveNostrBuses(): Map<string, NostrBusHandle> {
-  return new Map(activeBuses);
+export function getActiveNostrBuses(): ReadonlyMap<string, NostrBusHandle> {
+  return activeBuses;
 }

@@ -621,24 +621,7 @@ export async function beginSessionEffect(
     effect.phase = "writer";
     logAdmission("waiting", "store-writer");
     let writerStarted = false;
-    let removeAbort = () => {};
-    const aborted = new Promise<never>((_, reject) => {
-      const abort = () => {
-        if (!writerStarted) {
-          reject(
-            signal.reason instanceof Error
-              ? signal.reason
-              : new Error("Session effect cancelled", { cause: signal.reason }),
-          );
-        }
-      };
-      signal.addEventListener("abort", abort, { once: true });
-      removeAbort = () => signal.removeEventListener("abort", abort);
-      if (signal.aborted) {
-        abort();
-      }
-    });
-    const writer = runExclusiveSessionStoreWrite(
+    await runExclusiveSessionStoreWrite(
       target.storeScope,
       async () => {
         // A withdrawn queue callback has no writer capability or user work left.
@@ -655,12 +638,14 @@ export async function beginSessionEffect(
         signal.throwIfAborted();
       },
       { reentrant: true, identities: params.storeWriterIdentities, signal },
-    );
-    try {
-      await Promise.race([writer, aborted]);
-    } finally {
-      removeAbort();
-    }
+    ).catch((error: unknown) => {
+      if (!writerStarted && signal.aborted && Object.is(error, signal.reason)) {
+        throw error instanceof Error
+          ? error
+          : new Error("Session effect cancelled", { cause: error });
+      }
+      throw error;
+    });
     effect.phase = "acquired";
     diagnostic?.mark("run");
     logAdmission("settled", "acquired");

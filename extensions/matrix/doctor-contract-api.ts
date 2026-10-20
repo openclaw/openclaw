@@ -31,9 +31,7 @@ import {
   matrixReplayGuardIngressMigration,
   readLegacyInboundDedupeSqliteSource,
   recordMatrixInboundDedupeMigrationCompletion,
-  reserveMatrixInboundDedupeMigrationCompletion,
   retireLegacyInboundDedupeSqliteRows,
-  verifyMatrixInboundDedupeSourcesRetired,
   type LegacyInboundDedupeMarker,
 } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { walkMatrixStateFiles } from "./src/matrix/state-layout-walk.js";
@@ -306,27 +304,13 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       if (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env)) {
         return { changes, warnings };
       }
-      try {
-        await reserveMatrixInboundDedupeMigrationCompletion(params.context, params.env);
-      } catch (err) {
-        warnings.push(
-          `Failed reserving Matrix inbound dedupe migration completion: ${String(err)}; left legacy sources in place`,
-        );
-        return { changes, warnings };
-      }
       if (sources.status === "incomplete") {
         warnings.push(...sources.warnings);
       }
 
-      const recordCompletionIfClean = async (verifyRetirement = false) => {
+      const recordCompletionIfClean = async () => {
         if (warnings.length > 0) {
           return;
-        }
-        if (verifyRetirement) {
-          warnings.push(...(await verifyMatrixInboundDedupeSourcesRetired(params.stateDir)));
-          if (warnings.length > 0) {
-            return;
-          }
         }
         try {
           await recordMatrixInboundDedupeMigrationCompletion(params.context, params.env);
@@ -344,8 +328,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
         }
       };
 
-      // Gather every marker first so the capacity-aware import keeps the
-      // globally newest ones instead of whichever storage root imports last.
+      // Gather markers together so the ingress owner keeps the newest duplicate identity.
       const gathered: LegacyInboundDedupeMarker[] = [];
       const sqliteRootsToRetire: string[] = [];
       for (const storageRootDir of sources.sqliteRoots) {
@@ -394,7 +377,7 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           );
         }
       }
-      await recordCompletionIfClean(true);
+      await recordCompletionIfClean();
       return { changes, warnings };
     },
   },

@@ -7,7 +7,7 @@ import {
   LLAMA_SERVER_BUILD,
   LLAMA_SERVER_COMMIT,
   selectLlamaServerAsset,
-  type WindowsVcRuntimeDependency,
+  type LlamaServerDependency,
 } from "./llama-server-assets.js";
 import { ensureLlamaServerInstalled } from "./llama-server-install.js";
 
@@ -56,7 +56,7 @@ async function createFixture() {
   const bundle = Buffer.alloc(96, 0x5a);
   bundle.write("MSCF", containerOffset, "ascii");
   bundle.writeUInt32LE(containerSize, containerOffset + 8);
-  const runtime: WindowsVcRuntimeDependency = {
+  const runtime: Extract<LlamaServerDependency, { archive: "vc-redist" }> = {
     archive: "vc-redist",
     name: "runtime.exe",
     url: "https://example.invalid/runtime.exe",

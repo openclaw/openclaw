@@ -24,6 +24,7 @@ import { withInstallationTarget } from "../infra/installation-target-context.js"
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { startSessionControllerInterruption } from "../sessions/session-controller.lifecycle.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import type { SkillSnapshot } from "../skills/types.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -161,7 +162,7 @@ const state = vi.hoisted(() => ({
     entries: [],
     routeVariants: [],
   })),
-  buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
+  buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): SkillSnapshot => ({
     prompt: "",
     skills: [],
     resolvedSkills: [],
@@ -658,7 +659,8 @@ vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: () => ({ eligible: false }),
 }));
 
-vi.mock("../skills/runtime/session-snapshot.js", () => ({
+vi.mock("../skills/runtime/session-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/runtime/session-snapshot.js")>()),
   resolveReusableWorkspaceSkillSnapshot: (params: {
     workspaceDir: string;
     existingSnapshot?: { resolvedSkills?: unknown };
@@ -674,25 +676,20 @@ vi.mock("../skills/runtime/session-snapshot.js", () => ({
           version: 0,
         },
         shouldRefresh: !params.existingSnapshot,
-        snapshotVersion: 0,
       };
     }
     if (params.existingSnapshot?.resolvedSkills !== undefined) {
       return {
         snapshot: params.existingSnapshot,
         shouldRefresh: false,
-        snapshotVersion: 0,
       };
     }
-    const rebuilt = state.buildWorkspaceSkillSnapshotMock(params.workspaceDir, params) as {
-      resolvedSkills?: unknown;
-    };
+    const rebuilt = state.buildWorkspaceSkillSnapshotMock(params.workspaceDir, params);
     return {
       snapshot: params.existingSnapshot
-        ? { ...params.existingSnapshot, resolvedSkills: rebuilt?.resolvedSkills }
+        ? { ...params.existingSnapshot, resolvedSkills: rebuilt.resolvedSkills }
         : rebuilt,
       shouldRefresh: !params.existingSnapshot,
-      snapshotVersion: 0,
     };
   },
 }));
