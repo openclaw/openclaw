@@ -33,6 +33,25 @@ const design = {
   layers: { back: "", left_prop: "", right_prop: "", shell_overlay: "", accessory: "" },
 };
 
+function completionResult(text: string) {
+  return {
+    assistant: {
+      ...isolatedAssistant([{ type: "text", text }]),
+      provider: "test-provider",
+      model: "allowed",
+    },
+  };
+}
+
+function route(dispatch: ReturnType<typeof vi.fn>) {
+  return {
+    selection: {
+      selectedHarnessId: "test-harness",
+      harness: { id: "test-harness", runIsolatedCompletionV2: dispatch },
+    },
+  };
+}
+
 beforeEach(() => {
   resetIsolatedCompletionTestState();
   utility.prepare.mockReset().mockResolvedValue({
@@ -106,19 +125,8 @@ async function generate(
 }
 
 it("returns a preview through the real handler and isolated completion owner", async () => {
-  const dispatch = vi.fn(async () => ({
-    assistant: {
-      ...isolatedAssistant([{ type: "text", text: JSON.stringify(design) }]),
-      provider: "test-provider",
-      model: "allowed",
-    },
-  }));
-  utility.route.mockResolvedValue({
-    selection: {
-      selectedHarnessId: "test-harness",
-      harness: { id: "test-harness", runIsolatedCompletionV2: dispatch },
-    },
-  });
+  const dispatch = vi.fn(async () => completionResult(JSON.stringify(design)));
+  utility.route.mockResolvedValue(route(dispatch));
   const respond = await generate(operator().authority);
   expect(dispatch).toHaveBeenCalledOnce();
   expect(respond).toHaveBeenCalledWith(
@@ -144,12 +152,7 @@ it.each(["device", "model"] as const)(
           access.revokeModel();
         }
       }
-      return {
-        selection: {
-          selectedHarnessId: "test-harness",
-          harness: { id: "test-harness", runIsolatedCompletionV2: dispatch },
-        },
-      };
+      return route(dispatch);
     });
     const respond = await generate(access.authority, () => deviceCurrent);
     expect(respond).toHaveBeenCalledWith(
@@ -167,20 +170,9 @@ it("does not retry or publish after model access is revoked during the first com
   const access = operator();
   const dispatch = vi.fn(async () => {
     access.revokeModel();
-    return {
-      assistant: {
-        ...isolatedAssistant([{ type: "text", text: "invalid design" }]),
-        provider: "test-provider",
-        model: "allowed",
-      },
-    };
+    return completionResult("invalid design");
   });
-  utility.route.mockResolvedValue({
-    selection: {
-      selectedHarnessId: "test-harness",
-      harness: { id: "test-harness", runIsolatedCompletionV2: dispatch },
-    },
-  });
+  utility.route.mockResolvedValue(route(dispatch));
   const respond = await generate(access.authority);
   expect(respond).toHaveBeenCalledWith(
     false,

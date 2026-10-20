@@ -36,6 +36,11 @@ type AgentDeleteFilesystemHarness = {
 
 export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesystemHarness): void {
   const { mocks, makeCall, makeFileStat, expectNotTrashed, expectTrashedWithinParent } = harness;
+  const deleteAgent = async () => {
+    const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
+    await promise;
+    return respond;
+  };
   describe("filesystem cleanup", () => {
     const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -50,10 +55,7 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
         return stat;
       });
 
-      const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
-      await promise;
-
-      expectPendingDeletion(respond, {
+      expectPendingDeletion(await deleteAgent(), {
         failed: expect.arrayContaining([
           { path: "/workspace/test-agent", reason: retired.message },
         ]),
@@ -87,10 +89,7 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
         );
         mocks.fsReadlink.mockImplementation(async (pathname) => await actualFs.readlink(pathname));
 
-        const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
-        await promise;
-
-        expectRespondOk(respond, { ok: true });
+        expectRespondOk(await deleteAgent(), { ok: true });
         expectNotTrashed(decoy);
         expectTrashedWithinParent(workspaceLink);
         expect(mocks.deleteWorkspaceState).toHaveBeenCalled();
@@ -112,10 +111,7 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
         return "/trashed";
       });
 
-      const { respond, promise } = makeCall("agents.delete", { agentId: "test-agent" });
-      await promise;
-
-      expectPendingDeletion(respond, {
+      expectPendingDeletion(await deleteAgent(), {
         failed: [{ path: workspaceDir, reason: "trash destination missing" }],
       });
       await expect(actualFs.stat(workspaceDir)).resolves.toBeDefined();

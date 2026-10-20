@@ -57,33 +57,29 @@ export function registerAgentDeletionAuthorityTests({
     ];
     const approvals = new Set(["test-agent", "other-agent"]);
     const events: string[] = [];
-    mocks.cronRemoveAgentJobsTransactional.mockImplementation(
-      async (agentId: string, commit: () => Promise<unknown>) => {
-        const snapshot = structuredClone(cronJobs);
-        cronJobs.splice(0, cronJobs.length, ...cronJobs.filter((job) => job.agentId !== agentId));
-        events.push("cron");
-        try {
-          return await commit();
-        } catch (error) {
-          cronJobs.splice(0, cronJobs.length, ...snapshot);
-          throw error;
+    mocks.cronRemoveAgentJobsTransactional.mockImplementation(async (agentId, commit) => {
+      const snapshot = structuredClone(cronJobs);
+      cronJobs.splice(0, cronJobs.length, ...cronJobs.filter((job) => job.agentId !== agentId));
+      events.push("cron");
+      try {
+        return await commit();
+      } catch (error) {
+        cronJobs.splice(0, cronJobs.length, ...snapshot);
+        throw error;
+      }
+    });
+    mocks.withAgentExecApprovalsRemoved.mockImplementation(async (agentId, commit) => {
+      const existed = approvals.delete(agentId);
+      events.push("approvals");
+      try {
+        return await commit();
+      } catch (error) {
+        if (existed) {
+          approvals.add(agentId);
         }
-      },
-    );
-    mocks.withAgentExecApprovalsRemoved.mockImplementation(
-      async (agentId: string, commit: () => Promise<unknown>) => {
-        const existed = approvals.delete(agentId);
-        events.push("approvals");
-        try {
-          return await commit();
-        } catch (error) {
-          if (existed) {
-            approvals.add(agentId);
-          }
-          throw error;
-        }
-      },
-    );
+        throw error;
+      }
+    });
     mocks.writeConfigFile.mockImplementationOnce(async () => {
       expect(memorySessionActorOwners.read(memoryOwner)).toBeUndefined();
       expect(memorySessionActorOwners.read(survivor)).toBe(survivor);
@@ -99,9 +95,7 @@ export function registerAgentDeletionAuthorityTests({
       return true;
     });
 
-    const respond = await call("agents.delete", { agentId: "test-agent" });
-
-    const result = expectRespondOk(respond, {
+    const result = expectRespondOk(await call("agents.delete", { agentId: "test-agent" }), {
       ok: true,
       agentId: "test-agent",
       removedBindings: 2,

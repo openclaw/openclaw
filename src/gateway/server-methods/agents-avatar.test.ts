@@ -22,7 +22,7 @@ const operator = { profileId: "owner" };
 const release = vi.fn();
 
 async function generate(
-  params: Record<string, unknown>,
+  params: Record<string, unknown> = { agentId: "garden", prompt: "A gardener" },
   authority: Pick<GatewayRequestHandlerOptions, "hasCurrentClientAuthority" | "signal"> = {},
 ) {
   const respond = vi.fn();
@@ -38,6 +38,13 @@ async function generate(
   return respond;
 }
 
+function expectError(
+  respond: ReturnType<typeof vi.fn>,
+  error: { code: string; message?: unknown },
+) {
+  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+}
+
 beforeEach(() => {
   generation.mockReset().mockResolvedValue(preview);
   capture.mockReset().mockResolvedValue({ authority: operator, release });
@@ -46,11 +53,7 @@ beforeEach(() => {
 
 describe("agents.avatar.generate", () => {
   it("uses the selected agent and only the submitted description", async () => {
-    expect(await generate({ agentId: "garden", prompt: "A gardener" })).toHaveBeenCalledWith(
-      true,
-      preview,
-      undefined,
-    );
+    expect(await generate()).toHaveBeenCalledWith(true, preview, undefined);
     expect(generation).toHaveBeenCalledWith({
       cfg,
       agentId: "garden",
@@ -70,22 +73,14 @@ describe("agents.avatar.generate", () => {
     { label: "oversized prompt", params: { agentId: "garden", prompt: "a".repeat(8_001) } },
     { label: "SOUL context", params: { agentId: "garden", prompt: "A gardener", soul: "private" } },
   ])("rejects $label before model inference", async ({ params }) => {
-    expect(await generate(params)).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
+    expectError(await generate(params), { code: "INVALID_REQUEST" });
     expect(capture).not.toHaveBeenCalled();
     expect(generation).not.toHaveBeenCalled();
   });
 
   it("requires an authenticated operator before model inference", async () => {
     capture.mockResolvedValue(undefined);
-    expect(await generate({ agentId: "garden", prompt: "A gardener" })).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    );
+    expectError(await generate(), { code: "FORBIDDEN" });
     expect(generation).not.toHaveBeenCalled();
   });
 
@@ -93,61 +88,42 @@ describe("agents.avatar.generate", () => {
     const pending = createDeferred<typeof preview>();
     generation.mockReturnValue(pending.promise);
     let current = true;
-    const response = generate(
-      { agentId: "garden", prompt: "A gardener" },
-      { hasCurrentClientAuthority: () => current },
-    );
+    const response = generate(undefined, { hasCurrentClientAuthority: () => current });
     await vi.waitFor(() => expect(generation).toHaveBeenCalledOnce());
     current = false;
     pending.resolve(preview);
-    expect(await response).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: "Avatar generation access changed. Reconnect and try again.",
-      }),
-    );
+    expectError(await response, {
+      code: "UNAVAILABLE",
+      message: "Avatar generation access changed. Reconnect and try again.",
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 
   it("hides invalid provider output", async () => {
     generation.mockResolvedValue({ ...preview, svg: "x".repeat(128_001) });
-    expect(await generate({ agentId: "garden", prompt: "A gardener" })).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message:
-          "Could not generate a valid Blobster with the selected model. Try a shorter description or another configured model.",
-      }),
-    );
+    expectError(await generate(), {
+      code: "UNAVAILABLE",
+      message:
+        "Could not generate a valid Blobster with the selected model. Try a shorter description or another configured model.",
+    });
   });
 
   it("explains an unsupported runtime without exposing provider details", async () => {
     generation.mockRejectedValue(new BlobsterUnsupportedRuntimeError());
-    expect(await generate({ agentId: "garden", prompt: "A gardener" })).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message:
-          "The selected agent runtime cannot generate avatars without tools. Choose a supported runtime and try again.",
-      }),
-    );
+    expectError(await generate(), {
+      code: "UNAVAILABLE",
+      message:
+        "The selected agent runtime cannot generate avatars without tools. Choose a supported runtime and try again.",
+    });
   });
 
   it("returns an actionable authorization error for a disallowed selected model", async () => {
     generation.mockRejectedValue(
       createLlmOperatorAuthorizationError(new Error("Your operator role cannot use this model.")),
     );
-    expect(await generate({ agentId: "garden", prompt: "A gardener" })).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "FORBIDDEN",
-        message: expect.stringContaining("Choose an allowed model"),
-      }),
-    );
+    expectError(await generate(), {
+      code: "FORBIDDEN",
+      message: expect.stringContaining("Choose an allowed model"),
+    });
   });
 });

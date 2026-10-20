@@ -18,6 +18,16 @@ import {
 } from "../terminal/session-manager.test-helpers.js";
 import { deleteGatewayAgent } from "./agents-delete.js";
 
+async function openTerminal(
+  terminals: TerminalSessionManager,
+  pty: ReturnType<typeof makeFakePty>,
+  options: Parameters<typeof baseOpenRequest>[0],
+) {
+  return expectTerminalOpen(
+    await terminals.open(baseOpenRequest({ ...options, createBackend: async () => pty })),
+  );
+}
+
 it("joins a cancelled connection terminal spawn through backend exit while preserving another agent", async () => {
   const terminals = new TerminalSessionManager({ emit: () => {} });
   const backend = createDeferred<ReturnType<typeof makeFakePty>>();
@@ -39,14 +49,7 @@ it("joins a cancelled connection terminal spawn through backend exit while prese
       ok: false,
       code: "closed",
     });
-    const survivor = expectTerminalOpen(
-      await terminals.open(
-        baseOpenRequest({
-          agentId: "keeper",
-          createBackend: async () => keeper,
-        }),
-      ),
-    );
+    const survivor = await openTerminal(terminals, keeper, { agentId: "keeper" });
     doomed.emitExit(0);
     await drain.drained;
     expect(drain.hasWork()).toBe(false);
@@ -109,32 +112,22 @@ it("keeps deletion draining until every connection terminal exits, without touch
     };
     let deleting: ReturnType<typeof deleteGatewayAgent> | undefined;
     try {
-      for (const [index, pty] of ptys.slice(0, 3).entries()) {
-        const opened = expectTerminalOpen(
-          await terminals.open(
-            baseOpenRequest({
-              agentId: "doomed",
-              owner: { kind: "conn", connId: `doomed-${index}` },
-              cwd: workspace,
-              createBackend: async () => pty,
-            }),
-          ),
-        );
+      for (const [index, pty] of ptys.entries()) {
+        const opened = await openTerminal(terminals, pty, {
+          agentId: "doomed",
+          owner: { kind: "conn", connId: `doomed-${index}` },
+          cwd: workspace,
+        });
         if (index === 1) {
           terminals.handleDisconnect("doomed-1");
         } else if (index === 2) {
           expect(terminals.close("doomed-2", opened.sessionId)).toBe(true);
         }
       }
-      const survivor = expectTerminalOpen(
-        await terminals.open(
-          baseOpenRequest({
-            agentId: "keeper",
-            owner: { kind: "conn", connId: "keeper" },
-            createBackend: async () => keeper,
-          }),
-        ),
-      );
+      const survivor = await openTerminal(terminals, keeper, {
+        agentId: "keeper",
+        owner: { kind: "conn", connId: "keeper" },
+      });
       deleting = deleteGatewayAgent(
         "doomed",
         true,
