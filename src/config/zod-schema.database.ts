@@ -53,7 +53,7 @@ export const DatabaseConfigSchema = z
       .optional()
       .register(configUiMetadata, {
         label: "PostgreSQL",
-        help: "PostgreSQL connection and schema naming. PostgreSQL 17 is qualified; other admitted majors remain experimental pending conformance. Back up each store schema together with its local SQLite anchor. See the PostgreSQL operator guide for deployment qualification limits.",
+        help: "PostgreSQL connection and schema naming. PostgreSQL 16–18 are qualified; other admitted majors remain experimental pending conformance. Back up each store schema together with its local SQLite anchor. See the PostgreSQL operator guide for deployment qualification limits.",
       }),
   })
   .optional()
