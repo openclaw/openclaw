@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.js";
@@ -52,6 +52,11 @@ const configuredVision: OpenClawConfig = {
 let workspaceDir: string;
 let imagePath: string;
 
+async function expectFailure(result: ReturnType<typeof prepare>, providerCalls = 0) {
+  await expect(result).rejects.toThrow("Image attachments could not be analyzed.");
+  expect(describeImage).toHaveBeenCalledTimes(providerCalls);
+}
+
 function prepare(
   cfg = configuredVision,
   execution?: MediaExecutionContext,
@@ -71,127 +76,115 @@ function prepare(
   });
 }
 
-describe("agent image understanding", () => {
-  beforeAll(async () => {
-    workspaceDir = tempDirs.make("openclaw-agent-image-understanding-");
-    imagePath = path.join(workspaceDir, "square.png");
-    await fs.writeFile(imagePath, imageBytes);
-  });
+beforeAll(async () => {
+  workspaceDir = tempDirs.make("openclaw-agent-image-understanding-");
+  imagePath = path.join(workspaceDir, "square.png");
+  await fs.writeFile(imagePath, imageBytes);
+});
 
-  beforeEach(() => {
-    describeImage.mockReset().mockResolvedValue({ text: "A red square." });
-    resolveImageCompressionModelPolicy.mockReset().mockResolvedValue({});
-  });
+beforeEach(() => {
+  describeImage.mockReset().mockResolvedValue({ text: "A red square." });
+  resolveImageCompressionModelPolicy.mockReset().mockResolvedValue({});
+});
 
-  it("sends pixels to the configured vision provider and gives the text primary its description", async () => {
-    const result = await prepare();
+it("sends pixels to the configured vision provider and gives the text primary its description", async () => {
+  const result = await prepare();
 
-    expect(describeImage).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        buffer: imageBytes,
-        mime: "image/png",
-        provider: "fixture-vision",
-        model: "fixture-image-model",
-      }),
-    );
-    expect(result.message).toBe(
-      "[Image]\nUser text:\nWhat color is the square?\nDescription:\nA red square.",
-    );
-    expect(result.media).toEqual([
+  expect(describeImage).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      buffer: imageBytes,
+      mime: "image/png",
+      provider: "fixture-vision",
+      model: "fixture-image-model",
+    }),
+  );
+  expect(result).toEqual({
+    message: "[Image]\nUser text:\nWhat color is the square?\nDescription:\nA red square.",
+    media: [
       {
         path: imagePath,
         contentType: "image/png",
         fileName: "square.png",
         hydrationSuppressed: true,
       },
-    ]);
-  });
-
-  it("names the configuration step when no vision provider is configured", async () => {
-    await expect(prepare({})).rejects.toThrow(
-      "Configure agents.defaults.imageModel or tools.media.models with an available vision model, then retry.",
-    );
-    expect(describeImage).not.toHaveBeenCalled();
-  });
-
-  it("rejects an empty vision response instead of silently discarding the image", async () => {
-    describeImage.mockResolvedValue({ text: "   " });
-
-    await expect(prepare()).rejects.toThrow("Image attachments could not be analyzed.");
-  });
-
-  it.each([{ channel: "webchat" }, { chatType: "group" as const }])(
-    "honors image scope restrictions for %j before sending pixels",
-    async (source) => {
-      const cfg: OpenClawConfig = {
-        ...configuredVision,
-        tools: {
-          media: {
-            ...configuredVision.tools?.media,
-            image: { scope: { default: "allow", rules: [{ action: "deny", match: source }] } },
-          },
-        },
-      };
-
-      await expect(prepare(cfg, undefined, source)).rejects.toThrow(
-        "Image attachments could not be analyzed.",
-      );
-      expect(describeImage).not.toHaveBeenCalled();
-    },
-  );
-
-  it("does not send pixels after request authority is revoked during image preparation", async () => {
-    let current = true;
-    resolveImageCompressionModelPolicy.mockImplementationOnce(async () => {
-      current = false;
-      return {};
-    });
-
-    await expect(
-      prepare(configuredVision, {
-        signal: new AbortController().signal,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("Request authority expired");
-          }
-        },
-      }),
-    ).rejects.toThrow("Image attachments could not be analyzed.");
-    expect(describeImage).not.toHaveBeenCalled();
-  });
-
-  it("carries cancellation and live authority into asynchronous image adapters", async () => {
-    const controller = new AbortController();
-    const sendPixels = vi.fn(async () => new Response("A red square."));
-    let current = true;
-    let adapterSignal: AbortSignal | undefined;
-    const assertCurrent = () => {
-      if (!current) {
-        throw new Error("Request authority expired");
-      }
-    };
-    describeImage.mockImplementationOnce(async (request) => {
-      adapterSignal = request.signal;
-      await Promise.resolve();
-      current = false;
-      const result = await fetchWithSsrFGuard({
-        url: "https://vision.example/describe",
-        fetchImpl: sendPixels,
-        lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
-        init: { method: "POST", body: new Uint8Array(request.buffer), signal: request.signal },
-      });
-      try {
-        return { text: await result.response.text() };
-      } finally {
-        await result.release();
-      }
-    });
-
-    await expect(
-      prepare(configuredVision, { signal: controller.signal, assertCurrent }),
-    ).rejects.toThrow("Image attachments could not be analyzed.");
-    expect(adapterSignal).toBe(controller.signal);
-    expect(sendPixels).not.toHaveBeenCalled();
-    expect(controller.signal.aborted).toBe(false);
+    ],
   });
 });
+
+it("names the configuration step when no vision provider is configured", async () => {
+  await expect(prepare({})).rejects.toThrow(
+    "Configure agents.defaults.imageModel or tools.media.models with an available vision model, then retry.",
+  );
+  expect(describeImage).not.toHaveBeenCalled();
+});
+
+it("rejects an empty vision response instead of silently discarding the image", async () => {
+  describeImage.mockResolvedValue({ text: "   " });
+
+  await expectFailure(prepare(), 1);
+});
+
+it.each([{ channel: "webchat" }, { chatType: "group" as const }])(
+  "honors image scope restrictions for %j before sending pixels",
+  async (source) => {
+    const cfg: OpenClawConfig = {
+      ...configuredVision,
+      tools: {
+        media: {
+          ...configuredVision.tools?.media,
+          image: { scope: { default: "allow", rules: [{ action: "deny", match: source }] } },
+        },
+      },
+    };
+
+    await expectFailure(prepare(cfg, undefined, source));
+  },
+);
+
+it.each(["preparation", "adapter"] as const)(
+  "rejects revoked authority during %s",
+  async (phase) => {
+    const controller = new AbortController();
+    let current = true;
+    const execution: MediaExecutionContext = {
+      signal: controller.signal,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("Request authority expired");
+        }
+      },
+    };
+    const sendPixels = vi.fn(async () => new Response("A red square."));
+    let adapterSignal: AbortSignal | undefined;
+    if (phase === "preparation") {
+      resolveImageCompressionModelPolicy.mockImplementationOnce(async () => {
+        current = false;
+        return {};
+      });
+    } else {
+      describeImage.mockImplementationOnce(async (request) => {
+        adapterSignal = request.signal;
+        await Promise.resolve();
+        current = false;
+        const result = await fetchWithSsrFGuard({
+          url: "https://vision.example/describe",
+          fetchImpl: sendPixels,
+          lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
+          init: { method: "POST", body: new Uint8Array(request.buffer), signal: request.signal },
+        });
+        try {
+          return { text: await result.response.text() };
+        } finally {
+          await result.release();
+        }
+      });
+    }
+
+    await expectFailure(prepare(configuredVision, execution), phase === "adapter" ? 1 : 0);
+    expect(sendPixels).not.toHaveBeenCalled();
+    if (phase === "adapter") {
+      expect(adapterSignal).toBe(controller.signal);
+    }
+    expect(controller.signal.aborted).toBe(false);
+  },
+);

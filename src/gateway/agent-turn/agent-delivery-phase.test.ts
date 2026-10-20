@@ -45,9 +45,9 @@ function deliveryParams(
 
 describe("resolveAgentDeliveryPhase", () => {
   beforeEach(() => {
-    mocks.resolveAgentDeliveryPlanWithSessionRoute.mockReset();
-    mocks.resolveAgentOutboundTarget.mockReset();
-    mocks.resolveMessageChannelSelection.mockReset();
+    for (const mock of Object.values(mocks)) {
+      mock.mockReset();
+    }
   });
 
   for (const scope of ["local", "foreign Gateway", "foreign store"] as const) {
@@ -123,38 +123,6 @@ describe("resolveAgentDeliveryPhase", () => {
     });
   }
 
-  it("renders a strict target-resolution failure without its Error class", async () => {
-    const targetError = Object.assign(new Error('Reserved target "current" for Telegram'), {
-      code: "INVALID_TARGET",
-    });
-    mocks.resolveAgentDeliveryPlanWithSessionRoute.mockResolvedValue({
-      baseDelivery: {},
-      resolvedChannel: "telegram",
-      resolvedTo: "current",
-      deliveryTargetMode: "explicit",
-      targetResolutionError: targetError,
-    });
-    const respond = vi.fn();
-
-    await resolveAgentDeliveryPhase(
-      deliveryParams({
-        request: {
-          message: "strict delivery",
-          deliver: true,
-          idempotencyKey: "strict-target-resolution",
-        },
-        to: "current",
-        runId: "strict-target-resolution",
-        respond,
-      }),
-    );
-
-    expect(respond).toHaveBeenCalledWith(false, undefined, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: 'Reserved target "current" for Telegram | INVALID_TARGET',
-    });
-  });
-
   describe.each([
     { name: "ordinary", sessionKey: "agent:main:dashboard:ordinary", incognito: false },
     {
@@ -169,6 +137,9 @@ describe("resolveAgentDeliveryPhase", () => {
       async (source) => {
         const privateMessage = "synthetic-private-delivery-error";
         const failure = new Error(privateMessage);
+        if (name === "ordinary" && source === "target") {
+          Object.assign(failure, { code: "INVALID_TARGET" });
+        }
         mocks.resolveAgentDeliveryPlanWithSessionRoute.mockResolvedValue({
           baseDelivery: {},
           resolvedChannel: source === "target" ? "telegram" : "webchat",
@@ -192,6 +163,12 @@ describe("resolveAgentDeliveryPhase", () => {
         });
 
         expect(await resolveAgentDeliveryPhase(params)).toBeUndefined();
+        if (name === "ordinary" && source === "target") {
+          expect(respond).toHaveBeenCalledWith(false, undefined, {
+            code: ErrorCodes.INVALID_REQUEST,
+            message: `${privateMessage} | INVALID_TARGET`,
+          });
+        }
         const response = respond.mock.calls[0];
         const error = response?.[2];
         const metadata = response?.[3];
