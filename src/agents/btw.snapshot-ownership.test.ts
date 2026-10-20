@@ -17,7 +17,6 @@ describe("BTW live context ownership", () => {
   setupBtwTestHooks();
 
   it("keeps same-ID conversations separate through native cleanup", async () => {
-    // Keep the existing provider fixture, but exercise the real snapshot writer and reader.
     const runs = await vi.importActual<typeof import("./embedded-agent-runner/runs.js")>(
       "./embedded-agent-runner/runs.js",
     );
@@ -25,13 +24,7 @@ describe("BTW live context ownership", () => {
     mockDoneAnswer("Side answer.");
     const sessionId = "shared-conversation-id";
     const sessionKey = "agent:main:shared-conversation";
-    const owners: Array<{
-      operation: ReturnType<typeof createReplyOperation>;
-      handle: EmbeddedAgentQueueHandle;
-      attachment: ReturnType<typeof runs.attachActiveEmbeddedRun>;
-      sessionFile: string;
-      storePath: string;
-    }> = [];
+    const cleanups: Array<() => void> = [];
     const attach = (name: string, storePath: string) => {
       const sessionFile = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
       const operation = createReplyOperation({
@@ -61,16 +54,26 @@ describe("BTW live context ownership", () => {
         "main",
         operation,
       );
-      const owner = { operation, handle, attachment, sessionFile, storePath };
-      owners.push(owner);
+      const detach = () => {
+        runs.detachActiveEmbeddedRun(
+          sessionId,
+          handle,
+          sessionKey,
+          sessionFile,
+          undefined,
+          attachment,
+        );
+        operation.complete();
+      };
+      cleanups.push(detach);
       runs.updateActiveEmbeddedRunSnapshot(attachment, {
         transcriptLeafId: `leaf-${name}`,
         messages: [{ role: "user", content: `${name} private history`, timestamp: 1 }],
         inFlightPrompt: `${name} current task`,
       });
-      return owner;
+      return { attachment, sessionFile, storePath, detach };
     };
-    const ask = async (owner: (typeof owners)[number], index: number, expected: string) => {
+    const ask = async (owner: ReturnType<typeof attach>, index: number, expected: string) => {
       await runSideQuestion({
         sessionKey,
         storePath: owner.storePath,
@@ -87,15 +90,7 @@ describe("BTW live context ownership", () => {
       const beta = attach("beta", state.path("beta/sessions.json"));
       await ask(alpha, 0, "alpha");
       await ask(beta, 1, "beta");
-      runs.detachActiveEmbeddedRun(
-        sessionId,
-        alpha.handle,
-        sessionKey,
-        alpha.sessionFile,
-        undefined,
-        alpha.attachment,
-      );
-      alpha.operation.complete();
+      alpha.detach();
       // A retained producer cannot publish over the surviving physical conversation.
       runs.updateActiveEmbeddedRunSnapshot(alpha.attachment, {
         transcriptLeafId: "stale-alpha-leaf",
@@ -104,16 +99,8 @@ describe("BTW live context ownership", () => {
       });
       await ask(beta, 2, "beta");
     } finally {
-      for (const owner of owners) {
-        runs.detachActiveEmbeddedRun(
-          sessionId,
-          owner.handle,
-          sessionKey,
-          owner.sessionFile,
-          undefined,
-          owner.attachment,
-        );
-        owner.operation.complete();
+      for (const cleanup of cleanups) {
+        cleanup();
       }
     }
   });

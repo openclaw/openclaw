@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   createSessionEntry,
   mockArg,
@@ -21,33 +21,25 @@ function createOpenAIModel() {
 
 describe("BTW prepared tool policy", () => {
   setupBtwTestHooks();
+  beforeEach(() => {
+    mockOpenAIPlatformProfile();
+    resolveModelWithRegistryMock.mockReturnValue(createOpenAIModel());
+    resolveModelAsyncMock.mockResolvedValue({ model: createOpenAIModel() });
+  });
 
   it("prepares deny-all sender policy before calling a plugin side-question hook", async () => {
     const codexSideQuestionMock = registerCodexSideQuestionHarness();
-    mockOpenAIPlatformProfile();
     resolveModelWithRegistryMock.mockReturnValue({
       provider: "openai",
       id: "gpt-5.5",
       api: "openai-responses",
-    });
-    resolveModelAsyncMock.mockResolvedValue({
-      model: {
-        provider: "openai",
-        id: "gpt-5.5",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-      },
     });
     await runSideQuestion({
       cfg: {
         channels: {
           telegram: {
             groups: {
-              "deny-room": {
-                toolsBySender: {
-                  "id:restricted-sender": { deny: ["*"] },
-                },
-              },
+              "deny-room": { toolsBySender: { "id:restricted-sender": { deny: ["*"] } } },
             },
           },
         },
@@ -81,9 +73,6 @@ describe("BTW prepared tool policy", () => {
           ...(known ? { modelRef: { provider: "openai", model: "native-search-denied" } } : {}),
         }),
       });
-      mockOpenAIPlatformProfile();
-      resolveModelWithRegistryMock.mockReturnValue(createOpenAIModel());
-      resolveModelAsyncMock.mockResolvedValue({ model: createOpenAIModel() });
       await runSideQuestion({
         provider: "openai",
         model: "gpt-5.5",

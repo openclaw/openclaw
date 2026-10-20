@@ -30,16 +30,14 @@ const QUESTION_IMAGE: ImageContent = {
   data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=",
   mimeType: "image/png",
 };
-describe("runBtwSideQuestion images", () => {
+describe("runBtwSideQuestion", () => {
   setupBtwTestHooks();
 
   it("runBtwSideQuestion sends current images after question text with reasoning and tools off", async () => {
     mockDoneAnswer("A tiny dot.");
     await runSideQuestion({ images: [QUESTION_IMAGE], resolvedThinkLevel: "adaptive" });
 
-    const context = expectRecordFields(mockArg(streamSimpleMock, 0, 1), {
-      tools: undefined,
-    });
+    const context = expectRecordFields(mockArg(streamSimpleMock, 0, 1), { tools: undefined });
     expect(context.messages).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -84,11 +82,6 @@ describe("runBtwSideQuestion images", () => {
       "[2 attached image(s) omitted from CLI side-question input.]",
     );
   });
-});
-
-describe("side-question provider boundaries", () => {
-  setupBtwTestHooks();
-
   it("preserves ordinary OpenAI BTW with provider-injected native web search", async () => {
     const payload = { input: [], tools: [{ type: "web_search" }] };
     const stream: StreamFn = async (model, _context, options) => {
@@ -134,11 +127,6 @@ describe("side-question provider boundaries", () => {
       }
     },
   );
-});
-
-describe("runBtwSideQuestion CLI lifecycle", () => {
-  setupBtwTestHooks();
-
   it("closes CLI side-question admission when backend cleanup rejects", async () => {
     const { cleanup } = mockCliOutput({ text: "CLI side answer." });
     const cleanupError = new Error("CLI cleanup failed");

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
+import {
+  claudeBlockStart,
+  claudeBlockStop,
+  createClaudeParser,
+} from "./cli-output.test-helpers.js";
 
 function streamDelta(delta: Record<string, unknown>) {
   return {
@@ -12,12 +16,7 @@ function streamDelta(delta: Record<string, unknown>) {
 }
 
 function createParser() {
-  return createCliJsonlStreamingParser({
-    backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-    providerId: "claude-cli",
-    onAssistantDelta: () => {},
-    onThinkingDelta: () => {},
-  });
+  return createClaudeParser({ onThinkingDelta: () => {} });
 }
 
 describe("Claude partial-message output budgets", () => {
@@ -28,26 +27,18 @@ describe("Claude partial-message output budgets", () => {
     "delivers completed tool turns beyond the raw $name limit",
     ({ count, chars, resultChars }) => {
       const inputs: unknown[] = [];
-      const parser = createCliJsonlStreamingParser({
-        backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-        providerId: "claude-cli",
-        onAssistantDelta: () => {},
-        onToolUseStart: (tool) => inputs.push(tool.args),
-      });
+      const parser = createClaudeParser({ onToolUseStart: (tool) => inputs.push(tool.args) });
       const push = (record: unknown) => parser.push(`${JSON.stringify(record)}\n`);
       const input = { value: "a".repeat(count * chars) };
       const tool = { type: "tool_use", id: "write-fixture", name: "Write", input };
-      push({
-        type: "stream_event",
-        event: { type: "content_block_start", index: 0, content_block: { ...tool, input: {} } },
-      });
+      push(claudeBlockStart({ ...tool, input: {} }, 0));
       push(streamDelta({ type: "input_json_delta", partial_json: '{"value":"' }));
       const chunk = `${JSON.stringify(streamDelta({ type: "input_json_delta", partial_json: "a".repeat(chars) }))}\n`;
       for (let index = 0; index < count; index += 1) {
         parser.push(chunk);
       }
       push(streamDelta({ type: "input_json_delta", partial_json: '"}' }));
-      push({ type: "stream_event", event: { type: "content_block_stop", index: 0 } });
+      push(claudeBlockStop(0));
       push({ type: "assistant", message: { id: "tool-message", content: [tool] } });
       push({
         type: "user",
@@ -115,11 +106,8 @@ describe("Claude partial-message output budgets", () => {
   });
 
   it("keeps the ordinary frame limit when a custom parser claims deltas", () => {
-    const parser = createCliJsonlStreamingParser({
-      backend: { command: "claude", output: "jsonl", jsonlDialect: "claude-stream-json" },
-      providerId: "claude-cli",
+    const parser = createClaudeParser({
       parseJsonlEvent: () => ({ kind: "text", text: "a" }),
-      onAssistantDelta: () => {},
     });
     parser.push(
       `${JSON.stringify(streamDelta({ type: "text_delta", text: "a" }))}\n`.repeat(20_001),
@@ -127,12 +115,11 @@ describe("Claude partial-message output budgets", () => {
     expect(parser.getErrorText()).toContain("exceeded 20000 lines");
   });
 
-  it.each(["outer"])("still counts %s whitespace around a recognized delta", (location) => {
+  it("still counts outer whitespace around a recognized delta", () => {
     const parser = createParser();
     const compact = JSON.stringify(streamDelta({ type: "text_delta", text: "a" }));
     const padding = " ".repeat(4_300_000);
-    const line =
-      location === "outer" ? padding + compact : compact.replace('"event":', `"event":${padding}`);
+    const line = padding + compact;
     parser.push(`${line}\n${line}\n`);
     expect(parser.getErrorText()).toContain("exceeded 8388608 characters");
   });

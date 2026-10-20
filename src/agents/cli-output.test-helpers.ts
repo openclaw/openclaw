@@ -11,26 +11,25 @@ export function createClaudeParser(overrides: Partial<CliJsonlStreamingParserOpt
 }
 
 export function createOpenAiCompatibleCliUsageCases() {
+  const openAiExpected = { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 };
+  const cacheOnlyExpected = {
+    input: 0,
+    output: 10,
+    cacheRead: 40,
+    cacheWrite: 60,
+    total: undefined,
+  };
+  const openAiMetadata = { total_tokens: 22, prompt_tokens_details: { cached_tokens: 6 } };
   return [
     {
       name: "standard OpenAI snake_case token fields",
-      raw: {
-        prompt_tokens: 17,
-        completion_tokens: 5,
-        total_tokens: 22,
-        prompt_tokens_details: { cached_tokens: 6 },
-      },
-      normalized: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
+      raw: { prompt_tokens: 17, completion_tokens: 5, ...openAiMetadata },
+      normalized: openAiExpected,
     },
     {
       name: "camelCase OpenAI-compatible token fields",
-      raw: {
-        promptTokens: 17,
-        completionTokens: 5,
-        total_tokens: 22,
-        prompt_tokens_details: { cached_tokens: 6 },
-      },
-      normalized: { input: 11, output: 5, cacheRead: 6, cacheWrite: undefined, total: 22 },
+      raw: { promptTokens: 17, completionTokens: 5, ...openAiMetadata },
+      normalized: openAiExpected,
     },
     {
       name: "existing input/output field precedence",
@@ -46,11 +45,7 @@ export function createOpenAiCompatibleCliUsageCases() {
     },
     {
       name: "flat Codex cached input is included in input_tokens",
-      raw: {
-        input_tokens: 15,
-        output_tokens: 4,
-        cached_input_tokens: 6,
-      },
+      raw: { input_tokens: 15, output_tokens: 4, cached_input_tokens: 6 },
       normalized: { input: 9, output: 4, cacheRead: 6, cacheWrite: undefined, total: undefined },
     },
     {
@@ -61,7 +56,7 @@ export function createOpenAiCompatibleCliUsageCases() {
         cached_input_tokens: 40,
         cache_write_input_tokens: 60,
       },
-      normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
+      normalized: cacheOnlyExpected,
     },
     {
       name: "nested Codex input includes both cached reads and cache writes",
@@ -70,7 +65,7 @@ export function createOpenAiCompatibleCliUsageCases() {
         output_tokens: 10,
         input_tokens_details: { cached_tokens: 40, cache_write_tokens: 60 },
       },
-      normalized: { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: undefined },
+      normalized: cacheOnlyExpected,
     },
   ] as const;
 }
