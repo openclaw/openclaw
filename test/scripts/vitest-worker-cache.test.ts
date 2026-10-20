@@ -30,21 +30,23 @@ function fixture() {
   const directory = path.join(root, ".artifacts/vitest-workers/run-cache-0");
   const cached = path.join(root, ".artifacts/vitest-worker-cache/run-cache-0");
   const read = (name: string) => fs.readFileSync(path.join(root, name), "utf8");
-  const compilerInputs = ["scripts/lib/fixture-compiler.mts"];
   const write = (name: string, bytes: string) => writeFixture(root, name, bytes);
-  write("package.json", '{"name":"worker-cache-fixture","type":"module"}\n');
-  write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
-  write(
-    "tsconfig.json",
-    '{"extends":"./tsconfig.base.json","compilerOptions":{"target":"ES2023","module":"NodeNext","moduleResolution":"NodeNext","allowJs":true,"noEmit":true,"types":[]},"include":["src/**/*"]}',
-  );
-  write("tsconfig.base.json", '{"compilerOptions":{"strict":true}}\n');
-  write("src/entry.ts", 'import { value } from "./value.js"; console.log(value);\n');
-  write("src/value.js", 'export const value = "first";\n');
+  const sources = {
+    "package.json": '{"name":"worker-cache-fixture","type":"module"}\n',
+    "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+    "tsconfig.json":
+      '{"extends":"./tsconfig.base.json","compilerOptions":{"target":"ES2023","module":"NodeNext","moduleResolution":"NodeNext","allowJs":true,"noEmit":true,"types":[]},"include":["src/**/*"]}',
+    "tsconfig.base.json": '{"compilerOptions":{"strict":true}}\n',
+    "src/entry.ts": 'import { value } from "./value.js"; console.log(value);\n',
+    "src/value.js": 'export const value = "first";\n',
+    "scripts/lib/fixture-compiler.mts": 'export const compilerRevision = "first";\n',
+    "node-host-launcher.mjs": 'export const launcher = "fixture";\n',
+    "cli-invocation.mjs": 'export const invocation = "fixture";\n',
+  };
+  for (const [name, bytes] of Object.entries(sources)) {
+    write(name, bytes);
+  }
   write("notes/unrelated.ts", 'export const unrelated = "first";\n');
-  write(compilerInputs[0]!, 'export const compilerRevision = "first";\n');
-  write("node-host-launcher.mjs", 'export const launcher = "fixture";\n');
-  write("cli-invocation.mjs", 'export const invocation = "fixture";\n');
 
   const reserve = () => {
     fs.mkdirSync(directory, { recursive: true });
@@ -82,16 +84,7 @@ function fixture() {
     }
     fs.chmodSync(path.join(directory, "dist/probe.js"), 0o755);
     const inputs = Object.fromEntries(
-      [
-        "package.json",
-        "pnpm-lock.yaml",
-        ...configFiles,
-        ...compilerInputs,
-        "src/entry.ts",
-        "src/value.js",
-        "node-host-launcher.mjs",
-        "cli-invocation.mjs",
-      ]
+      [...Object.keys(sources), ...configFiles]
         .map((name) => path.resolve(root, name))
         .toSorted()
         .map((filename) => [filename, hashVitestWorkerArtifact(fs.readFileSync(filename))]),

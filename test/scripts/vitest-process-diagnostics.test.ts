@@ -14,11 +14,7 @@ it("signals the process group before a stuck diagnostic and bounds the wait", as
   vi.useFakeTimers();
   const kill = vi.fn(() => true);
   const log = vi.fn();
-  let diagnosticSignal: AbortSignal | undefined;
-  const startDiagnostics = vi.fn((signal: AbortSignal) => {
-    diagnosticSignal = signal;
-    return new Promise<void>(() => {});
-  });
+  const startDiagnostics = vi.fn((_signal: AbortSignal) => new Promise<void>(() => {}));
 
   const result = terminateVitestProcessGroupForTimeout({
     child: { pid: 42 },
@@ -37,7 +33,7 @@ it("signals the process group before a stuck diagnostic and bounds the wait", as
 
   await vi.advanceTimersByTimeAsync(50);
   await expect(result.diagnostics).resolves.toBeUndefined();
-  expect(diagnosticSignal?.aborted).toBe(true);
+  expect(startDiagnostics.mock.calls[0]?.[0].aborted).toBe(true);
   expect(log).toHaveBeenCalledWith("[vitest] process diagnostics deadline reached after 50ms.");
 });
 

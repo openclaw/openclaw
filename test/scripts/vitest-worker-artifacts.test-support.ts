@@ -300,7 +300,9 @@ export function fixtureFileBeforeSettlement(
   return Promise.race([receipts.waitFor(filename, expected ?? "written"), settled]);
 }
 
-function probeConfig(directory: string, test: string, provide = "") {
+function writeWorkerProbe(directory: string, source: string, provide = "") {
+  writeFixture(directory, "value.ts", 'export const value: string = "first";');
+  const test = writeFixture(directory, "child.test.ts", source);
   return {
     config: writeFixture(
       directory,
@@ -315,10 +317,8 @@ function probeConfig(directory: string, test: string, provide = "") {
 }
 
 export function workerBorrowingProbe(directory: string) {
-  writeFixture(directory, "value.ts", 'export const value: string = "first";');
-  const test = writeFixture(
+  return writeWorkerProbe(
     directory,
-    "child.test.ts",
     `
     import fs from 'node:fs';
     import path from 'node:path';
@@ -339,7 +339,6 @@ export function workerBorrowingProbe(directory: string) {
     });
   `,
   );
-  return probeConfig(directory, test);
 }
 
 export function workerProbe(
@@ -348,10 +347,8 @@ export function workerProbe(
   mode: "compiled" | "source" = "compiled",
   receiptEndpoint?: string,
 ) {
-  writeFixture(directory, "value.ts", 'export const value: string = "first";');
-  const test = writeFixture(
+  return writeWorkerProbe(
     directory,
-    "child.test.ts",
     `
     ${receiptEndpoint ? fixtureReceiptClientSource(receiptEndpoint) : ""}
     import * as cp from 'node:child_process';
@@ -450,10 +447,6 @@ export function workerProbe(
       } finally {fs.rmSync(dir,{recursive:true,force:true});}
     });
   `,
-  );
-  return probeConfig(
-    directory,
-    test,
     `,configValue:'first',releaseFile:${holdSecond} && name==='second' ? ${JSON.stringify(path.join(directory, "release"))} : null`,
   );
 }

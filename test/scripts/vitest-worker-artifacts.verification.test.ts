@@ -14,8 +14,9 @@ import { writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type Group = "inputs" | "outputs";
+const source = "expected";
 
-function generation(directory: string, groups: Partial<Record<Group, string[]>>, source: string) {
+function generation(directory: string, groups: Partial<Record<Group, string[]>>) {
   const hash = hashVitestWorkerArtifact(source);
   const manifest: VitestWorkerManifest = {
     identity: "fixture",
@@ -33,49 +34,53 @@ function generation(directory: string, groups: Partial<Record<Group, string[]>>,
   return manifest;
 }
 
+function controlledReads(held: string, options: { synthetic?: Set<string>; failed?: string } = {}) {
+  const started = createDeferred(),
+    release = createDeferred(),
+    failedRead = createDeferred();
+  const observedReads: string[] = [];
+  const readFile = fs.readFile.bind(fs);
+  const reader = vi.spyOn(fs, "readFile").mockImplementation((...args) => {
+    const [filename, callback] = args;
+    const synthetic = typeof filename === "string" && options.synthetic?.has(filename);
+    if (synthetic) {
+      observedReads.push(filename);
+    }
+    const deliver = () => (synthetic ? callback(null, Buffer.from(source)) : readFile(...args));
+    if (filename === held) {
+      started.resolve();
+      void release.promise.then(deliver);
+    } else if (filename === options.failed) {
+      readFile(filename, (error, bytes) => {
+        callback(error, bytes);
+        failedRead.resolve();
+      });
+    } else if (synthetic) {
+      queueMicrotask(deliver);
+    } else {
+      readFile(...args);
+    }
+  });
+  return { started, release, failedRead, observedReads, reader };
+}
+
 it.for(["filesystem", "microtask"] as const)(
   "keeps the runner event loop responsive while verifying a completed generation (%s reads)",
   async (completion, { signal }) => {
     const directory = tempDirs.make("vitest-worker-verification-");
-    const source = "export const value = 1;\n";
-    const manifest = generation(
-      directory,
-      {
-        inputs: Array.from({ length: 64 }, (_, i) => `input-${i}.ts`),
-        outputs: Array.from({ length: 64 }, (_, i) => `output-${i}.js`),
-      },
-      source,
-    );
+    const names = Array.from({ length: 64 }, (_, i) => `${i}.js`);
+    const manifest = generation(directory, { inputs: names, outputs: names });
     const files = new Set([
       ...Object.keys(manifest.inputs),
       ...Object.keys(manifest.outputs).map((name) => path.join(directory, "dist", name)),
     ]);
 
-    const held = path.join(directory, "input-0.ts");
-    const started = createDeferred();
-    const release = createDeferred();
-    const observedReads: string[] = [];
-    const readFile = fs.readFile.bind(fs);
-    const reader = vi.spyOn(fs, "readFile").mockImplementation((...args) => {
-      const [filename, callback] = args;
-      if (completion === "filesystem") {
-        if (filename === held) {
-          started.resolve();
-          void release.promise.then(() => readFile(...args));
-          return;
-        }
-        return readFile(...args);
-      }
-      if (typeof filename !== "string" || !files.has(filename)) {
-        return readFile(...args);
-      }
-      observedReads.push(filename);
-      if (filename === held) {
-        void release.promise.then(() => callback(null, Buffer.from(source)));
-      } else {
-        queueMicrotask(() => callback(null, Buffer.from(source)));
-      }
-    });
+    const { started, release, observedReads, reader } = controlledReads(
+      path.join(directory, "0.js"),
+      {
+        synthetic: completion === "microtask" ? files : undefined,
+      },
+    );
     let completed = false;
     // Supplying the manifest means the artifact reads themselves must yield.
     let verification: Promise<void> | undefined;
@@ -123,32 +128,14 @@ it.for([
     const files = group === "inputs" ? directory : path.join(directory, "dist");
     const bad = path.join(files, "changed.js");
     const held = path.join(files, "held.js");
-    const manifest = generation(directory, { [group]: ["changed.js", "held.js"] }, "expected");
+    const manifest = generation(directory, { [group]: ["changed.js", "held.js"] });
     if (damage === "changed") {
       fs.writeFileSync(bad, "changed");
     } else {
       fs.unlinkSync(bad);
     }
     fs.writeFileSync(path.join(directory, "manifest.json"), JSON.stringify(manifest));
-    const started = createDeferred();
-    const failedRead = createDeferred();
-    const release = createDeferred();
-    const readFile = fs.readFile.bind(fs);
-    const reader = vi.spyOn(fs, "readFile").mockImplementation((...args) => {
-      const [filename, callback] = args;
-      if (filename === held) {
-        started.resolve();
-        void release.promise.then(() => readFile(...args));
-        return;
-      }
-      if (filename !== bad) {
-        return readFile(...args);
-      }
-      readFile(filename, (error, bytes) => {
-        callback(error, bytes);
-        failedRead.resolve();
-      });
-    });
+    const { started, failedRead, release, reader } = controlledReads(held, { failed: bad });
     let completed = false;
     let failure: unknown;
     const disposal = owner
