@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../../test-helpers/control-ui-e2e-screenshot.ts";
@@ -60,6 +61,16 @@ describeControlUiE2e("Plugin SDK compatibility notice", () => {
       process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1"
         ? createControlUiE2eArtifactDir("plugin-deprecated-sdk")
         : undefined;
+    const capture = async (name: string, surface: Locator, elements: Locator[] = []) => {
+      if (!artifactDir) {
+        return;
+      }
+      const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
+        animations: "disabled",
+        elements,
+      });
+      await writeFile(path.join(artifactDir, name), frame.png);
+    };
     await page.goto(`${server.baseUrl}settings/plugins`);
     const row = page.locator('[data-plugin-id="sdk-demo"]');
     await row.getByText("SDK Demo", { exact: true }).waitFor();
@@ -75,13 +86,7 @@ describeControlUiE2e("Plugin SDK compatibility notice", () => {
     );
     expect(await row.locator(".plugin-compatibility-apis").count()).toBe(0);
     expect(await row.textContent()).not.toContain(notice.apis[0].displayName);
-    if (artifactDir) {
-      const frame = await takeControlUiScreenshotFrame(page, row, [row], {
-        animations: "disabled",
-        elements: [row],
-      });
-      await writeFile(path.join(artifactDir, "plugins-inventory.png"), frame.png);
-    }
+    await capture("plugins-inventory.png", row, [row]);
     await row.getByRole("link", { name: /SDK Demo/ }).click();
     await page.getByRole("heading", { name: "SDK Demo", exact: true }).waitFor();
     await gateway.waitForRequest("plugins.inspect");
@@ -89,13 +94,7 @@ describeControlUiE2e("Plugin SDK compatibility notice", () => {
     await apis.waitFor();
     expect(await apis.locator("dt").allTextContents()).toEqual([notice.apis[0].displayName]);
     expect(await apis.locator("dd").allTextContents()).toEqual([notice.apis[0].replacement]);
-    if (artifactDir) {
-      const surface = page.locator(".plugin-catalog-detail");
-      const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
-        animations: "disabled",
-      });
-      await writeFile(path.join(artifactDir, "plugin-detail.png"), frame.png);
-    }
+    await capture("plugin-detail.png", page.locator(".plugin-catalog-detail"));
     expect(await page.getByRole("button", { name: "Disable SDK Demo", exact: true }).count()).toBe(
       1,
     );

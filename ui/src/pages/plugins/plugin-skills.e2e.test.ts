@@ -25,62 +25,61 @@ const catalogId = "ch_Y2FsZW5kYXI";
 const entryPath = "SKILL.md";
 const configPath = "references/config.md";
 const scriptPath = "scripts/check.sh";
+const readMethod = "plugins.skills.read";
+const installedRoute = "settings/plugins/calendar-plus";
 const bundle: PluginsSkillsReadResult = {
   name: skill.name,
   rootPath: "skills/calendar",
   entryPath,
   inventoryComplete: true,
   directories: ["references", "scripts", "empty"],
-  files: [
-    {
-      path: entryPath,
-      sizeBytes: 90,
-      status: "ready",
-      content: "# Calendar guide\n\nStart here. [Configuration](references/config.md)",
-    },
-    {
-      path: configPath,
-      sizeBytes: 32000,
-      status: "ready",
-      content:
-        "# Configuration\n\n" +
-        "Complete author configuration guidance.\n\n".repeat(800) +
-        "CONFIGURATION_TAIL",
-    },
-    { path: scriptPath, sizeBytes: 20, status: "ready", content: "echo calendar-check" },
-  ],
+  files: Object.entries({
+    [entryPath]: "# Calendar guide\n\nStart here. [Configuration](references/config.md)",
+    [configPath]:
+      "# Configuration\n\n" +
+      "Complete author configuration guidance.\n\n".repeat(800) +
+      "CONFIGURATION_TAIL",
+    [scriptPath]: "echo calendar-check",
+  }).map(([path, content]) => ({
+    path,
+    content,
+    sizeBytes: content.length,
+    status: "ready" as const,
+  })),
 };
-function selectedBundle(selectedPath: string): PluginsSkillsReadResult {
-  return {
-    ...bundle,
-    files: bundle.files.map((file) =>
-      file.path === selectedPath
-        ? file
-        : { path: file.path, sizeBytes: file.sizeBytes, status: "deferred" },
-    ),
-  };
-}
-async function setup(options: Parameters<typeof installMockGateway>[1]) {
+const selectedBundle = (selectedPath: string, extraContent = ""): PluginsSkillsReadResult => ({
+  ...bundle,
+  files: bundle.files.map((file) =>
+    file.path === selectedPath
+      ? { ...file, content: file.content + extraContent }
+      : { path: file.path, sizeBytes: file.sizeBytes, status: "deferred" },
+  ),
+});
+type GatewayOptions = Parameters<typeof installMockGateway>[1];
+async function setup(options: GatewayOptions = {}, route = installedRoute) {
   const context = await newContext();
   onTestFinished(() => context.close());
   const page = await context.newPage();
   const gateway = await installMockGateway(page, {
-    featureMethods: [...pluginMethods, "plugins.skills.read"],
+    featureMethods: [...pluginMethods, readMethod],
+    methodResponses: responses(),
     ...options,
   });
+  await page.goto(`${server.baseUrl}${route}`);
   const modal = page.locator("openclaw-file-preview-modal");
   return {
     page,
     gateway,
     modal,
+    content: (selector: string) => expect.poll(() => modal.locator(selector).textContent()),
     file: (path: string, selected = false) =>
       modal.locator(`[data-path="${path}"]${selected ? '[aria-current="true"]' : ""}`),
     open: () => page.getByRole("button", { name: new RegExp(skill.name) }).click(),
-    read: (after = 0) => gateway.waitForRequest("plugins.skills.read", { after }),
+    read: (after = 0) => gateway.waitForRequest(readMethod, { after }),
   };
 }
-function catalog(installed: boolean): PluginDiscoveryDetailResult {
-  return {
+function responses(installed = true) {
+  const detail: PluginDiscoveryDetailResult = {
     plugin: {
       id: catalogId,
       catalog: {
@@ -101,7 +100,6 @@ function catalog(installed: boolean): PluginDiscoveryDetailResult {
     detail: {
       origin: "clawhub",
       packageName: "@acme/calendar",
-      author: { handle: "acme" },
       topics: [],
       configuration: [],
       mcpServers: [],
@@ -109,9 +107,6 @@ function catalog(installed: boolean): PluginDiscoveryDetailResult {
       versions: [],
     },
   };
-}
-function responses(installed = true) {
-  const detail = catalog(installed);
   return {
     ...pluginMethodResponses(),
     "plugins.list": inventory(installed ? [calendarPlugin] : []),
@@ -122,17 +117,11 @@ function responses(installed = true) {
       catalog: detail,
       components: { ...calendarInspection.components, skills: [skill.name], skillDetails: [skill] },
     },
-    "plugins.skills.read": {
-      cases: [
-        ...bundle.files.map((selected) => ({
-          match: { path: selected.path },
-          response: selectedBundle(selected.path),
-        })),
-        {
-          match: {},
-          response: selectedBundle(entryPath),
-        },
-      ],
+    [readMethod]: {
+      cases: [...bundle.files.map(({ path }) => path), undefined].map((path) => ({
+        match: path ? { path } : {},
+        response: selectedBundle(path ?? entryPath),
+      })),
     },
   };
 }
@@ -142,42 +131,31 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
   afterAll(teardownPluginsE2e);
 
   it.each([
-    ["installed settings", "settings/plugins/calendar-plus", true, "installed"],
+    ["installed settings", installedRoute, true, "installed"],
     ["installed catalog", `plugins/${catalogId}`, true, "installed"],
     ["uninstalled catalog", `plugins/${catalogId}`, false, "catalog"],
   ] as const)(
     "opens the full bundle from %s without installing it",
     async (name, route, installed, source) => {
-      const { page, gateway, modal, file, open, read } = await setup({
-        methodResponses: responses(installed),
-      });
-      await page.goto(`${server.baseUrl}${route}`);
+      const session = await setup({ methodResponses: responses(installed) }, route);
+      const { page, gateway, modal, file, open, read, content } = session;
       if (name === "installed settings") {
         const description = page.locator(".plugin-skills-section .plugin-capability__copy > span");
         for (const width of [1440, 390]) {
           await page.setViewportSize({ width, height: 1000 });
           expect(await description.textContent()).toBe(skill.description);
-          // Keep selection and measurement together when owner updates replace skill rows.
-          const layouts = await page.evaluate(() =>
-            [
-              ...document.querySelectorAll(
-                ".plugin-skills-section .plugin-capability__copy > span",
-              ),
-            ].map((element) => {
+          expect(await description.count()).toBe(1);
+          expect(
+            await description.evaluate((element) => {
               const style = getComputedStyle(element);
+              const height = element.getBoundingClientRect().height;
               return {
                 lineClamp: style.webkitLineClamp,
-                height: element.getBoundingClientRect().height,
-                lineHeight: Number.parseFloat(style.lineHeight),
-                scrollHeight: element.scrollHeight,
+                clamped: height <= Number.parseFloat(style.lineHeight) * 2 + 1,
+                overflowing: element.scrollHeight > height,
               };
             }),
-          );
-          expect(layouts).toHaveLength(1);
-          const layout = layouts[0]!;
-          expect(layout.lineClamp).toBe("2");
-          expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
-          expect(layout.scrollHeight).toBeGreaterThan(layout.height);
+          ).toEqual({ lineClamp: "2", clamped: true, overflowing: true });
           await captureScreenshot(page, `skill-row-${width}.png`, "viewport");
         }
         await page.setViewportSize({ width: 1440, height: 900 });
@@ -197,8 +175,8 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
       ).toContain("empty");
       expect(await modal.locator(".item-meta, .chips, .state, .foot").count()).toBe(0);
       expect(await modal.locator(".head button[aria-label='Close']").count()).toBe(1);
-      expect(await gateway.getRequests("plugins.skills.read")).toHaveLength(1);
-      await gateway.deferNext("plugins.skills.read");
+      expect(await gateway.getRequests(readMethod)).toHaveLength(1);
+      await gateway.deferNext(readMethod);
       await modal.getByRole("link", { name: "Configuration", exact: true }).click();
       expect((await read(1)).params).toMatchObject({ path: configPath });
       await modal
@@ -206,18 +184,14 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
         .waitFor();
       expect(await modal.locator(".item").count()).toBe(3);
       await captureScreenshot(page, "skill-selected-skeleton.png", "viewport");
-      await gateway.resolveDeferred("plugins.skills.read", selectedBundle(configPath));
+      await gateway.resolveDeferred(readMethod, selectedBundle(configPath));
       await file(configPath, true).waitFor();
-      await expect
-        .poll(() => modal.locator(".markdown").textContent())
-        .toContain("CONFIGURATION_TAIL");
+      await content(".markdown").toContain("CONFIGURATION_TAIL");
       await file(scriptPath).click();
-      await expect
-        .poll(() => modal.locator(".code-content").textContent())
-        .toContain("echo calendar-check");
+      await content(".code-content").toContain("echo calendar-check");
       await file(entryPath).click();
       await file(configPath).click();
-      expect(await gateway.getRequests("plugins.skills.read")).toHaveLength(3);
+      expect(await gateway.getRequests(readMethod)).toHaveLength(3);
       if (name === "installed settings") {
         for (const width of [1440, 1174, 768, 390]) {
           await page.setViewportSize({ width, height: 1000 });
@@ -238,29 +212,22 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
 
   it("shows read failure, retries the same source, and discards a pending read on navigation", async () => {
     const { page, gateway, modal, file, open, read } = await setup({
-      methodResponses: responses(),
-      deferredMethods: ["plugins.skills.read"],
+      deferredMethods: [readMethod],
     });
-    await page.goto(`${server.baseUrl}settings/plugins/calendar-plus`);
     await open();
     await read();
     expect(await modal.locator("openclaw-panel-loading-skeleton").count()).toBe(2);
-    expect(await modal.locator(".body[aria-busy]").textContent()).not.toContain("Loading");
-    expect(await modal.locator(".body[aria-busy]").textContent()).not.toContain(
-      "Try another file name or content search.",
+    expect(await modal.locator(".body[aria-busy]").textContent()).not.toMatch(
+      /Loading|Try another file name or content search\./,
     );
     expect(await modal.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
-    await gateway.rejectDeferred("plugins.skills.read", {
-      message: "The skill could not be read.",
-    });
+    await gateway.rejectDeferred(readMethod, { message: "Read failed" });
     await modal.getByRole("alert").waitFor();
     expect(await modal.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
     await modal.getByRole("button", { name: "Retry", exact: true }).click();
     await read(1);
     await file(entryPath, true).waitFor();
-    expect(
-      (await gateway.getRequests("plugins.skills.read")).map((request) => request.params),
-    ).toEqual(
+    expect((await gateway.getRequests(readMethod)).map((request) => request.params)).toEqual(
       Array.from({ length: 2 }, () => ({
         source: "installed",
         pluginId: calendarPlugin.id,
@@ -268,43 +235,28 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
       })),
     );
     await modal.getByRole("button", { name: /^Close/ }).click();
-    await gateway.deferNext("plugins.skills.read");
+    await gateway.deferNext(readMethod);
     await open();
     await read(2);
-    // Navigate through the existing route owner while the read is still pending.
     await page.evaluate(() => {
       history.pushState({}, "", "/settings/plugins");
       dispatchEvent(new PopStateEvent("popstate"));
     });
     await expect.poll(() => modal.count()).toBe(0);
-    await gateway.resolveDeferred("plugins.skills.read", bundle);
-    await page
-      .getByRole("link", { name: /Calendar Plus/ })
-      .first()
-      .waitFor();
+    await gateway.resolveDeferred(readMethod, bundle);
+    await page.getByRole("link", { name: calendarPlugin.name }).first().waitFor();
     expect(await modal.count()).toBe(0);
   });
 
   it("preserves the foreground reading position when a background file finishes", async () => {
-    const initial: PluginsSkillsReadResult = {
-      ...bundle,
-      files: bundle.files.map((file) =>
-        file.path === entryPath
-          ? {
-              ...file,
-              content:
-                file.content + "\n\n" + "Read this guidance before proceeding.\n\n".repeat(100),
-            }
-          : { path: file.path, sizeBytes: file.sizeBytes, status: "deferred" },
-      ),
-    };
-    const { page, gateway, modal, file, open, read } = await setup({
-      methodResponses: { ...responses(), "plugins.skills.read": initial },
+    const guidance = "Read this guidance before proceeding.\n\n".repeat(100);
+    const initial = selectedBundle(entryPath, "\n\n" + guidance);
+    const { gateway, modal, file, open, read } = await setup({
+      methodResponses: { ...responses(), [readMethod]: initial },
     });
-    await page.goto(`${server.baseUrl}settings/plugins/calendar-plus`);
     await open();
     await modal.locator(".markdown").waitFor();
-    await gateway.deferNext("plugins.skills.read");
+    await gateway.deferNext(readMethod);
     await file(configPath).click();
     await read(1);
     await file(entryPath).click();
@@ -315,11 +267,7 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
     });
     const scrollTop = await body.evaluate((element) => element.scrollTop);
     expect(scrollTop).toBe(300);
-    const selected = bundle.files.find((entry) => entry.path === configPath)!;
-    await gateway.resolveDeferred("plugins.skills.read", {
-      ...initial,
-      files: initial.files.map((entry) => (entry.path === selected.path ? selected : entry)),
-    });
+    await gateway.resolveDeferred(readMethod, selectedBundle(configPath));
     // Await the controller's completed read and the actual modal render, not just RPC delivery.
     await expect
       .poll(() =>
@@ -331,14 +279,10 @@ describeControlUiE2e("Plugin skill bundle routes", () => {
       .toContain("CONFIGURATION_TAIL");
     expect(await body.evaluate((element) => element.scrollTop)).toBe(scrollTop);
     expect(await file(entryPath, true).count()).toBe(1);
-    await modal.getByRole("button", { name: "Close", exact: true }).click();
   });
 
   it("retires the open viewer when the Gateway reconnects", async () => {
-    const { page, gateway, modal, file, open, read } = await setup({
-      methodResponses: responses(),
-    });
-    await page.goto(`${server.baseUrl}settings/plugins/calendar-plus`);
+    const { page, gateway, modal, file, open, read } = await setup();
     await open();
     await file(entryPath, true).waitFor();
     await reconnectMockGateway(page, gateway, "after-skill-preview");
