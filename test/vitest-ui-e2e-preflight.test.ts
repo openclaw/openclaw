@@ -53,32 +53,26 @@ function expectListenerClosed() {
 
 describe("UI E2E environment preflight", () => {
   it("preserves native HTTP and socket implementations for later shared-worker consumers", () => {
-    const nativeHttp = process.getBuiltinModule("node:http");
-    const nativeNet = process.getBuiltinModule("node:net");
-    for (const implementation of [
-      nativeHttp.Server,
-      nativeHttp.Agent,
-      nativeHttp.IncomingMessage,
-      nativeHttp.OutgoingMessage,
-      nativeHttp.ServerResponse,
-      nativeHttp.ClientRequest,
-      nativeHttp.createServer,
-      nativeNet.Socket,
-    ]) {
-      expect(vi.isMockFunction(implementation)).toBe(false);
-    }
-    for (const [prototype, method] of [
-      [nativeHttp.IncomingMessage.prototype, "read"],
-      [nativeHttp.OutgoingMessage.prototype, "write"],
-      [nativeHttp.OutgoingMessage.prototype, "end"],
-      [nativeHttp.globalAgent, "createConnection"],
-      [nativeNet.Socket.prototype, "write"],
+    const http = process.getBuiltinModule("node:http");
+    const { Socket } = process.getBuiltinModule("node:net");
+    for (const name of [
+      "Server",
+      "Agent",
+      "IncomingMessage",
+      "OutgoingMessage",
+      "ServerResponse",
+      "ClientRequest",
+      "createServer",
     ] as const) {
-      expect(prototype).toHaveProperty(
-        method,
-        expect.toSatisfy((implementation) => !vi.isMockFunction(implementation)),
-      );
+      expect(vi.isMockFunction(http[name])).toBe(false);
     }
+    expect(vi.isMockFunction(Socket)).toBe(false);
+    const nativeMethod = expect.toSatisfy((implementation) => !vi.isMockFunction(implementation));
+    expect(http.IncomingMessage.prototype).toHaveProperty("read", nativeMethod);
+    expect(http.OutgoingMessage.prototype).toHaveProperty("write", nativeMethod);
+    expect(http.OutgoingMessage.prototype).toHaveProperty("end", nativeMethod);
+    expect(http.globalAgent).toHaveProperty("createConnection", nativeMethod);
+    expect(Socket.prototype).toHaveProperty("write", nativeMethod);
   });
 
   it("proves the owned HTTP response and releases its listener", async () => {
@@ -91,9 +85,8 @@ describe("UI E2E environment preflight", () => {
 
   it("reports proxy HTTP failures without exposing remote content", async () => {
     const secret = "synthetic-private-proxy-details";
-    const fetchImpl = vi.fn<typeof fetch>(
-      async () => new Response(secret, { status: 502, headers: { "x-private-proxy": secret } }),
-    );
+    const fetchImpl = async () =>
+      new Response(secret, { status: 502, headers: { "x-private-proxy": secret } });
     const failure = await assertUiE2ePreflight({ fetchImpl }).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(Error);
     expect(String(failure)).toContain("UI E2E loopback HTTP preflight received HTTP 502");
@@ -103,7 +96,7 @@ describe("UI E2E environment preflight", () => {
   });
 
   it("rejects a successful status from a different endpoint", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
+    const fetchImpl = async () => new Response(null, { status: 204 });
     await expect(assertUiE2ePreflight({ fetchImpl })).rejects.toThrow(
       "instead of the owned response",
     );
@@ -118,13 +111,12 @@ describe("UI E2E environment preflight", () => {
           if (!signal) {
             throw new Error("Expected owned abort signal");
           }
+          const abort = () => reject(new Error("synthetic-private-timeout"));
           if (signal.aborted) {
-            reject(new Error("synthetic-private-timeout"));
-            return;
+            abort();
+          } else {
+            signal.addEventListener("abort", abort, { once: true });
           }
-          signal.addEventListener("abort", () => reject(new Error("synthetic-private-timeout")), {
-            once: true,
-          });
         }),
     );
     await expect(assertUiE2ePreflight({ fetchImpl, timeoutMs: 50 })).rejects.toThrow(

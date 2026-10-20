@@ -29,15 +29,35 @@ function write(relative: string, contents = "fixture\n") {
 }
 
 function git(...args: string[]) {
-  return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: "pipe" }).trim();
+  const config = [
+    "user.name=Fixture",
+    "user.email=fixture@example.invalid",
+    "commit.gpgsign=false",
+    "core.hooksPath=/dev/null",
+  ];
+  return execFileSync("git", [...config.flatMap((entry) => ["-c", entry]), ...args], {
+    cwd: root,
+    encoding: "utf8",
+    stdio: "pipe",
+  }).trim();
 }
 
+const readBuildInfo = () =>
+  JSON.parse(fs.readFileSync(path.join(root, "dist/build-info.json"), "utf8"));
+
 function writeMatchingUi() {
-  const { buildId } = JSON.parse(fs.readFileSync(path.join(root, "dist/build-info.json"), "utf8"));
+  const { buildId } = readBuildInfo();
   write(
     "dist/control-ui/index.html",
     `<html data-openclaw-control-ui-build-id="${buildId}-${"a".repeat(64)}"><script src="./assets/entry.js"></script></html>`,
   );
+}
+
+function stampBuild() {
+  writeBuildInfo({ rootDir: root, env: fixtureBuildEnv });
+  writeMatchingUi();
+  writeBuildStamp({ cwd: root });
+  writeRuntimePostBuildStamp({ cwd: root });
 }
 
 beforeEach(() => {
@@ -49,20 +69,7 @@ beforeEach(() => {
   write("package.json", '{"name":"prebuilt-ui-fixture","private":true}\n');
   git("init", "--quiet");
   git("add", ".");
-  git(
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.invalid",
-    "-c",
-    "commit.gpgsign=false",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "commit",
-    "--quiet",
-    "-m",
-    "fixture",
-  );
+  git("commit", "--quiet", "-m", "fixture");
   writeUpdateCompatibilityBuildFixture(root);
   writeUpdateCompatibilityChunks({
     distDir: path.join(root, "dist"),
@@ -81,10 +88,7 @@ beforeEach(() => {
   }
   write("dist/control-ui/assets/entry.js");
   write("dist/control-ui/sw.js");
-  writeBuildInfo({ rootDir: root, env: fixtureBuildEnv });
-  writeMatchingUi();
-  writeBuildStamp({ cwd: root });
-  writeRuntimePostBuildStamp({ cwd: root });
+  stampBuild();
 });
 
 afterEach(() => {
@@ -96,14 +100,14 @@ it("rejects retained UI assets after a same-source runtime rebuild without repai
   const uiRoot = path.join(root, "dist/control-ui");
   const indexPath = path.join(uiRoot, "index.html");
   const index = fs.readFileSync(indexPath);
-  const before = JSON.parse(fs.readFileSync(path.join(root, "dist/build-info.json"), "utf8"));
+  const before = readBuildInfo();
   expect(inspectControlUiRootAssets(uiRoot, before.buildId).kind).toBe("ready");
 
   writeBuildInfo({
     rootDir: root,
     env: { OPENCLAW_BUILD_TIMESTAMP: "2026-09-23T00:01:00.000Z" },
   });
-  const after = JSON.parse(fs.readFileSync(path.join(root, "dist/build-info.json"), "utf8"));
+  const after = readBuildInfo();
   expect(after.commit).toBe(before.commit);
   expect(after.buildId).not.toBe(before.buildId);
   expect(inspectControlUiRootAssets(uiRoot, after.buildId)).toMatchObject({
@@ -138,24 +142,8 @@ it("finishes before the generation check", () => {
 });`,
   );
   git("add", ".");
-  git(
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.invalid",
-    "-c",
-    "commit.gpgsign=false",
-    "-c",
-    "core.hooksPath=/dev/null",
-    "commit",
-    "--quiet",
-    "-m",
-    "native fixture",
-  );
-  writeBuildInfo({ rootDir: root, env: fixtureBuildEnv });
-  writeMatchingUi();
-  writeBuildStamp({ cwd: root });
-  writeRuntimePostBuildStamp({ cwd: root });
+  git("commit", "--quiet", "-m", "native fixture");
+  stampBuild();
   const reportFile = path.join(root, ".git/report.json");
   const configFile = path.join(root, ".git/probe.config.mts");
   write(
