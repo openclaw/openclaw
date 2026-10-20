@@ -248,11 +248,9 @@ it("narrow collector Stop joins owned raw effects without interrupting or waitin
     expect(foreign.isActive()).toBe(true);
     expect(foreignAbort).not.toHaveBeenCalled();
     expect(foreignOperation.abortSignal.aborted).toBe(false);
-    const stopped = expectDefined(
-      getCurrentSubagentRunOwner(subagentRuns, entry),
-      "stopped reserved collector",
-    );
-    expect(stopped.collectorCompletion?.status).toBe("killed");
+    expect(getCurrentSubagentRunOwner(subagentRuns, entry)).toMatchObject({
+      collectorCompletion: { status: "killed" },
+    });
   } finally {
     rawFinish.resolve();
     validationFinish.resolve();

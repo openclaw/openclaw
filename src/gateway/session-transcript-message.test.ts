@@ -7,25 +7,21 @@ import { projectTranscriptEntryMessage as projectEntry } from "./session-transcr
 import { projectSessionMessagePayload } from "./session-transcript-message.js";
 
 const position = { source: "selected-snapshot", rawSeq: 4 };
+type Position = typeof position | undefined;
+type ProjectionOptions = Parameters<typeof projectSessionMessagePayload>[0];
+const mainKey = "agent:main:main";
 const message = {
   role: "assistant",
   content: "done",
   __openclaw: { transcriptPosition: { source: "untrusted", rawSeq: 0 } },
 };
-const project = (
-  raw: unknown,
-  options: Partial<Omit<Parameters<typeof projectSessionMessagePayload>[0], "message">> = {},
-) => projectSessionMessagePayload({ message: raw, sessionKey: "agent:main:main", ...options });
+const project = (raw: unknown, options: Partial<Omit<ProjectionOptions, "message">> = {}) =>
+  projectSessionMessagePayload({ message: raw, sessionKey: mainKey, ...options });
 const metadata = (raw: unknown) => asOptionalRecord(asOptionalRecord(raw)?.["__openclaw"]);
-function projections(
-  raw: unknown,
-  entry: unknown,
-  placement: typeof position | undefined,
-  sessionKey = "agent:main:main",
-) {
+function projections(raw: unknown, entry: unknown, at: Position, key = mainKey) {
   return [
-    projectChatDisplayMessage(projectEntry(entry, 2, placement)),
-    project(raw, { messageId: "entry", messageSeq: 2, transcriptPosition: placement, sessionKey })
+    projectChatDisplayMessage(projectEntry(entry, 2, at)),
+    project(raw, { messageId: "entry", messageSeq: 2, transcriptPosition: at, sessionKey: key })
       .payload?.message,
   ];
 }
@@ -60,34 +56,31 @@ it.each([
   [[{ type: "text", text: "Useful partial answer" }], "recovering-run", false],
   [[{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }], "recovering-run", false],
   [[], "other-run", true],
-] as const)(
-  "defers attempt diagnostics without terminal settlement: %j %s",
-  (content, runId, pending) => {
-    const raw = {
-      role: "assistant",
-      stopReason: "error",
-      errorMessage: "context exceeded",
-      content,
-      __openclaw: { runId },
-    };
-    const original = structuredClone(raw);
-    const result = project(raw);
-    expect(result.deferredAssistantError === true).toBe(pending);
-    expect(Boolean(result.payload)).toBe(!pending);
-    expect(result.projectionState).toMatchObject({ assistantErrorPending: true });
-    if (runId === "recovering-run" && result.payload) {
-      for (const key of ["openclawRunError", "stopReason", "errorMessage"]) {
-        expect(result.payload.message).not.toHaveProperty(key);
-      }
+] as const)("defers diagnostics: %j %s", (content, runId, pending) => {
+  const raw = {
+    role: "assistant",
+    stopReason: "error",
+    errorMessage: "context exceeded",
+    content,
+    __openclaw: { runId },
+  };
+  const original = structuredClone(raw);
+  const result = project(raw);
+  expect(result.deferredAssistantError === true).toBe(pending);
+  expect(Boolean(result.payload)).toBe(!pending);
+  expect(result.projectionState).toMatchObject({ assistantErrorPending: true });
+  if (runId === "recovering-run" && result.payload) {
+    for (const key of ["openclawRunError", "stopReason", "errorMessage"]) {
+      expect(result.payload.message).not.toHaveProperty(key);
     }
-    expect(raw).toEqual(original);
-  },
-);
+  }
+  expect(raw).toEqual(original);
+});
 
 it("keeps nested activity ownership distinct from entry deduplication in history and live events", () => {
   const activity = {
     ...createNestedToolActivity({
-      runId: "owning-run",
+      runId: "run",
       scopeId: "attempt",
       afterEntryId: "parent",
       startOrder: 0,
@@ -100,21 +93,16 @@ it("keeps nested activity ownership distinct from entry deduplication in history
       startedAt: 1,
       timestamp: 2,
     }),
-    idempotencyKey: "attempt:nested-read",
+    idempotencyKey: "key",
   };
+  const expected = { id: "entry", sequence: 2, runId: "run", idempotencyKey: "key", sendId: null };
   for (const projected of projections(
     activity,
     { type: "message", id: "entry", message: activity },
     position,
     "agent:main:dashboard:nested",
   )) {
-    expect(identity(projected)).toMatchObject({
-      id: "entry",
-      sequence: 2,
-      runId: "owning-run",
-      idempotencyKey: "attempt:nested-read",
-      sendId: null,
-    });
+    expect(identity(projected)).toMatchObject(expected);
     expect(metadata(projected)?.transcriptPosition).toEqual(position);
   }
   expect(activity).not.toHaveProperty("__openclaw");
