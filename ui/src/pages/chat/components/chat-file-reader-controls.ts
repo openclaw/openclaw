@@ -4,10 +4,10 @@ import type { FileCopyAction, FileCopyFeedback } from "./chat-file-copy.ts";
 import type { FileHtmlPreviewControls } from "./chat-html-preview.ts";
 import type {
   AttachmentSidebarRuntime,
-  FileReaderWorkspace,
   FileSidebarContent,
   MobileFileBack,
 } from "./chat-sidebar-content-types.ts";
+import type { FileReaderWorkspace } from "./chat-sidebar-view-types.ts";
 
 export type MobileFileFindCloseReason = "close" | "escape" | "outside";
 

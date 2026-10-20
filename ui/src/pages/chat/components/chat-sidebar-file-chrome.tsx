@@ -13,7 +13,7 @@ import type { FileCopyAction } from "./chat-file-copy.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileReaderChromeProps, FileViewControls } from "./chat-file-reader-controls.ts";
 import { WorkspaceBreadcrumb } from "./chat-session-workspace-breadcrumb.tsx";
-import type { FileReaderWorkspace } from "./chat-sidebar-content-types.ts";
+import type { FileReaderWorkspace } from "./chat-sidebar-view-types.ts";
 
 registerCodeBlocksEnglish();
 registerFilePreviewEnglish();

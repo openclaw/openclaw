@@ -9,7 +9,6 @@ import type {
   FileReaderInteraction,
   FileReaderViewRequest,
   ChatDetailPanelContent,
-  ChatDetailPanelProps,
 } from "./chat-sidebar-content-types.ts";
 import {
   handleSidebarClick,
@@ -21,6 +20,7 @@ import {
   loadFileWrapPreference,
   saveFileWrapPreference,
 } from "./chat-sidebar-file-view.tsx";
+import type { ChatDetailPanelProps } from "./chat-sidebar-view-types.ts";
 import type { FileEditorViewHandle } from "./file-editor-view.ts";
 
 type FilePresentationState = {
