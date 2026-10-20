@@ -115,8 +115,9 @@ describe("public reader operator handoff", () => {
       { type: "openclaw:widget-prompt", height: 500 },
       { type: "openclaw:widget-size", height: "500" },
       { type: "openclaw:widget-size", height: Infinity },
-    ])
+    ]) {
       send(data);
+    }
     send({ type: "openclaw:widget-size", height: 500 }, other!.contentWindow);
     expect(other!.style.height).toBe("500px");
     send({ type: "openclaw:widget-size", height: 600 }, null);
