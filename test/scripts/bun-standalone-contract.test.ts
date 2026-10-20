@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -11,18 +10,14 @@ import {
   relativeStandaloneEntry,
   resolveStandaloneBuildIdentity,
 } from "../../scripts/lib/bun-standalone-contract.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-standalone-contract-"));
-  roots.push(root);
-  fs.mkdirSync(path.join(root, "runtime"));
-  return root;
+  const root = tempDirs.make("openclaw-standalone-contract-");
+  const runtime = path.join(root, "runtime");
+  fs.mkdirSync(runtime);
+  return { root, runtime };
 }
 
 describe("standalone build interface", () => {
@@ -37,10 +32,7 @@ describe("standalone build interface", () => {
       "--compile-aot": "aot",
     })) {
       const parsed = parseStandaloneArguments(["out", flag]);
-      if (parsed.help) {
-        throw new Error("A build mode must not request help");
-      }
-      expect(parsed.mode).toBe(mode);
+      expect(parsed).toMatchObject({ mode });
     }
     expect(() => parseStandaloneArguments(["out", "--bytecode", "--compile-aot"])).toThrow(
       "at most one",
@@ -122,8 +114,7 @@ describe("standalone build interface", () => {
   });
 
   it("describes the executable and deterministic sidecar without following links", async () => {
-    const root = fixture();
-    const runtime = path.join(root, "runtime");
+    const { root, runtime } = fixture();
     fs.writeFileSync(path.join(root, "openclaw"), "standalone\n");
     fs.writeFileSync(path.join(runtime, "a.js"), "export const value = 7;\n");
     fs.symlinkSync("a.js", path.join(runtime, "link"));
@@ -183,8 +174,7 @@ describe("standalone build interface", () => {
   it.each(["dangling", "outside", "indirect-outside", "cycle", "absolute-inside"])(
     "rejects a %s runtime symlink before describing the sidecar",
     async (kind) => {
-      const root = fixture();
-      const runtime = path.join(root, "runtime");
+      const { root, runtime } = fixture();
       const outside = path.join(root, "outside");
       fs.writeFileSync(outside, "outside\n");
       const link = path.join(runtime, "node_modules/.pnpm/node_modules/openclaw-control-ui");
@@ -213,8 +203,7 @@ describe("standalone build interface", () => {
   );
 
   it("allows contained directory links without counting their contents twice", async () => {
-    const root = fixture();
-    const runtime = path.join(root, "runtime");
+    const { runtime } = fixture();
     fs.mkdirSync(path.join(runtime, "assets"));
     fs.writeFileSync(path.join(runtime, "assets", "data"), "data");
     fs.symlinkSync("assets", path.join(runtime, "asset-link"));

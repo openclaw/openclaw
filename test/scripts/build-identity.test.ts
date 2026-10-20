@@ -14,6 +14,12 @@ import { toolingProbeRuntimeEntrypoints } from "./tooling-probe-runtime.test-sup
 const buildIdentityUrl = resolveRuntimeWorkerUrl(toolingProbeRuntimeEntrypoints.buildIdentity);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
+const resolveIdentity = (options: Partial<Parameters<typeof resolveBuildIdentityEnvironment>[0]>) =>
+  resolveBuildIdentityEnvironment({
+    commitLabel: "runtime pack commit",
+    readGitCommit: () => null,
+    ...options,
+  });
 
 function readGitCommitInChild(cwd: string, env: NodeJS.ProcessEnv = process.env) {
   const result = spawnSync(
@@ -44,27 +50,20 @@ describe("readCurrentGitCommit", () => {
     const outsideRepo = join(root, "outside");
     mkdirSync(repo);
     mkdirSync(outsideRepo);
-
-    execFileSync("git", ["init", "-q"], { cwd: repo, stdio: "ignore" });
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" });
+    git("init", "-q");
     writeFileSync(join(repo, "fixture.txt"), "fixture\n");
-    execFileSync("git", ["add", "fixture.txt"], { cwd: repo, stdio: "ignore" });
-    execFileSync(
-      "git",
-      [
-        "-c",
-        "user.name=OpenClaw Tests",
-        "-c",
-        "user.email=openclaw-tests@example.invalid",
-        "commit",
-        "-qm",
-        "fixture",
-      ],
-      { cwd: repo, stdio: "ignore" },
+    git("add", "fixture.txt");
+    git(
+      "-c",
+      "user.name=OpenClaw Tests",
+      "-c",
+      "user.email=openclaw-tests@example.invalid",
+      "commit",
+      "-qm",
+      "fixture",
     );
-    const expected = execFileSync("git", ["rev-parse", "HEAD"], {
-      cwd: repo,
-      encoding: "utf8",
-    }).trim();
+    const expected = git("rev-parse", "HEAD").trim();
 
     expect(readGitCommitInChild(repo)).toBe(expected);
     expect(readGitCommitInChild(outsideRepo)).toBeNull();
@@ -82,24 +81,12 @@ describe("readCurrentGitCommit", () => {
 
 describe("resolveBuildIdentityEnvironment", () => {
   it.each([
-    {
-      env: { GIT_COMMIT: "A".repeat(40), GIT_SHA: "b".repeat(40) },
-      expected: "a".repeat(40),
-      readsCheckout: false,
-    },
-    {
-      env: { GIT_SHA: "B".repeat(40), GITHUB_SHA: "c".repeat(40) },
-      expected: "b".repeat(40),
-      readsCheckout: false,
-    },
-    {
-      env: { GITHUB_SHA: "c".repeat(40) },
-      expected: "d".repeat(40),
-      readsCheckout: true,
-    },
-  ])("preserves build source precedence %#", ({ env, expected, readsCheckout }) => {
+    [{ GIT_COMMIT: "A".repeat(40), GIT_SHA: "b".repeat(40) }, "a".repeat(40), false],
+    [{ GIT_SHA: "B".repeat(40), GITHUB_SHA: "c".repeat(40) }, "b".repeat(40), false],
+    [{ GITHUB_SHA: "c".repeat(40) }, "d".repeat(40), true],
+  ])("preserves build source precedence %#", (env, expected, readsCheckout) => {
     const readGitCommit = vi.fn(() => "D".repeat(40));
-    const resolved = resolveBuildIdentityEnvironment({
+    const resolved = resolveIdentity({
       commitLabel: "build commit",
       env,
       now: () => new Date("2026-07-10T12:34:56.000Z"),
@@ -112,14 +99,12 @@ describe("resolveBuildIdentityEnvironment", () => {
 
   it("uses workflow identity only when the checkout cannot be read", () => {
     expect(
-      resolveBuildIdentityEnvironment({
-        commitLabel: "runtime pack commit",
+      resolveIdentity({
         env: {
           GITHUB_SHA: "e".repeat(40),
           OPENCLAW_BUILD_TIMESTAMP: " 2026-07-10T01:02:03.000Z ",
         },
         now: () => new Date("2026-07-11T12:34:56.000Z"),
-        readGitCommit: () => null,
       }),
     ).toMatchObject({
       GIT_COMMIT: "e".repeat(40),
@@ -128,12 +113,8 @@ describe("resolveBuildIdentityEnvironment", () => {
   });
 
   it("uses the owner label in malformed commit diagnostics", () => {
-    expect(() =>
-      resolveBuildIdentityEnvironment({
-        commitLabel: "runtime pack commit",
-        env: { GIT_COMMIT: "deadbeef" },
-        readGitCommit: () => null,
-      }),
-    ).toThrow("runtime pack commit must be a full 40-character hexadecimal SHA");
+    expect(() => resolveIdentity({ env: { GIT_COMMIT: "deadbeef" } })).toThrow(
+      "runtime pack commit must be a full 40-character hexadecimal SHA",
+    );
   });
 });

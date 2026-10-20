@@ -1,4 +1,3 @@
-// Browser CDP snapshot tests cover optional chunk quarantine and bounded snapshot assertions.
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -19,7 +18,9 @@ const SCRIPT_PATH = "scripts/e2e/lib/browser-cdp-snapshot/assert-snapshot.mjs";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 
-function runAssertSnapshot(snapshotPath: string, env: Record<string, string | undefined> = {}) {
+function runAssertSnapshot(contents: string, env: Record<string, string | undefined> = {}) {
+  const snapshotPath = path.join(tempDirs.make("openclaw-browser-cdp-snapshot-"), "snapshot.txt");
+  writeFileSync(snapshotPath, contents, "utf8");
   return spawnSync(testNodeExecPath, [SCRIPT_PATH, snapshotPath], {
     encoding: "utf8",
     env: { ...process.env, OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES: undefined, ...env },
@@ -94,11 +95,7 @@ describe("browser CDP optional AI chunk quarantine", () => {
 
 describe("browser CDP snapshot assertions", () => {
   it("rejects oversized snapshots before reading them into diagnostics", () => {
-    const root = tempDirs.make("openclaw-browser-cdp-snapshot-");
-    const snapshotPath = path.join(root, "snapshot.txt");
-    writeFileSync(snapshotPath, "x".repeat(33), "utf8");
-
-    const result = runAssertSnapshot(snapshotPath, {
+    const result = runAssertSnapshot("x".repeat(33), {
       OPENCLAW_BROWSER_CDP_SNAPSHOT_MAX_BYTES: "32",
     });
 
@@ -108,11 +105,7 @@ describe("browser CDP snapshot assertions", () => {
   });
 
   it("bounds missing-needle snapshot diagnostics", () => {
-    const root = tempDirs.make("openclaw-browser-cdp-snapshot-");
-    const snapshotPath = path.join(root, "snapshot.txt");
-    writeFileSync(snapshotPath, `${"old snapshot line\n".repeat(6 * 1024)}recent tail`, "utf8");
-
-    const result = runAssertSnapshot(snapshotPath);
+    const result = runAssertSnapshot(`${"old snapshot line\n".repeat(6 * 1024)}recent tail`);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("recent tail");
