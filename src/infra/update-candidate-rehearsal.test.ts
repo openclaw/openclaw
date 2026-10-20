@@ -25,6 +25,7 @@ it.each(["token", "password"] as const)(
       policyPath,
       JSON.stringify({ gateway: { auth: { requireAuth: true, requireExplicitRateLimit: true } } }),
     );
+    const user = "operator@example.invalid";
     const config: OpenClawConfig = {
       plugins: { entries: { policy: { enabled: true, config: { path: policyPath } } } },
       gateway: {
@@ -36,11 +37,8 @@ it.each(["token", "password"] as const)(
           password: { source: "env", provider: "default", id: "SYNTHETIC_SERVING_PASSWORD" },
           allowTailscale: true,
           rateLimit: { maxAttempts: 5, windowMs: 30_000, lockoutMs: 60_000, exemptLoopback: false },
-          identityScopes: { "operator@example.invalid": ["operator.read"] },
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            allowUsers: ["operator@example.invalid"],
-          },
+          identityScopes: { [user]: ["operator.read"] },
+          trustedProxy: { userHeader: "x-forwarded-user", allowUsers: [user] },
         },
         trustedProxies: ["192.0.2.1"],
       },
@@ -80,9 +78,9 @@ it.each(["token", "password"] as const)(
           identityScopes: config.gateway?.auth?.identityScopes,
           trustedProxy: config.gateway?.auth?.trustedProxy,
           allowTailscale: false,
+          token: expect.any(String),
         },
       });
-      expect(copied.gateway?.auth?.token).toEqual(expect.any(String));
       expect(copied.gateway?.auth?.token).not.toBe(config.gateway?.auth?.token);
       expect(copied.gateway?.auth?.password).toBeUndefined();
       expect(rehearsal.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();

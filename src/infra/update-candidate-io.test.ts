@@ -38,8 +38,7 @@ it.each([
     await vi.advanceTimersByTimeAsync(allowance - 1);
     expect(state.signal?.aborted).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
-    expect(state.signal?.aborted).toBe(true);
-    expect(state.settled).toBe(false);
+    expect(state).toMatchObject({ signal: { aborted: true }, settled: false });
     exit.resolve();
     await rejected;
   },
@@ -85,8 +84,7 @@ it("drains accepted work after caller cancellation", async () => {
   const { exit, state, operation } = pendingIo({ signal: caller.signal });
   const rejected = expect(operation).rejects.toBe(reason);
   caller.abort(reason);
-  expect(state.signal?.aborted).toBe(true);
-  expect(state.settled).toBe(false);
+  expect(state).toMatchObject({ signal: { aborted: true }, settled: false });
   exit.resolve();
   await rejected;
 });

@@ -74,10 +74,7 @@ it.each([
         ? { dependencies: { "sibling-helper": "1.0.0" } }
         : {}),
     });
-    await write("plugin/openclaw.plugin.json", {
-      id: "demo",
-      configSchema: { type: "object", properties: {} },
-    });
+    await write("plugin/openclaw.plugin.json", { id: "demo", configSchema: { type: "object" } });
     await fs.writeFile(
       entry,
       commonjs
@@ -89,13 +86,9 @@ it.each([
             : `import value from ${JSON.stringify(importTarget)}; export default () => value;`,
     );
     const expectExecutable = async (file: string) => {
+      const expression = `console.log(await (await import(${JSON.stringify(pathToFileURL(file).href)})).default())`;
       const result = await runCommandBuffered(
-        [
-          process.execPath,
-          "--input-type=module",
-          "-e",
-          `console.log(await (await import(${JSON.stringify(pathToFileURL(file).href)})).default())`,
-        ],
+        [process.execPath, "--input-type=module", "-e", expression],
         { timeoutMs: 10_000 },
       );
       expect(result.code, result.stderr.toString()).toBe(0);

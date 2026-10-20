@@ -46,9 +46,7 @@ export function registerCanaryMigrationPolicyTests({
             migrate();
           } else if (!inputAtBoot?.meta?.lastTouchedVersion) {
             queueMicrotask(() => {
-              child.stderr.write(
-                "Preserved configuration needs a migration this Gateway cannot perform\n",
-              );
+              child.stderr.write("Configuration migration required\n");
               child.emit("close", 1);
             });
           }
@@ -95,13 +93,13 @@ export function registerCanaryMigrationPolicyTests({
         onStep,
         migrationPolicy,
       });
+      const rehearsing = migrationPolicy === "rehearse";
       expect(result).toMatchObject({
-        status: migrationPolicy === "startup-only" ? "error" : "ok",
+        status: rehearsing ? "ok" : "error",
         phase: "runtime",
       });
       expect(result.candidateSchemaVersions).toBeUndefined();
       expect(result).not.toHaveProperty("checkpointContinuation");
-      const rehearsing = migrationPolicy === "rehearse";
       expect(result.steps).toEqual([
         step(rehearsing ? "candidate-recovery" : "candidate-runtime", rehearsing ? null : 1),
       ]);
@@ -111,8 +109,7 @@ export function registerCanaryMigrationPolicyTests({
         );
       }
       expect(onStep).toHaveBeenCalledWith(result.steps[0]);
-      expect(mocks.snapshot).not.toHaveBeenCalled();
-      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect([mocks.snapshot.mock.calls, mocks.spawn.mock.calls]).toEqual([[], []]);
     },
   );
 }
