@@ -14,8 +14,6 @@ import {
 import { captureEnv } from "../test-utils/env.js";
 import { createGatewayFixtureFork } from "./server.fixture-lifetime.test-support.js";
 
-// Run the actual fixture hooks with controlled setup/teardown overlap instead
-// of waiting for the runner's 180s timeout. Consumer test bodies stay uncalled.
 type FixtureHookContext = Pick<TestContext, "signal">;
 type FixtureHook = (context: FixtureHookContext) => unknown;
 const hooks = vi.hoisted(() => ({
@@ -53,8 +51,6 @@ vi.mock("../agents/prepared-model-runtime.test-support.js", async (importOrigina
 }));
 
 const listeners = vi.hoisted(() => new Set<import("node:net").Server>());
-// The fixture owns a disposable server, not Gateway business logic. Keep its
-// real port, socket, harness and environment lifetime; fork tests cover RPC boot.
 vi.mock("./server-runtime-state.js", () => ({
   createGatewayHttpTransport: async (params: { testListener?: import("node:http").Server }) => {
     if (!params.testListener) {
@@ -97,7 +93,6 @@ const consumerHooks = takeHooks();
 const sessions = await import("./test/server-sessions.test-helpers.js");
 const serverHarness = await import("./server.e2e-ws-harness.js");
 const gatewayHelpers = await import("./test-helpers.server.js");
-// Prepare during collection; each isolated child keeps its own shutdown deadline.
 const fixtureWorkers = createVitestWorkerRun();
 afterAll(() => fixtureWorkers.dispose());
 try {
@@ -167,6 +162,25 @@ async function emergencyCleanup(fixture: typeof hooks, context = uninterruptedCo
   }
 }
 
+function interceptSessionDirectories(observe: (prefix: string, dir?: string) => void) {
+  const mkdtemp = fs.mkdtemp.bind(fs);
+  const mkdtempSync = fsSync.mkdtempSync.bind(fsSync);
+  vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
+    observe(prefix);
+    const dir = await mkdtemp(prefix, options);
+    if (typeof dir === "string") {
+      observe(prefix, dir);
+    }
+    return dir;
+  });
+  vi.spyOn(fsSync, "mkdtempSync").mockImplementation((prefix, options) => {
+    observe(prefix);
+    const dir = mkdtempSync(prefix, options);
+    observe(prefix, dir);
+    return dir;
+  });
+}
+
 test("suite setup joins Gateway implementation preparation before releasing its home", async () => {
   startupPreparation.held = true;
   gatewayHelpers.installGatewayTestHooks({ scope: "suite" });
@@ -212,19 +226,10 @@ test("partial session setup closes its acquired server before removing its envir
   sessions.setupGatewaySessionsTestHarness();
   const fixture = takeHooks();
   const failure = new Error("injected session directory acquisition failure");
-  const mkdtemp = fs.mkdtemp.bind(fs);
-  const mkdtempSync = fsSync.mkdtempSync.bind(fsSync);
-  vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
+  interceptSessionDirectories((prefix) => {
     if (prefix.includes("openclaw-sessions-")) {
       throw failure;
     }
-    return await mkdtemp(prefix, options);
-  });
-  vi.spyOn(fsSync, "mkdtempSync").mockImplementation((prefix, options) => {
-    if (prefix.includes("openclaw-sessions-")) {
-      throw failure;
-    }
-    return mkdtempSync(prefix, options);
   });
   let acquired: Awaited<ReturnType<typeof startHarness>> | undefined;
   let closeCalls = 0;
@@ -260,21 +265,10 @@ test("teardown joins delayed server acquisition before cleaning session director
   let server: Awaited<ReturnType<typeof startHarness>> | undefined;
   let closeCalls = 0;
   const roots = new Set<string>();
-  const mkdtemp = fs.mkdtemp.bind(fs);
-  const mkdtempSync = fsSync.mkdtempSync.bind(fsSync);
-  vi.spyOn(fs, "mkdtemp").mockImplementation(async (prefix, options) => {
-    const dir = await mkdtemp(prefix, options);
-    if (typeof dir === "string" && path.basename(dir).startsWith("openclaw-sessions-")) {
+  interceptSessionDirectories((_prefix, dir) => {
+    if (dir && path.basename(dir).startsWith("openclaw-sessions-")) {
       roots.add(dir);
     }
-    return dir;
-  });
-  vi.spyOn(fsSync, "mkdtempSync").mockImplementation((prefix, options) => {
-    const dir = mkdtempSync(prefix, options);
-    if (typeof dir === "string" && path.basename(dir).startsWith("openclaw-sessions-")) {
-      roots.add(dir);
-    }
-    return dir;
   });
   vi.spyOn(serverHarness, "startGatewayServerHarness").mockImplementation(async () => {
     server = await startHarness();

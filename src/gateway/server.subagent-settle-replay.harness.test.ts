@@ -62,6 +62,11 @@ describe("public yielded settle replay with real Gateway admission", () => {
     sourceTool: "subagent_settle",
   });
   const persistedChild = () => loadSubagentRegistryFromSqlite().get(child.runId);
+  const mockCommand = (run: (command: AgentCommandOpts) => Promise<void>) =>
+    agentCommandMock.mockImplementationOnce(async (input) => {
+      await run(input as AgentCommandOpts);
+      return finalResult();
+    });
   const wakeState = (batchRunIds: string[]): SubagentRunRecord["requesterSettleWake"] => ({
     status: "dispatching",
     attemptCount: 1,
@@ -135,10 +140,8 @@ describe("public yielded settle replay with real Gateway admission", () => {
     saveChild(child);
   });
 
-  afterEach(async () => {
-    // Real restart activation arms a sweeper; retire it before seeding the next synthetic cohort.
-    await resetSubagentRegistryForTests({ persist: false });
-  });
+  // Restart activation arms a sweeper; retire it before the next synthetic cohort.
+  afterEach(() => resetSubagentRegistryForTests({ persist: false }));
 
   function persistChild(entry = child) {
     writeSubagentRunValuesInDatabase(
@@ -180,13 +183,14 @@ describe("public yielded settle replay with real Gateway admission", () => {
     return installChild(next);
   }
 
+  const assertChildCurrent = () => {
+    if (subagentRuns.get(child.runId) !== child) {
+      throw new SubagentCompletionSourceChangedError("Synthetic cohort was replaced");
+    }
+  };
   const settleWakeReplay = (sourceSessionKeys: string[]) => ({
     sourceSessionKeys,
-    assertCurrent: () => {
-      if (subagentRuns.get(child.runId) !== child) {
-        throw new SubagentCompletionSourceChangedError("Synthetic cohort was replaced");
-      }
-    },
+    assertCurrent: assertChildCurrent,
   });
 
   const markCommandExecutionStarted = (command: AgentCommandOpts) =>
@@ -224,13 +228,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
         await mutateRequesterCompletionBatch({
           entries: batch,
           operation: { kind: "settle", outcome: outcome! },
-          assertCurrent: () => {
-            if (subagentRuns.get(child.runId) !== child) {
-              throw new SubagentCompletionSourceChangedError(
-                "Subagent completion owner changed before settlement",
-              );
-            }
-          },
+          assertCurrent: assertChildCurrent,
         });
         await onCommitted?.();
       });
@@ -251,8 +249,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
     async (outcome) => {
       const entered = createDeferred();
       const release = createDeferred();
-      agentCommandMock.mockImplementationOnce(async (input) => {
-        const command = input as AgentCommandOpts;
+      mockCommand(async (command) => {
         await command.userTurnTranscriptRecorder!.persistApproved();
         await markCommandExecutionStarted(command);
         entered.resolve();
@@ -260,7 +257,6 @@ describe("public yielded settle replay with real Gateway admission", () => {
         if (outcome === "failure") {
           throw new Error("isolated requester provider failure");
         }
-        return finalResult();
       });
       const runId = buildAnnounceIdempotencyKey(
         `requester-settle:main:${requesterSessionKey}:${child.runId}:yield-1`,
@@ -317,8 +313,8 @@ describe("public yielded settle replay with real Gateway admission", () => {
         const reconciliation = wake();
         expect(await reconciliation.result).toBe(outcome === "success");
         expect(agentCommandMock).toHaveBeenCalledOnce();
-        const persisted = persistedChild();
         expect(reconciliation.completeBatch).toHaveBeenCalledOnce();
+        const persisted = persistedChild();
         expect(persisted?.requesterSettleWake).toBeUndefined();
         const settled = reconciliation.completeBatch.mock.calls[0]?.[2];
         expect(settled).toMatchObject(
@@ -342,7 +338,6 @@ describe("public yielded settle replay with real Gateway admission", () => {
                 },
         });
       } finally {
-        vi.useRealTimers();
         release.resolve();
         await terminal;
       }
@@ -410,10 +405,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
         subagentRuns.delete(entry.runId);
       }
       restoreChildren(cohort);
-      agentCommandMock.mockImplementationOnce(async (input) => {
-        await markCommandExecutionStarted(input as AgentCommandOpts);
-        return finalResult();
-      });
+      mockCommand(markCommandExecutionStarted);
       try {
         expect(await wake().result).toBe(true);
         expect(agentCommandMock).toHaveBeenCalledOnce();
@@ -526,11 +518,9 @@ describe("public yielded settle replay with real Gateway admission", () => {
       });
     // Leave the wake unacknowledged after Gateway input completion commits.
     const dispatch = (entry: SubagentRunRecord) => wake(entry, completion).result;
-    agentCommandMock.mockImplementationOnce(async (input) => {
-      const command = input as AgentCommandOpts;
-      expect(command.inputProvenance?.sourceSessionKey).toBe(
-        legacy ? sibling.childSessionKey : child.childSessionKey,
-      );
+    const originalSource = legacy ? sibling.childSessionKey : child.childSessionKey;
+    mockCommand(async (command) => {
+      expect(command.inputProvenance?.sourceSessionKey).toBe(originalSource);
       if (lateDescendant) {
         expect(command.message).toContain(
           "a descendant result below it was still undelivered when waiting stopped",
@@ -555,19 +545,15 @@ describe("public yielded settle replay with real Gateway admission", () => {
           }),
         );
       }
-      return finalResult();
     });
     if (retryable) {
-      agentCommandMock.mockImplementationOnce(async (input) => {
-        const command = input as AgentCommandOpts;
-        const expectedSource = legacy ? sibling.childSessionKey : child.childSessionKey;
-        expect(command.inputProvenance?.sourceSessionKey).toBe(expectedSource);
-        expect(command.message).toContain(`sourceSession=${expectedSource}`);
+      mockCommand(async (command) => {
+        expect(command.inputProvenance?.sourceSessionKey).toBe(originalSource);
+        expect(command.message).toContain(`sourceSession=${originalSource}`);
         const persistence = await command.userTurnTranscriptRecorder!.persistApproved();
         if (transcriptOnly) {
           expect(persistence).toMatchObject({ appended: false });
         }
-        return finalResult();
       });
     }
     // Reproduce the old sibling selection; admission and persistence stay real.
@@ -583,10 +569,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
             replayedLegacyAgent = true;
             return originalDispatch(
               method,
-              {
-                ...params,
-                inputProvenance: provenance(sibling.childSessionKey),
-              },
+              { ...params, inputProvenance: provenance(sibling.childSessionKey) },
               { ...options, settleWakeReplay: undefined },
             );
           })
@@ -639,11 +622,17 @@ describe("public yielded settle replay with real Gateway admission", () => {
         vi.setSystemTime(retryAt);
       }
       const replayed = await dispatch(child);
+      expect(replayed, child.requesterSettleWake?.lastError ?? undefined).toBe(!revoked);
+      expect(agentCommandMock).toHaveBeenCalledTimes(retryable && !revoked ? 2 : 1);
+      expect(admittedSources).toEqual(
+        visible
+          ? [child.childSessionKey]
+          : revoked
+            ? [originalSource]
+            : [originalSource, originalSource],
+      );
       if (visible) {
-        expect(replayed, child.requesterSettleWake?.lastError ?? undefined).toBe(true);
         expect(acceptedMessages).toHaveLength(1);
-        expect(admittedSources).toEqual([child.childSessionKey]);
-        expect(agentCommandMock).toHaveBeenCalledOnce();
         expect(completion).toHaveBeenCalledOnce();
         expect(completion.mock.calls[0]?.[2]).toMatchObject({
           delivered: true,
@@ -662,22 +651,15 @@ describe("public yielded settle replay with real Gateway admission", () => {
         };
       };
       expect(stable(first!.message)).toEqual(stable(replay!.message));
-      const originalSource = legacy ? sibling.childSessionKey : child.childSessionKey;
       expect(first!.message.provenance?.sourceSessionKey).toBe(originalSource);
       expect(replay!.message.provenance?.sourceSessionKey).toBe(child.childSessionKey);
       if (revoked) {
-        expect(replayed).toBe(false);
-        expect(admittedSources).toEqual([originalSource]);
-        expect(agentCommandMock).toHaveBeenCalledOnce();
         expect(completion).not.toHaveBeenCalled();
         expect(persistedChild()?.requesterSettleWake).toMatchObject({
           rearmGeneration: 2,
         });
         return;
       }
-      expect(replayed, child.requesterSettleWake?.lastError ?? undefined).toBe(true);
-      expect(admittedSources).toEqual([originalSource, originalSource]);
-      expect(agentCommandMock).toHaveBeenCalledTimes(retryable ? 2 : 1);
       expect(completion.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
     } finally {
       vi.useRealTimers();

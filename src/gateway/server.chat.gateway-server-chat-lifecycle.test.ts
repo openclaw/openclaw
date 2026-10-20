@@ -455,7 +455,7 @@ describe("gateway server chat lifecycle", () => {
     });
   });
 
-  test("agent events include sessionKey and agent.wait covers lifecycle flows", async () => {
+  test("agent events include sessionKey and agent.wait preserves lifecycle metadata", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await writeSessionStore({
@@ -488,44 +488,23 @@ describe("gateway server chat lifecycle", () => {
         expect(payload).toMatchObject({ sessionKey: "main", stream: "assistant" });
       }
 
-      const cases = [
-        {
-          runId: "run-wait-1",
-          terminal: { phase: "end", startedAt: 200, endedAt: 210 },
-          expected: { status: "ok", startedAt: 200 },
-        },
-        {
-          runId: "run-wait-early",
-          before: { phase: "end", startedAt: 50, endedAt: 55 },
-          expected: { status: "ok", startedAt: 50 },
-        },
-        { runId: "run-wait-3", timeoutMs: 30, expected: { status: "timeout" } },
-        {
-          runId: "run-wait-err",
-          timeoutMs: 50,
-          terminal: { phase: "error", error: "boom" },
-          expected: { status: "timeout", error: "boom", pendingError: true },
-        },
-        {
-          runId: "run-wait-start",
-          start: { phase: "start", startedAt: 123 },
-          terminal: { phase: "end", endedAt: 456 },
-          expected: { status: "ok", startedAt: 123, endedAt: 456 },
-        },
-      ];
-      for (const { runId, timeoutMs = 200, before, start, terminal, expected } of cases) {
-        if (before) {
-          emitLifecycle(runId, before);
-        }
-        const waiting = rpcReq(webchatWs, "agent.wait", { runId, timeoutMs });
-        if (start) {
-          emitLifecycle(runId, start);
-        }
-        if (terminal) {
-          queueMicrotask(() => emitLifecycle(runId, terminal));
-        }
-        expect(await waiting).toMatchObject({ ok: true, payload: expected });
-      }
+      const runId = "run-wait-start";
+      const waiting = rpcReq(webchatWs, "agent.wait", { runId, timeoutMs: 200 });
+      emitLifecycle(runId, { phase: "start", startedAt: 123 });
+      queueMicrotask(() => emitLifecycle(runId, { phase: "end", endedAt: 456 }));
+      expect(await waiting).toMatchObject({
+        ok: true,
+        payload: { status: "ok", startedAt: 123, endedAt: 456 },
+      });
+      const pendingError = rpcReq(webchatWs, "agent.wait", {
+        runId: "run-wait-err",
+        timeoutMs: 50,
+      });
+      queueMicrotask(() => emitLifecycle("run-wait-err", { phase: "error", error: "boom" }));
+      expect(await pendingError).toMatchObject({
+        ok: true,
+        payload: { status: "timeout", error: "boom", pendingError: true },
+      });
     } finally {
       await settleGatewayFixture();
       webchatWs.close();

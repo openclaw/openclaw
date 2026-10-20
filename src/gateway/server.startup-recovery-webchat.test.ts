@@ -3,6 +3,10 @@ import { text as readStreamText } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
@@ -71,20 +75,16 @@ it(
     const currentChildMarker = "recovery-child-after-reset";
     const batchChildMarker = "saved-batch-child";
     const afterResetRequest = createDeferred<string>();
-    const readPromptFrames = (payload: string) => {
+    const readPrompt = (payload: string, ...markers: string[]) => {
       const request: unknown = JSON.parse(payload);
       const input = isRecord(request) && Array.isArray(request.input) ? request.input : [];
-      return input.flatMap((message: unknown) => {
+      const prompts = input.flatMap((message: unknown) => {
         const content = isRecord(message) && Array.isArray(message.content) ? message.content : [];
-        return content.flatMap((part: unknown) =>
-          isRecord(part) && typeof part.text === "string" ? [part.text] : [],
-        );
+        return content.flatMap((part: unknown) => {
+          const text = isRecord(part) && typeof part.text === "string" ? part.text : undefined;
+          return text && markers.every((marker) => text.includes(marker)) ? [text] : [];
+        });
       });
-    };
-    const readPrompt = (payload: string, ...markers: string[]) => {
-      const prompts = readPromptFrames(payload).filter((text) =>
-        markers.every((marker) => text.includes(marker)),
-      );
       expect(prompts).toHaveLength(1);
       return prompts[0] ?? "";
     };
@@ -110,28 +110,28 @@ it(
           response.writeHead(404).end();
           return;
         }
-        const isTitleRequest = body.includes("Generate a concise session title");
-        if (!isTitleRequest && body.includes("Every subagent in this batch has now settled")) {
-          batchRequests.push(body);
-        }
-        if (
-          !isTitleRequest &&
-          [recoveryMessage, canceledMessage, survivorMessage, afterResetMessage].some((text) =>
-            body.includes(text),
-          )
-        ) {
-          targetRequests.push(body);
-        }
-        if (!isTitleRequest && body.includes(secondRecoveryMessage)) {
-          secondRequests.push(body);
-          await secondRecoveryGate.promise;
-        }
-        if (!isTitleRequest && body.includes(afterResetMessage)) {
-          afterResetRequest.resolve(body);
-        }
-        if (holdRecovery && !isTitleRequest && body.includes(recoveryMessage)) {
-          holdRecovery = false;
-          await recoveryGate.promise;
+        if (!body.includes("Generate a concise session title")) {
+          if (body.includes("Every subagent in this batch has now settled")) {
+            batchRequests.push(body);
+          }
+          if (
+            [recoveryMessage, canceledMessage, survivorMessage, afterResetMessage].some((text) =>
+              body.includes(text),
+            )
+          ) {
+            targetRequests.push(body);
+          }
+          if (body.includes(secondRecoveryMessage)) {
+            secondRequests.push(body);
+            await secondRecoveryGate.promise;
+          }
+          if (body.includes(afterResetMessage)) {
+            afterResetRequest.resolve(body);
+          }
+          if (holdRecovery && body.includes(recoveryMessage)) {
+            holdRecovery = false;
+            await recoveryGate.promise;
+          }
         }
         providerRequestCount += 1;
         writeOpenAiResponsesText(response, {
@@ -196,16 +196,8 @@ it(
           message: { role: "user", content: message, idempotencyKey: source },
         });
       }
-      await new Promise<void>((resolve, reject) => {
-        providerServer.once("error", reject);
-        providerServer.listen(0, "127.0.0.1", resolve);
-      });
-      const address = providerServer.address();
-      if (!address || typeof address === "string") {
-        throw new Error("startup recovery provider did not bind");
-      }
       const provider = buildMockOpenAiResponsesProvider(
-        `http://127.0.0.1:${address.port}/v1`,
+        `${await listenLoopback(providerServer)}/v1`,
         "gpt-startup-recovery-webchat",
       );
       const cfg = {
@@ -213,7 +205,6 @@ it(
           defaults: {
             workspace: state.workspaceDir,
             skipBootstrap: true,
-            // Each recovered session uses its own controller and the shared execution capacity.
             maxConcurrent: 2,
             model: { primary: provider.modelRef },
             models: {
@@ -252,6 +243,8 @@ it(
         expect(client.request("agent.wait", { runId, timeoutMs: 30_000 })).resolves.toMatchObject({
           status: "ok",
         });
+      const waitRequests = (requests: string[], count: number) =>
+        vi.waitFor(() => expect(requests).toHaveLength(count), { timeout: 30_000 });
       const execution = await observeGatewayRunExecution();
       requestExecution = execution;
 
@@ -289,8 +282,6 @@ it(
           expectsCompletionMessage: false,
           cleanupHandled: true,
           cleanupCompletedAt: Date.now(),
-          completion: { required: false },
-          delivery: { status: "not_required" },
           execution: {
             status: "terminal",
             endedAt: Date.now(),
@@ -312,13 +303,11 @@ it(
           signal,
         });
       holdRecovery = true;
-      // The startup scheduler passes its stop signal to recovery admission.
       recovery = startRecovery(startupRecoveryStop.signal);
-      await vi.waitFor(() => expect(targetRequests).toHaveLength(1), { timeout: 30_000 });
-      expect(readRecoveryPrompt(targetRequests[0] ?? "").includes(originalChildMarker)).toBe(true);
+      await waitRequests(targetRequests, 1);
+      expect(readRecoveryPrompt(targetRequests[0] ?? "")).toContain(originalChildMarker);
       const resendRunId = readSession()?.restartRecoveryDeliveryRunId;
       const resendSource = getRpcSource(expectDefined(resendRunId, "resend run id"));
-      // The resend is the session's selected mailbox input, not a side owner.
       expect(resendSource?.input.claim).toBeDefined();
 
       const canceledRunId = "webchat-canceled-during-recovery";
@@ -334,8 +323,7 @@ it(
             idempotencyKey: runId,
           }),
         ).resolves.toMatchObject({ runId, status: "started" });
-        // The ACK precedes queue admission, which no longer completes the run.
-        // Join dispatch before taking an immediate observation of queued custody.
+        // ACK precedes admission; join dispatch before observing queued custody.
         await execution.waitForDispatch(runId);
         await expect(client.request("agent.wait", { runId, timeoutMs: 0 })).resolves.toMatchObject({
           runId,
@@ -368,7 +356,7 @@ it(
 
       recoveryGate.resolve();
       await expect(recovery).resolves.toMatchObject({ started: 2, failed: 0 });
-      await vi.waitFor(() => expect(secondRequests).toHaveLength(1), { timeout: 30_000 });
+      await waitRequests(secondRequests, 1);
       const secondResendRunId = expectDefined(
         readSession(secondSessionKey)?.restartRecoveryDeliveryRunId,
         "second resend run id",
@@ -390,7 +378,7 @@ it(
       expect(secondResendSource.input.mailbox).not.toBe(resendSource?.input.mailbox);
       secondRecoveryGate.resolve();
       await waitOk(resendRunId);
-      await vi.waitFor(() => expect(targetRequests).toHaveLength(2), { timeout: 30_000 });
+      await waitRequests(targetRequests, 2);
       expect(targetRequests[1]).toContain(survivorMessage);
       expect(targetRequests[1]).not.toContain(canceledMessage);
       await waitOk(survivorRunId);
@@ -402,7 +390,6 @@ it(
         abortedLastRun: false,
         status: "done",
       });
-      // Each resend and the surviving WebChat turn executed exactly once.
       expect(secondRequests).toHaveLength(1);
       expect(targetRequests).toHaveLength(2);
 
@@ -425,8 +412,8 @@ it(
       ]);
       expect(resetResult).toMatchObject({ started: 1, failed: 0 });
       const resetPrompt = readRecoveryPrompt(providerPayload);
-      expect(resetPrompt.includes(currentChildMarker)).toBe(true);
-      expect(resetPrompt.includes(originalChildMarker)).toBe(false);
+      expect(resetPrompt).toContain(currentChildMarker);
+      expect(resetPrompt).not.toContain(originalChildMarker);
 
       const resetRunId = readSession()?.lifecycleRunId;
       expect(typeof resetRunId).toBe("string");
@@ -434,8 +421,7 @@ it(
       if (!gatewayContext) {
         throw new Error("Saved-batch proof needs the active Gateway owner");
       }
-      // Startup activation schedules a registry sweep that also resumes pending settle
-      // wakes. Retire it so the manual replays below are the only claimants.
+      // Retire startup's registry sweep so manual replays are the only claimants.
       const registry = Reflect.get(globalThis, Symbol.for("openclaw.subagentRegistryTestApi")) as {
         resetSubagentRegistryForTests(options: { persist: false }): Promise<void>;
       };
@@ -476,9 +462,7 @@ it(
               entries: batch,
               operation: { kind: "transition", state: next },
               context: captureOpenClawStateWorkerContext(),
-              assertCurrent: () => {
-                currentBatch(batch);
-              },
+              assertCurrent: () => currentBatch(batch),
               onCommitted: () => {},
               onPublished: () => {
                 const published = currentBatch(batch);
@@ -494,9 +478,7 @@ it(
                 kind: "settle",
                 outcome: expectDefined(outcome, "batch delivery outcome"),
               },
-              assertCurrent: () => {
-                currentBatch(batch, rearmGeneration);
-              },
+              assertCurrent: () => currentBatch(batch, rearmGeneration),
             });
             expect(result.publication).toBe("published");
             await onCommitted?.();
@@ -583,8 +565,7 @@ it(
       expect(resetBatchParent?.lifecycleRevision).not.toBe(
         fixtureHistory.completionRequesterLifecycleRevision,
       );
-      // Current reset revoked the live wake above. This explicitly restored older
-      // fixture history exercises compatibility, not a wake left behind by reset.
+      // Restore old history explicitly: reset revoked the live wake, so this is compatibility.
       batchChild = await reloadSavedBatch(fixtureHistory);
       expect(await wakeSavedBatch(batchChild)).toBe(true);
       expect(batchRequests).toHaveLength(2);
@@ -605,10 +586,7 @@ it(
         await gateway.server.close().catch(() => undefined);
       }
       if (providerServer.listening) {
-        providerServer.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          providerServer.close(() => resolve());
-        });
+        await closeHttpServer(providerServer);
       }
       await requestExecution?.restore();
       subagentRuns.delete(originalChildMarker);
