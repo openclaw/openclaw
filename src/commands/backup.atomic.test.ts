@@ -44,13 +44,8 @@ describe("backupCreateCommand atomic archive write", () => {
     await mockStateOnlyBackupPlan(stateDir);
   });
 
-  afterEach(async () => {
-    vi.restoreAllMocks();
-  });
-
-  afterAll(async () => {
-    await tempHome.restore();
-  });
+  afterEach(vi.restoreAllMocks);
+  afterAll(() => tempHome.restore());
 
   it("does not leave a partial final archive behind when tar creation fails", async () => {
     backupWalkMock.mockReturnValueOnce(createMockTarStream({ error: new Error("disk full") }));

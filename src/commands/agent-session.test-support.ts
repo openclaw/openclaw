@@ -1,11 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, onTestFinished, vi } from "vitest";
-import {
-  listSessionEntriesCore,
-  loadSessionEntryReadOnly,
-  replaceSessionEntry,
-} from "../config/sessions/session-accessor.js";
+import * as sessions from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import { withTempHomeCore } from "../plugin-sdk/test-helpers/temp-home.js";
@@ -19,34 +15,32 @@ export function createDefaultAgentResult(params?: {
   durationMs?: number;
   sessionId?: string;
 }) {
+  const { payloads = [{ text: "ok" }], durationMs = 5, sessionId = "s" } = params ?? {};
   return {
-    payloads: params?.payloads ?? [{ text: "ok" }],
-    meta: {
-      durationMs: params?.durationMs ?? 5,
-      agentMeta: { sessionId: params?.sessionId ?? "s", provider: "p", model: "m" },
-    },
+    payloads,
+    meta: { durationMs, agentMeta: { sessionId, provider: "p", model: "m" } },
   };
 }
 
 export async function useRealCommandSessionPersistence(): Promise<void> {
-  const [actual, runtime] = await Promise.all([
+  const [{ updateSessionStoreAfterAgentRun: update }, runtime] = await Promise.all([
     import("../agents/command/session-store.js"),
     import("../agents/command/session-store.runtime.js"),
   ]);
   const persistence = vi
     .spyOn(runtime, "updateSessionStoreAfterAgentRun")
-    .mockImplementation(actual.updateSessionStoreAfterAgentRun);
+    .mockImplementation(update);
   onTestFinished(() => persistence.mockRestore());
 }
 
 export async function writeSessionStoreSeed(
   storePath: string,
-  sessions: Record<string, Record<string, unknown>>,
+  entries: Record<string, Record<string, unknown>>,
 ): Promise<void> {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  for (const [sessionKey, entry] of Object.entries(sessions)) {
+  for (const [sessionKey, entry] of Object.entries(entries)) {
     const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : sessionKey;
-    await replaceSessionEntry({ sessionKey, storePath }, {
+    await sessions.replaceSessionEntry({ sessionKey, storePath }, {
       ...entry,
       sessionId,
       updatedAt: typeof entry.updatedAt === "number" ? entry.updatedAt : Date.now(),
@@ -56,19 +50,17 @@ export async function writeSessionStoreSeed(
 
 export function readSessionStore<T>(storePath: string): Record<string, T> {
   return Object.fromEntries(
-    listSessionEntriesCore({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry as T]),
+    sessions
+      .listSessionEntriesCore({ storePath })
+      .map(({ entry, sessionKey: key }) => [key, entry as T]),
   );
 }
 
-export function expectOwnedCommandSession(params: {
-  agentId: string;
-  excludedAgentId: string;
-  sessionKey: string;
-  sessionId: string;
-  storePath: string;
-}): void {
+export function expectOwnedCommandSession(
+  params: Record<"agentId" | "excludedAgentId" | "sessionKey" | "sessionId" | "storePath", string>,
+): void {
   const load = (agentId: string) =>
-    loadSessionEntryReadOnly({
+    sessions.loadSessionEntryReadOnly({
       agentId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
@@ -81,19 +73,12 @@ export function expectOwnedCommandSession(params: {
 }
 
 export function createOutboundSessionRouteFixture(
-  params: Parameters<typeof buildOutboundBaseSessionKey>[0] & {
-    chatType: "direct" | "group" | "channel";
-    from: string;
-    to: string;
-  },
+  params: Parameters<typeof buildOutboundBaseSessionKey>[0] &
+    Record<"from" | "to", string> & {
+      chatType: "direct" | "group" | "channel";
+    },
 ) {
   const baseSessionKey = buildOutboundBaseSessionKey(params);
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer: params.peer,
-    chatType: params.chatType,
-    from: params.from,
-    to: params.to,
-  };
+  const { peer, chatType, from, to } = params;
+  return { sessionKey: baseSessionKey, baseSessionKey, peer, chatType, from, to };
 }
