@@ -112,6 +112,13 @@ describe("standalone build interface", () => {
 
   it("describes the executable and deterministic sidecar without following links", async () => {
     const { root, runtime } = fixture();
+    const sqlite = {
+      source: "bun",
+      version: "3.53.4",
+      extensionLoadingSupported: true,
+      compileOptions: ["ENABLE_FTS5"],
+      license: "public-domain",
+    };
     fs.writeFileSync(path.join(root, "openclaw"), "standalone\n");
     fs.writeFileSync(path.join(runtime, "a.js"), "export const value = 7;\n");
     fs.symlinkSync("a.js", path.join(runtime, "link"));
@@ -123,18 +130,8 @@ describe("standalone build interface", () => {
       embedded: { modules: 4, plugins: 1, workers: 2, inlineWorkers: 0 },
       packageManager: undefined,
       plugins: { embedded: ["slack", "codex"], omitted: ["signal", "matrix"] },
-      sqlite: {
-        source: "bun",
-        version: "3.53.4",
-        extensionLoadingSupported: true,
-        compileOptions: ["ENABLE_FTS5"],
-        license: "public-domain",
-      },
+      sqlite: structuredClone(sqlite),
       pruning: {
-        policy: "runtime-resources-v1",
-        removedFiles: 0,
-        removedBytes: 0,
-        removedSymlinks: 0,
         categories: { pluginAssets: { files: 1, bytes: 24 } },
         sidecarPlugins: [],
       },
@@ -150,13 +147,7 @@ describe("standalone build interface", () => {
         symlinkCount: 1,
         categories: { pluginAssets: { files: 1, bytes: 24 } },
         sidecarPlugins: [],
-        sqlite: {
-          source: "bun",
-          version: "3.53.4",
-          extensionLoadingSupported: true,
-          compileOptions: ["ENABLE_FTS5"],
-          license: "public-domain",
-        },
+        sqlite,
       },
       embedded: { modules: 4, plugins: 1, workers: 2, inlineWorkers: 0 },
       plugins: { embedded: ["codex", "slack"], omitted: ["matrix", "signal"] },

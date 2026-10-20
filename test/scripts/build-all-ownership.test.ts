@@ -7,8 +7,8 @@ import {
   resolveDistArtifactLockPath,
   withDistArtifactOwnership,
 } from "../../scripts/lib/dist-artifact-ownership.mts";
-import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
+import { createCommandFixture } from "../helpers/command-fixture.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 
 const fixture = createFixtureLifetime();
@@ -22,7 +22,7 @@ it.for([
   ["--bogus", 2, "unknown argument: --bogus", false],
 ] as const)(
   "releases inherited artifact ownership after %s",
-  ([arg, exitCode, diagnostic, runsWorkload], { signal }) =>
+  ([arg, exitCode, diagnostic, runsWorkload], context) =>
     fixture.run(async () => {
       const root = fs.realpathSync(fixture.createTempDir("openclaw-build-all-ownership-"));
       const at = (file: string) => path.join(root, file);
@@ -41,10 +41,10 @@ console.error("fixture joined build failure");
 process.exitCode = 7;
 `,
       );
-      let output = "";
-      const result = await runManagedCommand({
-        bin: node,
-        args: [
+      const command = createCommandFixture(context, "tree");
+      const result = await command.run(
+        node,
+        [
           "--import",
           sourceUrl("scripts/tsx.mjs"),
           "--input-type=module",
@@ -61,26 +61,21 @@ process.exitCode = await withDistArtifactOwnership(process.cwd(), () => runManag
 }));
 `,
         ],
-        cwd: root,
-        env: {
-          ...process.env,
-          GIT_COMMIT: "a".repeat(40),
-          OPENCLAW_BUILD_ALL_NO_PNPM: "0",
-          OPENCLAW_BUILD_CACHE: "0",
-          OPENCLAW_UPDATE_IN_PROGRESS: "0",
-          npm_execpath: at("unavailable-pnpm.cjs"),
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            GIT_COMMIT: "a".repeat(40),
+            OPENCLAW_BUILD_ALL_NO_PNPM: "0",
+            OPENCLAW_BUILD_CACHE: "0",
+            OPENCLAW_UPDATE_IN_PROGRESS: "0",
+            npm_execpath: at("unavailable-pnpm.cjs"),
+          },
         },
-        shell: false,
-        stdio: ["ignore", "pipe", "pipe"],
-        requireProcessTreeExit: process.platform !== "win32",
-        signal,
-        onReady(child) {
-          for (const pipe of [child.stdout, child.stderr]) {
-            pipe?.on("data", (chunk) => (output += String(chunk)));
-          }
-        },
-      });
-      expect(result, output).toBe(exitCode);
+      );
+      const output = result.stdout + result.stderr;
+      expect(result.error).toBeUndefined();
+      expect(result.status, output).toBe(exitCode);
       expect(output).toContain(diagnostic);
       expect(fs.existsSync(settled), output).toBe(runsWorkload);
       if (runsWorkload) {

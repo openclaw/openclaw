@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveBuildIdentityEnvironment } from "../../scripts/lib/build-identity.mts";
@@ -52,29 +52,20 @@ it("reads HEAD from the inherited cwd and returns null when Git cannot resolve i
   mkdirSync(outsideRepo);
   const git = (...args: string[]) => execFileSync("git", args, { cwd: repo, encoding: "utf8" });
   git("init", "-q");
-  writeFileSync(join(repo, "fixture.txt"), "fixture\n");
-  git("add", "fixture.txt");
-  git(
-    "-c",
-    "user.name=OpenClaw Tests",
-    "-c",
-    "user.email=openclaw-tests@example.invalid",
-    "commit",
-    "-qm",
-    "fixture",
-  );
+  git("config", "user.name", "OpenClaw Tests");
+  git("config", "user.email", "openclaw-tests@example.invalid");
+  git("commit", "--allow-empty", "-qm", "fixture");
   const expected = git("rev-parse", "HEAD").trim();
 
   expect(readGitCommitInChild(repo)).toBe(expected);
   expect(readGitCommitInChild(outsideRepo)).toBeNull();
 
-  const envWithoutGit = { ...process.env };
-  for (const key of Object.keys(envWithoutGit)) {
-    if (key.toLowerCase() === "path") {
-      delete envWithoutGit[key];
-    }
-  }
-  envWithoutGit.PATH = "";
+  const envWithoutGit = {
+    ...Object.fromEntries(
+      Object.entries(process.env).filter(([key]) => key.toLowerCase() !== "path"),
+    ),
+    PATH: "",
+  };
   expect(readGitCommitInChild(repo, envWithoutGit)).toBeNull();
 });
 

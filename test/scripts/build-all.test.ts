@@ -80,6 +80,24 @@ function getBuildAllStep(label: string) {
   return step;
 }
 
+function expectWindowsStep(
+  step: Parameters<typeof resolveBuildAllStep>[0],
+  options: Parameters<typeof resolveBuildAllStep>[1],
+  args: string[],
+) {
+  const command = "C:\\Program Files\\nodejs\\node.exe";
+  const result = resolveBuildAllStep(step, { nodeExecPath: command, ...options });
+  expect(
+    createManagedCommandInvocation({
+      bin: result.command,
+      args: result.args,
+      ...result.options,
+      platform: "win32",
+    }),
+  ).toEqual({ command, args, shell: false, windowsVerbatimArguments: undefined });
+  return result;
+}
+
 function buildMemoryLimit(cgroupGiB: number) {
   // A cgroup-only fixture still reads Linux MemAvailable. Pin the host facts so
   // concurrent CI work cannot change the admission this scenario exercises.
@@ -194,30 +212,16 @@ describe("resolveBuildAllStep", () => {
     "passes encoded import URLs literally to managed Node on Windows (heap $heapMb)",
     ({ heapMb, concurrency }) => {
       const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
-      const result = resolveBuildAllStep(
+      expectWindowsStep(
         {
           ...getBuildAllStep(STEP.compile),
           args: ["--import", importUrl, ...getBuildAllStep(STEP.compile).args.slice(2)],
         },
         {
-          nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
           env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: heapMb },
         },
+        ["--import", importUrl, "scripts/tsdown-build.mts", "--concurrency", concurrency],
       );
-
-      expect(
-        createManagedCommandInvocation({
-          bin: result.command,
-          args: result.args,
-          ...result.options,
-          platform: "win32",
-        }),
-      ).toEqual({
-        command: "C:\\Program Files\\nodejs\\node.exe",
-        args: ["--import", importUrl, "scripts/tsdown-build.mts", "--concurrency", concurrency],
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      });
     },
   );
 
@@ -232,24 +236,14 @@ describe("resolveBuildAllStep", () => {
         "build",
         ...(deferIsolatedAssets ? ["--defer-isolated"] : []),
       ];
-      const result = resolveBuildAllStep(getBuildAllStep("plugins:assets:build"), {
-        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
-        deferIsolatedAssets,
-      });
-      expect(
-        createManagedCommandInvocation({
-          bin: result.command,
-          args: result.args,
-          ...result.options,
-          platform: "win32",
-        }),
-      ).toEqual({
-        command: "C:\\Program Files\\nodejs\\node.exe",
+      const result = expectWindowsStep(
+        getBuildAllStep("plugins:assets:build"),
+        {
+          env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+          deferIsolatedAssets,
+        },
         args,
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      });
+      );
       expect(result.options).toEqual({
         stdio: "inherit",
         env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
@@ -833,20 +827,16 @@ describe("resolveBuildStepCacheState", () => {
   it("validates the saved snapshot only when live outputs need restoration", () => {
     const f = buildCacheFixture();
     const cached = f.publish();
-    let savedReads = 0;
-    const readFile = fs.readFileSync.bind(fs);
-    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      if (String(file).startsWith(`${cached.outputRoot}${path.sep}`)) {
-        savedReads++;
-      }
-      return readFile(file, options);
-    });
+    const read = vi.spyOn(fs, "readFileSync");
+    const savedReads = () =>
+      read.mock.calls.filter(([file]) => String(file).startsWith(`${cached.outputRoot}${path.sep}`))
+        .length;
     try {
       expect(f.lookup()).toMatchObject({ fresh: true, restorable: false });
-      expect(savedReads).toBe(0);
+      expect(savedReads()).toBe(0);
       fs.writeFileSync(f.outputPath, "changed live bytes");
       expect(f.lookup()).toMatchObject({ fresh: true, restorable: true });
-      expect(savedReads).toBeGreaterThan(0);
+      expect(savedReads()).toBeGreaterThan(0);
       fs.writeFileSync(path.join(cached.outputRoot!, "dist/output.js"), "changed saved bytes");
       expect(f.lookup()).toMatchObject({ fresh: false, restorable: false });
     } finally {
@@ -878,18 +868,10 @@ describe("resolveBuildStepCacheState", () => {
       },
       params,
     );
-    let staticBytesRead = 0;
-    const readFile = fs.readFileSync.bind(fs);
-    const read = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
-      const bytes = readFile(file, options);
-      if (file === f.inputPath) {
-        staticBytesRead += Buffer.byteLength(bytes);
-      }
-      return bytes;
-    });
+    const read = vi.spyOn(fs, "readFileSync");
     try {
       expect(lookup()).toMatchObject({ fresh: true, consumedInputs: inputs });
-      expect(staticBytesRead).toBe(Buffer.byteLength("input"));
+      expect(read.mock.calls.filter(([file]) => file === f.inputPath)).toHaveLength(1);
     } finally {
       read.mockRestore();
     }
