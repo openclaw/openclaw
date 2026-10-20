@@ -62,14 +62,38 @@ type ControlUiE2eScenarioOwner = {
   controller: AbortController;
   test: ControlUiE2eScenarioContext;
 };
-// Hover/focus lifts `title` into the tooltip overlay until pointer-leave/focusout.
+type ControlUiE2eSuite = {
+  readonly artifactDir: string;
+  readonly browser: Browser;
+  readonly server: ControlUiE2eServer;
+  closeBrowserContext: (context: BrowserContext) => Promise<void>;
+  define: (defineTests: () => void) => void;
+  newBrowserContext: (options: Parameters<Browser["newContext"]>[0]) => Promise<BrowserContext>;
+  runScenario: <T>(
+    context: ControlUiE2eScenarioContext,
+    scenario: ControlUiE2eScenario<T>,
+  ) => Promise<T>;
+  withPage: <T>(
+    options: Parameters<Browser["newContext"]>[0],
+    run: (fixture: ControlUiE2ePage) => Promise<T>,
+    cleanup?: (fixture: ControlUiE2ePage) => Promise<void>,
+  ) => Promise<T>;
+};
+
+/* The shared title tooltip (components/tooltip-title.ts) lifts a hovered or
+   focused element's `title` into its overlay and blanks the attribute until
+   pointer-leave/focusout, so elements that can sit under the pointer or hold
+   focus race a raw getAttribute("title") read. Read the lifted overlay
+   description when the attribute is blank. */
 export function tooltipTitleText(item: Locator) {
   return item.evaluate((element) => {
     const title = element.getAttribute("title");
     if (title) {
       return title;
     }
-    // Nondescribable rows put the overlay relationship on an interactive descendant.
+    // The overlay describes the first interactive descendant when the titled
+    // row itself is not describable (tooltip.ts resolveDescribedElement), so
+    // link rows carry the description on their nested anchor.
     const described = element.hasAttribute("aria-describedby")
       ? element
       : (element.querySelector("[aria-describedby]") ?? element);
@@ -197,14 +221,11 @@ function throwControlUiCleanupErrors(errors: unknown[]): void {
   }
 }
 
-async function collectCleanupErrors(operations: Iterable<unknown>): Promise<unknown[]> {
-  return (await Promise.allSettled(operations)).flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-}
-
 async function settleControlUiCleanup(promises: Promise<unknown>[]): Promise<void> {
-  throwControlUiCleanupErrors(await collectCleanupErrors(promises));
+  const results = await Promise.allSettled(promises);
+  throwControlUiCleanupErrors(
+    results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+  );
 }
 
 export function createControlUiE2eContextOptions(): BrowserContextOptions {
@@ -215,7 +236,7 @@ export function createControlUiE2eContextOptions(): BrowserContextOptions {
   };
 }
 
-export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions) {
+export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): ControlUiE2eSuite {
   const { executablePath: chromiumExecutablePath, available: chromiumAvailable } =
     inject("controlUiE2eChromium");
   // Runner metadata crosses a process boundary; validate the injected runtime shape.
@@ -362,17 +383,22 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions) {
       [...openBrowserContexts]
         .filter(([, scope]) => !owner || scope === owner)
         .map(([context]) => context);
-    const early = collectCleanupErrors(ownedContexts().map(closeBrowserContext));
+    const early = Promise.allSettled(ownedContexts().map(closeBrowserContext));
     await Promise.allSettled(
       [...contextAcquisitions]
         .filter(([, scope]) => !owner || scope === owner)
         .map(([pending]) => pending),
     );
-    const late = await collectCleanupErrors(ownedContexts().map(closeBrowserContext));
+    const late = await Promise.allSettled(ownedContexts().map(closeBrowserContext));
     const failures = acquisitionFailures
       .filter((entry) => !owner || entry.owner === owner)
       .map((entry) => entry.error);
-    throwControlUiCleanupErrors([...failures, ...(await early), ...late]);
+    for (const result of [...(await early), ...late]) {
+      if (result.status === "rejected") {
+        failures.push(result.reason);
+      }
+    }
+    throwControlUiCleanupErrors(failures);
   };
   const newBrowserContext = (
     contextOptions: Parameters<Browser["newContext"]>[0],
@@ -440,7 +466,8 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions) {
     if (context.signal.aborted) {
       abort();
     }
-    // Native timeouts leave callbacks running: retain state and fence failed joins until fork exit.
+    // Native timeout rejects its wrapper, not the callback. On failed joining,
+    // fence this file and retain state until native isolated-fork teardown exits.
     context.onTestFinished(() => {
       assertControlUiForkActive();
       const finished = operation.promise.then(
@@ -524,7 +551,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions) {
       activeScenario = { controller: new AbortController(), test: context };
       return runOwnedScenario(activeScenario, scenario);
     },
-    define: (defineTests: () => void) => {
+    define(defineTests) {
       describeControlUiE2e(options.name, () => {
         beforeEach((context) => {
           assertControlUiForkActive();
@@ -536,18 +563,14 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions) {
           if (!chromiumAvailable && options.unavailableMessage) {
             throw new Error(options.unavailableMessage(chromiumExecutablePath));
           }
-          const startServer = async () => {
-            const create =
-              options.startServer ??
-              (async () => {
-                const { startControlUiE2eServer } =
-                  await import("../test-helpers/control-ui-e2e.ts");
-                return startControlUiE2eServer();
-              });
-            server = await create();
-          };
-          const startBrowser = async () => {
-            browser = await chromium.launch({
+          const startServer =
+            options.startServer ??
+            (async () => {
+              const { startControlUiE2eServer } = await import("../test-helpers/control-ui-e2e.ts");
+              return startControlUiE2eServer();
+            });
+          const launchBrowser = () =>
+            chromium.launch({
               ...options.browserLaunchOptions,
               // Full-tile CPU rasterization: GPU raster left paint-history-dependent edge pixels.
               args: [
@@ -557,20 +580,25 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions) {
               ],
               executablePath: chromiumExecutablePath,
             });
-          };
           setupPromise = Promise.resolve().then(async () => {
-            const starts = options.startServerBeforeBrowser
-              ? [startServer, startBrowser]
-              : [startBrowser, startServer];
-            for (const start of starts) {
-              await start();
+            if (options.startServerBeforeBrowser) {
+              server = await startServer();
               if (stopping) {
                 return;
               }
+              browser = await launchBrowser();
+            } else {
+              browser = await launchBrowser();
+              if (stopping) {
+                return;
+              }
+              server = await startServer();
             }
-            // Only an owner whose acquisition began may receive cleanup callbacks.
-            resources = options.resources;
-            await resources?.run(resourceLifetime.signal);
+            if (!stopping) {
+              // Only an owner whose acquisition began may receive cleanup callbacks.
+              resources = options.resources;
+              await resources?.run(resourceLifetime.signal);
+            }
           });
           return setupPromise;
         }, options.setupTimeoutMs);
@@ -579,11 +607,17 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions) {
           stopping = true;
           resourceLifetime.abort();
           activeScenario?.controller.abort();
-          const contexts = collectCleanupErrors([closeOpenBrowserContexts()]);
+          const closingContexts = closeOpenBrowserContexts();
+          const contexts = Promise.allSettled([closingContexts]);
           const teardown = (async () => {
-            const setupErrors = await collectCleanupErrors([setupPromise]);
+            const [setup] = await Promise.allSettled([setupPromise]);
             await Promise.allSettled(scenarios);
-            const errors = [...setupErrors, ...(await contexts)];
+            const errors: unknown[] = setup.status === "rejected" ? [setup.reason] : [];
+            for (const result of await contexts) {
+              if (result.status === "rejected") {
+                errors.push(result.reason);
+              }
+            }
             for (const close of [
               () => browser?.close(),
               () => resources?.close?.(),
@@ -619,11 +653,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions) {
         defineTests();
       });
     },
-    async withPage<T>(
-      contextOptions: Parameters<Browser["newContext"]>[0],
-      run: (fixture: ControlUiE2ePage) => Promise<T>,
-      cleanup?: (fixture: ControlUiE2ePage) => Promise<void>,
-    ): Promise<T> {
+    async withPage(contextOptions, run, cleanup) {
       const explicitScenario = activeScenario;
       const test = explicitScenario?.test ?? activeTest;
       if (!test) {
