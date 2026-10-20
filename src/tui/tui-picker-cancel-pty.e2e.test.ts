@@ -16,32 +16,42 @@ const cancelKeys = [
   { key: "\x1b[27;5;99~", name: "modifyOtherKeys Ctrl+C" },
 ];
 
+async function pickerFixture(env: NodeJS.ProcessEnv = {}) {
+  const fixture = await startTuiFixture({
+    env: {
+      TERM_PROGRAM: "vscode",
+      OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
+      OPENCLAW_TUI_PTY_COLS: "100",
+      OPENCLAW_TUI_PTY_ROWS: "30",
+      ...env,
+    },
+  });
+  const frame = (predicate: Parameters<typeof waitForSynchronizedFrameRows>[1]) =>
+    waitForSynchronizedFrameRows(fixture.run, predicate, 20_000);
+  return {
+    ...fixture,
+    frame,
+    row: (predicate: (row: string) => boolean) => frame((rows) => rows.some(predicate)),
+    write: (input: string) => fixture.run.write(input, { delay: false }),
+  };
+}
+
 it("returns to the editor as soon as a model is selected, before the update finishes", async ({
   signal,
 }) => {
   const directory = await mkdtemp(path.join(tmpdir(), "openclaw-picker-selection-"));
   const releasePath = path.join(directory, "release-patch");
-  const fixture = await startTuiFixture({
-    env: {
-      TERM_PROGRAM: "vscode",
-      OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
-      OPENCLAW_TUI_PTY_PATCH_RELEASE_PATH: releasePath,
-      OPENCLAW_TUI_PTY_COLS: "100",
-      OPENCLAW_TUI_PTY_ROWS: "30",
-    },
-  });
-  const waitForRows = (predicate: Parameters<typeof waitForSynchronizedFrameRows>[1]) =>
-    waitForSynchronizedFrameRows(fixture.run, predicate, 20_000);
+  const fixture = await pickerFixture({ OPENCLAW_TUI_PTY_PATCH_RELEASE_PATH: releasePath });
   try {
     await fixture.run.waitForOutput("local ready", 20_000);
-    await fixture.run.write("/models\r", { delay: false });
-    await waitForRows((rows) => rows.some((row) => row.includes("Fixture 2")));
-    await fixture.run.write("\x1b[B\r", { delay: false });
+    await fixture.write("/models\r");
+    await fixture.row((row) => row.includes("Fixture 2"));
+    await fixture.write("\x1b[B\r");
     await fixture.waitForLogEntry((entry) => entry.method === "patchSession", signal);
 
     const message = "draft after model selection";
-    await fixture.run.write("\r" + message, { delay: false });
-    const rows = await waitForRows((frame) => frame.some((row) => row.includes(message)));
+    await fixture.write("\r" + message);
+    const rows = await fixture.row((row) => row.includes(message));
     const patches = (await readFixtureLog(fixture.logPath)).filter(
       (entry) => entry.method === "patchSession",
     );
@@ -50,12 +60,12 @@ it("returns to the editor as soon as a model is selected, before the update fini
 
     await writeFile(releasePath, "release");
     await fixture.run.waitForOutput("model set to fixture-provider/fixture-model-2", 20_000);
-    await fixture.run.write("\r", { delay: false });
+    await fixture.write("\r");
     await fixture.waitForLogEntry(
       (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
       signal,
     );
-    await waitForRows((frame) => frame.some((row) => row.includes("PTY_RESPONSE: " + message)));
+    await fixture.row((row) => row.includes("PTY_RESPONSE: " + message));
   } finally {
     await fixture.cleanup();
     await rm(directory, { recursive: true, force: true });
@@ -69,41 +79,31 @@ it.each(
 )(
   "returns to chat from $command with $name",
   async ({ command, key, name }) => {
-    const fixture = await startTuiFixture({
-      env: {
-        TERM_PROGRAM: "vscode",
-        TMUX: undefined,
-        KITTY_WINDOW_ID: undefined,
-        GHOSTTY_RESOURCES_DIR: undefined,
-        WEZTERM_PANE: undefined,
-        ITERM_SESSION_ID: undefined,
-        WT_SESSION: undefined,
-        WARP_SESSION_ID: undefined,
-        WARP_TERMINAL_SESSION_UUID: undefined,
-        TERMINAL_EMULATOR: undefined,
-        OPENCLAW_TUI_PTY_PICKER_FIXTURE: "1",
-        OPENCLAW_TUI_PTY_COLS: "100",
-        OPENCLAW_TUI_PTY_ROWS: "30",
-      },
+    const fixture = await pickerFixture({
+      TMUX: undefined,
+      KITTY_WINDOW_ID: undefined,
+      GHOSTTY_RESOURCES_DIR: undefined,
+      WEZTERM_PANE: undefined,
+      ITERM_SESSION_ID: undefined,
+      WT_SESSION: undefined,
+      WARP_SESSION_ID: undefined,
+      WARP_TERMINAL_SESSION_UUID: undefined,
+      TERMINAL_EMULATOR: undefined,
     });
-    const waitForRows = (predicate: Parameters<typeof waitForSynchronizedFrameRows>[1]) =>
-      waitForSynchronizedFrameRows(fixture.run, predicate, 20_000);
     try {
       await fixture.run.waitForOutput("local ready", 20_000);
       if (name === "Kitty Ctrl+C") {
-        await fixture.run.write("\x1b[?1u", { delay: false });
+        await fixture.write("\x1b[?1u");
       }
-      await fixture.run.write(command + "\r", { delay: false });
+      await fixture.write(command + "\r");
       const prompt = command === "/sessions" ? "Filter:" : "search:";
-      await waitForRows((rows) => rows.some((row) => row.trimStart().startsWith(prompt)));
-      await fixture.run.write("missing", { delay: false });
-      await waitForRows((rows) =>
-        rows.some((row) => row.includes(prompt) && row.includes("missing")),
-      );
-      await fixture.run.write(key, { delay: false });
+      await fixture.row((row) => row.trimStart().startsWith(prompt));
+      await fixture.write("missing");
+      await fixture.row((row) => row.includes(prompt) && row.includes("missing"));
+      await fixture.write(key);
       if (key === "\x1b") {
         // Let the terminal disambiguate lone Escape before sending printable input.
-        await waitForRows((rows) =>
+        await fixture.frame((rows) =>
           command === "/sessions"
             ? rows.some((row) => row.trim() === "Filter: >")
             : !rows.some((row) => row.trimStart().startsWith(prompt)),
@@ -111,28 +111,24 @@ it.each(
       }
 
       if (command === "/sessions") {
-        await fixture.run.write("Picker", { delay: false });
-        const cleared = await waitForRows((rows) =>
-          rows.some((row) => row.includes(prompt) && row.includes("Picker")),
-        );
+        await fixture.write("Picker");
+        const cleared = await fixture.row((row) => row.includes(prompt) && row.includes("Picker"));
         expect(cleared.some((row) => row.trim() === "Filter: > Picker")).toBe(true);
         expect(cleared.some((row) => row.includes("No match"))).toBe(false);
-        await fixture.run.write(key, { delay: false });
-        await waitForRows((rows) => rows.some((row) => row.trim() === "Filter: >"));
-        await fixture.run.write(key, { delay: false });
+        await fixture.write(key);
+        await fixture.row((row) => row.trim() === "Filter: >");
+        await fixture.write(key);
         if (key === "\x1b") {
-          await waitForRows((rows) => !rows.some((row) => row.trimStart().startsWith(prompt)));
+          await fixture.frame((rows) => !rows.some((row) => row.trimStart().startsWith(prompt)));
         }
       }
 
       const message = "picker cancel proof";
-      await fixture.run.write(message + "\r", { delay: false });
-      const rows = await waitForRows((frame) =>
-        frame.some(
-          (row) =>
-            row.includes("PTY_RESPONSE: " + message) ||
-            (row.includes(prompt) && row.includes(message)),
-        ),
+      await fixture.write(message + "\r");
+      const rows = await fixture.row(
+        (row) =>
+          row.includes("PTY_RESPONSE: " + message) ||
+          (row.includes(prompt) && row.includes(message)),
       );
       expect(rows.some((row) => row.includes("PTY_RESPONSE: " + message))).toBe(true);
       expect(rows.some((row) => row.trimStart().startsWith(prompt))).toBe(false);
@@ -141,7 +137,7 @@ it.each(
           (entry) => entry.method === "sendChat" && objectFieldEquals(entry, "message", message),
         ),
       ).toBe(true);
-      await fixture.run.write("/exit\r", { delay: false });
+      await fixture.write("/exit\r");
       expect((await fixture.run.waitForExit()).exitCode).toBe(0);
     } finally {
       await fixture.cleanup();

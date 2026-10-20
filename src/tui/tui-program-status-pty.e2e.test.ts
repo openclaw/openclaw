@@ -27,25 +27,19 @@ function programStatusSequences(output: string): string[] {
   return sequences;
 }
 
+function expectStates(fixture: Awaited<ReturnType<typeof startTuiFixture>>, states: string[]) {
+  expect(programStatusSequences(fixture.run.output())).toEqual(
+    states.map((state) =>
+      state === "?" ? state : `state=${state}${state === "clear" ? "" : ":app=openclaw"}`,
+    ),
+  );
+}
+
 it.for([
-  {
-    // The fixture PTY cannot answer the support query, so this forces reporting on.
-    label: "a terminal with OSC 7501 support",
-    programStatus: "1",
-    expected: [
-      "state=idle:app=openclaw",
-      "state=working:app=openclaw",
-      "state=done:app=openclaw",
-      "state=clear",
-    ],
-  },
-  {
-    label: "a terminal that never answers the support query",
-    programStatus: undefined,
-    expected: ["?"],
-  },
+  { programStatus: "1", expected: ["idle", "working", "done", "clear"] },
+  { programStatus: undefined, expected: ["?"] },
 ])(
-  "reports the run lifecycle to $label",
+  "reports the run lifecycle with OSC 7501 override $programStatus",
   { timeout: 30_000 },
   async ({ programStatus, expected }, { signal }) => {
     const message = "program status probe";
@@ -61,8 +55,7 @@ it.for([
       await waitForFrame(fixture, "PTY_RESPONSE:", "| idle");
       await fixture.run.write("/exit\r", { delay: false });
       expect((await fixture.run.waitForExit()).exitCode).toBe(0);
-      const sequences = programStatusSequences(fixture.run.output());
-      expect(sequences).toEqual(expected);
+      expectStates(fixture, expected);
     } finally {
       await fixture.cleanup();
     }
@@ -81,11 +74,7 @@ it("does not report completion when switching away from a streaming session", as
     await waitForFrame(fixture, "T063", "streaming");
     await selectTuiFixtureSession(fixture, "agent:main:program-status-other", signal);
     await waitForFrame(fixture, "| idle");
-    expect(programStatusSequences(fixture.run.output())).toEqual([
-      "state=idle:app=openclaw",
-      "state=working:app=openclaw",
-      "state=idle:app=openclaw",
-    ]);
+    expectStates(fixture, ["idle", "working", "idle"]);
 
     // Complete the retired run, then prove the new session can report its own success.
     await releaseStream();
@@ -94,14 +83,7 @@ it("does not report completion when switching away from a streaming session", as
     await waitForFrame(fixture, "PTY_RESPONSE: new session reply", "| idle");
     await fixture.run.write("/exit\r", { delay: false });
     expect((await fixture.run.waitForExit()).exitCode).toBe(0);
-    expect(programStatusSequences(fixture.run.output())).toEqual([
-      "state=idle:app=openclaw",
-      "state=working:app=openclaw",
-      "state=idle:app=openclaw",
-      "state=working:app=openclaw",
-      "state=done:app=openclaw",
-      "state=clear",
-    ]);
+    expectStates(fixture, ["idle", "working", "idle", "working", "done", "clear"]);
   } finally {
     await releaseStream();
     await fixture.cleanup();
