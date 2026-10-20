@@ -333,10 +333,8 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
           Pick<ControlUiMockGateway, "requests" | "socketStates" | "socketUrls">
         >;
       };
-      const query = <T extends Element = HTMLElement>(
-        selector: string,
-        root: ParentNode | null = document,
-      ): T | null => root?.querySelector<T>(selector) ?? null;
+      const query = (selector: string, root: ParentNode | null = document) =>
+        root?.querySelector<HTMLElement>(selector) ?? null;
       const queryAll = (selector: string) => [...document.querySelectorAll(selector)];
       const app = query("openclaw-app");
       const shell = query("openclaw-app-shell");
@@ -354,12 +352,14 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
         }
         customElementCounts[name] = (customElementCounts[name] ?? 0) + 1;
       }
-      const textarea = query<HTMLTextAreaElement>(".agent-chat__composer-combobox textarea");
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        ".agent-chat__composer-combobox textarea",
+      );
       const roster =
         agentsState?.agentsList && typeof agentsState.agentsList === "object"
           ? (agentsState.agentsList as { agents?: unknown })
           : null;
-      const send = query<HTMLButtonElement>(".chat-send-btn--send");
+      const send = document.querySelector<HTMLButtonElement>(".chat-send-btn--send");
       const sendLabel = send?.getAttribute("aria-label");
       // Submit-disabled labels can contain server errors. Only known static UI copy
       // may reach CI logs; private reports retain the existing detailed state.
@@ -370,7 +370,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       const agentProperty = (key: string) => (agentPage ? Reflect.get(agentPage, key) : undefined);
       const selectedAgent = agentProperty("agentsSelectedId");
       const fileList = agentProperty("agentFilesList");
-      const fileEditor = query<HTMLTextAreaElement>(".agent-file-textarea");
+      const fileEditor = document.querySelector<HTMLTextAreaElement>(".agent-file-textarea");
       const agentPath = window.location.pathname.match(
         /^\/settings\/agents\/([^/]+)\/(overview|files|tools|skills|channels|cron)$/u,
       );
