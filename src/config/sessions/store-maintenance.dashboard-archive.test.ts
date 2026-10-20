@@ -12,24 +12,6 @@ function entry(updatedAt: number, extra: Partial<SessionEntry> = {}): SessionEnt
   return { sessionId: `session-${updatedAt}`, updatedAt, ...extra };
 }
 
-function maintain(store: Record<string, SessionEntry>, mode: "warn" | "enforce" = "enforce") {
-  return applyFileBackedSessionStoreMaintenance({
-    storePath: "/tmp/openclaw-sessions/sessions.json",
-    store,
-    maintenanceConfig: resolveMaintenanceConfigFromInput({
-      mode,
-      pruneAfter: "30d",
-      archiveDashboardAfter: "7d",
-      maxDiskBytes: false,
-    }),
-    log: { warn: () => {}, info: () => {} },
-    artifacts: {
-      archiveRemovedSessionTranscripts: async () => new Set<string>(),
-      cleanupArchivedSessionTranscripts: async () => {},
-    },
-  });
-}
-
 describe("archiveStaleDashboardEntries", () => {
   it("uses the latest activity signal and preserves active keys", () => {
     const now = 40 * DAY_MS;
@@ -91,23 +73,29 @@ describe("archiveStaleDashboardEntries", () => {
   });
 });
 
-describe("dashboard archive maintenance ordering", () => {
-  it("archives before general pruning", async () => {
-    const dashboardKey = "agent:main:dashboard:stale-visible-session";
-    const store = { [dashboardKey]: entry(Date.now() - 31 * DAY_MS) };
-
-    await maintain(store);
-    expect(store[dashboardKey]).toMatchObject({
-      archivedAt: expect.any(Number),
-      archiveReason: "stale-dashboard",
-    });
+it.each([
+  ["enforce", 31],
+  ["warn", 10],
+] as const)("dashboard archival respects %s mode before pruning", async (mode, ageDays) => {
+  const key = "agent:main:dashboard:stale";
+  const store = { [key]: entry(Date.now() - ageDays * DAY_MS) };
+  await applyFileBackedSessionStoreMaintenance({
+    storePath: "/tmp/openclaw-sessions/sessions.json",
+    store,
+    maintenanceConfig: resolveMaintenanceConfigFromInput({
+      mode,
+      pruneAfter: "30d",
+      archiveDashboardAfter: "7d",
+      maxDiskBytes: false,
+    }),
+    log: { warn: () => {}, info: () => {} },
+    artifacts: {
+      archiveRemovedSessionTranscripts: async () => new Set<string>(),
+      cleanupArchivedSessionTranscripts: async () => {},
+    },
   });
-
-  it("does not archive in warn mode", async () => {
-    const dashboardKey = "agent:main:dashboard:warn-only";
-    const store = { [dashboardKey]: entry(Date.now() - 10 * DAY_MS) };
-
-    await maintain(store, "warn");
-    expect(store[dashboardKey]?.archivedAt).toBeUndefined();
-  });
+  expect(store[key]?.archivedAt).toEqual(mode === "enforce" ? expect.any(Number) : undefined);
+  if (mode === "enforce") {
+    expect(store[key]?.archiveReason).toBe("stale-dashboard");
+  }
 });

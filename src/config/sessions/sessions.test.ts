@@ -46,142 +46,121 @@ it("merges bounded restart tombstones without evicting fresh-only ids", () => {
   expect(mergeRestartRecoveryTerminalRunIds(existing, ["run-0"])).toEqual(existing);
 });
 
-type NormalizationCase = {
-  name: string;
-  input: Record<string, unknown>;
-  expected?: Record<string, unknown>;
-  absent?: string[];
-  sessionKey?: string;
-};
-
-const repairBacklog = [
-  {
-    id: "repair-1",
-    text: "recoverable assistant final",
-    provider: "openai",
-    model: "gpt-5.5",
-    createdAt: 42,
-  },
-  { id: "repair-2", text: "second recoverable assistant final", createdAt: 43 },
+type NormalizationCase = [
+  name: string,
+  input: Record<string, unknown>,
+  expected?: Record<string, unknown>,
+  absent?: string[],
+  sessionKey?: string,
 ];
+const repairBacklog = [
+  { id: "repair-1", text: "first", provider: "openai", model: "gpt-5.5", createdAt: 42 },
+  { id: "repair-2", text: "second", createdAt: 43 },
+];
+const deliveries = [
+  { id: "prepared", state: "prepared" },
+  { id: "delivered", state: "delivered" },
+];
+const archived = { archivedAt: 41, archiveReason: "active-session-cap" };
+const actor = { type: "human", id: "operator" };
+const childKey = "agent:child:main";
+const pluginExtensions = { wordboard: { draftId: "draft-1" } };
 
 it.each<NormalizationCase>([
-  {
-    name: "rejects a noncanonical transcript ID",
-    input: { sessionId: "legacy:session", pluginExtensions: { memory: { mode: "legacy" } } },
-  },
-  {
-    name: "drops retired conversation links without losing session metadata",
-    input: {
-      sessionId: "existing-session",
-      conversationLink: { url: "https://chat.example.test/thread/123", label: "Source Thread" },
-      pluginExtensions: { wordboard: { draftId: "draft-1" } },
+  ["noncanonical ID", { sessionId: "legacy:session", pluginExtensions: { memory: {} } }],
+  [
+    "retired conversation link",
+    {
+      sessionId: "existing",
+      conversationLink: { url: "https://example.test" },
+      pluginExtensions,
     },
-    expected: {
-      sessionId: "existing-session",
+    {
+      sessionId: "existing",
       updatedAt: 42,
-      pluginExtensions: { wordboard: { draftId: "draft-1" } },
+      pluginExtensions: structuredClone(pluginExtensions),
     },
-    absent: ["conversationLink"],
-  },
-  {
-    name: "retains recognized archive reasons",
-    input: { archivedAt: 41, archiveReason: "active-session-cap" },
-    expected: { archiveReason: "active-session-cap" },
-  },
-  {
-    name: "drops orphan archive metadata",
-    input: {
-      archivedBy: { type: "human", id: "stale-actor" },
-      archiveReason: "active-session-cap",
-    },
-    expected: { updatedAt: 42 },
-    absent: ["archivedBy", "archiveReason"],
-  },
-  {
-    name: "retains the actor when an archive reason is unknown",
-    input: {
-      archivedAt: 41,
-      archivedBy: { type: "human", id: "operator-1" },
-      archiveReason: "unknown",
-    },
-    expected: { archivedBy: { type: "human", id: "operator-1" } },
-  },
-  ...[undefined, Number.NaN, 0].map((snoozedUntil): NormalizationCase => ({
-    name: `drops invalid snooze ${String(snoozedUntil)} and its timestamp`,
-    input: { snoozedUntil, snoozedAt: 41 },
-    expected: { updatedAt: 42 },
-    absent: ["snoozedUntil", "snoozedAt"],
-  })),
-  {
-    name: "drops archived snoozes so restore cannot hide a session",
-    input: {
+    ["conversationLink"],
+  ],
+  ["known archive reason", archived, { archiveReason: "active-session-cap" }],
+  [
+    "orphan archive metadata",
+    { archivedBy: actor, archiveReason: "active-session-cap" },
+    { updatedAt: 42 },
+    ["archivedBy", "archiveReason"],
+  ],
+  [
+    "unknown archive reason preserves actor",
+    { ...archived, archivedBy: actor, archiveReason: "unknown" },
+    { archivedBy: structuredClone(actor) },
+  ],
+  ...[undefined, Number.NaN, 0].map((snoozedUntil): NormalizationCase => [
+    `invalid snooze ${String(snoozedUntil)}`,
+    { snoozedUntil, snoozedAt: 41 },
+    { updatedAt: 42 },
+    ["snoozedUntil", "snoozedAt"],
+  ]),
+  [
+    "archived snooze",
+    {
       archivedAt: 43,
       archiveReason: "active-session-cap",
       snoozedUntil: Number.MAX_SAFE_INTEGER,
       snoozedAt: 41,
     },
-    expected: { archivedAt: 43, archiveReason: "active-session-cap" },
-    absent: ["snoozedUntil", "snoozedAt"],
-  },
-  {
-    name: "preserves shipped pending key-as-session-id rows",
-    input: { sessionId: "agent:child:main" },
-    sessionKey: "agent:child:main",
-    expected: { initializationPending: true, updatedAt: 42 },
-    absent: ["sessionId"],
-  },
-  {
-    name: "rejects locked key-as-session-id rows",
-    input: { sessionId: "agent:child:main", modelSelectionLocked: true },
-    sessionKey: "agent:child:main",
-  },
-  {
-    name: "migrates boolean pending delivery to transport-only",
-    input: { pendingFinalDelivery: true },
-    expected: { pendingFinalDelivery: { kind: "transport-only", createdAt: 42 } },
-  },
-  {
-    name: "preserves exact pending-final delivery owners",
-    input: {
+    { archivedAt: 43, archiveReason: "active-session-cap" },
+    ["snoozedUntil", "snoozedAt"],
+  ],
+  [
+    "shipped pending key-as-ID",
+    { sessionId: childKey },
+    { initializationPending: true, updatedAt: 42 },
+    ["sessionId"],
+    childKey,
+  ],
+  [
+    "locked key-as-ID",
+    { sessionId: childKey, modelSelectionLocked: true },
+    undefined,
+    undefined,
+    childKey,
+  ],
+  [
+    "boolean pending delivery",
+    { pendingFinalDelivery: true },
+    { pendingFinalDelivery: { kind: "transport-only", createdAt: 42 } },
+  ],
+  [
+    "pending delivery owners",
+    {
       pendingFinalDelivery: {
         kind: "replayable",
-        text: "durable reply",
+        text: "reply",
         createdAt: 41,
         intentId: "intent-1",
         deliveries: [
-          { id: "delivery-prepared", state: "prepared" },
-          { id: "delivery-delivered", state: "delivered" },
+          ...structuredClone(deliveries),
           { id: "", state: "queued" },
-          { id: "delivery-invalid", state: "invalid" },
+          { id: "invalid", state: "invalid" },
         ],
       },
     },
-    expected: {
-      pendingFinalDelivery: {
-        intentId: "intent-1",
-        deliveries: [
-          { id: "delivery-prepared", state: "prepared" },
-          { id: "delivery-delivered", state: "delivered" },
-        ],
-      },
-    },
-  },
-  {
-    name: "preserves the assistant transcript repair backlog",
-    input: { pendingTranscriptRepair: structuredClone(repairBacklog) },
-    expected: { pendingTranscriptRepair: repairBacklog },
-  },
-  ...[
-    { id: "repair-1", text: "recoverable assistant final", createdAt: 42 },
-    [{ kind: "transport-only" }],
-  ].map((pendingTranscriptRepair): NormalizationCase => ({
-    name: `drops invalid repair backlog ${JSON.stringify(pendingTranscriptRepair)}`,
-    input: { pendingTranscriptRepair },
-    expected: { updatedAt: 42 },
-    absent: ["pendingTranscriptRepair"],
-  })),
-])("normalization $name", ({ input, expected, absent, sessionKey }) => {
+    { pendingFinalDelivery: { intentId: "intent-1", deliveries } },
+  ],
+  [
+    "transcript repair backlog",
+    { pendingTranscriptRepair: structuredClone(repairBacklog) },
+    { pendingTranscriptRepair: repairBacklog },
+  ],
+  ...[{ id: "repair-1", text: "first", createdAt: 42 }, [{ kind: "transport-only" }]].map(
+    (pendingTranscriptRepair): NormalizationCase => [
+      `invalid repair backlog ${JSON.stringify(pendingTranscriptRepair)}`,
+      { pendingTranscriptRepair },
+      { updatedAt: 42 },
+      ["pendingTranscriptRepair"],
+    ],
+  ),
+])("normalization: %s", (_name, input, expected, absent, sessionKey) => {
   const entry = normalizePersistedSessionEntryShape(
     { sessionId: "session-1", updatedAt: 42, ...input },
     { sessionKey },
@@ -338,66 +317,64 @@ describe("resolveSessionResetPolicy", () => {
 
   const dailyNow = new Date(2026, 3, 25, 12).getTime();
   const idleNow = 60 * 60_000;
-  type FreshnessCase = {
-    name: string;
-    input: Parameters<typeof evaluateSessionFreshness>[0];
-    expected: Partial<ReturnType<typeof evaluateSessionFreshness>>;
-  };
-  it.each<FreshnessCase>([
-    {
-      name: "zero idle timeout never expires",
-      input: {
-        updatedAt: 1_000,
-        now: idleNow,
-        policy: { mode: "idle", atHour: 4, idleMinutes: 0 },
-      },
-      expected: { fresh: true, dailyResetAt: undefined, idleExpiresAt: undefined },
-    },
-    {
-      name: "daily freshness uses session start instead of updates",
-      input: {
-        updatedAt: dailyNow,
-        sessionStartedAt: dailyNow - 25 * 60 * 60_000,
-        now: dailyNow,
-        policy: { mode: "daily", atHour: 4 },
-      },
-      expected: { fresh: false, staleReason: "daily" },
-    },
-    ...[{ lastInteractionAt: 0 }, { sessionStartedAt: 0 }].map((timestamps): FreshnessCase => ({
-      name: `idle freshness uses ${Object.keys(timestamps)[0]} instead of updates`,
-      input: {
-        updatedAt: idleNow,
-        ...timestamps,
-        now: idleNow,
-        policy: { mode: "idle", atHour: 4, idleMinutes: 5 },
-      },
-      expected: { fresh: false, idleExpiresAt: 5 * 60_000, staleReason: "idle" },
-    })),
-    {
-      name: "combined expiry reports the first deadline",
-      input: {
-        updatedAt: dailyNow,
-        sessionStartedAt: new Date(2026, 3, 24, 23).getTime(),
-        lastInteractionAt: new Date(2026, 3, 25, 11).getTime(),
-        now: dailyNow,
-        policy: { mode: "daily", atHour: 4, idleMinutes: 30 },
-      },
-      expected: { fresh: false, staleReason: "daily" },
-    },
-    ...(["daily", "idle"] as const).map((mode): FreshnessCase => {
-      const now = mode === "daily" ? dailyNow : idleNow;
-      return {
-        name: `future legacy timestamps cannot keep ${mode} sessions fresh`,
-        input: {
-          updatedAt: now + 30 * 24 * 60 * 60_000,
-          now,
-          policy: { mode, atHour: 4, ...(mode === "idle" ? { idleMinutes: 5 } : {}) },
+  type Input = Parameters<typeof evaluateSessionFreshness>[0];
+  type Case = [
+    name: string,
+    input: Input,
+    expected: Partial<ReturnType<typeof evaluateSessionFreshness>>,
+  ];
+  function input(
+    mode: "daily" | "idle",
+    timestamps: Partial<Input> = {},
+    idleMinutes?: number,
+  ): Input {
+    const now = mode === "daily" ? dailyNow : idleNow;
+    return {
+      updatedAt: now,
+      now,
+      policy: { mode, atHour: 4, ...(idleMinutes === undefined ? {} : { idleMinutes }) },
+      ...timestamps,
+    };
+  }
+  it.each<Case>([
+    [
+      "zero idle timeout",
+      input("idle", { updatedAt: 1_000 }, 0),
+      { fresh: true, dailyResetAt: undefined, idleExpiresAt: undefined },
+    ],
+    [
+      "daily uses session start",
+      input("daily", { sessionStartedAt: dailyNow - 25 * 60 * 60_000 }),
+      { fresh: false, staleReason: "daily" },
+    ],
+    ...[{ lastInteractionAt: 0 }, { sessionStartedAt: 0 }].map((timestamps): Case => [
+      `idle uses ${Object.keys(timestamps)[0]}`,
+      input("idle", timestamps, 5),
+      { fresh: false, idleExpiresAt: 5 * 60_000, staleReason: "idle" },
+    ]),
+    [
+      "first of combined deadlines",
+      input(
+        "daily",
+        {
+          sessionStartedAt: new Date(2026, 3, 24, 23).getTime(),
+          lastInteractionAt: new Date(2026, 3, 25, 11).getTime(),
         },
-        expected: { fresh: false, ...(mode === "idle" ? { idleExpiresAt: 5 * 60_000 } : {}) },
-      };
-    }),
-  ])("$name", ({ input, expected }) => {
-    const freshness = evaluateSessionFreshness(input);
+        30,
+      ),
+      { fresh: false, staleReason: "daily" },
+    ],
+    ...(["daily", "idle"] as const).map((mode): Case => [
+      `future legacy timestamp: ${mode}`,
+      input(
+        mode,
+        { updatedAt: (mode === "daily" ? dailyNow : idleNow) + 30 * 24 * 60 * 60_000 },
+        mode === "idle" ? 5 : undefined,
+      ),
+      { fresh: false, ...(mode === "idle" ? { idleExpiresAt: 5 * 60_000 } : {}) },
+    ]),
+  ])("%s", (_name, request, expected) => {
+    const freshness = evaluateSessionFreshness(request);
     if (expected.fresh) {
       expect(freshness).toEqual(expected);
     } else {

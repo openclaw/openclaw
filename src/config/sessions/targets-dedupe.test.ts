@@ -67,16 +67,19 @@ describe("session store target dedupe", () => {
         };
         const resolve = (name: string) =>
           resolveSqliteTargetFromSessionStorePath(path.join(aliasDir, name), resolverOptions);
-        expect(resolve("shared.sqlite")).toMatchObject({
-          agentId: "ops",
-          ownerSource: "database-registry",
-          path: path.join(aliasDir, "shared.sqlite"),
-          shared: true,
-        });
-        expect(resolve("shared.json")).toMatchObject({
-          path: path.join(aliasDir, "shared.sqlite"),
-          unsuffixedOwnerAgentId: "ops",
-        });
+        const assertOwner = (agentId: string, ownerSource: string, customFile: string) => {
+          expect(resolve("shared.sqlite")).toMatchObject({
+            agentId,
+            ownerSource,
+            path: path.join(aliasDir, "shared.sqlite"),
+            shared: true,
+          });
+          expect(resolve("shared.json")).toMatchObject({
+            path: path.join(aliasDir, customFile),
+            unsuffixedOwnerAgentId: agentId,
+          });
+        };
+        assertOwner("ops", "database-registry", "shared.sqlite");
 
         expect(
           dedupeSessionStoreTargetsBySqliteTarget(targets, {
@@ -91,16 +94,7 @@ describe("session store target dedupe", () => {
         await fs.mkdir(otherDir);
         await fs.unlink(aliasDir);
         await fs.symlink(otherDir, aliasDir, "dir");
-        expect(resolve("shared.sqlite")).toMatchObject({
-          agentId: "main",
-          ownerSource: "configured-default",
-          path: path.join(aliasDir, "shared.sqlite"),
-          shared: true,
-        });
-        expect(resolve("shared.json")).toMatchObject({
-          path: path.join(aliasDir, "shared.ops.sqlite"),
-          unsuffixedOwnerAgentId: "main",
-        });
+        assertOwner("main", "configured-default", "shared.ops.sqlite");
         expect(
           dedupeSessionStoreTargetsBySqliteTarget(targets, { defaultAgentId: "main", env }),
         ).toHaveLength(2);
@@ -111,25 +105,18 @@ describe("session store target dedupe", () => {
   it("prepares each SQLite identity once during one dedupe pass", async () => {
     await withTempHome(async (home) => {
       const realHome = realpathSync(home);
-      const targets = Array.from({ length: 29 }, (_, index) => ({
-        agentId: `agent-${index}`,
-        storePath: path.join(
-          realHome,
-          ".openclaw",
-          "agents",
-          `agent-${index}`,
-          "sessions",
-          "sessions.json",
-        ),
-      }));
-      const databaseDirs = new Set(
-        targets.map((target) => path.join(path.dirname(path.dirname(target.storePath)), "agent")),
-      );
-      await Promise.all(
-        [...databaseDirs].map((databaseDir) => fs.mkdir(databaseDir, { recursive: true })),
+      const targets = await Promise.all(
+        Array.from({ length: 29 }, async (_, index) => {
+          const agentId = `agent-${index}`;
+          const dir = path.join(realHome, ".openclaw", "agents", agentId);
+          await fs.mkdir(path.join(dir, "agent"), { recursive: true });
+          return { agentId, storePath: path.join(dir, "sessions", "sessions.json") };
+        }),
       );
       const databasePaths = new Set(
-        [...databaseDirs].map((databaseDir) => path.join(databaseDir, "openclaw-agent.sqlite")),
+        targets.map(({ storePath }) =>
+          path.join(path.dirname(path.dirname(storePath)), "agent", "openclaw-agent.sqlite"),
+        ),
       );
       using realpathNative = vi.spyOn(realpathSync, "native");
       expect(

@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { input, nativePosts, nativeWorkers, observed, type NativeWorker } from "./session-transcript-worker-lanes.test-support.js";
 import assert from "node:assert/strict";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { UsageCostWorkerInput } from "../../infra/session-cost-usage-worker.types.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
@@ -29,20 +29,16 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
   const hostRequested = createDeferredCore();
   const refreshPosted = createDeferredCore<NativeWorker>();
   const controller = new AbortController();
-  let readDispatched = false;
+  const prepareRead = vi.fn(() => "origin-rows");
   let hostWrites = 0;
   const writing = runOpenClawAgentWriteAdmission(database, async () => {
     held.resolve();
     await startRead.promise;
-    const reading = reader.run(() => {
-      readDispatched = true;
-      return "origin-rows";
-    }, {});
+    const reading = reader.run(prepareRead, {});
     readSubmitted.resolve();
     return await reading;
   });
   const writerOutcome = Promise.allSettled([writing]);
-  let refreshing: ReturnType<typeof costRefreshLane.pool.run> | undefined;
   let refreshOutcome: Promise<unknown> | undefined;
   try {
     await held.promise;
@@ -64,7 +60,7 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
         refreshPosted.resolve(worker);
       }
     };
-    refreshing = costRefreshLane.pool.run(request, {
+    const refreshing = costRefreshLane.pool.run(request, {
       signal: controller.signal,
       async onRequest() {
         const restoring = runOpenClawAgentWriteAdmission(database, () => {
@@ -76,13 +72,12 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
       },
     });
     refreshOutcome = Promise.allSettled([refreshing]);
-    const worker = await awaitGateBeforeSettlement(
+    await awaitGateBeforeSettlement(
       refreshPosted.promise,
       refreshing,
       "Usage refresh did not finish worker preparation",
     );
-    const task = worker.posted.mock.calls.find(([message]) => message.input === request)?.[0];
-    assert(task);
+    const [worker, task] = postedTask(request);
     worker.posted.mockImplementation((message) => {
       if (message.responseId !== undefined) {
         queueMicrotask(() => {
@@ -109,15 +104,8 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
     startRead.resolve();
     await readSubmitted.promise;
     // The old refresh permit strands this dispatch behind its own queued host write.
-    expect(readDispatched).toBe(true);
-    const readerWorker = nativeWorkers.find((candidate) =>
-      candidate.posted.mock.calls.some(([message]) => message.input === "origin-rows"),
-    );
-    assert(readerWorker);
-    const read = readerWorker.posted.mock.calls.find(
-      ([message]) => message.input === "origin-rows",
-    )?.[0];
-    assert(read);
+    expect(prepareRead).toHaveBeenCalledOnce();
+    const [readerWorker, read] = postedTask("origin-rows");
     readerWorker.emit("message", { status: "ok", taskId: read.taskId, value: "origin-rows" });
     await expect(writing).resolves.toBe("origin-rows");
     await expect(refreshing).resolves.toMatchObject({ ok: true });
@@ -133,6 +121,16 @@ it("keeps usage refresh host writes out of writer-held reader compute capacity",
     nativePosts.observe = undefined;
   }
 });
+
+function postedTask(request: unknown): [NativeWorker, Parameters<NativeWorker["postMessage"]>[0]] {
+  for (const worker of nativeWorkers) {
+    const task = worker.posted.mock.calls.find(([message]) => message.input === request)?.[0];
+    if (task) {
+      return [worker, task];
+    }
+  }
+  throw new Error("Expected a posted native task");
+}
 
 it("allows reader cleanup while only a logical session lock is held", async () => {
   const { database } = input();

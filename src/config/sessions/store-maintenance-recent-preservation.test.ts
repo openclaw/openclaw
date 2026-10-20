@@ -18,12 +18,8 @@ const preserveRecentMs = 7 * DAY_MS;
 
 afterEach(() => resetPluginRuntimeStateForTest());
 
-function entry(
-  sessionId: string,
-  updatedAt: number,
-  extra: Partial<SessionEntry> = {},
-): SessionEntry {
-  return { sessionId, updatedAt, ...extra };
+function entry(id: string, at: number, extra: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId: id, updatedAt: at, ...extra };
 }
 
 function installThrowingConversationResolver() {

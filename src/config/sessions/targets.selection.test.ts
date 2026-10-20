@@ -36,38 +36,31 @@ describe("session store target selection", () => {
               },
             }),
       };
-      const firstDatabase = path.join(root, "agents", "first", "agent", "openclaw-agent.sqlite");
-      const secondDatabase = path.join(root, "agents", "second", "agent", "openclaw-agent.sqlite");
-      const expectedPaths = {
-        default: {
-          first: [firstDatabase],
-          second: [secondDatabase],
-          "acp-only": [path.join(root, "agents", "acp-only", "agent", "openclaw-agent.sqlite")],
-        },
-        template: {
-          first: [path.join(root, "first", "openclaw-agent.sqlite"), firstDatabase],
-          second: [path.join(root, "second", "openclaw-agent.second.sqlite"), secondDatabase],
-          "acp-only": [path.join(root, "acp-only", "openclaw-agent.acp-only.sqlite")],
-        },
-        fixed: {
-          first: [path.join(root, "fixed", "openclaw-agent.sqlite"), firstDatabase],
-          second: [path.join(root, "fixed", "openclaw-agent.second.sqlite"), secondDatabase],
-          "acp-only": [path.join(root, "fixed", "openclaw-agent.acp-only.sqlite")],
-        },
-        shared: {
-          first: [path.join(root, "fixed", "shared.sqlite"), firstDatabase],
-          second: [secondDatabase],
-          "acp-only": [],
-        },
-      };
-      const expected = Object.entries(expectedPaths[layout]).flatMap(([agentId, paths]) =>
-        paths.map((pathname) => ({ agentId, path: pathname })),
-      );
-      for (const agentId of ["openclaw", "crestodian"]) {
-        expected.push({
-          agentId,
-          path: path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite"),
-        });
+      const expected = [
+        "first",
+        "second",
+        "openclaw",
+        "crestodian",
+        ...(layout === "default" ? ["acp-only"] : []),
+      ].map((agentId) => ({
+        agentId,
+        path: path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+      }));
+      const configured: readonly (readonly [string, string])[] =
+        layout === "shared"
+          ? [["first", "shared.sqlite"]]
+          : [
+              ["first", "openclaw-agent.sqlite"],
+              ["second", "openclaw-agent.second.sqlite"],
+              ["acp-only", "openclaw-agent.acp-only.sqlite"],
+            ];
+      if (layout !== "default") {
+        expected.unshift(
+          ...configured.map(([agentId, filename]) => ({
+            agentId,
+            path: path.join(root, layout === "template" ? agentId : "fixed", filename),
+          })),
+        );
       }
       const all = resolveConfiguredAgentDatabaseTargets(cfg, { env, registeredDatabases: [] });
       expect(all).toHaveLength(expected.length);
@@ -102,16 +95,13 @@ describe("session store target selection", () => {
     }
   });
 
-  it("rejects a blank agent instead of selecting the default store", () => {
-    expect(() => resolveSessionStoreTargets({}, { agent: "" })).toThrow(
-      "--agent must not be blank",
-    );
-  });
-
   it.each([
-    ["empty", ""],
-    ["whitespace-only", "   "],
-  ])("rejects an %s store instead of selecting the default store", (_label, store) => {
-    expect(() => resolveSessionStoreTargets({}, { store })).toThrow("--store must not be blank");
+    ["agent", ""],
+    ["store", ""],
+    ["store", "   "],
+  ] as const)("rejects blank --%s (%j) instead of defaulting", (option, value) => {
+    expect(() => resolveSessionStoreTargets({}, { [option]: value })).toThrow(
+      `--${option} must not be blank`,
+    );
   });
 });
