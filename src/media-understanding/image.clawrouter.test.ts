@@ -1,7 +1,6 @@
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import clawrouter from "../../extensions/clawrouter/index.js";
 import { createEmptyAgentDiscoveryStores } from "../agents/embedded-agent-runner/model.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "../agents/embedded-agent-runner/model.static-id.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
@@ -11,6 +10,7 @@ import { registerSingleProviderPlugin } from "../plugin-sdk/plugin-test-runtime.
 import { clearLiveCatalogCacheForTests } from "../plugin-sdk/provider-catalog-live-runtime.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { resolveImageRuntime } from "./image-model-runtime.js";
@@ -20,6 +20,9 @@ afterEach(() => clearLiveCatalogCacheForTests());
 // Real catalog HTTP, model registry, auth resolution, and image eligibility gate.
 // The prepared snapshot supplies already-discovered rows, not a second model policy.
 it("admits ClawRouter native vision catalog rows and rejects text-only, malformed, and unknown rows", async () => {
+  const { default: clawrouter } = await loadBundledPluginFacade<{
+    default: Parameters<typeof registerSingleProviderPlugin>[0];
+  }>({ pluginId: "clawrouter", artifactBasename: "index.js" });
   await withOpenClawTestState({ label: "clawrouter-image" }, async (state) => {
     const requests: Array<{ url?: string; authorization?: string }> = [];
     const models = [
