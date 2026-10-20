@@ -41,15 +41,15 @@ describe("terminal resolution", () => {
   });
 
   it("completes an empty post-tool turn after committed media delivery", async () => {
-    const hasToolMediaBlockReply = true;
     const assistant = emptyAssistant();
-    const attempt = assistantAttempt(assistant, {
-      assistantTexts: [],
-      toolMetas: [{ toolName: "tts", isError: false, replaySafe: false }],
-      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-      hasToolMediaBlockReply,
+    const input = makeTerminalInput({
+      assistant,
+      attemptOverrides: {
+        toolMetas: [{ toolName: "tts", isError: false, replaySafe: false }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+        hasToolMediaBlockReply: true,
+      },
     });
-    const input = makeTerminalInput({ attempt });
 
     const resolved = await resolveEmbeddedRunTerminal(input);
 
@@ -80,13 +80,10 @@ describe("terminal resolution", () => {
       const payloads = cleanupFailed ? undefined : [];
       const attempt = assistantAttempt(assistant, {
         terminal: { kind: "failed", source: "prompt", error },
-        assistantTexts: [],
         lastToolError: cleanupFailed
           ? { toolName: "exec", error: "Tool execution aborted" }
           : undefined,
         toolMetas: cleanupFailed ? [{ toolName: "exec", isError: true, replaySafe: false }] : [],
-        didSendViaMessagingTool: false,
-        messagingToolSentTexts: [],
         replayMetadata: { hadPotentialSideEffects: cleanupFailed, replaySafe: false },
       });
       const onSuccessfulAuthProfile = vi.fn();
@@ -130,11 +127,11 @@ describe("terminal resolution", () => {
       stopReason: "error",
       errorMessage: "Authentication failed",
     });
-    const attempt = assistantAttempt(assistant, {
-      terminal: { kind: "failed", source: "prompt", error: new Error("Authentication failed") },
-    });
     const resolved = await resolveTerminal({
-      attempt,
+      assistant,
+      attemptOverrides: {
+        terminal: { kind: "failed", source: "prompt", error: new Error("Authentication failed") },
+      },
       runParams: {
         messageChannel: "internal",
         inputProvenance: { kind: "inter_session", sourceTool: "sessions_send" },
@@ -172,14 +169,13 @@ describe("terminal resolution", () => {
     const assistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
     });
-    const attempt = assistantAttempt(assistant, {
-      assistantTexts: [SILENT_REPLY_TOKEN],
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
     const activateInternalPrompt = vi.fn();
     const input = makeTerminalInput({
-      attempt,
-      attemptAssistant: assistant,
+      assistant,
+      attemptOverrides: {
+        assistantTexts: [SILENT_REPLY_TOKEN],
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      },
       runParams: {
         allowEmptyAssistantReplyAsSilent: false,
         trigger: "user",
@@ -255,43 +251,27 @@ describe("terminal resolution", () => {
     messagingToolSentTargets: [progressTarget],
   };
 
-  it("keeps a running media turn pending after a non-final source reply", async () => {
-    const overrides = {
-      ...progressAck,
-      didDeliverSourceReplyViaMessageTool: true,
-      messagingToolSentTargets: [{ ...progressTarget, sourceReplyFinal: false }],
-      messagingToolSourceReplyPayloads: [
-        { text: "Making the image now.", sourceReplyFinal: false },
-      ],
-    };
-    const resolved = await resolveTerminal({
-      attempt: detachedImageAttempt("running", overrides),
-      runParams: { replyOperation: { turnKind: "visible" } as never },
-    });
-
-    expect(resolved).toMatchObject({
-      action: "complete",
-      result: { payloads: undefined, meta: { continuationPending: true } },
-    });
-  });
-
-  it("completes a media turn when the model delivered its final reply", async () => {
-    const status = "running" as const;
-    const overrides = {
-      ...progressAck,
-      didDeliverSourceReplyViaMessageTool: true,
-      messagingToolSourceReplyPayloads: [{ text: "Making the image now.", sourceReplyFinal: true }],
-    };
-    const resolved = await resolveTerminal({
-      attempt: detachedImageAttempt(status, overrides),
-      runParams: { replyOperation: { turnKind: "visible" } as never },
-    });
-
-    expect(resolved.action).toBe("complete");
-    if (resolved.action === "complete") {
-      expect(resolved.result.meta.continuationPending).toBeUndefined();
-    }
-  });
+  it.each([false, true])(
+    "settles a media turn only after its final source reply (%s)",
+    async (sourceReplyFinal) => {
+      const resolved = await resolveTerminal({
+        attempt: detachedImageAttempt("running", {
+          ...progressAck,
+          didDeliverSourceReplyViaMessageTool: true,
+          ...(sourceReplyFinal
+            ? {}
+            : { messagingToolSentTargets: [{ ...progressTarget, sourceReplyFinal }] }),
+          messagingToolSourceReplyPayloads: [{ text: "Making the image now.", sourceReplyFinal }],
+        }),
+        runParams: { replyOperation: { turnKind: "visible" } as never },
+      });
+      expectComplete(resolved);
+      expect(resolved.result.meta.continuationPending).toBe(sourceReplyFinal ? undefined : true);
+      if (!sourceReplyFinal) {
+        expect(resolved.result.payloads).toBeUndefined();
+      }
+    },
+  );
 
   it.each([
     { provider: "openai", api: "openai-responses", narration: "none", isError: false },
@@ -312,30 +292,20 @@ describe("terminal resolution", () => {
         name: "ask_user",
         arguments: {},
       };
+      const narrationBlock = {
+        type: "text" as const,
+        text,
+        ...(narration === "commentary"
+          ? {
+              textSignature: JSON.stringify({ v: 1, id: "narration", phase: "commentary" }),
+            }
+          : {}),
+      };
       const assistant = buildEmbeddedRunnerAssistant({
         provider,
         api,
         stopReason: "toolUse",
-        content: [
-          ...(narration === "none"
-            ? []
-            : [
-                {
-                  type: "text" as const,
-                  text,
-                  ...(narration === "commentary"
-                    ? {
-                        textSignature: JSON.stringify({
-                          v: 1,
-                          id: "narration",
-                          phase: "commentary",
-                        }),
-                      }
-                    : {}),
-                },
-              ]),
-          terminalCall,
-        ],
+        content: narration === "none" ? [terminalCall] : [narrationBlock, terminalCall],
       });
       const toolResult = {
         role: "toolResult" as const,
@@ -421,21 +391,20 @@ describe("terminal resolution", () => {
     "honors required external silence after $effect: $text without recovery",
     async ({ effect, text }) => {
       const assistant = emptyAssistant({ content: [{ type: "text", text }] });
-      const attempt = assistantAttempt(assistant, {
-        assistantTexts: [text],
-        toolMetas: [
-          { toolName: effect === "yield" ? "sessions_yield" : "message", replaySafe: false },
-        ],
-        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-        yieldDetected: effect === "yield",
-        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-        ...(effect === "cross-chat send"
-          ? { didSendViaMessagingTool: true, messagingToolSentTexts: ["Sent to another chat."] }
-          : {}),
-      });
       const input = makeTerminalInput({
-        attempt,
-        attemptAssistant: assistant,
+        assistant,
+        attemptOverrides: {
+          assistantTexts: [text],
+          toolMetas: [
+            { toolName: effect === "yield" ? "sessions_yield" : "message", replaySafe: false },
+          ],
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          yieldDetected: effect === "yield",
+          replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+          ...(effect === "cross-chat send"
+            ? { didSendViaMessagingTool: true, messagingToolSentTexts: ["Sent to another chat."] }
+            : {}),
+        },
         finalAssistantRawText: text,
         runParams: {
           terminalReplyExpectation: "required",
@@ -467,13 +436,12 @@ describe("terminal resolution", () => {
         { text: "NO_REPLY The requested result.", silent: false },
       ]) {
         const assistant = emptyAssistant({ content: [{ type: "text", text }] });
-        const attempt = assistantAttempt(assistant, {
-          assistantTexts: [text],
-          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-        });
         const input = makeTerminalInput({
-          attempt,
-          attemptAssistant: assistant,
+          assistant,
+          attemptOverrides: {
+            assistantTexts: [text],
+            currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+          },
           finalAssistantRawText: text,
           payloadsWithToolMedia: silent ? [] : [{ text }],
           runParams: { lane, messageChannel: undefined },
@@ -513,7 +481,6 @@ describe("terminal resolution", () => {
       ],
     });
     const attempt = assistantAttempt(assistant, {
-      assistantTexts: [],
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     });
     const activateInternalPrompt = vi.fn();
@@ -602,10 +569,7 @@ describe("terminal resolution", () => {
   });
 
   it("suppresses duplicate user persistence when retrying a missing assistant", async () => {
-    const activePromptPersisted = true;
-    const expectedSuppression = true;
     const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
       lastAssistant: undefined,
       currentAttemptAssistant: undefined,
       currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
@@ -615,13 +579,13 @@ describe("terminal resolution", () => {
       attempt,
       attemptAssistant: undefined,
       sessionPromptState: {
-        activePrompt: { persisted: activePromptPersisted, internal: false },
+        activePrompt: { persisted: true, internal: false },
         activateInternalPrompt,
       },
     });
 
     await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
-    expect(input.sessionPromptState.suppressNextUserMessagePersistence).toBe(expectedSuppression);
+    expect(input.sessionPromptState.suppressNextUserMessagePersistence).toBe(true);
     expect(activateInternalPrompt).not.toHaveBeenCalled();
   });
 
@@ -639,14 +603,12 @@ describe("terminal resolution", () => {
         baseUrlHash: "base-url-hash",
       },
     });
-    const attempt = assistantAttempt(assistant, {
-      assistantTexts: [],
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
     const activateCompactionContinuation = vi.fn();
     const input = makeTerminalInput({
-      attempt,
-      attemptAssistant: assistant,
+      assistant,
+      attemptOverrides: {
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      },
       sessionPromptState: { activateCompactionContinuation },
     });
 
@@ -659,14 +621,12 @@ describe("terminal resolution", () => {
 
   it("reports exhausted finalization as a failed required reply", async () => {
     const assistant = emptyAssistant();
-    const attempt = assistantAttempt(assistant, {
-      assistantTexts: [],
-      toolMetas: [{ toolName: "write", replaySafe: false }],
-      replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-    });
     const resolved = await resolveTerminal({
-      attempt,
-      attemptAssistant: assistant,
+      assistant,
+      attemptOverrides: {
+        toolMetas: [{ toolName: "write", replaySafe: false }],
+        replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+      },
       runParams: {
         allowEmptyAssistantReplyAsSilent: true,
         terminalReplyExpectation: "required",
@@ -682,49 +642,32 @@ describe("terminal resolution", () => {
     expect(resolved.result.meta.finalAssistantRawText).toBeUndefined();
   });
 
-  it("delivers partial text with a truncation notice when the output budget ends", async () => {
-    const assistant = buildEmbeddedRunnerAssistant({
-      stopReason: "length",
-      content: [{ type: "text", text: "Here is the first half of the answer" }],
-    });
-    const attempt = assistantAttempt(assistant, {
-      assistantTexts: ["Here is the first half of the answer"],
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    const resolved = await resolveTerminal({
-      attempt,
-      attemptAssistant: assistant,
-      payloadsWithToolMedia: [{ text: "Here is the first half of the answer" }],
-    });
-
-    expectComplete(resolved);
-    expect(resolved.result.payloads).toEqual([
-      { text: "Here is the first half of the answer" },
-      { text: TRUNCATED_REPLY_NOTICE_TEXT },
-    ]);
-    expect(resolved.result.meta.error).toBeUndefined();
-    expect(resolved.result.meta.livenessState).toBe("working");
-  });
-
-  it("does not add a truncation notice to a length stop that already has terminal output", async () => {
-    // Terminal tool media was already a complete outcome before this fix, so it
-    // must not gain a notice telling the user to ask for a continuation.
-    const assistant = buildEmbeddedRunnerAssistant({
-      stopReason: "length",
-      content: [{ type: "text", text: "Chart attached" }],
-    });
-    const attempt = assistantAttempt(assistant, {
-      assistantTexts: ["Chart attached"],
-      toolMediaUrls: ["https://example.invalid/chart.png"],
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    const resolved = await resolveTerminal({
-      attempt,
-      attemptAssistant: assistant,
-      payloadsWithToolMedia: [{ text: "Chart attached" }],
-    });
-
-    expectComplete(resolved);
-    expect(resolved.result.payloads).toEqual([{ text: "Chart attached" }]);
-  });
+  it.each([
+    ["partial text", "Here is the first half of the answer", undefined, true],
+    ["terminal media", "Chart attached", ["https://example.invalid/chart.png"], false],
+  ] satisfies [string, string, string[] | undefined, boolean][])(
+    "adds a length-stop notice only for %s",
+    async (_kind, text, toolMediaUrls, truncated) => {
+      const resolved = await resolveTerminal({
+        assistant: buildEmbeddedRunnerAssistant({
+          stopReason: "length",
+          content: [{ type: "text", text }],
+        }),
+        attemptOverrides: {
+          assistantTexts: [text],
+          toolMediaUrls,
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        },
+        payloadsWithToolMedia: [{ text }],
+      });
+      expectComplete(resolved);
+      expect(resolved.result.payloads).toEqual(
+        truncated ? [{ text }, { text: TRUNCATED_REPLY_NOTICE_TEXT }] : [{ text }],
+      );
+      if (truncated) {
+        expect(resolved.result.meta.error).toBeUndefined();
+        expect(resolved.result.meta.livenessState).toBe("working");
+      }
+    },
+  );
 });

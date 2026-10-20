@@ -20,6 +20,8 @@ type TerminalInputOverrides = Omit<
   runParams?: Partial<TerminalInput["runParams"]>;
   retryState?: Partial<TerminalInput["retryState"]>;
   sessionPromptState?: Partial<TerminalInput["sessionPromptState"]>;
+  assistant?: Parameters<typeof assistantAttempt>[0];
+  attemptOverrides?: Parameters<typeof assistantAttempt>[1];
 };
 
 export function emptyAssistant(overrides: Parameters<typeof buildEmbeddedRunnerAssistant>[0] = {}) {
@@ -50,16 +52,17 @@ export function expectComplete(
   }
 }
 
-export function makeTerminalInput(overrides: TerminalInputOverrides = {}): TerminalInput {
-  const assistant = overrides.attemptAssistant ?? emptyAssistant();
+export function makeTerminalInput(input: TerminalInputOverrides = {}): TerminalInput {
+  const { assistant: suppliedAssistant, attemptOverrides, ...overrides } = input;
+  const assistant = suppliedAssistant ?? overrides.attemptAssistant ?? emptyAssistant();
   const attempt =
     overrides.attempt ??
-    makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
+    ("assistant" in input
+      ? assistantAttempt(suppliedAssistant, attemptOverrides)
+      : makeEmbeddedRunnerAttempt({
+          lastAssistant: assistant,
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        }));
   const profileStore = { version: 1, profiles: {} };
   const runParams = {
     sessionId: "session:terminal-resolution",
@@ -84,16 +87,11 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
       assistant: resolveCurrentAttemptAssistant(attempt),
     }),
     payloadsWithToolMedia: [],
-    recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
-    finalAssistantVisibleText: undefined,
-    finalAssistantRawText: undefined,
     agentMeta: {
       sessionId: runParams.sessionId,
       provider: "openai",
       model: "gpt-5.6-luna",
     },
-    attemptToolSummary: undefined,
-    failureSignal: undefined,
     attemptCompactionCount: 0,
     replayState: { ...attempt.replayMetadata, replayInvalid: false },
     sessionPromptState: {
@@ -116,7 +114,6 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     modelTransportId: "gpt-5.6-luna",
     modelTransportApi: "openai-responses",
     requestTransportOverrides: "none",
-    authProfileId: undefined,
     profileFailureStore: profileStore,
     attemptAuthProfileStore: profileStore,
     apiKeyInfo: null,
@@ -134,6 +131,10 @@ export function makeTerminalInput(overrides: TerminalInputOverrides = {}): Termi
     ...overrides,
     prepared: {
       payloads: [],
+      recoveredFinalAssistantPayloadsAfterPromptTimeout: undefined,
+      finalAssistantRawText: undefined,
+      attemptToolSummary: undefined,
+      failureSignal: undefined,
       replyDeliveryState: "missing",
       sourceReplyDeliveryState: "missing",
       timedOutDuringPrompt: false,

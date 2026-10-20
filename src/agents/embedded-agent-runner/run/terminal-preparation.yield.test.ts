@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
-import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -17,19 +16,20 @@ vi.mock("./auth-profile-success.js", () => ({
   reportEmbeddedRunSuccessfulAuthBinding: vi.fn(),
 }));
 
+type AttemptOverrides = NonNullable<Parameters<typeof makeEmbeddedRunnerAttempt>[0]>;
 function prepareYield(
-  input: {
-    yieldDetected?: boolean;
-    assistantTexts?: string[];
+  input: Pick<
+    AttemptOverrides,
+    | "yieldDetected"
+    | "assistantTexts"
+    | "codeModeEngaged"
+    | "lastToolError"
+    | "sourceReplyDelivered"
+  > & {
     assistantErrorMessage?: string;
     continuation?: boolean;
-    codeModeEngaged?: boolean;
     trigger?: Parameters<typeof prepareEmbeddedRunTerminal>[0]["runParams"]["trigger"];
     terminalState?: EmbeddedRunTerminalState;
-    lastToolError?: NonNullable<Parameters<typeof makeEmbeddedRunnerAttempt>[0]>["lastToolError"];
-    sourceReplyDelivered?: NonNullable<
-      Parameters<typeof makeEmbeddedRunnerAttempt>[0]
-    >["sourceReplyDelivered"];
   } = {},
 ) {
   const assistant = buildEmbeddedRunnerAssistant({
@@ -59,12 +59,8 @@ function prepareYield(
   });
   const prepared = prepareEmbeddedRunTerminal(
     preparationInput({
-      runParams: {
-        ...terminal.runParams,
-        admittedRunContext: createTestAdmittedRunContext("run:terminal-resolution"),
-      },
+      runParams: terminal.runParams,
       attempt,
-      provider: "openai",
       model: "mock-1",
       activeErrorContext: { provider: "openai", model: "mock-1" },
       terminalState: terminal.terminalState,
@@ -73,64 +69,52 @@ function prepareYield(
   return { attempt, terminal, prepared };
 }
 
-describe("terminal delivery facts", () => {
+describe("yielded terminal payloads", () => {
   it("records producer source delivery without an extracted messaging target", () => {
     const { prepared } = prepareYield({ sourceReplyDelivered: true });
     expect(prepared.agentMeta.terminalReceipt?.sourceReplyDelivered).toBe(true);
   });
-});
-
-describe("yielded terminal payloads after an earlier tool failure", () => {
+  const sendError = { toolName: "sessions_send", error: "Gateway delivery is unconfirmed" };
+  const execError = { toolName: "exec", error: "Command exited with code 1" };
   it.each([
-    {
-      assistantTexts: [],
-      assistantErrorMessage: "Agent run aborted",
-      continuation: true,
-      lastToolError: { toolName: "sessions_send", error: "Gateway delivery is unconfirmed" },
-    },
-    {
-      assistantTexts: ["Checking the task.", "Waiting for the child."],
-      assistantErrorMessage: "Agent run aborted",
-      continuation: true,
-      lastToolError: { toolName: "sessions_send", error: "Gateway delivery is unconfirmed" },
-    },
-    {
-      assistantTexts: [],
-      continuation: true,
-      lastToolError: { toolName: "exec", error: "Command exited with code 1" },
-    },
-    {
-      assistantTexts: [],
-      continuation: false,
-      lastToolError: { toolName: "exec", error: "Command exited with code 1" },
-    },
-  ])(
-    "preserves paused-turn payloads and continuation: $assistantTexts / $continuation",
-    async (input) => {
-      const { attempt, terminal, prepared } = prepareYield(input);
-      expect(attempt.lastToolError).toBe(input.lastToolError);
+    [[], sendError, true, "Agent run aborted"],
+    [["Checking the task.", "Waiting for the child."], sendError, true, "Agent run aborted"],
+    [[], execError, true, undefined],
+    [[], execError, false, undefined],
+  ] satisfies [
+    string[],
+    NonNullable<AttemptOverrides["lastToolError"]>,
+    boolean,
+    string | undefined,
+  ][])(
+    "preserves paused payloads %j after %j (continuation=%s)",
+    async (assistantTexts, lastToolError, continuation, assistantErrorMessage) => {
+      const { attempt, terminal, prepared } = prepareYield({
+        assistantTexts,
+        lastToolError,
+        continuation,
+        assistantErrorMessage,
+      });
+      expect(attempt.lastToolError).toBe(lastToolError);
       expect(terminal.terminalState.outcome.status).toBe("ok");
       expect(prepared.payloadsWithToolMedia?.map((payload) => payload.text) ?? []).toEqual(
-        input.assistantTexts,
+        assistantTexts,
       );
       expect(prepared.payloadsWithToolMedia?.some((payload) => payload.isError)).not.toBe(true);
-      expect(prepared.attemptToolSummary).toMatchObject({
-        unresolvedError: { toolName: input.lastToolError.toolName },
-      });
+      const summary = { unresolvedError: { toolName: lastToolError.toolName } };
+      expect(prepared.attemptToolSummary).toMatchObject(summary);
       const result = await resolveEmbeddedRunTerminal({ ...terminal, prepared });
       expectComplete(result);
       expect(result.result.meta).toMatchObject({
         yielded: true,
         aborted: false,
         livenessState: "paused",
+        toolSummary: summary,
       });
       expect(result.result.meta.error).toBeUndefined();
-      expect(result.result.meta.toolSummary).toMatchObject({
-        unresolvedError: { toolName: input.lastToolError.toolName },
-      });
       expect(result.result.payloads ?? []).toEqual(
-        input.continuation
-          ? input.assistantTexts.map((text) => ({ text, replyToTag: false }))
+        continuation
+          ? assistantTexts.map((text) => ({ text, replyToTag: false }))
           : [{ text: YIELD_DIAGNOSTIC_TEXT }],
       );
       expect(terminal.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
@@ -138,41 +122,31 @@ describe("yielded terminal payloads after an earlier tool failure", () => {
   );
 
   it.each([
-    {
-      name: "an ordinary completed turn",
-      yieldDetected: false,
-      outcome: { reason: "completed", status: "ok", stopReason: "stop" },
-    },
-    {
-      name: "a failed yielded turn",
-      yieldDetected: true,
-      outcome: { reason: "failed", status: "error", error: "Provider failed" },
-    },
-    {
-      name: "a timed-out yielded turn",
-      yieldDetected: true,
-      outcome: {
+    [false, { reason: "completed", status: "ok", stopReason: "stop" }],
+    [true, { reason: "failed", status: "error", error: "Provider failed" }],
+    [
+      true,
+      {
         reason: "hard_timeout",
         status: "timeout",
         timeoutPhase: "provider",
         providerStarted: true,
       },
+    ],
+  ] satisfies [boolean, EmbeddedRunTerminalState["outcome"]][])(
+    "retains tool errors (yield=%s, outcome=%j)",
+    (yieldDetected, outcome) => {
+      const { prepared } = prepareYield({
+        yieldDetected,
+        terminalState: { outcome, signalOwnedInterruption: false },
+      });
+      const warning = prepared.payloadsWithToolMedia?.find((payload) => payload.isError);
+      expect(warning).toMatchObject({ text: expect.stringContaining("failed"), isError: true });
+      expect(getReplyPayloadMetadata(warning ?? {})).toMatchObject({
+        toolErrorWarning: { toolName: "exec" },
+      });
     },
-  ] satisfies {
-    name: string;
-    yieldDetected: boolean;
-    outcome: EmbeddedRunTerminalState["outcome"];
-  }[])("retains tool-error presentation for $name", ({ yieldDetected, outcome }) => {
-    const { prepared } = prepareYield({
-      yieldDetected,
-      terminalState: { outcome, signalOwnedInterruption: false },
-    });
-    const warning = prepared.payloadsWithToolMedia?.find((payload) => payload.isError);
-    expect(warning).toMatchObject({ text: expect.stringContaining("failed"), isError: true });
-    expect(getReplyPayloadMetadata(warning ?? {})).toMatchObject({
-      toolErrorWarning: { toolName: "exec" },
-    });
-  });
+  );
 
   it("preserves restart presentation when a yielded turn is cancelled", () => {
     const { prepared } = prepareYield({
