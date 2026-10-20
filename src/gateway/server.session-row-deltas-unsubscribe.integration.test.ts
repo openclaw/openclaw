@@ -6,6 +6,7 @@ import { GatewayChatEvents } from "../../ui/src/api/gateway-chat-events.ts";
 import { createTestGatewayClient } from "../../ui/src/test-helpers/gateway-client.ts";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
 import { drainSessionEventPublications } from "./session-event-prepared-row.js";
@@ -15,29 +16,22 @@ import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 import { installGatewayTestHooks, rpcReq } from "./test-helpers.js";
 
 let harness: GatewayServerHarness;
-let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
+let kernel: Awaited<ReturnType<typeof captureGatewayKernel>>;
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    const module = await import("./server-kernel.js");
-    const create = module.createGatewayKernel;
-    const capture = vi
-      .spyOn(module, "createGatewayKernel")
-      .mockImplementation(async (...args) => (kernel = await create(...args)));
-    try {
+    kernel = await captureGatewayKernel(async () => {
       harness = await startGatewayServerHarness();
-    } finally {
-      capture.mockRestore();
-    }
+    });
   },
   cleanup: async () => harness?.close(),
 });
 
 test("unsubscribe acknowledgements and subscription switches preserve connection row baselines", async () => {
-  const capable = await harness.openClient({
-    caps: ["session-scoped-events", "session-row-deltas"],
-  });
-  const legacy = await harness.openClient({ caps: ["session-scoped-events"] });
+  const caps = ["session-scoped-events"];
+  const capable = await harness.openClient({ caps: [...caps, "session-row-deltas"] });
+  const legacy = await harness.openClient({ caps });
+  const unsubscribeMethod = "sessions.messages.unsubscribe";
   const sockets = [capable.ws, legacy.ws];
   const request = async (method: string, params: unknown, ws = capable.ws) => {
     const response = await rpcReq(ws, method, params);
@@ -93,34 +87,30 @@ test("unsubscribe acknowledgements and subscription switches preserve connection
   await publish(keyB);
   await expectPair();
 
-  const unsubscribe = expectDefined(
-    sessionSubscriptionHandlers["sessions.messages.unsubscribe"],
-    "unsubscribe handler",
-  );
-  const interleave = vi
-    .spyOn(sessionSubscriptionHandlers, "sessions.messages.unsubscribe")
-    .mockImplementationOnce(async (options) => {
-      let response: Parameters<typeof options.respond> | undefined;
-      await unsubscribe({ ...options, respond: (...args) => (response = args) });
-      const acknowledgement = expectDefined(response, "unsubscribe acknowledgement");
-      // The real mutation has finished; this frame must reach ingress before its ACK.
-      await publish(keyB);
-      options.respond(...acknowledgement);
-    });
+  const unsubscribe = expectDefined(sessionSubscriptionHandlers[unsubscribeMethod], "unsubscribe");
+  const interleave = vi.spyOn(sessionSubscriptionHandlers, unsubscribeMethod);
+  interleave.mockImplementationOnce(async (options) => {
+    let response: Parameters<typeof options.respond> | undefined;
+    await unsubscribe({ ...options, respond: (...args) => (response = args) });
+    const acknowledgement = expectDefined(response, "unsubscribe acknowledgement");
+    // The real mutation has finished; this frame must reach ingress before its ACK.
+    await publish(keyB);
+    options.respond(...acknowledgement);
+  });
   onTestFinished(() => interleave.mockRestore());
-  await decoder.request(client, "sessions.messages.unsubscribe", { key: keyA });
+  await decoder.request(client, unsubscribeMethod, { key: keyA });
   await expectPair();
   await publish(keyB);
   await expectPair(true);
 
-  await request("sessions.messages.unsubscribe", { key: keyA }, legacy.ws);
+  await request(unsubscribeMethod, { key: keyA }, legacy.ws);
   for (const key of [keyB, keyA, keyB]) {
     for (const ws of sockets) {
       await request("sessions.messages.subscribe", { key }, ws);
     }
     await publish(key);
     await expectPair(true);
-    await decoder.request(client, "sessions.messages.unsubscribe", { key });
-    await request("sessions.messages.unsubscribe", { key }, legacy.ws);
+    await decoder.request(client, unsubscribeMethod, { key });
+    await request(unsubscribeMethod, { key }, legacy.ws);
   }
 });

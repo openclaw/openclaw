@@ -34,10 +34,9 @@ test("sessions.create preserves creation and notices after an unknown signal out
       isLocalClient: false,
     }),
   );
-  const create = (
-    params: Record<string, unknown>,
-    creator: Parameters<typeof directSessionReq>[2] = { client: client as never },
-  ) => directSessionReq<{ key?: string; entry?: SessionEntry }>("sessions.create", params, creator);
+  const operator = { client: client as never };
+  const create = (params: Record<string, unknown>, creator = operator) =>
+    directSessionReq<{ key?: string; entry?: SessionEntry }>("sessions.create", params, creator);
   const syntheticClient = (sessionCreation?: TrustedSessionCreation) => ({
     client: {
       connect: { scopes: ["operator.write"] },
@@ -80,11 +79,7 @@ test("sessions.create preserves creation and notices after an unknown signal out
   expect(existing.ok).toBe(true);
   expect(peekSystemEvents("agent:main:main")).toEqual([]);
   expect((await listSessionStateEventsSince(key, "main", 0, 20)).events).toHaveLength(1);
-  const described = await directSessionReq(
-    "sessions.describe",
-    { key },
-    { client: client as never },
-  );
+  const described = await directSessionReq("sessions.describe", { key }, operator);
   expect(described).toMatchObject({ ok: true, payload: { session: { key } } });
 
   const synthetic = await create({ agentId: "main" }, syntheticClient());

@@ -8,27 +8,24 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
-import {
-  isOpenClawStateDatabaseOpen,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
+import * as database from "../state/openclaw-state-db.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 
 export function registerGatewayUpdateHistoryTests(
   getPort: () => number,
-  readonlyPreparation: {
+  preparation: {
     prepared: Array<{ pathname: string; location?: string; progressed: boolean }>;
     turns: Promise<void>[];
   },
 ) {
+  const { prepared: snapshots, turns } = preparation;
   const connect = () =>
     connectGatewayClient({
       url: `ws://127.0.0.1:${getPort()}`,
       token: "secret",
       clientName: GATEWAY_CLIENT_NAMES.CLI,
       mode: GATEWAY_CLIENT_MODES.CLI,
-      clientVersion: "1.0.0",
       scopes: ["operator.admin"],
     });
   const atAge = (minutes: number) =>
@@ -67,47 +64,35 @@ export function registerGatewayUpdateHistoryTests(
       try {
         const clock = atAge(shape === "fresh" ? 0 : 25 * 60);
         const run = createUpdateRun({ trigger: "api" });
+        const { runId } = run;
         if (shape === "retained") {
-          const from = {
-            root: process.env.OPENCLAW_STATE_DIR ?? "/fixture",
-            nodePath: process.execPath,
-            version: "2026.9.2",
-            buildId: null,
-          };
-          createRetainedUpdateRecovery({
-            runId: run.runId,
-            from,
-            to: { ...from, version: "2026.9.3" },
-          });
+          const from = { root: "/app", nodePath: "/node", version: "2026.9.2", buildId: null };
+          createRetainedUpdateRecovery({ runId, from, to: { ...from, version: "2026.9.3" } });
         }
         clock.mockRestore();
-        const databasePath = openOpenClawStateDatabase().path;
+        const path = database.openOpenClawStateDatabase().path;
         const methods =
           shape === "fresh" ? ["update.runs.get", "update.runs.list"] : ["update.runs.get"];
         for (const method of methods) {
           // Exercise expiry cold first, before a warm read could reconcile the row.
           for (const cache of ["closed", "warm"] as const) {
-            openOpenClawStateDatabase();
+            database.openOpenClawStateDatabase();
             if (cache === "closed") {
-              expect(await closeOpenClawStateDatabaseByPathAsync(databasePath)).toBe(true);
+              expect(await closeOpenClawStateDatabaseByPathAsync(path)).toBe(true);
             }
-            expect(isOpenClawStateDatabaseOpen(databasePath)).toBe(cache === "warm");
-            const before = readonlyPreparation.prepared.length;
+            expect(database.isOpenClawStateDatabaseOpen(path)).toBe(cache === "warm");
+            const before = snapshots.length;
             const get = method === "update.runs.get";
-            const result = await client.request(method, get ? { runId: run.runId } : { limit: 1 });
-            await Promise.all(readonlyPreparation.turns);
-            const expired = { runId: run.runId, status: "failed", reason: "legacy-driver-expired" };
+            const result = await client.request(method, get ? { runId } : { limit: 1 });
+            await Promise.all(turns);
+            const expired = { runId, status: "failed", reason: "legacy-driver-expired" };
             const expected = shape === "expired" ? expect.objectContaining(expired) : run;
             expect(result).toEqual(get ? { run: expected } : { runs: [expected] });
-            const prepared = readonlyPreparation.prepared
-              .slice(before)
-              .filter((entry) => entry.pathname === databasePath);
-            expect(prepared.map(({ progressed }) => progressed)).toEqual(
-              cache === "warm" ? [] : [true],
-            );
+            const rows = snapshots.slice(before).filter((row) => row.pathname === path);
+            expect(rows.map((row) => row.progressed)).toEqual(cache === "warm" ? [] : [true]);
             if (cache === "closed") {
-              expect(prepared[0]?.location).toBeDefined();
-              expect(existsSync(prepared[0]!.location!)).toBe(false);
+              expect(rows[0]?.location).toBeDefined();
+              expect(existsSync(rows[0]!.location!)).toBe(false);
             }
           }
         }

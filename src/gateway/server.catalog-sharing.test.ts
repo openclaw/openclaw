@@ -1,10 +1,9 @@
 import { expect, it } from "vitest";
 import type { WebSocket } from "ws";
-import type { SessionCatalogHost } from "../../packages/gateway-protocol/src/index.js";
 import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
-import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { createDeferredCore } from "../shared/deferred.js";
+import * as catalogs from "./server-methods/session-catalog.fixtures.test-support.js";
 import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   connectOk,
@@ -19,19 +18,13 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
   const token = "catalog-sharing-proof-token";
   const heldCatalogId = "catalog-sharing-proof";
   const completedCatalogId = "catalog-completed-proof";
-  const started = createDeferredCore();
-  const release = createDeferredCore();
-  const host: SessionCatalogHost = {
-    hostId: "gateway:local",
-    label: "Catalog sharing proof",
-    kind: "gateway",
-    connected: true,
-    sessions: [],
-  };
+  const [started, release] = [createDeferred(), createDeferred()];
+  const host = catalogs.catalogHost();
+  const progressId = "follower-progress";
   const publishHeldHosts: Array<() => void> = [];
-  const providerRuns: Promise<SessionCatalogHost[]>[] = [];
+  const providerRuns: Promise<(typeof host)[]>[] = [];
   const requests: Promise<ResponseFrame>[] = [];
-  const expectCatalog = (response: unknown, id: string, hosts: SessionCatalogHost[] = []) =>
+  const expectCatalog = (response: unknown, id: string, hosts: (typeof host)[] = []) =>
     expect(response).toMatchObject({ ok: true, payload: { catalogs: [{ id, hosts }] } });
   let heldCalls = 0;
   const registry = createEmptyPluginRegistry();
@@ -39,9 +32,7 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
     registry.sessionCatalogs.push({
       pluginId: "catalog-sharing-proof",
       source: "test",
-      provider: {
-        id: catalogId,
-        label: "Catalog sharing proof",
+      provider: catalogs.catalogProvider(catalogId, {
         audience: "gateway-operators",
         supportsProcessHomeIsolation: true,
         list: ({ search, onHost }) => {
@@ -54,17 +45,14 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
               return [host];
             }
             if (search === "after-follower") {
-              for (const publish of publishHeldHosts) {
-                publish();
-              }
+              publishHeldHosts.forEach((publish) => publish());
             }
             return [];
           })();
           providerRuns.push(operation);
           return operation;
         },
-        read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
-      },
+      }),
     });
   }
   setTestPluginRegistry(registry);
@@ -81,14 +69,12 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
     ws = await gateway.openWs();
     await connectOk(ws, { token, scopes: ["operator.admin"] });
     const socket = ws;
-    const request = (catalogId: string, search: string, progressId?: string) => {
+    const request = (catalogId: string, search: string, progress?: string) => {
       const id = `catalog-${requests.length}`;
-      const response = onceMessage<ResponseFrame>(
-        socket,
-        (frame) => frame.type === "res" && frame.id === id,
-      );
+      const matches = (frame: ResponseFrame) => frame.type === "res" && frame.id === id;
+      const response = onceMessage(socket, matches);
       requests.push(response);
-      const params = { catalogId, search, progressId };
+      const params = { catalogId, search, progressId: progress };
       socket.send(JSON.stringify({ type: "req", id, method: "sessions.catalog.list", params }));
       return response;
     };
@@ -102,19 +88,16 @@ it("shares a held catalog RPC after 128 distinct catalog results settle", async 
       (frame) =>
         frame.type === "event" &&
         frame.event === "sessions.catalog.host" &&
-        frame.payload?.progressId === "follower-progress",
+        frame.payload?.progressId === progressId,
     );
-    const follower = request(heldCatalogId, "held", "follower-progress");
+    const follower = request(heldCatalogId, "held", progressId);
     const [barrier, progress] = await Promise.all([
       request(completedCatalogId, "after-follower"),
       followerHost,
     ]);
     expectCatalog(barrier, completedCatalogId);
     expect(progress).toMatchObject({
-      payload: {
-        progressId: "follower-progress",
-        catalog: { id: heldCatalogId, hosts: [host] },
-      },
+      payload: { progressId, catalog: { id: heldCatalogId, hosts: [host] } },
     });
     unblock();
     for (const response of await Promise.all([leader, follower])) {

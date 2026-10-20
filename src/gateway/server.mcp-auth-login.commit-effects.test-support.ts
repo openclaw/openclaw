@@ -6,7 +6,7 @@ import type { McpOAuthLoginLifecycle } from "../agents/mcp-oauth-provider.js";
 import * as oauthStore from "../agents/mcp-oauth-store.js";
 import * as oauthCoordinator from "../agents/mcp-oauth.js";
 
-type McpAuthCommitEffectFixture = {
+export function registerMcpAuthCommitEffects(f: {
   identity: () => McpOAuthIdentity;
   resourceUrl: () => string;
   seed: () => Promise<void>;
@@ -18,9 +18,7 @@ type McpAuthCommitEffectFixture = {
   revoke: () => void;
   observeLogin: (observe: (login: McpOAuthLoginLifecycle) => void) => void;
   registerRestore: (restore: () => void) => void;
-};
-
-export function registerMcpAuthCommitEffects(f: McpAuthCommitEffectFixture) {
+}) {
   const expectPendingCleared = async (state: string) => {
     const after = await f.stored();
     expect(after.codeVerifier).toBeUndefined();

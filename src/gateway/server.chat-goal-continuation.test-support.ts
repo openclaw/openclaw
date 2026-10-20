@@ -1,9 +1,6 @@
 import { expect, it, type MockInstance } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  detachActiveEmbeddedRun,
-  attachActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
+import * as runs from "../agents/embedded-agent-runner/runs.js";
 import type { runEmbeddedAgent as executeEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
@@ -90,12 +87,12 @@ export function registerGoalAutomaticContinuationCases(
           queueMessage: async () => {},
         };
         operation?.attachBackend(backend);
-        attachActiveEmbeddedRun(id, backend, sessionKey, file, "main", operation);
+        runs.attachActiveEmbeddedRun(id, backend, sessionKey, file, "main", operation);
         secondStarted.resolve();
         try {
           await released.promise;
         } finally {
-          detachActiveEmbeddedRun(id, backend, sessionKey, file);
+          runs.detachActiveEmbeddedRun(id, backend, sessionKey, file);
           operation?.detachBackend(backend);
         }
       }
