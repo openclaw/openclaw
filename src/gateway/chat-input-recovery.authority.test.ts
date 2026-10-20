@@ -77,6 +77,12 @@ it.for(["steer", "followup"] as const)(
       }
     });
     const providerErrors: unknown[] = [];
+    const reply = (response: Parameters<typeof writeOpenAiResponsesText>[0], text: string) =>
+      writeOpenAiResponsesText(response, {
+        text,
+        messageId: randomUUID(),
+        responseId: randomUUID(),
+      });
     const providerServer = createServer((request, response) => {
       void (async () => {
         if (request.method !== "POST") {
@@ -104,30 +110,18 @@ it.for(["steer", "followup"] as const)(
           .findLast((text) => text.trim());
         if (activeInput?.includes("PEER_INPUT")) {
           replayOrder.push("peer");
-          writeOpenAiResponsesText(response, {
-            text: "Peer completed.",
-            messageId: randomUUID(),
-            responseId: randomUUID(),
-          });
+          reply(response, "Peer completed.");
           return;
         }
         if (activeInput?.includes("PREDECESSOR_INPUT")) {
           replayOrder.push("predecessor");
-          writeOpenAiResponsesText(response, {
-            text: "Predecessor completed.",
-            messageId: randomUUID(),
-            responseId: randomUUID(),
-          });
+          reply(response, "Predecessor completed.");
           return;
         }
         replayOrder.push("chat");
         requests.push(body);
         if (payload.input.some((item) => item.type === "function_call_output")) {
-          writeOpenAiResponsesText(response, {
-            text: "Replay completed.",
-            messageId: randomUUID(),
-            responseId: randomUUID(),
-          });
+          reply(response, "Replay completed.");
         } else {
           writeToolCall(response, "write", { path: effectsPath, content: "UNCHANGED_OPERATOR" });
         }
@@ -410,30 +404,19 @@ it.for(["steer", "followup"] as const)(
           }
         });
         await acquireGatewayTestWebSocket(startupProbe, 5_000);
-        startupProbe.send(
-          JSON.stringify({
-            type: "req",
-            id: "connect-probe",
-            method: "connect",
-            params: {
-              minProtocol: PROTOCOL_VERSION,
-              maxProtocol: PROTOCOL_VERSION,
-              client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
-              role: "operator",
-              scopes: ["operator.admin"],
-              auth: { token: "synthetic-replay-token" },
-            },
-          }),
-        );
+        const probe = startupProbe;
+        const sendProbe = (id: string, method: string, params: unknown) =>
+          probe.send(JSON.stringify({ type: "req", id, method, params }));
+        sendProbe("connect-probe", "connect", {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: { id: "gateway-client", version: "test", platform: "test", mode: "backend" },
+          role: "operator",
+          scopes: ["operator.admin"],
+          auth: { token: "synthetic-replay-token" },
+        });
         expect(await connected.promise).toMatchObject({ ok: true });
-        startupProbe.send(
-          JSON.stringify({
-            type: "req",
-            id: "startup-probe",
-            method: "chat.send",
-            params: successor,
-          }),
-        );
+        sendProbe("startup-probe", "chat.send", successor);
         expect(await refused.promise).toMatchObject({
           ok: false,
           error: { code: "UNAVAILABLE", retryable: true },

@@ -232,25 +232,22 @@ it("preserves error-turn media after a later reply", () => {
 
 const managedUrl = "./attachment-catalog-tiny/demo.jpg";
 const delivery = { mediaUrls: [managedUrl] };
-it.each([["LF", "\n"]])(
-  "withholds only relative directives from a mixed legacy batch with %s lines",
-  (_name, separator) => {
-    const visibleLines = [
-      "Prepared the mixed batch.",
-      "MEDIA:https://cdn.example.test/legacy.jpg",
-      "MEDIA:/media/legacy-audio.mp3",
-    ];
-    const source = assistant({
-      openclawDelivery: delivery,
-      content: [text([...visibleLines, `MEDIA:${managedUrl}`].join(separator))],
-    });
-    const before = structuredClone(source);
-    const payload = payloadFor(source);
-    expect(payload?.message).toMatchObject({ content: [text(visibleLines.join("\n"))] });
-    expect(JSON.stringify(payload)).not.toContain("attachment-catalog-tiny");
-    expect(source).toEqual(before);
-  },
-);
+it("withholds only relative directives from a mixed legacy batch with LF lines", () => {
+  const visibleLines = [
+    "Prepared the mixed batch.",
+    "MEDIA:https://cdn.example.test/legacy.jpg",
+    "MEDIA:/media/legacy-audio.mp3",
+  ];
+  const source = assistant({
+    openclawDelivery: delivery,
+    content: [text([...visibleLines, `MEDIA:${managedUrl}`].join("\n"))],
+  });
+  const before = structuredClone(source);
+  const payload = payloadFor(source);
+  expect(payload?.message).toMatchObject({ content: [text(visibleLines.join("\n"))] });
+  expect(JSON.stringify(payload)).not.toContain("attachment-catalog-tiny");
+  expect(source).toEqual(before);
+});
 
 describe("correlated channel mirrors in Gateway history", () => {
   let state: OpenClawTestState;
@@ -390,20 +387,15 @@ describe("channel mirror display controls", () => {
 });
 
 describe("multimodal display privacy", () => {
-  it.each([
-    {
-      name: "native image data",
-      image: (data: string) => ({ type: "image", mimeType: "image/png", data }),
-    },
-  ])("keeps text while omitting $name from display history", ({ image: inlineImage }) => {
+  it("keeps text while omitting native image data from display history", () => {
     const png = createNoisyPngBuffer(320, 320);
     const encoded = png.toString("base64");
     const message = {
       role: "user",
       content: [
-        { type: "text", text: "keep prefix text" },
-        inlineImage(encoded),
-        { type: "text", text: "keep suffix text" },
+        text("keep prefix text"),
+        { type: "image", mimeType: "image/png", data: encoded },
+        text("keep suffix text"),
       ],
     };
     const messages = project([message]);
@@ -411,9 +403,9 @@ describe("multimodal display privacy", () => {
       {
         role: "user",
         content: [
-          { type: "text", text: "keep prefix text" },
+          text("keep prefix text"),
           { type: "image", omitted: true, bytes: png.length },
-          { type: "text", text: "keep suffix text" },
+          text("keep suffix text"),
         ],
       },
     ]);
@@ -428,7 +420,7 @@ describe("multimodal display privacy", () => {
     const rawMessage = {
       role: "user",
       content: [
-        { type: "text", text: "keep mixed media metadata" },
+        text("keep mixed media metadata"),
         {
           type: "image",
           mimeType: "image/png",
@@ -481,7 +473,7 @@ describe("multimodal display privacy", () => {
         /private-|-(?:user|secret|fragment)|openclawReasoningReplay/u,
       );
       expect(message?.content).toEqual([
-        { type: "text", text: "keep mixed media metadata" },
+        text("keep mixed media metadata"),
         {
           type: "image",
           mimeType: "image/png",

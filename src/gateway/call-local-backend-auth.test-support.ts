@@ -35,6 +35,16 @@ export function registerGatewayCallLocalBackendAuthTests({
   loadDeviceAuthTokenReadOnlyMock: DeviceAuthLookupMock;
   loadOriginDeviceTokenMock: DeviceAuthLookupMock;
 }): void {
+  const backend = {
+    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+    mode: GATEWAY_CLIENT_MODES.BACKEND,
+    scopes: ["operator.read", "operator.pairing"],
+    deviceIdentity: null,
+  };
+  const localAuthNone = () => {
+    setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
+    setGatewayNetworkDefaults();
+  };
   it.each([undefined, "read-only"] as const)(
     "fails before connecting when identity storage is unavailable (%s)",
     async (sharedStateMode) => {
@@ -63,15 +73,11 @@ export function registerGatewayCallLocalBackendAuthTests({
       requireLocalBackendSharedAuth: true,
     });
 
-    expect(getClientOptions()?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
-    expect(getClientOptions()?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
-    expect(getClientOptions()?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(getClientOptions()?.deviceIdentity).toBeNull();
+    expect(getClientOptions()).toMatchObject(backend);
   });
 
   it("uses local backend auth-none without a device identity when required", async () => {
-    setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
-    setGatewayNetworkDefaults();
+    localAuthNone();
 
     await callGateway({
       method: "node.list",
@@ -79,17 +85,13 @@ export function registerGatewayCallLocalBackendAuthTests({
       requireLocalBackendSharedAuth: true,
     });
 
-    expect(getClientOptions()?.clientName).toBe(GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT);
-    expect(getClientOptions()?.mode).toBe(GATEWAY_CLIENT_MODES.BACKEND);
-    expect(getClientOptions()?.scopes).toEqual(["operator.read", "operator.pairing"]);
+    expect(getClientOptions()).toMatchObject(backend);
     expect(getClientOptions()?.token).toBeUndefined();
     expect(getClientOptions()?.password).toBeUndefined();
-    expect(getClientOptions()?.deviceIdentity).toBeNull();
   });
 
   it("keeps local auth-none CLI cron.status off device storage", async () => {
-    setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
-    setGatewayNetworkDefaults();
+    localAuthNone();
     const { callGatewayFromCliRuntime } = await import("../cli/gateway-rpc.runtime.js");
 
     await expect(callGatewayFromCliRuntime("cron.status", { json: true })).resolves.toEqual({
@@ -97,9 +99,7 @@ export function registerGatewayCallLocalBackendAuthTests({
     });
 
     expect(getClientOptions()).toMatchObject({
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      deviceIdentity: null,
+      ...backend,
       scopes: ["operator.read"],
     });
     expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
@@ -111,8 +111,7 @@ export function registerGatewayCallLocalBackendAuthTests({
   it.each(["url", "device", "stored auth"])(
     "preserves explicit %s authentication for auth-none CLI calls",
     async (kind) => {
-      setGatewayConfig({ mode: "local", bind: "loopback", auth: { mode: "none" } });
-      setGatewayNetworkDefaults();
+      localAuthNone();
       const { callGatewayFromCliRuntime } = await import("../cli/gateway-rpc.runtime.js");
       loadOriginDeviceTokenMock.mockReturnValue({
         token: "fixture-origin-token",

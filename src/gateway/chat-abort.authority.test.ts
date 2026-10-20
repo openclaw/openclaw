@@ -15,25 +15,29 @@ beforeEach(() => {
   resetAgentRunRegistryForTest();
 });
 
-function createAuthorityAbortFixture(runId: string) {
+function createAuthorityAbortFixture(runId: string, sessionless = false) {
   const sessionKey = "agent:main:authority";
   const operationalRunInstance = createOperationalRunInstanceRef(runId);
   rpcSourceTesting.clear();
   const registration = registerChatAbortController({
     runId,
     sessionId: `session-${runId}`,
-    sessionKey,
-    target: captureSessionTarget({
-      storeScope: `/synthetic/authority/${runId}`,
-      sessionKey,
-      incarnation: `session-${runId}`,
-    }),
+    sessionKey: sessionless ? undefined : sessionKey,
+    target: !sessionless
+      ? captureSessionTarget({
+          storeScope: `/synthetic/authority/${runId}`,
+          sessionKey,
+          incarnation: `session-${runId}`,
+        })
+      : undefined,
     timeoutMs: 60_000,
     operationalRunInstance,
   });
   onTestFinished(registration.cleanup);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  registration.bindAgentRunDelegatedAuthority(authority);
+  if (registration.registered) {
+    registration.bindAgentRunDelegatedAuthority(authority);
+  }
   const chatRunState = createChatRunState();
   const ops: ChatAbortOps = {
     chatRunState,
@@ -64,15 +68,7 @@ it("binds delegated authority only to the exact operational instance object", ()
 
 it("leaves sessionless authority with the outer admission owner", () => {
   const runId = "run-sessionless-authority";
-  const operationalRunInstance = createOperationalRunInstanceRef(runId);
-  rpcSourceTesting.clear();
-  const registration = registerChatAbortController({
-    runId,
-    sessionId: `session-${runId}`,
-    timeoutMs: 60_000,
-    operationalRunInstance,
-  });
-  const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+  const { registration, authority } = createAuthorityAbortFixture(runId, true);
   const unrelatedInstance = createOperationalRunInstanceRef("run-unrelated-authority");
   const unrelatedAuthority = claimAgentRunDelegatedAuthority(unrelatedInstance);
 
@@ -96,19 +92,17 @@ it("prepares before cancellation and publishes only after exact authority retire
   const { authority, chatRunState, ops, registration, runId, sessionKey } =
     createAuthorityAbortFixture("run-authority-abort");
   const entry = registration.entry!;
+  const expectRetired = () => {
+    expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
+    expect(entry.input.abortSignal.aborted).toBe(true);
+  };
   const onAbortPrepared = vi.fn(() => {
     expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
     expect(entry.input.abortSignal.aborted).toBe(false);
     expect(chatRunState.hasAbortMarker(runId)).toBe(true);
   });
-  const onAbortCommitted = vi.fn(() => {
-    expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
-    expect(entry.input.abortSignal.aborted).toBe(true);
-  });
-  ops.onRunAborted = vi.fn(() => {
-    expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
-    expect(entry.input.abortSignal.aborted).toBe(true);
-  });
+  const onAbortCommitted = vi.fn(expectRetired);
+  ops.onRunAborted = vi.fn(expectRetired);
 
   expect(
     abortChatRunById(ops, {
