@@ -180,7 +180,6 @@
 ["extensions/browser/src/browser/server-context.hot-reload-defaults.test.ts","./pw-ai-module.js","154f082f8fc9bb59607397f383fa9bbba837ed7b3f2ffddbddf393dd9b8e2373",1]
 ["extensions/browser/src/browser/server-context.hot-reload-profiles.test.ts","./config-refresh-source.js","9d9990a7395e4ab0fc65afcb1e60995521ba9788f0344d9c41f9a10f3b33e38b",1]
 ["extensions/browser/src/browser/server-context.reset.test.ts","./trash.js","d7bcd3bcfcd5784ef56a179194222e1891b68c96ab9d2b7f4979d9414b51ebca",1]
-["extensions/browser/src/browser/server-context.stop-running-browser.test.ts","./chrome-mcp.js","2dec930597247abd3c4738b03a47b15a1e10322d3c9a12474e3676e58bda6440",1]
 ["extensions/browser/src/browser/server-context.stop-running-browser.test.ts","./chrome.js","e00643969edd1c30f2fde99cb2cbfb56d8e1e7182748f9a485ef4fa989bf6cd7",1]
 ["extensions/browser/src/browser/server-context.stop-running-browser.test.ts","./pw-ai.js","a3b4d75930dcdb5553ad0092459346089fb90f1a511f6ea61d3ad2da792864b6",1]
 ["extensions/browser/src/browser/server-lifecycle.test.ts","./server-context.lifecycle.js","88d31ac8c7240f4e7e8ff2f61a22eb65400cabeac1d4c95e638ba0776cc8a4c7",1]

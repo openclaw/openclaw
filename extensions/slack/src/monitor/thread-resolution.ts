@@ -91,11 +91,12 @@ export function createSlackThreadTsResolver(params: { client: SlackWebClient }) 
       turnAdoptionLifecycle?: SlackIngressTurnLifecycle;
     }): Promise<SlackMessageEvent> => {
       const { message } = request;
-      if (!message.parent_user_id || message.thread_ts || !message.ts) {
+      const messageTs = message.ts;
+      if (!message.parent_user_id || message.thread_ts || !messageTs) {
         return message;
       }
 
-      const cacheKey = `${message.channel}:${message.ts}`;
+      const cacheKey = `${message.channel}:${messageTs}`;
       let resolved: string | null;
       try {
         ({ value: resolved } = await cache.read(
@@ -111,7 +112,7 @@ export function createSlackThreadTsResolver(params: { client: SlackWebClient }) 
                 (await resolveThreadTsFromHistory({
                   client: params.client,
                   channelId: message.channel,
-                  messageTs: message.ts,
+                  messageTs,
                 })) ?? null
               );
             } catch (err) {

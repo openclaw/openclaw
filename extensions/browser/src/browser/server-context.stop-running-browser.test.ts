@@ -31,7 +31,8 @@ vi.mock("./chrome.js", () => ({
   stopOwnedOpenClawChrome: chromeMocks.stopOwnedOpenClawChrome,
   stopOpenClawChrome: vi.fn(async () => {}),
 }));
-vi.mock("./chrome-mcp.js", () => ({
+vi.mock("./chrome-mcp.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./chrome-mcp.js")>()),
   closeChromeMcpSession: vi.fn(async () => false),
   ensureChromeMcpAvailable: vi.fn(async () => {}),
   listChromeMcpTabs: vi.fn(async () => []),
