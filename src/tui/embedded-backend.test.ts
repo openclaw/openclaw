@@ -653,14 +653,13 @@ describe("EmbeddedTuiBackend", () => {
 
   it("bridges assistant and lifecycle events into chat events", async () => {
     const pending = deferred<EmbeddedAgentResult>();
-    agentCommandFromIngressMock.mockReturnValueOnce(pending.promise);
+    runAgent.mockReturnValueOnce(pending.promise);
 
-    const backend = new EmbeddedTuiBackend();
-    const events: Array<{ event: string; payload: unknown }> = [];
+    const bridgedEvents: Array<{ event: string; payload: unknown }> = [];
     const onConnected = vi.fn();
     backend.onConnected = onConnected;
     backend.onEvent = (evt) => {
-      events.push({ event: evt.event, payload: evt.payload });
+      bridgedEvents.push({ event: evt.event, payload: evt.payload });
     };
 
     backend.start();
@@ -673,8 +672,8 @@ describe("EmbeddedTuiBackend", () => {
       runId: "run-local-1",
       timeoutMs: 300_000,
     });
-    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
-    expect(agentCommandFromIngressMock.mock.calls[0]?.[0].timeout).toBe("300");
+    expect(runAgent).toHaveBeenCalledTimes(1);
+    expect(runAgent.mock.calls[0]?.[0].timeout).toBe("300");
 
     registeredListener?.({
       runId: "run-local-1",
@@ -690,7 +689,7 @@ describe("EmbeddedTuiBackend", () => {
     pending.resolve({ payloads: [{ text: "hello" }], meta: {} });
     await flushMicrotasks();
 
-    expect(events).toEqual([
+    expect(bridgedEvents).toEqual([
       {
         event: "agent",
         payload: {
