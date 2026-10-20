@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { MessagingToolSourceReplyPayload } from "../../agents/embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import { prepareEmbeddedRunTerminal } from "../../agents/embedded-agent-runner/run/terminal-preparation.js";
 import { resolveEmbeddedRunTerminal } from "../../agents/embedded-agent-runner/run/terminal-resolution.js";
@@ -320,7 +321,7 @@ it.each([false, true])(
         transcriptOwner: true,
         ...(media ? { mediaUrl: mediaPath } : {}),
       },
-    ];
+    ] satisfies MessagingToolSourceReplyPayload[];
     for (const reply of replies) {
       await persistInternalSourceReply({
         cfg: context.cfg,
