@@ -130,7 +130,7 @@ describe("acpx register runtime service", () => {
     expect(startMock).toHaveBeenCalledWith(ctx, expect.any(Object));
     const params = createServiceMock.mock.calls[0]?.[0];
     expect(params?.getAllowedAgents?.()).toEqual(["codex"]);
-    await params?.openKeyedStore?.({ namespace: "test", maxEntries: 1 });
+    params?.openKeyedStore?.({ namespace: "test", maxEntries: 1 });
     expect(openKeyedStore).toHaveBeenCalledWith({ namespace: "test", maxEntries: 1 });
     expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
     expect(ctx.logger.info).toHaveBeenCalledWith("embedded acpx runtime backend registered lazily");
