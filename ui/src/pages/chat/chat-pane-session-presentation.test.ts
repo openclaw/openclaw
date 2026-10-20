@@ -13,7 +13,6 @@ import {
   createTestChatPane,
   nativeHistoryMessage,
 } from "./chat-pane.test-support.ts";
-import { projectChatSessionPresentation } from "./chat-session-presentation-projection.ts";
 import { createPageState } from "./chat-state-page.ts";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -66,8 +65,12 @@ function fixture() {
     sectionOrder: [],
     result: sessionsResult([selected, parent, foreign], 1),
   };
-  const publish = (next: SessionState) => {
+  const publish = (
+    next: SessionState,
+    presentation: Pick<SessionState, "result" | "agentId"> = next,
+  ) => {
     current = next;
+    Object.assign(sessions.presentation, presentation);
     pane.pane.applySessionsState(next);
     listeners.forEach((listener) => listener(next));
     for (const callback of frames.splice(0)) {
@@ -78,7 +81,6 @@ function fixture() {
   publish(publication);
   const rendered = vi.fn();
   const view = mountSolid(() => {
-    projectChatSessionPresentation(pane.state, pane.pane.context);
     createEffect(() => [pane.state.sessionsResult], rendered);
     return null;
   });
@@ -96,7 +98,7 @@ describe("chat pane session presentation", () => {
       const state = createPageState(
         context,
         { afterCommit: () => () => {} },
-        { dispatchEvent: () => true, querySelector: () => null },
+        { dispatchEvent: () => true },
       );
       const rendered = vi.fn();
       const view = mountSolid(() => {
@@ -179,14 +181,14 @@ describe("chat pane session presentation", () => {
 
   it("redraws accepted roster title changes while the selected descriptor stays unchanged", () => {
     const f = fixture();
-    f.sessions.presentation.result = sessionsResult(
-      [{ ...f.selected, label: "Accepted roster title" }],
-      2,
-    );
-    f.publish(f.publication);
+    const presentation = {
+      agentId: "main",
+      result: sessionsResult([{ ...f.selected, label: "Accepted roster title" }], 2),
+    };
+    f.publish(f.publication, presentation);
     expect(f.rendered).toHaveBeenCalledOnce();
     f.rendered.mockClear();
-    f.publish(f.publication);
+    f.publish(f.publication, presentation);
     expect(f.rendered).not.toHaveBeenCalled();
   });
 

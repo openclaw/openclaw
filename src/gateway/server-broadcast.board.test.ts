@@ -113,6 +113,7 @@ describe("board event scope guards", () => {
     const { broadcast } = createGatewayBroadcaster({ clients });
 
     broadcast("board.changed", { sessionKey: "agent:main:main", revision: 1 });
+    broadcast("sessions.processes.changed", { sessionKey: "agent:main:main", agentId: "main" });
     broadcast("board.command", {
       sessionKey: "agent:main:main",
       command: { kind: "focus_tab", tabId: "main" },
@@ -120,15 +121,17 @@ describe("board event scope guards", () => {
 
     expect(pairing.socket.events).toEqual([]);
     expect(node.socket.events).toEqual([]);
-    expect(read.socket.events).toEqual(["board.changed", "board.command"]);
-    expect(write.socket.events).toEqual(["board.changed", "board.command"]);
-    expect(admin.socket.events).toEqual(["board.changed", "board.command"]);
+    const events = ["board.changed", "sessions.processes.changed", "board.command"];
+    expect(read.socket.events).toEqual(events);
+    expect(write.socket.events).toEqual(events);
+    expect(admin.socket.events).toEqual(events);
   });
 });
 
 describe("board and progress event session ownership", () => {
   it.each([
     { scope: "global", feature: "progress" },
+    { scope: "global", feature: "process" },
     { scope: "per-sender", feature: "board" },
   ] as const)(
     "delivers $feature events only to the canonical draft owner in $scope mode",
@@ -201,6 +204,19 @@ describe("board and progress event session ownership", () => {
           });
         };
         try {
+          if (feature === "process") {
+            const target = { sessionKey: "global", agentId: "work" };
+            broadcast("sessions.processes.changed", target, {
+              sessionKeys: [target.sessionKey],
+              agentId: target.agentId,
+            });
+            expect(peers.map(frames)).toEqual([
+              [expect.objectContaining({ event: "sessions.processes.changed", payload: target })],
+              [],
+              [],
+            ]);
+            return;
+          }
           if (feature === "progress") {
             const rawWrite = await invoke("progressCard.put", {
               sessionKey: "global",

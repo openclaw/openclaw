@@ -541,8 +541,8 @@ async function createGatewaySessionInScope(
     // The locked parent owns delegated isolation, including signed remote callers whose
     // transport context carries only agent identity and cannot carry creator authority.
     const { creation, ownerAssignment: inheritedSpawnOwner } = resolveSessionCreateInheritance({
-      creation: params.creation,
-      parent: currentParentSessionEntry,
+      request: params,
+      parent: { entry: currentParentSessionEntry, target: parentSessionTarget },
     });
     const targetRead = await readSessionCreateTarget(
       { ...params, commitGuard },
@@ -1145,7 +1145,6 @@ async function createGatewaySessionInScope(
         });
       }
       emitGatewaySessionStartPluginHook({
-        cfg: params.cfg,
         sessionKey: target.canonicalKey,
         sessionId: created.entry.sessionId,
         resumedFrom: parentEntry?.sessionId,

@@ -1,4 +1,5 @@
 import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import type { PluginsUninstallResult } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import {
   pathForRoute,
   pluginCatalogIdFromPath,
@@ -7,7 +8,7 @@ import {
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
-import { registryFor } from "../../components/overlay-registry.ts";
+import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
@@ -15,7 +16,6 @@ import { isComposingKeyboardEvent } from "../../lib/ime.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
 import {
   loadPluginDiscoveryDetail,
-  uninstallPlugin,
   type PluginListResult,
   type PluginMutationResult,
 } from "../../lib/plugins/index.ts";
@@ -271,7 +271,7 @@ export function createPluginsPage(options: {
       !(event instanceof KeyboardEvent) ||
       event.key !== "Escape" ||
       isComposingKeyboardEvent(event) ||
-      document.querySelector(".shell-nav[aria-modal='true']") ||
+      hasModalSurface(document) ||
       registryFor(document).stack.at(-1)?.open
     ) {
       return;
@@ -296,7 +296,7 @@ export function createPluginsPage(options: {
       return;
     }
     // The file viewer owns Escape inside its shadow-root modal.
-    if (skillPreview.state || document.openClawModalLayers?.size) {
+    if (skillPreview.state) {
       return;
     }
     // Firefox does not emit blur when a focused input is removed from the document.
@@ -674,7 +674,7 @@ export function createPluginsPage(options: {
       : null;
     await consent.runMutation(
       rowKey,
-      (client) => uninstallPlugin(client, pluginId),
+      (client) => client.request<PluginsUninstallResult>("plugins.uninstall", { pluginId }),
       async (result, refreshError, client, isLatest) => {
         if (state.detail?.pluginId === pluginId) {
           setState({ detail: null });

@@ -37,7 +37,14 @@ const mocks = vi.hoisted(() => ({
   printResult: vi.fn(),
 }));
 vi.mock("./update-command-convergence.js", () => ({ convergeUpdatePlugins: mocks.converge }));
-vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: mocks.printResult,
+  prepareResult:
+    async (...args: Parameters<typeof import("./progress.js").printResult>) =>
+    () =>
+      mocks.printResult(...args.slice(0, 3)),
+}));
 vi.mock("../../infra/gateway-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/gateway-lock.js")>()),
   readActiveGatewayLockPort: mocks.activePort,

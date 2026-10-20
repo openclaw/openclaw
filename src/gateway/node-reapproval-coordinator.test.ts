@@ -1,4 +1,3 @@
-// Covers paired-node reapproval reuse and changed-surface write limits.
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
@@ -18,6 +17,25 @@ import {
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-reapproval-" });
+const limit = { maxAttempts: 2, windowMs: 60_000, lockoutMs: 60_000 };
+const nodeInput = (surface = "screen") => ({
+  nodeId: "node-1",
+  platform: "darwin",
+  caps: ["camera", surface],
+});
+
+async function pairedFixture(
+  name: string,
+  config?: Parameters<typeof createNodeReapprovalCoordinator>[0],
+  scheduler = createTestGatewayScheduler(),
+) {
+  const baseDir = await tempDirs.make(name);
+  await setupPairedNode(baseDir);
+  const coordinator = createNodeReapprovalCoordinator(config, { scheduler });
+  const request = (surface = "screen") =>
+    coordinator.request({ input: nodeInput(surface), baseDir });
+  return { baseDir, coordinator, request };
+}
 
 async function setupPairedNode(baseDir: string): Promise<void> {
   // Node surfaces attach to paired devices, so device pairing comes first.
@@ -32,14 +50,7 @@ async function setupPairedNode(baseDir: string): Promise<void> {
     baseDir,
   );
   await approveDevicePairing(devicePairing.request.requestId, { callerScopes: [] }, baseDir);
-  const request = await requestNodePairing(
-    {
-      nodeId: "node-1",
-      platform: "darwin",
-      caps: ["camera"],
-    },
-    baseDir,
-  );
+  const request = await requestNodePairing({ ...nodeInput(), caps: ["camera"] }, baseDir);
   await approveNodePairing(
     request.request.requestId,
     { callerScopes: ["operator.pairing"] },
@@ -48,9 +59,7 @@ async function setupPairedNode(baseDir: string): Promise<void> {
 }
 
 describe("node reapproval coordinator", () => {
-  beforeAll(async () => {
-    await tempDirs.setup();
-  });
+  beforeAll(() => tempDirs.setup());
 
   afterAll(async () => {
     await closeStateDatabaseForTest();
@@ -58,36 +67,19 @@ describe("node reapproval coordinator", () => {
   });
 
   test("retains changed-surface quota and free pending reuse across policy updates", async () => {
-    const baseDir = await tempDirs.make("reuse");
-    await setupPairedNode(baseDir);
-    const pending = await requestNodePairing(
-      {
-        nodeId: "node-1",
-        platform: "darwin",
-        caps: ["camera", "screen"],
-      },
-      baseDir,
-    );
     const clock = createGatewaySchedulerClock(1_000);
     const scheduler = createTestGatewayScheduler(clock.clock);
-    const coordinator = createNodeReapprovalCoordinator(
-      {
-        maxAttempts: 2,
-        windowMs: 60_000,
-        lockoutMs: 60_000,
-        exemptLoopback: true,
-      },
-      { scheduler },
+    const { baseDir, coordinator, request } = await pairedFixture(
+      "reuse",
+      { ...limit, exemptLoopback: true },
+      scheduler,
     );
+    const pending = await requestNodePairing(nodeInput(), baseDir);
 
     const matchingConnect = await beginNodePairingConnect("node-1", baseDir);
     await expect(
       coordinator.request({
-        input: {
-          nodeId: "node-1",
-          platform: "darwin",
-          caps: ["camera", "screen"],
-        },
+        input: nodeInput(),
         cleanupClaim: matchingConnect.cleanupClaim,
         baseDir,
       }),
@@ -102,11 +94,7 @@ describe("node reapproval coordinator", () => {
     const changedConnect = await beginNodePairingConnect("node-1", baseDir);
     await expect(
       coordinator.request({
-        input: {
-          nodeId: "node-1",
-          platform: "darwin",
-          caps: ["camera", "microphone"],
-        },
+        input: nodeInput("microphone"),
         cleanupClaim: changedConnect.cleanupClaim,
         baseDir,
       }),
@@ -118,50 +106,18 @@ describe("node reapproval coordinator", () => {
       await releaseNodePairingCleanupClaim(changedConnect.cleanupClaim);
     }
 
-    coordinator.updateConfig({
-      maxAttempts: 1,
-      windowMs: 60_000,
-      lockoutMs: 60_000,
-      exemptLoopback: true,
-    });
-    await expect(
-      coordinator.request({
-        input: {
-          nodeId: "node-1",
-          platform: "darwin",
-          caps: ["camera", "location"],
-        },
-        baseDir,
-      }),
-    ).resolves.toBeNull();
+    coordinator.updateConfig({ ...limit, maxAttempts: 1, exemptLoopback: true });
+    await expect(request("location")).resolves.toBeNull();
     expect((await listNodePairing(baseDir)).pending).toEqual([
       expect.objectContaining({ caps: ["camera", "microphone"] }),
     ]);
-    await expect(
-      coordinator.request({
-        input: {
-          nodeId: "node-1",
-          platform: "darwin",
-          caps: ["camera", "microphone"],
-        },
-        baseDir,
-      }),
-    ).resolves.toMatchObject({
+    await expect(request("microphone")).resolves.toMatchObject({
       request: { caps: ["camera", "microphone"] },
       created: false,
     });
 
     await clock.advanceBy(60_000);
-    await expect(
-      coordinator.request({
-        input: {
-          nodeId: "node-1",
-          platform: "darwin",
-          caps: ["camera", "location"],
-        },
-        baseDir,
-      }),
-    ).resolves.toMatchObject({
+    await expect(request("location")).resolves.toMatchObject({
       request: { caps: ["camera", "location"] },
       created: true,
     });
@@ -171,62 +127,18 @@ describe("node reapproval coordinator", () => {
   });
 
   test("stops accepting work after disposal", async () => {
-    const baseDir = await tempDirs.make("dispose");
-    await setupPairedNode(baseDir);
-    const coordinator = createNodeReapprovalCoordinator(undefined, {
-      scheduler: createTestGatewayScheduler(),
-    });
+    const { baseDir, coordinator, request } = await pairedFixture("dispose");
     coordinator.dispose();
 
-    await expect(
-      coordinator.request({
-        input: {
-          nodeId: "node-1",
-          platform: "darwin",
-          caps: ["camera", "screen"],
-        },
-        baseDir,
-      }),
-    ).resolves.toBeNull();
+    await expect(request()).resolves.toBeNull();
     expect((await listNodePairing(baseDir)).pending).toEqual([]);
   });
 
   test("keeps only the latest request waiting behind active work", async () => {
-    const baseDir = await tempDirs.make("latest");
-    await setupPairedNode(baseDir);
-    const coordinator = createNodeReapprovalCoordinator(
-      {
-        maxAttempts: 2,
-        windowMs: 60_000,
-        lockoutMs: 60_000,
-      },
-      { scheduler: createTestGatewayScheduler() },
-    );
-
-    const active = coordinator.request({
-      input: {
-        nodeId: "node-1",
-        platform: "darwin",
-        caps: ["camera", "screen"],
-      },
-      baseDir,
-    });
-    const superseded = coordinator.request({
-      input: {
-        nodeId: "node-1",
-        platform: "darwin",
-        caps: ["camera", "microphone"],
-      },
-      baseDir,
-    });
-    const latest = coordinator.request({
-      input: {
-        nodeId: "node-1",
-        platform: "darwin",
-        caps: ["camera", "location"],
-      },
-      baseDir,
-    });
+    const { baseDir, coordinator, request } = await pairedFixture("latest", limit);
+    const active = request();
+    const superseded = request("microphone");
+    const latest = request("location");
 
     await expect(active).resolves.toMatchObject({
       request: { caps: ["camera", "screen"] },
@@ -243,32 +155,10 @@ describe("node reapproval coordinator", () => {
   });
 
   test("cancels queued work when the latest declaration matches active work", async () => {
-    const baseDir = await tempDirs.make("active-latest");
-    await setupPairedNode(baseDir);
-    const coordinator = createNodeReapprovalCoordinator(
-      {
-        maxAttempts: 2,
-        windowMs: 60_000,
-        lockoutMs: 60_000,
-      },
-      { scheduler: createTestGatewayScheduler() },
-    );
-    const activeInput = {
-      nodeId: "node-1",
-      platform: "darwin",
-      caps: ["camera", "screen"],
-    };
-
-    const active = coordinator.request({ input: activeInput, baseDir });
-    const stale = coordinator.request({
-      input: {
-        nodeId: "node-1",
-        platform: "darwin",
-        caps: ["camera", "microphone"],
-      },
-      baseDir,
-    });
-    const latest = coordinator.request({ input: activeInput, baseDir });
+    const { baseDir, coordinator, request } = await pairedFixture("active-latest", limit);
+    const active = request();
+    const stale = request("microphone");
+    const latest = request();
 
     await expect(active).resolves.toMatchObject({
       request: { caps: ["camera", "screen"] },
@@ -286,30 +176,15 @@ describe("node reapproval coordinator", () => {
   });
 
   test("retains the newest cleanup claim across equivalent reconnects", async () => {
-    const baseDir = await tempDirs.make("cleanup-generation");
-    await setupPairedNode(baseDir);
-    const pending = await requestNodePairing(
-      {
-        nodeId: "node-1",
-        platform: "darwin",
-        caps: ["camera", "screen"],
-      },
-      baseDir,
-    );
+    const { baseDir, coordinator } = await pairedFixture("cleanup-generation");
+    const pending = await requestNodePairing(nodeInput(), baseDir);
     const first = await beginNodePairingConnect("node-1", baseDir);
     const staleCleanup = await beginNodePairingConnect("node-1", baseDir);
     const latest = await beginNodePairingConnect("node-1", baseDir);
     expect(first.cleanupClaim).toBeDefined();
     expect(staleCleanup.cleanupClaim).toBeDefined();
     expect(latest.cleanupClaim).toBeDefined();
-    const coordinator = createNodeReapprovalCoordinator(undefined, {
-      scheduler: createTestGatewayScheduler(),
-    });
-    const input = {
-      nodeId: "node-1",
-      platform: "darwin",
-      caps: ["camera", "screen"],
-    };
+    const input = nodeInput();
 
     const firstReuse = coordinator.request({
       input,

@@ -11,9 +11,9 @@ const { createTempDir } = createScriptTestHarness();
 
 describe("development tool selection", () => {
   it.each([
-    ["format", {}, false],
+    ["format", {}, true],
     ["format", { CI: "true" }, false],
-    ["format", { CI: "false" }, false],
+    ["format", { CI: "false" }, true],
     ["format", { OPENCLAW_FORMAT_TOOL: "oxfmt" }, false],
     ["format", { OPENCLAW_FORMAT_TOOL: "bun" }, true],
     ["format", { CI: "true", OPENCLAW_FORMAT_TOOL: "bun" }, true],
@@ -58,6 +58,21 @@ describe("development tool selection", () => {
     expect(notice).not.toHaveBeenCalled();
   });
 
+  it("falls back to oxfmt with a notice when the local pinned fork is unavailable", () => {
+    const notice = vi.fn();
+    const tool = resolveDevTool(
+      "format",
+      {},
+      {
+        resolvePinnedBun: () => ({ reason: "unavailable" }),
+        notice,
+      },
+    );
+    expect(tool.command).toBe(process.execPath);
+    expect(tool.args).toEqual([path.resolve("node_modules/oxfmt/bin/oxfmt")]);
+    expect(notice).toHaveBeenCalledExactlyOnceWith("[openclaw] unavailable; using oxfmt.");
+  });
+
   it("rejects an invalid override", () => {
     expect(() => resolveDevTool("format", { OPENCLAW_FORMAT_TOOL: "typo" })).toThrow(
       "OPENCLAW_FORMAT_TOOL must be bun or oxfmt",
@@ -92,6 +107,11 @@ describe("format parity", () => {
   });
 
   it.each([
+    [
+      { status: 0, stdout: "Finished in 1ms on 0 files using 4 threads.\n" },
+      { status: 0, stdout: "Finished in 0ms on 0 files using 4 threads.\n" },
+      true,
+    ],
     [{ status: 0, stdout: "" }, { status: 0, stdout: "" }, true],
     [{ status: 0, stdout: "" }, { status: 1, stdout: "a.ts\n" }, false],
     [{ status: 1, stdout: "a.ts" }, { status: 0, stdout: "" }, false],

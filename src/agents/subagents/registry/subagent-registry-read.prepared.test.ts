@@ -97,7 +97,11 @@ describe("prepared subagent publication ownership", () => {
       const read = () =>
         withSubagentRunReadSnapshot(
           subagentRuns,
-          (snapshot) => ({ snapshot, runIds: ["run-0"], sessionKeys: [] }),
+          (snapshot) => ({
+            snapshot,
+            runIds: kind === "run" ? ["run-0"] : [],
+            sessionKeys: kind === "session" ? ["agent:main:parent-0"] : [],
+          }),
           ({ snapshot }, selected) => ({ snapshot, ids: [...selected.keys()] }),
           readScope,
         );

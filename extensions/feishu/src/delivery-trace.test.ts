@@ -348,7 +348,6 @@ function makeTraceAccount(scenario: DeliveryTraceScenarioName): ResolvedFeishuAc
   traceState.setupCount += 1;
   return {
     accountId: "main",
-    selectionSource: "fallback",
     enabled: true,
     configured: true,
     // Run-unique app id busts the module-level CardKit token cache so every

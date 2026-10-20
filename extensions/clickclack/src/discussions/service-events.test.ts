@@ -1,3 +1,4 @@
+import "./service-http-mock.test-support.js";
 import "./session-authority.test-support.js";
 import type {
   OpenClawPluginGatewayEvents,
@@ -295,9 +296,7 @@ describe("ClickClack discussion session events", () => {
     let service: ClickClackDiscussionService | undefined;
     try {
       await harness.service.open("agent:main:pre-start");
-      service = new ClickClackDiscussionService(harness.runtime, {
-        clientFactory: () => harness.client,
-      });
+      service = new ClickClackDiscussionService(harness.runtime);
       const reconcileAll = vi.spyOn(service, "reconcileAll").mockResolvedValue(undefined);
       await vi.advanceTimersByTimeAsync(60_000);
       expect(reconcileAll).not.toHaveBeenCalled();

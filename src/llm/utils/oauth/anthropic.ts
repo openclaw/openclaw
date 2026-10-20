@@ -1,4 +1,3 @@
-import { toErrorObject } from "../../../infra/errors.js";
 import { readResponseWithLimit } from "../../../infra/http-body.js";
 import { startOAuthLoopbackCallbackServer } from "../../../infra/oauth-loopback-callback.js";
 import {
@@ -217,15 +216,12 @@ async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCreden
   const expectedState = generateOAuthState();
   const server = await startCallbackServer(expectedState);
 
-  let code: string | undefined;
-  let state: string | undefined;
-  const applyAuthorizationInput = (input: string) => {
+  const parseAuthorizationInput = (input: string) => {
     const parsed = parseOAuthAuthorizationInput(input);
     if (parsed.state && parsed.state !== expectedState) {
       throw new Error("OAuth state mismatch");
     }
-    code = parsed.code;
-    state = parsed.state ?? expectedState;
+    return { code: parsed.code, state: parsed.state ?? expectedState };
   };
 
   try {
@@ -248,47 +244,29 @@ async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCreden
     });
     throwIfOAuthLoginAborted(options.signal);
 
-    let manualInput: string | undefined;
-    let manualError: Error | undefined;
-    const manualPromise = options
-      .onManualCodeInput?.()
-      .then((input) => {
-        manualInput = input;
+    const manualPromise = options.onManualCodeInput?.().then(
+      (input) => {
         server.cancelWait();
-      })
-      .catch((err: unknown) => {
-        manualError = err instanceof Error ? err : new Error(String(err));
+        return parseAuthorizationInput(input);
+      },
+      (err: unknown) => {
         server.cancelWait();
-      });
-
-    const result = await withOAuthLoginAbort(
-      server.waitForCode(),
+        throw err instanceof Error ? err : new Error(String(err));
+      },
+    );
+    const callbackPromise = server.waitForCode();
+    let result = await withOAuthLoginAbort(
+      manualPromise
+        ? Promise.race([
+            manualPromise,
+            callbackPromise.then((callback) => callback ?? manualPromise),
+          ])
+        : callbackPromise,
       options.signal,
       server.cancelWait,
     );
 
-    if (manualError) {
-      throw manualError;
-    }
-
-    if (result?.code) {
-      code = result.code;
-      state = result.state;
-    } else if (manualInput) {
-      applyAuthorizationInput(manualInput);
-    }
-
-    if (!code && manualPromise) {
-      await withOAuthLoginAbort(manualPromise, options.signal, server.cancelWait);
-      if (manualError) {
-        throw toErrorObject(manualError, "Non-Error thrown");
-      }
-      if (manualInput) {
-        applyAuthorizationInput(manualInput);
-      }
-    }
-
-    if (!code) {
+    if (!result?.code) {
       const input = await withOAuthLoginAbort(
         options.onPrompt({
           message: "Paste the authorization code or full redirect URL:",
@@ -297,19 +275,25 @@ async function loginAnthropic(options: OAuthLoginCallbacks): Promise<OAuthCreden
         options.signal,
         server.cancelWait,
       );
-      applyAuthorizationInput(input);
+      result = parseAuthorizationInput(input);
     }
 
-    if (!code) {
+    if (!result.code) {
       throw new Error("Missing authorization code");
     }
 
-    if (!state) {
+    if (!result.state) {
       throw new Error("Missing OAuth state");
     }
 
     options.onProgress?.("Exchanging authorization code for tokens...");
-    return exchangeAuthorizationCode(code, state, verifier, REDIRECT_URI, options.signal);
+    return exchangeAuthorizationCode(
+      result.code,
+      result.state,
+      verifier,
+      REDIRECT_URI,
+      options.signal,
+    );
   } finally {
     await server.close();
   }
@@ -341,9 +325,7 @@ export const anthropicOAuthProvider: OAuthProviderInterface = {
   name: "Anthropic (Claude Pro/Max)",
   usesCallbackServer: true,
 
-  async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
-    return loginAnthropic({ ...callbacks });
-  },
+  login: loginAnthropic,
 
   async refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
     return refreshAnthropicToken(credentials.refresh);

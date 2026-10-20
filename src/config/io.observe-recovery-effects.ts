@@ -1,5 +1,5 @@
 import type fs from "node:fs";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import type { captureConfigAuditAppender } from "./io.audit.js";
 import type { captureConfigHealthStateStore } from "./io.health-state.js";
 import type { NormalizedConfigIoDeps } from "./io.read.types.js";
@@ -101,9 +101,7 @@ export function createConfigBackupReadEffect(
   backupPath: string,
 ): ConfigRecoveryEffect<string | null> {
   const unavailable = (error: unknown): null => {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
     return null;
   };
   return {

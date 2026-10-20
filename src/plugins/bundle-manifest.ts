@@ -24,10 +24,10 @@ import {
 } from "./plugin-cache-files.js";
 
 /** Relative manifest path for Codex-style plugin bundles. */
-export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
+const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
-export const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
-export const AGENT_BUNDLE_MANIFEST_RELATIVE_PATH = "plugin.json";
+const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
+const AGENT_BUNDLE_MANIFEST_RELATIVE_PATH = "plugin.json";
 export const BUNDLE_MANIFEST_PATHS: Readonly<Record<PluginBundleFormat, string>> = {
   agent: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
   claude: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,

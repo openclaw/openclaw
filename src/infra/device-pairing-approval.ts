@@ -62,6 +62,17 @@ function approvalAdmission(
   };
 }
 
+function publishApproval(requestId: string, result: ApproveDevicePairingResult, baseDir?: string) {
+  if (result?.status === "approved") {
+    publishDevicePairingResolution(
+      { requestId, deviceId: result.device.deviceId },
+      "approved",
+      baseDir,
+    );
+  }
+  return result;
+}
+
 export async function approveDevicePairing(
   requestId: string,
   baseDir?: string,
@@ -92,14 +103,7 @@ export async function approveDevicePairing(
         admit: admission.admit,
       },
     );
-    if (result?.status === "approved") {
-      publishDevicePairingResolution(
-        { requestId, deviceId: result.device.deviceId },
-        "approved",
-        baseDir,
-      );
-    }
-    return result;
+    return publishApproval(requestId, result, baseDir);
   });
 }
 
@@ -141,13 +145,6 @@ export async function approveBootstrapDevicePairing(
         admit: admission.admit,
       },
     );
-    if (result?.status === "approved") {
-      publishDevicePairingResolution(
-        { requestId, deviceId: result.device.deviceId },
-        "approved",
-        baseDir,
-      );
-    }
-    return result;
+    return publishApproval(requestId, result, baseDir);
   });
 }

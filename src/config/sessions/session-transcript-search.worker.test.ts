@@ -21,7 +21,7 @@ import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-wr
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcript-index.js";
 import * as projectionWriter from "./session-transcript-projection-writer.js";
-import { createSessionTranscriptWorkerLanes } from "./session-transcript-read-pools.js";
+import { createSessionTranscriptHistoryPool } from "./session-transcript-read-pools.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   waitForSessionTranscriptIndexReconcile,
@@ -34,6 +34,7 @@ import {
   historyClearTimeout,
   historyLane,
   projectionLane,
+  registerSessionTranscriptReaderLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -469,12 +470,14 @@ describe("search reader concurrency", () => {
               }
               return worker;
             });
-          let lanes: ReturnType<typeof createSessionTranscriptWorkerLanes> | undefined;
+          let ownedLane: typeof historyLane | undefined;
           // The pool captures its clock when constructed; no global lane is replaced.
           vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           try {
-            lanes = createSessionTranscriptWorkerLanes();
-            const lane = lanes.historyLane;
+            const lane = registerSessionTranscriptReaderLane("Surplus history fixture", (closed) =>
+              createSessionTranscriptHistoryPool(historyLane.pool.getSnapshot().maxWorkers, closed),
+            );
+            ownedLane = lane;
             const primary = retainSessionHistoryWorkerDatabase(database, lane);
             readers.push(primary);
             const surplus = retainSessionHistoryWorkerDatabase(database, lane);
@@ -516,15 +519,13 @@ describe("search reader concurrency", () => {
             release.resolve();
             try {
               // Closing cancels unfinished requests even when their fake deadlines have not fired.
-              const closed = await Promise.allSettled(
-                (lanes ? Object.values(lanes) : []).map(({ pool }) => pool.close()),
-              );
+              const closed = await Promise.allSettled(ownedLane ? [ownedLane.pool.close()] : []);
               await Promise.allSettled(pending);
               for (const reader of readers) {
                 reader.release();
               }
-              for (const lane of lanes ? Object.values(lanes) : []) {
-                historyClearTimeout(lane.idleTimer);
+              if (ownedLane) {
+                historyClearTimeout(ownedLane.idleTimer);
               }
               await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
               const failures = closed.flatMap((result) =>

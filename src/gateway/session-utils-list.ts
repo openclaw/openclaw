@@ -478,7 +478,9 @@ export function prepareProjectedSessionList(params: {
     prepared.candidateKeys(
       new Set([
         ...(projectRun?.candidateSessionIdsOrKeys() ?? []),
-        ...presentation.rowContext.subagentRuns.requesterSessionKeys(),
+        ...[...presentation.rowContext.subagentRuns.requesterSessionKeys()].filter(
+          (key) => presentation.rowContext.subagentRuns.countActiveDescendantRuns(key) > 0,
+        ),
         ...(presentation.rowContext.projectedSubagentActivity ?? []),
       ]),
     );

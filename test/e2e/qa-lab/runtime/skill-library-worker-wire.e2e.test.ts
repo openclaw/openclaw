@@ -354,8 +354,9 @@ it("pins skill bundles through worker authoring and lifecycle changes", async (c
       expect(outside(workerSkillDir, remoteCwd)).toBe(true);
       // Scoped turn inputs live in the secure scratch root, separate from node credentials.
       const materializationDir = path.dirname(workerSkillDir);
+      const workerTmpDir = node.tmpDir;
       expect(path.dirname(materializationDir)).toBe(
-        await fs.realpath(resolvePreferredOpenClawTmpDir()),
+        await fs.realpath(resolvePreferredOpenClawTmpDir({ tmpdir: () => workerTmpDir })),
       );
       expect(path.basename(materializationDir)).toMatch(/^skill-resources-[a-f0-9]{16}$/u);
       expect(outside(workerSkillDir, await fs.realpath(node.stateDir))).toBe(true);

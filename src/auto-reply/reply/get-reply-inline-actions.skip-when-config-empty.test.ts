@@ -7,7 +7,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { markCommandSessionMetadataChanged } from "./command-session-metadata.js";
 import { buildCommandContextForTest as buildCommandContext } from "./commands-context.test-support.js";
-import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
+import { routeReplyDirectivesForTest } from "./get-reply-directives-routing.test-support.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { withFastReplyConfig } from "./get-reply-fast-path.test-support.js";
@@ -87,6 +87,8 @@ vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => (
   getLoadedChannelPluginById: (id: string) =>
     id === "slack"
       ? {
+          id: "slack",
+          config: {},
           mentions: {
             stripPatterns: () => [renderedSlackMentionPattern, "<@[^>\\s]+>"],
           },
@@ -104,19 +106,7 @@ async function routeSender(ctx: ReturnType<typeof buildTestCtx>, isGroup: boolea
     shouldContinue: true,
     ...(command.commandBodyNormalized === "/help" ? { reply: { text: "Sender help output" } } : {}),
   }));
-  const routing = resolveReplyDirectiveRouting({
-    commandText: ctx.commandText,
-    agentText: ctx.agentText,
-    modelAliases: [],
-    canInterpretTextDirectives: true,
-    isAuthorizedSender: true,
-    isGroup,
-    wasMentioned: isGroup,
-    ctx,
-    cfg: { commands: { text: true } },
-    agentId: "main",
-    resetTriggered: false,
-  });
+  const routing = await routeReplyDirectivesForTest({ ...ctx, WasMentioned: isGroup }, { isGroup });
   const result = await runTestInlineActions({
     ctx,
     cleanedBody: routing.cleanedBody,
@@ -224,28 +214,31 @@ describe("handleInlineActions", () => {
     ]);
   });
 
-  it("propagates an explicit steer queue override into the prepared-turn result", async () => {
-    const ctx = commandCtx("/steer use the monochrome version");
-    handleCommandsMock.mockImplementationOnce(async (params) => {
-      params.command.rawBodyNormalized = "use the monochrome version";
-      params.command.commandBodyNormalized = "use the monochrome version";
-      params.ctx.agentText = "use the monochrome version";
-      return { shouldContinue: true, queueModeOverride: "steer" };
-    });
+  it.each(["steer", "followup"] as const)(
+    "propagates an explicit %s queue override into the prepared-turn result",
+    async (mode) => {
+      const ctx = commandCtx(`/${mode} use the monochrome version`);
+      handleCommandsMock.mockImplementationOnce(async (params) => {
+        params.command.rawBodyNormalized = "use the monochrome version";
+        params.command.commandBodyNormalized = "use the monochrome version";
+        params.ctx.agentText = "use the monochrome version";
+        return { shouldContinue: true, queueModeOverride: mode };
+      });
 
-    const result = await runTestInlineActions({
-      ctx,
-      overrides: {
-        cfg: { commands: { text: true } },
-      },
-    });
+      const result = await runTestInlineActions({
+        ctx,
+        overrides: {
+          cfg: { commands: { text: true } },
+        },
+      });
 
-    expect(result).toMatchObject({
-      kind: "continue",
-      queueModeOverride: "steer",
-    });
-    expect(ctx.agentText).toBe("use the monochrome version");
-  });
+      expect(result).toMatchObject({
+        kind: "continue",
+        queueModeOverride: mode,
+      });
+      expect(ctx.agentText).toBe("use the monochrome version");
+    },
+  );
 
   it("prefers the target session entry when routing inline status through the shared status builder", async () => {
     const ctx = commandCtx("/status", {

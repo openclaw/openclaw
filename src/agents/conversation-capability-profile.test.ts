@@ -1,12 +1,17 @@
 import path from "node:path";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
+import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import {
@@ -17,7 +22,10 @@ import {
   isConversationToolAllowed as allows,
   projectConversationToolNames,
 } from "./conversation-tool-policy-pipeline.js";
-import { preparePluginHarnessPolicyToolsAllow } from "./harness/execution-environment.js";
+import {
+  preparePluginHarnessToolPolicies,
+  resolvePluginHarnessPolicyToolsAllow,
+} from "./harness/execution-environment.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import { resolveWebSearchToolPolicy } from "./web-search-tool-policy.js";
 
@@ -299,14 +307,16 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
         );
       const webSearch = () =>
         resolveWebSearchToolPolicy({ ...params, runtimeToolAllowlist: ["web_search"] });
-      const harnessTools = () =>
-        preparePluginHarnessPolicyToolsAllow({
-          ...params,
-          provider: "fixture",
-          modelId: "fixture-model",
-          senderId: "sender",
-          conversationToolPolicy: { deny: ["*"] },
-        });
+      const harnessTools = async () =>
+        resolvePluginHarnessPolicyToolsAllow(
+          await preparePluginHarnessToolPolicies({
+            ...params,
+            provider: "fixture",
+            modelId: "fixture-model",
+            senderId: "sender",
+            conversationToolPolicy: { deny: ["*"] },
+          }),
+        );
 
       if (origin === "unknown" || !configured) {
         for (const resolve of [conversationTools, webSearch]) {
@@ -320,4 +330,110 @@ describe("resolveConversationCapabilityProfile scheduled account authority", () 
       expect(await harnessTools()).toEqual([]);
     },
   );
+});
+
+describe("requester conversation policy admission", () => {
+  let registry: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+  beforeEach(() => {
+    registry = captureActivePluginRegistrySnapshot();
+    const plugin: ChannelPlugin = {
+      ...createChannelTestPluginBase({ id: "telegram" }),
+      security: {
+        resolveDirectToolPolicy: ({ cfg, accountId, conversationId, senderId }) =>
+          accountId === "work" && conversationId === "42" && senderId === "alice"
+            ? cfg.channels?.telegram?.direct?.[conversationId]?.tools
+            : { allow: ["read"] },
+      },
+    };
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]));
+  });
+  afterEach(() => restoreActivePluginRegistrySnapshot(registry));
+
+  const toolNames = (capabilityProfile: Profile) =>
+    projectConversationToolNames({
+      capabilityProfile,
+      toolNames: ["read", "write", "exec"],
+      warn: () => undefined,
+    });
+
+  it("resolves new admission config for the original DM while preserving the source policy", () => {
+    const source = resolveProfile({
+      config: {
+        agents: { entries: { source: { tools: { allow: ["read"] } } } },
+        channels: { telegram: { direct: { "42": { tools: { deny: ["exec"] } } } } },
+      },
+      agentId: "source",
+      sessionKey: "agent:source:main",
+      messageProvider: "telegram",
+      agentAccountId: "work",
+      chatType: "direct",
+      conversationId: "42",
+      senderId: "alice",
+    });
+    const destination = resolveProfile({
+      config: {
+        channels: { telegram: { direct: { "42": { tools: { deny: ["write"] } } } } },
+      },
+      agentId: "destination",
+      sessionKey: "agent:destination:main",
+      messageProvider: "webchat",
+      agentAccountId: "receiver",
+      chatType: "direct",
+      conversationId: "99",
+      senderId: "bob",
+      requesterOrigin: source.requesterOrigin,
+    });
+
+    expect(toolNames(source)).toEqual(["read"]);
+    expect(toolNames(destination)).toEqual(["read", "exec"]);
+    expect(source.policy.groupPolicy).toEqual({ deny: ["exec"] });
+    expect(destination.requesterOrigin).toMatchObject({
+      accountId: "work",
+      conversationId: "42",
+      senderId: "alice",
+    });
+  });
+
+  it("keeps legacy policy on the original queued execution without inheriting it in requester facts", () => {
+    const initial = {
+      sessionKey: "agent:main:main",
+      messageProvider: "telegram",
+      agentAccountId: "work",
+      chatType: "direct",
+      conversationId: "42",
+      senderId: "alice",
+      conversationToolPolicy: { allow: ["read"] },
+    };
+    const source = resolveProfile(initial);
+    const queued = resolveProfile({
+      ...initial,
+      requesterOrigin: source.requesterOrigin,
+    });
+    const delegated = resolveProfile({
+      config: { channels: { telegram: { direct: { "42": { tools: {} } } } } },
+      sessionKey: "agent:destination:main",
+      requesterOrigin: source.requesterOrigin,
+    });
+
+    expect(toolNames(queued)).toEqual(["read"]);
+    expect(toolNames(delegated)).toEqual(["read", "write", "exec"]);
+    expect(source.requesterOrigin).not.toHaveProperty("conversationToolPolicy");
+  });
+
+  it("keeps execution-local non-owner authority with preserved owner requester identity", () => {
+    const origin = resolveProfile({
+      sessionKey: "agent:main:main",
+      messageProvider: INTERNAL_MESSAGE_CHANNEL,
+      operatorProfileId: "operator-alice",
+      senderIsOwner: true,
+    }).requesterOrigin;
+    const maintenance = resolveProfile({
+      requesterOrigin: origin,
+      senderIsOwner: false,
+      config: { tools: { toolsBySender: { "*": { deny: ["exec"] } } } },
+    });
+    expect(toolNames(maintenance)).toEqual(["read", "write"]);
+    expect(maintenance.sender.isOwner).toBe(false);
+    expect(origin).not.toHaveProperty("senderIsOwner");
+  });
 });

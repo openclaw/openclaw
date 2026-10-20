@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
@@ -9,6 +10,7 @@ import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../agents/harness/tool-authority.runtime.js";
 import { withFullRuntimeReplyConfig } from "../../auto-reply/reply/get-reply-fast-path.js";
 import { getReplyFromConfig } from "../../auto-reply/reply/get-reply.js";
+import type { InternalGetReplyOptions } from "../../auto-reply/reply/get-reply.types.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { bindReplySourceInput } from "../../auto-reply/reply/reply-source-binding.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -53,10 +55,21 @@ it.each([true, false])(
       });
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
-      const client = sharingPolicyClient({ deviceId: "caller-device", scopes: ["operator.admin"] });
+      const client = sharingPolicyClient({
+        user: "talk-requester",
+        deviceId: "caller-device",
+        scopes: ["operator.admin"],
+      });
       client.connect.caps = ["tool-events", "task-suggestions"];
       const sessionTarget = await prepareTalkSessionTarget(config, "agent:main:main");
-      const authority = resolveTalkAgentConsultAuthority(client.connect.scopes, client);
+      const authority = {
+        ...resolveTalkAgentConsultAuthority(client.connect.scopes, client),
+        operatorAuthority: createAdmittedRunOperatorAuthority({
+          profileId: "talk-requester",
+          scopes: client.connect.scopes ?? [],
+          assertCurrent: () => {},
+        }),
+      };
       const runId = "talk-authority-run";
       const registration = registerChatAbortController({
         runId,
@@ -132,6 +145,7 @@ it.each([true, false])(
                 operation,
               );
               const runTarget = beforePublication ? queuedTarget : captureTarget();
+              expect(runTarget?.isCurrent(params.sessionId)).toBe(true);
               const steer = (source: "reply" | "attempt" | undefined, current = authority) =>
                 controlRealtimeVoiceAgentRun({
                   sessionKey: sessionTarget.canonicalKey,
@@ -161,14 +175,19 @@ it.each([true, false])(
                   queued: true,
                 });
                 const weaker = sharingPolicyClient({
+                  user: "talk-requester",
                   deviceId: "caller-device",
                   scopes: ["operator.read"],
                 });
                 await expect(
-                  steer(
-                    runTarget?.toolAuthoritySource,
-                    resolveTalkAgentConsultAuthority(weaker.connect.scopes, weaker),
-                  ),
+                  steer(runTarget?.toolAuthoritySource, {
+                    ...resolveTalkAgentConsultAuthority(weaker.connect.scopes, weaker),
+                    operatorAuthority: createAdmittedRunOperatorAuthority({
+                      profileId: "talk-requester",
+                      scopes: weaker.connect.scopes ?? [],
+                      assertCurrent: () => {},
+                    }),
+                  }),
                 ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
                 expect(queueMessage).toHaveBeenCalledOnce();
               } finally {
@@ -185,6 +204,16 @@ it.each([true, false])(
           throw error;
         }
       });
+      const replyOptions: InternalGetReplyOptions = {
+        toolsAllow: authority.toolsAllow,
+        operatorAuthority: authority.operatorAuthority,
+        turnAdoptionLifecycle: bindReplySourceInput(
+          { onAdopted: () => {} },
+          registration.entry.input,
+        ),
+        runId,
+        abortSignal: registration.controller.signal,
+      };
       const result = await getReplyFromConfig(
         finalizeInboundContext({
           ...authority.replyCaller,
@@ -196,15 +225,7 @@ it.each([true, false])(
           CommandInterpretationSuppressed: true,
           InputProvenance: { kind: "internal_system", sourceTool: "openclaw_agent_consult" },
         }),
-        {
-          toolsAllow: authority.toolsAllow,
-          runId,
-          abortSignal: registration.controller.signal,
-          turnAdoptionLifecycle: bindReplySourceInput(
-            { onAdopted: () => {} },
-            registration.entry.input,
-          ),
-        },
+        replyOptions,
         config,
       ).finally(registration.cleanup);
       if (executionError) {

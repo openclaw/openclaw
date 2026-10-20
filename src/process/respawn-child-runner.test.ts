@@ -1,6 +1,12 @@
 import childProcess, { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { attachChildProcessBridge } from "./child-process-bridge.js";
+
+vi.mock("./child-process-bridge.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./child-process-bridge.js")>()),
+  attachChildProcessBridge: vi.fn(),
+}));
 
 const signalProcessTreeMock = vi.hoisted(() => vi.fn());
 vi.mock("./kill-tree.js", async (importOriginal) => ({
@@ -33,19 +39,16 @@ function start(
   const detach = vi.fn();
   let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
   const onError = vi.fn(options.onError ?? (() => {}));
+  vi.mocked(attachChildProcessBridge).mockImplementation((_child, signalHandler) => {
+    onSignal = signalHandler;
+    return { detach };
+  });
   const completion = runRespawnChildWithSignalBridge({
     command: "/usr/bin/node",
     args: ["/repo/openclaw/dist/entry.js"],
     env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
     onError,
     detachForProcessTree: options.detached,
-    runtime: {
-      spawn: childProcess.spawn,
-      attachChildProcessBridge: (_child, bridgeOptions) => {
-        onSignal = bridgeOptions?.onSignal;
-        return { detach };
-      },
-    },
   });
   runs.push({ child, completion });
   const settled = vi.fn();
@@ -65,6 +68,7 @@ beforeEach(() => {
     Object.defineProperty(stream, "isTTY", { configurable: true, value: false });
   }
   signalProcessTreeMock.mockReset();
+  vi.mocked(attachChildProcessBridge).mockReset();
   killProcess = vi.spyOn(process, "kill").mockReturnValue(true);
 });
 afterEach(async () => {

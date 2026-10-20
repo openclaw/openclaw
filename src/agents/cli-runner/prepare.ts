@@ -1,10 +1,7 @@
 import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  buildHarnessVisibleReplyGuidance,
-  messageToolOwnsVisibleReply,
-} from "../../auto-reply/source-reply-delivery-mode.js";
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -144,6 +141,7 @@ import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
 import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
 import {
+  buildCliVisibleReplyGuidance,
   composeCliPromptContext,
   createCliCurrentPromptRenderer,
   prepareCliSystemPrompt,
@@ -552,49 +550,6 @@ async function prepareCliRunContextWithinReadFence(
     params = { ...params, toolAuthorityFingerprint: questionFingerprint };
   }
   const modelDisplay = `${params.provider}/${modelId}`;
-  let openClawHistoryMessages: unknown[] | undefined;
-  const loadOpenClawHistoryMessages = async () => {
-    openClawHistoryMessages ??= await loadCliSessionHistoryMessages(params);
-    return openClawHistoryMessages;
-  };
-  const promptBuildHookContext = {
-    runId: params.runId,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    workspaceDir,
-    modelProviderId: params.provider,
-    modelId,
-    trigger: params.trigger,
-    inputProvenance: params.inputProvenance,
-    ...buildAgentHookContextChannelFields(params),
-  };
-  const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
-  let promptBuildHookResult: ResolvedPromptBuildHookResult | undefined;
-  if (!skipsTurnPreparation) {
-    try {
-      promptBuildHookResult = await resolvePromptBuildHookResult({
-        config: runConfig,
-        prompt: params.prompt,
-        messages: await loadOpenClawHistoryMessages(),
-        hookCtx: promptBuildHookContext,
-        hookRunner: promptBuildHookRunner,
-      });
-    } catch (error) {
-      cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
-    }
-  }
-  const promptBuildToolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
-    promptBuildHookResult?.toolsAllow,
-    {
-      forceMessageTool: messageToolOwnsVisibleReply({
-        sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
-      }),
-    },
-  );
-  const promptBuildRestrictsTools =
-    promptBuildToolsAllow !== undefined &&
-    !promptBuildToolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*");
   const isClaudeCli = isClaudeCliBackendId(params.provider);
   const requestedContextModelId = isClaudeCli ? resolveClaudeCliContextModelId(modelId) : modelId;
   const normalizedContextModelId = isClaudeCli
@@ -664,6 +619,46 @@ async function prepareCliRunContextWithinReadFence(
     resolvedContextWindowInfo.tokens > modelContextTokens
       ? { tokens: modelContextTokens, source: "model" as const }
       : resolvedContextWindowInfo;
+  let openClawHistoryMessages: unknown[] | undefined;
+  const promptBuildHookContext = {
+    runId: params.runId,
+    agentId: sessionAgentId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    workspaceDir,
+    modelProviderId: params.provider,
+    modelId,
+    contextTokenBudget: contextWindowInfo.tokens,
+    trigger: params.trigger,
+    inputProvenance: params.inputProvenance,
+    ...buildAgentHookContextChannelFields(params),
+  };
+  const promptBuildHookRunner = skipsTurnPreparation ? undefined : getGlobalHookRunner();
+  let promptBuildHookResult: ResolvedPromptBuildHookResult | undefined;
+  if (!skipsTurnPreparation) {
+    try {
+      promptBuildHookResult = await resolvePromptBuildHookResult({
+        config: runConfig,
+        prompt: params.prompt,
+        messages: (openClawHistoryMessages ??= await loadCliSessionHistoryMessages(params)),
+        hookCtx: promptBuildHookContext,
+        hookRunner: promptBuildHookRunner,
+      });
+    } catch (error) {
+      cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
+    }
+  }
+  const promptBuildToolsAllow = mergeForcedEmbeddedAttemptToolsAllow(
+    promptBuildHookResult?.toolsAllow,
+    {
+      forceMessageTool: messageToolOwnsVisibleReply({
+        sourceReplyDeliveryMode: bindingSourceReplyDeliveryMode,
+      }),
+    },
+  );
+  const promptBuildRestrictsTools =
+    promptBuildToolsAllow !== undefined &&
+    !promptBuildToolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*");
   const autoReseedHistoryChars = isClaudeCli
     ? resolveAutoCliSessionReseedHistoryChars(contextWindowInfo.tokens)
     : undefined;
@@ -891,7 +886,7 @@ async function prepareCliRunContextWithinReadFence(
       return await promptBuildHookRunner.runAuthorizedPromptBuild(
         {
           prompt: params.prompt,
-          messages: await loadOpenClawHistoryMessages(),
+          messages: (openClawHistoryMessages ??= await loadCliSessionHistoryMessages(params)),
         },
         promptBuildHookContext,
         {
@@ -1489,8 +1484,7 @@ async function prepareCliRunContextWithinReadFence(
     const effectiveReplyGuidance =
       skipsTurnPreparation || params.isolatedCompletion
         ? undefined
-        : buildHarnessVisibleReplyGuidance({
-            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        : buildCliVisibleReplyGuidance(params, {
             messageToolAvailable,
             requireExplicitMessageTarget,
           });
@@ -1664,6 +1658,8 @@ async function prepareCliRunContextWithinReadFence(
           ...params,
           config: runConfig,
           prompt: preparedPrompt,
+          // History and runtime context may mention images already delivered to the native session.
+          imagePrompt: params.imagePrompt ?? params.prompt,
           transcriptPrompt: finalizedTranscriptPrompt,
           ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
         },
@@ -1753,7 +1749,6 @@ async function prepareCliRunContextWithinReadFence(
       });
     }
     const hadSessionFile = await hasCliSessionTranscript(params);
-    const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
     let preparedParams = await admitFinalParams();
 
     const note = await claimHeartbeatContextForUserRun({
@@ -1790,7 +1785,7 @@ async function prepareCliRunContextWithinReadFence(
       hadSessionFile,
       contextEngine,
       deferContextEngineDisposalUntil,
-      contextEngineTurnPrompt,
+      contextEngineTurnPrompt: params.transcriptPrompt ?? params.prompt,
       ...(promptContext ? { promptContext, promptForHooks } : {}),
       ...(nodeSkillWorkshop ? { nodeSkillWorkshop } : {}),
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),

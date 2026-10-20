@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createSignal, onSettled } from "solid-js";
+import { createSignal, onSettled } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../../api/gateway.ts";
 import { createSidebarNarration } from "../../../components/app-sidebar-session-narration.ts";
@@ -16,6 +16,8 @@ import {
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { ChatSubagentActivity as ChatSubagentActivityRow } from "../chat-subagent-wait.ts";
 import { SubagentActivity, type SubagentActivityProps } from "./chat-subagent-activity.ts";
+
+const inputHandlers = new WeakMap<HTMLElement, () => void>();
 
 function matchesRun(
   row: ChatSubagentActivityRow,
@@ -42,7 +44,10 @@ function matchesRun(
 }
 
 /** Reuse bounded narration subscriptions; inline progress never reads child history. */
-function SubagentActivityLive(props: SubagentActivityProps) {
+function SubagentActivityLive(
+  props: SubagentActivityProps,
+  host: SolidBridgeElement<SubagentActivityProps>,
+) {
   const context = useOptionalApplication();
   // The cache retains only digests belonging to the currently displayed runs.
   const [digests, setDigests] = createSignal<Map<string, SessionObserverDigest>>(
@@ -57,12 +62,15 @@ function SubagentActivityLive(props: SubagentActivityProps) {
   );
   const narration = createSidebarNarration();
   const narrationView = projectOwner(narration, (owner) => owner.read());
-  const syncNarration = (rows: readonly ChatSubagentActivityRow[], enabled: boolean) => {
-    if (!context) {
+  let active = false;
+  let queued = false;
+  const syncNarration = () => {
+    if (!active || !context) {
       return;
     }
+    const rows = host.limit === undefined ? host.rows : host.rows.slice(0, host.limit);
     narration.sync({
-      enabled,
+      enabled: !host.compact && host.presented !== false,
       connected: Boolean(context.gateway.snapshot.hello),
       connectionIdentity: context.gateway.snapshot.hello,
       source: context.sessions,
@@ -78,25 +86,28 @@ function SubagentActivityLive(props: SubagentActivityProps) {
       agentId: context.gateway.snapshot.assistantAgentId ?? "main",
     });
   };
-  createEffect(
-    () => ({
-      rows: props.limit === undefined ? props.rows : props.rows.slice(0, props.limit),
-      enabled: !props.compact && props.presented !== false,
-    }),
-    ({ rows, enabled }) => syncNarration(rows, enabled),
-  );
   onSettled(() => {
     if (!context) {
       return undefined;
     }
+    active = true;
+    inputHandlers.set(host, () => {
+      if (host.compact || host.presented === false) {
+        syncNarration();
+      } else if (!queued) {
+        queued = true;
+        queueMicrotask(() => {
+          queued = false;
+          syncNarration();
+        });
+      }
+    });
+    syncNarration();
     const gateway = context.gateway;
     let connection = gateway.snapshot.hello;
     // Clear prior-connection digests before the next observer frame can be accepted.
     const unsubscribe = gateway.subscribe(() => {
-      syncNarration(
-        props.limit === undefined ? props.rows : props.rows.slice(0, props.limit),
-        !props.compact && props.presented !== false,
-      );
+      syncNarration();
       if (connection !== gateway.snapshot.hello) {
         connection = gateway.snapshot.hello;
         setDigests(new Map());
@@ -105,7 +116,7 @@ function SubagentActivityLive(props: SubagentActivityProps) {
     function onSessionObserver(event: GatewayEventFrame) {
       if (event.event !== "session.observer") {
         const payload = asOptionalRecord(event.payload);
-        if (payload && props.rows.some((row) => matchesRun(row, payload))) {
+        if (payload && host.rows.some((row) => matchesRun(row, payload))) {
           narration.handleEvent(event);
         }
         return;
@@ -118,7 +129,7 @@ function SubagentActivityLive(props: SubagentActivityProps) {
         return;
       }
       const digest = event.payload;
-      const row = props.rows.find((candidate) => matchesRun(candidate, digest));
+      const row = host.rows.find((candidate) => matchesRun(candidate, digest));
       if (!row) {
         return;
       }
@@ -130,6 +141,8 @@ function SubagentActivityLive(props: SubagentActivityProps) {
     }
     const unsubscribeEvents = gateway.subscribeEvents(onSessionObserver);
     return () => {
+      active = false;
+      inputHandlers.delete(host);
       unsubscribe();
       unsubscribeEvents();
       narration.disconnect();
@@ -170,8 +183,13 @@ function SubagentActivityLive(props: SubagentActivityProps) {
 
 export const ChatSubagentActivity = defineSolidBridge<SubagentActivityProps>(
   "openclaw-chat-subagent-activity",
-  (props) => <SubagentActivityLive {...props} />,
+  SubagentActivityLive,
   {
+    propertyChanged: (host, key) => {
+      if (key === "rows" || key === "compact" || key === "presented" || key === "limit") {
+        inputHandlers.get(host)?.();
+      }
+    },
     properties: {
       rows: { default: [], attribute: false },
       compact: { default: false },

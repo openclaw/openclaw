@@ -22,9 +22,12 @@ import type { EmbeddedAgentQueueHandle } from "./embedded-agent-runner/runs.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
   createEmbeddedRunHandle,
-  registerTestEmbeddedRun as setActiveEmbeddedRun,
 } from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import {
+  createSessionsSendTestCaller,
+  setSessionsSendTestActiveRun,
+} from "./openclaw-tools.sessions-steering.test-support.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
 import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";
 import {
@@ -119,15 +122,22 @@ export function registerSessionsSendRequesterRetirementTests({
         }
         return {};
       });
-      const queueMessage = vi.fn(async () => {});
+      const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(
+        async (_text, options) => {
+          const recorder = options?.userTurnTranscriptRecorder;
+          if (!recorder || !(await recorder.persistApproved())) {
+            throw new Error("Steering fixture did not commit the admitted guidance");
+          }
+        },
+      );
       const handle: EmbeddedAgentQueueHandle = {
-        ...createEmbeddedRunHandle({ runId, queueMessage }),
+        ...createEmbeddedRunHandle({ runId, queueMessage, supportsTranscriptCommitWait: true }),
         messageInjectionV2: {
           version: 2,
           isAvailable: () => true,
-          queueMessage: async (_text, _options, assertCurrent) => {
+          queueMessage: async (text, options, assertCurrent) => {
             assertCurrent?.();
-            await queueMessage();
+            await queueMessage(text, options);
           },
         },
       };
@@ -145,7 +155,13 @@ export function registerSessionsSendRequesterRetirementTests({
           spawnMode: "session",
           expectsCompletionMessage: true,
         });
-        setActiveEmbeddedRun(childSessionId, handle, childSessionKey);
+        await setSessionsSendTestActiveRun(
+          childSessionId,
+          handle,
+          childSessionKey,
+          requesterSessionKey,
+          config,
+        );
       } else {
         await addSubagentRunForTests({
           runId: "retiring-original-child-run",
@@ -216,6 +232,7 @@ export function registerSessionsSendRequesterRetirementTests({
                 admittedRunContext,
                 agentId: "main",
                 sessionKey: requesterSessionKey,
+                requesterOrigin: createSessionsSendTestCaller(requesterSessionKey).requesterOrigin,
               }),
               () =>
                 createSessionsSendTool({

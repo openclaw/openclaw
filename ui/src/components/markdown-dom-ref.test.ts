@@ -6,6 +6,42 @@ import { createMarkdownRef } from "./markdown-dom-ref.ts";
 import { toStreamingMarkdownParts } from "./markdown.ts";
 
 describe("Solid Markdown island", () => {
+  it("commits Markdown before onUpdate and retires a replaced island", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const [html, setHtml] = createSignal('<a href="#first">First</a>');
+    const onUpdate = vi.fn(() => container.textContent);
+    let bind!: (element: ParentNode) => void;
+    const view = mountSolid(
+      () => {
+        const region = document.createElement("div");
+        bind = createMarkdownRef(() => ({ content: html(), onUpdate }));
+        bind(region);
+        return region;
+      },
+      { container },
+    );
+    try {
+      expect(onUpdate).toHaveLastReturnedWith("First");
+      const original = view.getByRole("link", { name: "First" });
+      const replacement = container.appendChild(document.createElement("section"));
+      bind(replacement);
+      setHtml('<a href="#second">Second</a>');
+      flush();
+      expect(onUpdate).toHaveLastReturnedWith("Second");
+      expect(original.isConnected).toBe(false);
+      const current = view.getByRole("link", { name: "Second" });
+      expect(replacement.contains(current)).toBe(true);
+
+      view.unmount();
+      expect(current.isConnected).toBe(false);
+      expect(replacement.childNodes).toHaveLength(0);
+    } finally {
+      view.unmount();
+      container.remove();
+    }
+  });
+
   it.each([
     ["paragraph", "A growing reply", "p"],
     ["list", "- First item\n- Growing item", "ul"],

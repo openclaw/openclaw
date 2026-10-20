@@ -25,6 +25,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { testing as replyRunTesting } from "../../sessions/session-controller.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
+import { captureRequesterOrigin, hasSameRequesterOrigin } from "../requester-origin.js";
 import {
   captureGatewayToolCallerAssertion,
   withGatewayToolCallerIdentity,
@@ -771,6 +772,11 @@ describe("embedded run ownership", () => {
   });
 
   it("publishes completion authority and fences later turns of the same session", async () => {
+    const requesterOrigin = captureRequesterOrigin({
+      sessionKey,
+      messageProvider: "telegram",
+      senderId: "completion-requester",
+    })!;
     const first = createRunHandle({ runId: "first" });
     const oldClaim = prepareEmbeddedAgentRunCompletionClaim(sessionId, "first");
     let published = false;
@@ -785,8 +791,10 @@ describe("embedded run ownership", () => {
         sessionKey,
         embeddedRunToolAuthorityBinding: () => ({
           source: "reply",
+          acceptsRequesterOrigin: (incoming) => hasSameRequesterOrigin(requesterOrigin, incoming),
           project: () => "authority",
           projectAsync: async () => "authority",
+          assertRegistrationActive: () => {},
           assertActive: () => {},
         }),
       },

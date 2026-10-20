@@ -83,7 +83,6 @@ it("expands home-directory shorthand in PATH entries containing delimiters", asy
 
   expect(selection.selected).toMatchObject({
     id: "whisper-cli",
-    resolvedCommand: commandPath,
     entry: { command: commandPath },
   });
 });
@@ -127,7 +126,7 @@ it("discovers Windows commands through case-insensitive PATH and PATHEXT values"
     }
     expect(
       (await inspectWindows({ Path: availableDirectory, pAtHeXt: ".AUDIO" })).selected,
-    ).toMatchObject({ id: "whisper", resolvedCommand: commandPath });
+    ).toMatchObject({ id: "whisper", entry: { command: commandPath } });
   });
 });
 
@@ -136,6 +135,9 @@ it("does not rank Metal-capable whisper ahead of sherpa until a run observes Met
   const { inspectLocalAudioSelection: inspectSelection, recordLocalAudioBackendObservation } =
     await import("./local-audio.js");
   const { modelPath, sherpaDir } = await localModels();
+  vi.spyOn(fs, "realpath").mockResolvedValue(
+    "/opt/homebrew/Cellar/whisper-cpp/1.9.1/bin/whisper-cli",
+  );
   const inspectBackend = () =>
     inspectSelection({
       env: { WHISPER_CPP_MODEL: modelPath, SHERPA_ONNX_MODEL_DIR: sherpaDir },
@@ -147,7 +149,6 @@ it("does not rank Metal-capable whisper ahead of sherpa until a run observes Met
           : name === "sherpa-onnx-offline"
             ? "/usr/local/bin/sherpa-onnx-offline"
             : null,
-      resolveRealpath: async () => "/opt/homebrew/Cellar/whisper-cpp/1.9.1/bin/whisper-cli",
       inspectLinkedLibraries: async () => null,
     });
   const args = ["-m", modelPath, "-otxt", "-of", "{{OutputBase}}", "-nt", "{{MediaPath}}"];
@@ -202,7 +203,6 @@ it("reports Parakeet as MLX-capable without treating capability as observation",
     platform: "darwin",
     arch: "arm64",
     resolveBinary: async (name) => `/usr/local/bin/${name}`,
-    resolveRealpath: async (filePath) => filePath,
     inspectLinkedLibraries: async () => null,
   });
 

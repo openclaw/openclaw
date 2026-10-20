@@ -3,7 +3,7 @@ import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identi
 import type { ExecutionIdentityInspectionOutcome } from "../audit/execution-identity-inspection.types.js";
 import { readConfigSnapshotAuditRecordInDatabase } from "../config/config-journal-snapshot.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   readDebugProxyCaptureBlob,
   readDebugProxyCaptureSessionEvents,
@@ -54,7 +54,7 @@ export function readStateDiagnosticCommand(db: EngineConnection, command: StateD
       type: command.type,
       result: {
         status: "inspected",
-        inspection: runSqliteDeferredTransactionSync(db, () =>
+        inspection: runSqliteReadSnapshotSync(db, () =>
           inspectExecutionIdentityRunInDatabase(db, command.input, {
             executionIdentityContexts: tableExists(db, "execution_identity_contexts"),
             auditEvents: tableExists(db, "audit_events"),

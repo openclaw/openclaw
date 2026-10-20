@@ -12,8 +12,8 @@ describe("async work resources", () => {
       `import assert from "node:assert/strict";
        import { setImmediate as nextTurn } from "node:timers/promises";
        import { queryObjects } from "node:v8";
-       import { runWithAsyncWorkResources } from ${JSON.stringify(new URL("./async-work-resources.ts", import.meta.url).href)};
-       import { AsyncWorkScope, runWithTrackedCancellation, trackAsyncWork } from ${JSON.stringify(new URL("./async-work-scope.ts", import.meta.url).href)};
+       import { runWithAsyncWorkResources, runWithTrackedCancellation } from ${JSON.stringify(new URL("./async-work-resources.ts", import.meta.url).href)};
+       import { AsyncWorkScope, trackAsyncWork } from ${JSON.stringify(new URL("./async-work-scope.ts", import.meta.url).href)};
 
        function createForegroundProducer(pendingWork) {
          const input = { text: "synthetic transcript text" };

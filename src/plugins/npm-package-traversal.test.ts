@@ -54,13 +54,9 @@ describe("managed npm package traversal", () => {
     ]);
     const repairNames = ["@scope/alpha", "@scope/zeta", "alpha", "openclaw", "zeta"];
     const before = await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot });
-    expect(before.checked).toBe(5);
     expect(before.issues.map((issue) => issue.packageName)).toEqual(repairNames);
     expect(await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} })).toEqual({
-      checked: 5,
-      attempted: 5,
       repaired: 5,
-      skipped: 0,
     });
     for (const name of repairNames) {
       expect(fs.realpathSync(path.join(modules, name, "node_modules", "openclaw"))).toBe(
@@ -70,8 +66,6 @@ describe("managed npm package traversal", () => {
     expect(fs.existsSync(path.join(modules, ".hidden", "node_modules"))).toBe(false);
     expect(fs.existsSync(path.join(modules, ".bin", "node_modules"))).toBe(false);
     expect(await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot })).toEqual({
-      checked: 5,
-      broken: 0,
       issues: [],
     });
   });
@@ -107,16 +101,11 @@ describe("managed npm package traversal", () => {
       expect(before.issues.map((issue) => issue.packageName)).toEqual(["@scope/real"]);
       expect(await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} })).toEqual(
         {
-          checked: 1,
-          attempted: 1,
           repaired: 1,
-          skipped: 0,
         },
       );
       expect(fs.existsSync(path.join(outside, "package", "node_modules"))).toBe(false);
       expect(await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot })).toEqual({
-        checked: 1,
-        broken: 0,
         issues: [],
       });
     },
@@ -131,15 +120,10 @@ describe("managed npm package traversal", () => {
       code: "ENOTDIR",
     });
     expect(await auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot })).toEqual({
-      checked: 0,
-      broken: 0,
       issues: [],
     });
     expect(await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} })).toEqual({
-      checked: 0,
-      attempted: 0,
       repaired: 0,
-      skipped: 0,
     });
   });
 
@@ -148,12 +132,12 @@ describe("managed npm package traversal", () => {
     [
       "peer audit",
       (npmRoot: string) => auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot }),
-      { checked: 0, broken: 0, issues: [] },
+      { issues: [] },
     ],
     [
       "peer repair",
       (npmRoot: string) => relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} }),
-      { checked: 0, attempted: 0, repaired: 0, skipped: 0 },
+      { repaired: 0 },
     ],
   ] as const) {
     it.each(["missing", "file"] as const)(`${owner} preserves %s root errors`, async (kind) => {

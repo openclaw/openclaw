@@ -575,7 +575,6 @@ function createMigrationPlanHarness(
     ].join("\n"),
   );
   writeExecutable(path.join(binDir, "defaults"), "#!/bin/sh\nprintf '%s\\n' primary\n");
-  writeCommandFixture(binDir, "sqlite3", "#!/bin/sh\nprintf '%s\\n' fixture-node\n");
   writeExecutable(
     path.join(binDir, "openclaw"),
     [
@@ -586,6 +585,8 @@ function createMigrationPlanHarness(
       "  *'config get gateway.remote.url'*) printf '%s\\n' '\"wss://gateway.invalid\"' ;;",
       "  *'config get gateway.remote.token'*) printf '%s\\n' '\"redacted\"' ;;",
       "  *'config get gateway.remote.password'*) exit 1 ;;",
+      "  'node identity --identity primary --json'|'node identity --identity node --json')",
+      '    printf \'%s\\n\' "$TEST_NODE_IDENTITY_JSON"; exit "${TEST_NODE_IDENTITY_EXIT_CODE:-0}" ;;',
       '  *\'nodes status\'*) printf \'%s\\n\' \'{"nodes":[{"nodeId":"fixture-node","paired":true,"connected":false}]}\' ;;',
       "  *) exit 2 ;;",
       "esac",
@@ -606,6 +607,8 @@ function createMigrationPlanHarness(
       PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
       TEST_FIXTURE_ROOT: tempRoot,
       TEST_LAUNCH_STATE: launchState,
+      TEST_NODE_IDENTITY_JSON: '{"deviceId":"fixture-node","publicKey":"fixture-public-key"}',
+      TEST_NODE_IDENTITY_EXIT_CODE: "0",
     },
   };
 }
@@ -661,6 +664,8 @@ function createNodeHarness(mac: MacScriptFixture, nodeId = "fixture-node") {
       "  *'config get gateway.remote.url'*) printf '%s\\n' '\"wss://gateway.invalid\"' ;;",
       "  *'config get gateway.remote.token'*) printf '%s\\n' '\"redacted\"' ;;",
       "  *'config get gateway.remote.password'*) exit 1 ;;",
+      "  'node identity --identity primary --json'|'node identity --identity node --json')",
+      '    printf \'%s\\n\' "$TEST_NODE_IDENTITY_JSON"; exit "${TEST_NODE_IDENTITY_EXIT_CODE:-0}" ;;',
       '  *\'nodes status\'*) printf \'%s\\n\' \'{"nodes":[{"nodeId":"fixture-node","paired":true,"connected":true,"connectedAtMs":10}]}\' ;;',
       "  *) exit 2 ;;",
       "esac",
@@ -1254,7 +1259,6 @@ function createRollbackHarness(
       ].join("\n"),
     );
   }
-  writeCommandFixture(binDir, "sqlite3", "#!/bin/sh\nprintf '%s\\n' fixture-node\n");
   writeCommandFixture(
     binDir,
     "pgrep",
@@ -1352,6 +1356,8 @@ function createRollbackHarness(
       "  *'config get gateway.remote.url'*) printf '%s\\n' '\"wss://gateway.invalid\"' ;;",
       "  *'config get gateway.remote.token'*) printf '%s\\n' '\"redacted\"' ;;",
       "  *'config get gateway.remote.password'*) exit 1 ;;",
+      "  'node identity --identity primary --json'|'node identity --identity node --json')",
+      '    printf \'%s\\n\' "$TEST_NODE_IDENTITY_JSON"; exit "${TEST_NODE_IDENTITY_EXIT_CODE:-0}" ;;',
       "  *'nodes status'*)",
       '    state="$(tr -d \'\\n\' <"$TEST_LAUNCH_STATE_FILE")"',
       '    if [[ "$state" == "elevation-loaded" ]]; then',
@@ -1526,6 +1532,7 @@ function createRollbackHarness(
       TEST_LAUNCH_STATE_FILE: launchStateFile,
       TEST_PENDING_KILL_MARKER: path.join(tempRoot, "pending-kill-marker"),
       TEST_NODE_GENERATION_FILE: nodeGenerationFile,
+      TEST_NODE_IDENTITY_JSON: '{"deviceId":"fixture-node","publicKey":"fixture-public-key"}',
       TEST_RECOVERY_KILL_MARKER: path.join(tempRoot, "recovery-kill-marker"),
       TEST_RENAME_HELPER_HASH_MARKER: path.join(tempRoot, "rename-helper-hash-marker"),
       TEST_SIGNAL_DURING_CUSTODY:
@@ -2036,6 +2043,38 @@ describe("mac elevation host command contract", () => {
         "canonical node LaunchAgent --node-id does not match the selected paired macOS identity",
       );
     }),
+  );
+
+  it.skipIf(process.platform !== "darwin").concurrent.for([
+    ["missing", "", "1", "selected macOS node identity is missing or invalid"],
+    [
+      "invalid",
+      '{"deviceId":"invalid/id"}',
+      "0",
+      "selected macOS node identity is missing or invalid",
+    ],
+    [
+      "unpaired",
+      '{"deviceId":"other-node","publicKey":"fixture-public-key"}',
+      "0",
+      "selected macOS node identity is not paired on the configured gateway",
+    ],
+  ] as const)(
+    "refuses migration when the existing public node identity is %s",
+    async ([, response, exitCode, diagnostic], { mac }) =>
+      mac.lifetime.run(async () => {
+        const harness = createMigrationPlanHarness(mac);
+        const source = readFileSync(harness.plistPath);
+        const result = await runMigrationPlan(mac, harness, {
+          ...harness.env,
+          TEST_NODE_IDENTITY_JSON: response,
+          TEST_NODE_IDENTITY_EXIT_CODE: exitCode,
+        });
+
+        expectFailure(result, diagnostic);
+        expectFile(harness.plistPath, source);
+        expect(existsSync(path.join(harness.stateDir, "client"))).toBe(false);
+      }),
   );
 
   it.skipIf(process.platform !== "darwin").concurrent.for([

@@ -108,7 +108,7 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
   const lifecycleEvents: string[] = [];
   session.subscribe((event) => {
     lifecycleEvents.push(event.type);
-    if (event.type === "queue_update" && event.steering.includes(steerText)) {
+    if (event.type === "queue_update" && session.getSteeringMessages().includes(steerText)) {
       steerEnqueued.resolve();
     }
   });
@@ -155,7 +155,12 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
       onAbandoned: abandoned,
       onSettled: lifecycleSettled,
     },
-    run: { sessionId, sessionKey: queueKey, messageProvider: "telegram" },
+    run: {
+      sessionId,
+      sessionKey: queueKey,
+      messageProvider: "telegram",
+      senderId: "handoff-requester",
+    },
   });
   const activeOperation = createReplyOperation({
     sessionKey: queueKey,
@@ -248,7 +253,11 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     expect(followupRuns).toEqual([]);
     expect(session.pendingMessageCount).toBe(0);
     expect(session.getSteeringMessages()).toEqual([]);
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+    expect(runState.admission).toEqual({
+      status: "accepted",
+      mode: "followup",
+      reason: "steering-unavailable",
+    });
     expect(settled).not.toHaveBeenCalled();
     expect(lifecycleEvents).toContain("agent_handoff");
     expect(lifecycleEvents).not.toContain("agent_settled");

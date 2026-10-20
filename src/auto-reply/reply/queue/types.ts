@@ -30,6 +30,9 @@ export function bindReplyOperationQueueDisposition(
 ): void {
   const observe = run.onQueueDisposition;
   run.onQueueDisposition = (disposition) => {
+    if (state) {
+      state.followupQueueDisposition = disposition;
+    }
     observe?.(disposition);
     if (state && (disposition !== "queue-cap-old" || state.admission?.status !== "accepted")) {
       state.admission = { status: "skipped", reason: "queue-cap" };

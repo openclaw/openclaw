@@ -9,6 +9,7 @@ import type { ActivityHeadline } from "./chat-activity-headline-selection.ts";
 import { ChatToolIcon } from "./chat-tool-cards.solid.tsx";
 
 export type ChatActivityHeadlineProps = {
+  contentRef?: (element: HTMLSpanElement) => void;
   scope: string;
   activity: ActivityHeadline | undefined;
   summary: string;
@@ -103,7 +104,7 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
           )}
         </Show>
       </span>
-      <span class="chat-tool-disclosure__content">
+      <span ref={(element) => props.contentRef?.(element)} class="chat-tool-disclosure__content">
         <Show
           when={shown()?.title}
           keyed

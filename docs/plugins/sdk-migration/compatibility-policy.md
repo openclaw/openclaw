@@ -72,6 +72,37 @@ successful cleanup; `drained` remains false while the backend is still settling.
 Cleanup preserves committed outcomes and successor sessions. If the writer cannot
 be safely revoked, `forceCleared` stays false and its custody remains retained.
 
+### Channel prepared tool policy
+
+`BuildChannelInboundEventContextParams.access.toolPolicy` and
+`MsgContext.ConversationToolPolicy` are deprecated as of October 12, 2026.
+They remain source-compatible until a **later stable release**, after a separately
+announced deprecation window and explicit maintainer approval for removal. No
+removal date is set; the `stable-deprecation-period` gate does not itself authorize
+removal. The synchronous SQLite cutoff does not apply to these fields. Legacy use
+emits the bounded `DEP_CHANNEL_PREPARED_TOOL_POLICY` warning.
+
+The compatibility adapter retains the supplied policy for the **original external
+request**, including time waiting in its queued turn. That snapshot does not
+refresh when configuration changes. It remains local to that execution and is not
+copied into requester provenance or passed to a new delegation.
+
+Move configuration-derived policy to `security.resolveDirectToolPolicy` for direct
+conversations or `groups.resolveToolPolicy` for shared conversations. The host calls
+these adapters at execution admission with current configuration and preserved
+authenticated sender, account, and conversation facts. An admitted execution keeps
+that prepared policy; a newly admitted delegated execution resolves policy again
+for its original requester at the destination. These callbacks do not change the
+separate spawned-child authority envelope contract.
+
+Bundled Telegram direct messages use `security.resolveDirectToolPolicy`; X guest
+mentions use their existing `groups.resolveToolPolicy` adapter. External
+plugins still supplying the deprecated field retain snapshot behavior, so fresh
+configuration at admission requires migrating that producer. A plugin with a
+restriction supplied by an external authority must define its original-request
+lifetime with that authority; the deprecated field does not grant an indefinite
+restriction over descendant work.
+
 ### Harness deletion companions
 
 Unbound `AgentHarnessSessionDeletionMutation` callbacks are deprecated. During

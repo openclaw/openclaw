@@ -368,6 +368,8 @@ describe("OpenAI completions reasoning", () => {
 
   it.each([
     { id: "gpt-5.6-luna", expected: "none" },
+    { id: "gpt-5.5", expected: undefined },
+    { id: "gpt-5.4-mini", expected: undefined },
     {
       id: "custom-azure-deployment",
       name: "GPT-5.5 (Azure)",
@@ -420,6 +422,12 @@ describe("OpenAI completions reasoning", () => {
     for (const model of [
       {
         provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        id: "gpt-5.6-sol",
+        reasoning: true,
+      },
+      {
+        provider: "openrouter",
         baseUrl: "https://proxy.example.com/v1",
         id: "anthropic/claude-sonnet-4",
         reasoning: true,
@@ -437,12 +445,14 @@ describe("OpenAI completions reasoning", () => {
         reasoning: false,
       },
     ]) {
-      const params = request(model, { reasoningEffort: "high" });
-      if (model.reasoning) {
-        expect(params.reasoning).toEqual({ effort: "high" });
-      } else {
-        expect(params).not.toHaveProperty("reasoning");
-        expect(params).not.toHaveProperty("reasoning_effort");
+      for (const context of [emptyContext(), toolContext()]) {
+        const params = request(model, { reasoningEffort: "high" }, context);
+        if (model.reasoning) {
+          expect(params.reasoning).toEqual({ effort: "high" });
+        } else {
+          expect(params).not.toHaveProperty("reasoning");
+          expect(params).not.toHaveProperty("reasoning_effort");
+        }
       }
     }
   });

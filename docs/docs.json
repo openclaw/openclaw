@@ -2223,6 +2223,7 @@
                       "providers/google",
                       "providers/groq",
                       "providers/huggingface",
+                      "providers/levanto",
                       "providers/longcat",
                       "providers/meta",
                       "providers/minimax",
@@ -3223,6 +3224,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.10.5",
                   "releases/2026.10.4",
                   "releases/2026.10.3",
                   "releases/2026.10.2",

@@ -23,11 +23,8 @@ export class BrowserScreencastClient {
   private readonly events = new AbortController();
   private closed = false;
 
-  constructor(
-    private readonly options: BrowserScreencastOptions,
-    createWebSocket: (url: string) => WebSocket = (url) => new WebSocket(url),
-  ) {
-    this.socket = createWebSocket(resolveGatewayWebSocketUrl(options.wsPath, options.gatewayUrl));
+  constructor(private readonly options: BrowserScreencastOptions) {
+    this.socket = new WebSocket(resolveGatewayWebSocketUrl(options.wsPath, options.gatewayUrl));
     this.socket.binaryType = "arraybuffer";
     this.socket.addEventListener("message", (event) => this.receive(event.data), {
       signal: this.events.signal,

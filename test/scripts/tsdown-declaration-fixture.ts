@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
+import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-runtime.mts";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
@@ -186,6 +187,15 @@ export function createDeclarationFixture(
   return createFixture(groups, root, extraEntrypoints);
 }
 
+export function createDeclarationFixtureWriter(root: string) {
+  const boundary = createDeclarationInputBoundary(root);
+  return (source: string, contents: string) => {
+    const target = boundary.assert(source);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, contents);
+  };
+}
+
 export function createFixture(
   groups: readonly string[],
   root: string,
@@ -200,12 +210,15 @@ export function createFixture(
     "@openclaw/fs-safe",
     "@openclaw/proc-safe",
     "@silvia-odwyer/photon-node",
+    "highlight.js",
     "playwright-core",
     "web-tree-sitter",
     "tree-sitter-bash",
     "tsx",
     "esbuild",
     "import-meta-resolve",
+    "tar",
+    "yaml",
   ]) {
     const target = path.join(root, "node_modules", name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -216,20 +229,13 @@ export function createFixture(
     );
   }
   materializeDeclarationPackages(root, groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS);
-  const write = (source: string, contents: string) => {
-    const relative = path.relative(root, path.resolve(root, source));
-    if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error(`Fixture input escapes its root: ${source}`);
-    }
-    const target = path.join(root, relative);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, contents);
-  };
+  const write = createDeclarationFixtureWriter(root);
   write(
     "package.json",
     '{"name":"sdk-declaration-fixture","version":"0.0.0","private":true,"type":"module"}',
   );
   write("pnpm-workspace.yaml", "packages: []\n");
+  write("pnpm-lock.yaml", fs.readFileSync(path.join(sourceRoot, "pnpm-lock.yaml"), "utf8"));
   // tsdown.config.ts passes this path to package declaration builds as compiler configuration, not an import edge.
   write(
     "tsconfig.packages.json",
@@ -254,6 +260,7 @@ export function createFixture(
     "src/plugin-sdk/facade-runtime.ts",
     "extensions/browser/src/browser/playwright-core.runtime.ts",
     "src/infra/net/undici-dispatcher-options.ts",
+    "src/infra/sealed-runtime-bootstrap.ts",
     "src/infra/command-explainer/tree-sitter-runtime.ts",
     "packages/gateway-client/src/websocket.ts",
     "src/gateway/desktop/node-stream-broker.ts",
@@ -294,6 +301,10 @@ export function createFixture(
   // Only unselected inputs need placeholders; selected sources receive their final contracts below.
   for (const source of new Set(qa.inputs)) {
     const relative = path.relative(root, path.resolve(root, source)).replaceAll(path.sep, "/");
+    // Installed entrypoints belong to the linked dependency, never the placeholder graph.
+    if (relative.split("/").includes("node_modules")) {
+      continue;
+    }
     if (!sources.has(relative) && !selectedSources.has(relative)) {
       write(source, "export {};\n");
     }

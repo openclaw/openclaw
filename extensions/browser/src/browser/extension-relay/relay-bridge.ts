@@ -126,21 +126,18 @@ export class ExtensionRelayBridge {
     if (this.extensionConnected) {
       return true;
     }
-    const timeout = new AbortController();
-    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    const timeout = AbortSignal.timeout(timeoutMs);
     try {
       await once(this.connectionEvents, "ready", {
-        signal: AbortSignal.any([signal, timeout.signal]),
+        signal: AbortSignal.any([signal, timeout]),
       });
       return this.extensionConnected;
     } catch (error) {
       signal.throwIfAborted();
-      if (timeout.signal.aborted) {
+      if (timeout.aborted) {
         return false;
       }
       throw error;
-    } finally {
-      clearTimeout(timer);
     }
   }
 

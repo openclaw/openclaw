@@ -1,7 +1,6 @@
 import type { EmbeddedRunCompletionRegistration } from "../../agents/embedded-agent-runner/run-state.js";
 import { prepareEmbeddedAgentRunCompletionClaim } from "../../agents/embedded-agent-runner/runs.js";
 import { registerRequesterFinalAttachment } from "../../agents/subagents/requester-final-attachment.js";
-import { normalizeTalkSection } from "../../config/talk.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -200,7 +199,7 @@ export function createTalkClientAgentConsultRunner(params: {
             assertCurrent: assertConsultCurrent,
           })
         : getAgentRuntime();
-    const talkConfig = normalizeTalkSection(config.talk);
+    const talkConfig = config.talk;
     // A voice turn outlives offer setup and must drain under its own root,
     // while new turns still respect suspension and restart admission.
     const admission = tryBeginGatewayIndependentRootWorkAdmission("talk-agent-consult", {
@@ -243,6 +242,7 @@ export function createTalkClientAgentConsultRunner(params: {
             // Source authority belongs to prepared admission, not loose runtime
             // params. Direct attempts also do not implement reply tracing.
             const {
+              sessionKey: _sessionKey,
               operatorAuthority: _operatorAuthority,
               traceAuthorized: _traceAuthorized,
               originatingChannel: _originatingChannel,

@@ -9,6 +9,7 @@ import {
   shouldSuppressGoogleChatManualExecApprovalFollowupText,
 } from "./approval-card-actions.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
+import { buildGoogleChatCanonicalApprovalTerminalCards } from "./approval-terminal-card.js";
 import type { WebhookTarget } from "./monitor-types.js";
 import type { GoogleChatEvent } from "./types.js";
 
@@ -115,6 +116,48 @@ function registerCardBinding(
     ...overrides,
   });
 }
+
+it.each([
+  {
+    outcome: { status: "allowed", decision: "allow-once", reason: "user" },
+    title: "Exec Approval: Allowed once",
+  },
+  {
+    outcome: { status: "allowed", decision: "allow-always", reason: "user" },
+    title: "Exec Approval: Allowed always",
+  },
+  {
+    outcome: { status: "denied", decision: "deny", reason: "user" },
+    title: "Exec Approval: Denied",
+  },
+  {
+    outcome: { status: "expired", reason: "timeout" },
+    title: "Exec Approval: Expired",
+  },
+  {
+    outcome: { status: "cancelled", reason: "run-aborted" },
+    title: "Exec Approval: Cancelled",
+  },
+] as const)("renders $title from the canonical result", ({ outcome, title }) => {
+  const cards = buildGoogleChatCanonicalApprovalTerminalCards({
+    applied: false,
+    approval: {
+      id: "approval-terminal",
+      urlPath: "/approve/approval-terminal",
+      createdAtMs: 1,
+      expiresAtMs: 10_000,
+      resolvedAtMs: 2,
+      presentation: {
+        kind: "exec",
+        commandText: "echo approved",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+      },
+      ...outcome,
+    },
+  });
+
+  expect(cards[0]?.card.header?.title).toBe(title);
+});
 
 function click(event: GoogleChatEvent | string, target = createTarget()) {
   return maybeHandleGoogleChatApprovalCardClick({

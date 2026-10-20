@@ -6,6 +6,7 @@ import type { MentionsCapability } from "../app/mentions.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway, projectMentions, projectOverlays } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
@@ -15,6 +16,7 @@ import {
   projectSessions,
 } from "../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { registerModalSurface } from "./overlay-registry.ts";
 import "../styles/sidebar-menus.css";
 import "../styles/sidebar-issues.css";
 import type { SidebarAttentionDismissal } from "./sidebar-attention-dismissals.ts";
@@ -59,7 +61,6 @@ export type SidebarAttentionPanelParams = {
   onKeydown: (event: KeyboardEvent) => void;
   onNavigate: ApplicationContext["navigate"];
   onOpen: (item: SidebarAttentionItem) => void;
-  onScroll: () => void;
   listRef?: (element: HTMLDivElement | null) => void;
   focusRef?: (registry: SidebarAttentionFocus | null) => void;
   onSelectTab: (tab: IssueTab) => void;
@@ -122,26 +123,6 @@ function SidebarInboxItem(props: {
   readContext: () => ApplicationContext;
   isMentionDismissing: (id: string) => boolean;
 }) {
-  const outbox = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "outbox" ? entry : null;
-  });
-  const approval = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "approval" ? entry : null;
-  });
-  const attention = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "attention" ? entry : null;
-  });
-  const mention = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "mention" ? entry : null;
-  });
-  const scopeUpgrade = createMemo(() => {
-    const entry = props.entry;
-    return entry.type === "scopeUpgrade" ? entry : null;
-  });
   const dismiss = () => {
     const dismissal = props.entry.dismissal;
     if (dismissal) {
@@ -150,7 +131,7 @@ function SidebarInboxItem(props: {
   };
   return (
     <Switch>
-      <Match when={outbox()}>
+      <Match when={props.entry.type === "outbox" ? props.entry : null}>
         {(entry) => (
           <SidebarOutboxItem
             entry={entry()}
@@ -158,7 +139,7 @@ function SidebarInboxItem(props: {
           />
         )}
       </Match>
-      <Match when={approval()}>
+      <Match when={props.entry.type === "approval" ? props.entry : null}>
         {(entry) => (
           <SidebarApprovalItem
             approval={entry().approval}
@@ -168,7 +149,7 @@ function SidebarInboxItem(props: {
           />
         )}
       </Match>
-      <Match when={attention()}>
+      <Match when={props.entry.type === "attention" ? props.entry : null}>
         {(entry) => (
           <SidebarIssueItem
             item={entry()}
@@ -185,18 +166,23 @@ function SidebarInboxItem(props: {
           />
         )}
       </Match>
-      <Match when={mention()}>
+      <Match when={props.entry.type === "mention" ? props.entry : null}>
         {(entry) => (
           <SidebarMentionItem
             mention={entry().mention}
             context={props.readContext()}
             dismissing={props.isMentionDismissing(entry().mention.id)}
+            canDismiss={canCallGatewayMethod(
+              props.readContext().gateway.snapshot,
+              "mentions.dismiss",
+              "operator.read",
+            )}
             onDismiss={() => void props.mentions.dismiss([entry().mention.id])}
             onNavigate={(route, options) => props.panel.onNavigate(route, options)}
           />
         )}
       </Match>
-      <Match when={scopeUpgrade()}>
+      <Match when={props.entry.type === "scopeUpgrade" ? props.entry : null}>
         {(entry) => (
           <SidebarScopeUpgradeItem
             state={entry().state}
@@ -256,8 +242,12 @@ export function SidebarAttentionPanel(
   let panel!: HTMLElement;
   const focus = createSidebarAttentionFocus(() => panel);
   onSettled(() => {
+    const releaseModal = registerModalSurface(panel);
     props.focusRef?.(focus);
-    return () => props.focusRef?.(null);
+    return () => {
+      props.focusRef?.(null);
+      releaseModal();
+    };
   });
   const mentions = projectMentions(mentionSource);
   const gateway = projectGateway(context.gateway);
@@ -277,7 +267,9 @@ export function SidebarAttentionPanel(
     visibleEntries().flatMap((entry) => (entry.type === "mention" ? [entry.mention.id] : [])),
   );
   const mentionDismissals = createMemo(() =>
-    visibleMentions().filter((id) => !mentions.read().dismissing.includes(id)),
+    canCallGatewayMethod(gateway.read().snapshot, "mentions.dismiss", "operator.read")
+      ? visibleMentions().filter((id) => !mentions.read().dismissing.includes(id))
+      : [],
   );
   const hasVisibleDismissals = createMemo(
     () => visibleDismissals().length > 0 || visibleMentions().length > 0,
@@ -416,7 +408,6 @@ export function SidebarAttentionPanel(
               role="tabpanel"
               aria-labelledby={`sidebar-issues-tab-${props.selectedTab}`}
               tabindex={0}
-              onScroll={() => props.onScroll()}
             >
               <Show when={showMentionStatus()}>
                 <div class="sidebar-issues-panel__mentions-note" role="status">

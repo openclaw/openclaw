@@ -27,7 +27,6 @@ import { runReplyAgent } from "./agent-runner-run.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
-import { createQueueTestRun } from "./queue.test-helpers.js";
 import { clearSessionQueues } from "./queue/cleanup.js";
 import { getExistingFollowupQueue } from "./queue/state.js";
 import {
@@ -35,6 +34,7 @@ import {
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
 import { withQuestionCreator } from "./reply-run-question.test-support.js";
+import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 import { prepareSteeringDelivery } from "./steering-delivery-preparation.js";
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -253,7 +253,7 @@ describe("question response custody through reply adoption", () => {
                   shouldFollowup: false,
                   isActive: true,
                   typing,
-                  sessionCtx: {},
+                  sessionCtx: { Provider: run.run.messageProvider, SenderId: run.run.senderId },
                   sessionKey: key,
                   defaultModel: "openai/gpt-test",
                   resolvedVerboseLevel: "off",
@@ -272,7 +272,7 @@ describe("question response custody through reply adoption", () => {
                   resolvedQueue: { mode: "steer", debounceMs: 0 },
                   restartRecoverySourceTurnId: run.messageId,
                   runFollowup: followup,
-                  sessionCtx: {},
+                  sessionCtx: { Provider: run.run.messageProvider, SenderId: run.run.senderId },
                   sessionKey: key,
                   storePath: receiptScope?.storePath,
                   touchActiveSessionEntry: async () => {},

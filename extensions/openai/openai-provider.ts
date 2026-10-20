@@ -2,7 +2,6 @@ import type {
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { LiveModelCatalogFetchGuard } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import {
   buildFamilyForwardCompatModel,
@@ -60,10 +59,9 @@ import {
   OPENAI_GPT_54_PRO_MODEL_ID,
   OPENAI_GPT_55_MODEL_ID,
   OPENAI_GPT_55_PRO_MODEL_ID,
-  OPENAI_GPT_56_LUNA_MODEL_ID,
   OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
-  OPENAI_GPT_56_TERRA_MODEL_ID,
+  OPENAI_GPT_56_VARIANT_MODEL_IDS,
   OPENAI_GPT_6_MODEL_IDS,
   OPENAI_GPT_61_SOL_MODEL_ID,
   OPENAI_PROVIDER_MODERN_MODEL_IDS,
@@ -140,11 +138,8 @@ const OPENAI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 
 type BuildOpenAILiveProviderConfigParams = {
   apiKey: string;
-  baseUrl?: string;
+  baseUrl: string;
   discoveryApiKey?: string;
-  env?: Record<string, string | undefined>;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
 };
 
 function buildOpenAIManifestModelsForBaseUrl(baseUrl: string): ModelDefinitionConfig[] {
@@ -174,8 +169,7 @@ function buildOpenAIStaticPlatformProviderConfig(
 async function buildOpenAILiveProviderConfig(
   params: BuildOpenAILiveProviderConfigParams,
 ): Promise<OpenAILiveProviderCatalog> {
-  const baseUrl =
-    normalizeOptionalString(params.baseUrl) ?? resolveOpenAIDefaultBaseUrl(params.env);
+  const baseUrl = params.baseUrl;
   const fallback = buildOpenAIStaticPlatformProviderConfig(params.apiKey, baseUrl);
   if (!isOpenAIApiBaseUrl(baseUrl)) {
     return { provider: fallback };
@@ -215,8 +209,6 @@ async function buildOpenAILiveProviderConfig(
       models: catalogModels,
       apiKey: params.apiKey,
       discoveryApiKey: params.discoveryApiKey,
-      fetchGuard: params.fetchGuard,
-      signal: params.signal,
       ttlMs: OPENAI_MODELS_CACHE_TTL_MS,
       auditContext: "openai-model-discovery",
     });
@@ -367,8 +359,6 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
   catalogContext?: OpenAICodexModelsEndpointContext;
-  fetchGuard?: LiveModelCatalogFetchGuard;
-  signal?: AbortSignal;
 }): Promise<OpenAILiveProviderCatalog> {
   const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   const { getCachedLiveCatalogValue } = await import("openclaw/plugin-sdk/provider-catalog-shared");
@@ -376,7 +366,6 @@ async function buildOpenAICodexLiveProviderConfig(params: {
   const endpoint = await resolveOpenAICodexModelsEndpoint(params.catalogContext);
   try {
     return await getCachedLiveCatalogValue({
-      signal: params.signal,
       ttlMs: OPENAI_CODEX_MODELS_CACHE_TTL_MS,
       keyParts: [
         PROVIDER_ID,
@@ -390,7 +379,6 @@ async function buildOpenAICodexLiveProviderConfig(params: {
           providerId: PROVIDER_ID,
           endpoint,
           discoveryApiKey: params.discoveryApiKey,
-          fetchGuard: params.fetchGuard,
           signal,
           auditContext: "openai-model-discovery",
           readRows: readCodexModelRows,
@@ -552,12 +540,7 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
     patch: { reasoning: false, cost: OPENAI_CHAT_LATEST_COST, contextWindow: 400_000 },
   },
   {
-    match: [
-      OPENAI_GPT_56_MODEL_ID,
-      OPENAI_GPT_56_SOL_MODEL_ID,
-      OPENAI_GPT_56_TERRA_MODEL_ID,
-      OPENAI_GPT_56_LUNA_MODEL_ID,
-    ],
+    match: [OPENAI_GPT_56_MODEL_ID, ...OPENAI_GPT_56_VARIANT_MODEL_IDS],
     templateIds: [OPENAI_GPT_55_MODEL_ID],
   },
   {
@@ -584,9 +567,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
   if (
     OPENAI_DAYBREAK_MODEL_IDS.some((id) => id === modelId) ||
     OPENAI_GPT_6_MODEL_IDS.some((id) => id === modelId) ||
-    modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
-    modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
-    modelId === OPENAI_GPT_56_LUNA_MODEL_ID
+    OPENAI_GPT_56_VARIANT_MODEL_IDS.some((id) => id === modelId)
   ) {
     if (exactModel) {
       return exactModel;

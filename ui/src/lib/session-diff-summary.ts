@@ -2,6 +2,7 @@ import type { SessionsDiffResult } from "../../../packages/gateway-protocol/src/
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
+import { listen } from "./reactive/listener.ts";
 
 type Summary = { fileCount: number; additions: number; deletions: number; truncated: boolean };
 type Snapshot = { summary: Summary | null; stale: boolean; unavailable: boolean };
@@ -16,7 +17,6 @@ type Input = {
 };
 const empty = (): Entry => ({ summary: null, stale: false, unavailable: false });
 
-/** Details owns a small metadata cache; the full Review diff has a separate lifetime. */
 export function createSessionDiffSummary(document: Document, isConnected = () => true) {
   let input: Input | undefined;
   let gateway: ApplicationGateway | undefined;
@@ -25,14 +25,12 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
   let unsubscribe: (() => void) | undefined;
   let current = empty();
   const entries = new Map<string, Entry>();
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let pending = false;
   let disposed = false;
   const publish = () => {
-    for (const listener of listeners) {
-      listener();
-    }
+    render?.();
   };
   const clearTimer = () => {
     clearTimeout(timer);
@@ -161,15 +159,15 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
     }
     schedule();
   }
-  document.addEventListener("visibilitychange", schedule);
+  const stopVisibility = listen(document, "visibilitychange", schedule);
   return {
     get snapshot(): Snapshot {
       return current;
     },
     subscribe(listener: () => void) {
-      listeners.add(listener);
+      render = listener;
       return () => {
-        listeners.delete(listener);
+        render = undefined;
       };
     },
     update(next: Input) {
@@ -183,6 +181,7 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
         entries.clear();
         gateway = next.gateway;
         lifecycle = gateway ? createGatewayConnectionLifecycle(gateway.snapshot) : undefined;
+        // Gateway receipts invalidate this Details metadata cache; the full Review diff has a separate lifetime.
         unsubscribe = gateway?.subscribe(connectionChanged);
       }
       select();
@@ -193,9 +192,9 @@ export function createSessionDiffSummary(document: Document, isConnected = () =>
       clearTimer();
       unsubscribe?.();
       lifecycle?.dispose();
-      document.removeEventListener("visibilitychange", schedule);
+      stopVisibility();
       entries.clear();
-      listeners.clear();
+      render = undefined;
     },
   };
 }

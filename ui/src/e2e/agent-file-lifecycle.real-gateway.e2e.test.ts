@@ -236,11 +236,18 @@ catalogSuite.define(() => {
           await option("fixture/selected").click();
           const selected = () => pickerValue(picker);
           await expect.poll(selected).toBe("fixture/selected");
-          const fallbackInput = editor.locator("openclaw-multi-select.agent-fallbacks input");
+          await expect.poll(() => readConfig("agents.entries.main.model")).toBe("fixture/selected");
+          const fallbacks = editor.locator("openclaw-multi-select.agent-fallbacks");
+          const fallbackInput = fallbacks.locator("input");
+          await expect.poll(() => fallbackInput.isEnabled()).toBe(true);
           await fallbackInput.fill("fixture/anchor");
-          await fallbackInput.press("Enter");
+          await fallbacks.locator('[role="option"][data-value="fixture/anchor"]').click();
+          await expect
+            .poll(() =>
+              fallbacks.locator('.multi-select__chip[data-value="fixture/anchor"]').isVisible(),
+            )
+            .toBe(true);
           await expect.poll(selected).toBe("fixture/selected");
-          await expect.poll(() => mutations.length).toBeGreaterThan(0);
           const selectedModel = { primary: "fixture/selected", fallbacks: ["fixture/anchor"] };
           await expect.poll(() => readConfig("agents.entries.main.model")).toEqual(selectedModel);
           const writesBeforePublication = [...mutations];

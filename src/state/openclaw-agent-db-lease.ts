@@ -11,6 +11,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import type { SqliteIntegrityCheck } from "../infra/sqlite-integrity.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
 import { SqliteWorkerOpenRefusedError } from "../infra/sqlite-worker-contract.js";
@@ -254,7 +255,10 @@ export function releaseOpenClawAgentDatabaseLease(
     const db = getNodeSqliteKysely<AgentDatabaseLeaseDatabase>(database);
     const held = executeSqliteQueryTakeFirstSync(
       database,
-      db.selectFrom("agent_database_leases").select("path").where("lease_id", "=", leaseId),
+      db
+        .selectFrom("agent_database_leases")
+        .select(["path", "agent_id"])
+        .where("lease_id", "=", leaseId),
     );
     if (held && !closeOutcome) {
       clearAgentDatabaseLeaseVerifications(database, held.path);
@@ -280,11 +284,15 @@ export function releaseOpenClawAgentDatabaseLease(
       receipt = closeOutcome.publishSeal() ? "written" : "verification-missing";
     }
     const publish = () =>
-      log.info(`agent database clean-close receipt: ${receipt}`, {
-        path: held?.path,
-        leaseId,
-        receipt,
-      });
+      log.info(
+        `agent database clean-close receipt: ${receipt}; agent=${held?.agent_id ?? "unknown"}`,
+        {
+          agentId: held?.agent_id,
+          path: held?.path,
+          leaseId,
+          receipt,
+        },
+      );
     if (!deferSqlitePostCommitPublication(database, publish)) {
       publish();
     }
@@ -410,6 +418,11 @@ export function prepareOpenClawAgentDatabaseWorkerLease(
   provenance: string | null;
   validation?: OpenClawAgentDatabaseValidation;
   integrityRevoked?: boolean;
+  startupRepair?: (
+    check: SqliteIntegrityCheck,
+    error: unknown,
+    assertCurrent: () => void,
+  ) => boolean;
   claim(onVerification?: OpenClawAgentIntegrityVerificationReceiver): string;
 } {
   const database = { ...sharedDatabase };

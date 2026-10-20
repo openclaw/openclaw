@@ -7,6 +7,7 @@ import { claimPendingAgentQuestionAnswerFromCaller } from "../../agents/harness/
 import { readQuestionRejection } from "../../agents/tools/gateway-question-lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import { beginSessionControllerSourceInjection } from "../../sessions/session-controller.mailbox.js";
+import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
@@ -28,7 +29,7 @@ type ReplyQuestionInputParams = Pick<
 >;
 
 type ReplyQuestionInputResult =
-  | { handled: false }
+  | { handled: false; requesterMismatch?: true }
   | { handled: true; payload: ReplyPayload | undefined };
 
 /** Question-only runtimes accept answers without exposing ordinary steering. */
@@ -48,6 +49,7 @@ export async function runReplyQuestionInput(
     !sessionKey ||
     opts?.isHeartbeat ||
     params.resetTriggered ||
+    isExplicitFollowupCommandTurn(params.sessionCtx) ||
     opts?.messageInjectionDisposition === "accepted" ||
     !external ||
     !text ||
@@ -109,6 +111,9 @@ export async function runReplyQuestionInput(
           }
         },
       });
+      if (claimed === "requester-mismatch") {
+        return { handled: false, requesterMismatch: true };
+      }
       if (!claimed) {
         return { handled: false };
       }

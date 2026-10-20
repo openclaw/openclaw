@@ -268,12 +268,12 @@ export function registerReplyAdmissionCases({
         storePath,
       },
     });
+    onTestFinished(() => authorized.authorization?.release?.());
     expect(authorized.error).toBeNull();
     const authority = expectDefined(
       authorized.authorization,
       "session-backed retirement authority",
     );
-    onTestFinished(() => authority.release?.());
     duplicate.followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId,
       scopes,

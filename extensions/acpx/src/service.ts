@@ -184,10 +184,9 @@ async function reapOpenAcpxProcessLeases(params: {
   gatewayInstanceId: string;
   leaseStore: AcpxProcessLeaseStore;
   assertCurrent?: () => void;
-}): Promise<{ inspectedPids: number[]; terminatedPids: number[] }> {
+}): Promise<{ terminatedPids: number[] }> {
   const { assertCurrent } = params;
   const leases = await params.leaseStore.listOpen(params.gatewayInstanceId);
-  const inspectedPids: number[] = [];
   const terminatedPids: number[] = [];
   const legacyWrapperRoots = new Set<string>();
   for (const lease of leases) {
@@ -211,7 +210,6 @@ async function reapOpenAcpxProcessLeases(params: {
           wrapperRoot: lease.wrapperRoot,
           assertCurrent,
         });
-    inspectedPids.push(...result.inspectedPids);
     terminatedPids.push(...result.terminatedPids);
     // A missing probe wrapper cannot prove its detached adapter descendants
     // exited because those descendants do not carry the lease arguments.
@@ -236,10 +234,9 @@ async function reapOpenAcpxProcessLeases(params: {
       wrapperRoot,
       assertCurrent,
     });
-    inspectedPids.push(...legacyResult.inspectedPids);
     terminatedPids.push(...legacyResult.terminatedPids);
   }
-  return { inspectedPids, terminatedPids };
+  return { terminatedPids };
 }
 
 export function createAcpxRuntimeService(
@@ -249,9 +246,7 @@ export function createAcpxRuntimeService(
 } {
   let runtime: AcpxRuntimeLike | null = null;
   let recoverProcesses:
-    | ((
-        assertCurrent: () => void,
-      ) => Promise<{ inspectedPids: number[]; terminatedPids: number[] }>)
+    | ((assertCurrent: () => void) => Promise<{ terminatedPids: number[] }>)
     | undefined;
   let recoveryPromise: Promise<void> | undefined;
   let lifecycleRevision = 0;

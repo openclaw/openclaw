@@ -152,13 +152,6 @@ describe("source reply settlement across provider retries", () => {
         agentAccountId: "default",
         messageActionTurnCapability: capability,
         sourceReplyDeliveryMode: "automatic",
-        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-          resolvedConfig,
-          diagnostics: [],
-          targetStatesByPath: {},
-          hadUnresolvedTargets: false,
-        }),
       });
       let attempts = 0;
       runAttempt.mockImplementation(async (params) => {

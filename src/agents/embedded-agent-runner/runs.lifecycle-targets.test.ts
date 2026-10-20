@@ -181,9 +181,11 @@ describe("native lifecycle admission and cancellation", () => {
         sessionKey,
         embeddedRunToolAuthorityBinding: () => ({
           source: "attempt",
+          acceptsRequesterOrigin: () => false,
           detached: true,
           project: () => undefined,
           projectAsync: async () => undefined,
+          assertRegistrationActive: assertActive,
           assertActive,
         }),
       },

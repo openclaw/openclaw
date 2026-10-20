@@ -1,6 +1,9 @@
+import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNonExitingRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
 import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
+
+vi.mock("node:timers/promises", { spy: true });
 
 const readyResult = {
   status: "ready" as const,
@@ -19,8 +22,9 @@ const busyResult = {
 };
 
 describe("gateway suspend CLI", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => vi.resetAllMocks());
   afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => vi.restoreAllMocks());
 
   it("prints a ready lease without exposing remote credentials in the resume hint", async () => {
     const callGateway = vi.fn(async () => readyResult);
@@ -104,13 +108,14 @@ describe("gateway suspend CLI", () => {
       .mockResolvedValueOnce(busyResult)
       .mockResolvedValueOnce(readyResult);
     let now = 1_000;
-    const sleep = vi.fn(async (delayMs: number) => {
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.mocked(sleep).mockImplementation(async (delayMs = 0) => {
       now += delayMs;
     });
 
     await runGatewaySuspend(
       { rpcOpts: {}, requestId: "host-operation", waitSeconds: "2" },
-      { callGateway, runtime: createNonExitingRuntimeEnv(), nowMs: () => now, sleep },
+      { callGateway, runtime: createNonExitingRuntimeEnv() },
     );
 
     expect(sleep).toHaveBeenCalledExactlyOnceWith(200);
@@ -138,20 +143,17 @@ describe("gateway suspend CLI", () => {
 
   it("never issues another prepare after a sleep overshoots the deadline", async () => {
     let now = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.mocked(sleep).mockImplementation(async () => {
+      // A lagging clock can wake far past the advertised --wait window.
+      now += 10_000;
+    });
     const callGateway = vi.fn(async () => busyResult);
 
     await expect(
       runGatewaySuspend(
         { rpcOpts: {}, requestId: "host-operation", waitSeconds: "0.2" },
-        {
-          callGateway,
-          runtime: createNonExitingRuntimeEnv(),
-          nowMs: () => now,
-          sleep: async () => {
-            // A lagging clock can wake far past the advertised --wait window.
-            now += 10_000;
-          },
-        },
+        { callGateway, runtime: createNonExitingRuntimeEnv() },
       ),
     ).rejects.toThrow(
       "Gateway suspension is busy (active-work; 1 active).\nBlockers:\n- 1 active request\nTimed out waiting for the Gateway to become idle.",

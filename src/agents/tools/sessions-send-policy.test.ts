@@ -22,6 +22,7 @@ import {
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import { truncateToolResultMessage } from "../embedded-agent-runner/tool-result-truncation.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
+import * as inProcessGateway from "./in-process-gateway.js";
 import { createSessionStatusTool } from "./session-status-tool.js";
 import { createSessionsHistoryTool } from "./sessions-history-tool.js";
 import { createSessionsListTool } from "./sessions-list-tool.js";
@@ -248,6 +249,39 @@ describe("sessions_send directed policy at the tool boundary", () => {
   afterAll(async () => {
     restoreActivePluginRegistrySnapshot(originalRegistry);
     await state.cleanup();
+  });
+
+  it("prefers sessionKey over a redundant label without trimming the message", async () => {
+    const config = configFor({ send: ["worker"] });
+    setRuntimeConfigSnapshot(config);
+    const result = await createSessionsSendTool({
+      config,
+      agentSessionKey: requesterKey,
+      callGateway,
+      idempotencyKey: runId,
+    }).execute("send-policy-key-label", {
+      sessionKey: workerKey,
+      label: "stale-label",
+      message: "    indented body",
+      timeoutSeconds: 1,
+    });
+
+    expect(result.details).toMatchObject({ status: "ok", sessionKey: workerKey });
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          sessionKey: workerKey,
+          message: expect.stringMatching(/\n {4}indented body$/u),
+        }),
+      }),
+    );
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.resolve",
+        params: expect.objectContaining({ label: "stale-label" }),
+      }),
+    );
   });
 
   it("sends by session ID under self visibility and returns only that run's reply", async () => {
@@ -526,9 +560,18 @@ describe("sessions_send directed policy at the tool boundary", () => {
       query: "private",
     });
     expect(search.details).toMatchObject({ status: "forbidden" });
-    await expect(
-      createSessionStatusTool(options).execute("status", { sessionKey: workerKey }),
-    ).rejects.toThrow("visibility");
+    const statusGateway = vi
+      .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
+      .mockImplementation(callGateway);
+    try {
+      await expect(
+        createSessionStatusTool({ config, agentSessionKey: requesterKey }).execute("status", {
+          sessionKey: workerKey,
+        }),
+      ).rejects.toThrow("visibility");
+    } finally {
+      statusGateway.mockRestore();
+    }
     expectNoDispatch();
     expect(gatewayMethods()).not.toContain("sessions.search");
     expect(gatewayMethods()).not.toContain("chat.history");

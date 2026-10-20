@@ -94,25 +94,36 @@ export function ChatSummaryAutomations(props: Props) {
     publish();
   }
 
-  async function load(append = false, retry?: HTMLButtonElement, isPresented = presented()) {
+  async function load({
+    append = false,
+    retry,
+    isPresented = presented(),
+    event,
+  }: {
+    append?: boolean;
+    retry?: HTMLButtonElement;
+    isPresented?: boolean;
+    event?: unknown;
+  } = {}) {
     const current = cron;
     if (
       !readAccess ||
       !visible(isPresented) ||
       !current.connected ||
       !current.cronSessionFilter ||
-      current.cronLoading ||
-      current.cronJobsLoadingMore
+      ((current.cronLoading || current.cronJobsLoadingMore) && !dirty)
     ) {
       return;
     }
     dirty = false;
-    const pending = loadCompactCronJobsPage(current, { append });
+    const pending = loadCompactCronJobsPage(current, { append, event });
     publish();
     await pending;
     if (cron !== current || !active || !host.isConnected) {
       return;
     }
+    // The loader pauses trailing reads while hidden; retain one visible catch-up.
+    dirty ||= !visible();
     showError = current.cronJobsError !== null;
     const restoreFocus = retry && visible() && host.ownerDocument.activeElement === retry;
     publish();
@@ -171,7 +182,7 @@ export function ChatSummaryAutomations(props: Props) {
       const unsubscribeEvents = source.subscribeEvents((event) => {
         if (current() && event.event === "cron") {
           dirty = true;
-          void load();
+          void load({ event: event.payload });
         }
       });
       void load();
@@ -185,7 +196,7 @@ export function ChatSummaryAutomations(props: Props) {
   }
   function PresentedLifetime() {
     onSettled(() => {
-      void load(false, undefined, true);
+      void load({ isPresented: true });
       return () => {
         dirty = true;
       };
@@ -278,7 +289,7 @@ export function ChatSummaryAutomations(props: Props) {
             type="button"
             class="chip chat-summary__automation-retry"
             aria-disabled={loading() || !state().connected ? "true" : "false"}
-            onClick={(event) => void load(false, event.currentTarget)}
+            onClick={(event) => void load({ retry: event.currentTarget })}
           >
             {t("common.retry")}
           </button>
@@ -304,7 +315,7 @@ export function ChatSummaryAutomations(props: Props) {
           type="button"
           class="chip chat-summary__automation-more"
           disabled={loading() || !state().connected}
-          onClick={() => void load(true)}
+          onClick={() => void load({ append: true })}
         >
           {t("chat.sessionDetails.automationMore")}
         </button>
@@ -336,12 +347,4 @@ export function ChatSummaryAutomations(props: Props) {
       </Show>
     </openclaw-chat-summary-automations>
   );
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-summary-automations": HTMLAttributes<HTMLElement>;
-    }
-  }
 }

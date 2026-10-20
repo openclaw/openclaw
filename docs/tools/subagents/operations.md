@@ -104,6 +104,16 @@ and cannot authorize execution by itself. Missing, invalid, or revoked evidence 
 the interrupted result available for inspection; recovery never substitutes system
 authority. Start a new authorized requester turn to continue that work.
 
+Children spawned by a recovered requester retain its authority after that requester
+yields or finishes. They remain subject to the original scope ceiling and current
+policy; credential rotation or other source revocation still stops them.
+
+Shared-token and password owner connections, including CLI/backend requests,
+retain this evidence too. Recovery requires the same shared authentication
+generation and method; rotating the credential or changing authentication mode
+refuses the old continuation. Nested requesters inherit the admitted owner's
+evidence and cannot widen its scope ceiling.
+
 Legacy completions without saved operator evidence record permanent non-delivery
 once, including requester-settle wakes and yielded runs without a final outcome.
 Recovery clears the unavailable wake while preserving execution results and any
@@ -118,6 +128,10 @@ completed requester turn without executing or delivering it again. Unfinished
 main-session turns continue through normal restart recovery with the original
 operator restrictions. If the original authority is unavailable, the task stays
 owed instead of running with broader permissions.
+
+Completion replay uses the same captured requester identity as the original
+input. Optional fields absent from that identity stay absent after reload, so
+an already committed completion is reconciled without appending another notice.
 
 An already-admitted completion turn for a yielded nested requester is different
 from an orphaned child launch. Its frozen child-result batch retains the exact
@@ -172,6 +186,10 @@ The parent can inspect a retained child transcript and use `sessions_send` to
 continue that session, or spawn a replacement after confirming the old execution
 has stopped. Reusing a child restores its conversation context; it does not replay
 an interrupted command. Existing cleanup and retention settings still apply.
+An accepted follow-up keeps its restored operator authority when the earlier
+completion settles; it does not depend on that completed run remaining active.
+Requester resets, Gateway shutdown, and operator access revocation still stop
+the retained authority.
 
 When a detached cleanup attempt logs `subagent cleanup finalize failed`, its
 retries use bounded backoff in the current Gateway process. If those retries are

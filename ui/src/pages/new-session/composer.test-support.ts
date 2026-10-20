@@ -8,6 +8,7 @@ import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import {
   createNewSessionComposerTextarea,
   type NewSessionComposerTextarea,
@@ -103,7 +104,6 @@ export function renderComposer(
     nativeTerminal: overrides.nativeTerminal,
     onUnsupportedAttachment: overrides.onUnsupportedAttachment,
     submitting: overrides.submitting ?? false,
-    composerTextarea,
     messageLocked: overrides.messageLocked,
     onInput: (next) => {
       message = next;
@@ -115,7 +115,7 @@ export function renderComposer(
     onBackgroundSubmit: overrides.onBackgroundSubmit,
   });
   const renderCurrent = () => mounted.rerender();
-  const mounted = mountNewSessionComposer(currentOptions, container);
+  const mounted = mountNewSessionComposer(currentOptions, composerTextarea, container);
   const composer = container.querySelector<HTMLElement>(".new-session-page__composer");
   if (!composer) {
     throw new Error("Expected new-session composer");
@@ -156,6 +156,7 @@ export function resetComposerTestFixtures() {
 
 export function mountNewSessionComposer(
   read: () => NewSessionComposerOptions,
+  textarea: NewSessionComposerTextarea,
   container: HTMLElement,
 ) {
   let update: (options: NewSessionComposerOptions) => void;
@@ -169,7 +170,16 @@ export function mountNewSessionComposer(
         },
       });
     },
-    { container },
+    {
+      container,
+      wrapper: (props) =>
+        createComponent(NewSessionComposerTextareaContext, {
+          value: textarea,
+          get children() {
+            return props.children;
+          },
+        }),
+    },
   );
   return {
     ...mounted,

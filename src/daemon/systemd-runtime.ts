@@ -3,7 +3,6 @@ import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
-/** systemd service enabled-state and runtime inspection. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import { withServiceInspectionBudget } from "./service-inspection-budget.js";

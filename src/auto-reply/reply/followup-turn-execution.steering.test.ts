@@ -307,7 +307,7 @@ describe("queued turn steering", () => {
             profileId: "maintainer",
           }),
         }),
-      ).resolves.toMatchObject({ status: "accepted" });
+      ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       await expect(
         inject("Change tool permissions", { ...overlay, disableTools: true }),
       ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
@@ -322,7 +322,7 @@ describe("queued turn steering", () => {
           }),
         ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       }
-      expect(queueMessage).toHaveBeenCalledTimes(2);
+      expect(queueMessage).toHaveBeenCalledOnce();
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });
     try {

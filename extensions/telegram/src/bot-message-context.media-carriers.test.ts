@@ -8,7 +8,7 @@ vi.mock("./sticker-vision.runtime.js", () => ({
 }));
 
 describe("buildTelegramMessageContext media carriers", () => {
-  it("carries direct tool policy into a topic-bound admitted turn", async () => {
+  it("preserves direct conversation facts for policy admission after a topic-bound message", async () => {
     const context = await buildTelegramMessageContextForTest({
       message: {
         chat: { id: 42, type: "private", first_name: "Ada" },
@@ -29,8 +29,12 @@ describe("buildTelegramMessageContext media carriers", () => {
     });
 
     expect(context?.ctxPayload).toMatchObject({
-      ConversationToolPolicy: { deny: ["exec"] },
+      ChatId: "42",
+      ChatType: "direct",
+      SenderId: "42",
+      MessageThreadId: 7,
     });
+    expect(context?.ctxPayload.ConversationToolPolicy).toBeUndefined();
   });
 
   it("keeps immediate native sticker kind ahead of MIME and deeper reply media", async () => {

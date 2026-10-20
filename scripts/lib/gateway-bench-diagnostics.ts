@@ -1,6 +1,8 @@
 import { channel } from "node:diagnostics_channel";
 import {
+  constants,
   createHistogram,
+  monitorEventLoopDelay,
   performance,
   PerformanceObserver,
   type RecordableHistogram,
@@ -12,9 +14,16 @@ const CHANNELS = [
   "openclaw.session.write",
   "openclaw.session.list",
   "openclaw.worker.task",
+  "openclaw.gateway.request.stages",
+  "openclaw.git.operation",
+  "openclaw.gateway.rpc",
 ] as const;
+const sources = CHANNELS.map((name) => [name, channel(name)] as const);
 const METRICS = [
   "elapsedMs",
+  "durationMs",
+  "admissionMs",
+  "responseBytes",
   "threadCpuMs",
   "inputChars",
   "patternCount",
@@ -56,6 +65,13 @@ const PHASES = [
   "visibilityRepair",
   "response",
   "handlerExit",
+  "resolve",
+  "repository",
+  "managedBase",
+  "git",
+  "scopedRead",
+  "load",
+  "send",
 ] as const;
 
 const MAX_HISTOGRAMS = 256;
@@ -100,6 +116,10 @@ function summarizeMetrics(metrics: Record<string, Metric>) {
 /** Bounded numeric aggregates for the benchmark's main isolate; profiles cover workers. */
 export function startGatewayBenchDiagnostics() {
   const startedAt = performance.now();
+  const startedAtEpochMs = performance.timeOrigin + startedAt;
+  const startedAtMonotonicMicros = Number(process.hrtime.bigint() / 1_000n);
+  const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+  eventLoopDelay.enable();
   const groups = new Map<string, Group>();
   let droppedEvents = 0;
   let collectionErrors = 0;
@@ -136,8 +156,7 @@ export function startGatewayBenchDiagnostics() {
     // Offset by one because histograms accept only positive integers; zero stays zero.
     metric.histogram.record(Math.round(Math.min(value, MAX_DURATION_MS) * HISTOGRAM_SCALE) + 1);
   };
-  const subscriptions = CHANNELS.map((name) => {
-    const source = channel(name);
+  const subscriptions = sources.map(([name, source]) => {
     const listener = (message: unknown) => {
       // Node forwards subscriber throws to uncaughtException. Keep capture failures local.
       try {
@@ -149,11 +168,15 @@ export function startGatewayBenchDiagnostics() {
           return;
         }
         const outcome =
-          message.outcome === "ok" || message.outcome === "error" || message.outcome === "failed"
-            ? message.outcome
-            : message.responseOutcome === "ok"
-              ? "ok"
-              : "error";
+          name === "openclaw.gateway.request.stages" || name === "openclaw.gateway.rpc"
+            ? "observed"
+            : message.outcome === "ok" ||
+                message.outcome === "error" ||
+                message.outcome === "failed"
+              ? message.outcome
+              : message.responseOutcome === "ok"
+                ? "ok"
+                : "error";
         const cacheRole = [
           "unreached",
           "completed-hit",
@@ -193,10 +216,24 @@ export function startGatewayBenchDiagnostics() {
     return () => source.unsubscribe(listener);
   });
   const gc: Record<string, Metric> = {};
-  const collectGc = (entries: readonly { startTime: number; duration: number }[]) => {
+  const collectGc = (
+    entries: readonly { startTime: number; duration: number; detail?: unknown }[],
+  ) => {
     for (const entry of entries) {
       if (entry.startTime >= startedAt) {
         add(gc, "durationMs", entry.duration);
+        const kind = isRecord(entry.detail) ? entry.detail.kind : undefined;
+        const name =
+          kind === constants.NODE_PERFORMANCE_GC_MAJOR
+            ? "major"
+            : kind === constants.NODE_PERFORMANCE_GC_MINOR
+              ? "minor"
+              : kind === constants.NODE_PERFORMANCE_GC_INCREMENTAL
+                ? "incremental"
+                : kind === constants.NODE_PERFORMANCE_GC_WEAKCB
+                  ? "weakCallback"
+                  : "unknown";
+        add(gc, `${name}DurationMs`, entry.duration);
       }
     }
   };
@@ -204,6 +241,7 @@ export function startGatewayBenchDiagnostics() {
   observer.observe({ entryTypes: ["gc"] });
   return () => {
     const endedAt = performance.now();
+    eventLoopDelay.disable();
     for (const unsubscribe of subscriptions) {
       unsubscribe();
     }
@@ -211,7 +249,16 @@ export function startGatewayBenchDiagnostics() {
     observer.disconnect();
     return {
       scope: "main-isolate",
+      startedAtEpochMs,
+      startedAtMonotonicMicros,
+      endedAtEpochMs: performance.timeOrigin + endedAt,
       durationMs: endedAt - startedAt,
+      eventLoopDelay: {
+        resolutionMs: 20,
+        count: eventLoopDelay.count,
+        maxMs: eventLoopDelay.max / 1_000_000,
+        p99Ms: eventLoopDelay.count ? eventLoopDelay.percentile(99) / 1_000_000 : null,
+      },
       droppedEvents,
       collectionErrors,
       droppedHistogramSamples,

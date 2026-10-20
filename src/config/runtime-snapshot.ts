@@ -121,7 +121,6 @@ export type RuntimeConfigSnapshotMetadata = {
   revision: number;
   fingerprint: string;
   sourceFingerprint: string | null;
-  updatedAtMs: number;
 };
 
 let runtimeConfigSnapshot: OpenClawConfig | null = null;
@@ -223,7 +222,6 @@ function publishRuntimeConfigSnapshot(
     revision: ++runtimeConfigSnapshotRevision,
     fingerprint: configFact.fingerprint,
     sourceFingerprint: sourceConfig ? sourceFact.fingerprint : null,
-    updatedAtMs: Date.now(),
   };
   const scope = runtimeSessionPublicationChangeScope({
     previousRuntimeConfig: runtimeConfigSnapshot,
@@ -562,7 +560,6 @@ export async function loadPinnedRuntimeConfigAsync(
     if (runtimeConfigSnapshot) {
       return result(runtimeConfigSnapshot);
     }
-    assertCurrent();
     const commit = await prepareRuntimeConfigSnapshot(
       config,
       { env: runtimeEnv?.env },
@@ -572,7 +569,6 @@ export async function loadPinnedRuntimeConfigAsync(
     if (runtimeConfigSnapshot) {
       return result(runtimeConfigSnapshot);
     }
-    assertCurrent();
     const publication = runtimeEnv?.publish();
     try {
       assertCurrent();

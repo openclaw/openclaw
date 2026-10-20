@@ -1,3 +1,4 @@
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
   aggregatePluginRuntimeCloseErrors,
@@ -39,10 +40,6 @@ class PreparedRegistryResources {
   ) {
     state.views.add(this);
     state.registries.set(acquired.registry, this);
-    void this.completion.promise.then(
-      () => state.views.delete(this),
-      () => {},
-    );
   }
 
   get primaryRegistry(): PluginRegistry {
@@ -98,6 +95,7 @@ class PreparedRegistryResources {
             ),
           );
         } else {
+          state.views.delete(this);
           this.completion.resolve();
         }
       })();
@@ -227,10 +225,5 @@ export async function closeEphemeralPreparedModelRuntimeResources(): Promise<voi
       }
     }),
   );
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Prepared plugin resources failed to close");
-  }
+  throwSettledAggregate(results, "Prepared plugin resources failed to close");
 }

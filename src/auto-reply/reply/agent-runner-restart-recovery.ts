@@ -7,6 +7,7 @@ import {
 import {
   acquireReplyOperationSessionActor,
   getReplyOperationSessionTarget,
+  lifecycleAdmissionByOperation,
 } from "../../sessions/session-controller.state.js";
 import {
   resolveReplyRunDeliveryContext,
@@ -55,6 +56,7 @@ export function createReplyAgentRestartRecoveryController(
   const admissionRunId = resolveReplyAdmissionRunId(sessionCtx);
   const recovery = createReplyRestartRecoveryClaimController({
     agentId: followupRun.run.agentId,
+    operationAdmission: lifecycleAdmissionByOperation.get(replyOperation),
     acquireSessionActor: async () => {
       const actor = await acquireReplyOperationSessionActor(replyOperation);
       if (!actor) {
@@ -67,6 +69,7 @@ export function createReplyAgentRestartRecoveryController(
       return { actor, target };
     },
     operatorAuthority: followupRun.operatorAuthority,
+    requesterOrigin: followupRun.run.requesterOrigin,
     inputProvenance: followupRun.run.inputProvenance,
     lifecycleGeneration: replyOperation.lifecycleGeneration,
     admissionRunId,

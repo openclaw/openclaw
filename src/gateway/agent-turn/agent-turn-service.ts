@@ -62,6 +62,8 @@ export function createAgentTurnService(
     replyExpectation,
     settleWakeReplay,
     assertAdmissionCurrent,
+    assertCancellationCurrent,
+    executionSource,
     assertInputCommitAllowed,
     hasCurrentClientAuthority,
     preflight,
@@ -90,7 +92,6 @@ export function createAgentTurnService(
     assertInputCommitAllowed?.();
     const respond: RespondFn = (ok, payload, error, meta) =>
       io.emitAcceptance([ok, payload, error], meta);
-    const runFacts = { ...preflight };
     const {
       request,
       cfg,
@@ -102,7 +103,7 @@ export function createAgentTurnService(
       isRestartRecoveryResumeRun,
       suppressVisibleSessionEffects,
       agentDedupeKeys,
-    } = runFacts;
+    } = preflight;
     // Cached replay returns before a new lifecycle generation is observed, matching
     // the idempotency path that preceded this service extraction.
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -118,6 +119,7 @@ export function createAgentTurnService(
       ...preflight,
       reconcileDurableInput,
       assertAdmissionCurrent,
+      assertCancellationCurrent,
       ownerConnId,
       ownerDeviceId,
       context,
@@ -379,7 +381,6 @@ export function createAgentTurnService(
             maintenanceConfig: sessionMaintenanceConfig,
             canonicalSessionAgentId: sessionAgentId,
             mainSessionKey,
-            sessionId,
             touchInteraction,
           } = preparedSession;
           let { entry } = preparedSession;
@@ -437,7 +438,10 @@ export function createAgentTurnService(
             threadId: recipientThreadId,
           });
           const explicitSessionKey = normalizeOptionalString(request.sessionKey);
-          const buildSessionPatch = (freshEntry: SessionEntry | undefined) =>
+          const buildSessionPatch = (
+            freshEntry: SessionEntry | undefined,
+            fallbackSessionId?: string,
+          ) =>
             buildAgentSessionPatch({
               ...preparedSession,
               freshEntry,
@@ -455,7 +459,7 @@ export function createAgentTurnService(
               expectedExistingSessionId,
               hasRestoredCronContinuation: restoredCronContinuationIdentity !== undefined,
               requestedSessionId,
-              fallbackSessionId: sessionId,
+              fallbackSessionId,
             });
           const patchBuild = preparedSession.freshChild
             ? {
@@ -473,8 +477,9 @@ export function createAgentTurnService(
             : await buildSessionPatch(entry);
           assertRequestCurrent();
           session.sessionEntry = entry;
-          session.resolvedSessionId =
-            mergeSessionEntry(entry, patchBuild.patch)?.sessionId ?? sessionId;
+          session.resolvedSessionId = mergeSessionEntry(entry, patchBuild.patch).sessionId;
+          // The initial patch owns the stable fallback for writer-side re-evaluation.
+          const fallbackSessionId = session.resolvedSessionId;
           session.admittedSessionId = session.resolvedSessionId ?? runId;
           resolvedSessionKey = canonicalSessionKey;
           resolvedSessionAgentId = sessionAgentId;
@@ -552,7 +557,7 @@ export function createAgentTurnService(
             suppressVisibleSessionEffects,
             restoredCronContinuationIdentity,
             initialPatchBuild: patchBuild,
-            buildSessionPatch,
+            buildSessionPatch: (freshEntry) => buildSessionPatch(freshEntry, fallbackSessionId),
             state: session,
             touchInteraction,
             requestedBestEffortDeliver,
@@ -595,7 +600,7 @@ export function createAgentTurnService(
         const { activeSessionAgentId } = delivery;
 
         const runParams = {
-          ...runFacts,
+          ...preflight,
           ...session,
           cfgForAgent,
           freshChild,
@@ -664,6 +669,7 @@ export function createAgentTurnService(
                 ...runParams,
                 ...session,
                 assertContextCurrent,
+                executionSource,
                 prepared: preparedDispatch,
                 mainRestartRecoveryOwnerLease,
                 agentId,

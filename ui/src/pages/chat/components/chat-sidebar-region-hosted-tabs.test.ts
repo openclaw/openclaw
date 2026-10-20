@@ -82,7 +82,11 @@ async function mount(
   shell.className = "sidebar-region";
   const outlet = document.createElement("div");
   outlet.className = "sidebar-region__right-runtime";
-  shell.append(region, outlet);
+  const header = document.createElement("div");
+  const primary = document.createElement("div");
+  primary.className = "sidebar-region__primary";
+  region.elements = { shell, primary, header, outlet };
+  shell.append(header, region, primary, outlet);
   document.body.append(shell);
   shells.push(shell);
   await region.updateComplete;

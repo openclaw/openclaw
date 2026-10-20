@@ -21,6 +21,7 @@ import { findUninspectedPluginDiagnostic } from "./discovery-availability.js";
 import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
 import {
   applyResolvedPluginDoctorCompatibilityMigrations,
+  type PluginDoctorCompatibilityOptions,
   type PluginDoctorCompatibilityResult,
 } from "./doctor-compatibility-migration.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
@@ -744,9 +745,7 @@ export function resolveLivePluginDoctorStateMigrationInventory(params: {
 
 export function applyPluginDoctorCompatibilityMigrations(
   cfg: OpenClawConfig,
-  params?: PluginDoctorRegistryParams & {
-    onInspectedPlugin?: (pluginId: string, hasConfigRepair: boolean) => void;
-  },
+  params?: PluginDoctorRegistryParams & PluginDoctorCompatibilityOptions,
 ): PluginDoctorCompatibilityResult {
   return applyResolvedPluginDoctorCompatibilityMigrations(
     cfg,

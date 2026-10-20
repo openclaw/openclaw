@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
 import {
@@ -25,6 +26,7 @@ import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import {
   publishServiceFile,
   matchesServiceFilePublication,
+  matchesServiceFileState,
   readServiceFileState,
   type GatewayServiceDefinitionTransactionHooks,
 } from "./service-stage.js";
@@ -187,10 +189,7 @@ export async function readExistingLaunchAgentPlist(
       await handle.close();
     }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return null;
-    }
-    throw error;
+    return ignoreMissingPath(error) ?? null;
   }
 }
 
@@ -234,7 +233,7 @@ export async function captureLaunchAgentInstallFiles(env: GatewayServiceEnv) {
     const expected = published.get(file);
     if (
       expected
-        ? !matchesServiceFilePublication(current, expected)
+        ? !matchesServiceFileState(current, expected)
         : !isDeepStrictEqual(current, originals.get(file)?.state)
     ) {
       throw new Error(`LaunchAgent artifact changed after capture or publication: ${file}`);

@@ -393,29 +393,45 @@ it("replays explicit cancellation before a retained accepted input marker", asyn
   );
 });
 
-it("transfers the pending input identity when an abort precedes active registration", async () => {
-  params.context.dedupe.set(params.session.pendingChatSendKey, {
-    ts: 100,
-    ok: true,
-    requestIdentity: params.request.requestIdentity,
-    payload: {
+it.each(["pending", "evicted", "superseded"] as const)(
+  "settles only the original input when aborting a %s reservation",
+  async (reservation) => {
+    const pending = {
+      ts: 100,
+      ok: true,
+      requestIdentity: params.request.requestIdentity,
+      payload: {
+        runId: params.session.clientRunId,
+        status: "accepted",
+        sessionKey: params.session.sessionKey,
+        attemptId: reservation === "superseded" ? "successor" : "attempt",
+      },
+    };
+    if (reservation !== "evicted") {
+      params.context.dedupe.set(params.session.pendingChatSendKey, pending);
+    }
+    const written = writePreRegisteredChatAbort({
+      context: params.context,
       runId: params.session.clientRunId,
-      status: "accepted",
-      sessionKey: params.session.sessionKey,
+      stopReason: "rpc",
       attemptId: "attempt",
-    },
-  });
-  writePreRegisteredChatAbort({
-    context: params.context,
-    runId: params.session.clientRunId,
-    stopReason: "rpc",
-    attemptId: "attempt",
-    endedAt: 200,
-  });
-  params.request.requestIdentity = "changed-after-abort";
-  await expectRetryConflict(params);
-  expect(params.context.dedupe.has(params.session.pendingChatSendKey)).toBe(false);
-});
+      requestIdentity: params.request.requestIdentity,
+      endedAt: 200,
+    });
+    if (reservation === "superseded") {
+      expect(written).toBe(false);
+      expect(params.context.chatRunState.hasAbortMarker(params.session.clientRunId)).toBe(false);
+      expect(params.context.dedupe.get(params.session.pendingChatSendKey)).toBe(pending);
+      expect(params.context.dedupe.has(`chat:${params.session.clientRunId}`)).toBe(false);
+      return;
+    }
+    expect(written).toBe(true);
+    expect(params.context.chatRunState.hasAbortMarker(params.session.clientRunId)).toBe(true);
+    params.request.requestIdentity = "changed-after-abort";
+    await expectRetryConflict(params);
+    expect(params.context.dedupe.has(params.session.pendingChatSendKey)).toBe(false);
+  },
+);
 
 it.each(["different", undefined])(
   "rejects a durable source retry with fingerprint %s",

@@ -157,57 +157,6 @@ async function fetchChutesUserInfo(params: {
   }
 }
 
-async function exchangeChutesCodeForTokens(params: {
-  app: ChutesOAuthAppConfig;
-  code: string;
-  codeVerifier: string;
-  signal?: AbortSignal;
-}): Promise<ChutesStoredOAuth> {
-  const now = Date.now();
-  const body = new URLSearchParams({
-    grant_type: "authorization_code",
-    client_id: params.app.clientId,
-    code: params.code,
-    redirect_uri: params.app.redirectUri,
-    code_verifier: params.codeVerifier,
-  });
-  if (params.app.clientSecret) {
-    body.set("client_secret", params.app.clientSecret);
-  }
-
-  const token = await requestChutesTokenGrant({
-    body,
-    responseLabel: "Chutes token exchange",
-    now,
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-  if (!token.refresh) {
-    throw new Error("Chutes token exchange returned no refresh_token");
-  }
-
-  let info: ChutesUserInfo | null = null;
-  try {
-    info = await fetchChutesUserInfo({
-      accessToken: token.access,
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
-  } catch (error) {
-    if (params.signal?.aborted) {
-      throw error;
-    }
-    // Token exchange completes authentication; optional profile enrichment must
-    // not discard issued credentials when userinfo is unavailable or times out.
-  }
-  return {
-    access: token.access,
-    refresh: token.refresh,
-    expires: token.expires,
-    email: info?.username,
-    accountId: info?.sub,
-    clientId: params.app.clientId,
-  };
-}
-
 /** Refreshes a stored Chutes OAuth credential through the provider token endpoint. */
 export async function refreshChutesOAuthCredential(
   credential: OAuthCredential,
@@ -306,10 +255,49 @@ export async function loginChutes(params: {
   }
 
   params.onProgress?.("Exchanging code for tokens...");
-  return await exchangeChutesCodeForTokens({
-    app: params.app,
+  const app = params.app;
+  const signal = params.signal;
+  const now = Date.now();
+  const body = new URLSearchParams({
+    grant_type: "authorization_code",
+    client_id: app.clientId,
     code: codeAndState.code,
-    codeVerifier: verifier,
-    ...(params.signal ? { signal: params.signal } : {}),
+    redirect_uri: app.redirectUri,
+    code_verifier: verifier,
   });
+  if (app.clientSecret) {
+    body.set("client_secret", app.clientSecret);
+  }
+
+  const token = await requestChutesTokenGrant({
+    body,
+    responseLabel: "Chutes token exchange",
+    now,
+    ...(signal ? { signal } : {}),
+  });
+  if (!token.refresh) {
+    throw new Error("Chutes token exchange returned no refresh_token");
+  }
+
+  let info: ChutesUserInfo | null = null;
+  try {
+    info = await fetchChutesUserInfo({
+      accessToken: token.access,
+      ...(signal ? { signal } : {}),
+    });
+  } catch (error) {
+    if (signal?.aborted) {
+      throw error;
+    }
+    // Token exchange completes authentication; optional profile enrichment must
+    // not discard issued credentials when userinfo is unavailable or times out.
+  }
+  return {
+    access: token.access,
+    refresh: token.refresh,
+    expires: token.expires,
+    email: info?.username,
+    accountId: info?.sub,
+    clientId: app.clientId,
+  };
 }

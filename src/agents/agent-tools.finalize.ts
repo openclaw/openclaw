@@ -223,24 +223,25 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
       if (!normalizedSchema || !parameters || (entry.outputSource && !outputSchema)) {
         return undefined;
       }
-      const descriptor = Object.freeze({ ...entry.descriptor, parameters, outputSchema });
+      const descriptor = { ...entry.descriptor, parameters, outputSchema };
       if (!modelApi || modelApi === "openai-responses" || modelApi === "openai-completions") {
         prewarmOpenAISchema(descriptor, modelCompat);
       } else if (modelApi === "anthropic-messages") {
         prepareAnthropicInputSchema(parameters);
       }
-      return Object.freeze({
-        ...entry,
+      return {
+        source: entry.source,
+        outputSource: entry.outputSource,
         normalized: normalizedSchema,
         finalSource: entry.finalSource === entry.normalized ? normalizedSchema : entry.finalSource,
         descriptor,
-      });
+      };
     });
     // A late settlement may replace a newer entry; input matching makes that a cold miss.
     const snapshot = {
       key,
       pluginMetadataSnapshot,
-      entries: Object.freeze(prepared),
+      entries: prepared,
     };
     snapshots.delete(sessionId);
     snapshots.set(sessionId, snapshot);

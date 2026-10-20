@@ -5,6 +5,10 @@ import type {
 import { createWorkerOperationRegistry } from "./worker-operation-registry.js";
 
 const loaders = {
+  sandboxPersistentExec: () =>
+    import("../agents/sandbox/persistent-exec-store.worker.js").then(
+      (m) => m.sandboxPersistentExecOperations,
+    ),
   sandboxRegistry: () =>
     import("../agents/sandbox/registry-write.worker.js").then((m) => m.sandboxRegistryOperations),
   workspace: () =>

@@ -1,6 +1,7 @@
 // QA Lab Slack capture preserves transient message writes from the shared debug capture store.
 import { setTimeout as sleep } from "node:timers/promises";
 import type { AsyncDebugProxyCaptureReader } from "openclaw/plugin-sdk/proxy-capture";
+import { safeParseQaJson } from "../../json.js";
 import type { SlackObservedMessage } from "./slack-live.contracts.js";
 import { collectSlackBlockText } from "./slack-live.observations.js";
 
@@ -146,12 +147,8 @@ function parseSlackQaBlocks(value: unknown): unknown[] | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  try {
-    const parsed = JSON.parse(value) as unknown;
-    return Array.isArray(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+  const parsed = safeParseQaJson(value);
+  return Array.isArray(parsed) ? parsed : undefined;
 }
 
 function truncateSlackQaText(value: unknown): string | undefined {
@@ -179,9 +176,6 @@ async function parseSlackQaMessageWrite(params: {
     text: truncateSlackQaText(request.text) ?? "",
     ts,
     ...(blockText.length > 0 ? { blockText } : {}),
-    ...(typeof request.thread_ts === "string"
-      ? { threadTs: request.thread_ts.slice(0, SLACK_QA_MESSAGE_TEXT_MAX_CHARS) }
-      : {}),
   };
 }
 

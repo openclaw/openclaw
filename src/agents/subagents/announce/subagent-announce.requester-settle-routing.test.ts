@@ -5,7 +5,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import { authorizeGatewayMethod } from "../../../gateway/server-methods/method-authorization.js";
-import { resolveInProcessGatewaySyntheticScopes } from "../../../gateway/server-plugin-in-process-scopes.js";
+import { resolveInProcessGatewayDispatch } from "../../../gateway/server-plugin-in-process-authority.js";
+import { withOperatorToolGatewayAuthority } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../../../gateway/server-plugin-runtime-client.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
@@ -169,14 +170,19 @@ describe("requester settle routing and session authority", () => {
     expect(completeBatch).toHaveBeenCalledOnce();
     if (testCase.narrow) {
       const request = startTurn.mock.calls[0]![0].preflight.request;
-      const scopes = resolveInProcessGatewaySyntheticScopes({
-        method: "agent",
-        requestParams: request,
-        operatorScopes: ["operator.sessions.read", "operator.sessions.write"],
-      });
+      const { client } = await withOperatorToolGatewayAuthority(
+        {
+          operatorRoleActor: { kind: "system" },
+          scopes: ["operator.sessions.read", "operator.sessions.write"],
+        },
+        async () =>
+          resolveInProcessGatewayDispatch("agent", request, {
+            forceSyntheticClient: true,
+            resolveGatewayContext: () => context,
+          }),
+      );
       const unbound = testCase.reset || testCase.replaced || testCase.legacy || testCase.mixed;
-      expect(scopes).toEqual(unbound ? [] : ["operator.sessions.write"]);
-      const client = createSyntheticPluginRuntimeClient({ scopes });
+      expect(client.connect.scopes).toEqual(unbound ? [] : ["operator.sessions.write"]);
       const registry = context.getGatewayMethodRegistry!();
       const authorization = authorizeGatewayMethod("agent", client, request, registry, context);
       if (unbound) {

@@ -122,7 +122,15 @@ state for these fields:
 - parent or child lineage when available.
 
 For a child started through `sessions_spawn`, the child owns a new context; it
-never reuses or mutates the parent context. The lineage projection links the
+never reuses or mutates the parent context. The spawning agent remains the
+invoker. When admission has a verified human requester, `representedSubject`
+records that person's installation-local pseudonym separately. A supported
+explicit user selection can therefore create a child representing Bob while
+the parent execution continues as Alice. This does not mean Bob personally
+requested or approved the tool call. Agent-initiated `sessions_create` and
+`sessions_send` executions also record the trusted agent invoker and prepared
+human subject when available; they do not invent spawn lineage. The lineage
+projection for `sessions_spawn` links the
 parent context, execution, run, and agent when the exact private parent token
 was available. Its delegation reference covers the spawn relation plus the
 requester/controller and evaluated local/target policy inputs. Applicable
@@ -239,7 +247,23 @@ await and authority recheck. Create, fork, send, patch, reset, archive, restore,
 and delete facts distinguish committed or scheduled work from typed lifecycle
 conflicts and definitive no-ops. These mechanics are `attribution-only`; the
 public generic display remains unverified rather than presenting their private
-reason or target as trusted evidence.
+reason or target as trusted evidence. When the operation has a resolved human
+authority, its receipt includes a pseudonymous **Recorded authority subject**
+from that prepared selection. The operation's subject can differ from the
+immutable parent context; it is not inferred from message authorship, session
+ownership, or a later participant lookup. This field does not verify the generic
+receipt or prove human intent, approval, or authorization. No new successful
+read, list, or history receipts are collected, and missing historical subjects
+mean they were not recorded.
+
+On otherwise compatible databases, older released readers reject generic receipt
+payloads containing this new optional field and show those receipts as corrupt or
+unknown. Previously written receipts remain readable; upgrading again restores
+access to the retained new receipts. This receipt-format limitation is separate
+from database schema compatibility: an older installation can refuse a newer
+database before reading any receipt. Context subjects use an existing optional
+field and do not have this receipt-reader limitation. Collection switches,
+retention, row bounds, and approval records remain unchanged.
 
 Direct session-sharing methods do not admit model runs,
 so they do not synthesize run selectors. Sharing events preserve a verified
@@ -451,13 +475,26 @@ what was recorded, not as proof of what happened:
 - **Absence of a row proves nothing.** Pre-admission inbound drops, sends from
   plugin-local or direct-send paths that bypass shared durable delivery, a
   dropped admission envelope, and crash-lost queued work can leave no record.
+- Agent-run starts are buffered until the run settles, then start and finish
+  commit together. A running turn's start becomes visible at turn end. Live
+  readers can see tool events before their enclosing run start; occurrence times
+  and source ordering are preserved. If no identity context or other audit event
+  exists yet, run inspection can report the running turn as unknown. A crash before
+  settlement can lose the buffered start. The oldest start flushes separately
+  when the 1,024-run buffer is full. An event that observes disabled collection,
+  or normal shutdown, also flushes accepted unmatched starts.
 - Writes go through a bounded asynchronous process-owned queue; queue
   saturation, storage failure, or a bounded shutdown timeout can drop records
   and log one operational warning.
   A rejected metadata record does not stop the queue from accepting later records.
 - Shutdown drops waiting metadata at its existing deadline but joins submitted
-  worker operations before releasing the writer. Unknown worker outcomes are
-  not replayed; ordinary native lock contention keeps the existing FIFO retry.
+  worker operations before releasing the writer.
+  The writer submits up to 32 already-queued items together, preserving each
+  item's independent commit. Lock contention retains the unprocessed suffix;
+  an unknown worker outcome replays the unacknowledged batch with its original
+  identities, so already committed records and their bindings are not duplicated.
+  After the third consecutive unknown outcome, the writer reports and drops that
+  batch so later queued work can proceed. Previously committed records remain.
 - Crash-ambiguous outbound sends are recorded as `unknown` rather than
   invented outcomes.
 
@@ -534,6 +571,11 @@ their recorded decisions. Delivery to the generic table uses the bounded audit
 queue and remains best-effort until persisted; approval-owner writes do not
 depend on that queue. The activity ledger cannot recreate either source after
 loss.
+
+Identity and decision overflow cleanup uses the existing timestamp/id indexes to
+find the retention boundary. Each write deletes the oldest overflow rows within
+the budget left after expiry cleanup, without building a set of all retained IDs.
+The transaction, retention limits, and deletion order are unchanged.
 
 Every generic decision-fact write rereads the immutable execution context and
 requires the full context, execution, and run tuple. Projection validates the

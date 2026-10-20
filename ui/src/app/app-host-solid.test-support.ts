@@ -1,5 +1,5 @@
 import { render } from "@solidjs/testing-library";
-import { createComponent, createEffect, createRoot, flush, onSettled } from "solid-js";
+import { createComponent, createRoot, flush, onSettled } from "solid-js";
 import { onTestFinished } from "vitest";
 import { ShellOwner } from "./app-host.tsx";
 import type { ShellChromeOwner } from "./app-shell-chrome.ts";
@@ -33,10 +33,7 @@ export function createConnectedShellOwner(): ShellOwner {
 export function mountShellView(shell: ShellOwner) {
   const view = render(
     () => {
-      createEffect(
-        () => shell.shellRevision(),
-        () => shell.afterCommit(),
-      );
+      onSettled(() => shell.mountPresentation());
       return createComponent(ApplicationShell, { host: shell });
     },
     { container: shell.element },

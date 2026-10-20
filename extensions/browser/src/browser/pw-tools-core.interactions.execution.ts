@@ -322,7 +322,6 @@ async function batchViaPlaywright(
       if (page.isClosed()) {
         return finishAborted("closed", index, page.url(), opts.actions.length - index);
       }
-      navigated = false;
       let result: BrowserBatchActionResult;
       try {
         await executeSingleAction(action, { ...opts, ...navigationPolicy });

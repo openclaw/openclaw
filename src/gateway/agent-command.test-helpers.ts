@@ -25,6 +25,11 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
   const continueWork = admission.runWithGatewayIndependentRootWorkContinuation;
   const trackWork = asyncWork.trackAsyncWork;
   const beginSessionWork = sessionWork.beginSessionEffect;
+  const rootWorkAdmission = admission.tryBeginGatewayRootWorkAdmission;
+  const previousRootWork = vi.isMockFunction(rootWorkAdmission)
+    ? rootWorkAdmission.getMockImplementation()
+    : undefined;
+  const beginRootWork = previousRootWork ?? rootWorkAdmission;
   type ObservedRequest = {
     runId?: string;
     request?: Promise<void>;
@@ -44,6 +49,29 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
     }
     return pending;
   };
+  const rootWorkSpy = vi
+    .spyOn(admission, "tryBeginGatewayRootWorkAdmission")
+    .mockImplementation((origin) => {
+      const lease = beginRootWork(origin);
+      const observed = observedRequest.getStore();
+      if (!lease?.ownsRoot || !observed) {
+        return lease;
+      }
+      return {
+        ...lease,
+        run: (run) =>
+          lease.run(() => {
+            const observeRelease = admission.captureGatewayRootWorkReleaseObserver();
+            if (observeRelease) {
+              const released = createDeferred();
+              observeRelease(() => released.resolve());
+              // Only cleanup joins final release; dispatch-only waits must stay nonblocking.
+              void captureEffect(released.promise);
+            }
+            return run();
+          }),
+      };
+    });
   const sessionWorkSpy = vi
     .spyOn(sessionWork, "beginSessionEffect")
     .mockImplementation((params) => {
@@ -161,6 +189,11 @@ export async function observeGatewayRunExecution(selection?: { method: "agent"; 
         requestSpy.mockRestore();
         effectSpy.mockRestore();
         continuationSpy.mockRestore();
+        if (previousRootWork) {
+          rootWorkSpy.mockImplementation(previousRootWork);
+        } else {
+          rootWorkSpy.mockRestore();
+        }
         observedRequest.disable();
       }
     },

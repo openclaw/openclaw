@@ -441,7 +441,6 @@ export type GatewayServiceState = {
 };
 
 export type GatewayServiceStartRepairIssue = {
-  code: "missing-program" | "port-mismatch" | "temporary-program";
   message: string;
 };
 

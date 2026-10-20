@@ -12,6 +12,7 @@ import type {
 import {
   mergeScopedSearchConfig,
   resolveProviderWebSearchPluginConfig,
+  WEB_SEARCH_QUERY_COUNT_PROPERTIES,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildBraveWebSearchProviderBase, resolveBraveMode } from "../web-search-shared.js";
@@ -23,13 +24,7 @@ const loadBraveWebSearchRuntime = createLazyRuntimeModule(
 const BraveSearchSchema = {
   type: "object",
   properties: {
-    query: { type: "string", description: "Search query string." },
-    count: {
-      type: "integer",
-      description: "Number of results to return (1-10).",
-      minimum: 1,
-      maximum: 10,
-    },
+    ...WEB_SEARCH_QUERY_COUNT_PROPERTIES,
     country: {
       type: "string",
       description:

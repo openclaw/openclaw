@@ -273,6 +273,7 @@ export async function handleChatSendWithStorage(
       client,
       logGateway: context.logGateway,
       getConfig: context.getRuntimeConfig,
+      assertInputCurrent: assertInputAdmissionCurrent,
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
@@ -359,6 +360,7 @@ export async function handleChatSendWithStorage(
       });
       const staged = await userTurnRecorder.stageApproved?.({
         ...pendingAdmission,
+        retryInterrupted: true,
         ...(request.restartResume ? { lifecycleAdmission: request.restartResume } : {}),
       });
       stagePhase?.finish();
@@ -665,6 +667,7 @@ export async function handleChatSendWithStorage(
       injection: {
         beginCapturedMessageInjection,
         messageInjectionAttempt,
+        messageInjectionDisposition: preAckInjection.disposition,
         preAckReplyContextPromise,
         replyContextFieldsPromise,
       },

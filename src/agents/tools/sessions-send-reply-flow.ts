@@ -23,6 +23,8 @@ import {
 } from "../run-wait.js";
 import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent-announce-delivery-retry.js";
 import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
+import type { AgentStepSession } from "./agent-step.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
   runWithGatewayToolContinuationContext,
@@ -97,6 +99,7 @@ export function startSessionsSendReplyFlow(
                 threadId: stringifyRouteThreadId(params.requesterOrigin?.threadId),
               },
               privateCompletion: true,
+              agentToolCaller: params.requester,
               expectFinal: true,
               onAccepted: (payload) => {
                 const receipt = asOptionalRecord(payload);
@@ -223,14 +226,25 @@ export function prepareSessionsSendReplyContext(params: {
   isIsolatedCronRequester: boolean;
   targetIsSubagent: boolean;
   requesterSessionKey: string;
-  targetSession: Parameters<typeof isRequesterParentOfBackgroundAcpSession>[0];
+  targetSession:
+    | (NonNullable<Parameters<typeof isRequesterParentOfBackgroundAcpSession>[0]> &
+        AgentStepSession)
+    | undefined;
   requesterTarget: GatewaySessionStoreTargetWithStore;
   requesterSessionId?: string;
   context: Omit<
     SessionsSendReplyContext,
-    "replyMode" | "requesterSession" | "requesterDeliveryGeneration"
+    "replyMode" | "requesterSession" | "requesterDeliveryGeneration" | "targetSession"
   >;
 }): SessionsSendReplyContext {
+  const caller = getGatewayToolCallerIdentity();
+  const requester = caller?.requesterOrigin
+    ? {
+        agentId: caller.agentId,
+        sessionKey: caller.sessionKey,
+        requesterOrigin: caller.requesterOrigin,
+      }
+    : undefined;
   const requesterSessionEntry = params.requesterTarget.store[params.requesterTarget.canonicalKey];
   const requesterSessionId = params.requesterSessionId ?? requesterSessionEntry?.sessionId;
   const requesterSession = requesterSessionId
@@ -257,8 +271,15 @@ export function prepareSessionsSendReplyContext(params: {
     isRequesterParentOfBackgroundAcpSession(params.targetSession, params.requesterSessionKey);
   return {
     ...params.context,
+    requester,
     requesterSession,
     requesterDeliveryGeneration,
+    targetSession: params.targetSession
+      ? {
+          sessionId: params.targetSession.sessionId,
+          lifecycleRevision: params.targetSession.lifecycleRevision,
+        }
+      : undefined,
     replyMode: taskOwned ? undefined : params.targetIsSubagent ? "one-way" : "peer",
   };
 }
@@ -351,6 +372,8 @@ export async function finishSessionsSendReply(params: {
       completion,
       skip: registryCompletion || delayedDelivery.status === "skipped",
       targetSessionKey: acceptedTargetSessionKey,
+      targetSession: start.a2aSession ?? replyContext.targetSession,
+      replyAdmission: start.replyAdmission,
       displayKey: start.a2aSessionKey ?? replyContext.displayKey,
       notifyRequesterOnWaitFailure: notifyRequesterOnWaitFailure && !isIsolatedCronRequester,
     });

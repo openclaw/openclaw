@@ -2,6 +2,7 @@
 import { resolveAgentRunLifecycleTerminalFacts } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import { isDefinitiveRunLifecycle } from "../agents/agent-run-terminal-outcome.js";
+import { onBackgroundProcessesChanged } from "../agents/bash-process-registry.js";
 import {
   isAuditLedgerEnabled,
   isExecutionIdentityCollectionEnabled,
@@ -28,7 +29,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
-import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import {
   onGatewaySuspendAdmissionChange,
   retainGatewayRootWorkAdmissionContinuation,
@@ -579,9 +580,9 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     await auditRecorder.stop();
   };
 
-  const heartbeatUnsub = onHeartbeatEvent((evt) => {
+  heartbeatNotifications.onEvent = (evt) => {
     params.broadcast("heartbeat", evt, { dropIfSlow: true });
-  });
+  };
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
     sessionActivitySummaries.handleTranscript(evt);
@@ -683,6 +684,15 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   const unsubscribeSuspension = onGatewaySuspendAdmissionChange((phase) => {
     params.broadcast("gateway.suspension", { phase });
   });
+  const unsubscribeProcesses = onBackgroundProcessesChanged((target) => {
+    if (!params.signal.aborted) {
+      params.broadcast("sessions.processes.changed", target, {
+        sessionKeys: [target.sessionKey],
+        agentId: target.agentId,
+        dropIfSlow: true,
+      });
+    }
+  });
 
   return {
     channelAdmissionAudit,
@@ -691,9 +701,9 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     sessionCompanion,
     sessionObserver,
     agentUnsub,
-    heartbeatUnsub,
     transcriptUnsub,
     lifecycleUnsub() {
+      unsubscribeProcesses();
       unsubscribeSessionIdentity();
       unsubscribeSuspension();
       unsubscribeProfileChanges();

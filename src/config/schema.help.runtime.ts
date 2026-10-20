@@ -538,7 +538,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "skills.load.allowSymlinkTargets":
     "Trusted real target roots that skill symlinks may resolve into when they sit outside their configured source root. Keep this narrow, such as a sibling repo skills directory.",
   "skills.load.watch":
-    "Enable passive skill rescans in one background worker about once per minute. Disabling this leaves explicit OpenClaw skill changes, relevant configuration changes, and Gateway startup refreshing skills immediately. Existing sessions use changed snapshots on their next agent turn.",
+    "Enable filesystem-triggered skill discovery with a safety rescan every 30 minutes for missed events. Disabling this leaves explicit OpenClaw skill changes, relevant configuration changes, and Gateway startup refreshing skills immediately. Existing sessions use changed snapshots on their next agent turn.",
   "skills.workshop.autonomous.mode":
     'Controls background learning: "auto" lets agents save and update Workshop skills after substantial work, and archives learned skills unused for 30 days. Every change is recorded and undoable. "off" disables background learning. Default: "auto".',
   "skills.workshop.autonomous.channelNotices":

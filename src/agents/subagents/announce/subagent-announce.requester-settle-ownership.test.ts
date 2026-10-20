@@ -194,6 +194,79 @@ it("holds an adopted child's old wake until its current requester turn yields", 
   expect(quietChild.requesterTurnRunId).toBe("quiet-cancellation-owner");
 });
 
+it.each([
+  { yielded: false, allDelivered: true },
+  { yielded: false, allDelivered: false },
+  { yielded: true, allDelivered: true },
+  { yielded: true, allDelivered: false },
+])(
+  "does not repeat results consumed in a settle-wake turn (yielded=$yielded, allDelivered=$allDelivered)",
+  async ({ yielded, allDelivered }) => {
+    const requesterTurnRunId = `announce:requester-settle:main:${REQUESTER}:earlier-child:yield-1`;
+    const children = ["run-a", "run-b"].map((runId, index) =>
+      makeChild({
+        runId,
+        requesterTurnRunId,
+        // These are the completion owner's confirmed in-turn delivery facts.
+        delivery: { status: index === 0 || allDelivered ? "delivered" : "pending" },
+        completion: { required: true, resultText: `retry result ${index}` },
+      }),
+    );
+    const runs = new Map(children.map((child) => [child.runId, child]));
+    registryRuntimeMock.listSubagentRunsForRequester.mockImplementation(() => [...runs.values()]);
+    const requesterTurn = holdLiveRequesterTurns(requesterTurnRunId);
+    const requester = {
+      requesterSessionKey: REQUESTER,
+      requesterTurnRunId,
+      runs,
+      transfer: createRequesterInitialTransferFixture(runs, vi.fn()),
+    };
+    try {
+      expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+      expect(deliverSpy).not.toHaveBeenCalled();
+      if (yielded) {
+        expect(await markRequesterTurnYieldedWithAuthority(requester)).toBe(2);
+      }
+      expect(
+        await settleRequesterTurnAfterSessionSpawns({
+          ...requester,
+          requesterYielded: yielded,
+          acceptedSessionSpawns: children.map((child) => ({
+            runId: child.runId,
+            childSessionKey: child.childSessionKey,
+            expectsCompletionMessage: true,
+          })),
+          schedule: vi.fn(),
+        }),
+      ).toBe(true);
+    } finally {
+      requesterTurn.end(requesterTurnRunId);
+      requesterTurn.restore();
+    }
+    // The delivery fixture mutates its snapshots; published registry rows are immutable.
+    for (const [runId, child] of runs) {
+      runs.set(runId, copySubagentRunRuntimeOwner(child, { ...child }));
+    }
+
+    const continuationOwed = yielded || !allDelivered;
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(continuationOwed);
+    expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
+    expect(deliverSpy).toHaveBeenCalledTimes(continuationOwed ? 1 : 0);
+    if (continuationOwed) {
+      const call = deliverSpy.mock.calls[0]![0];
+      expect(call.sourceTool).toBe("subagent_settle");
+      expect(call.triggerMessage).not.toContain("retry result 0");
+      expect(call.triggerMessage).toContain("Already delivered child results");
+      if (allDelivered) {
+        expect(call.triggerMessage).not.toContain("retry result 1");
+      } else {
+        expect(call.triggerMessage).toContain("retry result 1");
+      }
+    }
+    expect([...runs.values()].every((child) => child.requesterSettleWake === undefined)).toBe(true);
+  },
+);
+
 it.each(["same", "before admission", "during admission", "rearm"] as const)(
   "fences queued requester wakes across %s",
   async (replacement) => {

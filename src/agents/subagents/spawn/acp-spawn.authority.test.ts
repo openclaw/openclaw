@@ -145,6 +145,9 @@ it.each([
     const readChild = (sessionKey: string) =>
       sessionAccessor.loadSessionEntry({ sessionKey, agentId: "fixture" });
     if (live) {
+      await sessionAccessor.upsertSessionEntryCore(parentScope, {
+        inheritedGitContributorProfileIds: ["unrelated-a", "unrelated-b"],
+      });
       await sessionAccessor.recordSessionParticipant(parentScope, {
         identity: { type: "profile", id: "human-contributor" },
         promptedAt: 1,
@@ -330,6 +333,7 @@ it.each([
       agentSessionKey: parentSessionKey,
       // Trusted tool construction facts the ACP child records in its lineage receipt.
       senderIsOwner: true,
+      gitContributorProfileId: "human-contributor",
       expectedParentSessionId: "parent-session",
       requesterRunId: parentRunId,
       requesterTurnRunId: parentRunId,

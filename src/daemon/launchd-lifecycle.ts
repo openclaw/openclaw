@@ -1,4 +1,3 @@
-/** LaunchAgent bootstrap recovery plus start and restart lifecycle controls. */
 import { spawnSync } from "node:child_process";
 import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";

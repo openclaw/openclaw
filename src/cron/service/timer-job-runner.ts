@@ -1,3 +1,4 @@
+import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -295,6 +296,8 @@ async function executeJobCoreWithTimeoutUnfinalized(
     const result: CronCoreRunOutcome = {
       status: "error",
       error,
+      interruptedByRestart:
+        resolveAgentRunAbortLifecycleFields(runAbortController.signal).stopReason === "restart",
       // A timeout raised by this service-owned watchdog is authoritative even
       // when the interrupted main-session heartbeat has no model attribution.
       errorClassification,

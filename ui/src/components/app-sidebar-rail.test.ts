@@ -405,8 +405,19 @@ describe("personal navigation rail", () => {
     ] as const) {
       await click(sidebar, `[data-navigation-view="${view}"]`);
       expect(sidebar).toMatchObject({ navigationView: view, navigationCollapsed: collapsed });
+      expect(sidebar.activeNavigationViewElement()).toBe(
+        collapsed ? undefined : sidebar.querySelector(`[data-navigation-view="${view}"]`),
+      );
     }
     expect(toggle).toHaveBeenCalledTimes(4);
+    await update(sidebar, { navigationVisible: false });
+    expect(sidebar.activeNavigationViewElement()).toBeUndefined();
+    await update(sidebar, { navigationVisible: true });
+    expect(sidebar.activeNavigationViewElement()).toBe(
+      sidebar.querySelector('[data-navigation-view="online"]'),
+    );
+    sidebar.hostElement.remove();
+    expect(sidebar.activeNavigationViewElement()).toBeUndefined();
   });
 
   it("preserves a mobile drawer when a stored desktop preference is collapsed", async () => {
@@ -559,8 +570,8 @@ describe("personal navigation rail", () => {
   });
 
   it("opens a pinned dashboard on its saved face instead of forcing chat", async () => {
-    const { sidebar, result } = await fixture();
-    result.sessions.find((row) => row.key === "agent:main:mine")!.boardFace = "dashboard";
+    const { sidebar, publish } = await fixture();
+    publish({ boardFace: "dashboard" });
     sidebar.sidebarEntries = ["session:agent:main:mine"];
     sidebar.invalidate();
     await sidebar.updateComplete;
@@ -783,6 +794,30 @@ describe("personal navigation rail", () => {
       expect(showToast).not.toHaveBeenCalled();
     },
   );
+
+  it("discovers MCP apps only while Pages is mounted", async () => {
+    const { sidebar, gateway } = await fixture();
+    const request = vi.spyOn(gateway.gateway.snapshot.client!, "request").mockResolvedValue({
+      servers: [],
+    });
+    const discoveries = () =>
+      request.mock.calls.filter(([method]) => method === "mcp.app.discover");
+    gateway.publish({ hello: gatewayHelloForMethods(["mcp.app.discover"]) });
+    await sidebar.updateComplete;
+    gateway.publishEvent("config.changed", {});
+    await sidebar.updateComplete;
+    expect(discoveries()).toHaveLength(0);
+
+    await click(sidebar, '[data-navigation-view="pages"]');
+    await waitForSolid(() => expect(discoveries()).toHaveLength(1));
+    await click(sidebar, '[data-navigation-view="sessions"]');
+    gateway.publishEvent("config.changed", {});
+    await sidebar.updateComplete;
+    expect(discoveries()).toHaveLength(1);
+
+    await click(sidebar, '[data-navigation-view="pages"]');
+    await waitForSolid(() => expect(discoveries()).toHaveLength(2));
+  });
 
   it("does not recreate catalog observations in an update queued before removal", async () => {
     const { sidebar, sessions, gateway } = await fixture();

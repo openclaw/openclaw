@@ -173,9 +173,9 @@ describe("requester pause notices", () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
     const params = wakeParams({
       settledEntry: child,
-      completeBatch: (batch, generation, outcome, onCommitted) => {
+      completeBatch: async (batch, generation, outcome, onCommitted) => {
         if (!consumeSubagentPauseNotice(child)) {
-          completeBatch(batch, generation, outcome, onCommitted);
+          await completeBatch(batch, generation, outcome, onCommitted);
         }
       },
     });

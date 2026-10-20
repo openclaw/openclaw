@@ -191,3 +191,116 @@ it("exports warm/cold preparation phases without identifiers or untrusted series
     metrics.stop();
   }
 });
+
+it("bounds diff histograms to two methods, six stages and two cache outcomes in seconds", () => {
+  const metrics = createMetricsHarness();
+  const event = {
+    type: "diagnostic.phase.completed" as const,
+    name: "sessions.diff",
+    startedAt: 0,
+    durationMs: 160,
+    details: {
+      outcome: "cache-hit",
+      admission: 1,
+      "checkout-resolve": 2,
+      "cache-validate": 150,
+      "worker-queue": 100,
+      "git-wall": 0,
+      encode: 7,
+      "/synthetic/private/checkout": 99,
+      sessionKey: "synthetic-private-session",
+    },
+  };
+  try {
+    for (const name of ["sessions.diff", "checkout.diff"]) {
+      for (const outcome of ["cache-hit", "cache-miss"]) {
+        metrics.record({ ...event, name, details: { ...event.details, outcome } }, trusted);
+      }
+    }
+    const rendered = metrics.render();
+    const counts = rendered
+      .split("\n")
+      .filter((line) => line.startsWith("openclaw_diff_stage_seconds_count"));
+    expect(counts).toHaveLength(24);
+    expect(rendered).toContain(
+      'openclaw_diff_stage_seconds_sum{method="sessions.diff",outcome="cache-hit",stage="cache-validate"} 0.15\n',
+    );
+    expect(rendered).toContain(
+      'openclaw_diff_stage_seconds_sum{method="checkout.diff",outcome="cache-miss",stage="git-wall"} 0\n',
+    );
+    expect(rendered).not.toContain("synthetic");
+    metrics.record(event, untrusted);
+    metrics.record(event, { trusted: false, internal: true });
+    metrics.record({ ...event, name: "sessions.diff.private" }, trusted);
+    metrics.record({ ...event, details: { ...event.details, outcome: "private" } }, trusted);
+    for (const elapsed of [-1, Number.NaN, Number.POSITIVE_INFINITY, "150"]) {
+      metrics.record(
+        { ...event, details: { outcome: "cache-hit", "cache-validate": elapsed } },
+        trusted,
+      );
+    }
+    expect(metrics.render()).toBe(rendered);
+  } finally {
+    metrics.stop();
+  }
+});
+
+it("bounds diff miss reasons without exporting revision keys or caller supplied labels", () => {
+  const metrics = createMetricsHarness();
+  const event = {
+    type: "diagnostic.phase.completed" as const,
+    name: "sessions.diff",
+    startedAt: 0,
+    durationMs: 1,
+    details: { outcome: "cache-miss", missReason: "cold", revision: "private-revision" },
+  };
+  try {
+    for (const name of ["sessions.diff", "checkout.diff"]) {
+      for (const missReason of [
+        "cold",
+        "evicted",
+        "pending",
+        "no-revision",
+        "no-revision-environment",
+        "no-revision-platform",
+        "no-revision-metadata",
+        "no-revision-git-installation",
+        "no-revision-config",
+        "no-revision-reftable",
+        "no-revision-alternates",
+        "no-revision-symlink",
+        "no-revision-nested-repository",
+        "no-revision-status",
+        "no-revision-unmerged",
+        "no-revision-submodule",
+        "no-revision-permission",
+        "no-revision-missing",
+        "no-revision-io",
+        "oversized",
+        "revision-changed-head",
+        "revision-changed-index",
+        "revision-changed-untracked-set",
+        "revision-changed-worktree-mtime",
+        "revision-changed-metadata",
+      ]) {
+        metrics.record({ ...event, name, details: { ...event.details, missReason } }, trusted);
+      }
+    }
+    const rendered = metrics.render();
+    const counters = rendered
+      .split("\n")
+      .filter((line) => line.startsWith("openclaw_diff_cache_misses_total{"));
+    expect(counters).toHaveLength(50);
+    expect(counters.every((line) => line.endsWith(" 1"))).toBe(true);
+    expect(rendered).not.toContain("private");
+    metrics.record(event, untrusted);
+    metrics.record({ ...event, name: "sessions.diff.private" }, trusted);
+    metrics.record({ ...event, details: { ...event.details, outcome: "cache-hit" } }, trusted);
+    for (const missReason of ["private-revision", "revision-changed-/private/path", 1, true]) {
+      metrics.record({ ...event, details: { ...event.details, missReason } }, trusted);
+    }
+    expect(metrics.render()).toBe(rendered);
+  } finally {
+    metrics.stop();
+  }
+});

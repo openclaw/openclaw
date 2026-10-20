@@ -52,7 +52,7 @@ it("pauses an interval while its reactive delay is absent", () => {
   expect(tick).toHaveBeenCalledTimes(1);
 });
 
-it("replaces pending feedback and cancels on request or owner disposal", () => {
+it("replaces pending deadlines, preserves the default delay, and cancels on disposal", () => {
   vi.useFakeTimers();
   const callback = vi.fn();
   const { timer, dispose } = createRoot((stop) => ({
@@ -60,21 +60,26 @@ it("replaces pending feedback and cancels on request or owner disposal", () => {
     dispose: stop,
   }));
   onTestFinished(dispose);
-  timer.schedule();
+  timer.schedule(200);
   vi.advanceTimersByTime(50);
-  timer.schedule();
+  timer.schedule(75);
   vi.advanceTimersByTime(50);
   expect(callback).not.toHaveBeenCalled();
-  vi.advanceTimersByTime(50);
+  vi.advanceTimersByTime(25);
   expect(callback).toHaveBeenCalledTimes(1);
+  timer.schedule();
+  vi.advanceTimersByTime(99);
+  expect(callback).toHaveBeenCalledTimes(1);
+  vi.advanceTimersByTime(1);
+  expect(callback).toHaveBeenCalledTimes(2);
   timer.schedule();
   timer.cancel();
   vi.advanceTimersByTime(100);
-  expect(callback).toHaveBeenCalledTimes(1);
+  expect(callback).toHaveBeenCalledTimes(2);
   timer.schedule();
   dispose();
   vi.advanceTimersByTime(100);
-  expect(callback).toHaveBeenCalledTimes(1);
+  expect(callback).toHaveBeenCalledTimes(2);
 });
 
 it("preserves a reactive deadline across equal refreshes and cancels when paused or disposed", () => {

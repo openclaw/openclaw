@@ -441,7 +441,6 @@ export async function executeMcpAppOperation(
         if (!runtime.sessionKey) {
           throw new Error("MCP App session is unavailable");
         }
-        assertCurrent();
         return await callMcpAppToolWithElicitation({
           options: request.options,
           origin: {

@@ -285,6 +285,9 @@ it("releases managed workspace admission while the helper waits for exchange com
         admitted = false;
       }
     },
+    async terminate(action) {
+      await action();
+    },
     async checkpoint() {},
     [Symbol.dispose]() {},
   });

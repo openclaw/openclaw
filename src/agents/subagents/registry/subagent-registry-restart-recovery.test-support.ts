@@ -63,6 +63,7 @@ const gatewayRuntime: GatewayRecoveryRuntime = {
   dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
   waitForAgent: vi.fn(),
   sendRecoveryNotice: vi.fn(),
+  resumeChatInput: vi.fn(),
 };
 const warn = vi.fn();
 

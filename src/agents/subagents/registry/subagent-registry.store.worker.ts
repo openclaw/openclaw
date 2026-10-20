@@ -11,10 +11,7 @@ import {
 } from "../../../infra/sqlite-worker-operation-admission.js";
 import type { WorkerTaskChannel } from "../../../infra/worker-task-server.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import {
-  recordSessionStateEventInDatabase,
-  type SessionStateNotice,
-} from "../../../sessions/session-state-events.kernel.js";
+import { recordSessionStateEventsInDatabase } from "../../../sessions/session-state-events.kernel.js";
 import { invalidateOpenClawStateRuntimeIntegrity } from "../../../state/openclaw-state-db-integrity-admission.js";
 import {
   assertStateReadSchema,
@@ -23,7 +20,6 @@ import {
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import type {
   OpenClawStateReadCommand,
-  OpenClawStateReadResult,
   OpenClawStateReadRequest,
 } from "../../../state/openclaw-state-read.types.js";
 import type { WorkerWriteOperationContext } from "../../../state/worker-operation-registry.js";
@@ -39,13 +35,27 @@ import type {
   SubagentRegistryWrite,
   SubagentRegistryWriteReceipt,
 } from "./subagent-registry.store.types.js";
+import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
 
 const log = createSubsystemLogger("state/worker");
+
+type SubagentRunsReadResult =
+  | {
+      type: "subagents.runs";
+      projection?: never;
+      runs: Map<string, SubagentRunRecord>;
+      descendants?: { sessionKeys: Set<string>; runIds: readonly string[] };
+    }
+  | {
+      type: "subagents.runs";
+      projection: "maintenance";
+      runs: Map<string, SubagentRunMaintenanceRecord>;
+    };
 
 export function readSubagentRunsInWorker(
   db: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>,
-): Extract<OpenClawStateReadResult, { type: "subagents.runs" }> {
+): SubagentRunsReadResult {
   if (command.scope.kind === "maintenance") {
     return {
       type: command.type,
@@ -161,10 +171,7 @@ export const subagentRegistryOperations = {
       return context.write((writer): SubagentRegistryWriteReceipt => {
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
         writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
-        const notices: SessionStateNotice[] = [];
-        for (const { event, now } of terminalEvents) {
-          notices.push(...recordSessionStateEventInDatabase(writer.db, event, now).notices);
-        }
+        const { notices } = recordSessionStateEventsInDatabase(writer.db, terminalEvents);
         for (const [eventIndex, event] of terminalEvents.entries()) {
           requestSessionEntryCurrentAdmission(event.sessionEntryCurrentSource, {
             stage: "commit",

@@ -1,10 +1,6 @@
 import { createHash } from "node:crypto";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  isFutureDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { raceWithTimeoutAndAbort } from "./async.js";
 import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
 import type { FeishuProbeResult } from "./types.js";
@@ -54,12 +50,7 @@ function setCachedProbeResult(
   result: FeishuProbeResult,
   ttlMs: number,
 ): FeishuProbeResult {
-  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs);
-  if (expiresAt === undefined) {
-    probeCache.delete(cacheKey);
-    return result;
-  }
-  probeCache.set(cacheKey, { result, expiresAt });
+  probeCache.set(cacheKey, { result, expiresAt: Date.now() + ttlMs });
   pruneMapToMaxSize(probeCache, MAX_PROBE_CACHE_SIZE);
   return result;
 }
@@ -90,7 +81,7 @@ export async function probeFeishu(
     setCachedProbeResult(cacheKey, { ok: false, appId: creds.appId, error }, PROBE_ERROR_TTL_MS);
   const cached = probeCache.get(cacheKey);
   if (cached) {
-    if (isFutureDateTimestampMs(cached.expiresAt)) {
+    if (cached.expiresAt > Date.now()) {
       return cached.result;
     }
     probeCache.delete(cacheKey);

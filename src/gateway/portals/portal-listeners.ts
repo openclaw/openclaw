@@ -8,19 +8,3 @@ export function removePortalServers(shared: HttpServer[], owned: readonly HttpSe
     }
   }
 }
-
-export async function closePortalServers(servers: readonly HttpServer[]): Promise<void> {
-  await Promise.all(
-    servers.map(
-      (server) =>
-        new Promise<void>((resolve) => {
-          if (!server.listening) {
-            resolve();
-            return;
-          }
-          server.close(() => resolve());
-          server.closeAllConnections();
-        }),
-    ),
-  );
-}

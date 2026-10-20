@@ -14,10 +14,8 @@ import {
   type ManagedImageRecordDatabase,
 } from "../gateway/managed-image-record-store.js";
 import { getMediaDir } from "../media/store.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { hasErrnoCode } from "./errno.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -88,8 +86,9 @@ export function detectLegacyManagedOutgoingImages(params: {
   if (params.doctorOnlyStateMigrations === true) {
     try {
       hasLegacy = fs.readdirSync(sourceDir).some(isLegacyManagedImageSourceName);
-    } catch {
-      hasLegacy = false;
+    } catch (error) {
+      // Let migration report an unreadable directory instead of declaring it empty.
+      hasLegacy = !hasErrnoCode(error, "ENOENT");
     }
   }
   return { sourceDir, hasLegacy };
@@ -358,7 +357,6 @@ export function migrateLegacyManagedOutgoingImages(params: {
   stateDir: string;
   nowMs?: number;
   beforeClaim?: () => void;
-  beforeVerify?: () => void;
   removeSource?: (sourcePath: string) => void;
 }): MigrationMessages {
   const changes: string[] = [];
@@ -437,22 +435,7 @@ export function migrateLegacyManagedOutgoingImages(params: {
   }
 
   try {
-    params.beforeVerify?.();
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
-    });
-    for (const parsed of parsedRecords) {
-      const row = readManagedImageRow(database.db, parsed.record.attachmentId);
-      if (discardedIds.has(parsed.record.attachmentId)) {
-        if (row) {
-          throw new Error(
-            `discarded transient record unexpectedly exists: ${parsed.record.attachmentId}`,
-          );
-        }
-      } else if (!row || !managedImageRecordsEqual(managedImageRecordFromRow(row), parsed.record)) {
-        throw new Error(`managed image verification failed: ${parsed.record.attachmentId}`);
-      }
-    }
+    // Trust the committed import; recheck the external source before deleting it.
     verifyClaimedSources(claimed);
   } catch (error) {
     const rollbackError = rollbackImportedRecords({

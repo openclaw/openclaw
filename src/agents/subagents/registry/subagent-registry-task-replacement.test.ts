@@ -37,6 +37,7 @@ import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import * as persistence from "./subagent-registry-persistence.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
@@ -768,10 +769,10 @@ it.each([
       handler: async () => {},
     });
     vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue(createHookRunner(registry));
+    vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
     const cleanup = createSubagentRegistryContextCleanup({
       isEndedHookOwnerCurrent: (entry) =>
         isSameSubagentRunOwner(subagentRuns.get(entry.runId), entry),
-      warn: () => {},
     });
     const lateStamp =
       transition.includes("late stamp") || transition === "stamp admitted during wait";

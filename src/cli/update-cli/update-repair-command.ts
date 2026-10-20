@@ -37,6 +37,7 @@ import {
 } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { assertOpenClawStateWriteAllowedAtPath } from "../../state/openclaw-state-ownership-preflight.js";
@@ -86,7 +87,8 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   if (admission.kind === "conflict") {
     throw new Error(admission.message);
   }
-  if (opts.channel === undefined || normalizeUpdateChannel(opts.channel)) {
+  const validChannel = opts.channel === undefined || normalizeUpdateChannel(opts.channel) !== null;
+  if (validChannel) {
     const settlement = await settlePendingPackageActivation(
       resolveUpdateInstallRoot(discoveredRoot),
       (settled) => {
@@ -123,7 +125,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     !inheritedRunId &&
     !env.OPENCLAW_UPDATE_RUN_HANDOFF &&
     !env[POST_CORE_UPDATE_ENV] &&
-    (opts.channel === undefined || normalizeUpdateChannel(opts.channel))
+    validChannel
       ? await (
           await prepareManagedHandoffLeaseStore()
         ).prepareRepair(await resolveUpdateRoot(), env, timeoutMs)
@@ -201,6 +203,20 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
       [...recoveryRuns, ...historicalRuns, ...history.postCoreRuns].map((run) => run.runId),
     ),
   ];
+  const finalizeRepair = async () => {
+    try {
+      // Driver death is a historical fact; maintenance completion is acknowledged separately.
+      await reconcileAbandonedUpdateRunsAsync({ runIds: recoveryRunIds }, options);
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
+      defaultRuntime.error(
+        `Warning: Update history reconciliation could not complete: ${String(error)}`,
+      );
+    }
+    return await updateFinalizeCommand(opts, recoveryRunIds, handoff ?? undefined);
+  };
 
   if (
     handoff ||
@@ -212,12 +228,12 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     history.postCoreRuns.length > 0 ||
     history.incomplete
   ) {
-    return await updateFinalizeCommand(opts, recoveryRunIds, handoff ?? undefined);
+    return await finalizeRepair();
   }
 
   const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
   if (!snapshot.valid) {
-    return await updateFinalizeCommand(opts, recoveryRunIds);
+    return await finalizeRepair();
   }
   const context = await resolveGatewayRestartProbeContext(env);
   const port = resolveGatewayPort(context.config, env);
@@ -247,7 +263,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     http.healthz !== 200 ||
     http.readyz !== 200
   ) {
-    return await updateFinalizeCommand(opts, recoveryRunIds);
+    return await finalizeRepair();
   }
 
   // Health probes await network I/O. Recheck current rows before the ledger's

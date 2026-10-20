@@ -22,8 +22,8 @@ export function callbacks(
     focus: vi.fn(),
     focusChanged: vi.fn(),
     frameLoadFailed: noAction,
-    widgetAppView: vi.fn(async () => ({ status: "stale" as const, error: "unused" })),
-    refreshWidgetAppView: vi.fn(async () => ({ status: "stale" as const, error: "unused" })),
+    widgetAppView: vi.fn(async () => ({ status: "stale" as const })),
+    refreshWidgetAppView: vi.fn(async () => ({ status: "stale" as const })),
     ...overrides,
   };
 }

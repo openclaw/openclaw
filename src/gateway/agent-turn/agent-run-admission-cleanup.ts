@@ -4,14 +4,16 @@ import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-sess
 import type { MainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import type { PreparedModelRuntimeLease } from "../../agents/prepared-model-runtime.js";
 import type { FollowupCompletionOwner } from "../../agents/subagents/completion/session-followup-completion.types.js";
-import { getLatestLiveSubagentRunByChildSessionKey } from "../../agents/subagents/registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
-import { isSameSubagentRunOwner } from "../../agents/subagents/registry/subagent-run-generation.js";
-import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { SessionEffectRef } from "../../sessions/session-controller.lifecycle.js";
+import { getRpcSource, hasRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import type { registerChatAbortController } from "../chat-abort.js";
 import { formatForLog } from "../ws-log.js";
-import { settleUnstartedGatewayFollowup } from "./agent-run-subagent.js";
+import {
+  settleUnstartedGatewayFollowup,
+  settleUnstartedGatewayParentResume,
+} from "./agent-run-subagent.js";
 import type { AgentTurnContext } from "./types.js";
 
 /** Retire rejected preparation only after its adopted task and runtime resources settle. */
@@ -22,6 +24,7 @@ export async function cleanupRejectedAgentRunAdmission({
   activeRunAbort,
   activeGatewayWorkAdmission,
   admittedRunIdentity,
+  admittedRunContext,
   releaseCallerAuthority,
   restoreAdmittedRestartRecoveryInterrupted,
   lease,
@@ -36,6 +39,7 @@ export async function cleanupRejectedAgentRunAdmission({
   activeRunAbort: ReturnType<typeof registerChatAbortController>;
   activeGatewayWorkAdmission?: SessionEffectRef;
   admittedRunIdentity: Parameters<typeof settleUnstartedGatewayFollowup>[0]["admittedRunIdentity"];
+  admittedRunContext?: ReturnType<typeof getAgentRunContext>;
   releaseCallerAuthority?: () => void;
   restoreAdmittedRestartRecoveryInterrupted?: () => Promise<
     MainSessionRecoveryPendingTarget | undefined
@@ -49,32 +53,7 @@ export async function cleanupRejectedAgentRunAdmission({
   let pendingRecovery: MainSessionRecoveryPendingTarget | undefined;
   try {
     if (adopted) {
-      await runWithGatewayDetachedWorkContinuation(async () => {
-        const runtime = await import("../../agents/subagents/registry/subagent-registry.js");
-        const ownsAdoption = () =>
-          isSameSubagentRunOwner(
-            getLatestLiveSubagentRunByChildSessionKey(
-              adopted.childSessionKey,
-              undefined,
-              adopted.childAgentId,
-            ),
-            adopted,
-          );
-        if (!ownsAdoption()) {
-          return;
-        }
-        const settled = await runtime.finalizeInterruptedSubagentRun({
-          runId: adopted.runId,
-          expectedEntry: adopted,
-          error: failure ?? "Parent resume admission ended before acceptance.",
-          suppressSessionEffects: true,
-        });
-        if (!settled && ownsAdoption()) {
-          throw new Error(
-            "Adopted parent resume could not be durably settled after admission rejection",
-          );
-        }
-      }, "subagents:unstarted-resume");
+      await settleUnstartedGatewayParentResume(adopted, failure);
     }
     if (completion) {
       await settleUnstartedGatewayFollowup({
@@ -109,7 +88,22 @@ export async function cleanupRejectedAgentRunAdmission({
         await lease?.[Symbol.asyncDispose]();
       } finally {
         try {
-          releaseCallerAuthority?.();
+          try {
+            releaseCallerAuthority?.();
+          } finally {
+            // A retired source may release its context, but a successor with the
+            // same protocol ID owns its own registration and must remain intact.
+            if (
+              admittedRunContext &&
+              admittedRunIdentity &&
+              getAgentRunContext(runId) === admittedRunContext &&
+              (!hasRpcSource(runId) || getRpcSource(runId) === activeRunAbort.entry) &&
+              activeRunAbort.entry?.adapter.operationalRunInstance ===
+                admittedRunIdentity.operationalRunInstance
+            ) {
+              clearAgentRunContext(runId, admittedRunIdentity.lifecycleGeneration);
+            }
+          }
           activeRunAbort.cleanup();
           if (!admissionReleased) {
             activeGatewayWorkAdmission?.release();

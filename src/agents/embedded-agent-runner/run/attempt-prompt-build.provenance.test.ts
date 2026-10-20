@@ -168,6 +168,18 @@ async function assembleWithCapturedHookCtx(
 }
 
 describe("prompt-build hook context input provenance", () => {
+  it("bounds plugin system context using the resolved attempt budget before assembly", async () => {
+    const { setSystemPrompt } = await assembleWithCapturedHookCtx(
+      "bounded-plugin-system-context",
+      { contextTokenBudget: 32_000 },
+      { hookResult: { prependSystemContext: "x".repeat(824_170) } },
+    );
+    const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";
+    expect(finalPrompt).toContain("[Plugin system context truncated to fit the model budget.]");
+    expect(finalPrompt).toContain("Base system prompt");
+    expect(finalPrompt.length).toBeLessThan(33_000);
+  });
+
   it("prepares the restricted prompt once before composing the original hook additions", async () => {
     const observeDecision = vi.spyOn(decisionDiagnostics, "logDecisionToolPrefilter");
     const order: string[] = [];
@@ -207,22 +219,22 @@ describe("prompt-build hook context input provenance", () => {
     expect(finalPrompt.match(/Hook suffix/g)).toHaveLength(1);
   });
 
-  it.each([
-    { requiresToolAuthority: undefined, reason: "ineligible" },
-    { requiresToolAuthority: true, reason: "pending-action-context" },
-  ] as const)(
+  it.each([{ requiresToolAuthority: undefined }, { requiresToolAuthority: true }] as const)(
     "gates semantic prefilter admission for authority=$requiresToolAuthority",
-    async ({ requiresToolAuthority, reason }) => {
-      const { prompt } = await assembleWithCapturedHookCtx(
+    async ({ requiresToolAuthority }) => {
+      const observeDecision = vi.spyOn(decisionDiagnostics, "logDecisionToolPrefilter");
+      const applyPolicy = vi.fn(() => []);
+      await assembleWithCapturedHookCtx(
         "hook-prefilter-admission",
         { supportsTurnScopedToolRestrictions: true },
-        { requiresToolAuthority, hookResult: { appendContext: "Answer warmly without tools." } },
+        {
+          requiresToolAuthority,
+          hookResult: { appendContext: "Answer warmly without tools." },
+          applyPromptBuildToolsAllow: applyPolicy,
+        },
       );
-      expect(prompt.decisionPrefilter).toMatchObject({
-        shouldPruneTools: false,
-        status: "skipped",
-        reason,
-      });
+      expect(observeDecision).toHaveBeenCalledExactlyOnceWith({ effect: "skipped" });
+      expect(applyPolicy).toHaveBeenCalledExactlyOnceWith(undefined, false);
     },
   );
 

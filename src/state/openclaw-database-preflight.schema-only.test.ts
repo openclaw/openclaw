@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SqliteReadOnlyInspectionContentionError } from "../infra/sqlite-readonly-worker-protocol.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
@@ -22,6 +23,10 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "./openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -29,7 +34,64 @@ afterEach(() => {
   closeDatabases();
 });
 
-it("upgrades the subagent authority format without rewriting rows and refuses schema-24 targets", async () => {
+it.each([
+  {
+    name: "retryable snapshot contention",
+    error: new SqliteReadOnlyInspectionContentionError("snapshot did not stabilize"),
+    guidance: "Wait a moment for write activity to settle, then retry the inspection.",
+    restore: false,
+  },
+  {
+    name: "database corruption",
+    error: new Error("database disk image is malformed"),
+    guidance: "Stop OpenClaw processes, then restore the affected database from a verified backup.",
+    restore: true,
+  },
+])(
+  "keeps Doctor's refusal and gives the next step for $name",
+  async ({ error, guidance, restore }) => {
+    const fixture = databaseFixture(tempDirs.make("doctor-readiness-guidance-"));
+    fixture.state();
+    closeDatabases();
+    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockRejectedValueOnce(error);
+
+    const failure = await fixture.doctor().catch((cause: unknown) => cause);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({
+      message: expect.stringContaining("Doctor could not complete repair"),
+    });
+    expect(failure).toMatchObject({ message: expect.stringContaining(error.message) });
+    expect(failure).toMatchObject({ message: expect.stringContaining(guidance) });
+    if (!restore) {
+      expect(failure).toMatchObject({ message: expect.not.stringContaining("restore") });
+    }
+  },
+);
+
+it("keeps retry and restore guidance with their affected agent databases", async () => {
+  const fixture = databaseFixture(tempDirs.make("doctor-mixed-readiness-"));
+  const busy = fixture.agent("busy");
+  const corrupt = fixture.agent("corrupt");
+  closeDatabases();
+  const prepare = snapshots.prepareSqliteReadOnlyLocation;
+  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((source, options) => {
+    if (source === busy.path) {
+      throw new SqliteReadOnlyInspectionContentionError("snapshot did not stabilize");
+    }
+    if (source === corrupt.path) {
+      throw new Error("database disk image is malformed");
+    }
+    return prepare(source, options);
+  });
+
+  await expect(
+    withArtifactPreservingStateReads(() => fixture.doctor(), { agentDatabases: true }),
+  ).rejects.toThrow(
+    `Doctor could not complete repair because persisted database readiness could not be verified:\nagent ${busy.path}: snapshot did not stabilize Wait a moment for write activity to settle, then retry the inspection.\nagent ${corrupt.path}: database disk image is malformed Stop OpenClaw processes, then restore the affected database from a verified backup.`,
+  );
+});
+
+it("upgrades captured subagent authority state without rewriting rows and refuses schema-24 targets", async () => {
   const fixture = databaseFixture(tempDirs.make("subagent-authority-format-"));
   const pathname = fixture.state().path;
   await closeOpenClawStateDatabaseAsync();
@@ -44,6 +106,8 @@ it("upgrades the subagent authority format without rewriting rows and refuses sc
   let catalog;
   {
     using writer = openRawDatabase(pathname);
+    catalog = writer.prepare(catalogSql).all();
+    addPreCutoverClientCredentialTablesForTest(writer);
     writer.exec(`PRAGMA user_version = 24;
       UPDATE schema_meta SET schema_version = 24 WHERE meta_key = 'primary';
       UPDATE config_machine_state SET value_json = '24'
@@ -53,11 +117,11 @@ it("upgrades the subagent authority format without rewriting rows and refuses sc
       (run_id, child_session_key, requester_session_key, created_at, payload_json)
       VALUES ('interrupted-child', 'agent:main:subagent:child', 'agent:main:main', 1, ?)`)
       .run(payload);
-    catalog = writer.prepare(catalogSql).all();
   }
   // A prior process's file must acquire fresh physical admission, not cached version facts.
   fs.renameSync(pathname, `${pathname}.v24`);
   fs.copyFileSync(`${pathname}.v24`, pathname);
+  await withStateMigrationBackupForTest({ env: fixture.env }, () => fixture.state());
   const { db } = fixture.state();
   expect(db.prepare("PRAGMA user_version").get()).toEqual({
     user_version: supportedVersions.state,

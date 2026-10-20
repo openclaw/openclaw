@@ -166,6 +166,7 @@ export type OpenClawToolsOptions = {
   sandboxWorkspaceMediaReadAllowed?: boolean;
   fsPolicy?: ToolFsPolicy;
   sandboxed?: boolean;
+  cronSandboxContext?: CronToolOptions["sandboxContext"];
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   /** Prepared profile authority for the gateway tool's configuration-read actions. */

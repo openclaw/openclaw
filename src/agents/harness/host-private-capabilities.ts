@@ -7,6 +7,7 @@ import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import type {
   ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityRequester,
   ReplyToolAuthorityPreparation,
   ReplyToolAuthorityRoute,
 } from "../../sessions/session-controller.contracts.js";
@@ -138,7 +139,7 @@ export function prepareQuestionGatewayDispatch(
 }
 
 type CallerReadPreparer = (
-  caller: ReplyToolAuthorityOverlay | undefined,
+  caller: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester | undefined,
   fingerprint: string,
   route: ReplyToolAuthorityRoute | undefined,
   assertCurrent: () => void,
@@ -212,7 +213,7 @@ export function bindReplyToolAuthorityCallerRead(
 
 export async function prepareReplyToolAuthorityCallerRead(
   projector: object | undefined,
-  caller: ReplyToolAuthorityOverlay | undefined,
+  caller: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester | undefined,
   fingerprint: string | undefined,
   route: ReplyToolAuthorityRoute | undefined,
   assertCurrent: () => void,

@@ -1,20 +1,34 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveReplyOperationAbortReason } from "../../../auto-reply/reply/reply-operation-abort.js";
 import {
+  areDiagnosticsEnabledForProcess,
+  setDiagnosticsEnabledForProcess,
+} from "../../../infra/diagnostic-events.js";
+import {
   createDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunStarted,
   closeDiagnosticEmbeddedRunOwner,
 } from "../../../logging/diagnostic-run-activity.js";
+import { getDiagnosticSessionState } from "../../../logging/diagnostic-session-state.js";
+import { resetDiagnosticStateForTest } from "../../../logging/diagnostic.test-support.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
+import {
+  beginReplyMessageInjectionTarget,
+  captureReplyMessageInjectionTarget,
+} from "../../../sessions/session-controller.message-injection.js";
 import { isSessionRunActive } from "../../../sessions/session-controller.queries.js";
 import { assertSessionControllerOperation } from "../../../sessions/session-controller.state.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { attachCliReplyBackend } from "../../cli-runner/execution-target.js";
+import { runWithCliTurn } from "../../cli-runner/turn-admission.js";
 import {
   isAgentRunRestartAbortReason,
   isAgentRunSupersededAbortReason,
   resolveAgentRunErrorLifecycleFields,
 } from "../../run-termination.js";
+import { getActiveNativeAttempt } from "../run-state.js";
 import {
   abortEmbeddedAgentRun,
   detachActiveEmbeddedRun,
@@ -157,6 +171,80 @@ describe("deferred logical-turn lifecycle", () => {
       operation.complete();
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("keeps native ownership through CLI backend cleanup and returns the completed turn to idle", async () => {
+    const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
+    setDiagnosticsEnabledForProcess(true);
+    try {
+      await withSessionTurn({ sessionId, sessionKey }, async (operation) => {
+        const manager = createDeferredEmbeddedRunLifecycleManager({
+          runId: "cli-owned-turn",
+          sessionId,
+          sessionKey,
+          replyOperation: operation,
+        });
+        try {
+          const diagnosticOwner = manager.handoffToCli();
+          const native = getActiveNativeAttempt(sessionId);
+          expect(native).toBeDefined();
+          expect(getDiagnosticSessionState({ sessionId, sessionKey }).state).toBe("processing");
+
+          await runWithCliTurn(
+            {
+              sessionId,
+              sessionKey,
+              sessionFile: "cli-owned-turn.jsonl",
+              workspaceDir: ".",
+              prompt: "Reply with exactly: pong",
+              provider: "claude-cli",
+              runId: "cli-owned-turn",
+              timeoutMs: 10_000,
+              replyOperation: operation,
+              diagnosticOwner,
+            },
+            async (params) => {
+              const injected: string[] = [];
+              const detach = attachCliReplyBackend(params, () => {}, {
+                supportsTranscriptCommitWait: true,
+                messageInjectionV2: {
+                  version: 2,
+                  isAvailable: () => true,
+                  queueMessage: async (text, _options, assertCurrent) => {
+                    assertCurrent();
+                    injected.push(text);
+                  },
+                },
+              });
+              try {
+                expect.soft(getActiveNativeAttempt(sessionId)).toBe(native);
+                const target = captureReplyMessageInjectionTarget(params.replyOperation);
+                expect(target).toBeDefined();
+                const injection = await beginReplyMessageInjectionTarget(target!, "guidance", {
+                  waitForTranscriptCommit: true,
+                });
+                await expect(injection.outcome).resolves.toEqual({ status: "accepted" });
+                expect(injected).toEqual(["guidance"]);
+              } finally {
+                detach?.();
+              }
+              expect.soft(getActiveNativeAttempt(sessionId)).toBe(native);
+              expect(getDiagnosticSessionState({ sessionId, sessionKey }).state).toBe("processing");
+              return { payloads: [{ text: "pong" }], meta: { durationMs: 0 } };
+            },
+          );
+        } finally {
+          await manager.complete();
+        }
+        expect.soft(getDiagnosticSessionState({ sessionId, sessionKey }).state).toBe("idle");
+        expect(getActiveNativeAttempt(sessionId)).toBeUndefined();
+      });
+      expect(isSessionRunActive(sessionId)).toBe(false);
+      expect(getDiagnosticSessionState({ sessionId, sessionKey }).state).toBe("idle");
+    } finally {
+      resetDiagnosticStateForTest();
+      setDiagnosticsEnabledForProcess(diagnosticsEnabled);
     }
   });
 

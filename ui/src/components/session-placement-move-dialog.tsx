@@ -1,6 +1,7 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
+import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import {
@@ -15,6 +16,8 @@ import "../styles/new-session.css";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 import { compareCloudProfiles } from "./provider-icon-data.ts";
 import { Icon } from "./solid/icon.tsx";
+
+registerSessionOrganizationEnglish();
 
 registerNewSessionSetupEnglish();
 

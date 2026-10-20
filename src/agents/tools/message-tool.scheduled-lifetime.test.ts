@@ -4,6 +4,7 @@ import type { ChannelOutboundContext } from "../../channels/plugins/outbound.typ
 import type { ChannelPollContext } from "../../channels/plugins/types.core.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { createChannelPartialDeliveryError } from "../../channels/turn/delivery-result.js";
+import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
 import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as activeJobs from "../../cron/active-jobs.js";
@@ -286,14 +287,8 @@ it.each([
         catalog: () => ({ tools: catalog }),
         isAvailable: () => catalog.some((tool) => tool.name === "message"),
       });
-      const tool = createMessageTool({
-        config,
-        ...identity,
-        agentSessionKey: sessionKey,
-        agentAccountId: "default",
-        messageActionTurnCapability: admission.messageActionTurnCapability,
-        admitScheduledInvocation: invocationPolicy.admit,
-        resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => {
+      vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
+        async ({ config: resolvedConfig }) => {
           await pauseAtBoundary(revokeAt === "config");
           return {
             resolvedConfig,
@@ -302,6 +297,14 @@ it.each([
             hadUnresolvedTargets: false,
           };
         },
+      );
+      const tool = createMessageTool({
+        config,
+        ...identity,
+        agentSessionKey: sessionKey,
+        agentAccountId: "default",
+        messageActionTurnCapability: admission.messageActionTurnCapability,
+        admitScheduledInvocation: invocationPolicy.admit,
       });
       catalog.push(tool);
       const invoke = <T>(run: () => Promise<T>) =>
@@ -412,6 +415,7 @@ it.each([
       source.abort();
       releaseBoundary.resolve();
       await pending?.catch(() => undefined);
+      vi.restoreAllMocks();
       admission?.close();
       releaseCancellation?.();
       activeJobs.clearCronJobActive(jobId, marker);

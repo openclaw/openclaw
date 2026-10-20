@@ -1,8 +1,10 @@
 // OpenClaw TUI backend tests cover rescue status integration with the TUI backend.
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as preparedModelCatalog from "../agents/prepared-model-catalog.js";
+import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps, SystemAgentOperation } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
@@ -537,7 +539,23 @@ describe("runSystemAgentTui", () => {
       const events: string[] = [];
       const runtime = createRuntime();
       runtime.log = (...args) => events.push(`log:${args.join(" ")}`);
-      const verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+      let verified = await createVerifiedTuiOptions({ loadOverview: async () => overview });
+      if (handoff.target === "gateway") {
+        const configFixture = await createInferenceConfigFixture(verifiedConfig);
+        const snapshot = configFixture.snapshot;
+        const fixture = await createSystemAgentVerifiedInferenceTestFixture(
+          snapshot.runtimeConfig ?? snapshot.config,
+          snapshot,
+        );
+        verified = {
+          verifiedInference: fixture.binding,
+          deps: { readConfigFileSnapshot: configFixture.read, loadOverview: async () => overview },
+        };
+        const reader = vi
+          .spyOn(configModule, "readConfigFileSnapshot")
+          .mockImplementation(configFixture.read);
+        onTestFinished(() => reader.mockRestore());
+      }
       await runSystemAgentTui(
         {
           ...verified,

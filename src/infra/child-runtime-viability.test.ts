@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { accessSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -13,6 +13,11 @@ import {
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, accessSync: vi.fn(actual.accessSync) };
 });
 
 const log = vi.hoisted(() => ({ error: vi.fn() }));
@@ -36,14 +41,12 @@ describe("child runtime viability", () => {
     { execPath: process.execPath, code: undefined, available: true },
     { execPath: "/fixture/restricted-node", code: "EACCES", available: true },
   ])("classifies executable access $code", ({ execPath, code, available }) => {
-    const viability = readChildRuntimeViability({
-      execPath,
-      access: () => {
-        if (code) {
-          throw Object.assign(new Error(code), { code });
-        }
-      },
+    vi.mocked(accessSync).mockImplementationOnce(() => {
+      if (code) {
+        throw Object.assign(new Error(code), { code });
+      }
     });
+    const viability = readChildRuntimeViability({ execPath });
     expect(viability).toEqual({ execPath, available });
     expect(formatMissingChildRuntimeWarning(viability)).toBe(
       available
@@ -69,7 +72,7 @@ it("records a permanent loader failure once and does not confuse a post-handshak
   });
   expect(failure).toMatchObject({ code: "NODE_RUNTIME_UNAVAILABLE" });
   expect(classifyChildRuntimeFailure({ execPath, signal: "SIGABRT" })).toBe(failure);
-  expect(readChildRuntimeViability({ execPath, access: () => {} }).available).toBe(false);
+  expect(readChildRuntimeViability({ execPath }).available).toBe(false);
   expect(log.error).toHaveBeenCalledExactlyOnceWith(failure?.message);
 });
 

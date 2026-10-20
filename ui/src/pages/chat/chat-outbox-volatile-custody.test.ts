@@ -20,9 +20,9 @@ import { resumeStoredChatOutboxes, retryQueuedChatMessage } from "./chat-send-ac
 import { handleSendChat } from "./chat-send-submit.ts";
 import {
   listStoredChatOutboxes,
-  removeStoredChatComposerQueueItem,
+  updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
-import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
+import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
@@ -372,11 +372,10 @@ it.each([
     if (offscreen) {
       const saved = listStoredChatOutboxes(peer)[0]!;
       expect(
-        removeStoredChatComposerQueueItem(
+        updateStoredChatComposerQueueItems(
           peer,
           saved.sessionKey,
-          original.id,
-          saved.queue[0]!,
+          [{ expected: saved.queue[0]!, next: null }],
           saved.agentId,
         ),
       ).toBe(true);

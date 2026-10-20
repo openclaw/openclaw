@@ -1,4 +1,3 @@
-/** Native Computer Use service provisioning for isolated Codex homes. */
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -29,16 +28,7 @@ const CLIENT_RELATIVE_PATH = path.join(
 const SERVICE_PARENT_LABEL = "Computer Use service parent";
 const COPY_TIMEOUT_MS = 120_000;
 const INSPECT_TIMEOUT_MS = 30_000;
-const activeInstalls = new Map<string, Promise<CodexComputerUseServiceStatus>>();
-
-type CodexComputerUseServiceStatus = {
-  status: "installed" | "refreshed" | "already_current" | "source_missing" | "unsupported";
-  changed: boolean;
-  targetPath?: string;
-  sourcePath?: string;
-  sourceBuild?: string;
-  previousBuild?: string;
-};
+const activeInstalls = new Map<string, Promise<"source_missing" | void>>();
 
 type CopyServiceApp = (sourcePath: string, targetPath: string) => Promise<void>;
 type InspectServiceApp = (appPath: string) => Promise<CodexComputerUseServiceIdentity | undefined>;
@@ -83,10 +73,10 @@ export async function ensureCodexComputerUseServiceApp(params: {
   copyServiceApp?: CopyServiceApp;
   inspectServiceApp?: InspectServiceApp;
   assertCurrent?: () => void;
-}): Promise<CodexComputerUseServiceStatus> {
+}): Promise<"source_missing" | void> {
   const platform = params.platform ?? process.platform;
   if (platform !== "darwin") {
-    return { status: "unsupported", changed: false };
+    return;
   }
   const codexHome = path.resolve(params.codexHome);
   const ownershipRoot = path.resolve(params.ownershipRoot ?? path.dirname(codexHome));
@@ -107,7 +97,6 @@ export async function ensureCodexComputerUseServiceApp(params: {
     codexHome,
     ownershipRoot,
     targetParent,
-    targetPath,
     sourceAppCandidates: candidates,
   });
   activeInstalls.set(targetPath, install);
@@ -122,25 +111,17 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   codexHome: string;
   ownershipRoot: string;
   targetParent: string;
-  targetPath: string;
   sourceAppCandidates: readonly string[];
   copyServiceApp?: CopyServiceApp;
   inspectServiceApp?: InspectServiceApp;
   assertCurrent?: () => void;
-}): Promise<CodexComputerUseServiceStatus> {
+}): Promise<"source_missing" | void> {
   const inspectServiceApp = params.inspectServiceApp ?? inspectTrustedServiceApp;
   const source = await findUsableServiceApp(params.sourceAppCandidates, inspectServiceApp);
   if (!source) {
-    return { status: "source_missing", changed: false, targetPath: params.targetPath };
+    return "source_missing";
   }
   const { path: sourcePath, identity: sourceIdentity } = source;
-  const alreadyCurrent: CodexComputerUseServiceStatus = {
-    status: "already_current",
-    changed: false,
-    targetPath: params.targetPath,
-    sourcePath,
-    sourceBuild: sourceIdentity.build,
-  };
   const ownedParent = await prepareOwnedServiceParent({
     ownershipRoot: params.ownershipRoot,
     codexHome: params.codexHome,
@@ -148,10 +129,9 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   });
   const operationTargetPath = path.join(ownedParent.realPath, SERVICE_APP_NAME);
   await assertNotSymlink(operationTargetPath, "Computer Use service target");
-  const targetExisted = await pathExists(operationTargetPath);
   const initialIdentity = await inspectServiceApp(operationTargetPath);
   if (initialIdentity && identitiesMatch(initialIdentity, sourceIdentity)) {
-    return alreadyCurrent;
+    return;
   }
 
   await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
@@ -210,12 +190,6 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
       await fs.rm(backupPath, { recursive: true, force: true });
       backupCreated = false;
     }
-    return {
-      ...alreadyCurrent,
-      status: targetExisted ? "refreshed" : "installed",
-      changed: true,
-      ...(initialIdentity ? { previousBuild: initialIdentity.build } : {}),
-    };
   } catch (error) {
     if (
       backupCreated &&

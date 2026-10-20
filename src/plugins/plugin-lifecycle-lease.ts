@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerLeaseContext } from "../state/openclaw-state-lease-context.js";
@@ -136,12 +137,7 @@ async function withPluginLifecycleCache<T>(run: () => Promise<T>): Promise<T> {
       failures.push(error);
     }
   }
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Plugin lifecycle work failed");
-  }
+  throwCollectedErrors(failures, "Plugin lifecycle work failed");
   return result;
 }
 

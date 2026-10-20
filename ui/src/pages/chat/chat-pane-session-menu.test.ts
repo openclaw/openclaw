@@ -602,12 +602,15 @@ describe("chat pane session menu boundary", () => {
 
     await pane.handleHeaderSessionAction({ kind: "fork" }, session);
 
-    expect(create).toHaveBeenCalledWith({
-      parentSessionKey: session.key,
-      fork: true,
-      forkFrom: "last-completed",
-      agentId: "main",
-    });
+    expect(create).toHaveBeenCalledWith(
+      {
+        parentSessionKey: session.key,
+        fork: true,
+        forkFrom: "last-completed",
+        agentId: "main",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:forked");
   });
 
@@ -711,6 +714,15 @@ describe("chat pane session menu boundary", () => {
       agentId: "research",
     },
     {
+      name: "offline retained session",
+      key: "agent:main:current",
+      sessionId: "rename-current",
+      value: "Offline notes",
+      label: "Offline notes",
+      agentId: "main",
+      offline: true,
+    },
+    {
       name: "unchanged generated title",
       key: "agent:main:dashboard:generated",
       displayName: "Generated title",
@@ -719,7 +731,7 @@ describe("chat pane session menu boundary", () => {
     },
   ])(
     "renames only an edited captured session: $name",
-    ({ key, sessionId, displayName, value, label, agentId }) => {
+    ({ key, sessionId, displayName, value, label, agentId, offline }) => {
       const patch = vi.fn(async () => ({}));
       const { pane, state } = createTestChatPane({
         client: createGatewayBrowserClientFixture(),
@@ -727,6 +739,10 @@ describe("chat pane session menu boundary", () => {
       });
       state.sessionKey = key;
       state.assistantAgentId = agentId;
+      if (offline) {
+        pane.context.gateway.snapshot.phase = "offline";
+        state.connected = false;
+      }
       const session: GatewaySessionRow = {
         key,
         sessionId,

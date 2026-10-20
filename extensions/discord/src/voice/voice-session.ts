@@ -52,7 +52,7 @@ export class DiscordVoiceSessions {
   constructor(
     private readonly params: {
       accountId: string;
-      botUserId: () => string | undefined;
+      botUserId?: string;
       cfg: OpenClawConfig;
       client: Client;
       destroyed: () => boolean;
@@ -83,7 +83,7 @@ export class DiscordVoiceSessions {
     if (!entry || entry.sessionLifecycle.status === "stopped") {
       return;
     }
-    this.params.membership.activate(entry, this.params.botUserId());
+    this.params.membership.activate(entry, this.params.botUserId);
   }
 
   async resolveChannel({
@@ -390,7 +390,7 @@ export class DiscordVoiceSessions {
     audio.on("speaking", speakingHandler);
 
     this.params.sessions.set(guildId, entry);
-    this.params.membership.activate(entry, this.params.botUserId());
+    this.params.membership.activate(entry, this.params.botUserId);
     logger.info(
       `discord voice: joined guild=${guildId} channel=${channelId} mode=${voiceMode} agent=${route.agentId} voiceSession=${voiceRoute.sessionKey} supervisorSession=${route.sessionKey} voiceModel=${voiceConfig?.model ?? "route-default"}`,
     );
@@ -454,7 +454,7 @@ export class DiscordVoiceSessions {
       bootstrapContextInstructions,
       entry,
       getHumanParticipantCount: () =>
-        this.params.membership.countHumanParticipants(entry, this.params.botUserId()),
+        this.params.membership.countHumanParticipants(entry, this.params.botUserId),
       mode: voiceMode,
       onTerminalError: (error) => {
         logger.error(

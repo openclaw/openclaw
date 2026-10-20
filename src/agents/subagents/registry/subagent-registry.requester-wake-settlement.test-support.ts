@@ -1,8 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import type { onAgentEvent } from "../../../infra/agent-events.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -43,50 +42,9 @@ export function registerRequesterWakeSettlementBoundaryTests({
   getLifecycleHandler: () => Parameters<typeof onAgentEvent>[0] | undefined;
   useGlobalSessionScope: () => void;
 }): void {
-  it("delivers a yielded result despite an older failed grandchild awaiting cleanup", async () => {
-    const oldTime = Date.now() - 5 * 24 * 60 * 60 * 1000;
-    const oldParentKey = "agent:main:subagent:old-parent";
-    await registry.addSubagentRunForTests({
-      ...createSubagentRunParams({
-        runId: "old-parent",
-        childSessionKey: oldParentKey,
-        requesterSessionKey,
-        requesterAgentId: "main",
-      }),
-      createdAt: oldTime,
-      execution: { status: "terminal", startedAt: oldTime, endedAt: oldTime + 100 },
-      delivery: { status: "delivered", disposition: "delivered" },
-      cleanupCompletedAt: oldTime + 100,
-    });
-    await registry.addSubagentRunForTests({
-      ...createSubagentRunParams({
-        runId: "old-grandchild",
-        childSessionKey: "agent:main:subagent:old-grandchild",
-        requesterSessionKey: oldParentKey,
-        requesterAgentId: "main",
-      }),
-      createdAt: oldTime + 10,
-      execution: {
-        status: "terminal",
-        startedAt: oldTime + 10,
-        endedAt: oldTime + 50,
-        outcome: { status: "error", error: "Gateway lifecycle dispatch unavailable" },
-      },
-      delivery: { status: "pending" },
-      completion: { required: true, resultText: "unrelated old result" },
-    });
-
-    const requesterTurnRunId = "current-requester";
-    const child = {
-      runId: "current-child",
-      childSessionKey: "agent:main:subagent:current-child",
-      expectsCompletionMessage: true,
-    };
-    await spawnVisibleChild({ ...child, requesterTurnRunId });
-    await createRequesterYieldTool(requesterSessionKey, requesterTurnRunId).execute(
-      "yield-current-result",
-      {},
-    );
+  const readRun = registry.getSubagentRunByRunId;
+  async function settleYield(runId: string, children: ReturnType<typeof visibleChild>[]) {
+    await createRequesterYieldTool(requesterSessionKey, runId).execute(runId, {});
     const { withLocalSessionPlacementTurnSettlement } =
       await import("../../session-placement-admission.js");
     await withLocalSessionPlacementTurnSettlement(
@@ -94,17 +52,49 @@ export function registerRequesterWakeSettlementBoundaryTests({
         sessionId: "sess-main",
         sessionKey: requesterSessionKey,
         agentId: "main",
-        runId: requesterTurnRunId,
+        runId,
       },
       async () => ({
-        acceptedSessionSpawns: [child],
-        meta: {
-          durationMs: 1,
-          yielded: true,
-          executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
-        },
+        acceptedSessionSpawns: children,
+        meta: { durationMs: 1, yielded: true },
       }),
     );
+  }
+  const addRun = (
+    runId: string,
+    childSessionKey: string,
+    overrides: Omit<Parameters<typeof registry.addSubagentRunForTests>[0], "runId">,
+  ) =>
+    registry.addSubagentRunForTests({
+      runId,
+      childSessionKey,
+      requesterSessionKey,
+      requesterAgentId: "main",
+      ...overrides,
+    });
+  it("delivers a yielded result despite an older failed grandchild awaiting cleanup", async () => {
+    const oldTime = Date.now() - 5 * 24 * 60 * 60 * 1000;
+    const oldParentKey = "agent:main:subagent:old-parent";
+    await addRun("old-parent", oldParentKey, {
+      childAgentId: "main",
+      createdAt: oldTime,
+      endedAt: oldTime + 100,
+      delivery: { status: "delivered", disposition: "delivered" },
+      cleanupCompletedAt: oldTime + 100,
+    });
+    await addRun("old-grandchild", "agent:main:subagent:old-grandchild", {
+      childAgentId: "main",
+      requesterSessionKey: oldParentKey,
+      createdAt: oldTime + 10,
+      endedAt: oldTime + 50,
+      outcome: { status: "error", error: "Gateway lifecycle dispatch unavailable" },
+      completion: { required: true, resultText: "unrelated old result" },
+    });
+
+    const requesterTurnRunId = "current-requester";
+    const child = visibleChild("current-child");
+    await spawnVisibleChild({ ...child, requesterTurnRunId });
+    await settleYield(requesterTurnRunId, [child]);
     emitCompleted(child.runId, child.childSessionKey, "current counting result");
     await flushOwnedWork();
     await waitForDeliveredCleanup(child.runId);
@@ -113,31 +103,19 @@ export function registerRequesterWakeSettlementBoundaryTests({
     const wakeMessage = getRequesterWakeCalls()[0]?.params?.message;
     expect(wakeMessage).toContain("current counting result");
     expect(wakeMessage).not.toContain("unrelated old result");
-    expect(registry.getSubagentRunByRunId("old-grandchild")).toMatchObject({
+    expect(readRun("old-grandchild")).toMatchObject({
       delivery: { status: "pending" },
     });
-    expect(registry.getSubagentRunByRunId("old-grandchild")?.cleanupCompletedAt).toBeUndefined();
+    expect(readRun("old-grandchild")?.cleanupCompletedAt).toBeUndefined();
   });
   it("delivers after its owned descendant settles despite foreign active work in a global session", async () => {
     vi.setSystemTime(100_000);
     useGlobalSessionScope();
-    await registry.addSubagentRunForTests({
-      runId: "run-main-batch",
-      childSessionKey: "agent:main:subagent:batch",
-      requesterSessionKey,
-      requesterDisplayKey: "main",
-      requesterAgentId: "main",
-      task: "main completed batch",
-      cleanup: "keep",
+    await addRun("run-main-batch", "agent:main:subagent:batch", {
       createdAt: 1_000,
-      execution: {
-        status: "terminal",
-        startedAt: 1_100,
-        endedAt: 1_200,
-        outcome: { status: "ok" },
-      },
+      endedAt: 1_200,
+      outcome: { status: "ok" },
       expectsCompletionMessage: true,
-      delivery: { status: "pending" },
       requesterSettleWake: {
         status: "pending",
         attemptCount: 0,
@@ -146,79 +124,49 @@ export function registerRequesterWakeSettlementBoundaryTests({
         rearmGeneration: 1,
       },
     });
-    await registry.addSubagentRunForTests({
-      runId: "run-main-stale",
-      childSessionKey: "agent:main:subagent:stale",
+    await addRun("run-main-stale", "agent:main:subagent:stale", {
       requesterSessionKey: "agent:main:subagent:batch",
-      requesterDisplayKey: "main",
-      requesterAgentId: "main",
-      task: "main stale settle blocker",
-      cleanup: "keep",
       createdAt: 2_000,
-      execution: {
-        status: "terminal",
-        startedAt: 2_100,
-        endedAt: 2_200,
-        outcome: { status: "ok" },
-      },
+      endedAt: 2_200,
+      outcome: { status: "ok" },
       expectsCompletionMessage: true,
-      delivery: { status: "pending" },
     });
-    await registry.addSubagentRunForTests({
-      runId: "run-research-active",
-      childSessionKey: "agent:research:subagent:active",
-      requesterSessionKey,
-      requesterDisplayKey: "main",
+    await addRun("run-research-active", "agent:research:subagent:active", {
       requesterAgentId: "research",
-      task: "unrelated research work",
-      cleanup: "keep",
       createdAt: 3_000,
-      execution: { status: "running", startedAt: 3_100 },
     });
 
     const transitions: Array<{ status: string; attemptCount: number }> = [];
     const waits: Array<number | undefined> = [];
     const completions: Array<{ delivered: boolean; error?: string }> = [];
-    const runWake = () => {
-      const batch = registry.getSubagentRunByRunId("run-main-batch");
-      if (!batch) {
-        throw new Error("expected main requester batch");
-      }
-      return maybeWakeRequesterAfterAllChildrenSettled({
+    const runWake = () =>
+      maybeWakeRequesterAfterAllChildrenSettled({
         isSourceCurrent: () => true,
         requesterSessionKey,
-        settledEntry: batch,
+        settledEntry: expectDefined(readRun("run-main-batch"), "main requester batch"),
         onDescendantsPending: (deadline) => waits.push(deadline),
         transitionBatch: async (entries, state, onPublished) => {
           const publication = await mutateRequesterCompletionBatch({
             entries,
             operation: { kind: "transition", state },
-            context: captureOpenClawStateWorkerContext(),
             assertCurrent: () => {},
-            onCommitted: () => {},
             onPublished: () =>
               onPublished?.(entries.map((entry) => subagentRuns.get(entry.runId)!)),
           });
           expect(publication).toEqual({ applied: true, publication: "published" });
-          transitions.push({
-            status: state.status,
-            attemptCount: state.attemptCount,
-          });
+          transitions.push({ status: state.status, attemptCount: state.attemptCount });
         },
         completeBatch: async (entries, _rearmGeneration, outcome) => {
-          if (!outcome) {
-            throw new Error("Expected a requester delivery outcome");
-          }
+          const delivery = expectDefined(outcome, "requester delivery outcome");
           const publication = await mutateRequesterCompletionBatch({
             entries,
-            operation: { kind: "settle", outcome },
+            operation: { kind: "settle", outcome: delivery },
             assertCurrent: () => {},
           });
           expect(publication).toEqual({ applied: true, publication: "published" });
-          completions.push({ delivered: outcome.delivered, error: outcome.error });
+          completions.push({ delivered: delivery.delivered, error: delivery.error });
         },
       });
-    };
 
     await expect(runWake()).resolves.toBe(false);
     expect(transitions).toEqual([]);
@@ -228,10 +176,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     // Descendant settlement makes this recorded cohort runnable. Foreign work
     // sharing the logical key still cannot hold this physical requester's wake.
     await mutateSubagentRuns(["run-main-stale"], (rows) => {
-      const stale = rows.get("run-main-stale");
-      if (!stale) {
-        throw new Error("expected the owned descendant");
-      }
+      const stale = expectDefined(rows.get("run-main-stale"), "owned descendant");
       const settled: SubagentRunRecord = {
         ...stale,
         delivery: { status: "delivered", disposition: "delivered" },
@@ -246,58 +191,27 @@ export function registerRequesterWakeSettlementBoundaryTests({
     expect(transitions).toEqual([{ status: "dispatching", attemptCount: 1 }]);
     expect(getRequesterWakeCalls()).toHaveLength(1);
     expect(completions).toEqual([{ delivered: true, error: undefined }]);
-    expect(registry.getSubagentRunByRunId("run-main-batch")?.requesterSettleWake).toBeUndefined();
-    expect(
+    expect(readRun("run-main-batch")?.requesterSettleWake).toBeUndefined();
+    const activeDescendants = (agentId?: string) =>
       buildScopedSubagentRunReadIndexFromRuns(
         subagentRuns,
         requesterSessionKey,
-      ).countActiveDescendantRuns(requesterSessionKey),
-    ).toBe(1);
-    expect(
-      buildScopedSubagentRunReadIndexFromRuns(
-        subagentRuns,
-        requesterSessionKey,
-        "main",
-      ).countActiveDescendantRuns(requesterSessionKey),
-    ).toBe(0);
+        agentId,
+      ).countActiveDescendantRuns(requesterSessionKey);
+    expect([activeDescendants(), activeDescendants("main")]).toEqual([1, 0]);
   });
 
   it("wakes a yielded parent once after one running child is stopped", async () => {
     await registry.initSubagentRegistry();
     await registry.activateSubagentRegistry(getGatewayContext);
-    const { withLocalSessionPlacementTurnSettlement } =
-      await import("../../session-placement-admission.js");
     const requesterTurnRunId = "requester-stopped-pair";
     const stopped = visibleChild("stopped");
     const finished = visibleChild("finished");
     for (const child of [stopped, finished]) {
       await spawnVisibleChild({ ...child, requesterTurnRunId });
     }
-    await createRequesterYieldTool(requesterSessionKey, requesterTurnRunId).execute(
-      "yield-stopped-pair",
-      {},
-    );
-    await withLocalSessionPlacementTurnSettlement(
-      {
-        sessionId: "sess-main",
-        sessionKey: requesterSessionKey,
-        agentId: "main",
-        runId: requesterTurnRunId,
-      },
-      async () => ({
-        payloads: [],
-        acceptedSessionSpawns: [stopped, finished],
-        meta: {
-          durationMs: 1,
-          yielded: true,
-          executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
-        },
-      }),
-    );
-    const lifecycleHandler = getLifecycleHandler();
-    if (!lifecycleHandler) {
-      throw new Error("Fixture lifecycle listener was not registered before Stop");
-    }
+    await settleYield(requesterTurnRunId, [stopped, finished]);
+    const lifecycleHandler = expectDefined(getLifecycleHandler(), "lifecycle listener before Stop");
     lifecycleHandler({
       stream: "lifecycle",
       runId: stopped.runId,
@@ -308,7 +222,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     });
     await flushOwnedWork();
     expect(getRequesterWakeCalls()).toHaveLength(0);
-    expect(registry.getSubagentRunByRunId(stopped.runId)).toMatchObject({
+    expect(readRun(stopped.runId)).toMatchObject({
       endedReason: "subagent-killed",
       suppressCompletionDelivery: true,
     });
@@ -325,7 +239,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     await registry.testing.sweepOnceForTests();
     await flushOwnedWork();
     expect(getAgentCalls()).toHaveLength(1);
-    expect(registry.getSubagentRunByRunId(finished.runId)?.requesterSettleWake).toBeUndefined();
-    expect(registry.getSubagentRunByRunId(stopped.runId)).toBeUndefined();
+    expect(readRun(finished.runId)?.requesterSettleWake).toBeUndefined();
+    expect(readRun(stopped.runId)).toBeUndefined();
   });
 }

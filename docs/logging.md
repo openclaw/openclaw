@@ -348,6 +348,15 @@ results before repeating them.
 
 ### Targeted model transport diagnostics
 
+OpenAI Responses transport failures retain structured status, code, type, and
+error/cause names. When the active request signal was aborted, `abortReason`
+identifies OpenClaw-owned causes with fixed labels: `idle_timeout`, `no_progress`,
+`first_event_timeout`, `request_deadline`, `session_watchdog`, `restart`,
+`superseded`, or `caller_abort`. Unclassified caller cancellation uses
+`caller_abort`. Provider error messages and arbitrary abort-reason text are never
+logged because they can contain prompt or tool content. Headers and request or
+response bodies are also omitted.
+
 Prompt-cache history warnings identify the first changed message and bounded
 field paths, such as `content[0].thinkingSignature` or `content[0].arguments`.
 They report no message content, argument values, or signature bytes. Unknown
@@ -511,9 +520,7 @@ settlement and queue release. The Gateway's earlier operator-start queue is sepa
 
 `stepCount` counts admitted callbacks. `admittedStepMs` sums their elapsed time
 through actual settlement, including authority checks, factory work, and I/O
-waits. `continuationWaitMs` measures queue waiting after an incomplete step until
-resumption or cancellation; it excludes initial admission. These fields are not
-an exact disjoint partition and do not measure CPU time.
+waits. These fields are not an exact disjoint partition and do not measure CPU time.
 
 `admitted` and `providerInvoked` distinguish an attempt that never entered the
 queue's active slot from one that called the provider. Unreached intervals are
@@ -521,7 +528,6 @@ omitted. `outcome` reports the attempt's resolution or rejection;
 `signalAborted` reports the signal independently and does not identify an error's
 cause or prove that native work stopped. An active provider call or `next()` step
 keeps its slot until its actual promise settles, including after cancellation.
-An inert continuation queues with other callers between steps.
 
 `providerIdHash` hashes provider IDs of at most 256 UTF-16 units; longer IDs omit
 the field. It supports correlation, not anonymization or authorization. Host
@@ -748,6 +754,9 @@ structured file log. Records are limited to 60 per minute.
 the absolute checkout path; linked checkouts have different IDs. `checkoutClass`
 is `managed` when the caller supplies managed-index ownership, otherwise
 `unspecified`. Paths, refs, command arguments, and output contents are not logged.
+For `checkout.diff`, `scope` distinguishes `all`, `uncommitted`, and `commit`;
+`summaryOnly` distinguishes summary polling from full patch requests. These
+fields describe the admitted request without inspecting the checkout again.
 
 `workerQueueWaitMs` measures admission wait (null if never dispatched).
 `firstHostRequestMs` includes that wait plus worker startup and work before the

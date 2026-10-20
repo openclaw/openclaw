@@ -9,7 +9,7 @@ import { expect, it, vi } from "vitest";
 import type { StoredBinding } from "./agentsapi-binding-record.js";
 import {
   createAttempt,
-  executorFixture,
+  externalSessionFixture,
   mockClient,
   registerHarness,
   reopenState,
@@ -170,6 +170,11 @@ export function registerMigrationTests(
       expect(await store.lookup(params.sessionId)).toEqual(legacy);
       expectNoCalls(client.create, client.update, client.message);
       fetchMock.mockImplementationOnce(async ({ url }) =>
+        guardedResponse(url, Response.json({ ...legacySession(), id: "different-session" })),
+      );
+      await expect(harness.runAttempt(params)).rejects.toThrow("different session");
+      expect(await store.lookup(params.sessionId)).toEqual(legacy);
+      fetchMock.mockImplementationOnce(async ({ url }) =>
         guardedResponse(url, Response.json(legacySession())),
       );
       expect(await harness.runAttempt(params)).toMatchObject({ terminal: { kind: "ok" } });
@@ -177,7 +182,7 @@ export function registerMigrationTests(
         sessionId: legacy.sessionId,
         configFingerprint: expect.any(String),
       });
-      expect(fetchMock).toHaveBeenCalledTimes(6);
+      expect(fetchMock).toHaveBeenCalledTimes(7);
     }));
 
   it("fences legacy migration when generation, lease, or source changes during access validation", () =>
@@ -250,7 +255,7 @@ export function registerMigrationTests(
     "settles unmigratable legacy work before %s with current agent authentication",
     (operation) =>
       withOpenClawTestState({ label: "agentsapi-upgrade-cleanup" }, async (state) => {
-        const { params, ...fixture } = await executorFixture(state);
+        const { params, ...fixture } = await externalSessionFixture(state);
         const store = migrationStore(state.env);
         await store.register(params.sessionId, legacy);
         await reopenState();
@@ -286,7 +291,7 @@ export function registerMigrationTests(
           );
           const cancelledIds = fixture.cancel.mock.calls.map(([id]) => id);
           expect(cancelledIds).toEqual([legacy.sessionId, legacy.sessionId]);
-          expectNoCalls(fixture.controller.retire, fixture.create);
+          expectNoCalls(fixture.create);
         } finally {
           await harness.dispose();
         }

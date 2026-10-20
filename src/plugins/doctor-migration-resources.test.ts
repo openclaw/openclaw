@@ -15,6 +15,7 @@ import { waitForPluginCacheRetirement } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 let noDataMigrations: { pluginId: string; migration: PluginDoctorStateMigration }[];
+let recoveryMigrations: { pluginId: string; migration: PluginDoctorStateMigration }[];
 beforeAll(async () => {
   const ids = new Set([
     "crabbox-warm-profile-v3",
@@ -32,6 +33,13 @@ beforeAll(async () => {
         .filter((migration) => ids.has(migration.id))
         .map((migration) => ({ pluginId, migration })),
     );
+  }
+  recoveryMigrations = [];
+  for (const pluginId of ["codex", "voice-call"]) {
+    const { stateMigrations } = await loadBundledPluginFacade<{
+      stateMigrations: PluginDoctorStateMigration[];
+    }>({ pluginId, artifactBasename: "doctor-contract-api.ts" });
+    recoveryMigrations.push(...stateMigrations.map((migration) => ({ pluginId, migration })));
   }
 });
 
@@ -107,6 +115,51 @@ it("does not claim missing recovery coverage for bundled core-only and disposabl
   expect(result.resources).toEqual([]);
   expect(input.warnings).toEqual([]);
 });
+
+it.each(["absent", "default", "configured"] as const)(
+  "declares Codex sidecars and Voice Call SQLite recovery resources for %s state",
+  async (layout) => {
+    const store = path.join(stateDir, layout === "configured" ? "custom-calls" : "voice-calls");
+    const database = path.join(store, "state", "openclaw.sqlite");
+    const sessions = path.join(stateDir, "agents", "main", "sessions");
+    const sidecar = path.join(sessions, "session.jsonl.codex-app-server.json");
+    const sharedSidecar = path.join(stateDir, "sessions", "old.jsonl.codex-app-server.json");
+    const sources = [database, sidecar, sharedSidecar];
+    if (layout === "configured") {
+      input.config = {
+        plugins: { entries: { "@openclaw/voice-call": { config: { store } } } },
+      };
+    }
+    if (layout !== "absent") {
+      for (const file of sources) {
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, "original migration input");
+      }
+    }
+    const expected = [
+      { path: path.join(stateDir, "state", "openclaw.sqlite"), kind: "sqlite" },
+      ...(layout === "absent"
+        ? []
+        : [
+            { path: database, kind: "sqlite" },
+            { path: sidecar, kind: "file" },
+            { path: sharedSidecar, kind: "file" },
+          ]),
+    ];
+    for (let run = 0; run < 2; run++) {
+      input.warnings = [];
+      const result = await preparePluginDoctorMigrationResources(recoveryMigrations, input);
+      expect(result.resources).toEqual(expected.toSorted((a, b) => a.path.localeCompare(b.path)));
+      expect(input.warnings).toEqual([]);
+    }
+    for (const file of sources) {
+      expect(fs.existsSync(file)).toBe(layout !== "absent");
+      if (layout !== "absent") {
+        expect(fs.readFileSync(file, "utf8")).toBe("original migration input");
+      }
+    }
+  },
+);
 
 it("warns once per undeclared owner without running its migration", async () => {
   const result = await preparePluginDoctorMigrationResources(

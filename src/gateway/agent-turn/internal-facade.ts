@@ -120,6 +120,26 @@ export function createInternalAgentTurnFacade(
       let acceptedAbortOwner: { entry: RpcSourceRef; runId: string } | undefined;
       let emittedAbortOwner: { entry: RpcSourceRef; runId: string } | undefined;
       let startOwnerPublished = false;
+      let sourceIdentityLost = false;
+      const isSourceIdentityCurrent = (owner: RpcSourceRef) => {
+        try {
+          options.assertContextCurrent?.();
+          const identity = getRpcSourceIdentity(owner);
+          // Losing the captured source is permanent, independently of its own abort.
+          sourceIdentityLost ||=
+            options.getContext() !== context ||
+            !isRpcSourceRegistered(owner) ||
+            owner.input.protocolRunId !== expectedRunId ||
+            getAgentEventLifecycleGeneration() !== lifecycleGeneration ||
+            getRpcSourceLifecycleGeneration(owner) !== lifecycleGeneration ||
+            (expectedAgentId !== undefined && identity.agentId !== expectedAgentId) ||
+            (!isRpcSourceExecuting(owner) && identity.sessionId !== expectedSessionId) ||
+            identity.sessionKey !== expectedSessionKey;
+        } catch {
+          sourceIdentityLost = true;
+        }
+        return !sourceIdentityLost;
+      };
       const publishStartOwner = (runId: string, owner: RpcSourceRef) => {
         const identity = getRpcSourceIdentity(owner);
         if (
@@ -136,25 +156,13 @@ export function createInternalAgentTurnFacade(
         }
         startOwnerPublished = true;
         const observe = () => {
-          try {
-            options.assertContextCurrent?.();
-          } catch {
-            return undefined;
-          }
-          if (
-            !isRpcSourceRegistered(owner) ||
-            getAgentEventLifecycleGeneration() !== lifecycleGeneration ||
-            getRpcSourceLifecycleGeneration(owner) !== lifecycleGeneration ||
-            (expectedAgentId !== undefined &&
-              getRpcSourceIdentity(owner).agentId !== expectedAgentId) ||
-            getRpcSourceIdentity(owner).sessionId !== expectedSessionId ||
-            getRpcSourceIdentity(owner).sessionKey !== expectedSessionKey ||
-            owner.input.abortSignal.aborted ||
-            owner.input.retirementRequested === true
-          ) {
+          if (!isSourceIdentityCurrent(owner)) {
             return undefined;
           }
           const executionStarted = isRpcSourceExecuting(owner);
+          if (owner.input.abortSignal.aborted || owner.input.retirementRequested === true) {
+            return undefined;
+          }
           // The start watch is complete; attempt policy may itself read this owner.
           const watchdog = executionStarted ? undefined : owner.input.claim?.operation?.watchdog;
           const snapshot = watchdog?.snapshot();
@@ -314,6 +322,21 @@ export function createInternalAgentTurnFacade(
                 io,
                 onRunObserved,
                 assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
+                assertCancellationCurrent: dispatchOptions.assertCancellationCurrent
+                  ? () => {
+                      const owner = emittedAbortOwner?.entry;
+                      if (
+                        !owner ||
+                        emittedAbortOwner?.runId !== expectedRunId ||
+                        !owner.input.abortSignal.aborted ||
+                        !isSourceIdentityCurrent(owner)
+                      ) {
+                        throw new Error("Canceled agent request no longer owns its RPC source");
+                      }
+                      dispatchOptions.assertCancellationCurrent?.();
+                    }
+                  : undefined,
+                executionSource: dispatchOptions.executionSource,
                 privateCompletion: dispatchOptions.privateCompletion,
                 replyExpectation: dispatchOptions.replyExpectation,
                 settleWakeReplay: dispatchOptions.settleWakeReplay,

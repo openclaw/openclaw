@@ -21,6 +21,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { observeAgentRunStart } from "../agent-run-start.js";
 import {
   isNativeCommandTurn,
+  isExplicitFollowupCommandTurn,
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
 } from "../command-turn-context.js";
@@ -97,9 +98,7 @@ export function createDispatchReplyOperationCoordinator(
         }),
       );
     }
-    if (!dispatchReplyOperation && !preDispatchLifecycleAdmission) {
-      return;
-    }
+    // A native command can acquire its operation after resolver work starts.
     const pending = dispatchLifecycleWork[phase];
     const settled = work.then(
       () => {},
@@ -224,7 +223,12 @@ export function createDispatchReplyOperationCoordinator(
         resolveCommandTurnTargetSessionKey(params.ctx) !== params.dispatchOperationSessionKey)
     ) {
       assertRequestCurrent();
-      if (input?.retirementRequested || getPreDispatchAbortSignal()?.aborted) {
+      // A resolved command may consume its input before delivering its refusal.
+      // Retirement bars new work; cancellation still bars final delivery.
+      if (
+        getPreDispatchAbortSignal()?.aborted ||
+        (phase !== "dispatch" && input?.retirementRequested)
+      ) {
         return { status: "aborted" };
       }
       return { status: "ready" };
@@ -296,20 +300,21 @@ export function createDispatchReplyOperationCoordinator(
               })
             : undefined,
         );
-    // An explicit /steer becomes queue input for the active turn, so it must reach
-    // queue policy like an ordinary message rather than wait for that turn to end.
-    const explicitSteerCommandTurn = isExplicitSteerCommandTurn(params.ctx);
+    // Queue commands must reach admission while the incumbent is active so their
+    // steering or followup outcome can be reported before that turn ends.
+    const explicitQueueCommandTurn =
+      isExplicitSteerCommandTurn(params.ctx) || isExplicitFollowupCommandTurn(params.ctx);
     const commandRequiresTurn =
       (isExplicitCommandTurnContext(params.ctx, params.cfg) ||
         isUnauthorizedTextSlashCommand(params.ctx)) &&
       !activeRunSafe &&
-      !explicitSteerCommandTurn;
+      !explicitQueueCommandTurn;
     const queueEligible =
       replyTurnKind === "visible" || params.replyOptions?.internalEventExecution !== undefined;
     const allowQueuePreparation =
       queueEligible &&
       !commandRequiresTurn &&
-      (explicitSteerCommandTurn ||
+      (explicitQueueCommandTurn ||
         params.replyOptions?.turnAdoptionLifecycle !== undefined ||
         params.allowActiveQueueResolution === true);
     const allowActiveResolution =
@@ -507,6 +512,9 @@ export function createDispatchReplyOperationCoordinator(
       }
       if (
         admission.reason === "active-run" &&
+        // Releasing a refused claim retires its source. Its producer must retry
+        // admission instead of resolving queue policy on that consumed input.
+        !mailboxClaim &&
         (allowActiveResolution ||
           shouldLetSlackRoutedThreadBypassBusyReplyOperation({
             activeOperation: admission.activeOperation,
@@ -594,7 +602,6 @@ export function createDispatchReplyOperationCoordinator(
     params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
   let agentRunTerminalOutcome: "completed" | "failed" | undefined;
-  let agentRunId = params.replyOptions?.runId;
   const markObservedReplyDelivery = async () => {
     if (observedReplyDelivery) {
       return;
@@ -622,8 +629,6 @@ export function createDispatchReplyOperationCoordinator(
         : {}),
       ...observeAgentRunStart(params.replyOptions, (start) => {
         agentRunTerminalOutcome = "completed";
-        // Execution may generate its ID in copied options; finalization needs the observed run.
-        agentRunId = start.runId;
         params.messageAuditTerminal?.observeRunId(start.runId);
       }),
       onAgentRunTerminalOutcome: (outcome) => {
@@ -633,23 +638,21 @@ export function createDispatchReplyOperationCoordinator(
         params.replyOptions?.onAgentRunTerminalOutcome?.(outcome);
       },
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
-      ...(params.replyOptions?.internalEventExecution
-        ? {
-            onReplyOperationOwned: (operation: ReplyOperation) => {
-              if (dispatchReplyOperation && dispatchReplyOperation !== operation) {
-                throw new Error("Reply dispatch already owns another operation");
-              }
-              operation.abortSignal.throwIfAborted();
-              params.replyOptions?.abortSignal?.throwIfAborted();
-              params.replyOptions?.onReplyOperationOwned?.(operation);
-              params.replyOptions?.internalEventExecution?.assertCurrent?.();
-              dispatchReplyOperation = operation;
-              dispatchAbortOperation = operation;
-              admittedExpectedSessionId = operation.sessionId;
-              return true;
-            },
-          }
-        : {}),
+      // Native command continuations acquire their operation in the runner. Its
+      // completion belongs to dispatch so the final answer retains delivery authority.
+      onReplyOperationOwned: (operation: ReplyOperation) => {
+        if (dispatchReplyOperation && dispatchReplyOperation !== operation) {
+          throw new Error("Reply dispatch already owns another operation");
+        }
+        operation.abortSignal.throwIfAborted();
+        params.replyOptions?.abortSignal?.throwIfAborted();
+        params.replyOptions?.onReplyOperationOwned?.(operation);
+        params.replyOptions?.internalEventExecution?.assertCurrent?.();
+        dispatchReplyOperation = operation;
+        dispatchAbortOperation = operation;
+        admittedExpectedSessionId = operation.sessionId;
+        return true;
+      },
     };
   };
 
@@ -719,7 +722,6 @@ export function createDispatchReplyOperationCoordinator(
     turnLedger,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
-    getAgentRunId: () => agentRunId,
     getAgentRunTerminalOutcome: () => agentRunTerminalOutcome,
     getDispatchAbortOperation: () => dispatchAbortOperation,
     getDispatchAbortSignal,

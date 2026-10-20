@@ -224,9 +224,13 @@ export async function buildBrowserGatewayConnectPlan({
           "tool-events",
           "chat-only-assistant-text",
           "hello-health-on-demand",
+          "health-summary",
+          "hello-presence-self",
           "session-scoped-events",
           "presence-deltas",
-          ...(!nativeAuth ? ["session-row-deltas", "roster-message-bodies-optional"] : []),
+          ...(!nativeAuth
+            ? ["session-row-deltas", "session-event-field-refs", "roster-message-bodies-optional"]
+            : []),
           "inline-widgets",
           "model-selection-policy",
           "model-wait-status",

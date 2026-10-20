@@ -5,6 +5,10 @@ import { runGitWorkerOperation } from "../infra/git-worker.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createControlUiSessionPullRequestSubscriptions as createSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import {
+  spyOnSessionPrLoader,
+  type SessionPrLoader,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
+import {
   createSessionPullRequestsFixture,
   githubJson,
   pullListItem,
@@ -91,12 +95,16 @@ function mockCheckout(
 }
 
 function subscribe(
-  options: Pick<Parameters<typeof createSubscriptions>[0], "load" | "broadcastToConnIds">,
+  options: Pick<Parameters<typeof createSubscriptions>[0], "broadcastToConnIds"> & {
+    load: SessionPrLoader;
+  },
 ) {
+  const { load, ...deps } = options;
+  spyOnSessionPrLoader(load);
   const subscriptions = createSubscriptions({
     scheduler: createTestGatewayScheduler("fake-timers"),
     prepareRead: fixture.prepareRead,
-    ...options,
+    ...deps,
   });
   subscriptionsToStop.add(subscriptions);
   return subscriptions;
@@ -286,7 +294,12 @@ describe("watched session PR retention", () => {
     let fetchFailure = false;
     stubPulls(() => githubJson(fetchFailure ? {} : [], fetchFailure ? 503 : 200), true);
     mockCheckout(
-      () => branch,
+      () => {
+        if (rootFailure) {
+          throw new Error("session unavailable");
+        }
+        return branch;
+      },
       () => branch,
     );
     const load = () =>
@@ -294,12 +307,7 @@ describe("watched session PR retention", () => {
         { sessionKey: "retained", refresh: true },
         {
           cacheSignal: cacheLifetime.signal,
-          resolveGitRoot: async () => {
-            if (rootFailure) {
-              throw new Error("session unavailable");
-            }
-            return root;
-          },
+          resolveGitRoot: async () => root,
         },
       );
     const pins = () => listenerCount(cacheLifetime.signal);
@@ -332,6 +340,9 @@ describe("watched session PR retention", () => {
       branch = null;
       await load();
       expect(pins()).toBe(0);
+      branch = "feature-c";
+      await load();
+      expect(pins()).toBe(1);
       rootFailure = true;
       await expect(load()).rejects.toThrow("session unavailable");
       expect(pins()).toBe(0);

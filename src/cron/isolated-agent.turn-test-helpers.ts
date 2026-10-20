@@ -52,7 +52,7 @@ export async function readCronSessionEntry(storePath: string, key: string) {
 
 export const DEFAULT_MESSAGE = "do it";
 const DEFAULT_SESSION_KEY = "cron:job-1";
-export const DEFAULT_AGENT_TURN_PAYLOAD: CronJob["payload"] = {
+const DEFAULT_AGENT_TURN_PAYLOAD: CronJob["payload"] = {
   kind: "agentTurn",
   message: DEFAULT_MESSAGE,
 };

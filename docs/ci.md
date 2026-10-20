@@ -60,6 +60,14 @@ a default weight. Inspect any assignment with `--shard 1/3 --list` (or `2/3`, `3
 The combined inventory matches the local full suite; a failure in one shard leaves
 the others running and fails the aggregate gate.
 
+The PostgreSQL Weekly Qualification workflow runs the same three conformance shards on
+digest-pinned PostgreSQL 16 and 18 images every Monday at 06:43 UTC, or by manual dispatch on main.
+Its six hosted jobs use the same measured shard allocator with a 50-minute job budget,
+with at most three running at once. PR CI keeps only the existing three PostgreSQL 17 shards.
+All versions start with `max_locks_per_transaction=512` for the conformance workload.
+Weekly failures surface through the workflow's failed jobs, like other standalone scheduled audits;
+the PR failure classifier continues to compare against hourly main CI's matching PostgreSQL 17 jobs.
+
 Full hybrid extension lint packs the same standard chunks into three existing rows, sharing setup and SDK preparation within each row. Targeted plans and frozen routes retain their existing layout; see [runner profiles](/ci/runners#runner-backend-modes).
 
 Full hybrid PR checks share central formatting and scripts lint with core lint stripe 1 when those are the complete central command inventory. The existing 16-class runner executes them sequentially within its 15-minute deadline, removing one checkout and dependency setup. Additional central checks, targeted core stripes, and plans without another required check row retain their separate lint job. Central lint still runs after a core lint failure and fails the shared job if it fails.
@@ -170,7 +178,7 @@ Full GitHub and hybrid type checks run the five core stripes independently, reta
 
 Additional checks and narrow-PR guards and dependency scans start directly after preflight. Ordinary PRs selecting Madge or Kysely divide guards into `check-guards` and `check-guards-architecture`, with the same runner routing and no compiler-plan wait. The manifest retains every check once, and both selected rows must pass. Other events retain their existing rows. Guards retain the exact comparison base and shared check commands; compiler and lint rows wait for their selected graphs. Known full compiler selections skip discovery while retaining the core graph boundary in an existing required owner; see [pipeline ordering](/ci/pipeline#fail-fast-order).
 
-Changed compiler planning reads complete programs from sequential native snapshots for core and additional graphs. It releases the core programs and closes their API before opening the additional graphs to bound each compiler heap. With `OPENCLAW_CI_TYPE_PLAN_SERIAL` unset, each snapshot shares parsing and resolution without changing graph membership or full fallback. Upstream first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect. Set `OPENCLAW_CI_TYPE_PLAN_SERIAL` to `true` or `1` to restore serial queries.
+Changed compiler planning queries each config's complete file membership with `--listFilesOnly`, using tsrs by default and tsgo on unsupported hosts or when `OPENCLAW_TYPECHECKER=tsgo`. Type-only consumers and dependency declarations remain included; the selected compiler's bundled library directory is excluded because it describes compiler identity, not repository membership. Config expansion and shard/buildinfo validation still use tsgo's `--showConfig`. Queries run serially without opening native API snapshots. Upstream first-attempt `check-plan` jobs use the 16-class when the backend is unset, `blacksmith`, or `hybrid`, including fork PRs. Fork type stripes also use the 16-class with an unset or `blacksmith` backend; their logical GitHub profile and restore-only cache policy stay intact. Existing hybrid health admission, the explicit GitHub override, retries, and frozen routing remain in effect.
 
 The extension package boundary row has a 40-minute job budget for SDK preparation,
 all selected plugin compiles, input-receipt validation, the required negative
@@ -222,6 +230,8 @@ a 30-minute budget; full nonpublishing app-host recovery proof has 75 minutes to
 and stage the exact runtime, exercise Retry, and verify a fresh-process relaunch.
 
 Native test builds retain coverage and source-line backtraces while omitting IDE indexes and full debugger type metadata. Local development builds keep their normal debug settings.
+
+The macOS app test phase installs the full workspace dependencies and builds the CLI runtime before Swift tests that use the shared exec policy owner. Other native phases keep the filtered Mermaid and protocol dependency install. Policy fixtures exercise the real local CLI rather than building it on their first request.
 
 Short hybrid jobs use a [40-row base threshold and 45-row hosted admission limit](/ci/capacity#bounded-hybrid-hosted-offload), with unchanged coverage and Blacksmith fallback when optional work does not fit.
 

@@ -73,6 +73,7 @@ describe("worker environment startup authority", () => {
         })),
         stop: vi.fn(async () => {}),
         stopAll: vi.fn(async () => {}),
+        beginClose: vi.fn(),
       };
       const workerService = support.createService(
         support.createProvider({

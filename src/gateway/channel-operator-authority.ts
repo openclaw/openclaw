@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { parseUserChannelAuthorizationReference } from "../state/user-channel-authorization-reference.js";
 import {
-  parseUserChannelAuthorizationReference,
   resolveUserChannelAuthorizationPolicy,
   resolveUserChannelIdentity,
 } from "../state/user-channel-identities.js";

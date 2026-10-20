@@ -10,10 +10,11 @@ import {
   storageTargetForGateway,
 } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import "./chat-outbox-recovery.tsx";
 
 const recoveryIo = vi.hoisted(() => ({
   confirm: vi.fn<(typeof import("../../components/confirm-dialog.ts"))["showConfirmDialog"]>(),
@@ -53,7 +54,7 @@ afterEach(async () => {
 
 async function mountRecovery(kind: "draft" | "queue" = "draft") {
   const request = vi.fn(async () => ({}));
-  const host: NonNullable<HTMLElementTagNameMap["openclaw-chat-outbox-recovery"]["host"]> = {
+  const host: Parameters<typeof PaneOutboxRecovery>[0]["state"] = {
     settings: { gatewayUrl: "ws://recovery-owner.test" },
     connected: true,
     client: createTestGatewayClient(request),
@@ -95,21 +96,20 @@ async function mountRecovery(kind: "draft" | "queue" = "draft") {
       },
     }),
   );
-  const element = Object.assign(document.createElement("openclaw-chat-outbox-recovery"), {
-    host,
-    identity: "current-owner",
-  });
   const restored = vi.fn();
-  element.addEventListener("outbox-restored", restored);
-  document.body.append(element);
+  const props = { state: host, identity: "current-owner", onRestored: restored };
+  let view = mountSolid(PaneOutboxRecovery, props);
+  document.body.append(view.container);
   await waitForSolid(() =>
-    expect(element.querySelector(".chat-outbox-recovery__preview")?.textContent).toBe(preview),
+    expect(view.container.querySelector(".chat-outbox-recovery__preview")?.textContent).toBe(
+      preview,
+    ),
   );
   const button = (action: "restore" | "discard") => {
     const label = t(
       action === "restore" ? "chat.outboxRecoveryRestore" : "chat.outboxRecoveryDelete",
     );
-    const found = [...element.querySelectorAll("button")].find(
+    const found = [...view.container.querySelectorAll("button")].find(
       (candidate) => candidate.textContent?.trim() === label,
     );
     if (!found) {
@@ -117,7 +117,20 @@ async function mountRecovery(kind: "draft" | "queue" = "draft") {
     }
     return found;
   };
-  return { host, element, button, restored, request };
+  return {
+    host,
+    button,
+    restored,
+    request,
+    get element() {
+      return view.container;
+    },
+    remount() {
+      view.dispose();
+      view = mountSolid(PaneOutboxRecovery, props);
+      document.body.append(view.container);
+    },
+  };
 }
 
 it("retires durable delivery receipts from the run owner without bridge prop refreshes", async () => {
@@ -169,7 +182,7 @@ it("admits one review before Solid flushes and restores through the storage owne
 });
 
 it.each(["restore", "discard"] as const)(
-  "retires a pending %s review with its Solid owner even when its tag reconnects",
+  "retires a pending %s review when its Solid owner remounts",
   async (action) => {
     const confirmation = createDeferred<boolean>();
     recoveryIo.confirm.mockReturnValue(confirmation.promise);
@@ -177,11 +190,7 @@ it.each(["restore", "discard"] as const)(
     fixture.button(action).click();
     await waitForSolid(() => expect(recoveryIo.confirm).toHaveBeenCalledOnce());
 
-    fixture.element.remove();
-    // Cross the bridge's same-turn move window before reconnecting the tag.
-    await Promise.resolve();
-    flush();
-    document.body.append(fixture.element);
+    fixture.remount();
     await waitForSolid(() => expect(fixture.button(action).disabled).toBe(false));
     confirmation.resolve(true);
     await confirmation.promise;

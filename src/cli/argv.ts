@@ -1,5 +1,4 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-// Low-level CLI argv helpers for root options, help/version detection, and command paths.
 import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
 import {
   consumeRootOptionToken,
@@ -171,19 +170,24 @@ function scanHelpNormalizationArgv(argv: string[]) {
   const positionals: HelpNormalizationPositional[] = [];
   const rootOptions: string[] = [];
   let helpFlagIndex: number | null = null;
+  let literal = false;
 
   for (let index = 2; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (!arg || arg === FLAG_TERMINATOR) {
+    if (!arg) {
       break;
     }
-    const consumed = consumeRootOptionToken(argv, index);
+    if (!literal && arg === FLAG_TERMINATOR) {
+      literal = true;
+      continue;
+    }
+    const consumed = literal ? 0 : consumeRootOptionToken(argv, index);
     if (consumed > 0) {
       rootOptions.push(...argv.slice(index, index + consumed));
       index += consumed - 1;
       continue;
     }
-    if (HELP_FLAGS.has(arg)) {
+    if (!literal && HELP_FLAGS.has(arg)) {
       helpFlagIndex = index;
       continue;
     }

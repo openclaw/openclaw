@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { QueueDropPolicy } from "../config/types.queue.js";
 import { isFastTestRuntimeEnv } from "../infra/env.js";
+import { sleep } from "./sleep.js";
 
 type QueueSummaryState = {
   droppedCount: number;
@@ -15,21 +16,16 @@ type QueueState<T> = QueueSummaryState & {
 };
 
 /** Build a summary prompt preview without mutating the source queue state. */
-export function previewQueueSummaryPrompt(params: {
-  state: QueueSummaryState;
-  noun: string;
-  title?: string;
-}): string | undefined {
-  if (params.state.droppedCount <= 0) {
+export function previewQueueSummaryPrompt(state: QueueSummaryState): string | undefined {
+  if (state.droppedCount <= 0) {
     return undefined;
   }
-  const title =
-    params.title ??
-    `[Queue overflow] Dropped ${params.state.droppedCount} ${params.noun}${params.state.droppedCount === 1 ? "" : "s"} due to cap.`;
-  const lines = [title];
-  if (params.state.summaryLines.length > 0) {
+  const lines = [
+    `[Queue overflow] Dropped ${state.droppedCount} message${state.droppedCount === 1 ? "" : "s"} due to cap.`,
+  ];
+  if (state.summaryLines.length > 0) {
     lines.push("Summary:");
-    for (const line of params.state.summaryLines) {
+    for (const line of state.summaryLines) {
       lines.push(`- ${line}`);
     }
   }
@@ -80,7 +76,6 @@ export function countPendingQueueItems<T>(items: readonly T[], inFlight?: Readon
 export function applyQueueDropPolicy<T>(params: {
   queue: QueueState<T>;
   summarize: (item: T) => string;
-  summaryLimit?: number;
   onDrop?: (items: T[]) => void;
   onSummaryElide?: (lines: string[]) => void;
   inFlight?: ReadonlySet<T>;
@@ -125,18 +120,17 @@ export function applyQueueDropPolicy<T>(params: {
       params.queue.summaryLines.push(buildQueueSummaryLine(params.summarize(item)));
     }
     // Summary memory is bounded independently from the item cap to avoid prompt blowups.
-    const limit = Math.max(0, params.summaryLimit ?? cap);
     const summaryLines = params.queue.summaryLines;
-    if (summaryLines.length > limit) {
+    if (summaryLines.length > cap) {
       // Round the cutoff first; subtraction can erase a fraction just below an integer.
-      const elidedLines = summaryLines.splice(0, summaryLines.length - Math.floor(limit));
+      const elidedLines = summaryLines.splice(0, summaryLines.length - Math.floor(cap));
       params.onSummaryElide?.(elidedLines);
     }
   }
   return true;
 }
 
-export function waitForQueueDebounce(
+export async function waitForQueueDebounce(
   queue: {
     debounceMs: number;
     lastEnqueuedAt: number;
@@ -145,48 +139,28 @@ export function waitForQueueDebounce(
 ): Promise<void> {
   if (isFastTestRuntimeEnv()) {
     // Tests use this escape hatch so debounce logic does not slow deterministic queue specs.
-    return Promise.resolve();
+    return;
   }
   const debounceMs = Math.max(0, queue.debounceMs);
-  if (debounceMs <= 0) {
-    return Promise.resolve();
+  if (debounceMs <= 0 || abortSignal?.aborted) {
+    return;
   }
-  if (abortSignal?.aborted) {
-    return Promise.resolve();
+  let observedEnqueuedAt: number | undefined;
+  let observedAtMs = 0;
+  while (true) {
+    const nowMs = performance.now();
+    if (queue.lastEnqueuedAt !== observedEnqueuedAt) {
+      observedEnqueuedAt = queue.lastEnqueuedAt;
+      observedAtMs = nowMs;
+    }
+    // Wall time counts quiet time before this wait; elapsed time keeps a
+    // backward wall-clock step from extending the window until wall time catches up.
+    const since = Math.max(Date.now() - queue.lastEnqueuedAt, nowMs - observedAtMs);
+    if (abortSignal?.aborted || since >= debounceMs) {
+      return;
+    }
+    await sleep(debounceMs - since, abortSignal).catch(() => undefined);
   }
-  return new Promise<void>((resolve) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let observedEnqueuedAt: number | undefined;
-    let observedAtMs = 0;
-    const finish = () => {
-      if (timer !== undefined) {
-        clearTimeout(timer);
-      }
-      abortSignal?.removeEventListener("abort", finish);
-      resolve();
-    };
-    const check = () => {
-      if (abortSignal?.aborted) {
-        finish();
-        return;
-      }
-      const nowMs = performance.now();
-      if (queue.lastEnqueuedAt !== observedEnqueuedAt) {
-        observedEnqueuedAt = queue.lastEnqueuedAt;
-        observedAtMs = nowMs;
-      }
-      // Wall time counts quiet time before this wait; elapsed time keeps a
-      // backward wall-clock step from extending the window until wall time catches up.
-      const since = Math.max(Date.now() - queue.lastEnqueuedAt, nowMs - observedAtMs);
-      if (since >= debounceMs) {
-        finish();
-        return;
-      }
-      timer = setTimeout(check, debounceMs - since);
-    };
-    abortSignal?.addEventListener("abort", finish, { once: true });
-    check();
-  });
 }
 
 /** Render a collect prompt from queued items and optional overflow summary. */

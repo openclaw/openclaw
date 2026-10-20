@@ -74,16 +74,6 @@ function writeSenderNameCache(key: string, entry: SenderNameCacheEntry): void {
   pruneMapToMaxSize(senderNameCache, SENDER_NAME_CACHE_MAX_SIZE);
 }
 
-function resolveSenderLookupIdType(senderId: string): "open_id" | "user_id" | "union_id" {
-  if (senderId.startsWith("ou_")) {
-    return "open_id";
-  }
-  if (senderId.startsWith("on_")) {
-    return "union_id";
-  }
-  return "user_id";
-}
-
 export async function resolveFeishuSenderName(params: {
   account: ResolvedFeishuAccount;
   senderId: string;
@@ -110,7 +100,11 @@ export async function resolveFeishuSenderName(params: {
 
   try {
     const client = createFeishuClient(account);
-    const userIdType = resolveSenderLookupIdType(normalizedSenderId);
+    const userIdType = normalizedSenderId.startsWith("ou_")
+      ? "open_id"
+      : normalizedSenderId.startsWith("on_")
+        ? "union_id"
+        : "user_id";
     const res = await client.contact.user.get({
       path: { user_id: normalizedSenderId },
       params: { user_id_type: userIdType },

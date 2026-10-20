@@ -1,4 +1,5 @@
 import { createEffect } from "solid-js";
+import type { AppSidebarMethods } from "../components/app-sidebar.tsx";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import {
   ControlUiReadiness,
@@ -13,7 +14,9 @@ export type SolidReadinessShell = {
   readonly updateComplete?: Promise<unknown>;
   readiness: ControlUiReadiness | undefined;
   readonly activeSessionKey: string;
-  readonly navigationSidebar: CommittedElement & { readonly navigationVisible?: boolean };
+  readonly navigationSidebar: CommittedElement & { readonly navigationVisible?: boolean } & Partial<
+      Pick<AppSidebarMethods, "findSidebarHovercardRowByKey">
+    >;
   readonly shellElement?: HTMLElement;
   readonly routeOutlet?: ControlUiReadinessOutlet;
   readonly terminalPanel?: CommittedElement & { readonly available?: boolean };

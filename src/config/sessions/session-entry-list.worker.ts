@@ -150,15 +150,20 @@ export function readSessionEntryList(
               // Queued inputs without live custody become interrupted in the history owner.
               .where("input.state", "in", ["queued", "interrupted"])
               .where((eb) =>
-                eb(
-                  jsonPathValue(
-                    database.db,
-                    eb.ref("input.message_json"),
-                    eb.val("$.__openclaw.sessionSendDelivery"),
+                eb.or([
+                  eb("input.state", "=", "queued"),
+                  ...["sessionSendDelivery", "chatInputRecovery"].map((field) =>
+                    eb(
+                      jsonPathValue(
+                        database.db,
+                        eb.ref("input.message_json"),
+                        eb.val(`$.__openclaw.${field}`),
+                      ),
+                      "is not",
+                      null,
+                    ),
                   ),
-                  "is not",
-                  null,
-                ),
+                ]),
               ),
           ).rows.map((row) => row.session_key);
           return keys.length ? readSelectedSessionEntriesInDatabase(database, keys) : [];

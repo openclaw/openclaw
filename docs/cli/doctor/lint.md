@@ -31,7 +31,8 @@ including their modification times. An older shared-state schema produces a
 not upgrade it. Ordinary Doctor and explicit repair retain their migration behavior.
 
 Doctor retires private database readers and writers before removing inspection
-snapshots. A cleanup failure preserves completed findings and check counts;
+snapshots, including their cached database admissions so status cannot report a
+removed inspection image. A cleanup failure preserves completed findings and check counts;
 updater runs report failed temporary-file removal as a warning. If database
 retirement fails, Doctor reports the error and leaves the private snapshot in place.
 

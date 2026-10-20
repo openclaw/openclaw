@@ -122,6 +122,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
     profileId?: string;
     reason?: AuthProfileFailureReason | null;
     modelId?: string;
+    retryAfterMs?: number;
   }) => {
     const { profileId, reason } = failure;
     if (
@@ -147,6 +148,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
       agentDir,
       runId: params.runId,
       modelId: failure.modelId,
+      retryAfterMs: failure.retryAfterMs,
     };
     if (profileId) {
       await markAuthProfileFailure({
@@ -402,6 +404,18 @@ export function createEmbeddedRunFailoverRetryController(input: {
           `transient retry ${retry.retryAfterMs === Infinity ? "floor exceeds representable time" : "window elapsed"} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${transientRetryCount}/${retryBudget} retries; stopping same-model retries`,
         );
         return false;
+      }
+      if (rateLimit) {
+        try {
+          await maybeMarkAuthProfileFailure({
+            profileId: preparedRuntime.snapshot().lastProfileId,
+            reason: resolveProfileFailureReason("rate_limit", { transientRateLimit: true }),
+            modelId,
+            retryAfterMs: retry.retryAfterMs,
+          });
+        } catch (error) {
+          log.warn(`profile failure mark failed: ${String(error)}`);
+        }
       }
       const outputLimit = retry.reason === "output_limit";
       const attempt = (outputLimit ? outputLimitRetryCount : retryCount) + 1;

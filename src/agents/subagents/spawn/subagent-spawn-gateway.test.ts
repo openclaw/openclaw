@@ -54,8 +54,7 @@ describe("native subagent Gateway transport ownership", () => {
             method: "agent",
             params: { message: "must not launch", idempotencyKey: "closed-owner" },
           },
-          undefined,
-          binding === "captured" ? resolver : undefined,
+          { gatewayContextResolver: binding === "captured" ? resolver : undefined },
         );
       const result =
         binding === "caller"

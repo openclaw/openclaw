@@ -16,7 +16,7 @@ import { updateSessionProfileInvolvementAsync } from "../config/sessions/session
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorScopeSatisfied, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
 import { readUserProfileDirectory } from "../state/user-profile-reads.js";
 import {
@@ -28,7 +28,7 @@ import {
   authorizeGatewaySessionCreation,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
-import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
+import { ADMIN_SCOPE, READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
@@ -131,7 +131,7 @@ export function createHumanMentionPolicy(params: {
       client.invalidated === true ||
       client.internal?.syntheticClient ||
       (client.connect.role ?? "operator") !== "operator" ||
-      !scopesAllowRead(client.connect.scopes ?? [])
+      !operatorScopeSatisfied(SESSION_READ_SCOPE, client.connect.scopes ?? [])
     ) {
       return err(errorShape(ErrorCodes.FORBIDDEN, "Human mentions require a signed-in operator."));
     }
@@ -151,7 +151,7 @@ export function createHumanMentionPolicy(params: {
       return err(authenticatedProfileUnavailableError());
     }
     const policy = resolveOperatorRolePolicyForProfile(profile.profileId, cfg);
-    if (policy && !scopesAllowRead(policy.scopes)) {
+    if (policy && !operatorScopeSatisfied(SESSION_READ_SCOPE, policy.scopes)) {
       return err(errorShape(ErrorCodes.FORBIDDEN, "Your operator role cannot read mentions."));
     }
     const admin =
@@ -161,7 +161,7 @@ export function createHumanMentionPolicy(params: {
     const { entryFilter } = prepareSessionSharing({
       cfg,
       client: {
-        connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [READ_SCOPE] },
+        connect: { ...client.connect, scopes: admin ? [ADMIN_SCOPE] : [SESSION_READ_SCOPE] },
         internal: { operatorRoleActor: { kind: "operator", profileId: profile.profileId } },
       },
     });

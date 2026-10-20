@@ -51,9 +51,10 @@ extension OpenClawChatViewModel {
             self.refreshSourceContext()
             self.refreshAgentsIfRequested()
             let session = self.currentSessionSnapshot()
-            let models = Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
+            let models = evt.refreshesModelCatalog(forAgentID: session.deliveryAgentID)
+                ? Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) } : nil
             let swarm = Task { [weak self] in await self?.refreshSwarmCapability(sessionSnapshot: session) }
-            return Task { _ = await (models.value, swarm.value) }
+            return Task { _ = await (models?.value, swarm.value) }
         case let .sessionsChanged(change):
             return self.handleSessionsChangedEvent(change)
         case let .sessionObserver(digest):

@@ -371,6 +371,8 @@ it.each([
       agentId: "main",
       sessionId: talkSessionId,
       sessionKey: talkSessionKey,
+      messageProvider: "telegram",
+      senderId: "talk-requester",
     });
     const operation = createOperation({ sessionId: talkSessionId, sessionKey: talkSessionKey });
     await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
@@ -425,6 +427,8 @@ it.each([
     registerTestEmbeddedRun(talkSessionId, handle, talkSessionKey, undefined, undefined, operation);
     operation.setPhase("running");
     let overlay: Overlay = {
+      messageProvider: "telegram",
+      senderId: "talk-requester",
       senderIsOwner: false,
       disableTools: false,
       traceAuthorized: false,

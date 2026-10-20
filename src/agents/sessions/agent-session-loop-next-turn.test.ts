@@ -426,8 +426,8 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         if (event.type === "queue_update") {
           queueEvents.push({
             type: "queue_update",
-            steering: event.steering,
-            followUp: event.followUp,
+            steering: [...session.getSteeringMessages()],
+            followUp: [...session.getFollowUpMessages()],
           });
         } else if (
           event.type === "message_start" &&
@@ -907,7 +907,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const { session } = await createTestSession();
     const abortRetry = vi.spyOn(session, "abortRetry");
     const abortCompaction = vi.spyOn(session, "abortCompaction");
-    const abortBranchSummary = vi.spyOn(session, "abortBranchSummary");
     const abortAgent = vi.spyOn(session.agent, "abort");
     abortRetry.mockImplementationOnce(() => {
       throw new Error("retry abort failed");
@@ -921,7 +920,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     expect(providerSignal?.aborted).toBe(true);
     expect(abortRetry).toHaveBeenCalledOnce();
     expect(abortCompaction).toHaveBeenCalledOnce();
-    expect(abortBranchSummary).toHaveBeenCalledOnce();
     expect(abortAgent).toHaveBeenCalledOnce();
   });
 
@@ -935,7 +933,6 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
     const { session } = await createTestSession({ settingsManager });
     settingsManager.setSteeringMode("all");
     settingsManager.setFollowUpMode("all");
-    await settingsManager.flush();
 
     expect(session.agent.steeringMode).toBe("one-at-a-time");
     expect(session.agent.followUpMode).toBe("one-at-a-time");

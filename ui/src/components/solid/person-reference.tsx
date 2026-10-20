@@ -1,4 +1,4 @@
-import { createEffect, onSettled, Show } from "solid-js";
+import { onSettled, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
@@ -27,7 +27,7 @@ import { updatePersonActivityCard } from "../person-activity-card.tsx";
 import { observePersonActivityData } from "../person-activity-data.ts";
 import { personActivityRouting } from "../person-activity-link.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "../portaled-hovercard.ts";
-import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
+import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import "../../styles/chat/person-reference.css";
 
@@ -37,7 +37,13 @@ type PersonReferenceProps = {
   label?: string;
 };
 
-const active = new WeakMap<Document, () => void>();
+type ActivePersonCard = {
+  host: HTMLElement;
+  close: () => void;
+  refresh: () => void;
+};
+
+const active = new WeakMap<Document, ActivePersonCard>();
 let nextCardId = 0;
 
 /** Explicit transcript selections only. The directory remains Gateway-owned, not a UI name index. */
@@ -61,7 +67,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
   );
 
   function close() {
-    if (active.get(props.host.ownerDocument) === close) {
+    if (active.get(props.host.ownerDocument)?.close === close) {
       active.delete(props.host.ownerDocument);
     }
     activity?.dispose();
@@ -104,17 +110,8 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       renderCard();
     }
   };
-  createEffect(
-    () => ({ profileId: profileId(), label: label(), loading: t("common.loading") }),
-    (value, previous) => {
-      if (previous && value.profileId !== previous.profileId) {
-        close();
-      }
-      renderCard();
-    },
-  );
-
   onSettled(() => {
+    // Retire connection-bound cards while their transcript trigger remains mounted.
     const stopGateway = gateway?.subscribe(syncConnection);
     syncConnection();
     activityExpiry.connect();
@@ -130,8 +127,8 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     if (!trigger || !profileId() || portal.card) {
       return;
     }
-    active.get(trigger.ownerDocument)?.();
-    active.set(trigger.ownerDocument, close);
+    active.get(trigger.ownerDocument)?.close();
+    active.set(trigger.ownerDocument, { host: props.host, close, refresh: renderCard });
     const card = createPortaledHovercard(
       "openclaw-person-reference-" + ++nextCardId,
       "session-progress-hovercard person-activity-hovercard",
@@ -144,6 +141,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       listen(document, "focusin", outside, true),
       listen(document, "keydown", escape, true),
     ];
+    // Navigation ends the portaled card before its retained transcript can render again.
     stopRoute = context?.router.subscribe(close);
     if (context) {
       activity = observePersonActivityData(context, () => renderCard());
@@ -192,10 +190,6 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     if (!card) {
       return;
     }
-    card.setAttribute(
-      "aria-label",
-      t("presence.card.ariaLabel", { name: person?.name ?? label() }),
-    );
     const data = activity?.data;
     const presence = projectPresencePayload(data?.presencePayload).users.find((user) =>
       presenceMatchesProfile(user, person?.identity),
@@ -219,6 +213,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
         user && context
           ? {
               user,
+              ariaName: person?.name ?? label(),
               sessionData: data,
               watchAgentId: resolveUiDefaultAgentId(defaults),
               mainKey: resolveUiConfiguredMainKey(defaults),
@@ -252,9 +247,11 @@ function PersonReferenceContent(props: PersonReferenceProps) {
                 });
               },
             }
-          : person === undefined
-            ? t("common.loading")
-            : t("chat.mentions.unavailable"),
+          : {
+              status: person === undefined ? "loading" : "unavailable",
+              name: person?.name ?? label(),
+            },
+        () => portal.position(),
       ),
     );
     portal.position();
@@ -265,6 +262,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     identity: { type: "profile", id: profileId() },
     name: label().replace(/^@/u, ""),
   }));
+  const presentation = createIdentityAvatarPresentation(avatar);
   return (
     <button
       ref={(element) => {
@@ -317,15 +315,15 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       }}
     >
       <span
-        ref={identityAvatarState(avatar)}
-        class="markdown-person-reference__avatar"
+        data-avatar-state={presentation.state()}
+        class={["markdown-person-reference__avatar", presentation.classes()]}
         aria-hidden="true"
         data-initials={avatar().fallback.initials}
       >
         <Show when={Boolean(avatar().imageUrl)}>
           <IdentityAvatarImage
             view={avatar()}
-            fallbackSelector=".markdown-person-reference__avatar"
+            onStateChange={presentation.onStateChange}
             ariaHidden={true}
           />
         </Show>
@@ -356,6 +354,17 @@ defineSolidBridge<PersonReferenceProperties>(
     properties: {
       profileId: { default: "", attribute: "profile-id" },
       label: { default: "" },
+    },
+    propertyChanged(host, key) {
+      const current = active.get(host.ownerDocument);
+      if (current?.host !== host) {
+        return;
+      }
+      if (key === "profileId") {
+        current.close();
+      } else if (key === "label") {
+        current.refresh();
+      }
     },
   },
 );

@@ -83,6 +83,93 @@ afterEach(async () => {
 });
 
 describe("processEvent (functional)", () => {
+  it.each([
+    {
+      path: "machine policy",
+      answeredBy: "machine_start",
+      reason: "voicemail",
+      failure: "carrier",
+    },
+    { path: "notify fax", answeredBy: "fax", reason: "failed", failure: "carrier" },
+    {
+      path: "playback recovery",
+      answeredBy: "machine_end_beep",
+      reason: "error",
+      failure: "carrier",
+    },
+    {
+      path: "machine policy",
+      answeredBy: "machine_start",
+      reason: "voicemail",
+      failure: "finalization",
+    },
+  ] as const)(
+    "reports failed $path $failure cleanup without claiming termination",
+    async ({ path, answeredBy, reason, failure }) => {
+      const work: Promise<unknown>[] = [];
+      let failPersistence = false;
+      if (failure === "finalization") {
+        installStateRuntime(() => failPersistence);
+      }
+      const hangupCall = vi.fn(async () => {
+        if (failure === "carrier") {
+          throw new Error("synthetic private carrier response");
+        }
+        failPersistence = true;
+      });
+      const ctx = createContext({
+        provider: createProvider({
+          name: "twilio",
+          hangupCall,
+          playMessageAndHangup: async () => {
+            throw new Error("synthetic playback failure");
+          },
+        }),
+        config: normalizeVoiceCallConfig({
+          voicemail: {
+            detection: "twilio",
+            onMachine: path === "machine policy" ? "hang-up" : "leave-message",
+          },
+        }),
+        trackCallWork: (item) => {
+          work.push(item);
+        },
+      });
+      const call = createCall({
+        callId: "detected-call",
+        providerCallId: "CA-detected",
+        provider: "twilio",
+        metadata: {
+          pendingNotifyAmd: path === "notify fax",
+          brief: { voicemailMessage: "Please call back." },
+        },
+      });
+      ctx.activeCalls.set(call.callId, call);
+
+      await expect(
+        processEvent(ctx, {
+          id: "detection",
+          type: "call.amd",
+          callId: call.callId,
+          timestamp: Date.now(),
+          answeredBy,
+        }),
+      ).resolves.toEqual({ kind: "processed" });
+      await Promise.all(work);
+
+      expect(hangupCall).toHaveBeenCalledExactlyOnceWith({
+        callId: call.callId,
+        providerCallId: "CA-detected",
+        reason,
+      });
+      expect(logSpy.logEntries).toEqual([
+        `Detected-call cleanup failed for ${call.callId}; inspect voice-call status and logs.`,
+      ]);
+      expect(ctx.activeCalls.get(call.callId)).toBe(call);
+      expect(call.endedAt).toBeUndefined();
+    },
+  );
+
   it("drains final assistant transcript before a carrier terminal event finalizes", async () => {
     const ctx = createContext();
     const call = createCall({ callId: "carrier-drain", providerCallId: "CA-drain" });

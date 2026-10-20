@@ -15,6 +15,8 @@ const WARNING_RATIO = 0.8;
 const CRITICAL_RATIO = 0.9;
 const DEFAULT_PRESSURE_REPEAT_MS = 5 * 60 * 1000;
 const BYTE_UNITS = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
+// Retain the named channel between samples, including periods without subscribers.
+const memoryPressure = channel("openclaw.memory.critical");
 
 // Bun's compatibility probe walks the heap and does not describe a V8 allocation limit.
 let defaultHeapSizeLimitBytes: number | undefined;
@@ -71,6 +73,7 @@ export function createDiagnosticMemorySampler(isCurrent: () => boolean) {
       return;
     }
     const linuxSample = emitSample && process.platform === "linux";
+    const sampledAt = performance.now();
     const memory = emitDiagnosticMemorySample({ emitSample: emitSample && !linuxSample });
     if (!linuxSample || pending) {
       return;
@@ -80,7 +83,23 @@ export function createDiagnosticMemorySampler(isCurrent: () => boolean) {
     void readProcessFootprint().then((processFootprint) => {
       pending = false;
       if (isCurrent()) {
-        publishMemorySample({ ...memory, ...processFootprint }, uptimeMs);
+        const publicationDelayMs = Math.round(performance.now() - sampledAt);
+        // The event timestamp is publication time; age the acquired samples without
+        // mutating rows already shared with pressure events. Coverage stays acquisition-scoped.
+        publishMemorySample(
+          {
+            ...memory,
+            ...processFootprint,
+            workerHeaps: memory.workerHeaps?.map((worker) =>
+              worker.sampleAgeMs === undefined
+                ? worker
+                : Object.assign({}, worker, {
+                    sampleAgeMs: worker.sampleAgeMs + publicationDelayMs,
+                  }),
+            ),
+          },
+          uptimeMs,
+        );
       }
     });
   };
@@ -316,7 +335,7 @@ export function emitDiagnosticMemorySample(
 
   const pressure = pickPressure(memory, heapLimitBytes, rssLimitBytes, options?.thresholds);
   if (pressure?.level === "critical") {
-    channel("openclaw.memory.critical").publish(undefined);
+    memoryPressure.publish(undefined);
   }
   if (
     collectDiagnostics &&

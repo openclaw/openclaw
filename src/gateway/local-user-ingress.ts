@@ -1,11 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ExecutionIdentityAdmissionFacts } from "../audit/execution-identity-admission.js";
+import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import type { GatewayAuthResult } from "./auth.js";
 
 type GatewayLocalUserIngressFacts = Readonly<
-  Pick<ExecutionIdentityAdmissionFacts, "assurance" | "ingress" | "invoker">
+  Pick<ExecutionIdentityAdmissionFacts, "assurance" | "ingress" | "invoker" | "representedSubject">
 >;
 
 export type GatewayLocalUserIngress = Readonly<{
@@ -18,6 +19,7 @@ const preparedIngress = new WeakSet<GatewayLocalUserIngress>();
 function freezeLocalUserIngress(facts: GatewayLocalUserIngressFacts): GatewayLocalUserIngress {
   Object.freeze(facts.ingress);
   Object.freeze(facts.invoker);
+  Object.freeze(facts.representedSubject);
   for (const item of facts.assurance ?? []) {
     Object.freeze(item);
   }
@@ -27,7 +29,34 @@ function freezeLocalUserIngress(facts: GatewayLocalUserIngressFacts): GatewayLoc
   return ingress;
 }
 
-/** Only the attach owner can supply facts; copied or public lookalikes carry none. */
+/** The creation owner supplies these facts only after checking its live agent caller. */
+export function prepareGatewayAgentToolIngress(params: {
+  agentId: string;
+  representedProfileId?: string;
+  spawnAdmission?: string;
+}): GatewayLocalUserIngress {
+  return freezeLocalUserIngress(
+    executionIdentitySpawnAdmission({
+      operation: "attach",
+      value: {
+        ingress: { kind: "api", boundary: "gateway.agent-tool", state: "present" },
+        invoker: { state: "present", kind: "agent", rawPrincipalRef: params.agentId },
+        ...(params.representedProfileId
+          ? {
+              representedSubject: {
+                state: "present",
+                kind: "person",
+                rawPrincipalRef: params.representedProfileId,
+              },
+            }
+          : {}),
+      } satisfies GatewayLocalUserIngressFacts,
+      extra: params.spawnAdmission,
+    }),
+  );
+}
+
+/** Only prepared host ingress supplies facts; copied or public lookalikes carry none. */
 export function readGatewayLocalUserIngressFacts(
   ingress: GatewayLocalUserIngress | undefined,
 ): GatewayLocalUserIngressFacts | undefined {

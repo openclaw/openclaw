@@ -66,18 +66,6 @@ export function formatGatewayCommandFailure(params: { action: string; error: unk
   )} to inspect the active Gateway.`;
 }
 
-export function formatLookupMiss(params: {
-  noun: string;
-  value: string;
-  listCommand: string;
-  valueLabel?: string;
-}): string {
-  const valueLabel = params.valueLabel ?? params.noun.toLowerCase();
-  return `${params.noun} not found: ${params.value}. Run ${formatInlineCliCommand(
-    params.listCommand,
-  )} to see recent ${valueLabel}s.`;
-}
-
 export function formatMissingPluginMessage(params: {
   id: string;
   listCommand?: string;

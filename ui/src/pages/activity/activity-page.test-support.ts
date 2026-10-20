@@ -1,7 +1,11 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { createComponent, createEffect, createSignal } from "solid-js";
-import type { ApplicationContext } from "../../app/context.ts";
+import { vi } from "vitest";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
+import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayEvent } from "../../app/gateway-store.test-support.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createActivityPageState } from "./activity-page-state.ts";
@@ -11,11 +15,22 @@ export type TestActivityPage = ReturnType<typeof createActivityPage>;
 
 export function createActivityPage(context: ApplicationContext, initial?: RouteLocation) {
   const [location, setLocation] = createSignal(initial);
-  const mounted = mountSolid(() => {
-    const page = createActivityPageState(context);
-    createEffect(location, (next) => page.setRouteLocation(next));
-    return createComponent(ActivityPageView, { page });
-  });
+  const mounted = mountSolid(
+    () => {
+      const page = createActivityPageState(context);
+      createEffect(location, (next) => page.setRouteLocation(next));
+      return createComponent(ActivityPageView, { page });
+    },
+    {
+      wrapper: (props) =>
+        createComponent(ApplicationProvider, {
+          value: context,
+          get children() {
+            return props.children;
+          },
+        }),
+    },
+  );
   flush();
   return {
     context,
@@ -44,10 +59,6 @@ export function expandFirst(page: TestActivityPage) {
   return row;
 }
 
-export function mountActivityPage(page: TestActivityPage) {
-  return page.container;
-}
-
 export function toolEvent(id: string, sessionKey = "main", name = "read", runId = `run-${id}`) {
   return createGatewayEvent("session.tool", {
     stream: "tool",
@@ -60,4 +71,76 @@ export function toolEvent(id: string, sessionKey = "main", name = "read", runId 
       result: { text: `${id} output` },
     },
   });
+}
+
+export function activityHello(recoveryScope = "activity-owner-a"): GatewayHelloOk {
+  return {
+    type: "hello-ok",
+    protocol: 1,
+    auth: { role: "operator", scopes: ["operator.read"], recoveryScope },
+  };
+}
+
+export function createActivityGatewayStub(): ApplicationContext["gateway"] {
+  const snapshot: ApplicationGatewaySnapshot = {
+    client: null,
+    phase: "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
+    hello: null,
+    assistantAgentId: null,
+    sessionKey: "main",
+    lastError: null,
+    lastErrorCode: null,
+  };
+  // SAFETY: Static route tests only read the snapshot and register these observers.
+  return {
+    snapshot,
+    eventLog: [],
+    eventLogRevision: 0,
+    subscribe: vi.fn(() => () => undefined),
+    subscribeEventLog: vi.fn(() => () => undefined),
+    subscribeEvents: vi.fn(() => () => undefined),
+  } as unknown as ApplicationContext["gateway"];
+}
+
+export function inspectorGateway(client: GatewayBrowserClient) {
+  const source = createActivityGatewayStub();
+  Object.assign(source.snapshot, {
+    client,
+    phase: "connected",
+    hello: {
+      ...activityHello(),
+      features: { methods: ["audit.run.inspect"], events: [] },
+    },
+  });
+  return source;
+}
+
+export function activityRoster(
+  sessions: GatewaySessionRow[] = [
+    { key: "main", kind: "direct", hasActiveRun: true },
+    { key: "agent:other:work", kind: "direct", hasActiveRun: true },
+  ],
+): SessionsListResult {
+  return {
+    ts: 1,
+    path: "",
+    count: sessions.length,
+    sessions,
+    defaults: { model: null, modelProvider: null, contextTokens: null },
+  };
+}
+
+export function activityResponse(method: string, params: unknown) {
+  switch (method) {
+    case "sessions.list":
+      return activityRoster();
+    case "sessions.subscribe":
+      return { subscribed: true };
+    case "sessions.messages.subscribe":
+      return params;
+    default:
+      return {};
+  }
 }

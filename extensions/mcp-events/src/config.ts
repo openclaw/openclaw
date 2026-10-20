@@ -1,5 +1,6 @@
 import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { canonicalArguments, record } from "./protocol.js";
+import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { canonicalArguments } from "./protocol.js";
 
 export type McpEventsConfig = { callbackOrigin: string; maxPendingEvents: number };
 

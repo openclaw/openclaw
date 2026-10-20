@@ -10,7 +10,10 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../infra/runtime-worker-url.js";
 import { trackSqliteDatabaseAdmissionWorker } from "../infra/sqlite-database-admission.js";
-import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
+import {
+  formatSqliteErrorCodeSuffix,
+  isSqliteLockError,
+} from "../infra/sqlite-error-diagnostics.js";
 import { retainSqliteWriteAdmissionService } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createSqliteDatabaseAdmissionRelay } from "../infra/sqlite-worker-operation-admission.js";
@@ -30,6 +33,7 @@ import {
   leaseHeartbeatState as state,
   leaseHeartbeatStartupPhase,
   LEASE_HEARTBEAT_START_TIMEOUT_MS,
+  LEASE_CONTENTION_RETRY_MS,
   type LeaseHeartbeatLoss,
   type LeaseHeartbeatRenewalFailure,
   type LeaseHeartbeatRequest,
@@ -57,10 +61,13 @@ export function startOpenClawStateLeaseTimer(params: {
   let expiryClosed = false;
   let renewal: Promise<void> | undefined;
   let cancelExpiry: (() => void) | undefined;
-  let heartbeat: ReturnType<typeof setInterval> | undefined = setInterval(() => {
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  const renew = () => {
     if (stopped || renewal) {
       return;
     }
+    clearTimeout(retry);
+    retry = undefined;
     const pending = (async () => {
       await params.renew();
     })();
@@ -72,9 +79,18 @@ export function startOpenClawStateLeaseTimer(params: {
       (error: unknown) => {
         renewal = undefined;
         params.onRenewError(error);
+        if (!stopped && isSqliteLockError(error)) {
+          // Waiting for the next normal tick can leave no retry before durable expiry.
+          retry = setTimeout(renew, LEASE_CONTENTION_RETRY_MS);
+          retry.unref?.();
+        }
       },
     );
-  }, params.heartbeatMs);
+  };
+  let heartbeat: ReturnType<typeof setInterval> | undefined = setInterval(
+    renew,
+    params.heartbeatMs,
+  );
   heartbeat.unref?.();
   const checkExpiry = () => {
     cancelExpiry = undefined;
@@ -87,6 +103,8 @@ export function startOpenClawStateLeaseTimer(params: {
       stopped = true;
       expiryClosed = true;
       clearInterval(heartbeat);
+      clearTimeout(retry);
+      retry = undefined;
       heartbeat = undefined;
       params.onLost(new Error("state lease expired"));
       return;
@@ -97,12 +115,16 @@ export function startOpenClawStateLeaseTimer(params: {
     checkExpiry();
   } catch (error) {
     clearInterval(heartbeat);
+    clearTimeout(retry);
+    retry = undefined;
     cancelExpiry?.();
     throw error;
   }
   const stopRenewal = async () => {
     stopped = true;
     clearInterval(heartbeat);
+    clearTimeout(retry);
+    retry = undefined;
     heartbeat = undefined;
     if (renewal) {
       // The lease owner handles the error; stopping must still join native settlement.

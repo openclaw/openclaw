@@ -1,9 +1,10 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createComponent, createEffect, onSettled } from "solid-js";
+import { createComponent, onSettled } from "solid-js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { composedParent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { activeElement, isHtmlElement, tabbableElements } from "./focus-navigation.ts";
 import { createOverlay, findOverlayParent } from "./overlay-lifecycle.ts";
 import { containsComposed } from "./overlay-registry.ts";
 import { ModalDialogContent } from "./solid/modal-dialog.tsx";
@@ -17,6 +18,7 @@ export type ModalDialogProperties = {
   manual: boolean;
   label: string;
   description: string;
+  initialFocus?: () => HTMLElement | null;
   onOpenChange: ((open: boolean) => void) | undefined;
 };
 
@@ -34,6 +36,7 @@ type ModalDialogAttributes = SolidJSX.HTMLAttributes<OpenClawModalDialog> & {
   manual?: boolean;
   description?: string;
   "prop:onOpenChange"?: ModalDialogProperties["onOpenChange"];
+  "prop:initialFocus"?: ModalDialogProperties["initialFocus"];
   "onModal-cancel"?: (event: Event) => void;
 };
 
@@ -102,54 +105,6 @@ function acquirePresentation(host: HTMLElement): () => void {
   };
 }
 
-function isHtmlElement(value: EventTarget | null): value is HTMLElement {
-  // Namespace survives document adoption; realm-specific constructors do not.
-  return (
-    value !== null &&
-    "namespaceURI" in value &&
-    value.namespaceURI === "http://www.w3.org/1999/xhtml"
-  );
-}
-
-const TABBABLE_SELECTOR =
-  "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), details > summary:first-of-type, iframe, [contenteditable], [tabindex]";
-
-function* tabbableElements(elements: Iterable<Element>): Generator<HTMLElement> {
-  for (const element of elements) {
-    if (element.hasAttribute("inert")) {
-      continue;
-    }
-    if (
-      element instanceof HTMLElement &&
-      element.matches(TABBABLE_SELECTOR) &&
-      !element.matches(":disabled, [data-modal-focus-edge]") &&
-      (element.tabIndex >= 0 ||
-        (element.isContentEditable &&
-          !element.hasAttribute("tabindex") &&
-          !element.parentElement?.isContentEditable)) &&
-      element.checkVisibility({ visibilityProperty: true })
-    ) {
-      yield element;
-    }
-    const assigned =
-      element instanceof HTMLSlotElement ? element.assignedElements({ flatten: true }) : [];
-    yield* tabbableElements(assigned.length ? assigned : (element.shadowRoot ?? element).children);
-  }
-}
-
-function activeElement(host: HTMLElement): HTMLElement | null {
-  const view = host.ownerDocument.defaultView;
-  const root = host.getRootNode();
-  let active =
-    (root instanceof ShadowRoot || (view && root instanceof view.ShadowRoot)
-      ? root.activeElement
-      : null) ?? host.ownerDocument.activeElement;
-  while (isHtmlElement(active) && active.shadowRoot?.activeElement) {
-    active = active.shadowRoot.activeElement;
-  }
-  return isHtmlElement(active) ? active : null;
-}
-
 function restoreFocus(target: HTMLElement) {
   target.focus({ preventScroll: true });
   target.dispatchEvent(new Event("openclaw:restore-focus"));
@@ -174,7 +129,7 @@ type ModalPolicy = {
   disconnect(): void;
 };
 
-function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperties): ModalPolicy {
+function createModalPolicy(host: OpenClawModalDialog): ModalPolicy {
   let dialog!: HTMLDialogElement;
   let mounted = false;
   let disposed = false;
@@ -201,7 +156,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
       return;
     }
     const active = activeElement(host);
-    const autofocus = dialog.querySelector<HTMLElement>("[autofocus]");
+    const autofocus = host.initialFocus?.();
     if (
       active &&
       active !== dialog &&
@@ -346,13 +301,16 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     if (detaching || disposed || !host.isConnected) {
       return;
     }
-    host.open = open;
-    if (!force && reportedOpen === open) {
-      return;
+    const changed = force || reportedOpen !== open;
+    if (changed) {
+      reportedOpen = open;
+      publication += 1;
     }
-    reportedOpen = open;
-    publication += 1;
-    props.onOpenChange?.(open);
+    // Host writes reenter request(); commit the publication before that callback.
+    host.open = open;
+    if (changed) {
+      host.onOpenChange?.(open);
+    }
   };
 
   const request = (next: boolean, controlled = true) => {
@@ -415,15 +373,6 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
   };
   const state = stateFor(host);
   state.policy = policy;
-
-  createEffect(
-    () => props.open,
-    (open) => {
-      if (mounted) {
-        request(open);
-      }
-    },
-  );
 
   const cancel = (event: Event) => {
     if (event.target === dialog) {
@@ -506,6 +455,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     ];
     overlay.bindSurface(dialog);
     overlay.setParent(findOverlayParent(host));
+    // Modal layering and return focus settle with the accepted transition, before completion events.
     overlay.subscribe((open) => {
       setModalLayer(host, open && host.isConnected);
       if (!open) {
@@ -539,7 +489,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
 export const ModalDialog = defineSolidBridge<ModalDialogProperties, ModalDialogMethods>(
   "openclaw-modal-dialog",
   (props, host) => {
-    const policy = createModalPolicy(host, props);
+    const policy = createModalPolicy(host);
     return createComponent(ModalDialogContent, {
       bindDialog: policy.bindDialog,
       bindOverlayContainer: policy.bindOverlayContainer,
@@ -560,7 +510,13 @@ export const ModalDialog = defineSolidBridge<ModalDialogProperties, ModalDialogM
       manual: { default: false, type: Boolean, reflect: true },
       label: { default: "", type: String },
       description: { default: "", type: String },
+      initialFocus: { default: undefined, attribute: false },
       onOpenChange: { default: undefined, attribute: false },
+    },
+    propertyChanged(host, key) {
+      if (key === "open") {
+        states.get(host)?.policy?.request(host.open);
+      }
     },
     connected(host) {
       if (host.manual) {

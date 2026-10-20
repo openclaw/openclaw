@@ -41,9 +41,15 @@ it("retains committed initial turns through fencing and denies their final write
     gateway: { ...configIO.getRuntimeConfig().gateway, auth: { mode: "token", token } },
   });
   const gateway = await createGatewaySuiteHarness({ serverOptions: { bind: "loopback" } });
-  const applyConfig = async (config: Parameters<typeof configIO.writeConfigFile>[0]) => {
+  const applyConfig = async (
+    gatewayPatch: NonNullable<Parameters<typeof configIO.writeConfigFile>[0]["gateway"]>,
+  ) => {
     const application = createRuntimeConfigWriteApplication();
-    await configIO.writeConfigFile(config, attachRuntimeConfigWriteApplication({}, application));
+    const current = configIO.getRuntimeConfig();
+    await configIO.writeConfigFile(
+      { ...current, gateway: { ...current.gateway, ...gatewayPatch } },
+      attachRuntimeConfigWriteApplication({}, application),
+    );
     expect(application.claimed).toBe(true);
     expect(await application.result).toBe("applied");
   };
@@ -83,11 +89,7 @@ it("retains committed initial turns through fencing and denies their final write
       scenario.turnEntered = true;
       scenario.beforeTurn.resolve(options);
       await resumeTurns.promise;
-      try {
-        await originalSend(options);
-      } finally {
-        scenario.finishTurn.resolve();
-      }
+      await originalSend(options).finally(scenario.finishTurn.resolve);
     });
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   const registry = getTestPluginRegistry();
@@ -100,9 +102,9 @@ it("retains committed initial turns through fencing and denies their final write
   };
   registry.typedHooks.push(hook);
   initializeGlobalHookRunner(registry);
-  dispatchInboundMessageMock.mockClear();
-  dispatchInboundMessageMock.mockImplementation(
-    async (params: Parameters<typeof dispatchInboundMessage>[0]) => {
+  dispatchInboundMessageMock
+    .mockClear()
+    .mockImplementation(async (params: Parameters<typeof dispatchInboundMessage>[0]) => {
       const scenario = cases.find(({ key }) => key === params.ctx.SessionKey);
       assert(scenario);
       const recorder = params.replyOptions?.userTurnTranscriptRecorder;
@@ -119,8 +121,7 @@ it("retains committed initial turns through fencing and denies their final write
       } finally {
         scenario.dispatchFinished.resolve();
       }
-    },
-  );
+    });
   const sockets: Awaited<ReturnType<typeof gateway.openWs>>[] = [];
   const requests: Promise<unknown>[] = [];
   const waitForRelease = (scenario: (typeof cases)[number]) =>
@@ -156,15 +157,12 @@ it("retains committed initial turns through fencing and denies their final write
       expect(loadSessionEntry(scenario.scope)?.sessionId).toBeTruthy();
     }
     const closed = sockets.map((ws) => once(ws, "close"));
-    const current = configIO.getRuntimeConfig();
     await applyConfig({
-      ...current,
-      gateway: { ...current.gateway, allowRealIpFallback: !current.gateway?.allowRealIpFallback },
+      allowRealIpFallback: !configIO.getRuntimeConfig().gateway?.allowRealIpFallback,
     });
     for (const close of closed) {
       const [code, reason] = await close;
-      expect(code).toBe(4001);
-      expect(String(reason)).toBe("gateway policy changed");
+      expect([code, String(reason)]).toEqual([4001, "gateway policy changed"]);
     }
     resumeTurns.resolve();
     for (const scenario of cases) {
@@ -179,14 +177,7 @@ it("retains committed initial turns through fencing and denies their final write
     for (const scenario of cases) {
       const revoke = scenario === cases[1];
       if (revoke) {
-        const config = configIO.getRuntimeConfig();
-        await applyConfig({
-          ...config,
-          gateway: {
-            ...config.gateway,
-            auth: { mode: "token", token: "initial-turn-revoked-fixture-token" },
-          },
-        });
+        await applyConfig({ auth: { mode: "token", token: "initial-turn-revoked-fixture-token" } });
       }
       scenario.allowWrite.resolve();
       await scenario.dispatchFinished.promise;
@@ -206,9 +197,6 @@ it("retains committed initial turns through fencing and denies their final write
           event.message.role === "user",
       );
       expect(userMessages).toHaveLength(revoke ? 0 : 1);
-      console.info(
-        `[initial-turn-grant] session=${scenario.key} outcome=${revoke ? "denied (transcript absent)" : "accepted (transcript written)"}`,
-      );
     }
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
   } finally {

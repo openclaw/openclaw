@@ -1,5 +1,6 @@
-import { Show, createEffect, createMemo, createSignal } from "solid-js";
+import { Show, createMemo, createSignal } from "solid-js";
 import type { ChatInputRegion } from "../../../app/chat-input-owner.ts";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -12,10 +13,10 @@ import { isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
 import { SubagentsPanelData, type SubagentsPanelRow } from "../subagents-panel-data.ts";
 import {
   SessionPanelGroups,
+  syncSessionPanelInputs,
   useSessionPanel,
   type SessionPanelProps,
 } from "./chat-session-panel.tsx";
-import "../../../components/elapsed-time.tsx";
 import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
 
@@ -31,10 +32,17 @@ let panelSequence = 0;
 
 export const ChatSubagentsPanel = defineSolidBridge<Props>(
   "openclaw-chat-subagents-panel",
-  (props) => {
+  (props, host) => {
     const [finishedOpen, setFinishedOpen] = createSignal(true);
     const finishedId = `chat-subagents-finished-${++panelSequence}`;
-    const data = useSessionPanel(props, SubagentsPanelData, () => setSelected(null));
+    const data = useSessionPanel(
+      host,
+      () => ({ sessionKey: host.sessionKey, agentId: host.agentId, presented: host.presented }),
+      SubagentsPanelData,
+      syncSelection,
+    );
+    // An applied request must not reopen detail after the user returns to the list.
+    let appliedRequest: Props["showRequest"];
     // Keep a local choice until the authoritative roster removes it or denies access.
     const [selected, setSelected] = createSignal<{ key: string; agentId: string } | null>(
       (previous) => {
@@ -52,29 +60,32 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     const subagentAgentId = (key: string) =>
       data().rows.find((row) => row.session.key === key)?.session.agentId ??
       parseAgentSessionKey(key)?.agentId ??
-      props.agentId;
-    createEffect(
-      () => props.showRequest,
-      (request) => {
+      host.agentId;
+    function syncSelection(identityChanged: boolean): void {
+      if (identityChanged) {
+        setSelected(null);
+      }
+      const request = host.showRequest;
+      if (request !== appliedRequest) {
+        appliedRequest = request;
         const key = request?.();
         if (key !== undefined) {
           setSelected(key ? { key, agentId: subagentAgentId(key) } : null);
         }
-      },
-    );
+      }
+    }
     const unfinished = (row: SubagentsPanelRow) =>
       row.session.status === "queued" || isUnfinishedSubagent(row.session);
     const running = createMemo(() => data().rows.filter(unfinished));
     const finished = createMemo(() => data().rows.filter((row) => !unfinished(row)));
-    const detailId = createMemo(() =>
-      selected() ? `${props.presentationId}:subagent:${selected()!.key}` : undefined,
-    );
+    const detailId = () =>
+      selected() ? `${props.presentationId}:subagent:${selected()!.key}` : undefined;
     const renderElapsed = (row: SubagentsPanelRow) => {
       const session = row.session;
       const active = isSessionRunStateActive(session);
       if (session.runtimeMs != null) {
         return active && session.runtimeSampledAt != null ? (
-          <openclaw-elapsed-time prop:startMs={session.runtimeSampledAt - session.runtimeMs} />
+          <ElapsedTime startMs={session.runtimeSampledAt - session.runtimeMs} />
         ) : (
           formatDurationCompact(session.runtimeMs)
         );
@@ -82,10 +93,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
       return (
         session.startedAt != null &&
         (active || session.endedAt != null) && (
-          <openclaw-elapsed-time
-            prop:startMs={session.startedAt}
-            prop:endMs={active ? null : session.endedAt}
-          />
+          <ElapsedTime startMs={session.startedAt} endMs={active ? null : session.endedAt} />
         )
       );
     };
@@ -237,6 +245,16 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     );
   },
   {
+    propertyChanged: (host, key) => {
+      if (
+        key === "sessionKey" ||
+        key === "agentId" ||
+        key === "presented" ||
+        key === "showRequest"
+      ) {
+        syncSessionPanelInputs(host);
+      }
+    },
     properties: {
       sessionKey: { default: "", attribute: false },
       agentId: { default: "main", attribute: false },

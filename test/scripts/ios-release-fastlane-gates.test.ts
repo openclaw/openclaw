@@ -714,6 +714,7 @@ ${[
   "archive_snapshot_test_result!",
   "write_release_ios_screenshot_attempts!",
   "record_release_ios_screenshot_attempt!",
+  "mark_ios_resource_phase",
   "screenshot_phase",
   "run_screenshot_xcodebuild!",
   "capture_release_ios_screenshot!",
@@ -943,6 +944,9 @@ def available_simulator_devices
   ] + @owned.values + (@scenario == "busy" ? [{ "name" => "Unrelated", "udid" => "unrelated", "state" => "Booted" }] : [])
 end
 def write_watch_screenshot_mode_defaults(*); end
+def resolve_simulator_device(name)
+  available_simulator_devices.find { |device| device.fetch("name") == name }
+end
 def set_watch_status_bar_override(*)
   false
 end
@@ -993,6 +997,11 @@ def sh(command, *arguments, **_options)
   @commands << args
   if args[0, 3] == ["xcrun", "simctl", "create"]
     raise "new device before old cleanup" unless @owned.empty?
+    if args[3].include?("Apple Watch") && @scenario.start_with?("runtime-")
+      @watch_creates += 1
+      raise "unrelated creation failure" if @scenario == "runtime-unrelated"
+      raise "The watchOS 27.0 simulator runtime is not available: runtime path not found" if @watch_creates == 1 || @scenario == "runtime-retry-failure"
+    end
     @created += 1
     udid = "00000000-0000-0000-0000-%012d" % @created
     @owned[udid] = { "name" => args[3], "udid" => udid, "runtime" => args[5], "state" => "Shutdown" }
@@ -1007,6 +1016,16 @@ def sh(command, *arguments, **_options)
     @owned.fetch(args[3])["state"] = "Shutdown"
   elsif args[0, 3] == ["xcrun", "simctl", "delete"]
     @owned.delete(args[3])
+  elsif args == ["xcrun", "simctl", "runtime", "list", "-j"]
+    return JSON.generate({
+      "watch-image" => { "identifier" => "watch-image", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.watchOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "watch-runtime") },
+      "phone-image" => { "identifier" => "phone-image", "runtimeIdentifier" => "com.apple.CoreSimulator.SimRuntime.iOS-27-0", "state" => "Ready", "runtimeBundlePath" => File.join(@root, "phone-runtime") }
+    })
+  elsif args == ["xcrun", "--sdk", "watchsimulator", "--show-sdk-version"]
+    return "27.0"
+  elsif args[0, 2] == ["xcodebuild", "-downloadPlatform"]
+    raise "watchOS download unavailable" if @scenario == "runtime-download-failure"
+    FileUtils.mkdir_p(File.join(@root, "watch-runtime")) unless @scenario == "runtime-path-missing"
   elsif args.include?("xcodebuild") && args.include?("build")
     @builds << "watch"
     raise "Watch build failed" if @scenario == "standalone-build-failure"
@@ -1019,10 +1038,12 @@ def sh(command, *arguments, **_options)
   end
 end
 
-results = %w[combined diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure].map do |scenario|
+results = %w[combined diagnostics iphone standalone standalone-build-failure missing invalid-plist invalid-install build-failure busy boot-failure boot-ended capture-failure capture-cleanup-failure cleanup-failure runtime-recovered runtime-download-failure runtime-path-missing runtime-retry-failure runtime-unrelated runtime-local].map do |scenario|
   Dir.mktmpdir("openclaw-watch-build-") do |root|
     @root, @scenario, @builds, @commands, @installed = root, scenario, [], [], nil
     @owned, @created = {}, 0
+    @watch_creates = 0
+    ENV["CI"] = scenario == "runtime-local" ? "false" : "true"
     ENV["HOME"] = root
     ENV["OPENCLAW_SNAPSHOT_DIAGNOSTICS"] = scenario == "diagnostics" ? "1" : "0"
     logs = File.join(ios_root, "build", "SnapshotLogs")
@@ -1055,6 +1076,8 @@ results = %w[combined diagnostics iphone standalone standalone-build-failure mis
       scenario: scenario, builds: @builds, error: error, installed: @installed,
       owned: @owned.keys,
       lifecycle: @commands.select { |args| args[0, 2] == ["xcrun", "simctl"] && %w[create bootstatus shutdown delete].include?(args[2]) }.map { |args| args.drop(2) },
+      repairCommands: @commands.select { |args| args[0, 3] == ["xcrun", "simctl", "runtime"] || args[0, 2] == ["xcodebuild", "-downloadPlatform"] },
+      watchCreates: @watch_creates,
       pngs: Dir[File.join(ios_root, "fastlane", "screenshots", "en-US", "*.png")].length,
       xcresults: Dir[File.join(ios_root, "build", "SnapshotTestResults", "*.xcresult")].length,
       attempts: File.exist?(File.join(ios_root, "build", "SnapshotTestResults", "capture-attempts.json")),
@@ -1086,6 +1109,8 @@ puts JSON.generate(results)
       versions: string[][];
       owned: string[];
       lifecycle: string[][];
+      repairCommands: string[][];
+      watchCreates: number;
     }[];
     const row = (scenario: string) => rows.find((entry) => entry.scenario === scenario)!;
     const versionArgs = ["--version", "2026.9.1", "--revision", "2", "--build-number", "123"];
@@ -1208,6 +1233,26 @@ puts JSON.generate(results)
     expect(row("capture-failure").error).toBe("capture failed");
     expect(row("capture-cleanup-failure").error).toBe("capture failed");
     expect(row("cleanup-failure").error).toBe("cleanup failed");
+    expect(row("runtime-recovered")).toMatchObject({ error: null, pngs: 9, watchCreates: 2 });
+    expect(row("runtime-recovered").repairCommands).toEqual([
+      ["xcrun", "simctl", "runtime", "list", "-j"],
+      ["xcrun", "simctl", "runtime", "delete", "watch-image"],
+      ["xcodebuild", "-downloadPlatform", "watchOS", "-buildVersion", "27.0"],
+      ["xcrun", "simctl", "runtime", "list", "-j"],
+    ]);
+    expect(row("runtime-download-failure")).toMatchObject({
+      error: "watchOS download unavailable",
+      pngs: 8,
+      watchCreates: 1,
+    });
+    expect(row("runtime-path-missing").error).toContain("did not restore a mounted runtime");
+    expect(row("runtime-path-missing").watchCreates).toBe(1);
+    expect(row("runtime-retry-failure").error).toContain("after one runtime repair");
+    expect(row("runtime-retry-failure").watchCreates).toBe(2);
+    for (const scenario of ["runtime-unrelated", "runtime-local"]) {
+      expect(row(scenario)).toMatchObject({ pngs: 8, watchCreates: 1, repairCommands: [] });
+      expect(row(scenario).error).toBeTruthy();
+    }
     for (const entry of rows) {
       expect(entry.owned, entry.scenario).toEqual([]);
     }
@@ -1337,6 +1382,14 @@ end
     expect(captureJob).not.toContain("OPENCLAW_SNAPSHOT_SKIP_WATCH");
     expect(captureJob).not.toContain("run_ios_fastlane ios watch_screenshot");
     expect(captureJob).toContain("run: pnpm ios:screenshots");
+    const runtimeProvision = "xcodebuild -downloadPlatform watchOS -buildVersion 27.0";
+    expect(captureJob).toContain(runtimeProvision);
+    expect(captureJob.indexOf("*select_xcode_step")).toBeLessThan(
+      captureJob.indexOf(runtimeProvision),
+    );
+    expect(captureJob.indexOf(runtimeProvision)).toBeLessThan(
+      captureJob.indexOf("run: pnpm ios:screenshots"),
+    );
     expect(captureJob).toContain("id: package_screenshot_evidence");
     expect(captureJob).not.toContain("--family");
     expect(

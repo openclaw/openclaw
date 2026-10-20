@@ -457,6 +457,18 @@ describe("Mattermost DM retries", () => {
       name: "port 443 connection error",
       failure: new Error("connect ECONNRESET 104.18.32.10:443"),
     },
+    {
+      name: "fetch transport failure without a nested code",
+      failure: new TypeError("fetch failed"),
+    },
+    {
+      name: "network-down transport code",
+      failure: Object.assign(new Error("transport unavailable"), { code: "ENETDOWN" }),
+    },
+    {
+      name: "legacy timeout diagnostic",
+      failure: new Error("request timed out"),
+    },
   ])("retries $name with capped exponential jitter", async ({ failure }) => {
     const fetchImpl = (fetchFixture.current = vi
       .fn<typeof fetch>()

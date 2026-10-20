@@ -1,19 +1,50 @@
 /* @vitest-environment jsdom */
 
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { MarkdownDomReconciler } from "../lib/markdown-dom-reconciler.ts";
+import { renderSolidRef } from "../test-helpers/render-solid-ref.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { createMarkdownRef } from "./markdown-dom-ref.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
+import "./session-progress-hovercard-registration.ts";
+import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
+import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 const SESSION_KEY = "agent:main:research";
 const DASHBOARD_KEY = "agent:main:dashboard:d0effac9-3211-4641-b993-10f619f124e6";
 function row(displayName?: string, key = SESSION_KEY): GatewaySessionRow {
   return { key, kind: "direct", displayName, updatedAt: Date.now() };
 }
-function renderMarkdown(host: HTMLElement, value: string, fileLinks = false) {
+function registerTargets(titler: SessionLinkTitler, host: HTMLElement) {
+  for (const target of host.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
+    titler.register(
+      target,
+      target.querySelector<HTMLElement>(".session-label") ?? document.createElement("span"),
+    );
+  }
+}
+
+function decorate(titler: SessionLinkTitler, element: HTMLElement, load = false) {
+  titler.register(
+    element,
+    element.querySelector<HTMLElement>(".session-label") ?? document.createElement("span"),
+  );
+  return titler.decorate(element, load);
+}
+
+function renderMarkdown(
+  titler: SessionLinkTitler,
+  host: HTMLElement,
+  value: string,
+  fileLinks = false,
+) {
   host.innerHTML = toSanitizedMarkdownHtml(value, { sessionLinks: true, fileLinks });
+  registerTargets(titler, host);
   return () => host.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
 }
 function observe(host: HTMLElement) {
@@ -46,7 +77,11 @@ function sessionContext(rows: GatewaySessionRow[] = [], origin?: string): Applic
           },
         }
       : {}),
-    sessions: { state: { result: { count: rows.length, sessions: rows } } },
+    sessions: {
+      state: { result: { count: rows.length, sessions: rows } },
+      subscribe: () => () => undefined,
+    },
+    agentSelection: { subscribe: () => () => undefined },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: {
       connectionRevision: 0,
@@ -75,7 +110,7 @@ function previewResponse(overrides: Record<string, unknown> = {}) {
 
 function createTitler(rows: GatewaySessionRow[] = [], request = vi.fn()) {
   const host = document.createElement("div");
-  const titler = new SessionLinkTitler(host);
+  const titler = new SessionLinkTitler();
   titler.client = { request } as unknown as GatewayBrowserClient;
   titler.context = sessionContext(rows);
   return { host, request, titler };
@@ -100,6 +135,7 @@ describe("SessionLinkTitler", () => {
     label.dataset.sessionKey = SESSION_KEY;
     label.innerHTML = '<span class="session-label"></span>';
     host.append(label);
+    registerTargets(titler, host);
     titler.refresh();
     expectTitle(label, "Cached research");
     expect(label.classList.contains("markdown-session-link--titled")).toBe(true);
@@ -108,7 +144,7 @@ describe("SessionLinkTitler", () => {
     expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
     expect(request).not.toHaveBeenCalled();
     titler.context = sessionContext([row("Current research")]);
-    await titler.decorate(label);
+    await decorate(titler, label);
     expectTitle(label, "Current research");
     expect(label.matches("a, [href], [tabindex], .markdown-session-link")).toBe(false);
   });
@@ -123,12 +159,12 @@ describe("SessionLinkTitler", () => {
     label.textContent = SESSION_KEY;
     first.replaceChildren(label);
 
-    await titler.decorate(first, true);
-    await titler.decorate(second, true);
+    await decorate(titler, first, true);
+    await decorate(titler, second, true);
 
     expectTitle(first, "Research plan");
     expectTitle(second, "Research plan");
-    await titler.decorate(first, true);
+    await decorate(titler, first, true);
     expectTitle(first, "Research plan");
     expect(first.getAttribute("href")).toBe("/chat/main/research");
     expect(request).toHaveBeenCalledExactlyOnceWith("controlUi.sessionPreview", {
@@ -138,7 +174,7 @@ describe("SessionLinkTitler", () => {
     label.textContent = "Updated by the producer";
     expect(first.textContent).toBe("Updated by the producer");
     titler.context = sessionContext([row("Replacement Gateway")]);
-    await titler.decorate(first, true);
+    await decorate(titler, first, true);
     expect(first.firstElementChild).toBe(label);
     expect(first.textContent).toBe("Updated by the producer");
   });
@@ -152,7 +188,7 @@ describe("SessionLinkTitler", () => {
     const request = vi.fn().mockImplementation(() => oldPreview.promise);
     const { titler } = createTitler([], request);
     const previous = sessionAnchor();
-    const decorating = titler.decorate(previous, true);
+    const decorating = decorate(titler, previous, true);
     await Promise.resolve();
     if (state === "cached") {
       oldPreview.resolve(previewResponse({ title: "Previous Gateway" }));
@@ -176,7 +212,7 @@ describe("SessionLinkTitler", () => {
     await decorating;
     expect(previous.textContent).toBe(state === "cached" ? "Previous Gateway" : SESSION_KEY);
     const current = state === "cached" ? previous : sessionAnchor();
-    await titler.decorate(current, true);
+    await decorate(titler, current, true);
 
     expect(current.textContent).toBe("Current Gateway");
     expect(request).toHaveBeenCalledTimes(2);
@@ -190,14 +226,14 @@ describe("SessionLinkTitler", () => {
       .mockResolvedValueOnce(previewResponse());
     const { titler } = createTitler([], request);
 
-    await titler.decorate(sessionAnchor(), true);
+    await decorate(titler, sessionAnchor(), true);
     await vi.advanceTimersByTimeAsync(5 * 60_000);
-    await titler.decorate(sessionAnchor(), true);
-    await titler.decorate(sessionAnchor(), true);
+    await decorate(titler, sessionAnchor(), true);
+    await decorate(titler, sessionAnchor(), true);
     expect(request).toHaveBeenCalledTimes(2);
 
     await vi.advanceTimersByTimeAsync(30_000);
-    await titler.decorate(sessionAnchor(), true);
+    await decorate(titler, sessionAnchor(), true);
     expect(request).toHaveBeenCalledTimes(3);
   });
 
@@ -212,9 +248,9 @@ describe("SessionLinkTitler", () => {
     });
     const { host, titler } = createTitler(retired ? [row("Previous Gateway", key)] : [], request);
     const href = "/chat/main/d0effac9?view=details#latest";
-    const link = renderMarkdown(host, `[Plan](${href})`)();
+    const link = renderMarkdown(titler, host, `[Plan](${href})`)();
     if (retired) {
-      await titler.decorate(link);
+      await decorate(titler, link);
       expect(link.textContent).toBe("Previous Gateway");
       titler.context = sessionContext();
     }
@@ -254,7 +290,7 @@ describe("SessionLinkTitler", () => {
     );
     const { host, titler } = createTitler([], request);
     titler.context = sessionContext([], "https://chat.example");
-    const getLink = renderMarkdown(host, source);
+    const getLink = renderMarkdown(titler, host, source);
     await refresh(titler);
     const link = getLink();
 
@@ -284,14 +320,12 @@ describe("SessionLinkTitler", () => {
   ])("preserves hover identity and route intent for %s", async (_kind, markdown) => {
     const key = DASHBOARD_KEY;
     const session = row("Shared contract", key);
-    const rows: GatewaySessionRow[] = [];
+    const rows: GatewaySessionRow[] = [session];
     const { host, titler, request } = createTitler(rows);
     titler.context = sessionContext(rows, "https://CHAT.example:443/");
     host.innerHTML = toSanitizedMarkdownHtml(markdown, { sessionLinks: true, fileLinks: true });
-    await titler.decorate(host.querySelector<HTMLElement>("[data-session-href]")!);
-    expect(request).not.toHaveBeenCalled();
-    rows.push(session);
-    titler.connect();
+    registerTargets(titler, host);
+    titler.refresh();
     await Promise.resolve();
     const link = host.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
     expect(link).toMatchObject({ dataset: { sessionKey: key }, textContent: "Shared contract" });
@@ -316,6 +350,7 @@ describe("SessionLinkTitler", () => {
         "[Remote](https://elsewhere.example/chat/main/d0effac9) `https://elsewhere.example/chat/main/d0effac9`",
       { sessionLinks: true },
     );
+    registerTargets(titler, host);
     titler.refresh();
     const links = [...host.querySelectorAll<HTMLAnchorElement>("a.markdown-session-link")];
     const keys = () => links.map((link) => link.dataset.sessionKey);
@@ -352,5 +387,98 @@ describe("SessionLinkTitler", () => {
     } finally {
       observer.disconnect();
     }
+  });
+});
+
+describe("producer-owned session titles", () => {
+  it("titles late Markdown links across provider remounts and retires a removed pending target", async ({
+    onTestFinished,
+  }) => {
+    const preview = Promise.withResolvers<ReturnType<typeof previewResponse>>();
+    const request = vi.fn((method: string) => {
+      if (method === "sessions.resolve") {
+        return Promise.resolve({
+          ok: true,
+          key: DASHBOARD_KEY,
+          agentId: "main",
+          displayName: "Shared contract",
+        });
+      }
+      if (method === "controlUi.sessionPreview") {
+        return preview.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const provider = Object.assign(
+      document.createElement("openclaw-session-progress-hovercard-provider"),
+      { client: { request }, context: sessionContext() },
+    );
+    const mountPoint = provider.appendChild(document.createElement("div"));
+    const host = document.createElement("div");
+    document.body.append(provider);
+    const [content, setContent] = createSignal("");
+    const view = renderSolidRef(
+      () => createMarkdownRef(() => ({ content: content(), incremental: true })),
+      { container: mountPoint, targetElement: host },
+    );
+    onTestFinished(() => {
+      view.unmount();
+      provider.remove();
+    });
+    const first = toSanitizedMarkdownHtml("[Plan](/chat/main/d0effac9?view=details#latest)", {
+      sessionLinks: true,
+    });
+    const second = toSanitizedMarkdownHtml(SESSION_KEY, { sessionLinks: true });
+    setContent(first);
+    await waitForSolid(() => expect(host.querySelector("a")).not.toBeNull());
+    await vi.dynamicImportSettled();
+    await vi.waitFor(() => expect(host.textContent?.trim()).toBe("Shared contract"));
+    const firstLink = host.querySelector<HTMLAnchorElement>("a")!;
+    expect(firstLink.getAttribute("href")).toBe("/chat/main/d0effac9?view=details#latest");
+
+    provider.remove();
+    await Promise.resolve();
+    provider.context = sessionContext([row("Reconnected plan", DASHBOARD_KEY)]);
+    document.body.append(provider);
+    await vi.waitFor(() => expect(firstLink.textContent).toBe("Reconnected plan"));
+    expect(host.querySelector("a")).toBe(firstLink);
+
+    setContent(first + second);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith("controlUi.sessionPreview", { sessionKey: SESSION_KEY }),
+    );
+    const removed = host.querySelector<HTMLAnchorElement>(`a[data-session-key="${SESSION_KEY}"]`)!;
+    setContent(first);
+    await waitForSolid(() => expect(removed.isConnected).toBe(false));
+    preview.resolve(previewResponse());
+    setContent(first + second);
+    await vi.waitFor(() =>
+      expect(host.querySelector(`a[data-session-key="${SESSION_KEY}"]`)?.textContent).toBe(
+        "Research plan",
+      ),
+    );
+    expect(host.querySelector("a")).toBe(firstLink);
+    expect(removed.textContent).toBe(SESSION_KEY);
+    expect(removed.classList.contains("markdown-session-link--titled")).toBe(false);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases a Markdown target before its lazy registration starts", async ({
+    onTestFinished,
+  }) => {
+    const request = vi.fn();
+    const provider = Object.assign(
+      document.createElement("openclaw-session-progress-hovercard-provider"),
+      { client: { request }, context: sessionContext() },
+    );
+    const host = provider.appendChild(document.createElement("div"));
+    document.body.append(provider);
+    onTestFinished(() => provider.remove());
+    const markdown = new MarkdownDomReconciler(host, registerSessionTitleTarget);
+    markdown.updateHtml(toSanitizedMarkdownHtml(SESSION_KEY, { sessionLinks: true }));
+    markdown.dispose();
+    await vi.dynamicImportSettled();
+    expect(request).not.toHaveBeenCalled();
+    expect(host.textContent).toBe("");
   });
 });

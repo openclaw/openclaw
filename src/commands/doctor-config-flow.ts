@@ -6,6 +6,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { applyMessageQueueDefaults } from "../config/defaults.js";
 import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
@@ -18,7 +19,6 @@ import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway } from "../gateway/call.js";
 import type { PreparedAgentDatabaseMigrationDiscovery } from "../infra/state-migrations.media-persistence-targets.js";
 import type { LegacyStateMigrationStepReceipt } from "../infra/state-migrations.types.js";
 import { resolvePluginDoctorProviderRenames } from "../plugins/doctor-contract-registry.js";
@@ -57,19 +57,6 @@ import { LEGACY_AGENT_ROSTER_RULES } from "./doctor/shared/legacy-config-migrati
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 import { planProviderRenames } from "./doctor/shared/provider-rename.js";
 import { canWriteDoctorInclude } from "./doctor/shared/roster-include-write.js";
-
-async function refreshGatewayAuthStateAfterAuthProfileRepair(): Promise<void> {
-  for (const request of [
-    { method: "secrets.reload", params: {} },
-    { method: "models.authStatus", params: { refresh: true } },
-  ]) {
-    try {
-      await callGateway({ ...request, timeoutMs: 3000 });
-    } catch {
-      // Doctor repair remains best effort when the Gateway is stopped or cannot reload.
-    }
-  }
-}
 
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
@@ -324,6 +311,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   );
   applyConfigMutation(normalized, `Run "${doctorFixCommand}" to apply these changes.`);
 
+  const queueDefaults = applyMessageQueueDefaults(state.candidate);
+  applyConfigMutation(
+    {
+      config: queueDefaults,
+      changes:
+        queueDefaults === state.candidate
+          ? []
+          : ["Set messages.queue.allowCollaborativeSteering to false (default)."],
+    },
+    `Run "${doctorFixCommand}" to persist the collaborative steering default.`,
+  );
+
   const { recoverCommandOwnerTargetKinds } = await import("./doctor-command-owner-recovery.js");
   applyConfigMutation(
     runWithCurrentPluginMetadata(state.candidate, () =>
@@ -549,6 +548,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     retiredModelRefConfig = repairSequence.retiredModelRefConfig;
     modelRetirementRepairRan = repairSequence.modelRetirementRepairRan;
     if (repairSequence.authProfilesRepaired) {
+      const { refreshGatewayAuthStateAfterAuthProfileRepair } =
+        await import("./doctor/auth-profile-repair.js");
       await refreshGatewayAuthStateAfterAuthProfileRepair();
     }
     // Committed side-effect repairs (SQLite/filesystem) already happened; report now.

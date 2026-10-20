@@ -19,6 +19,7 @@ import {
   type DiagnosticEmbeddedRunOwner,
 } from "../../logging/diagnostic-run-activity.js";
 import { getDiagnosticSessionState } from "../../logging/diagnostic-session-state.js";
+import { logMessageQueued } from "../../logging/diagnostic.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
@@ -317,6 +318,23 @@ describe("embedded run registry lifecycle generations", () => {
     successor.operation.complete();
   });
 
+  it("retires processing when a successor fails before native start without consuming queued work", () => {
+    const pendingRef = createIdentity("blocked-recovery");
+    const priorOperation = createReplyOperation({ ...pendingRef, resetTriggered: false });
+    const priorHandle = createRunHandle({ runId: "prior-native-run" });
+    const priorAttachment = attachOperation(priorOperation, priorHandle, pendingRef);
+    logMessageQueued({ ...pendingRef, source: "pending-followup" });
+    priorOperation.complete();
+    const successor = createReplyOperation({ ...pendingRef, resetTriggered: false });
+    retireDiagnosticRun({ handle: priorHandle, attachment: priorAttachment }, pendingRef);
+    successor.fail("run_failed", new Error("Session ended during restart recovery"));
+    successor.complete();
+
+    expect(listActiveSessionRunKeys()).not.toContain(pendingRef.sessionKey);
+    expect(resolveActiveEmbeddedRunOwnerByRunId("prior-native-run")).toBeUndefined();
+    expect(getDiagnosticSessionState(pendingRef)).toMatchObject({ state: "idle", queueDepth: 1 });
+  });
+
   it("publishes backend completion authority and replaces two-argument claims", async () => {
     const handle = createRunHandle({ runId: "claim-run" });
     const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
@@ -334,8 +352,10 @@ describe("embedded run registry lifecycle generations", () => {
         sessionKey: "agent:main:main",
         embeddedRunToolAuthorityBinding: () => ({
           source: "reply",
+          acceptsRequesterOrigin: () => false,
           project: () => "authority",
           projectAsync: async () => "authority",
+          assertRegistrationActive: () => {},
           assertActive: () => {},
         }),
       },

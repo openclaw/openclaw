@@ -3,15 +3,13 @@ import {
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
-  buildMSTeamsGraphMessageUrl,
-  downloadMSTeamsAttachments,
   downloadMSTeamsBotFrameworkAttachments,
-  downloadMSTeamsGraphMedia,
-  extractMSTeamsHtmlAttachmentIds,
   isBotFrameworkPersonalChatId,
-  type MSTeamsHtmlAttachmentSummary,
-  type MSTeamsInboundMedia,
-} from "../attachments.js";
+} from "../attachments/bot-framework.js";
+import { downloadMSTeamsAttachments } from "../attachments/download.js";
+import { buildMSTeamsGraphMessageUrl, downloadMSTeamsGraphMedia } from "../attachments/graph.js";
+import { extractMSTeamsHtmlAttachmentIds } from "../attachments/html.js";
+import type { MSTeamsHtmlAttachmentSummary, MSTeamsInboundMedia } from "../attachments/types.js";
 import { formatUnknownError } from "../errors.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import {

@@ -95,6 +95,8 @@ suite.define(() => {
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(0);
     const details = await openChatDetails(page);
     const action = details.getByRole("button", { name: "All changes", exact: true });
+    // The lazy Session view must mount before its summary timer can advance.
+    await action.waitFor();
     await page.clock.runFor(1);
     await expect.poll(() => action.textContent()).toContain("12 files");
     expect(await action.textContent()).toContain("+248");

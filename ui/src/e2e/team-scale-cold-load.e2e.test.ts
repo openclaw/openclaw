@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
@@ -5,6 +6,7 @@ import {
   persistColdLoadWarmState,
   restoreColdLoadWarmState,
 } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
+import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -92,13 +94,25 @@ async function readStoredWarmState({ sessionKey }: { sessionKey: string }) {
 }
 
 suite.define(() => {
-  const sandbox = useCanvasSandboxFixture();
+  let sandboxAssets: ReturnType<typeof createControlUiTeamScaleFixture>["assets"] | undefined;
+  const sandbox = useCanvasSandboxFixture((pathname) => sandboxAssets?.get(pathname));
 
-  it("loads a paged Team roster, pinned dashboards, plugins, and inline widgets through a deep link", async () => {
+  it("loads a paged Team roster, pinned MCP dashboard, plugins, and inline widgets through a deep link", async () => {
+    const sandboxConfig = sandbox("");
     const fixture = createControlUiTeamScaleFixture({
       baseUrl: suite.server.baseUrl,
-      ...sandbox(""),
+      ...sandboxConfig,
+      sandboxUrl: buildSandboxHostPath({
+        blockDescendantFrames: true,
+        resourceDomains: [`http://127.0.0.1:${sandboxConfig.sandboxPort}`],
+      }),
+      dashboardMcpApp: {
+        font: await readFile(
+          new URL("../../public/fonts/space-grotesk-latin.woff2", import.meta.url),
+        ),
+      },
     });
+    sandboxAssets = fixture.assets;
     await suite.withPage(
       {
         locale: "en-US",
@@ -156,9 +170,7 @@ suite.define(() => {
         await page.goto(
           controlUiSessionUrl(suite.server.baseUrl, fixture.selectedSessionKey, "dashboard"),
         );
-        await page
-          .locator(".chat-pane__session-title-text", { hasText: "Project dashboard 1" })
-          .waitFor();
+        await page.locator(".chat-pane__header").first().waitFor();
 
         await selectAllSidebarSessions(page);
         const catalogRequest = await gateway.waitForRequest("sessions.catalog.list");
@@ -212,11 +224,26 @@ suite.define(() => {
         await onlineWrite.evaluate(({ done }) => done);
         await onlineWrite.dispose();
 
-        await page
-          .frameLocator(".board-widget__frame")
-          .frameLocator("iframe")
-          .getByText("Team metric 1", { exact: true })
-          .waitFor();
+        const dashboard = page
+          .frameLocator("openclaw-board-view mcp-app-view iframe")
+          .frameLocator("iframe");
+        await dashboard.getByText("Team metric 1", { exact: true }).waitFor();
+        await dashboard.getByRole("img", { name: "Synthetic chart 4", exact: true }).waitFor();
+        expect(await dashboard.getByRole("img", { name: /^Synthetic chart / }).count()).toBe(4);
+        const fontState = await dashboard.locator("body").evaluate(async () => {
+          await document.fonts.ready;
+          return {
+            fonts: [...document.fonts].map((font) => ({
+              family: font.family,
+              status: font.status,
+            })),
+            resources: performance.getEntriesByType("resource").map((entry) => entry.name),
+          };
+        });
+        expect(fontState.fonts, JSON.stringify(fontState)).toContainEqual({
+          family: "TeamMetric",
+          status: "loaded",
+        });
         await page
           .frameLocator(".chat-tool-card__preview-frame")
           .last()
@@ -395,9 +422,7 @@ suite.define(() => {
         await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
         expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);
         expect(await composer.inputValue()).toBe("");
-        await page
-          .locator(".chat-pane__session-title-text", { hasText: "Project dashboard 1" })
-          .waitFor();
+        await page.locator(".chat-pane__header").first().waitFor();
 
         const rosterRequests = await gateway.getRequests("sessions.list");
         expect(rosterRequests.some((request) => asRecord(request.params)?.limit === 200)).toBe(

@@ -434,7 +434,7 @@ export class ManagedWorktreeService {
       !worktreeOwnerMatches(existing, params)
     ) {
       throw new Error(
-        `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${suppliedName}`,
+        `worktree name is already in use by ${existing.ownerKind}${existing.ownerId ? ` ${existing.ownerId}` : ""}: ${suppliedName}; choose an unused name, or omit it to generate one.`,
       );
     }
     if (existing && existing.removedAt === undefined) {

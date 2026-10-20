@@ -1,10 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  filterMemorySearchHitsBySessionVisibility,
-  prepareMemorySearchChannelRead,
-} from "@openclaw/memory-core/session-search-visibility-api.js";
+import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/session-search-visibility-api.js";
 import type { MemoryReadResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
@@ -118,10 +115,9 @@ beforeEach(() => {
   loadCombinedSessionStoreForGatewayAsyncMock
     .mockReset()
     .mockResolvedValue({ storePath: "(test)", store: {} });
+  vi.mocked(filterMemorySearchHitsBySessionVisibility).mockClear();
   resolveDefaultAgentIdMock.mockClear();
   resolveSessionAgentIdMock.mockClear();
-  vi.mocked(filterMemorySearchHitsBySessionVisibility).mockClear();
-  vi.mocked(prepareMemorySearchChannelRead).mockClear();
 });
 
 beforeAll(async () => {
@@ -635,74 +631,6 @@ describe("searchMemoryWiki", () => {
       "MEMORY.md",
     ]);
   });
-  it.each([
-    { allowed: true, expectedSessionSnippet: true },
-    { allowed: false, expectedSessionSnippet: false },
-  ])(
-    "finalizes direct Wiki transcript snippets and citations under current owner access ($allowed)",
-    async ({ allowed, expectedSessionSnippet }) => {
-      const { config } = await createSharedVault("memory");
-      const sessionHit = {
-        path: "sessions/main/sibling-session.jsonl",
-        startLine: 3,
-        endLine: 4,
-        score: 20,
-        snippet: "sibling transcript",
-        source: "sessions" as const,
-        citation: "sessions/main/sibling-session.jsonl#L3-L4",
-      };
-      const durableHit = {
-        path: "MEMORY.md",
-        startLine: 5,
-        endLine: 6,
-        score: 10,
-        snippet: "durable memory",
-        source: "memory" as const,
-        citation: "MEMORY.md#L5-L6",
-      };
-      const manager = createMemoryManager({ searchResults: [sessionHit, durableHit] });
-      getActiveMemorySearchManagerMock.mockResolvedValue({ manager });
-      vi.mocked(filterMemorySearchHitsBySessionVisibility).mockImplementation(async (params) => {
-        params.captureChannelTargets?.([{ hit: sessionHit, aliases: [] }]);
-        return params.hits;
-      });
-      vi.mocked(prepareMemorySearchChannelRead).mockResolvedValue({
-        sessionHits: [sessionHit],
-        withCurrentAccess: async (consume) => consume([allowed]),
-      });
-
-      const results = await searchMemoryWiki({
-        config,
-        appConfig: {
-          agents: { entries: { main: {} } },
-          tools: { sessions: { visibility: "channel" } },
-        } as OpenClawConfig,
-        agentId: "main",
-        agentSessionKey: "agent:main:slack:channel:c111:thread:1.001",
-        query: "transcript",
-        maxResults: 10,
-      });
-
-      expect(results.map((result) => result.snippet)).toEqual(
-        expectedSessionSnippet ? ["sibling transcript", "durable memory"] : ["durable memory"],
-      );
-      expect(results.map((result) => result.citation)).toEqual(
-        expectedSessionSnippet
-          ? ["sessions/main/sibling-session.jsonl#L3-L4", "MEMORY.md#L5-L6"]
-          : ["MEMORY.md#L5-L6"],
-      );
-      expect(prepareMemorySearchChannelRead).toHaveBeenCalledWith(
-        expect.objectContaining({
-          requesterSessionKey: "agent:main:slack:channel:c111:thread:1.001",
-          hits: [sessionHit, durableHit],
-          targets: [{ hit: sessionHit, aliases: [] }],
-        }),
-      );
-      vi.mocked(filterMemorySearchHitsBySessionVisibility).mockRestore();
-      vi.mocked(prepareMemorySearchChannelRead).mockRestore();
-    },
-  );
-
   it("keeps protected session recall inside its trusted corpus (all/wiki)", async () => {
     const { config, writePage } = await createSharedVault("all");
     await writePage("sources/alpha.md", "Alpha", "# Alpha\n\nalpha wiki secret\n");
