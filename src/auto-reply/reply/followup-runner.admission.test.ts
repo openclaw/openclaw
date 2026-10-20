@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { getSessionControllerOperation } from "../../sessions/session-controller.js";
@@ -144,30 +144,28 @@ async function runPolicyRefreshScenario(sessionKey: string, refreshedPolicy: "al
   });
 }
 
-describe("createFollowupRunner admission ownership", () => {
-  it("releases the admitted operation when source adoption fails", async () => {
-    const { executeFollowupTurn } = await vi.importActual<
-      typeof import("./followup-turn-execution.js")
-    >("./followup-turn-execution.js");
-    state.execute.mockImplementation(executeFollowupTurn);
-    const sessionKey = "agent:main:followup-adoption-failure";
-    const queued = createQueuedRun(sessionKey);
-    const failure = new Error("source adoption failed");
-    const onAdopted = vi.fn().mockRejectedValue(failure);
-    queued.turnAdoptionLifecycle = { onAdopted };
-    await drain(queued);
-    expect(state.execute).toHaveBeenCalledOnce();
-    expect(onAdopted).toHaveBeenCalledOnce();
-  });
+it("releases the admitted operation when source adoption fails", async () => {
+  const { executeFollowupTurn } = await vi.importActual<
+    typeof import("./followup-turn-execution.js")
+  >("./followup-turn-execution.js");
+  state.execute.mockImplementation(executeFollowupTurn);
+  const sessionKey = "agent:main:followup-adoption-failure";
+  const queued = createQueuedRun(sessionKey);
+  const failure = new Error("source adoption failed");
+  const onAdopted = vi.fn().mockRejectedValue(failure);
+  queued.turnAdoptionLifecycle = { onAdopted };
+  await drain(queued);
+  expect(state.execute).toHaveBeenCalledOnce();
+  expect(onAdopted).toHaveBeenCalledOnce();
+});
 
-  it("suppresses a deferred compaction notice after preflight refreshes policy to deny", async () => {
-    await runPolicyRefreshScenario("agent:main:followup-policy-control", "allow");
-    expect(state.deliver.mock.calls.filter(([params]) => params.kind === "block")).toHaveLength(1);
+it("suppresses a deferred compaction notice after preflight refreshes policy to deny", async () => {
+  await runPolicyRefreshScenario("agent:main:followup-policy-control", "allow");
+  expect(state.deliver.mock.calls.filter(([params]) => params.kind === "block")).toHaveLength(1);
 
-    state.deliver.mockClear();
-    state.execute.mockClear();
-    await runPolicyRefreshScenario("agent:main:followup-policy-refresh", "deny");
-    expect(state.deliver.mock.calls.filter(([params]) => params.kind === "block")).toHaveLength(0);
-    expect(state.execute).toHaveBeenCalledOnce();
-  });
+  state.deliver.mockClear();
+  state.execute.mockClear();
+  await runPolicyRefreshScenario("agent:main:followup-policy-refresh", "deny");
+  expect(state.deliver.mock.calls.filter(([params]) => params.kind === "block")).toHaveLength(0);
+  expect(state.execute).toHaveBeenCalledOnce();
 });

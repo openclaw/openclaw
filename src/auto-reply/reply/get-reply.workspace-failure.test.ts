@@ -1,10 +1,6 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { holdWorkspacePreparationSnapshot } from "../../agents/workspace-preparation-queue.test-support.js";
 import {
@@ -15,6 +11,7 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { buildGetReplyCtx, registerGetReplyRuntimeOverrides } from "./get-reply.test-fixtures.js";
 import "./get-reply.test-runtime-mocks.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { beforeSettlement, expectCallCounts } from "./reply-contract.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   resolveReplyDirectives: vi.fn(),
@@ -41,22 +38,18 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-it("returns a visible repair notice without sending workspace paths to the channel", async () => {
-  vi.mocked(ensureAgentWorkspace).mockRejectedValueOnce(aliasError);
+it.each([
+  [aliasError, "openclaw doctor"],
+  [new WorkspaceVanishedError({ workspaceDir: "/home/user/clawd" }), "workspace is missing"],
+] as const)("reports %s without exposing workspace paths", async (error, notice) => {
+  vi.mocked(ensureAgentWorkspace).mockRejectedValueOnce(error);
   const reply = await getReplyFromConfig(buildGetReplyCtx(), undefined, {});
-  expect(reply).toMatchObject({ text: expect.stringContaining("openclaw doctor") });
-  const text = [reply].flat()[0]?.text;
-  expect(text).toContain("⚠️");
-  expect(text).not.toMatch(/\/home\/user|\/srv\/data|(^|[\s(])\/[A-Za-z0-9_.-]+\//u);
-});
-
-it("turns a vanished workspace into a visible terminal reply", async () => {
-  vi.mocked(ensureAgentWorkspace).mockRejectedValueOnce(
-    new WorkspaceVanishedError({ workspaceDir: "/home/user/clawd" }),
-  );
-  await expect(getReplyFromConfig(buildGetReplyCtx(), undefined, {})).resolves.toMatchObject({
-    text: expect.stringContaining("workspace is missing"),
-  });
+  expect(reply).toMatchObject({ text: expect.stringContaining(notice) });
+  if (error === aliasError) {
+    const text = [reply].flat()[0]?.text;
+    expect(text).toContain("⚠️");
+    expect(text).not.toMatch(/\/home\/user|\/srv\/data|(^|[\s(])\/[A-Za-z0-9_.-]+\//u);
+  }
 });
 
 it("keeps heartbeat workspace failures throwing for heartbeat-owned logging", async () => {
@@ -70,8 +63,6 @@ it("rejects queued reply preparation after abort or operator revocation without 
   signal,
 }) => {
   vi.stubEnv("OPENCLAW_TEST_FAST", "0");
-  const waitForGate = (gate: PromiseLike<void>, work: PromiseLike<unknown>, message: string) =>
-    withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
   for (const authority of ["abort", "operator"] as const) {
     const state = await createOpenClawTestState({
       layout: "state-only",
@@ -112,7 +103,12 @@ it("rejects queued reply preparation after abort or operator revocation without 
           agents: { defaults: { workspace: state.workspaceDir } },
         }),
       );
-      await waitForGate(queued.promise, preparing, "Reply did not queue workspace preparation");
+      await beforeSettlement(
+        queued.promise,
+        preparing,
+        signal,
+        "Reply did not queue workspace preparation",
+      );
       controller.abort(reason);
       held.release();
       await leader;
@@ -127,9 +123,12 @@ it("rejects queued reply preparation after abort or operator revocation without 
       } else {
         expect(error).toBe(reason);
       }
-      expect(mocks.initSessionState).not.toHaveBeenCalled();
-      expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
-      expect(runPreparedReply).not.toHaveBeenCalled();
+      expectCallCounts(
+        0,
+        mocks.initSessionState,
+        mocks.resolveReplyDirectives,
+        vi.mocked(runPreparedReply),
+      );
     } finally {
       await held.dispose();
       await state.cleanup();

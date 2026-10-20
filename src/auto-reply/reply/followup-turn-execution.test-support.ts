@@ -46,32 +46,19 @@ export const createFollowupTurnTestTypingController = createMockTypingController
 export function createFollowupTurnTestTurn(
   overrides: Partial<AdmittedFollowupTurn> = {},
 ): AdmittedFollowupTurn {
-  const base = createTurn();
-  return {
-    ...base,
-    queued: {
-      ...base.queued,
-      prompt: "queued prompt",
-      transcriptPrompt: "queued transcript",
-      messageId: "message-1",
-      originatingThreadId: "thread-1",
-      originatingAccountId: "acct-1",
-      originatingChatType: "group",
-      media: [{ kind: "audio", contentType: "audio/ogg" }],
-      run: {
-        ...base.queued.run,
-        messageProvider: "slack",
-        senderId: "user-1",
-      },
-    },
-    session: {
-      kind: "session",
-      key: "main",
-      current: () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "on" }),
-      publish: () => undefined,
-    },
-    ...overrides,
-  };
+  const turn = createTurn();
+  Object.assign(turn.queued, {
+    prompt: "queued prompt",
+    transcriptPrompt: "queued transcript",
+    messageId: "message-1",
+    originatingThreadId: "thread-1",
+    originatingAccountId: "acct-1",
+    originatingChatType: "group",
+    media: [{ kind: "audio", contentType: "audio/ogg" }],
+  } satisfies Partial<FollowupRun>);
+  Object.assign(turn.queued.run, { messageProvider: "slack", senderId: "user-1" });
+  turn.session.current = () => ({ sessionId: "session", updatedAt: 1, verboseLevel: "on" });
+  return Object.assign(turn, overrides);
 }
 
 export async function executeQueuedFollowupTurnForTest(
