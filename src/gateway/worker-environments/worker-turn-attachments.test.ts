@@ -47,16 +47,26 @@ describe("cloud attachment transfer confinement", () => {
         timeoutMs: 10_000,
         signal: command.signal,
       });
-    return {
-      remote,
-      bytes,
-      execute,
-      input: { timeoutMs: 5_000, media: [{ path: saved.path, contentType: "application/pdf" }] },
+    const input = {
+      timeoutMs: 5_000,
+      media: [{ path: saved.path, contentType: "application/pdf" }],
     };
+    const prepare = (
+      runWorkspaceCommand = execute,
+      overrides: Partial<Parameters<typeof prepareWorkerTurnAttachments>[0]> = {},
+    ) =>
+      prepareWorkerTurnAttachments({
+        turn: input,
+        remoteWorkspaceDir: remote,
+        tunnel: { runWorkspaceCommand },
+        assertCurrent: () => {},
+        ...overrides,
+      });
+    return { remote, bytes, execute, input, prepare };
   }
 
   it("removes incomplete files after a checksum failure without changing other workspace files", async () => {
-    const { remote, execute, input } = await fixture();
+    const { remote, execute, prepare } = await fixture();
     await writeFile(path.join(remote, "keep.txt"), "remote edits");
     const runWorkspaceCommand = vi.fn(async (command: WorkerWorkspaceCommand) =>
       execute(
@@ -65,20 +75,13 @@ describe("cloud attachment transfer confinement", () => {
           : { ...command, input: Buffer.from("%PDF-1.7\ncorrupt bytes here!").toString("base64") },
       ),
     );
-    await expect(
-      prepareWorkerTurnAttachments({
-        turn: input,
-        remoteWorkspaceDir: remote,
-        tunnel: { runWorkspaceCommand },
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow(/checksum|invalid attachment chunk/);
+    await expect(prepare(runWorkspaceCommand)).rejects.toThrow(/checksum|invalid attachment chunk/);
     expect(await readdir(remote)).toEqual(["keep.txt"]);
     expect(await readFile(path.join(remote, "keep.txt"), "utf8")).toBe("remote edits");
   });
 
   it("rejects a replaced upload directory without following its symlink during write or cleanup", async () => {
-    const { remote, execute, input } = await fixture();
+    const { remote, execute, prepare } = await fixture();
     const outside = path.join(root, "outside");
     await mkdir(outside);
     await writeFile(path.join(outside, "keep.txt"), "outside");
@@ -93,20 +96,13 @@ describe("cloud attachment transfer confinement", () => {
       }
       return result;
     });
-    await expect(
-      prepareWorkerTurnAttachments({
-        turn: input,
-        remoteWorkspaceDir: remote,
-        tunnel: { runWorkspaceCommand },
-        assertCurrent: () => {},
-      }),
-    ).rejects.toThrow("attachment directory changed");
+    await expect(prepare(runWorkspaceCommand)).rejects.toThrow("attachment directory changed");
     expect(await readdir(outside)).toEqual(["keep.txt"]);
     expect(await readFile(path.join(outside, "keep.txt"), "utf8")).toBe("outside");
   });
 
   it("stops after claim loss and never uses a stale claim for cleanup", async () => {
-    const { remote, execute, input } = await fixture();
+    const { remote, execute, prepare } = await fixture();
     let current = true;
     const runWorkspaceCommand = vi.fn(async (command: WorkerWorkspaceCommand) => {
       const result = await execute(command);
@@ -114,10 +110,7 @@ describe("cloud attachment transfer confinement", () => {
       return result;
     });
     await expect(
-      prepareWorkerTurnAttachments({
-        turn: input,
-        remoteWorkspaceDir: remote,
-        tunnel: { runWorkspaceCommand },
+      prepare(runWorkspaceCommand, {
         assertCurrent: () => {
           if (!current) {
             throw new Error("lost claim");
@@ -133,16 +126,13 @@ describe("cloud attachment transfer confinement", () => {
   it.each(["path", "url"] as const)(
     "reports unavailable local %s attachments without reading arbitrary host files",
     async (field) => {
-      const { remote, input } = await fixture();
+      const { input, prepare } = await fixture();
       const privatePath = path.join(root, "private.txt");
       await writeFile(privatePath, "not an admitted attachment");
       const runWorkspaceCommand = vi.fn();
       await expect(
-        prepareWorkerTurnAttachments({
+        prepare(runWorkspaceCommand, {
           turn: { ...input, media: [{ [field]: privatePath }] },
-          remoteWorkspaceDir: remote,
-          tunnel: { runWorkspaceCommand },
-          assertCurrent: () => {},
         }),
       ).rejects.toThrow("attach the file again");
       expect(runWorkspaceCommand).not.toHaveBeenCalled();
@@ -150,8 +140,8 @@ describe("cloud attachment transfer confinement", () => {
   );
 
   it("uses a managed original URL when the runtime path was already staged on the Gateway", async () => {
-    const { remote, input, execute, bytes } = await fixture();
-    const note = await prepareWorkerTurnAttachments({
+    const { remote, input, prepare, bytes } = await fixture();
+    const note = await prepare(undefined, {
       turn: {
         ...input,
         media: [
@@ -162,9 +152,6 @@ describe("cloud attachment transfer confinement", () => {
           },
         ],
       },
-      remoteWorkspaceDir: remote,
-      tunnel: { runWorkspaceCommand: execute },
-      assertCurrent: () => {},
     });
     const [directory] = await readdir(remote);
     expect(note).toContain(directory);
@@ -172,16 +159,11 @@ describe("cloud attachment transfer confinement", () => {
   });
 
   it("bounds transfer commands by the monotonic turn budget when the wall clock rewinds", async () => {
-    const { remote, execute, input } = await fixture();
+    const { execute, prepare } = await fixture();
     vi.spyOn(performance, "now").mockReturnValueOnce(500).mockReturnValue(500.25);
     vi.spyOn(Date, "now").mockReturnValueOnce(500).mockReturnValue(-89_500);
     const runWorkspaceCommand = vi.fn(execute);
-    await prepareWorkerTurnAttachments({
-      turn: input,
-      remoteWorkspaceDir: remote,
-      tunnel: { runWorkspaceCommand },
-      assertCurrent: () => {},
-    });
+    await prepare(runWorkspaceCommand);
     // Integral budget: the node protocol rejects fractional timeoutMs.
     expect(runWorkspaceCommand.mock.calls.map(([command]) => command.timeoutMs)).toEqual([
       4999, 4999,

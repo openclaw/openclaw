@@ -27,6 +27,13 @@ import { WorkerRunnerCapacityError, type WorkerTunnelHandle } from "./tunnel-con
 import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
 import * as githubBinding from "./worker-github-binding.js";
 import {
+  createLauncher,
+  executeTurn,
+  expectUncalled,
+  localResult as defaultLocalResult,
+  runIdentity,
+} from "./worker-turn-launcher-flow.test-support.js";
+import {
   createWorkerTurnTunnel,
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -41,7 +48,6 @@ import {
   credential,
   cleanupWorkerTurnLauncherTest,
   computerDescriptor,
-  createWorkerSessionTurnPlacementProvider,
   readLaunchToolNames,
   measureLaunchTurn,
   placements,
@@ -139,12 +145,8 @@ describe("worker launch capabilities", () => {
         acquireTurnCredential: vi.fn(async () => credential()),
         startTunnel: vi.fn(async () => tunnel),
       };
-      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
-      const execution = provider.executeTurn(
-        { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId: "run-github" },
-        turn("run-github"),
-        vi.fn(),
-      );
+      const provider = createLauncher({ environments });
+      const execution = executeTurn(provider, "run-github", vi.fn());
       if (revoked) {
         await expect(execution).rejects.toBe(revokedError);
         expect(dispatchLaunch).not.toHaveBeenCalled();
@@ -209,17 +211,12 @@ describe("worker launch capabilities", () => {
         startTunnel: vi.fn(async () => tunnel),
         prepareComputer,
       };
-      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+      const provider = createLauncher({ environments });
       await expect(
         provider.executeTurn(
-          {
-            sessionId: SESSION_ID,
-            sessionKey: SESSION_KEY,
-            agentId: "main",
-            runId: "run-computer",
-          },
+          runIdentity("run-computer"),
           { ...turn("run-computer"), toolsAllow: ["computer"], modelHasVision, images: [image] },
-          async () => ({ meta: { durationMs: 1 } }),
+          defaultLocalResult,
         ),
       ).rejects.toBeInstanceOf(WorkerRunnerCapacityError);
       expect(launchTurn).toHaveBeenCalledOnce();
@@ -433,7 +430,7 @@ describe("worker launch capabilities", () => {
         startTunnel: vi.fn(async () => tunnel),
         prepareComputer: vi.fn(async () => (nodeDeviceId ? computer : undefined)),
       };
-      const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+      const provider = createLauncher({ environments });
       const successorGate = vi.spyOn(provider, "assertCompactionSuccessorAllowed");
       let retainedNodeAuthority: (() => void) | undefined;
       const runLocal = vi.fn(() =>
@@ -526,16 +523,7 @@ describe("worker launch capabilities", () => {
           })
         : undefined;
       const uninstall = installSessionPlacementAdmissionProvider(provider);
-      const operation = provider.executeTurn(
-        {
-          sessionId: SESSION_ID,
-          sessionKey: SESSION_KEY,
-          agentId: "main",
-          runId: "run-remote-exec",
-        },
-        inputTurn,
-        runLocal,
-      );
+      const operation = provider.executeTurn(runIdentity("run-remote-exec"), inputTurn, runLocal);
       try {
         if (resourceCleanup) {
           await resourceCleanup.entered.promise;
@@ -674,8 +662,7 @@ describe("worker launch capabilities", () => {
         "reconcile",
         "resume",
       ]);
-      expect(launchTurn).not.toHaveBeenCalled();
-      expect(environments.acquireTurnCredential).not.toHaveBeenCalled();
+      expectUncalled(launchTurn, environments.acquireTurnCredential);
       expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       const placement = placements.get(SESSION_ID);
       expect([placement?.state, placement?.turnClaim]).toEqual(["active", null]);
