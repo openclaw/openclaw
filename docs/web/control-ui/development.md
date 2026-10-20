@@ -57,7 +57,9 @@ being modulepreloaded into the document.
 
 Selecting a language loads its startup catalog and translations for English namespaces
 that are already registered. Other page-only namespaces and configuration hints load
-when first used, with English fallback while the request is pending. The
+when first used, with English fallback while the request is pending. Route loading
+waits for the selected language's newly registered namespaces before mounting the page,
+so editable defaults start in that language. The
 build derives this split from the English startup catalog and canonical translation
 memory for every language. The combined base and configuration-hint catalog size is
 capped at 307,200 B gzip per language; `pnpm ui:check-performance` enforces this cap

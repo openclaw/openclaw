@@ -111,6 +111,20 @@ class I18nManager {
     return this.pendingLocale ?? this.locale;
   }
 
+  public async prepareLocale(): Promise<void> {
+    let locale;
+    do {
+      locale = this.locale;
+      await this.prepareCatalog(locale);
+    } while (locale !== this.locale);
+  }
+
+  private prepareCatalog(locale: Locale): Promise<void> | undefined {
+    return getLazyLocaleCatalog(this.translations[locale]!)?.prepare(
+      this.translations[DEFAULT_LOCALE]!,
+    );
+  }
+
   public getSystemLocale(): Locale {
     const language =
       typeof globalThis.navigator?.language === "string" ? globalThis.navigator.language : null;
@@ -157,10 +171,7 @@ class I18nManager {
           }
           this.translations[locale] = translation;
         }
-        const lazyCatalog = getLazyLocaleCatalog(this.translations[locale]!);
-        if (lazyCatalog) {
-          await lazyCatalog.prepare(this.translations[DEFAULT_LOCALE]!);
-        }
+        await this.prepareCatalog(locale);
       } catch (e) {
         const isCurrentRequest = this.localeRequestGeneration === requestGeneration;
         if (retrying && isCurrentRequest && this.localeLoadRecovery?.isUnrecoverableError(e)) {
