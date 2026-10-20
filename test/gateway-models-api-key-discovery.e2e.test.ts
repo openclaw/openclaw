@@ -5,6 +5,7 @@ import type { ModelsAuthSetApiKeyResult } from "../packages/gateway-protocol/src
 import type { ModelsListResult } from "../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
+import { connectProofClient } from "./helpers/gateway-integration-fixtures.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -16,6 +17,8 @@ it(
   { timeout: 120_000 },
   async ({ signal }) => {
     const providers = ["vllm", "sglang"] as const;
+    const perProvider = <T>(build: (provider: (typeof providers)[number]) => T) =>
+      Object.fromEntries(providers.map((provider) => [provider, build(provider)]));
     const modelIds = ["proof-alpha", "proof-beta", "proof-gamma"];
     const apiKey = "dummy-model-proof-key";
     const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
@@ -48,23 +51,16 @@ it(
             agents: { defaults: { modelPolicy: { allow: providers.map((id) => `${id}/*`) } } },
             plugins: {
               allow: [...providers],
-              entries: Object.fromEntries(
-                providers.map((provider) => [provider, { enabled: true }]),
-              ),
+              entries: perProvider(() => ({ enabled: true })),
               slots: { memory: "none" },
             },
             models: {
               catalogRefresh: { enabled: false },
-              providers: Object.fromEntries(
-                providers.map((provider) => [
-                  provider,
-                  {
-                    baseUrl: `http://127.0.0.1:${endpoint.claim.port}/${provider}/v1`,
-                    api: "openai-completions",
-                    models: [],
-                  },
-                ]),
-              ),
+              providers: perProvider((provider) => ({
+                baseUrl: `http://127.0.0.1:${endpoint.claim.port}/${provider}/v1`,
+                api: "openai-completions",
+                models: [],
+              })),
             },
             gateway: { mode: "local", reload: { mode: "hybrid" } },
           },
@@ -82,9 +78,7 @@ it(
           },
         });
         await instance.startGateway();
-        const client = (connected = await connectGatewayClient({
-          url: instance.url,
-          token: instance.gatewayToken,
+        const client = (connected = await connectProofClient(instance, {
           scopes: ["operator.admin", "operator.read", "operator.write"],
         }));
         for (const provider of providers) {

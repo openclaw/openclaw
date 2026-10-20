@@ -21,6 +21,8 @@ it("matches a cold SQLite current-message binding through the registered iMessag
   await withOpenClawTestState({ label: "imessage-alias-worker" }, async (state) => {
     const { createPluginStateKeyedStoreV2, createPluginStateSyncKeyedStore } =
       await import("../src/plugin-state/plugin-state-store.js");
+    const openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+      createPluginStateSyncKeyedStore<T>("imessage", { ...options, env: state.env });
     const entry = {
       accountId: "work",
       messageId: "00000000-0000-4000-8000-000000000042",
@@ -30,17 +32,15 @@ it("matches a cold SQLite current-message binding through the registered iMessag
       timestamp: Date.now(),
     };
     // Seed the persisted upgrade contract before loading the plugin's memory cache.
-    createPluginStateSyncKeyedStore("imessage", {
+    openSyncKeyedStore({
       namespace: "imessage.reply-cache",
       maxEntries: 2000,
-      env: state.env,
     }).register(createHash("sha256").update(entry.messageId).digest("hex").slice(0, 32), entry, {
       ttlMs: 6 * 60 * 60 * 1000,
     });
-    createPluginStateSyncKeyedStore("imessage", {
+    openSyncKeyedStore({
       namespace: "imessage.reply-cache-counter",
       maxEntries: 1,
-      env: state.env,
     }).register("short-id-counter", { counter: 7 });
 
     const runtime = createPluginRuntimeMock({
@@ -55,8 +55,7 @@ it("matches a cold SQLite current-message binding through the registered iMessag
             { ...options, env: state.env },
             authority ?? { assertCurrent() {} },
           ),
-        openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-          createPluginStateSyncKeyedStore<T>("imessage", { ...options, env: state.env }),
+        openSyncKeyedStore,
       },
     });
     const openSync = vi.spyOn(runtime.state, "openSyncKeyedStore");
@@ -64,10 +63,7 @@ it("matches a cold SQLite current-message binding through the registered iMessag
       await import("../extensions/imessage/runtime-api.js");
     const { imessagePlugin } = await import("../extensions/imessage/api.js");
     setIMessageRuntime(runtime);
-    const delivered = {
-      content: [{ type: "text" as const, text: "reaction delivered" }],
-      details: { ok: true },
-    };
+    const delivered = { content: [], details: { ok: true } };
     const handleAction = vi.fn(async () => delivered);
     const { setActivePluginRegistry } = await import("../src/plugins/runtime.js");
     setActivePluginRegistry(

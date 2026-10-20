@@ -6,6 +6,7 @@ import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/te
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import {
   closeHttpServer,
+  connectProofClient,
   listenLoopback,
   readRequestText,
   respondJson,
@@ -14,7 +15,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
-import { createDeferred } from "./helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 it(
@@ -59,30 +60,29 @@ it(
           `${await listenLoopback(server)}/v1`,
           modelId,
         );
-        const config: OpenClawConfig = {
-          plugins: { slots: { memory: "none" } },
-          agents: {
-            entries: { main: {} },
-            defaults: {
-              model: { primary: provider.modelRef, fallbacks: [] },
-              models: { [provider.modelRef]: { agentRuntime: { id: "openclaw" } } },
-              skills: [],
-            },
-          },
-          tools: { profile: "minimal" },
-          models: {
-            mode: "replace",
-            providers: {
-              [provider.providerId]: {
-                ...provider.config,
-                request: { allowPrivateNetwork: true },
-              },
-            },
-          },
-        };
         instance = await createOpenClawTestInstance({
           name: "cold-agent-abort",
-          config,
+          config: {
+            plugins: { slots: { memory: "none" } },
+            agents: {
+              entries: { main: {} },
+              defaults: {
+                model: { primary: provider.modelRef, fallbacks: [] },
+                models: { [provider.modelRef]: { agentRuntime: { id: "openclaw" } } },
+                skills: [],
+              },
+            },
+            tools: { profile: "minimal" },
+            models: {
+              mode: "replace",
+              providers: {
+                [provider.providerId]: {
+                  ...provider.config,
+                  request: { allowPrivateNetwork: true },
+                },
+              },
+            },
+          } satisfies OpenClawConfig,
           env: {
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
             OPENCLAW_SKIP_PROVIDERS: undefined,
@@ -91,10 +91,7 @@ it(
         });
         await instance.startGateway();
         const started = instance;
-        client = await connectGatewayClient({
-          url: started.url,
-          token: started.gatewayToken,
-        }).catch(async (error: unknown) => {
+        client = await connectProofClient(started).catch(async (error: unknown) => {
           // Capture the owned child before cleanup retires it.
           throw new Error(`${String(error)}\n${await started.diagnose()}`, { cause: error });
         });
@@ -111,21 +108,19 @@ it(
           { expectFinal: true, timeoutMs: 30_000, onAccepted: accepted.resolve },
         );
         await expect(
-          Promise.race([
+          awaitGateBeforeSettlement(
             Promise.all([accepted.promise, providerReceived.promise]),
-            final.then(() => {
-              throw new Error("agent completed before the cancellation request");
-            }),
-          ]),
+            final,
+            "agent completed before the cancellation request",
+          ),
         ).resolves.toMatchObject([{ runId, status: "accepted" }, { model: modelId }]);
         expect(providerAborted).toBe(false);
 
         // Readiness uses HTTP and setup uses only agent: this is the first chat-family RPC.
         const aborted = await client.request("chat.abort", { sessionKey, runId });
         expect(aborted).toMatchObject({ aborted: true, runIds: [runId] });
-        const terminal = await final;
         // The agent RPC retains its cancellation wire status; agent.wait retains the terminal outcome.
-        expect(terminal).toEqual({
+        expect(await final).toEqual({
           runId,
           status: "timeout",
           summary: "aborted",
