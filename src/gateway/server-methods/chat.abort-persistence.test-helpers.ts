@@ -8,25 +8,16 @@ export function collectMessagesWithIdempotencyKey(
   lines: TranscriptLine[],
   idempotencyKey: string,
 ): Record<string, unknown>[] {
-  const messages: Record<string, unknown>[] = [];
-  for (const line of lines) {
-    if (line.message?.idempotencyKey === idempotencyKey) {
-      messages.push(line.message);
-    }
-  }
-  return messages;
+  return lines.flatMap(({ message }) =>
+    message?.idempotencyKey === idempotencyKey ? [message] : [],
+  );
 }
 
 export function findMessageWithIdempotencyKey(
   lines: TranscriptLine[],
   idempotencyKey: string,
 ): Record<string, unknown> | undefined {
-  for (const line of lines) {
-    if (line.message?.idempotencyKey === idempotencyKey) {
-      return line.message;
-    }
-  }
-  return undefined;
+  return lines.find(({ message }) => message?.idempotencyKey === idempotencyKey)?.message;
 }
 
 export function collectAssistantRowsWithText(
@@ -68,14 +59,11 @@ export function expectAbortPayload(payload: unknown, expected?: { runIds?: strin
 export function expectAbortPayloadContainsRunIds(payload: unknown, runIds: string[]) {
   const actual = expectAbortPayload(payload);
   expect(Array.isArray(actual.runIds)).toBe(true);
-  for (const runId of runIds) {
-    expect(actual.runIds as unknown[]).toContain(runId);
-  }
+  expect(actual.runIds).toEqual(expect.arrayContaining(runIds));
 }
 
 export function requireLastRespondCall(respond: ReturnType<typeof vi.fn>): unknown[] {
-  const calls = respond.mock.calls;
-  const call = calls[calls.length - 1];
+  const call = respond.mock.calls.at(-1);
   if (!call) {
     throw new Error("expected respond call");
   }
@@ -92,12 +80,9 @@ export function expectPersistedAbortMessage(
   },
 ) {
   const actual = expectRecord(message, "persisted abort message");
-  expect(actual.idempotencyKey).toBe(expected.idempotencyKey);
-  if (expected.stopReason) {
-    expect(actual.stopReason).toBe(expected.stopReason);
-  }
-  const abort = expectRecord(actual.openclawAbort, "persisted abort metadata");
-  expect(abort.aborted).toBe(true);
-  expect(abort.origin).toBe(expected.origin);
-  expect(abort.runId).toBe(expected.runId);
+  expect(actual).toMatchObject({
+    idempotencyKey: expected.idempotencyKey,
+    ...(expected.stopReason ? { stopReason: expected.stopReason } : {}),
+    openclawAbort: { aborted: true, origin: expected.origin, runId: expected.runId },
+  });
 }

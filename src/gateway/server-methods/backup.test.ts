@@ -68,50 +68,31 @@ async function invoke(params: Record<string, unknown>, jobs: CronJob[] = []) {
 
 describe("backup.status", () => {
   it("returns destination freshness, cron-owned schedules and a config-only storage view", async () => {
-    const ok: BackupRunRecord = {
-      id: "ok",
+    const run = (
+      id: string,
+      archivePath: string,
+      extra: Partial<BackupRunRecord> = {},
+    ): BackupRunRecord => ({
+      id,
+      archivePath,
       createdAt: 10,
-      archivePath: "",
       kind: "archive",
       status: "ok",
-      target: "offsite",
-      namespace: "host",
-      bytes: 12,
-    };
-    const failed: BackupRunRecord = {
-      ...ok,
-      id: "failed",
+      ...extra,
+    });
+    const fail = (record: BackupRunRecord, archivePath = record.archivePath): BackupRunRecord => ({
+      ...record,
+      id: record.id.replace("ok", "failed"),
       createdAt: 20,
       status: "failed",
-      error: "disk unavailable",
-    };
-    const archiveOk: BackupRunRecord = {
-      id: "archive-ok",
-      createdAt: 10,
-      archivePath: "/backups/old.tar.gz",
-      kind: "archive",
-      status: "ok",
-    };
-    const archiveFailed: BackupRunRecord = {
-      ...archiveOk,
-      id: "archive-failed",
-      createdAt: 20,
-      archivePath: "/backups/new.tar.gz",
-      status: "failed",
-    };
-    const snapshotOk: BackupRunRecord = {
-      ...archiveOk,
-      id: "snapshot-ok",
-      kind: "sqlite-snapshot",
-      archivePath: "/backups/old-snapshot",
-    };
-    const snapshotFailed: BackupRunRecord = {
-      ...snapshotOk,
-      id: "snapshot-failed",
-      createdAt: 20,
-      archivePath: "/backups/new-snapshot",
-      status: "failed",
-    };
+      archivePath,
+    });
+    const ok = run("ok", "", { target: "offsite", namespace: "host", bytes: 12 });
+    const failed = { ...fail(ok), error: "disk unavailable" };
+    const archiveOk = run("archive-ok", "/backups/old.tar.gz");
+    const archiveFailed = fail(archiveOk, "/backups/new.tar.gz");
+    const snapshotOk = run("snapshot-ok", "/backups/old-snapshot", { kind: "sqlite-snapshot" });
+    const snapshotFailed = fail(snapshotOk, "/backups/new-snapshot");
     ledger.mockResolvedValue([failed, archiveFailed, snapshotFailed, ok, archiveOk, snapshotOk]);
     const job: CronJob = {
       ...buildBackupScheduleJob({

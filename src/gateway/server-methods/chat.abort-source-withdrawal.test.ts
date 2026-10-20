@@ -26,27 +26,38 @@ vi.mock("../session-utils.js", async (original) => ({
   }),
 }));
 
-function createActiveRun(...[sessionKey, options]: Parameters<typeof createUnscopedRun>) {
-  return createUnscopedRun(sessionKey, {
+function queuedRun(runId: string) {
+  const source = createUnscopedRun("main", {
     storeScope: "/synthetic/withdrawal/sessions.json",
-    ...options,
+    sessionId: "main-session",
+    agentId: "main",
+    queued: true,
+    runId,
+  });
+  const context = createChatAbortContext({
+    sources: [[runId, source]],
+    getSessionEventSubscriberConnIds: () => new Set(),
+  });
+  return { source, context };
+}
+
+function withdraw(
+  context: Parameters<typeof invokeChatAbortHandler>[0]["context"],
+  runId: string,
+  handler = handleChatAbortRequestWithLifecycle,
+) {
+  return invokeChatAbortHandler({
+    handler,
+    context,
+    request: { sessionKey: "main", runId, discardPendingInput: true },
+    client: { connect: { scopes: ["operator.admin"] } },
   });
 }
 
 describe("chat.abort exact controller input withdrawal", () => {
   it("retains captured identity when duplicate admission is refused during withdrawal", async () => {
     const runId = "withdrawal-collision";
-    const source = createActiveRun("main", {
-      sessionId: "main-session",
-      agentId: "main",
-      storeScope: "/synthetic/withdrawal/sessions.json",
-      queued: true,
-      runId,
-    });
-    const context = createChatAbortContext({
-      sources: [[runId, source]],
-      getSessionEventSubscriberConnIds: () => new Set(),
-    });
+    const { source, context } = queuedRun(runId);
     let foreign: ReturnType<typeof registerChatAbortController> | undefined;
     const discard = vi
       .spyOn(withdrawal, "discardSessionPendingInput")
@@ -72,14 +83,7 @@ describe("chat.abort exact controller input withdrawal", () => {
         return true;
       });
     try {
-      await expect(
-        invokeChatAbortHandler({
-          handler: handleChatAbortRequestWithLifecycle,
-          context,
-          request: { sessionKey: "main", runId, discardPendingInput: true },
-          client: { connect: { scopes: ["operator.admin"] } },
-        }),
-      ).rejects.toThrow("Run changed before input removal");
+      await expect(withdraw(context, runId)).rejects.toThrow("Run changed before input removal");
       expect(discard).toHaveBeenCalledOnce();
       expect(source.input.abortSignal.aborted).toBe(false);
       expect(foreign).toBeDefined();
@@ -95,16 +99,7 @@ describe("chat.abort exact controller input withdrawal", () => {
     async (outcome) => {
       const entered = createDeferred();
       const release = createDeferred();
-      const input = createActiveRun("main", {
-        sessionId: "main-session",
-        agentId: "main",
-        queued: true,
-        runId: " source ",
-      });
-      const context = createChatAbortContext({
-        sources: new Map([[" source ", input]]),
-        getSessionEventSubscriberConnIds: () => new Set(),
-      });
+      const { source: input, context } = queuedRun(" source ");
       let current = true;
       const discard = vi
         .spyOn(withdrawal, "discardSessionPendingInput")
@@ -120,16 +115,12 @@ describe("chat.abort exact controller input withdrawal", () => {
           current = false;
           return true;
         });
-      const stopping = invokeChatAbortHandler({
-        handler: (options) =>
-          handleChatAbortRequestWithLifecycle({
-            ...options,
-            hasCurrentClientAuthority: () => current,
-          }),
-        context,
-        request: { sessionKey: "main", runId: " source ", discardPendingInput: true },
-        client: { connect: { scopes: ["operator.admin"] } },
-      });
+      const stopping = withdraw(context, " source ", (options) =>
+        handleChatAbortRequestWithLifecycle({
+          ...options,
+          hasCurrentClientAuthority: () => current,
+        }),
+      );
       try {
         await entered.promise;
         expect(input.input.withdrawalHolds).toBe(1);
@@ -172,12 +163,7 @@ describe("chat.abort exact controller input withdrawal", () => {
     const discard = vi.spyOn(withdrawal, "discardSessionPendingInput");
     try {
       for (const runId of ["source", " source "]) {
-        const respond = await invokeChatAbortHandler({
-          handler: handleChatAbortRequestWithLifecycle,
-          context,
-          request: { sessionKey: "main", runId, discardPendingInput: true },
-          client: { connect: { scopes: ["operator.admin"] } },
-        });
+        const respond = await withdraw(context, runId);
         expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: false, runIds: [] });
       }
       expect(discard).not.toHaveBeenCalled();

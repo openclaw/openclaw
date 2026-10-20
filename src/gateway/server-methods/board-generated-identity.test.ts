@@ -18,12 +18,15 @@ import { createBoardHarness } from "./board.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(async () => {
-  resetPluginRuntimeStateForTest();
+async function closeDatabases() {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
+}
+afterEach(async () => {
+  resetPluginRuntimeStateForTest();
+  await closeDatabases();
 });
 
 it("serializes in-flight generated-name collisions and reuses both names after reload", async () => {
@@ -54,35 +57,32 @@ it("serializes in-flight generated-name collisions and reuses both names after r
     {},
     new SqliteBoardStore(options),
   );
-  const [first, second] = await Promise.all([
-    invoke("board.widget.put", {
+  const widgets = [
+    { title: "売上レポート 2024", docId: "sales", key: "a" },
+    { title: "在庫レポート 2024", docId: "inventory", key: "b" },
+  ];
+  const put = (call: typeof invoke, widget: (typeof widgets)[number], revised = false) =>
+    call("board.widget.put", {
       sessionKey,
       name: "2024",
-      title: "売上レポート 2024",
-      content: { kind: "canvas-doc", docId: "sales" },
+      title: widget.title,
+      content: revised
+        ? { kind: "html", html: `<p>${widget.docId} revised</p>` }
+        : { kind: "canvas-doc", docId: widget.docId },
       generatedIdentity: {
         source: "show_widget",
-        key: "a".repeat(64),
-        fallbackName: "2024-aaaaaaaa",
+        key: widget.key.repeat(64),
+        fallbackName: `2024-${widget.key.repeat(8)}`,
       },
-    }),
-    invoke("board.widget.put", {
-      sessionKey,
-      name: "2024",
-      title: "在庫レポート 2024",
-      content: { kind: "canvas-doc", docId: "inventory" },
-      generatedIdentity: {
-        source: "show_widget",
-        key: "b".repeat(64),
-        fallbackName: "2024-bbbbbbbb",
-      },
-    }),
-  ]);
-
-  const results = [first, second].map(
-    (respond) => respond.mock.calls[0]?.[1] as BoardSnapshot & { resolvedWidgetName: string },
+    });
+  const resolvedName = (respond: Awaited<ReturnType<typeof invoke>>) => {
+    const payload = respond.mock.calls[0]?.[1];
+    expect(payload).toBeDefined();
+    return (payload as BoardSnapshot & { resolvedWidgetName: string }).resolvedWidgetName;
+  };
+  const committedNames = (await Promise.all(widgets.map((widget) => put(invoke, widget)))).map(
+    resolvedName,
   );
-  const committedNames = results.map((result) => result.resolvedWidgetName);
   expect(new Set(committedNames).size).toBe(2);
   expect(committedNames).toContain("2024");
   expect(committedNames.some((name) => name === "2024-aaaaaaaa" || name === "2024-bbbbbbbb")).toBe(
@@ -92,45 +92,17 @@ it("serializes in-flight generated-name collisions and reuses both names after r
     broadcast.mock.calls.map(([, event]) => (event as { widget?: string }).widget).filter(Boolean),
   ).toEqual(expect.arrayContaining(committedNames));
 
-  await closeOpenClawAgentDatabasesAsync();
-  closeOpenClawAgentDatabasesForTest();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
+  await closeDatabases();
   const reloaded = createBoardHarness(undefined, {}, new SqliteBoardStore(options));
   const get = await reloaded.invoke("board.get", { sessionKey });
   const snapshot = get.mock.calls[0]?.[1] as BoardSnapshot;
   expect(new Set(snapshot.widgets.map((widget) => widget.name))).toEqual(new Set(committedNames));
 
-  const firstReload = await reloaded.invoke("board.widget.put", {
-    sessionKey,
-    name: "2024",
-    title: "売上レポート 2024",
-    content: { kind: "html", html: "<p>sales revised</p>" },
-    generatedIdentity: {
-      source: "show_widget",
-      key: "a".repeat(64),
-      fallbackName: "2024-aaaaaaaa",
-    },
-  });
-  const secondReload = await reloaded.invoke("board.widget.put", {
-    sessionKey,
-    name: "2024",
-    title: "在庫レポート 2024",
-    content: { kind: "html", html: "<p>inventory revised</p>" },
-    generatedIdentity: {
-      source: "show_widget",
-      key: "b".repeat(64),
-      fallbackName: "2024-bbbbbbbb",
-    },
-  });
-  const resolvedName = (respond: typeof firstReload) => {
-    const payload = respond.mock.calls[0]?.[1];
-    expect(payload).toBeDefined();
-    return (payload as BoardSnapshot & { resolvedWidgetName: string }).resolvedWidgetName;
-  };
-  expect(new Set([firstReload, secondReload].map((respond) => resolvedName(respond)))).toEqual(
-    new Set(committedNames),
-  );
+  const reloads = [];
+  for (const widget of widgets) {
+    reloads.push(await put(reloaded.invoke, widget, true));
+  }
+  expect(new Set(reloads.map(resolvedName))).toEqual(new Set(committedNames));
   expect(
     reloaded.broadcast.mock.calls
       .map(([, event]) => (event as { widget?: string }).widget)
