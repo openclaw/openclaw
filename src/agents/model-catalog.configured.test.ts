@@ -24,14 +24,11 @@ const capturedMetadata = {
   params: { captured: true },
   compat: { supportsTools: false },
 } satisfies ModelCatalogEntry;
-const defaults = {
+const defaults: Pick<ModelProviderConfig, "api" | "baseUrl"> = {
   api: "openai-completions",
   baseUrl: "https://configured.example.test/v1",
-} as const;
-function config<T extends Partial<ModelDefinitionConfig>>(
-  model: T,
-  route: Pick<ModelProviderConfig, "api" | "baseUrl"> = defaults,
-) {
+};
+function config<T extends Partial<ModelDefinitionConfig>>(model: T, route = defaults) {
   return {
     plugins: { enabled: false },
     models: { providers: { custom: { ...route, models: [model] } } },
@@ -40,10 +37,7 @@ function config<T extends Partial<ModelDefinitionConfig>>(
 
 describe("configured catalog overlay", () => {
   it("clears captured capabilities when applying a previously missing base URL", () => {
-    const route = {
-      api: "openai-responses",
-      baseUrl: "https://configured.example.test/v1",
-    } as const;
+    const route = { ...defaults, api: "openai-responses" } as const;
     const source = validateConfigObjectRaw(
       config({ id: "plain", name: "Configured model", ...route }, route),
     );
@@ -52,7 +46,6 @@ describe("configured catalog overlay", () => {
     }
     const captured: ModelCatalogEntry & ThinkingCatalogPolicyCarrier = {
       ...capturedMetadata,
-      ...route,
       thinkingPolicyProvider: "captured-policy",
       [PREPARED_THINKING_POLICY]: {
         resolve: () => ({ levels: [{ id: "high" }], defaultLevel: "high" }),
@@ -62,7 +55,6 @@ describe("configured catalog overlay", () => {
       input: ["text", "image"],
       mediaInput: { image: { maxBytes: 4_096 } },
     };
-    delete captured.baseUrl;
     Object.freeze(captured);
     const catalog = Object.freeze([captured]);
     const [entry] = overlayConfiguredModelCatalog({ catalog, config: source.config });

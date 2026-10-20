@@ -6,9 +6,10 @@ import {
   resolveProviderEnvAuthEvidence,
 } from "./model-auth-env.js";
 
-const pluginMetadataMocks = vi.hoisted(() => ({
-  getCurrentPluginMetadataSnapshot: vi.fn(),
-  loadPluginMetadataSnapshot: vi.fn(),
+const { current, load, setup } = vi.hoisted(() => ({
+  current: vi.fn(),
+  load: vi.fn(),
+  setup: vi.fn(() => undefined),
 }));
 
 const snapshot = createPluginMetadataSnapshotFixture({
@@ -24,9 +25,6 @@ const snapshot = createPluginMetadataSnapshotFixture({
   ],
 });
 
-const setupRegistryMocks = vi.hoisted(() => ({
-  resolvePluginSetupProviderCore: vi.fn(() => undefined),
-}));
 const scope = { config: {}, workspaceDir: "/workspace" };
 const env = { EXTERNAL_CLOUD_API_KEY: "secret" };
 const lookup = {
@@ -35,41 +33,37 @@ const lookup = {
   authEvidenceMap: {},
 };
 function expectNoSetup() {
-  expect(pluginMetadataMocks.getCurrentPluginMetadataSnapshot).not.toHaveBeenCalled();
-  expect(pluginMetadataMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-  expect(setupRegistryMocks.resolvePluginSetupProviderCore).not.toHaveBeenCalled();
+  expect([current.mock.calls, load.mock.calls, setup.mock.calls]).toEqual([[], [], []]);
 }
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
-  getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrentPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshot: current,
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
-  loadPluginMetadataSnapshot: pluginMetadataMocks.loadPluginMetadataSnapshot,
+  loadPluginMetadataSnapshot: load,
 }));
 
 vi.mock("../plugins/setup-registry.js", () => ({
-  resolvePluginSetupProviderCore: setupRegistryMocks.resolvePluginSetupProviderCore,
+  resolvePluginSetupProviderCore: setup,
 }));
 
 describe("resolveEnvApiKey provider auth aliases", () => {
   beforeEach(() => {
-    pluginMetadataMocks.getCurrentPluginMetadataSnapshot.mockReset().mockReturnValue(snapshot);
-    pluginMetadataMocks.loadPluginMetadataSnapshot.mockReset().mockReturnValue(snapshot);
-    setupRegistryMocks.resolvePluginSetupProviderCore.mockReset().mockReturnValue(undefined);
+    current.mockReset().mockReturnValue(snapshot);
+    load.mockReset().mockReturnValue(snapshot);
+    setup.mockReset().mockReturnValue(undefined);
   });
 
   it("reuses the current scoped metadata snapshot while resolving provider auth aliases", () => {
-    // The active scoped snapshot already reflects workspace/plugin filtering;
-    // reloading metadata here can accidentally see a broader plugin set.
     expect(resolveEnvApiKey("cloud-alias", env, scope)).toEqual({
       apiKey: "secret",
       source: "env: EXTERNAL_CLOUD_API_KEY",
     });
-    expect(pluginMetadataMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
-    expect(pluginMetadataMocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
+    expect(load).not.toHaveBeenCalled();
+    expect(current).toHaveBeenCalledWith({
       ...scope,
       env,
       allowWorkspaceScopedSnapshot: true,
@@ -77,7 +71,7 @@ describe("resolveEnvApiKey provider auth aliases", () => {
   });
 
   it("passes config and workspace scope to setup-provider fallback", () => {
-    setupRegistryMocks.resolvePluginSetupProviderCore.mockReturnValue({
+    setup.mockReturnValue({
       resolveConfigApiKey: () => "setup-secret",
     } as never);
 
@@ -85,7 +79,7 @@ describe("resolveEnvApiKey provider auth aliases", () => {
       apiKey: "setup-secret",
       source: "env",
     });
-    expect(setupRegistryMocks.resolvePluginSetupProviderCore).toHaveBeenCalledWith({
+    expect(setup).toHaveBeenCalledWith({
       provider: "setup-cloud",
       ...scope,
       env: {},

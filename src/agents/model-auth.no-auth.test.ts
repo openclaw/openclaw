@@ -14,8 +14,8 @@ import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.
 beforeEach(clearRuntimeConfigSnapshot);
 afterEach(clearRuntimeConfigSnapshot);
 
-function configForProvider<T extends ModelProviderConfig>(provider: T) {
-  return { models: { providers: { "custom-studio": provider } } };
+function configForProvider(overrides: Partial<ModelProviderConfig> = {}) {
+  return { models: { providers: { "custom-studio": { ...provider, ...overrides } } } };
 }
 
 const model = makeProviderModelFixture<"openai-completions">({
@@ -36,7 +36,6 @@ describe("explicit provider no-auth", () => {
     "keeps explicit no-auth terminal with %s credentials",
     async (credential) => {
       const sourceConfig = configForProvider({
-        ...provider,
         ...(credential === "inline" ? { apiKey: "synthetic-inline-key" } : {}),
         ...(credential.endsWith("-ref")
           ? { apiKey: { source: "file" as const, id: "/custom/key", provider: "vault" } }
@@ -72,11 +71,7 @@ describe("explicit provider no-auth", () => {
   it.each(["openai-completions", "openai-responses", undefined] as const)(
     "uses the selected model adapter for explicit no-auth with provider API %s",
     async (providerApi) => {
-      const cfg = configForProvider({
-        ...provider,
-        api: providerApi,
-        apiKey: "synthetic-inline-key",
-      });
+      const cfg = configForProvider({ api: providerApi, apiKey: "synthetic-inline-key" });
       const request = { cfg, store: authStore({}) };
       await expect(
         resolveModelAuth({ ...request, model: { ...model, api: "openai-completions" } }),

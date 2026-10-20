@@ -19,16 +19,26 @@ import {
 } from "./model-auth-availability.test-support.js";
 import { resolveApiKeyForProviderCore } from "./model-auth-provider.js";
 
-const profileMocks = vi.hoisted(() => ({ resolveApiKeyForProfile: vi.fn() }));
+const { resolveProfile } = vi.hoisted(() => ({ resolveProfile: vi.fn() }));
 vi.mock("./auth-profiles/oauth.js", async (importActual) => ({
   ...(await importActual<typeof import("./auth-profiles/oauth.js")>()),
-  resolveApiKeyForProfile: profileMocks.resolveApiKeyForProfile,
+  resolveApiKeyForProfile: resolveProfile,
 }));
-afterEach(() => profileMocks.resolveApiKeyForProfile.mockReset());
+afterEach(() => resolveProfile.mockReset());
 const modelRef = { modelId: "gpt-5.4", runtimeId: "codex" };
 const platformCredential = createApiKeyCredential("openai", "platform-key");
-function oauthCredential(authFlow?: "chatgpt-token-sharing") {
-  return createOAuthRefreshCredential({ authFlow, expires: Date.now() + 3_600_000 });
+async function resolveAuth(
+  request: Omit<Parameters<typeof resolveApiKeyForProviderCore>[0], "provider" | "store">,
+  authFlow?: "chatgpt-token-sharing",
+  withApiKey = true,
+  profileId = "openai:oauth",
+) {
+  await prepareSharedAuthStoreOwnership();
+  const store = createAuthProfileStoreFixture({
+    [profileId]: createOAuthRefreshCredential({ authFlow, expires: Date.now() + 3_600_000 }),
+    ...(withApiKey ? { "openai:platform": platformCredential } : {}),
+  });
+  return resolveApiKeyForProviderCore({ provider: "openai", store, ...request });
 }
 
 function resolver(mode?: "api_key" | "oauth" | "token", cfg: OpenClawConfig = {}, complete = true) {
@@ -67,21 +77,13 @@ describe("native Codex model auth", () => {
     ).toBeUndefined();
   });
 
-  it("does not rescue a pinned account with the native login", () => {
+  it.each([
+    { boundary: "pinned account", cfg: {}, ref: { pinnedProfileId: "openai:missing" } },
+    { boundary: "empty account order", cfg: { auth: { order: { openai: [] } } }, ref: {} },
+  ])("keeps $boundary authoritative over native login", ({ cfg, ref }) => {
     expect(
-      resolver("api_key").evaluateRuntimeModelAuth("openai", {
-        ...modelRef,
-        pinnedProfileId: "openai:missing",
-      }).availability,
-    ).not.toBe(true);
-  });
-
-  it("keeps an authored empty account order authoritative", () => {
-    expect(
-      resolver("api_key", { auth: { order: { openai: [] } } }).evaluateRuntimeModelAuth(
-        "openai",
-        modelRef,
-      ).availability,
+      resolver("api_key", cfg).evaluateRuntimeModelAuth("openai", { ...modelRef, ...ref })
+        .availability,
     ).not.toBe(true);
   });
 });
@@ -98,31 +100,32 @@ describe("OAuth inference grants", () => {
           [profileId]: createOAuthRefreshCredential({ authFlow }),
         }),
       });
-      expect(result.availability).toBe(availability);
-      if (availability) {
-        expect(result).toMatchObject({
-          evidence: "profile",
-          selectedAuthMode: "oauth",
-          selectedProfileId: profileId,
-          selectedRoute: platformRoute,
-        });
-      }
+      expect(result).toMatchObject({
+        availability,
+        ...(availability
+          ? {
+              evidence: "profile",
+              selectedAuthMode: "oauth",
+              selectedProfileId: profileId,
+              selectedRoute: platformRoute,
+            }
+          : {}),
+      });
     },
   );
 
   it("does not substitute another account when SIWC is locked for an unsupported capability", async () => {
-    await prepareSharedAuthStoreOwnership();
     await expect(
-      resolveApiKeyForProviderCore({
-        provider: "openai",
-        capability: "image-generation",
-        profileId: "openai:shared",
-        lockedProfile: true,
-        store: createAuthProfileStoreFixture({
-          "openai:shared": oauthCredential("chatgpt-token-sharing"),
-          "openai:platform": platformCredential,
-        }),
-      }),
+      resolveAuth(
+        {
+          capability: "image-generation",
+          profileId: "openai:shared",
+          lockedProfile: true,
+        },
+        "chatgpt-token-sharing",
+        true,
+        "openai:shared",
+      ),
     ).rejects.toThrow(/does not support this operation with Sign in with ChatGPT/);
   });
 });
@@ -144,13 +147,8 @@ describe("OpenAI Decision credentials", () => {
   ])(
     "excludes OAuth before credential resolution (flow=$authFlow, API key=$withApiKey)",
     async ({ authFlow, withApiKey }) => {
-      await prepareSharedAuthStoreOwnership();
-      const profiles = {
-        "openai:oauth": oauthCredential(authFlow),
-        ...(withApiKey ? { "openai:platform": platformCredential } : {}),
-      };
       const order = ["openai:oauth", ...(withApiKey ? ["openai:platform"] : [])];
-      profileMocks.resolveApiKeyForProfile.mockImplementation(async ({ profileId }) => {
+      resolveProfile.mockImplementation(async ({ profileId }) => {
         if (profileId !== "openai:platform") {
           throw new Error("Incompatible OAuth must not be resolved or refreshed");
         }
@@ -158,11 +156,14 @@ describe("OpenAI Decision credentials", () => {
       });
 
       await withEnvAsync({ OPENAI_API_KEY: undefined }, async () => {
-        const result = resolveApiKeyForProviderCore({
-          ...decisionRequest,
-          cfg: { auth: { order: { openai: order } } },
-          store: createAuthProfileStoreFixture(profiles),
-        });
+        const result = resolveAuth(
+          {
+            ...decisionRequest,
+            cfg: { auth: { order: { openai: order } } },
+          },
+          authFlow,
+          withApiKey,
+        );
         if (withApiKey) {
           await expect(result).resolves.toMatchObject({
             mode: "api-key",
@@ -176,17 +177,16 @@ describe("OpenAI Decision credentials", () => {
           });
         }
       });
-      expect(
-        profileMocks.resolveApiKeyForProfile.mock.calls.map(([call]) => call.profileId),
-      ).toEqual(withApiKey ? ["openai:platform"] : []);
+      expect(resolveProfile.mock.calls.map(([call]) => call.profileId)).toEqual(
+        withApiKey ? ["openai:platform"] : [],
+      );
     },
   );
 
   it("keeps an explicit incompatible OAuth binding terminal despite another API key", async () => {
-    await prepareSharedAuthStoreOwnership();
     await withEnvAsync({ OPENAI_API_KEY: "env-must-not-be-used" }, async () => {
       await expect(
-        resolveApiKeyForProviderCore({
+        resolveAuth({
           ...decisionRequest,
           cfg: {
             models: {
@@ -200,13 +200,9 @@ describe("OpenAI Decision credentials", () => {
               },
             },
           },
-          store: createAuthProfileStoreFixture({
-            "openai:oauth": oauthCredential(),
-            "openai:platform": platformCredential,
-          }),
         }),
       ).rejects.toThrow(/not a bearer-style auth class/);
     });
-    expect(profileMocks.resolveApiKeyForProfile).not.toHaveBeenCalled();
+    expect(resolveProfile).not.toHaveBeenCalled();
   });
 });

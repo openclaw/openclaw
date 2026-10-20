@@ -16,27 +16,24 @@ vi.mock("../plugins/provider-runtime.runtime.js", () => ({
 }));
 
 function fixture(discovery: "static" | "runtime", ...modelIds: string[]) {
+  const provider = "catalog-fixture";
+  const modelCatalog = {
+    providers: {
+      [provider]: {
+        api: "openai-responses" as const,
+        models: modelIds.map((id) => ({ id, name: id })),
+      },
+    },
+    discovery: { [provider]: discovery },
+  };
   return finalizePluginMetadataSnapshot(
     createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "catalog-fixture",
-          origin: "bundled",
-          providers: ["catalog-fixture"],
-          modelCatalog: {
-            providers: {
-              "catalog-fixture": {
-                api: "openai-responses",
-                models: modelIds.map((id) => ({ id, name: id })),
-              },
-            },
-            discovery: { "catalog-fixture": discovery },
-          },
-        },
-      ],
+      plugins: [{ id: provider, origin: "bundled", providers: [provider], modelCatalog }],
     }),
   );
 }
+const plan = vi.mocked(planEffectiveModelCatalogRows);
+const normalize = vi.mocked(normalizeModelCatalogProviderRows);
 
 async function build(params: { config: OpenClawConfig; metadataSnapshot: PluginMetadataSnapshot }) {
   return await buildPreparedModelCatalogSnapshot({
@@ -51,8 +48,8 @@ async function build(params: { config: OpenClawConfig; metadataSnapshot: PluginM
 describe("prepared catalog planning and declaration cache", () => {
   beforeEach(() => {
     augment.mockClear();
-    vi.mocked(planEffectiveModelCatalogRows).mockReset();
-    vi.mocked(normalizeModelCatalogProviderRows).mockReset();
+    plan.mockReset();
+    normalize.mockReset();
   });
 
   it("plans manifest rows once without expanding entitlement", async () => {
@@ -63,8 +60,8 @@ describe("prepared catalog planning and declaration cache", () => {
     const metadataSnapshot = fixture("runtime", "allowed", "denied");
     const params = { config, metadataSnapshot };
     await withPluginRuntimeGenerationScope({ metadataSnapshot }, async () => {
-      vi.mocked(planEffectiveModelCatalogRows).mockClear();
-      vi.mocked(normalizeModelCatalogProviderRows).mockClear();
+      plan.mockClear();
+      normalize.mockClear();
       const snapshot = await build(params);
       expect([snapshot.entries, snapshot.routeVariants]).toEqual([[], []]);
       const firstRead = loadManifestModelCatalog(params);
@@ -72,9 +69,8 @@ describe("prepared catalog planning and declaration cache", () => {
       expect(loadManifestModelCatalog(params)).toBe(firstRead);
       expect(augment).not.toHaveBeenCalled();
       expect(planEffectiveModelCatalogRows).toHaveBeenCalledTimes(1);
-      const normalizations = vi.mocked(normalizeModelCatalogProviderRows).mock.results;
       expect(
-        normalizations.map(({ type, value }) => (type === "return" ? value.length : type)),
+        normalize.mock.results.map(({ type, value }) => (type === "return" ? value.length : type)),
       ).toEqual([2]);
     });
   });
@@ -87,7 +83,7 @@ describe("prepared catalog planning and declaration cache", () => {
     const originalRows = loadManifestModelCatalog({ config, metadataSnapshot: initial });
     const params = { config, metadataSnapshot: replacement };
     await withPluginRuntimeGenerationScope({ metadataSnapshot: replacement }, async () => {
-      vi.mocked(planEffectiveModelCatalogRows).mockImplementationOnce(() => {
+      plan.mockImplementationOnce(() => {
         throw planningError;
       });
       await expect(build(params)).rejects.toBe(planningError);
