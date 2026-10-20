@@ -1,13 +1,47 @@
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import type { UpdateDatabaseWriteReceipt } from "../../infra/update-database-generations.js";
+import {
+  UPDATE_DOCTOR_HISTORICAL_SCANS_ENV,
+  type UpdateDoctorHistoricalScans,
+} from "../../infra/update-doctor-scan-receipts.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+
+// The installed driver records the first Doctor receipt here. Its existing backup
+// object is the operation identity shared with post-plugin convergence. No durable cache.
+const historicalScans = new WeakMap<UpdateDatabaseBackup, UpdateDoctorHistoricalScans>();
+
+export function consumeUpdateDoctorHistoricalScans(
+  backup: UpdateDatabaseBackup,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const scans = historicalScans.get(backup);
+  historicalScans.delete(backup);
+  const encoded = scans?.length ? JSON.stringify(scans) : undefined;
+  if (!encoded) {
+    return undefined;
+  }
+  // Windows bounds the entire UTF-16 environment block, not each variable.
+  // Optional reuse must never turn an otherwise valid Doctor spawn into failure.
+  const environmentLength = Object.entries(env).reduce(
+    (length, [key, value]) => length + (value === undefined ? 0 : key.length + value.length + 2),
+    1,
+  );
+  return environmentLength + UPDATE_DOCTOR_HISTORICAL_SCANS_ENV.length + encoded.length + 2 <=
+    30 * 1024
+    ? encoded
+    : undefined;
+}
 
 export function recordUpdateDatabaseWrites(
   backup: UpdateDatabaseBackup,
   writes: UpdateDatabaseWriteReceipt | undefined,
   step: Pick<UpdateStepResult, "name">,
 ): UpdateStepResult {
+  historicalScans.delete(backup);
+  if (writes?.historicalScans?.length) {
+    historicalScans.set(backup, writes.historicalScans);
+  }
   const paths = Object.keys(backup.sourceGenerations).toSorted();
   const receipt: UpdateStepResult = {
     name: "database migration writes",

@@ -288,6 +288,13 @@ On macOS, default-on means a paired gateway can drive pointer and keyboard input
 
 ## Safety
 
+OpenClaw hides its native macOS human-approval panels from Peekaboo screen snapshots
+and refuses native computer input while an approval panel or menu-bar approval is
+pending. Human clicks and **Command-Return** still work. These native guards do not
+cover browser automation, the separate CUA driver, or third-party automation on
+the same machine. This is hardening, not an isolation boundary. Do not combine
+ask-mode exec with unrestricted computer use for a model you do not trust.
+
 - Tool policy, local provider enablement, and platform permissions must agree. Node targets also require Gateway command policy, pairing, and node-app settings. On macOS that includes **Allow Computer Control**, Accessibility, and Screen Recording; the native Peekaboo path also requires Event Posting. Actions execute while those durable controls remain enabled; there is no per-action confirmation.
 - The macOS fulfiller posts text one grapheme at a time, so cancellation, disconnect, pause, disable, or endpoint replacement stops it before the next grapheme. The experimental CUA Driver fulfiller passes node cancellation to the SDK for each call.
 - On macOS, capture and input require a verified unlocked desktop. Temporary keep-awake covers an active Computer execution, including background actions, for at most one hour. Manual lock, logout, or unknown state releases assertions and retires the execution; a later unlock requires a new execution. Optional [Keep computer awake](/platforms/mac/permissions#desktop-availability-and-keeping-awake) keeps a connected host awake between jobs without changing persistent macOS power or lock settings.

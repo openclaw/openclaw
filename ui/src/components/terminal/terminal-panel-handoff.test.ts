@@ -178,7 +178,7 @@ it("keeps catalog first-output readiness at its source until output arrives", as
   gateway.emit("terminal.data", { sessionId: "session-1", seq: 5, data: "ready" });
   await vi.waitFor(() => expect(dock.disabled).toBe(false));
   expect(panel.hostedTabs[0]?.className).toBe("is-live");
-  await vi.advanceTimersByTimeAsync(panel.catalogReadyTimeoutMs + 1);
+  await vi.advanceTimersByTimeAsync(30_001);
   await panel.updateComplete;
   expect(panel.hostedTabs[0]?.className).toBe("is-live");
   expect(panel.querySelector(".tp-error")).toBeNull();

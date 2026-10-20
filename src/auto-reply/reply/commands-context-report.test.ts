@@ -322,6 +322,31 @@ describe("buildContextReply", () => {
     );
   });
 
+  it("tells same-named files apart on context map tiles", async () => {
+    // Moving a file changes only its path, so the image can change only through its tile label.
+    // Real workspace paths are longer than a tile, so the distinguishing directory must survive clipping.
+    const root = "/home/operator/.openclaw/workspace-root";
+    const image = async (layeredAgents: boolean, movedPath: string) => {
+      const params = makeParams("/context map", false, { layeredAgents });
+      const moved = params.sessionEntry?.systemPromptReport?.injectedWorkspaceFiles.at(-1);
+      if (!moved) {
+        throw new Error("missing injected workspace file");
+      }
+      moved.path = movedPath;
+      const { mediaUrl } = await buildContextReply(params);
+      if (!mediaUrl) {
+        throw new Error("missing context map media path");
+      }
+      onTestFinished(() => unlink(mediaUrl));
+      return readFile(mediaUrl);
+    };
+
+    const shared = await image(true, `${root}/main/AGENTS.md`);
+    expect(shared.equals(await image(true, `${root}/other/AGENTS.md`))).toBe(false);
+    const unique = await image(false, `${root}/main/AGENTS.md`);
+    expect(unique.equals(await image(false, `${root}/other/AGENTS.md`))).toBe(true);
+  });
+
   it("uses the session agent profile when legacy reports are missing bootstrap limits", async () => {
     const result = await buildContextReply(
       makeParams("/context list", false, {

@@ -794,8 +794,37 @@ The report includes post-GC resources after initial work and after reopening,
 periodic natural-GC idle samples, idle GC diagnostics/promotion, and each cohort's
 first-turn or reopened-turn latency. Reopened timings include the real agent
 turn and tool round trip, so they are end-to-end reload cost rather than a
-storage-only timer. History digests must remain unchanged across the idle window;
-reopening must append a second exact synthetic answer without rewriting history.
+storage-only timer. After reopening, the pre-idle history digest must match the
+retained prefix, with a second exact synthetic answer appended. No history reads
+warm the workers between the idle wait and the measured reopen.
+Each cohort also reports request-to-provider arrival, time held at the synthetic
+provider's cohort barrier, and request-to-first assistant text in the Gateway.
+The last timestamp comes from the benchmark-only IPC preload, without a message
+subscription or retained message payload. It includes the read-tool round trip
+and excludes subsequent client delivery. Missing samples remain visible as a
+lower count, rather than being counted as zero latency.
+The provider barrier waits for the entire cohort: one slow preparation can delay
+all of its full-turn timings. These synthetic SSE results do not measure external
+provider latency, WebSocket reconnection, or prompt-cache hits. Add `--prep-trace`
+in a separate diagnostic run to capture the existing per-stage preparation logs;
+`--diagnostics` also separates hydration and model-context database reservations.
+
+For long-history reopen measurements, first seed the measured sessions offline:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/fresh-team-shape --scenario session-idle-retention \
+  --sessions 100 --runs 10 --history-turns 163 --seed-history
+```
+
+Run the measurement command above against that fixture with `--history-turns 163`.
+Seeding appends 163 user/tool-call/tool-result/answer cycles through SessionManager,
+plus a header and two settings entries: 655 entries per session. It runs separately
+from measurement, refuses an existing seed, and writes sessions sequentially.
+The measurement preserves these histories and paginates the final integrity checks.
+Without `--history-turns`, measured sessions start empty; the background roster's
+history size does not determine the measured sessions' history depth.
+
 Add `--entry src/entry.ts --session-census` to count live `SessionManager`,
 `AgentSession`, and runtime `Agent` instances at the four forced-GC checkpoints
 without writing snapshots. The source-only census imports the same constructors
@@ -1293,6 +1322,18 @@ hashes, a passing edit control, and fewer diff collections with a higher cache
 hit rate on the repaired path, without a material paired latency regression.
 Native Git status used to validate a revision still counts as Git work; cache
 hits do not imply zero subprocesses.
+
+Use `--missing-cwd` with RPC mode and a small fixture to measure a disappeared
+session directory. The driver renames the synthetic `new/` directory after
+session creation, requires `not_git` on every measured response, restores the
+directory, and requires recovery within two seconds. Do not combine it with
+mutation, churn, or extra polling fixtures. The report includes
+`missingRecoveryMs`; both revisions must return identical absent-checkout
+responses. Compare at least two simultaneous pairs with swapped CPU halves.
+RPC reports also include `processCpuMsPerRpc`, the Gateway process's CPU during
+the measured window divided by completed requests. This includes its worker
+threads but excludes child Git processes; compare it with command counts and
+latency, not as total system CPU.
 
 Add `--nested-cwd` to launch each session from the fixture's `new/` subdirectory.
 This exercises checkout discovery through a session's working directory instead

@@ -56,6 +56,19 @@ if (isMainThread) {
   if (!process.send) {
     throw new Error("Gateway profiling requires the benchmark IPC channel");
   }
+  if (process.env.OPENCLAW_BENCH_FIRST_TEXT === "1") {
+    const { onAgentEvent } = await import("../../src/infra/agent-events.js");
+    onAgentEvent((event) => {
+      if (event.stream === "assistant" && (event.data.delta || event.data.text)) {
+        process.send?.({
+          channel: GATEWAY_PROFILE_CHANNEL,
+          kind: "agent-text",
+          runId: event.runId,
+          atEpochMs: performance.timeOrigin + performance.now(),
+        });
+      }
+    });
+  }
   // This begins after preload imports, before the Gateway entry. It is not
   // process birth and does not include the profiler's own module import cost.
   const initialResources = sampleResources();

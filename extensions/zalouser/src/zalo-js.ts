@@ -570,7 +570,6 @@ export function normalizeZaloInboundMessage(
     wasExplicitlyMentioned,
     implicitMention,
     quotedGlobalMsgId: quotedGlobalMsgId || undefined,
-    quotedOwnerId: quoteOwnerId || undefined,
     quotedBody: quotedBody || undefined,
     eventMessage,
     raw: message,

@@ -296,9 +296,11 @@ describe("typed Git read ownership", () => {
     await expect(loadCheckoutDiff({ ...input, sessionKey: "first" })).resolves.toMatchObject({
       additions: 3,
     });
+    const workBeforeRetainedRead = vi.mocked(runGitWorkerOperation).mock.calls.length;
     await expect(loadCheckoutDiff({ ...input, sessionKey: "second" })).resolves.toMatchObject({
       additions: 3,
     });
+    expect(vi.mocked(runGitWorkerOperation).mock.calls.length).toBe(workBeforeRetainedRead);
     expect(gitRead).toHaveBeenCalledTimes(2);
     gitRead.mockResolvedValueOnce({ ...emptyDiff, additions: 4 });
     await expect(loadCheckoutDiff({ cwd: input.cwd, sessionKey: "first" })).resolves.toMatchObject({
@@ -348,6 +350,8 @@ describe("typed Git read ownership", () => {
     readRevision.mockResolvedValue("retryable-checkout");
     gitRead.mockResolvedValueOnce({ ...emptyDiff, unavailableReason: "not_git" });
     await read(input);
+    await expect(read(input)).resolves.toMatchObject({ unavailableReason: "not_git" });
+    vi.advanceTimersByTime(1_001);
     await expect(read(input)).resolves.toMatchObject({ additions: 2 });
     expect(gitRead).toHaveBeenCalledTimes(9);
   });
@@ -371,11 +375,31 @@ describe("typed Git read ownership", () => {
     held.resolve("unchanged");
     await Promise.all([first, otherCheckout, otherBase, second, otherEnvironment]);
     expect(revisionCount).toBe(4);
-    expect(gitRead).toHaveBeenCalledTimes(3);
+    expect(gitRead).toHaveBeenCalledTimes(4);
     readRevision.mockResolvedValue("edited");
     await read(input);
     expect(readRevision).toHaveBeenCalledTimes(5);
-    expect(gitRead).toHaveBeenCalledTimes(4);
+    expect(gitRead).toHaveBeenCalledTimes(5);
+  });
+
+  it("separates unavailable checkouts by environment and honors explicit refresh", async () => {
+    vi.useFakeTimers();
+    const operation = { type: "checkout.diff" as const, input: { cwd: "/negative-scope" } };
+    gitRead.mockResolvedValue({ ...emptyDiff, unavailableReason: "not_git" });
+    try {
+      await runGitReadOperation(operation);
+      await runGitReadOperation(operation);
+      expect(gitRead).toHaveBeenCalledOnce();
+      expect(readRevision).toHaveBeenCalledOnce();
+      vi.stubEnv("GIT_CONFIG_GLOBAL", "/changed-config");
+      await runGitReadOperation(operation);
+      expect(gitRead).toHaveBeenCalledTimes(2);
+      await runGitReadOperation(operation, { refresh: true });
+      expect(gitRead).toHaveBeenCalledTimes(3);
+      expect(readRevision).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("gives each coalesced response independent files and commit metadata", async () => {

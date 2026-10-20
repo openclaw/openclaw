@@ -11,6 +11,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { readUserBackgroundCommand } from "../../state/user-background.kernel.js";
+import {
+  ensureUserBackgroundSchema,
+  writeUserBackgroundImage,
+} from "../../state/user-background.store.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { retireSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
 import { runSqliteReadSnapshotSync } from "../sqlite-transaction.js";
@@ -45,6 +49,14 @@ it.skipIf(!connection)(
         const physical = getPostgresPhysicalFacts(opened.db);
         assert(physical, "Expected PostgreSQL state admission");
         opened.db.exec("SET lock_timeout = '100ms'");
+        ensureUserBackgroundSchema(options);
+        writeUserBackgroundImage(opened.db, {
+          profile_id: secondProfile.id,
+          asset_id: "target-background",
+          image: Buffer.from([255, 216, 255, 217]),
+          width: 1,
+          height: 1,
+        });
         return { database: opened, first: firstProfile, second: secondProfile, facts: physical };
       });
       namespace = facts.namespace;
@@ -60,16 +72,13 @@ it.skipIf(!connection)(
       await blocker.query("SELECT pg_advisory_xact_lock($1::bigint)", [
         createHash("sha256").update(facts.storeId).digest().readBigInt64BE().toString(),
       ]);
-      expect(withEngineStoreAdmission(read)).toEqual({
-        type: "userBackground.snapshot",
-        profileId: first.id,
-        result: { status: "ok", asset: null, preference: null },
-      });
+      const empty = { status: "ok", asset: null, preference: null };
+      expect(withEngineStoreAdmission(read).result).toEqual(empty);
       await blocker.query("ROLLBACK");
 
       withEngineStoreAdmission(() => {
         runSqliteReadSnapshotSync(database.db, () => {
-          expect(read().profileId).toBe(first.id);
+          expect(read().result).toEqual(empty);
           expect(database.db.isTransaction).toBe(true);
           expect(
             database.db.prepare("SHOW transaction_read_only").get()?.transaction_read_only,
@@ -82,14 +91,24 @@ it.skipIf(!connection)(
                 second.id,
                 first.id,
               );
-              expect(read().profileId).toBe(second.id);
+              expect(read().result).toEqual({
+                status: "ok",
+                asset: {
+                  assetId: "target-background",
+                  width: 1,
+                  height: 1,
+                  mime: "image/jpeg",
+                  byteLength: 4,
+                },
+                preference: null,
+              });
               expect(db.isTransaction).toBe(true);
               throw new Error("rollback enclosing write");
             },
             { database },
           ),
         ).toThrow("rollback enclosing write");
-        expect(read().profileId).toBe(first.id);
+        expect(read().result).toEqual(empty);
       });
     } finally {
       await blocker.query("ROLLBACK");

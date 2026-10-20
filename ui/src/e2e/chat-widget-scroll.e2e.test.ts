@@ -19,14 +19,17 @@ async function swipe(
   direction: -1 | 1,
 ) {
   const distance = 240;
+  const moveCount = 12;
+  const moveSeconds = 0.016;
   const before = await thread.evaluate((element) => element.scrollTop);
   const scroll = await thread.evaluateHandle((element) => {
     const offsets = [
       { time: performance.timeOrigin + performance.now(), offset: element.scrollTop },
     ];
-    const record = (event: Event) =>
+    // Observe delivery independently of the synthetic touch-event clock.
+    const record = () =>
       offsets.push({
-        time: performance.timeOrigin + event.timeStamp,
+        time: performance.timeOrigin + performance.now(),
         offset: element.scrollTop,
       });
     let finish!: () => void;
@@ -50,8 +53,8 @@ async function swipe(
     page.frames().map((frame) =>
       frame.evaluateHandle(() => {
         const state = { time: null as number | null };
-        const record = (event: TouchEvent) => {
-          state.time = performance.timeOrigin + event.timeStamp;
+        const record = () => {
+          state.time = performance.timeOrigin + performance.now();
         };
         window.addEventListener("touchend", record, { capture: true, once: true, passive: true });
         return {
@@ -62,13 +65,28 @@ async function swipe(
     ),
   );
   try {
-    // Chromium owns gesture timing; per-event CDP round trips can stall under load.
-    await cdp.send("Input.synthesizeScrollGesture", {
-      ...point,
-      yDistance: direction * distance,
-      speed: 1_250,
-      gestureSourceType: "touch",
-      preventFling: false,
+    // Use Chromium's touch emulator on every platform; synthetic scroll gestures
+    // bypass Aura's touch recognizer. Keep layout reads out of the input sequence.
+    // Explicit timestamps keep gesture velocity independent of CDP round trips.
+    const timestamp = Date.now() / 1000;
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchStart",
+      touchPoints: [{ ...point, id: 0 }],
+      timestamp,
+    });
+    for (let step = 1; step <= moveCount; step++) {
+      await cdp.send("Input.dispatchTouchEvent", {
+        type: "touchMove",
+        touchPoints: [
+          { x: point.x, y: point.y + (direction * distance * step) / moveCount, id: 0 },
+        ],
+        timestamp: timestamp + step * moveSeconds,
+      });
+    }
+    await cdp.send("Input.dispatchTouchEvent", {
+      type: "touchEnd",
+      touchPoints: [],
+      timestamp: timestamp + moveCount * moveSeconds + 0.002,
     });
     const releaseTimes = await Promise.all(
       releases.map((release) => release.evaluate(({ state }) => state.time)),

@@ -1,11 +1,5 @@
-// Private completion batches: session binding and yielded-final delivery policy.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../../config/runtime-snapshot.js";
-import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
-import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import { beforeEach, describe, expect, it } from "vitest";
+import { completionReader, visibleCompletion } from "./subagent-announce-fixtures.test-support.js";
 import {
   registryRuntimeMock,
   findTranscriptEventMock,
@@ -22,33 +16,19 @@ import {
   completeBatchSpy,
   deliveredCallArg,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
-import { getRuntimeConfig } from "./subagent-announce.runtime.js";
 
 const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 
 describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
   beforeEach(() => {
-    setRuntimeConfigSnapshot(getRuntimeConfig());
-    findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
-      const child = listedRequesterRuns().find(
-        (entry) => sessionStore[entry.childSessionKey]?.sessionId === sessionId,
-      );
-      const event = {
-        type: "message",
-        message: {
-          role: "assistant",
-          display: true,
-          content: [{ type: "text", text: child?.completion?.resultText }],
-          __openclaw: { runId: child?.runId },
-        },
-      };
-      return child && matchesTranscriptEvent(event, match) ? { event } : undefined;
-    });
-  });
-
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
+    findTranscriptEventMock.mockImplementation(
+      completionReader((sessionId) =>
+        listedRequesterRuns().find(
+          (entry) => sessionStore[entry.childSessionKey]?.sessionId === sessionId,
+        ),
+      ),
+    );
   });
 
   const settledPrivateChildren = ({
@@ -62,19 +42,13 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     single: boolean;
     marked?: boolean;
   }) =>
-    (single ? ["run-b"] : ["run-a", "run-b"]).map((runId, index) => {
-      return makeSettledChild({
+    (single ? ["run-b"] : ["run-a", "run-b"]).map((runId, index) =>
+      makeSettledChild({
         runId,
         ...(!mixed || index === 0
           ? { completionTarget: "parent" as const, completionRequesterSessionId: "sess-main" }
           : {}),
-        completion: {
-          required: true,
-          resultText: index === 0 ? "private marker" : "public sibling",
-          terminalReply: prepareAgentRunTerminalReply({
-            rawText: index === 0 ? "private marker" : "public sibling",
-          }).terminalReply,
-        },
+        completion: visibleCompletion(index === 0 ? "private marker" : "public sibling"),
         requesterSettleWake: yielded
           ? {
               status: "pending",
@@ -85,8 +59,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
               ...(marked ? { yieldedFinalDeliverable: true as const } : {}),
             }
           : { status: "pending", attemptCount: 0 },
-      });
-    });
+      }),
+    );
 
   it.each([
     { name: "pending private pair", mixed: false, single: false, yielded: false },
@@ -100,9 +74,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
     const call = deliveredCallArg();
-    expect(call).toMatchObject({
-      completionRequesterSessionId: "sess-main",
-    });
+    expect(call.completionRequesterSessionId).toBe("sess-main");
     // The conversation's reply policy decides whether a visible update is owed.
     expect(call.requireVisibleReply).toBeUndefined();
     expect(call.completionTarget).toBe(yielded ? undefined : "parent");
@@ -128,10 +100,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
   // upgrade they keep their admitted private policy under the same stable identity.
   it.each([false, true])("preserves a batch's policy and identity (marked=%s)", async (marked) => {
     const children = settledPrivateChildren({ mixed: false, yielded: true, single: true, marked });
-    children[0]!.requesterSettleWake = {
-      ...children[0]!.requesterSettleWake!,
-      batchRunIds: ["run-b"],
-    };
+    children[0]!.requesterSettleWake!.batchRunIds = ["run-b"];
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
     expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
     const call = deliveredCallArg();
@@ -151,27 +120,9 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     "does not pass private findings to a replacement requester incarnation: $name",
     async ({ current }) => {
       setSessionStore({ [REQUESTER]: current });
-      const child = makeSettledChild({
-        runId: "run-b",
-        completionTarget: "parent",
-        completionRequesterSessionId: "sess-main",
-        delivery: { status: "pending" },
-        completion: {
-          required: true,
-          resultText: "private marker",
-          terminalReply: { disposition: "visible", text: "private marker" },
-        },
-        requesterSettleWake: {
-          status: "pending",
-          attemptCount: 0,
-          batchRunIds: ["run-b"],
-          afterRequesterYield: true,
-          requesterYieldBatch: true,
-          rearmGeneration: 1,
-          yieldedFinalDeliverable: true,
-        },
-      });
-      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([child]);
+      const children = settledPrivateChildren({ mixed: false, yielded: true, single: true });
+      children[0]!.requesterSettleWake!.batchRunIds = ["run-b"];
+      registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
       expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(false);
       expect(deliverSpy).not.toHaveBeenCalled();
       expect(completeBatchSpy).toHaveBeenCalledWith(

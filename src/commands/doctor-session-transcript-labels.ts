@@ -7,6 +7,7 @@ import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { backupDoctorSqliteRepair } from "../infra/sqlite-index-recovery.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { VERSION, resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit } from "../version.js";
 import {
   scanDoctorSessionTranscripts,
   transcriptSnapshotsMatch,
@@ -155,6 +156,20 @@ export async function noteSessionTranscriptLabelHealth(params: {
       env,
       title: NOTE_TITLE,
       failureLabel: "Failed to inspect or rewrite labels",
+      // Frozen migration identity plus loaded build/codec and the exact target/profile.
+      cleanScanIdentity: (target) => [
+        "session-transcript-labels:v1",
+        VERSION,
+        resolveRuntimeServiceBuildId(),
+        resolveRuntimeServiceCommit(),
+        process.versions.node,
+        INBOUND_CONTEXT_MARKER,
+        env.OPENCLAW_PROFILE ?? null,
+        target.agentId,
+        target.storePath,
+        params.shouldRepair,
+        params.integrityCheck ?? "quick",
+      ],
     },
     ({ reader, target, databaseOptions, reportError, sessionId }) => {
       const { agentId } = target;
@@ -168,7 +183,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
           `- Failed to read transcript for session ${sessionId} (${agentId})`,
           readResult.error,
         );
-        return;
+        return false;
       }
 
       const updates: Array<{ seq: number; eventJson: string }> = [];
@@ -188,7 +203,7 @@ export async function noteSessionTranscriptLabelHealth(params: {
       }
 
       if (updates.length === 0) {
-        return;
+        return true;
       }
 
       foundSessions += 1;
@@ -239,6 +254,8 @@ export async function noteSessionTranscriptLabelHealth(params: {
           );
         }
       }
+      // Findings and repairs are not a clean scan, even when the repair succeeded.
+      return false;
     },
   );
 
