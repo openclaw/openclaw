@@ -5,8 +5,10 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
+import { sessionRow as makeRow } from "./chat-flow-fixtures.test-support.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { bounds } from "./session-management.compact.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session suggestions",
@@ -16,10 +18,8 @@ const suite = createControlUiE2eSuite({
 
 const sessionKey = "agent:main:main";
 
-async function contextAndPage() {
-  const context = await suite.newBrowserContext({ viewport: { height: 760, width: 1180 } });
-  return { page: await context.newPage() };
-}
+const newPage = async () =>
+  (await suite.newBrowserContext({ viewport: { height: 760, width: 1180 } })).newPage();
 
 function presenceUser(
   id: "alice" | "owner" | "zoe",
@@ -37,16 +37,13 @@ function presenceUser(
 function sessionRow(sharingRole: "owner" | "viewer", kind: "direct" | "group" = "direct") {
   return {
     ...chatSessionListResponse([
-      {
-        key: sessionKey,
+      makeRow(sessionKey, "Main", 1, {
         kind,
-        label: "Main",
         sessionId: "session-main",
         status: "done",
-        updatedAt: 1,
         visibility: "suggest",
         sharingRole,
-      },
+      }),
     ]),
     ts: 1,
   };
@@ -67,7 +64,7 @@ async function openSuggestions(
   options: Parameters<typeof installMockGateway>[1] = {},
   kind: "direct" | "group" = "direct",
 ) {
-  const { page } = await contextAndPage();
+  const page = await newPage();
   const gateway = await installMockGateway(page, {
     featureMethods,
     presenceUsers: [presenceUser("alice", true), presenceUser("owner")],
@@ -94,6 +91,19 @@ function pendingSuggestion(id: string, text: string, createdAt: number) {
     text,
     createdAt,
     state: "pending",
+  };
+}
+
+function ownerMessage(content: string, metadata: Record<string, unknown> = {}) {
+  return {
+    role: "user",
+    content,
+    __openclaw: {
+      senderId: "owner",
+      senderName: "Owner",
+      senderIdentity: { type: "profile", id: "owner" },
+      ...metadata,
+    },
   };
 }
 
@@ -210,21 +220,15 @@ suite.define(() => {
     const typingRow = page.locator('[data-virtual-row-key="presence:typing"]');
     const typingIndicator = typingRow.locator(".agent-chat__typing-indicator");
     await modelTrigger.waitFor();
-    const idleModelBox = await modelTrigger.boundingBox();
-    if (idleModelBox === null) {
-      throw new Error("Expected the model trigger before remote typing");
-    }
+    const idleModelBox = await bounds(modelTrigger);
     await expect(typingIndicator).toHaveCount(0);
     await typingEvent(gateway);
     await expect(typingIndicator.locator(".sr-only")).toHaveText("Owner is typing…");
     const [typingModelBox, typingRowBox, composerShellBox] = await Promise.all([
-      modelTrigger.boundingBox(),
-      typingRow.boundingBox(),
-      page.locator(".agent-chat__composer-shell").boundingBox(),
+      bounds(modelTrigger),
+      bounds(typingRow),
+      bounds(page.locator(".agent-chat__composer-shell")),
     ]);
-    if (typingModelBox === null || typingRowBox === null || composerShellBox === null) {
-      throw new Error("Expected the transcript typing row and stable composer layout");
-    }
     expect(Math.abs(typingModelBox.x - idleModelBox.x)).toBeLessThanOrEqual(0.5);
     // The #122809 regression shifted the picker by a full indicator row
     // (~20px); allow subpixel/rounding jitter seen on CI renderers (2.41px).
@@ -233,15 +237,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("session.message", {
       sessionKey: "main",
       agentId: "main",
-      message: {
-        role: "user",
-        content: "Owner finished typing",
-        __openclaw: {
-          senderId: "owner",
-          senderName: "Owner",
-          senderIdentity: { type: "profile", id: "owner" },
-        },
-      },
+      message: ownerMessage("Owner finished typing"),
     });
     await expect(typingIndicator).toHaveCount(0);
     await composer.fill("Try the focused change");
@@ -398,15 +394,8 @@ suite.define(() => {
         sessionId: "session-main",
         agentId: "main",
         message: {
-          role: "user",
-          content: draft,
+          ...ownerMessage(draft, { id: "sent-owner-draft" }),
           timestamp: Date.now(),
-          __openclaw: {
-            id: "sent-owner-draft",
-            senderId: "owner",
-            senderName: "Owner",
-            senderIdentity: { type: "profile", id: "owner" },
-          },
         },
       });
       await expect(typingRow).toHaveCount(0);
@@ -471,7 +460,7 @@ suite.define(() => {
   it.each(["one identity", "unadvertised suggestion RPCs"] as const)(
     "keeps the suggestion composer read-only with %s",
     async (reason) => {
-      const { page } = await contextAndPage();
+      const page = await newPage();
       const solo = reason === "one identity";
       const gateway = await installMockGateway(page, {
         ...(solo ? { featureMethods } : {}),

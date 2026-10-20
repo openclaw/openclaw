@@ -10,7 +10,10 @@ import type { SessionCatalogProvider } from "../../../src/plugins/session-catalo
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { expectDefined } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { deviceGatewayEnv } from "./device-gateway.test-support.ts";
+import { catalogList } from "./sidebar-assertions.test-support.ts";
 
 type ProgressRequest = { outcome: "pending" | "ok"; sessionKey: string };
 declare global {
@@ -34,16 +37,7 @@ suite.define(() => {
     const state = await createOpenClawTestState({
       label: "control-ui-catalog-progress",
       layout: "home",
-      env: {
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
+      env: deviceGatewayEnv,
     });
     let gateway: GatewayServer | undefined;
     const registry = createEmptyPluginRegistry();
@@ -75,28 +69,24 @@ suite.define(() => {
         },
       });
       state.applyEnv();
+      const catalog = catalogList({
+        id: "codex",
+        label: "Codex",
+        host: "Local Codex",
+        thread: threadId,
+        name: "Native catalog progress",
+        status: "idle",
+        archive: false,
+      });
+      const host = expectDefined(catalog.catalogs[0]?.hosts[0], "catalog host");
+      Object.assign(expectDefined(host.sessions[0], "catalog session"), {
+        cwd: writerWorkspace,
+        canContinue: false,
+      });
       const provider: SessionCatalogProvider = {
         id: "codex",
         label: "Codex",
-        list: async () => [
-          {
-            hostId: "gateway:local",
-            label: "Local Codex",
-            kind: "gateway",
-            connected: true,
-            sessions: [
-              {
-                threadId,
-                name: "Native catalog progress",
-                cwd: writerWorkspace,
-                status: "idle",
-                archived: false,
-                canContinue: false,
-                canArchive: false,
-              },
-            ],
-          },
-        ],
+        list: async () => [{ ...host, kind: "gateway" }],
         read: async ({ hostId, threadId: requestedThreadId }) => ({
           hostId,
           threadId: requestedThreadId,

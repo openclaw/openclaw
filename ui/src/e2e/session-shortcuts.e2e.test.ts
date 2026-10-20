@@ -2,27 +2,29 @@ import { expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
+  button,
+  expectNoRequests,
+  sessionPatch,
+} from "./session-management.compact.test-support.ts";
+import {
   controlUiSessionPath,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
-  requireRecord,
-  waitForPatch,
 } from "./session-management.test-support.ts";
+import { expectFocused } from "./sidebar-assertions.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
 suite.define(() => {
   it("direct session shortcuts preserve drafts, archive only the current conversation, and support Undo", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const main = sessionRow("agent:main:main", "Main", 1);
       const target = sessionRow("agent:main:current-shortcut", "Current shortcut", 2);
-      const others = [
-        sessionRow("agent:main:selected-other-one", "Selected other one", 3),
-        sessionRow("agent:main:selected-other-two", "Selected other two", 4),
-      ];
+      const others = ["one", "two"].map((name, index) =>
+        sessionRow(`agent:main:selected-other-${name}`, `Selected other ${name}`, index + 3),
+      );
       const gateway = await installMockGateway(page, {
-        sessions: [main, target, ...others],
+        sessions: [sessionRow("agent:main:main", "Main", 1), target, ...others],
         sessionKey: target.key,
         sessionArchiveFiltering: true,
         historyMessages: [
@@ -45,52 +47,35 @@ suite.define(() => {
       // Browser key events exercise the registered receiver; CDP input does not
       // certify interception of physical operating-system accelerators.
       await composer.press(`${modifier}+Shift+A`);
-      const archived = await waitForPatch(
-        gateway,
-        (params) => params.key === target.key && params.archived === true,
-      );
+      const archived = await sessionPatch(gateway, target.key, { archived: true });
       expect(archived.params).toMatchObject({
         key: target.key,
         expectedSessionId: target.sessionId,
         archived: true,
       });
-      expect(await gateway.getRequests("sessions.patchMany")).toEqual([]);
-      expect(await gateway.getRequests("sessions.abort")).toEqual([]);
-      expect(await gateway.getRequests("sessions.delete")).toEqual([]);
-      const undo = page.getByRole("button", { name: "Undo", exact: true });
+      await expectNoRequests(gateway, "sessions.patchMany", "sessions.abort", "sessions.delete");
+      const undo = button(page, "Undo");
       await undo.waitFor({ state: "visible" });
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
       await pane.getByText("Current conversation content", { exact: true }).waitFor();
       await undo.click();
-      await waitForPatch(
-        gateway,
-        (params) => params.key === target.key && params.archived === false,
-      );
+      await sessionPatch(gateway, target.key, { archived: false });
       await expect.poll(() => composer.inputValue()).toBe("Preserve this unsent draft");
-      const archiveRequests = (await gateway.getRequests("sessions.patch")).filter(
-        (request) => typeof requireRecord(request.params).archived === "boolean",
-      );
-      expect(archiveRequests).toHaveLength(2);
       expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
 
       await page.keyboard.press(`${modifier}+/`);
       const shortcuts = page.getByRole("dialog", { name: "Keyboard shortcuts" });
-      const newSessionHelp = page
-        .locator("openclaw-keyboard-shortcuts-dialog")
-        .getByText("Open New Session", { exact: true });
+      const newSessionHelp = shortcuts.getByText("Open New Session", { exact: true });
       await newSessionHelp.waitFor({ state: "visible" });
       await page.keyboard.press(`${modifier}+Shift+A`);
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(2);
       await page.keyboard.press(`${modifier}+Shift+O`);
       const newComposer = page.locator("openclaw-new-session-page .new-session-page__message");
-      const newComposerFocused = () =>
-        newComposer.evaluate((element) => element === document.activeElement);
       await newComposer.waitFor({ state: "visible" });
       await shortcuts.waitFor({ state: "detached" });
-      await expect.poll(newComposerFocused).toBe(true);
+      await expectFocused(newComposer);
       expect(await newComposer.inputValue()).toBe("");
-      expect(await gateway.getRequests("sessions.create")).toEqual([]);
-      expect(await gateway.getRequests("chat.send")).toEqual([]);
+      await expectNoRequests(gateway, "sessions.create", "chat.send");
       await page.keyboard.press(`${modifier}+/`);
       await newSessionHelp.waitFor({ state: "visible" });
       await page.keyboard.press(`${modifier}+/`);
@@ -99,13 +84,8 @@ suite.define(() => {
       await expect.poll(() => composer.inputValue()).toBe("Preserve this unsent draft");
       await composer.press(`${modifier}+Shift+O`);
       await newComposer.waitFor({ state: "visible" });
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          }),
-      );
-      await expect.poll(newComposerFocused).toBe(true);
+      await page.evaluate(() => new Promise(requestAnimationFrame));
+      await expectFocused(newComposer);
     });
   });
 });
