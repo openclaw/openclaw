@@ -1,12 +1,10 @@
 import fs from "node:fs";
-import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWebSearchTool } from "../agents/tools/web-search.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
@@ -24,7 +22,7 @@ afterEach(() => {
 });
 
 it.each(["ordinary", "timed-out"] as const)(
-  "retains a shared web search capture until concurrent %s calls return",
+  "retains capture during %s retirement",
   async (kind) => {
     const root = temp.make("web-provider-custody-");
     const pluginRoot = path.join(root, "search-fixture");
@@ -33,11 +31,7 @@ it.each(["ordinary", "timed-out"] as const)(
     const event = `web-provider-custody:${root}`;
     const readEvent = `${event}:read`;
     writeTree(pluginRoot, {
-      "package.json": {
-        name: "search-fixture",
-        main: "index.cjs",
-        openclaw: { extensions: ["./index.cjs"] },
-      },
+      "package.json": { name: "search-fixture", openclaw: { extensions: ["./index.cjs"] } },
       "openclaw.plugin.json": {
         id: "search-fixture",
         contracts: { webSearchProviders: ["fixture-search"] },
@@ -58,14 +52,14 @@ module.exports = { id: "search-fixture", register(api) {
   });
 } };`,
     });
-    const config: OpenClawConfig = {
+    const config = {
       ...pluginFixtureConfig({ id: "search-fixture", file: pluginRoot }, { enabled: true }),
       tools: { web: { search: { provider: "fixture-search" } } },
     };
     const cache = createPluginCache();
-    const registry = withPluginCache(cache, () => loadOpenClawPlugins({ config }));
+    const { plugins } = withPluginCache(cache, () => loadOpenClawPlugins({ config }));
     const record = expectDefined(
-      registry.plugins.find((entry) => entry.id === "search-fixture"),
+      plugins.find((entry) => entry.id === "search-fixture"),
       "search plugin",
     );
     expect(record.status).toBe("loaded");
@@ -86,9 +80,7 @@ module.exports = { id: "search-fixture", register(api) {
     const cancellation = vi.fn();
     instance.lifecycle.onDispose(cancellation);
     const queries = Array.from({ length: 50 }, (_, index) => `query-${index}`);
-    const calls = Promise.allSettled(
-      queries.map((query, i) => tool.execute(`search-${i}`, { query })),
-    );
+    const calls = Promise.allSettled(queries.map((query) => tool.execute(query, { query })));
     let retirement: ReturnType<typeof instance.dispose> | undefined;
     let physical: Promise<void> | undefined;
     try {
@@ -97,7 +89,7 @@ module.exports = { id: "search-fixture", register(api) {
       expect(new Set(readers.map((reader) => reader.filename)).size).toBe(1);
       const filename = expectDefined(readers[0], "captured reader").filename;
       expect(filename).toContain("openclaw-plugin-build-");
-      const remove = vi.spyOn(fsPromises, "rm");
+      const remove = vi.spyOn(fs.promises, "rm");
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       retirement = instance.dispose();
       await nextTurn();
@@ -119,42 +111,40 @@ module.exports = { id: "search-fixture", register(api) {
       ).toHaveLength(0);
       expect(fs.existsSync(filename)).toBe(true);
       readers.forEach((reader) => reader.release());
-      const outcomes = await calls;
-      expect(completedReads.toSorted()).toEqual(queries.toSorted());
-      expect(outcomes.map((result) => result.status)).toEqual(Array(50).fill("fulfilled"));
-      for (const [index, outcome] of outcomes.entries()) {
+      const details = (await calls).map((outcome) => {
         if (outcome.status !== "fulfilled") {
           throw outcome.reason;
         }
-        if (kind === "timed-out") {
-          expect(outcome.value.details).toEqual({
-            kind: "error",
-            provider: "fixture-search",
-            error: "provider_error",
-            message: expect.stringContaining("Search failed"),
-            docs: "https://docs.openclaw.ai/tools/web",
-          });
-        } else {
-          expect(outcome.value.details).toMatchObject({
-            kind: "results",
-            provider: "fixture-search",
-            query: `query-${index}`,
-            count: 1,
-            results: [
-              { title: expect.stringContaining("search-fixture"), url: "https://example.com/" },
-            ],
-          });
-        }
-      }
-      await retirement;
-      await physical;
+        return outcome.value.details;
+      });
+      expect(completedReads.toSorted()).toEqual(queries.toSorted());
+      expect(details).toEqual(
+        queries.map((query) =>
+          kind === "timed-out"
+            ? {
+                kind: "error",
+                provider: "fixture-search",
+                error: "provider_error",
+                message: expect.stringContaining("Search failed"),
+                docs: "https://docs.openclaw.ai/tools/web",
+              }
+            : expect.objectContaining({
+                kind: "results",
+                provider: "fixture-search",
+                query,
+                count: 1,
+                results: [
+                  { title: expect.stringContaining("search-fixture"), url: "https://example.com/" },
+                ],
+              }),
+        ),
+      );
+      await Promise.all([retirement, physical]);
       expect(fs.existsSync(filename)).toBe(false);
     } finally {
       process.off(readEvent, captureRead);
       readers.forEach((reader) => reader.release());
-      await calls;
-      await retirement;
-      await physical;
+      await Promise.all([calls, retirement, physical]);
       await clearActivePluginRegistry();
       await retirePluginCache(cache);
       process.off(event, captureReader);
