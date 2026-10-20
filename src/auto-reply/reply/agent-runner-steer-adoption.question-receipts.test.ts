@@ -25,6 +25,10 @@ import {
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
+import {
+  createReplyParams,
+  createSteerParams,
+} from "./agent-runner-steer-adoption.test-support.js";
 import { MessageInjectionTargetUnavailableError } from "./message-injection-authority.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { clearSessionQueues } from "./queue/cleanup.js";
@@ -37,7 +41,6 @@ import { withQuestionCreator } from "./reply-run-question.test-support.js";
 import { createQueueTestRun } from "./reply-tool-authority.test-support.js";
 import { prepareSteeringDelivery } from "./steering-delivery-preparation.js";
 import { createMockTypingController } from "./test-helpers.js";
-import { createTypingSignaler } from "./typing-mode.js";
 
 const text = "candidate committed answer";
 type QueueOptions = Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2];
@@ -239,49 +242,32 @@ describe("question response custody through reply adoption", () => {
           let done = false;
           const adoption = (
             entrypoint === "reply"
-              ? runReplyAgent({
-                  commandBody: text,
-                  transcriptCommandBody: text,
-                  followupRun: run,
-                  opts: {
-                    [REPLY_OPERATION_RUN_STATE]: state,
-                    turnAdoptionLifecycle: run.turnAdoptionLifecycle,
-                  },
-                  queueKey: key,
-                  resolvedQueue: { mode: "steer", debounceMs: 0 },
-                  shouldSteer: true,
-                  shouldFollowup: false,
-                  isActive: true,
-                  typing,
-                  sessionCtx: { Provider: run.run.messageProvider, SenderId: run.run.senderId },
-                  sessionKey: key,
-                  defaultModel: "openai/gpt-test",
-                  resolvedVerboseLevel: "off",
-                  isNewSession: false,
-                  blockStreamingEnabled: false,
-                  resolvedBlockStreamingBreak: "text_end",
-                  shouldInjectGroupIntro: false,
-                  typingMode: "never",
-                })
-              : runActiveReplySteer({
-                  followupRun: run,
-                  opts: undefined,
-                  providedReplyOperation: operation,
-                  queueKey: key,
-                  replyOperationRunState: state,
-                  resolvedQueue: { mode: "steer", debounceMs: 0 },
-                  restartRecoverySourceTurnId: run.messageId,
-                  runFollowup: followup,
-                  sessionCtx: { Provider: run.run.messageProvider, SenderId: run.run.senderId },
-                  sessionKey: key,
-                  storePath: receiptScope?.storePath,
-                  touchActiveSessionEntry: async () => {},
-                  typingSignals: createTypingSignaler({
+              ? runReplyAgent(
+                  createReplyParams(run, {
+                    opts: {
+                      [REPLY_OPERATION_RUN_STATE]: state,
+                      turnAdoptionLifecycle: run.turnAdoptionLifecycle,
+                    },
+                    queueKey: key,
+                    resolvedQueue: { mode: "steer", debounceMs: 0 },
+                    shouldSteer: true,
+                    isActive: true,
                     typing,
-                    mode: "never",
-                    isHeartbeat: false,
+                    sessionCtx: { Provider: run.run.messageProvider, SenderId: run.run.senderId },
+                    sessionKey: key,
+                    defaultModel: "openai/gpt-test",
+                    resolvedBlockStreamingBreak: "text_end",
                   }),
-                })
+                )
+              : runActiveReplySteer(
+                  createSteerParams(key, run, operation, {
+                    replyOperationRunState: state,
+                    restartRecoverySourceTurnId: run.messageId,
+                    runFollowup: followup,
+                    sessionCtx: { Provider: run.run.messageProvider, SenderId: run.run.senderId },
+                    storePath: receiptScope?.storePath,
+                  }),
+                )
           ).finally(() => {
             done = true;
           });

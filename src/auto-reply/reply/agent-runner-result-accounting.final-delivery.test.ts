@@ -1,9 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { MessagingToolSourceReplyPayload } from "../../agents/embedded-agent-messaging.types.js";
 import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import { prepareEmbeddedRunTerminal } from "../../agents/embedded-agent-runner/run/terminal-preparation.js";
@@ -15,62 +13,19 @@ import {
   makeEmbeddedRunnerAttempt,
 } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { persistInternalSourceReply } from "../../gateway/internal-source-reply-persistence.js";
 import { createChatSendReplyDispatch } from "../../gateway/server-methods/chat-send-reply-dispatch.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  isOpenClawAgentDatabaseOpen,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
-import {
-  agentAccountingPersistenceDiagnostic as diagnostic,
-  createAgentAccountingPersistenceFixture,
-} from "./agent-runner-result-accounting.persistence.test-support.js";
+import { createDeliverySuite } from "./agent-runner-delivery-suite.test-support.js";
+import { agentAccountingPersistenceDiagnostic as diagnostic } from "./agent-runner-result-accounting.persistence.test-support.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { applyPreparedReplyMedia } from "./reply-media-paths.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const operations: ReplyOperation[] = [];
-let suiteRoot: string;
-let storePath: string;
-let fixtureSequence = 0;
-beforeAll(() => {
-  // openclaw-temp-dir: allow suite database root drains before removal
-  suiteRoot = fs.mkdtempSync(
-    path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-accounting-suite-"),
-  );
-  storePath = path.join(suiteRoot, "openclaw-agent.sqlite");
-  openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-});
-afterAll(async () => {
-  await drainSessionStoreWriterQueuesForTest();
-  await disposeOpenClawAgentDatabaseByPath(storePath);
-  await closeOpenClawAgentDatabasesAsync(suiteRoot);
-  expect(isOpenClawAgentDatabaseOpen(storePath)).toBe(false);
-  fs.rmSync(suiteRoot, { recursive: true, force: true });
-});
-afterEach(() => {
-  for (const operation of operations.splice(0)) {
-    operation.complete();
-  }
-});
-function createFixture() {
-  return createAgentAccountingPersistenceFixture({
-    storePath,
-    root: tempDirs.make("openclaw-context-pressure-"),
-    fixtureId: ++fixtureSequence,
-    registerOperation: (operation) => {
-      operations.push(operation);
-    },
-  });
-}
+const suite = createDeliverySuite();
+const { createFixture } = suite;
 
 async function prepareLocalReply(
   fixture: Awaited<ReturnType<typeof createFixture>>,
@@ -80,6 +35,7 @@ async function prepareLocalReply(
 ) {
   const { context, sessionId } = fixture;
   const { cfg, runId, sessionKey } = context;
+  const { storePath } = suite;
   if (!sessionKey) {
     throw new Error("Expected a session-bound reply fixture");
   }
@@ -217,7 +173,7 @@ it("publishes a prepared final only after its worker completion commits without 
     expect(completion).toMatchObject({
       sessionId: fixture.sessionId,
       sessionKey: fixture.context.sessionKey,
-      storePath,
+      storePath: suite.storePath,
     });
     expect(fixture.read()?.pendingFinalDelivery).toMatchObject({
       intentId: completion?.intentId,
@@ -248,21 +204,14 @@ it("keeps a committed local answer in history without a second final delivery in
   await fixture.replace(settled);
   context.activeSessionEntry = settled;
   context.activeSessionStore![scope.sessionKey] = settled;
-  context.execution.result.meta.agentMeta = {
-    sessionId: fixture.sessionId,
-    provider: diagnostic.provider,
-    model: diagnostic.model,
-    usage: { input: 120, output: 8 },
-  };
+  fixture.setMeta({ usage: { input: 120, output: 8 } });
 
   const result = await finalizeReplyAgentRun(context);
 
   expect(result).toMatchObject({ text: "Committed local answer." });
   const final = Array.isArray(result) ? result[0] : result;
   expect(final && getReplyPayloadMetadata(final)?.pendingFinalDeliveryCompletion).toBeUndefined();
-  await drainSessionStoreWriterQueuesForTest();
-  await disposeOpenClawAgentDatabaseByPath(storePath);
-  openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+  await suite.reopen();
   expect(fixture.read()).toMatchObject({
     status: "done",
     endedAt: settledAt,
@@ -348,7 +297,7 @@ async function prepareCommittedSourceReplies(media: boolean) {
     messagingToolSourceReplyPayloads: replies,
   });
   context.execution.result.sourceReplyDeliveryState = "delivered";
-  const scope = { agentId: "main", storePath, sessionKey, sessionId };
+  const scope = { agentId: "main", storePath: suite.storePath, sessionKey, sessionId };
   const transcript = await sessionAccessor.loadTranscriptEvents(scope);
 
   return { fixture, scope, transcript };
@@ -362,9 +311,7 @@ it.each([false, true])(
 
     expect(result).toHaveLength(2);
     expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
-    await drainSessionStoreWriterQueuesForTest();
-    await disposeOpenClawAgentDatabaseByPath(storePath);
-    openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+    await suite.reopen();
     expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
     expect(await sessionAccessor.loadTranscriptEvents(scope)).toEqual(transcript);
   },
@@ -398,9 +345,7 @@ it("retains custody for an MCP Connect presentation added after the source reply
   const pending = fixture.read()?.pendingFinalDelivery;
   expect(pending).toMatchObject({ kind: "transport-only", deliveries: [{ state: "prepared" }] });
   expect(pending?.deliveries).toHaveLength(1);
-  await drainSessionStoreWriterQueuesForTest();
-  await disposeOpenClawAgentDatabaseByPath(storePath);
-  openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+  await suite.reopen();
   expect(fixture.read()?.pendingFinalDelivery).toEqual(pending);
   expect(await sessionAccessor.loadTranscriptEvents(scope)).toEqual(transcript);
 });
@@ -449,12 +394,7 @@ it.each([
     context.sessionCtx.ExplicitDeliverRoute = true;
   } else if (reason === "usage footer") {
     context.cfg.messages = { responseUsage: "tokens" };
-    context.execution.result.meta.agentMeta = {
-      sessionId: fixture.sessionId,
-      provider: diagnostic.provider,
-      model: diagnostic.model,
-      usage: { input: 120, output: 8 },
-    };
+    fixture.setMeta({ usage: { input: 120, output: 8 } });
   }
 
   const result = await finalizeReplyAgentRun(context);

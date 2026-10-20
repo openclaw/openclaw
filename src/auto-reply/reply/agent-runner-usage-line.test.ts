@@ -1,9 +1,9 @@
-// Tests usage-line formatting for agent runner completion summaries.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
+
+type Usage = Parameters<typeof resolveResponseUsageLine>[0]["usage"];
 
 describe("appendUsageLine", () => {
   it("marks a standalone usage footer as non-terminal status", () => {
@@ -16,14 +16,7 @@ describe("appendUsageLine", () => {
   });
 
   const completeUsage = { input: 1_000_000, output: 0 };
-  it.each<
-    [
-      name: string,
-      usage: Parameters<typeof resolveResponseUsageLine>[0]["usage"],
-      tiered: boolean,
-      expected: string | undefined,
-    ]
-  >([
+  it.each<[name: string, usage: Usage, tiered: boolean, expected: string | undefined]>([
     ["costless flat-price runtime", completeUsage, false, "est $1.00"],
     ["explicit zero total", { ...completeUsage, cost: { total: 0 } }, true, "est $0.0000"],
     ["incomplete tiered cost", completeUsage, true, undefined],
@@ -74,7 +67,7 @@ describe("appendUsageLine", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      },
       agentDir: "/tmp/openclaw-main-agent",
       usage,
       provider: "fixture",
@@ -100,16 +93,17 @@ describe("appendUsageLine", () => {
   });
 
   it("preserves reply payload metadata when appending usage text", () => {
+    const mirror = {
+      sessionKey: "agent:main:telegram:direct:123",
+      agentId: "main",
+      text: "message tool reply",
+      idempotencyKey: "run-1:internal-source-reply:0",
+    };
     const payload = setReplyPayloadMetadata(
       { text: "message tool reply" },
       {
         deliverDespiteSourceReplySuppression: true,
-        sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main:telegram:direct:123",
-          agentId: "main",
-          text: "message tool reply",
-          idempotencyKey: "run-1:internal-source-reply:0",
-        },
+        sourceReplyTranscriptMirror: mirror,
       },
     );
 
@@ -120,8 +114,7 @@ describe("appendUsageLine", () => {
       {
         deliverDespiteSourceReplySuppression: true,
         sourceReplyTranscriptMirror: {
-          sessionKey: "agent:main:telegram:direct:123",
-          idempotencyKey: "run-1:internal-source-reply:0",
+          ...mirror,
           text: "message tool reply\nUsage: 12 in / 3 out",
         },
       },

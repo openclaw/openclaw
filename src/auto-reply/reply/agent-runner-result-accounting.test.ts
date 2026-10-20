@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 
 const mocks = vi.hoisted(() => ({
   refreshQueuedFollowupSession: vi.fn(),
-  resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
 }));
 
 vi.mock("../../agents/context.js", () => ({
-  resolveContextTokensForModel: () => mocks.resolveContextTokensForModel(),
+  resolveContextTokensForModel: () => 200_000,
 }));
 
 vi.mock("../../agents/fast-mode.js", () => ({
@@ -76,10 +76,9 @@ function createParams(
   const sessionStore = { main: entry };
   const turn = {
     runId: "run-1",
-    queued: {
-      prompt: "queued prompt",
-      enqueuedAt: 1,
-      run: {
+    queued: createQueueTestRun(
+      { prompt: "queued prompt", enqueuedAt: 1 },
+      {
         agentId: "agent",
         agentDir: "/tmp/agent",
         sessionId: "session-1",
@@ -92,7 +91,7 @@ function createParams(
         timeoutMs: 1_000,
         blockReplyBreak: "message_end",
       },
-    },
+    ),
     operation: {},
     config: {},
     session: {
@@ -152,23 +151,14 @@ function createParams(
 describe("accountFollowupTurn", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveContextTokensForModel.mockReturnValue(200_000);
   });
 
   it.each([
-    {
-      name: "source-less legacy user pin",
-      authProfileOverrideCompactionCount: undefined,
-      expectedSource: "user",
-    },
-    {
-      name: "source-less compaction-marked auto pin",
-      authProfileOverrideCompactionCount: 0,
-      expectedSource: "auto",
-    },
+    [undefined, "user"],
+    [0, "auto"],
   ] as const)(
-    "forwards a $name with canonical provenance during fallback queue refresh",
-    async ({ authProfileOverrideCompactionCount, expectedSource }) => {
+    "forwards a source-less pin with compaction count %s as %s during fallback queue refresh",
+    async (authProfileOverrideCompactionCount, expectedSource) => {
       await accountFollowupTurn(createParams(authProfileOverrideCompactionCount));
 
       expect(mocks.refreshQueuedFollowupSession).toHaveBeenCalledOnce();
