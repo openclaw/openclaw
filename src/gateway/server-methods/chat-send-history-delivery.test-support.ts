@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import {
@@ -39,9 +39,7 @@ export function registerChatHistoryDeliveryCases(
         if (route === "queued-webchat") {
           // The queue retains cancellation/admission after the initial dispatch unwinds.
           const input = readReplySourceInput(options.replyOptions);
-          if (!input) {
-            throw new Error("Expected original controller input");
-          }
+          assert(input, "Expected original controller input");
           const run = createQueueTestRun({ prompt: fixture.params.message });
           run.turnAdoptionLifecycle = options.replyOptions?.turnAdoptionLifecycle;
           bindSessionControllerSource(input, run);
@@ -102,9 +100,7 @@ export function registerChatHistoryDeliveryCases(
           eventId: "route-answer",
           message,
         });
-        if (!appended?.ok) {
-          throw new Error("Expected committed route fixture answer");
-        }
+        assert(appended?.ok, "Expected committed route fixture answer");
         await publishTranscriptUpdate(fixture.scope, { message, messageId: "route-answer" });
         expect((await replyOptions?.resolveReplyDelivery?.()) ?? "missing").toBe(
           route === "external" ? "missing" : "delivered",

@@ -117,6 +117,13 @@ it.each([true, false])(
       expect(isRpcSourceQueued(active)).toBe(true);
       const pending = await listSessionPendingInputs(fixture.scope);
       expect(pending.total).toBe(1);
+      const expectRetained = async () => {
+        expect(authority.assertCurrent).not.toThrow();
+        expect(authority.signal?.aborted).toBe(false);
+        expect(isRpcSourceQueued(active)).toBe(true);
+        expect(getExistingFollowupQueue(fixture.scope.sessionKey)?.items).toHaveLength(1);
+        expect(await listSessionPendingInputs(fixture.scope)).toEqual(pending);
+      };
       for (const grant of [["operator.read"], ["operator.admin"], undefined] as const) {
         const next = structuredClone(current);
         const scopes = next.gateway!.auth!.identityScopes!;
@@ -126,12 +133,8 @@ it.each([true, false])(
           delete scopes["other@example.test"];
         }
         publish(next);
-        expect(authority.assertCurrent).not.toThrow();
-        expect(authority.signal?.aborted).toBe(false);
         expect(client.invalidated).not.toBe(true);
-        expect(isRpcSourceQueued(active)).toBe(true);
-        expect(getExistingFollowupQueue(fixture.scope.sessionKey)?.items).toHaveLength(1);
-        expect(await listSessionPendingInputs(fixture.scope)).toEqual(pending);
+        await expectRetained();
       }
       const narrowed = structuredClone(current);
       narrowed.gateway!.auth!.identityScopes![identity] = ["operator.read"];
@@ -150,12 +153,8 @@ it.each([true, false])(
         publish({ ...current, gateway: { ...current.gateway, allowRealIpFallback: true } });
         expect(client.invalidated).toBe(true);
         expect(close).toHaveBeenCalledWith(4001, "gateway policy changed");
-        expect(authority.signal?.aborted).toBe(false);
-        expect(authority.assertCurrent).not.toThrow();
         expect(active.input.abortSignal.aborted).toBe(false);
-        expect(isRpcSourceQueued(active)).toBe(true);
-        expect(getExistingFollowupQueue(fixture.scope.sessionKey)?.items).toHaveLength(1);
-        expect(await listSessionPendingInputs(fixture.scope)).toEqual(pending);
+        await expectRetained();
       }
     } finally {
       clearSessionQueues([fixture.scope.sessionKey]);

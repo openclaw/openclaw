@@ -1,6 +1,6 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -20,14 +20,15 @@ import {
   readChatSendReplyPayload,
 } from "./chat-send-command-replies.js";
 
-function selectRawReplies(params: {
-  deliveredReplies: readonly { kind: "block" | "final"; payload: ReplyPayload }[];
-  foldCommandBlocks: boolean;
-  suppressReplies: boolean;
-}) {
+function selectRawReplies(
+  replies: readonly { kind: "block" | "final"; payload: ReplyPayload }[],
+  options: { foldCommandBlocks?: boolean; suppressReplies?: boolean } = {},
+) {
   return selectChatSendFinalReplyInputs({
-    ...params,
-    deliveredReplies: params.deliveredReplies.map(({ kind, payload }) => ({
+    foldCommandBlocks: true,
+    suppressReplies: false,
+    ...options,
+    deliveredReplies: replies.map(({ kind, payload }) => ({
       kind,
       input: { kind: "raw", payload },
     })),
@@ -44,14 +45,10 @@ describe("selectChatSendFinalReplyInputs", () => {
       replyToId: "later-target",
       mediaUrl: "https://example.invalid/document.txt",
     });
-    const selected = selectRawReplies({
-      deliveredReplies: [
-        { kind: "block", payload: modified },
-        { kind: "final", payload: modified },
-      ],
-      foldCommandBlocks: true,
-      suppressReplies: false,
-    });
+    const selected = selectRawReplies([
+      { kind: "block", payload: modified },
+      { kind: "final", payload: modified },
+    ]);
     const plans = createOutboundPayloadPlan(selected);
     expect(plans).toHaveLength(1);
     expect(plans[0]?.payload.replyToId).toBeUndefined();
@@ -68,9 +65,7 @@ describe("selectChatSendFinalReplyInputs", () => {
         blockPayload,
         { text: "private", mediaUrl: "/tmp/paired.png", sensitiveMedia: true },
       ]);
-      if (!blockPlan || !finalPlan) {
-        throw new Error("expected both media plans");
-      }
+      assert(blockPlan && finalPlan, "expected both media plans");
       const blockInput: ReplyDispatchOperation =
         blockKind === "raw"
           ? { kind: "raw", payload: blockPayload }
@@ -135,20 +130,10 @@ describe("selectChatSendFinalReplyInputs", () => {
       { kind: "final" as const, payload: { text: "done" } },
     ];
 
-    expect(
-      selectRawReplies({
-        deliveredReplies,
-        foldCommandBlocks: false,
-        suppressReplies: false,
-      }),
-    ).toEqual([{ text: "done" }]);
-    expect(
-      selectRawReplies({
-        deliveredReplies,
-        foldCommandBlocks: true,
-        suppressReplies: true,
-      }),
-    ).toEqual([]);
+    expect(selectRawReplies(deliveredReplies, { foldCommandBlocks: false })).toEqual([
+      { text: "done" },
+    ]);
+    expect(selectRawReplies(deliveredReplies, { suppressReplies: true })).toEqual([]);
   });
 
   it.each([
@@ -187,11 +172,7 @@ describe("selectChatSendFinalReplyInputs", () => {
     ];
     const originalReplies = structuredClone(deliveredReplies);
 
-    const replies = selectRawReplies({
-      deliveredReplies,
-      foldCommandBlocks: true,
-      suppressReplies: false,
-    });
+    const replies = selectRawReplies(deliveredReplies);
     const merged = {
       text: blockText,
       mediaUrl: undefined,

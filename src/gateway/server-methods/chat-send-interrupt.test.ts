@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
@@ -22,9 +22,7 @@ describe("chat interrupt acknowledgement", () => {
   it("leaves the active run intact when replacement session settings are stale", async () => {
     await using fixture = await createFixture();
     const active = fixture.activeRun;
-    if (!active) {
-      throw new Error("Expected an active fixture run");
-    }
+    assert(active, "Expected an active fixture run");
     fixture.params.queueMode = "interrupt";
     fixture.params.expectedPermissionMode = "full";
 
@@ -88,14 +86,11 @@ describe("chat interrupt acknowledgement", () => {
     expect(capture).toBeDefined();
     const successor = reserve();
     try {
-      if (!capture) {
-        throw new Error("Expected the earlier admission to be captured");
-      }
+      assert(capture, "Expected the earlier admission to be captured");
       expect(stopSession({ source: "interrupt", capture }).aborted).toBe(true);
-      expect(previous.abortSignal.aborted).toBe(true);
-      expect(otherIncarnation.abortSignal.aborted).toBe(false);
-      expect(incoming.abortSignal.aborted).toBe(false);
-      expect(successor.abortSignal.aborted).toBe(false);
+      expect(
+        [previous, otherIncarnation, incoming, successor].map((input) => input.abortSignal.aborted),
+      ).toEqual([true, false, false, false]);
     } finally {
       if (claim) {
         releaseSessionControllerClaim(claim);
@@ -109,9 +104,7 @@ describe("chat interrupt acknowledgement", () => {
   it("acknowledges an interrupt while a finalizing owner refuses cancellation", async () => {
     const fixture = await createFixture();
     const active = fixture.activeRun;
-    if (!active) {
-      throw new Error("Expected an active fixture run");
-    }
+    assert(active, "Expected an active fixture run");
     const cleanup = createDeferred();
     active.registerExecutionCleanup(() => cleanup.promise);
     const settled = vi.fn();

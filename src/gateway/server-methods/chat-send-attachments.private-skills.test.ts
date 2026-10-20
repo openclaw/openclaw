@@ -80,18 +80,14 @@ it.each(["existing", "admitted new"] as const)(
           workspaceDir: state.workspaceDir,
         }),
       );
-      expect(mocks.ensureSandboxWorkspaceForSession).toHaveBeenCalledWith(
-        expect.objectContaining({
-          skillsSnapshot: snapshot,
-          workspaceDir: state.path("session-workspace"),
-        }),
-      );
-      expect(mocks.stageSandboxMedia).toHaveBeenCalledWith(
-        expect.objectContaining({
-          skillsSnapshot: snapshot,
-          workspaceDir: state.path("session-workspace"),
-        }),
-      );
+      for (const stage of [mocks.ensureSandboxWorkspaceForSession, mocks.stageSandboxMedia]) {
+        expect(stage).toHaveBeenCalledWith(
+          expect.objectContaining({
+            skillsSnapshot: snapshot,
+            workspaceDir: state.path("session-workspace"),
+          }),
+        );
+      }
       expect(result.value.mediaPathOffloads[0]).toMatchObject({
         path: "media/inbound/private.txt",
         workspaceDir: state.path("isolated-runtime"),
