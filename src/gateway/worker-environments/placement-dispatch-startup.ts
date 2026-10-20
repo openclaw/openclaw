@@ -277,8 +277,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     params.signal?.throwIfAborted();
     const syncingPlacement = placement;
     const assertAttachmentCurrent = () => {
-      params.signal?.throwIfAborted();
-      params.authorize?.();
+      assertRequestCurrent();
       const current = placements.get(request.sessionId);
       if (
         current?.state !== "syncing" ||
@@ -304,6 +303,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       environmentId: provisioned.environmentId,
       ownerEpoch: provisioned.ownerEpoch,
       sessionId: request.sessionId,
+      assertCurrent: assertAttachmentCurrent,
       ...(params.environment.preparation
         ? {
             placementBinding: {
