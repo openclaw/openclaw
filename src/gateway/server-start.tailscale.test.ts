@@ -5,31 +5,17 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { createGatewayStartupOperations } from "../cli/gateway-cli/run-loop-startup.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { startGatewayServerCore } from "./server-start.js";
 import * as startup from "./server-startup-finish.js";
+import * as fixture from "./server-startup-state.test-support.js";
 import * as tailscale from "./server-tailscale.js";
 
 it("stops a ready Tailscale claim while the Gateway is still preparing its close handle", async ({
   signal,
 }) => {
-  const state = await createOpenClawTestState({
-    label: "gateway-tailscale-startup-stop",
-    layout: "home",
-    env: {
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-      OPENCLAW_TEST_TAILSCALE_BINARY: process.execPath,
-      VITEST: "1",
-    },
+  const state = await fixture.createGatewayStartupTestState("gateway-tailscale-startup-stop", {
+    OPENCLAW_TEST_TAILSCALE_BINARY: process.execPath,
   });
   const port = await acquireTestPortBlock({ offsets: [0], signal });
   const operations = createGatewayStartupOperations();
@@ -50,11 +36,9 @@ it("stops a ready Tailscale claim while the Gateway is still preparing its close
   try {
     await state.writeConfig({
       gateway: {
-        port: port.port,
+        ...fixture.gatewayStartupTestConfig(port.port, "fixture-token"),
         bind: "loopback",
-        auth: { mode: "token", token: "fixture-token" },
         tailscale: { mode: "serve" },
-        controlUi: { enabled: false },
       },
       plugins: { enabled: false },
       discovery: { mdns: { mode: "off" } },

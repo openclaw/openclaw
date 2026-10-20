@@ -3,10 +3,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayClient } from "./client.js";
 import type { GatewayServer } from "./server-public.js";
+import * as fixture from "./server-startup-state.test-support.js";
 import * as rowReads from "./session-row-database-facts.js";
 import { connectGatewayClient } from "./test-helpers.e2e.js";
 
@@ -16,32 +16,15 @@ it.runIf(process.env.OPENCLAW_STARTUP_RECONNECT_BENCH === "1")(
   { timeout: 240_000 },
   async () => {
     const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const state = await createOpenClawTestState({
-      label: "startup-reconnect-benchmark",
-      layout: "home",
-      env: {
-        OPENCLAW_GATEWAY_PASSWORD: undefined,
-        OPENCLAW_GATEWAY_TOKEN: undefined,
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
+    const state = await fixture.createGatewayStartupTestState("startup-reconnect-benchmark", {
+      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
     });
     const token = "startup-reconnect-synthetic-token";
     const clients: GatewayClient[] = [];
     let server: GatewayServer | undefined;
     try {
       await state.writeConfig({
-        gateway: {
-          auth: { mode: "token", token },
-          controlUi: { enabled: false },
-          port: claim.port,
-        },
+        gateway: fixture.gatewayStartupTestConfig(claim.port, token),
         agents: { defaults: { model: "unit-test/model", utilityModel: "" } },
         plugins: { enabled: false },
         discovery: { mdns: { mode: "off" } },
@@ -79,12 +62,7 @@ it.runIf(process.env.OPENCLAW_STARTUP_RECONNECT_BENCH === "1")(
         return read(...args);
       });
       const boot = performance.now();
-      server = await startGatewayServerCore(claim.port, {
-        auth: { mode: "token", token },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      });
+      server = await startGatewayServerCore(claim.port, fixture.gatewayStartupTestOptions(token));
       await server.startupSettled;
       const ready = performance.now();
       const samples = Object.fromEntries(

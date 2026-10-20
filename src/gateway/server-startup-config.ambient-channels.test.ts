@@ -31,34 +31,14 @@ afterEach(() => {
 });
 
 describe("Gateway channel activation consent", () => {
-  it.each<{
-    name: string;
-    ambientEnvTriggers: AmbientEnvTriggerPolicy;
-    channels: OpenClawConfig["channels"];
-    enabled: boolean;
-  }>([
-    {
-      name: "default env-only suppression",
-      ambientEnvTriggers: "suppress",
-      channels: {},
-      enabled: false,
-    },
-    { name: "ambient opt-in", ambientEnvTriggers: "allow", channels: {}, enabled: true },
-    {
-      name: "explicit channel config",
-      ambientEnvTriggers: "suppress",
-      channels: { discord: { dmPolicy: "pairing" } },
-      enabled: true,
-    },
-    {
-      name: "explicit disable with opt-in",
-      ambientEnvTriggers: "allow",
-      channels: { discord: { enabled: false } },
-      enabled: false,
-    },
+  it.each<[string, AmbientEnvTriggerPolicy, OpenClawConfig["channels"], boolean]>([
+    ["default env-only suppression", "suppress", {}, false],
+    ["ambient opt-in", "allow", {}, true],
+    ["explicit channel config", "suppress", { discord: { dmPolicy: "pairing" } }, true],
+    ["explicit disable with opt-in", "allow", { discord: { enabled: false } }, false],
   ])(
-    "preserves $name through initial config loading and reload",
-    async ({ ambientEnvTriggers, channels, enabled }) => {
+    "preserves %s through initial config loading and reload",
+    async (_name, ambientEnvTriggers, channels, enabled) => {
       const sourceConfig: OpenClawConfig = { channels };
       const snapshot = buildTestConfigSnapshot({
         path: process.env.OPENCLAW_CONFIG_PATH!,

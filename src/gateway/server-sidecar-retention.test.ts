@@ -8,10 +8,10 @@ import {
 } from "../../scripts/lib/local-build-metadata.mts";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
+import * as fixture from "./server-startup-state.test-support.js";
 
 describe("createGatewayKernel", () => {
   beforeAll(async () => {
@@ -35,22 +35,9 @@ describe("createGatewayKernel", () => {
     "retains shutdown dependencies after connection-sidecar failure during %s close",
     async (entry) => {
       const port = await getFreePort();
-      const state = await createOpenClawTestState({
-        label: `gateway-${entry}-sidecar-retention`,
-        layout: "home",
-        env: {
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-          VITEST: "1",
-        },
-      });
+      const state = await fixture.createGatewayStartupTestState(
+        `gateway-${entry}-sidecar-retention`,
+      );
       const token = "gateway-sidecar-retention-token";
       const stopEntered = createDeferred();
       const releaseStop = createDeferred();
@@ -81,15 +68,10 @@ describe("createGatewayKernel", () => {
       };
       try {
         await state.writeConfig({
-          gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
+          gateway: fixture.gatewayStartupTestConfig(port, token),
         });
         state.applyEnv();
-        const options = {
-          auth: { mode: "token" as const, token },
-          bind: "loopback" as const,
-          controlUiEnabled: false,
-          sidecarStartup: "defer" as const,
-        };
+        const options = fixture.gatewayStartupTestOptions(token);
         if (entry === "public") {
           const { startGatewayServerCore } = await import("./server-start.js");
           server = await startGatewayServerCore(port, options);
