@@ -352,6 +352,62 @@ it("removes the CLI scratch directory when audio conversion fails", async () => 
   await expect(fs.stat(scratchDir)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
+it.each([
+  { executionFails: false, cleanupFails: false },
+  { executionFails: false, cleanupFails: true },
+  { executionFails: true, cleanupFails: false },
+  { executionFails: true, cleanupFails: true },
+])(
+  "preserves the CLI result and reports scratch cleanup: %j",
+  async ({ executionFails, cleanupFails }) => {
+    let scratchDir = "";
+    let retainedDir = "";
+    const executionError = new Error("fixture CLI execution failed");
+    const cleanupError = new Error("fixture scratch removal denied");
+    const rm = fs.rm.bind(fs);
+    const remove = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
+      if (target === scratchDir && cleanupFails) {
+        retainedDir = scratchDir;
+        return Promise.reject(cleanupError);
+      }
+      return rm(target, options);
+    });
+    runExecMock.mockImplementationOnce(async (_command, argv: string[]) => {
+      scratchDir = path.dirname(expectDefined(argv[2], "CLI output base"));
+      if (executionFails) {
+        throw executionError;
+      }
+      await fs.writeFile(`${argv[2]}.txt`, "cli transcript");
+      return { stdout: "" };
+    });
+    try {
+      await withAudioFixture("openclaw-cli-scratch", async (fixture) => {
+        const result = runFixture(fixture, whisper);
+        if (executionFails) {
+          await expect(result).rejects.toBe(executionError);
+        } else {
+          expect((await result)?.text).toBe("cli transcript");
+        }
+      });
+      expect(scratchDir).not.toBe("");
+      if (cleanupFails) {
+        expect((await fs.stat(scratchDir)).isDirectory()).toBe(true);
+        expect(logWarn).toHaveBeenCalledExactlyOnceWith(
+          `media-understanding: failed to remove CLI temporary directory ${scratchDir}: ${String(cleanupError)}; remove it manually.`,
+        );
+      } else {
+        await expect(fs.stat(scratchDir)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(logWarn).not.toHaveBeenCalled();
+      }
+    } finally {
+      remove.mockRestore();
+      if (retainedDir) {
+        await rm(retainedDir, { recursive: true, force: true });
+      }
+    }
+  },
+);
+
 it("preserves parakeet stdout for default srt output without a file contract", async () => {
   const result = await withEnvAsync(
     { PARAKEET_OUTPUT_FORMAT: undefined, PARAKEET_OUTPUT_TEMPLATE: undefined },

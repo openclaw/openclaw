@@ -303,7 +303,7 @@ it("commits one collected message and retains exact source receipts across rewri
   expect(query("SELECT count(*) AS n FROM session_pending_inputs").get()).toEqual({ n: 0 });
 });
 
-it.each(["empty-metadata", "transport-metadata", "changed-payload"] as const)(
+it.each(["empty-metadata", "transport-metadata", "changed-payload", "changed-sender"] as const)(
   "preserves legacy consumed input identity with %s",
   async (scenario) => {
     const empty = scenario === "empty-metadata";
@@ -326,6 +326,12 @@ it.each(["empty-metadata", "transport-metadata", "changed-payload"] as const)(
       ...(scenario === "changed-payload" ? { content: "Changed input" } : {}),
       __openclaw: {
         ...original["__openclaw"],
+        ...(scenario === "changed-sender" ? { senderId: "different-sender" } : {}),
+        requesterOrigin: {
+          sessionKey: scope().sessionKey,
+          messageProvider: "telegram",
+          senderId: "original-sender",
+        },
         transport: {
           ...originalTransport,
           clients: [{ id: "cli", mode: "cli" }],

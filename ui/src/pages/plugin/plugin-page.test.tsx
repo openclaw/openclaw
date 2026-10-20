@@ -496,9 +496,6 @@ function logbookResponse(method: string) {
       timeZone: "UTC",
     };
   }
-  if (method === "logbook.days") {
-    return { days: [] };
-  }
   return {
     day: "2026-07-05",
     cards: [],
@@ -528,34 +525,31 @@ describe("bundled plugin views", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 6, 5, 12));
     const staleStatus = createDeferred<unknown>();
-    const staleDays = createDeferred<unknown>();
     const staleTimeline = createDeferred<unknown>();
     const pending = new Map([
       ["logbook.status", staleStatus],
-      ["logbook.days", staleDays],
       ["logbook.timeline", staleTimeline],
     ]);
     const request = vi.fn(
       (method: string) => pending.get(method)?.promise ?? Promise.resolve(logbookResponse(method)),
     );
     const fixture = createBundledPage({ request } as unknown as GatewayBrowserClient);
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
     fixture.snapshot.phase = "stopped";
     fixture.notify();
     pending.clear();
     staleStatus.resolve(logbookResponse("logbook.status"));
-    staleDays.resolve(logbookResponse("logbook.days"));
     staleTimeline.resolve(logbookResponse("logbook.timeline"));
-    await Promise.all([staleStatus.promise, staleDays.promise, staleTimeline.promise]);
+    await Promise.all([staleStatus.promise, staleTimeline.promise]);
     flush();
     expect(fixture.page.querySelector(".logbook__chips")).toBeNull();
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(2);
     fixture.snapshot.phase = "connected";
     fixture.notify();
     await waitForSolid(() => expect(fixture.page.querySelector(".logbook__chips")).not.toBeNull());
     expect(fixture.page.querySelector(".logbook__day")?.textContent).toBe("2026-07-05");
-    expect(request).toHaveBeenCalledTimes(6);
+    expect(request).toHaveBeenCalledTimes(4);
   });
 
   it("retries the rejected view immediately and recovers without a Gateway update", async () => {

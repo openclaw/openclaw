@@ -1,26 +1,23 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
   createArchivedSubagentSweeperRun,
   createSubagentSweeperHarness,
 } from "../../agents/subagents/registry/subagent-registry-sweeper.test-support.js";
 import { deleteSubagentSessionForCleanup } from "../../agents/subagents/registry/subagent-session-cleanup.js";
 import {
-  clearFollowupQueueForTest,
   createQueueSettings,
   createQueueTestRun,
 } from "../../auto-reply/reply/queue.test-helpers.js";
-import { hasSessionLifecycleQueueWork } from "../../auto-reply/reply/queue/cleanup.js";
+import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
-import { FOLLOWUP_QUEUES } from "../../auto-reply/reply/queue/state.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { getExistingFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { clearCommandLane, enqueueCommandInLane } from "../../process/command-queue.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -126,31 +123,48 @@ it.each([
   { method: "sessions.delete", key: "shared", agentId: "main" },
 ])("$method preserves another agent's $key work ($agentId)", async ({ method, key, agentId }) => {
   lifecycleConfig();
+  const cfg = getRuntimeConfig();
   const foreignAgentId = agentId === "main" ? "research" : "main";
   const target = await resolveGatewaySessionStoreTargetInWorker({
-    cfg: getRuntimeConfig(),
+    cfg,
     key,
     agentId,
     projection: "list",
     exactRead: true,
     readOnly: false,
   });
+  const foreignTarget = await resolveGatewaySessionStoreTargetInWorker({
+    cfg,
+    key,
+    agentId: foreignAgentId,
+    projection: "list",
+    exactRead: true,
+    readOnly: false,
+  });
   const targetId = `${agentId}-session`;
+  const foreignId = `${foreignAgentId}-session`;
   await upsertSessionEntryCore(
     { agentId, sessionKey: target.canonicalKey },
     { sessionId: targetId, lifecycleRevision: "original", updatedAt: 1 },
   );
-  const foreignTarget = {
-    agentId: foreignAgentId,
+  const operation = createReplyOperation({
     sessionKey: key,
-    sessionId: `${foreignAgentId}-session`,
-  };
-  const ownedTarget = { agentId, sessionKey: target.canonicalKey, sessionId: targetId };
-  const operation = createReplyOperation({ ...foreignTarget, resetTriggered: false });
+    sessionId: foreignId,
+    agentId: foreignAgentId,
+    target: captureSessionTarget({
+      storeScope: foreignTarget.storePath,
+      sessionKey: foreignTarget.canonicalKey,
+      aliases: [key, ...foreignTarget.storeKeys],
+      incarnation: foreignId,
+      agentId: foreignAgentId,
+    }),
+    resetTriggered: false,
+  });
   operation.abortSignal.addEventListener("abort", () => operation.complete(), { once: true });
-  const followup = (sessionTarget: typeof foreignTarget) => {
-    const run = createQueueTestRun({ prompt: sessionTarget.agentId });
-    Object.assign(run.run, sessionTarget);
+  const queueKeys = [key, target.canonicalKey, targetId];
+  const followup = (ownerAgentId: string, sessionId: string, sessionKey: string) => {
+    const run = createQueueTestRun({ prompt: ownerAgentId });
+    Object.assign(run.run, { agentId: ownerAgentId, sessionId, sessionKey });
     const settled = vi.fn();
     run.turnAdoptionLifecycle = {
       admission: "cancel-only",
@@ -160,25 +174,10 @@ it.each([
     enqueueFollowupRun(key, run, createQueueSettings(), "none", undefined, false);
     return { run, settled };
   };
-  const foreign = followup(foreignTarget);
-  const hasOwnedWork = () => hasSessionLifecycleQueueWork({ keys: [key], ...ownedTarget });
-  const entered = createDeferred();
-  const release = createDeferred();
-  const lane = resolveEmbeddedSessionLane(key);
-  const blocker = enqueueCommandInLane(lane, async () => {
-    entered.resolve();
-    await release.promise;
-  });
-  await entered.promise;
-  const foreignTask = vi.fn(async () => "preserved");
-  const ownedTask = vi.fn(async () => "must not run");
-  const queuedResult = Promise.allSettled([
-    enqueueCommandInLane(lane, foreignTask, { sessionTarget: foreignTarget }),
-    enqueueCommandInLane(lane, ownedTask, { sessionTarget: { ...ownedTarget, sessionKey: key } }),
-  ]);
+  const foreign = followup(foreignAgentId, foreignId, key);
+  let owned: ReturnType<typeof followup> | undefined;
   try {
-    expect.soft(hasOwnedWork()).toBe(true);
-    const owned = followup(ownedTarget);
+    owned = followup(agentId, targetId, target.canonicalKey);
     const params = {
       key,
       agentId,
@@ -188,8 +187,9 @@ it.each([
     expect(operation.abortSignal.aborted).toBe(false);
     expect(foreign.settled).not.toHaveBeenCalled();
     expect(owned.settled).toHaveBeenCalledOnce();
-    expect(FOLLOWUP_QUEUES.get(key)?.items).toEqual([foreign.run]);
-    expect(hasOwnedWork()).toBe(false);
+    expect(
+      getExistingFollowupQueue(key, foreign.run.controllerInput?.mailbox.owner.target)?.items,
+    ).toEqual([foreign.run]);
     const entry = loadSessionEntry({ agentId, sessionKey: target.canonicalKey });
     if (method === "sessions.delete") {
       expect(entry).toBeUndefined();
@@ -198,22 +198,14 @@ it.each([
     } else {
       expect(entry?.archivedAt).toEqual(expect.any(Number));
     }
-    release.resolve();
-    await blocker;
-    expect(await queuedResult).toEqual([
-      { status: "fulfilled", value: "preserved" },
-      { status: "rejected", reason: expect.objectContaining({ name: "CommandLaneClearedError" }) },
-    ]);
-    expect(foreignTask).toHaveBeenCalledOnce();
-    expect(ownedTask).not.toHaveBeenCalled();
     operation.complete();
     expect(operation.result?.kind).toBe("completed");
   } finally {
     operation.complete();
-    release.resolve();
-    [key, target.canonicalKey, targetId].forEach(clearFollowupQueueForTest);
-    clearCommandLane(lane);
-    await Promise.allSettled([blocker, queuedResult]);
+    clearSessionQueues(queueKeys, foreign.run.controllerInput?.mailbox.owner.target);
+    if (owned?.run.controllerInput?.mailbox.owner.target) {
+      clearSessionQueues(queueKeys, owned.run.controllerInput.mailbox.owner.target);
+    }
   }
 });
 
@@ -222,11 +214,26 @@ it.each(["sessions.delete", "sessions.reset", "sessions.patch"])(
   async (method) => {
     const key = "agent:main:lifecycle-owned";
     const sessionId = "owned-session";
+    const cfg = getRuntimeConfig();
     await upsertSessionEntryCore({ agentId: "main", sessionKey: key }, { sessionId, updatedAt: 1 });
+    const target = await resolveGatewaySessionStoreTargetInWorker({
+      cfg,
+      key,
+      agentId: "main",
+      projection: "list",
+      exactRead: true,
+      readOnly: false,
+    });
     const operation = createReplyOperation({
       sessionKey: key,
       sessionId,
       agentId: "main",
+      target: captureSessionTarget({
+        storeScope: target.storePath,
+        sessionKey: key,
+        incarnation: sessionId,
+        agentId: "main",
+      }),
       resetTriggered: false,
     });
     operation.setPhase("running");
@@ -240,7 +247,7 @@ it.each(["sessions.delete", "sessions.reset", "sessions.patch"])(
       expect(operation.abortSignal.aborted).toBe(true);
     } finally {
       operation.complete();
-      [key, sessionId].forEach(clearFollowupQueueForTest);
+      clearSessionQueues([key, sessionId]);
     }
   },
 );

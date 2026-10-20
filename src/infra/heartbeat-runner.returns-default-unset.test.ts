@@ -470,7 +470,6 @@ describe("runHeartbeatOnce", () => {
     },
   ): HeartbeatDeps => ({
     whatsapp: sendWhatsApp,
-    getQueueSize: () => 0,
     nowMs: () => options?.nowMs ?? 0,
     webAuthExists: async () => true,
     hasActiveWebListener: () => true,

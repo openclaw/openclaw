@@ -1,9 +1,16 @@
 import { createComponent, flush } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayPendingRequests } from "../../../packages/gateway-client/src/pending-request.js";
+import type { RequestFrame } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import type { McpAppDiscoverResult } from "../../../src/shared/mcp-app-extensions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../lib/sessions/session-capability.test-support.ts";
 import { AppsPage } from "../pages/apps/apps-page.tsx";
 import { createApplicationGateway } from "../test-helpers/application-context-fixtures.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
@@ -17,12 +24,13 @@ import "./mcp-app-catalog.tsx";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "./mcp-app-launch.ts";
-import "./mcp-app-resources.tsx";
+import { McpAppResources } from "./mcp-app-resources.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 const result: McpAppDiscoverResult = {
   servers: [
@@ -78,9 +86,11 @@ function discoveryContext(request: ReturnType<typeof vi.fn>, scopes = ["operator
 const providers = new WeakMap<HTMLElement, HTMLElement>();
 function provide(element: HTMLElement, context: unknown) {
   // SAFETY: fixtures supply precisely the capabilities exercised by these catalog flows.
-  const provider = createApplicationContextProvider(context as ApplicationContext);
+  const application = context as ApplicationContext;
+  const provider = createApplicationContextProvider(application);
   provider.append(element);
   providers.set(element, provider);
+  return application;
 }
 function appendElement(element: HTMLElement) {
   const provider = providers.get(element);
@@ -181,6 +191,111 @@ describe("app launch catalog", () => {
     expect(catalog.textContent).not.toContain("Parts tray");
   });
 
+  it.each(["closed", "agent changed", "conversation changed", "open"] as const)(
+    "only creates a startup-waiting catalog session while its target remains open (%s)",
+    async (lifetime) => {
+      vi.useFakeTimers();
+      let ready = false;
+      const writes: RequestFrame[] = [];
+      const issued = createDeferred();
+      const pending = new GatewayPendingRequests({
+        createRequestId: () => "catalog",
+        nowMs: Date.now,
+      });
+      onTestFinished(() => pending.flush(new Error("test disposed")));
+      const client = createTestGatewayClient((method, params, options) => {
+        if (method === "sessions.create") {
+          return pending.request(
+            {
+              send(raw) {
+                // SAFETY: The production request owner serializes this frame.
+                const frame = JSON.parse(raw) as RequestFrame;
+                if (ready) {
+                  writes.push(frame);
+                }
+                pending.handleResponse({
+                  type: "res",
+                  id: frame.id,
+                  ok: ready,
+                  ...(ready
+                    ? { payload: { key: "agent:main:one" } }
+                    : {
+                        error: {
+                          code: "UNAVAILABLE",
+                          message: "Agent is preparing",
+                          retryable: true,
+                          retryAfterMs: 1_000,
+                          details: { reason: "startup-sidecars", method },
+                        },
+                      }),
+                });
+                issued.resolve();
+              },
+            },
+            method,
+            params,
+            options,
+          );
+        }
+        if (method === "sessions.describe") {
+          // SAFETY: The session capability constructs this typed describe target.
+          const target = params as { key: string; agentId?: string };
+          return {
+            session:
+              target.key === "agent:main:one" && target.agentId === "main"
+                ? null
+                : { key: target.key, kind: "direct", updatedAt: 1 },
+          };
+        }
+        if (method === "sessions.list") {
+          return sessionsResult([], 1);
+        }
+        return method === "mcp.app.discover" ? result : {};
+      });
+      const { gateway, publish } = createApplicationGateway();
+      publish({
+        ...gateway.snapshot,
+        client,
+        phase: "connected",
+        hello: gatewayHelloForMethods(["mcp.app.discover"]),
+      });
+      const sessions = createTestSessionCapability(gateway);
+      const catalog = document.createElement("openclaw-mcp-app-catalog");
+      catalog.sessionKey = "agent:main:one";
+      catalog.agentId = "main";
+      provide(catalog, {
+        gateway,
+        sessions,
+        agentSelection: { state: { selectedId: "main" }, subscribe: () => () => {} },
+      });
+      appendElement(catalog);
+      await issued.promise;
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(writes).toHaveLength(0);
+      expect(pending.hasPending).toBe(true);
+
+      if (lifetime === "closed") {
+        catalog.remove();
+        await Promise.resolve();
+      } else if (lifetime === "agent changed") {
+        catalog.agentId = "other";
+      } else if (lifetime === "conversation changed") {
+        catalog.sessionKey = "agent:main:two";
+      }
+      await catalog.updateComplete;
+      ready = true;
+      await vi.advanceTimersByTimeAsync(GATEWAY_STARTUP_ADMISSION_WAIT_MS);
+      expect(writes.map((frame) => frame.params)).toEqual(
+        lifetime === "open" ? [{ key: "agent:main:one", agentId: "main" }] : [],
+      );
+      expect(pending.hasPending).toBe(false);
+      expect(sessions.state.error).toBeNull();
+      if (lifetime === "open") {
+        expect(catalog.textContent).toContain("Library");
+      }
+    },
+  );
+
   it("waits for the new session's discovery before retaining an Apps page launch", async () => {
     // Observe the page-to-conversation contract without loading the conversation runtime.
     const lookup = customElements.get.bind(customElements);
@@ -272,15 +387,24 @@ describe("app launch catalog", () => {
     sidebar.surface = "sidebar";
     const thread = document.createElement("openclaw-mcp-app-catalog");
     thread.surface = "thread";
-    const resources = document.createElement("openclaw-mcp-app-resources");
-    const elements = [sidebar, thread, resources];
+    const elements = [sidebar, thread];
     for (const element of elements) {
       element.sessionKey = "agent:main:one";
       element.agentId = "main";
-      provide(element, context);
+    }
+    const application = provide(sidebar, context);
+    provide(thread, context);
+    for (const element of elements) {
       appendElement(element);
       await element.updateComplete;
     }
+    const resourcesMount = mountSolid(
+      () => createComponent(McpAppResources, { sessionKey: "agent:main:one", agentId: "main" }),
+      { wrapper: createSolidApplicationContextProvider(application).wrapper },
+    );
+    onTestFinished(resourcesMount.unmount);
+    const resources = resourcesMount.container;
+    await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledExactlyOnceWith("mcp.app.discover", {
       sessionKey: "agent:main:one",
       agentId: "main",
@@ -518,7 +642,7 @@ describe("app launch catalog", () => {
       } else {
         expect(createResult).toHaveBeenCalledExactlyOnceWith(
           { key: "agent:main:main", agentId: "main" },
-          { reconciliation: "background" },
+          { reconciliation: "background", signal: expect.any(AbortSignal) },
         );
       }
       expect(request).toHaveBeenCalledWith("mcp.app.discover", {

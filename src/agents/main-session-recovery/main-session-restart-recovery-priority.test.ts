@@ -6,20 +6,27 @@ import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { admitReplyTurn } from "../../auto-reply/reply/reply-turn-admission.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { admitAgentRestartRecovery } from "../../gateway/agent-turn/agent-run-recovery-admission.js";
+import { registerChatAbortController } from "../../gateway/chat-abort.js";
 import type { GatewayRecoveryRuntime } from "../../gateway/server-instance-runtime.types.js";
 import { createContext as createGatewayTestContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
-import { resetAgentEventsForTest } from "../../infra/agent-events.js";
+import {
+  getAgentEventLifecycleGeneration,
+  resetAgentEventsForTest,
+} from "../../infra/agent-events.js";
 import {
   enqueueCommandInLane,
   getQueueSize,
   setCommandLaneConcurrency,
 } from "../../process/command-queue.js";
+import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
-import { consumeSessionWorkAdmissionHandoff } from "../../sessions/session-lifecycle-admission.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { waitForFast } from "../subagent-test-fixtures.test-helpers.js";
 import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
+import { settleAcceptedRestartRecovery } from "./main-session-restart-dispatch-settlement.js";
 import {
   createRestartRecoveryStoreFixture,
   mainSessionEntry,
@@ -43,11 +50,13 @@ beforeEach(async () => {
   dispatchSettlement = createDeferred();
   resetAgentEventsForTest();
   resetGatewayWorkAdmission();
+  resetCommandQueueStateForTest();
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-recovery-priority-"));
   setRuntimeConfigSnapshot({});
 });
 afterEach(async () => {
   resetGatewayWorkAdmission();
+  resetCommandQueueStateForTest();
   await cleanupSessionStateForTest({ stateDir: tmpDir });
   await fs.rm(tmpDir, { recursive: true, force: true });
   clearRuntimeConfigSnapshot();
@@ -59,6 +68,8 @@ describe("demand-triggered restart recovery", () => {
   }) => {
     const sessionsDir = await makeSessionsDir();
     const storePath = path.join(sessionsDir, "sessions.json");
+    const cfg = { session: { store: storePath } };
+    setRuntimeConfigSnapshot(cfg);
     const sessionKey = "agent:main:main";
     await writeStore(sessionsDir, { [sessionKey]: mainSessionEntry() });
     await writeTranscript(sessionsDir, "main-session", [
@@ -67,6 +78,7 @@ describe("demand-triggered restart recovery", () => {
     const backgroundStarted = createDeferred();
     const releaseBackground = createDeferred();
     const finishRecovery = createDeferred();
+    const recoveryEntered = createDeferred();
     const background = enqueueCommandInLane("background", async () => {
       backgroundStarted.resolve();
       await releaseBackground.promise;
@@ -83,34 +95,67 @@ describe("demand-triggered restart recovery", () => {
       ) => {
         dispatches++;
         expect(request.lane).toBe("main");
-        if (!request.internalRuntimeHandoffId) {
-          throw new Error("Recovery dispatch omitted its session admission handoff");
+        const sourceInput = options?.controllerInput;
+        if (!sourceInput?.target) {
+          throw new Error("Recovery dispatch omitted its controller input");
         }
-        const lease = consumeSessionWorkAdmissionHandoff({
-          handoffId: request.internalRuntimeHandoffId,
-          scope: storePath,
-          identities: [sessionKey, "main-session"],
+        const registration = registerChatAbortController({
+          runId: request.idempotencyKey,
+          sessionKey,
+          sessionId: "main-session",
+          agentId: "main",
+          target: sourceInput.target,
+          sourceInput,
+          timeoutMs: 60_000,
         });
-        if (!lease) {
-          throw new Error("Recovery dispatch did not transfer its session admission");
-        }
+        const lifecycleGeneration = getAgentEventLifecycleGeneration();
         let executionStarted = false;
         options?.onStartOwner?.({
-          observe: () => ({ executionStarted, expiresAtMs: Date.now() + 60_000 }),
+          observe: () => ({ executionStarted, startDeadlineAtMs: Date.now() + 60_000 }),
           abort: () => false,
         });
         options?.onAccepted?.({ runId: request.idempotencyKey });
-        const execution = enqueueCommandInLane(request.lane ?? "main", async () => {
-          executionStarted = true;
-          options?.onExecutionStarted?.();
-          await finishRecovery.promise;
-          return { runId: request.idempotencyKey, status: "ok" } as T;
-        }).finally(() => lease.release());
+        const execution = withSessionTurn(
+          {
+            sessionKey,
+            sessionId: "main-session",
+            target: sourceInput.target,
+            controllerInput: sourceInput,
+          },
+          async () => {
+            await admitAgentRestartRecovery({
+              lifecycleGeneration,
+              runId: request.idempotencyKey,
+              sessionId: "main-session",
+              sessionKey,
+              storePath,
+              activeRunAbort: registration,
+            });
+            return await enqueueCommandInLane(request.lane ?? "main", async () => {
+              executionStarted = true;
+              registration.markExecutionStarted();
+              options?.onExecutionStarted?.();
+              recoveryEntered.resolve();
+              await finishRecovery.promise;
+              await settleAcceptedRestartRecovery({
+                agentId: "main",
+                expectedRecoveryRunId: request.idempotencyKey,
+                expectedSessionId: "main-session",
+                lifecycleGeneration,
+                sessionKey,
+                sessionKeys: [sessionKey],
+                storePath,
+                terminalStatus: "ok",
+              });
+              return { runId: request.idempotencyKey, status: "ok" } as T;
+            });
+          },
+        ).finally(() => registration.cleanup());
         recoveryExecution = execution;
         return execution;
       },
     };
-    const context = createGatewayTestContext();
+    const context = createGatewayTestContext([], () => cfg);
     context.recoveryRuntime = runtime;
     const input = admitReplyTurn({
       agentId: "main",
@@ -125,6 +170,10 @@ describe("demand-triggered restart recovery", () => {
     });
     let admitted: Awaited<typeof input> | undefined;
     try {
+      await withinTest(recoveryEntered.promise, signal);
+      expect(dispatches).toBe(1);
+      expect(getQueueSize("background")).toBe(1);
+      finishRecovery.resolve();
       admitted = await withinTest(input, signal);
       expect(admitted.status).toBe("owned");
       expect(dispatches).toBe(1);

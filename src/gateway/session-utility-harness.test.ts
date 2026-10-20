@@ -163,8 +163,8 @@ describe("utility completion with an unavailable implicit harness", () => {
           agentHarnessId: "openclaw",
         })),
       });
-      dispose = () => observer.observer.dispose();
-      startAndAddToolNotes(observer.observer);
+      dispose = () => observer.observer.disposeAsync();
+      await startAndAddToolNotes(observer.observer);
       await vi.advanceTimersByTimeAsync(12_000);
       await vi.dynamicImportSettled();
       await flushObserver();

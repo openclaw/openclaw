@@ -1,3 +1,4 @@
+import { registerSessionResourceCleanup } from "@openclaw/ai/internal/runtime";
 import {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
@@ -81,9 +82,26 @@ type PromptCacheTracker = {
   requestedAt: number;
   pendingChanges: PromptCacheChange[] | null;
   unmeasuredChanges?: PromptCacheChange[] | null;
+  /** The session tool pin changed the tool block on purpose before the next request. */
+  toolPinChanged?: boolean;
 };
 
 const trackers = new Map<string, PromptCacheTracker>();
+
+/** Retired session IDs cannot reuse their cross-turn diagnostic baselines. */
+export function clearPromptCacheObservations(sessionId?: string): void {
+  if (sessionId === undefined) {
+    trackers.clear();
+    return;
+  }
+  for (const [key, tracker] of trackers) {
+    if (tracker.sessionId === sessionId) {
+      trackers.delete(key);
+    }
+  }
+}
+registerSessionResourceCleanup(clearPromptCacheObservations);
+
 // Unpublished provider declarations retain their existing identity contract.
 const toolSchemaFingerprints = new WeakMap<object, string>();
 const MAX_TRACKERS = 512;
@@ -94,7 +112,6 @@ const HISTORY_ENVELOPE_FIELDS = new Set([
   "role",
   "timestamp",
   "idempotencyKey",
-  "__openclaw",
   "usage",
   "api",
   "provider",
@@ -427,6 +444,10 @@ export function collectPromptCacheTools(
   return sortPromptCacheToolsByName(snapshots);
 }
 
+// The session tool pin holds the tool block on every route; system prompts are
+// pinned only on routes with in-history prompt updates, so they are reported, not asserted.
+const PROMPT_PREFIX_CHANGE_CODES = new Set<PromptCacheChange["code"]>(["tools"]);
+
 export function beginPromptCacheObservation(
   params: PromptCacheIdentity & {
     provider: string;
@@ -438,6 +459,8 @@ export function beginPromptCacheObservation(
     systemPrompt: string;
     tools: readonly PromptCacheToolSnapshot[];
     messages: readonly Message[];
+    /** Turn attribution for diagnostics, such as the trigger and input provenance. */
+    turn?: string;
   },
 ) {
   const key = buildTrackerKey(params);
@@ -525,10 +548,20 @@ export function beginPromptCacheObservation(
   trackers.delete(key);
   pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
   trackers.set(key, tracker);
+  // Within one session the tool definitions depend only on session and config facts;
+  // a model, transport or retention change starts over.
+  const prefixChanges =
+    restarted || previous?.toolPinChanged
+      ? []
+      : changes.filter(({ code }) => PROMPT_PREFIX_CHANGE_CODES.has(code));
+  if (process.env.OPENCLAW_PROMPT_CACHE_ASSERT === "1" && (violation || prefixChanges.length)) {
+    const detail = [violation, ...prefixChanges]
+      .filter((change) => change !== undefined)
+      .map((change) => `${change.code}(${change.detail})`)
+      .join(", ");
+    throw new Error(`[prompt-cache] prefix changed within session: ${detail} ${params.turn ?? ""}`);
+  }
   if (violation) {
-    if (process.env.OPENCLAW_PROMPT_CACHE_ASSERT === "1") {
-      throw new Error(violation.detail);
-    }
     if (!historyRewriteWarnings.check(params.sessionKey?.trim() || params.sessionId)) {
       log.warn(`[prompt-cache] ${violation.detail} sessionKey=${params.sessionKey ?? key}`);
     }
@@ -552,6 +585,17 @@ export function declarePromptHistoryRewrite(
       tracker.sessionKey === params.sessionKey?.trim()
     ) {
       (tracker.declaredRewrites ??= new Set()).add(params.reason);
+    }
+  }
+}
+
+export function declarePromptToolPin(params: PromptCacheIdentity): void {
+  for (const tracker of trackers.values()) {
+    if (
+      tracker.sessionId === params.sessionId &&
+      tracker.sessionKey === params.sessionKey?.trim()
+    ) {
+      tracker.toolPinChanged = true;
     }
   }
 }
@@ -584,11 +628,7 @@ export function completePromptCacheObservation(
   tracker.pendingChanges = null;
 
   const cacheRead = params.usage?.cacheRead;
-  if (
-    params.usage?.cacheTelemetry?.state === "unavailable" ||
-    typeof cacheRead !== "number" ||
-    !Number.isFinite(cacheRead)
-  ) {
+  if (params.usage?.cacheTelemetry?.state === "unavailable" || cacheRead === undefined) {
     // Keep cause evidence paired with the last measured cache hit, not a usage-less request.
     tracker.unmeasuredChanges = changes;
     return null;

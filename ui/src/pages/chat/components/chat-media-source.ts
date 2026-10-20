@@ -51,10 +51,6 @@ export class ChatMediaSourceOwner {
     }
   }
 
-  get currentIdentity(): string {
-    return this.appliedIdentity;
-  }
-
   get readySource(): string {
     return this.playbackSource;
   }

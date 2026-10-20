@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
@@ -16,7 +17,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import * as stateReadPool from "../../state/openclaw-state-read-pool.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { seedCanonicalAcpSessionMeta } from "./session-meta-fixture.test-support.js";
@@ -111,7 +111,7 @@ it("retains absent ACP metadata across async reads and follows in-process set an
     await captureRuntimeConfigAsyncReader()();
     await replaceSessionEntry({ agentId: "main", sessionKey, env: state.env }, entry);
     openOpenClawStateDatabase({ env: state.env });
-    const requests = vi.spyOn(stateReadPool, "startReadTask");
+    const requests = vi.spyOn(WorkerTaskPoolCore.prototype, "runTask");
     const input = { sessionKey, agentId: "main", entry, env: state.env };
     const expectRead = async (expected: typeof meta | undefined, calls = 0) => {
       expect(await metadataReads.readAcpSessionMetaForEntryAsync(input)).toEqual(expected);

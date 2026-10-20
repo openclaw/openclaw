@@ -1,7 +1,6 @@
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTavilyWebSearchProvider } from "./tavily-search-provider.js";
-import { createTavilySearchTool } from "./tavily-search-tool.js";
+import { captureTavilyTools } from "./tavily-tools.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -38,7 +37,7 @@ describe("Tavily search cache TTL", () => {
         };
         const query = `Tavily ${kind} current TTL ${cacheTtlMinutes}`;
         if (kind === "tavily_search") {
-          const tool = createTavilySearchTool(createTestPluginApi({ config }));
+          const tool = captureTavilyTools(config)("tavily_search");
           return (await tool.execute("cache-ttl", { query })).details as Record<string, unknown>;
         }
         const tool = createTavilyWebSearchProvider().createTool({ config, searchConfig });

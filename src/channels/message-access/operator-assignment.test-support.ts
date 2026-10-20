@@ -30,7 +30,7 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { unlinkUserChannelIdentity } from "../../state/user-channel-identities.js";
-import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { setUserProfileRole, syncGitHubIdentity } from "../../state/user-profile-writes.worker.js";
 import { withAdminIngress } from "./operator-authority.test-support.js";
 
 type Fixture = Parameters<Parameters<typeof withAdminIngress>[0]>[0];
@@ -163,6 +163,56 @@ async function prepareAssignment(fixture: Fixture, turn: MsgContext, nativeAgent
 }
 
 export function registerOperatorAssignmentTests() {
+  it("recovers an unknown channel owner through the canonical profile directory", () =>
+    withAdminIngress(async (fixture) => {
+      const requester = fixture.admins[0]!;
+      syncGitHubIdentity({
+        identity: { accountId: 42, login: "fixture-requester" },
+        authenticationAlias: { kind: "email", email: "ada@example.test" },
+      });
+      const turn = await fixture.context(requester.identity.senderId);
+      using assignment = await prepareAssignment(fixture, turn, true);
+      await expect(assignment.assign(humanSessionKey, requester.identity.senderId)).rejects.toThrow(
+        "Gateway profile ID",
+      );
+      expect(loadSessionEntry(assignment.scope(humanSessionKey))?.owner).toBeUndefined();
+      const directory = await assignment.execute("sessions", "resolve-owner", {
+        action: "owner_profiles",
+        githubAccountIds: [42],
+      });
+      expect(directory.details).toEqual({
+        profiles: [
+          {
+            id: requester.profile.id,
+            displayName: "ada",
+            githubIdentity: {
+              login: "fixture-requester",
+              profileUrl: "https://github.com/fixture-requester",
+              avatarUrl: "https://avatars.githubusercontent.com/u/42?v=4",
+            },
+          },
+        ],
+        githubProfiles: [{ accountId: 42, profileId: requester.profile.id }],
+      });
+      expect(
+        (
+          await assignment.execute("sessions", "unknown-owner", {
+            action: "owner_profiles",
+            githubAccountIds: [999],
+          })
+        ).details,
+      ).toEqual({ profiles: [], githubProfiles: [] });
+      expect(
+        (await assignment.assign(humanSessionKey, requester.profile.id)).details,
+      ).toMatchObject({
+        status: "updated",
+        owner: human(requester.profile.id),
+      });
+      expect(loadSessionEntry(assignment.scope(humanSessionKey))?.owner?.actor).toEqual(
+        human(requester.profile.id),
+      );
+    }));
+
   it.each([
     { channel: "slack", role: "admin" },
     { channel: "discord", role: "member" },
@@ -192,6 +242,9 @@ export function registerOperatorAssignmentTests() {
                 action: "patch",
                 label: "forbidden",
               }),
+            ).rejects.toThrow("Only assign_owner");
+            await expect(
+              execute("sessions", "deny-directory", { action: "owner_profiles" }),
             ).rejects.toThrow("Only assign_owner");
           }
           if (role === "admin") {

@@ -35,7 +35,11 @@ import type {
 } from "./agent-tools.before-tool-call.types.js";
 import { registerActiveEmbeddedRunHumanInputWaitForRun } from "./embedded-agent-runner/run-state.js";
 import { hasInProcessGatewayToolCaller } from "./tools/gateway-caller-availability.js";
-import { withGatewayToolApprovalOwner } from "./tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  captureGatewayToolCallerAssertion,
+  withGatewayToolApprovalOwner,
+} from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
@@ -263,6 +267,22 @@ async function requestPluginToolApprovalDecision(
       : undefined;
   };
   let gatewayApprovalPhase: "none" | "request" | "wait" = "none";
+  const watchdogAttempt =
+    params.ctx?.watchdogAttempt ?? getGatewayToolCallerIdentity()?.watchdogAttempt;
+  const assertCurrent = captureGatewayToolCallerAssertion();
+  let watchdogWait: ReturnType<NonNullable<typeof watchdogAttempt>["beginWait"]> | undefined;
+  const beginApprovalWait = (deadlineAtMs: number) => {
+    watchdogWait?.close();
+    watchdogWait = watchdogAttempt?.beginWait({
+      kind: "approval",
+      deadlineAtMs,
+      isCurrent: () => {
+        params.signal?.throwIfAborted();
+        assertCurrent?.();
+        return true;
+      },
+    });
+  };
   try {
     const requestIdentity = {
       toolName: params.toolName,
@@ -277,6 +297,7 @@ async function requestPluginToolApprovalDecision(
     };
     const embeddedApprovalBroker = isEmbeddedMode() ? getEmbeddedPluginApprovalBroker() : null;
     if (embeddedApprovalBroker) {
+      beginApprovalWait(Date.now() + timeoutMs);
       const result = await embeddedApprovalBroker.request({
         request: {
           pluginId: approval.pluginId,
@@ -327,6 +348,7 @@ async function requestPluginToolApprovalDecision(
       id?: string;
       decision?: unknown;
       deliveryRoute?: string;
+      expiresAtMs?: number;
     } = await withGatewayToolApprovalOwner(
       approval.pluginId,
       async () =>
@@ -381,6 +403,9 @@ async function requestPluginToolApprovalDecision(
       // Wait for the decision, but abort early if the agent run is cancelled
       // so the user isn't blocked for the full approval timeout.
       gatewayApprovalPhase = "wait";
+      if (typeof requestResult.expiresAtMs === "number") {
+        beginApprovalWait(requestResult.expiresAtMs);
+      }
       const waitResult: {
         id?: string;
         decision?: unknown;
@@ -447,6 +472,8 @@ async function requestPluginToolApprovalDecision(
       reason,
       resolveToolErrorDiagnostic(err, signal).terminalReason,
     );
+  } finally {
+    watchdogWait?.close();
   }
 }
 

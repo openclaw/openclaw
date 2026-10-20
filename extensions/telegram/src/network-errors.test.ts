@@ -313,6 +313,22 @@ describe("rethrowTelegramSendError", () => {
     expect(caught).toMatchObject({ message: expect.stringContaining(String(migratedChatId)) });
   });
 
+  it.each(["chat not found", "message thread not found"])(
+    "preserves retryable no-send proof for an exact %s rejection",
+    (reason) => {
+      const error = Object.assign(new Error(`400: Bad Request: ${reason}`), {
+        error_code: 400,
+        description: `Bad Request: ${reason}`,
+      });
+      expect(captureTelegramSendError(error)).toMatchObject({
+        name: "PlatformMessageNotDispatchedError",
+        message: error.message,
+        retryable: true,
+        cause: error,
+      });
+    },
+  );
+
   it.each([
     ["rate limit", errorWithTelegramCode("Too Many Requests", 429)],
     ["server failure", errorWithTelegramCode("Bad Gateway", 502)],
@@ -330,10 +346,29 @@ describe("rethrowTelegramSendError", () => {
       "migration parameter without matching description",
       Object.assign(new Error("different bad request"), {
         error_code: 400,
-        description: "Bad Request: chat not found",
+        description: "Bad Request: message is empty",
         parameters: { migrate_to_chat_id: migratedChatId },
       }),
     ],
+    [
+      "partially accepted album",
+      Object.assign(new Error("album partly failed"), {
+        error_code: 400,
+        description:
+          'Bad Request: Failed to send message #2 with the error message "message thread not found"',
+      }),
+    ],
+    [
+      "mixed aggregate",
+      new AggregateError([
+        Object.assign(new Error("route rejected"), {
+          error_code: 400,
+          description: "Bad Request: message thread not found",
+        }),
+        errorWithCode("read ECONNRESET", "ECONNRESET"),
+      ]),
+    ],
+    ["plain route text", new Error("400: Bad Request: message thread not found")],
     ["plain migration text", new Error("400: group chat was upgraded to a supergroup chat")],
   ])("does not terminalize a %s", (_name, error) => {
     expect(captureTelegramSendError(error)).toBe(error);

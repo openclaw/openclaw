@@ -195,6 +195,27 @@ describe("SQLite backup commands", () => {
     ).rejects.toThrow(missingSnapshotMessage);
   });
 
+  it.each(["directory", "file"])(
+    "reports a repository-format mismatch when listing a Git backup as SQLite (%s marker)",
+    async (marker) => {
+      const repositoryPath = path.join(state.root, "git-backup");
+      const gitPath = path.join(repositoryPath, ".git");
+      if (marker === "directory") {
+        await fs.mkdir(gitPath, { recursive: true });
+      } else {
+        await fs.mkdir(repositoryPath);
+        await fs.writeFile(gitPath, "gitdir: ../git-admin\n");
+      }
+
+      const runtime = createRuntimeCapture();
+      await expect(
+        backupSqliteListCommand(runtime, { repository: repositoryPath, json: true }),
+      ).rejects.toThrow(
+        `Git backup repository is not a SQLite snapshot repository: ${repositoryPath}. Use \`openclaw backup git log --repository <path>\` instead.`,
+      );
+    },
+  );
+
   it("requires exactly one named OpenClaw database source", async () => {
     const runtime = createRuntimeCapture();
 

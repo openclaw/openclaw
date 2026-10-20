@@ -1,18 +1,12 @@
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfigSnapshot,
-} from "../../../../src/config/config.js";
-import { resetConfigOverrides } from "../../../../src/config/runtime-overrides.js";
+import { getRuntimeConfigSnapshot } from "../../../../src/config/config.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../../../src/config/sessions/session-accessor.js";
-import { clearSessionStoreCacheForTest } from "../../../../src/config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../../../src/gateway/session-transcript-readers.js";
 import {
@@ -20,32 +14,19 @@ import {
   startGatewayWithClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../../../../src/gateway/test-openai-responses-model.js";
-import { resetAgentEventsForTest } from "../../../../src/infra/agent-events.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../../../../src/infra/system-events.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../../../../src/test-utils/env.js";
+import { peekSystemEvents } from "../../../../src/infra/system-events.js";
 import { normalizeSessionDeliveryState } from "../../../../src/utils/delivery-context.shared.js";
-import { writeOpenAiResponsesSse } from "../../../helpers/openai-responses-sse.js";
+import {
+  listenLoopback,
+  readRequestText,
+  closeHttpServer,
+} from "../../../helpers/gateway-integration-fixtures.js";
 import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { writeFixtureReply } from "./gateway-recovery.test-support.js";
+import { prepareRecoveryHome, resetGatewayState } from "./gateway-startup-routing.test-support.js";
 
 const PROOF_CHANNEL_ID = "heartbeat-route-proof";
-const ISOLATED_GATEWAY_ENV_KEYS = [
-  "HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
-  "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
-  "OPENCLAW_TEST_MINIMAL_GATEWAY",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-] as const;
 
 type DeliveryTrace = {
   accountId: string | null;
@@ -61,42 +42,6 @@ function nextId(prefix: string): string {
   return `${prefix}-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}-${sequence++}`;
 }
 
-function resetGatewayState(): void {
-  resetConfigOverrides();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest({ preserveListeners: true });
-  resetSystemEventsForTest();
-}
-
-function writeAssistantResponse(response: ServerResponse, text: string): void {
-  const message = {
-    type: "message",
-    id: nextId("provider-message"),
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...message, status: "in_progress", content: [] },
-    },
-    { type: "response.output_item.done", output_index: 0, item: message },
-    {
-      type: "response.completed",
-      response: {
-        id: nextId("provider-response"),
-        status: "completed",
-        output: [message],
-        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
-      },
-    },
-  ]);
-}
-
 async function writeRouteCapturePlugin(params: {
   pluginDir: string;
   tracePath: string;
@@ -105,16 +50,12 @@ async function writeRouteCapturePlugin(params: {
   await fs.mkdir(params.pluginDir, { recursive: true });
   await fs.writeFile(
     path.join(params.pluginDir, "openclaw.plugin.json"),
-    `${JSON.stringify(
-      {
-        id: PROOF_CHANNEL_ID,
-        activation: { onStartup: true },
-        channels: [PROOF_CHANNEL_ID],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      },
-      null,
-      2,
-    )}\n`,
+    JSON.stringify({
+      id: PROOF_CHANNEL_ID,
+      activation: { onStartup: true },
+      channels: [PROOF_CHANNEL_ID],
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
     "utf8",
   );
   await fs.writeFile(
@@ -200,6 +141,11 @@ async function readSessionTranscript(sessionKey: string): Promise<unknown[]> {
   );
 }
 
+const poll = <T>(read: () => T) => expect.poll(read, { timeout: 15_000, interval: 50 });
+const transcript = (key: string) => readSessionTranscript(key).then(JSON.stringify);
+const readSessionId = (sessionKey: string) =>
+  loadSessionEntry({ agentId: "main", sessionKey, readConsistency: "latest" })?.sessionId;
+
 describe("Gateway heartbeat session routing", () => {
   let fixtureSettlement: Promise<void> | undefined;
   beforeEach(resetGatewayState);
@@ -215,22 +161,18 @@ describe("Gateway heartbeat session routing", () => {
     "routes monitor wakes through heartbeat.session while preserving explicit wake sessions",
     { timeout: 90_000 },
     async ({ signal }) => {
-      const envSnapshot = captureEnv([...ISOLATED_GATEWAY_ENV_KEYS]);
       const tempHome = tempDirs.make("openclaw-gateway-heartbeat-routing-");
-      const stateDir = path.join(tempHome, ".openclaw");
-      const workspaceDir = path.join(tempHome, "workspace");
+      const token = nextId("heartbeat-routing-token");
+      const { workspaceDir, configPath, envSnapshot } = await prepareRecoveryHome(
+        tempHome,
+        token,
+        true,
+      );
       const pluginDir = path.join(workspaceDir, "plugins", PROOF_CHANNEL_ID);
       const deliveryTracePath = path.join(tempHome, "heartbeat-deliveries.jsonl");
       const cronReadyEvent = nextId("cron-reconciled");
       const cronReconciled = createDeferred<unknown>();
       const onCronReconciled = (event: unknown) => cronReconciled.resolve(event);
-      const bundledPluginsDir = path.join(tempHome, "empty-bundled-plugins");
-      const configPath = path.join(stateDir, "openclaw.json");
-      await Promise.all([
-        fs.mkdir(workspaceDir, { recursive: true }),
-        fs.mkdir(bundledPluginsDir, { recursive: true }),
-        fs.mkdir(path.dirname(configPath), { recursive: true }),
-      ]);
       await Promise.all([
         fs.writeFile(
           path.join(workspaceDir, "HEARTBEAT.md"),
@@ -238,25 +180,6 @@ describe("Gateway heartbeat session routing", () => {
         ),
         writeRouteCapturePlugin({ pluginDir, tracePath: deliveryTracePath, cronReadyEvent }),
       ]);
-
-      const token = nextId("heartbeat-routing-token");
-      for (const [key, value] of Object.entries({
-        HOME: tempHome,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_GATEWAY_TOKEN: token,
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CRON: "0",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      })) {
-        setTestEnvValue(key, value);
-      }
-      deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-      deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
-      deleteTestEnvValue("OPENCLAW_SKIP_CHANNELS");
 
       const configuredSessionKey = "agent:main:ops-heartbeat";
       const configuredSessionId = nextId("configured-heartbeat-session");
@@ -272,27 +195,23 @@ describe("Gateway heartbeat session routing", () => {
       const providerRequests: Array<Record<string, unknown>> = [];
       const providerServer = createServer((request, response) => {
         void (async () => {
-          const chunks: Buffer[] = [];
-          for await (const chunk of request) {
-            chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-          }
+          const raw = await readRequestText(request);
           if (request.method !== "POST" || request.url !== "/v1/responses") {
             response.writeHead(404).end();
             return;
           }
-          const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<
-            string,
-            unknown
-          >;
+          const body = JSON.parse(raw) as Record<string, unknown>;
           providerRequests.push(body);
           const serialized = JSON.stringify(body);
-          writeAssistantResponse(
+          writeFixtureReply(
             response,
             serialized.includes(configuredEvent)
               ? configuredReply
               : serialized.includes(explicitQueuedEvent) || serialized.includes(explicitWakeText)
                 ? explicitReply
                 : nextId("unexpected-heartbeat-reply"),
+            nextId("provider-message"),
+            nextId("provider-response"),
           );
         })().catch((error: unknown) => {
           response.writeHead(500).end(error instanceof Error ? error.message : String(error));
@@ -304,16 +223,9 @@ describe("Gateway heartbeat session routing", () => {
       fixtureSettlement = fixtureSettled.promise;
       try {
         process.on(cronReadyEvent, onCronReconciled);
-        await new Promise<void>((resolve, reject) => {
-          providerServer.once("error", reject);
-          providerServer.listen(0, "127.0.0.1", resolve);
-        });
-        const providerAddress = providerServer.address();
-        if (!providerAddress || typeof providerAddress === "string") {
-          throw new Error("mock OpenAI Responses server did not bind a loopback port");
-        }
+        const providerUrl = await listenLoopback(providerServer);
         const provider = buildMockOpenAiResponsesProvider(
-          `http://127.0.0.1:${providerAddress.port}/v1`,
+          `${providerUrl}/v1`,
           "gpt-heartbeat-session-routing",
         );
         const config = {
@@ -376,51 +288,30 @@ describe("Gateway heartbeat session routing", () => {
           throw new Error("gateway runtime config snapshot was not initialized");
         }
         const client = gateway.client;
+        const queueEvent = async (sessionKey: string, text: string) => {
+          await expect(
+            client.request("system-event", { text, sessionKey, wake: false }),
+          ).resolves.toEqual({ ok: true });
+          expect(peekSystemEvents(sessionKey)).toContain(text);
+        };
 
-        const seedSession = async (params: {
-          sessionId: string;
-          sessionKey: string;
-          to: string;
-        }) => {
+        const seedSession = async (sessionId: string, sessionKey: string, to: string) => {
           await replaceSessionEntry(
-            { agentId: "main", sessionKey: params.sessionKey },
+            { agentId: "main", sessionKey },
             {
-              sessionId: params.sessionId,
+              sessionId,
               updatedAt: Date.now(),
               delivery: normalizeSessionDeliveryState({
-                context: {
-                  channel: PROOF_CHANNEL_ID,
-                  to: params.to,
-                  accountId: "default",
-                },
+                context: { channel: PROOF_CHANNEL_ID, to, accountId: "default" },
               }),
             },
           );
         };
-        await seedSession({
-          sessionId: configuredSessionId,
-          sessionKey: configuredSessionKey,
-          to: "configured-destination",
-        });
-        await seedSession({
-          sessionId: explicitSessionId,
-          sessionKey: explicitSessionKey,
-          to: "explicit-destination",
-        });
-        await seedSession({
-          sessionId: mainSessionId,
-          sessionKey: mainSessionKey,
-          to: "main-destination",
-        });
+        await seedSession(configuredSessionId, configuredSessionKey, "configured-destination");
+        await seedSession(explicitSessionId, explicitSessionKey, "explicit-destination");
+        await seedSession(mainSessionId, mainSessionKey, "main-destination");
 
-        await expect(
-          client.request<{ ok: boolean }>("system-event", {
-            text: configuredEvent,
-            sessionKey: configuredSessionKey,
-            wake: false,
-          }),
-        ).resolves.toEqual({ ok: true });
-        expect(peekSystemEvents(configuredSessionKey)).toContain(configuredEvent);
+        await queueEvent(configuredSessionKey, configuredEvent);
 
         // A connected Gateway may still be starting cron; its lifecycle hook owns readiness.
         expect(await withinTest(cronReconciled.promise, signal)).toEqual({
@@ -463,72 +354,36 @@ describe("Gateway heartbeat session routing", () => {
           enqueued: true,
           runId: expect.any(String),
         });
-        await expect
-          .poll(
-            async () => {
-              const history = await client.request<{
-                entries: Array<{ error?: string; runId?: string; status?: string }>;
-              }>("cron.runs", {
-                id: monitor.id,
-                runId: configuredRun.runId,
-                limit: 1,
-              });
-              return history.entries.find((entry) => entry.runId === configuredRun.runId);
-            },
-            { timeout: 15_000, interval: 50 },
-          )
-          .toMatchObject({ runId: configuredRun.runId, status: "ok" });
-        await expect
-          .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
-          .toBeGreaterThan(configuredRequestBaseline);
+        await poll(async () => {
+          const history = await client.request<{
+            entries: Array<{ error?: string; runId?: string; status?: string }>;
+          }>("cron.runs", {
+            id: monitor.id,
+            runId: configuredRun.runId,
+            limit: 1,
+          });
+          return history.entries.find((entry) => entry.runId === configuredRun.runId);
+        }).toMatchObject({ runId: configuredRun.runId, status: "ok" });
+        await poll(() => providerRequests.length).toBeGreaterThan(configuredRequestBaseline);
         const configuredRequest = JSON.stringify(providerRequests[configuredRequestBaseline]);
         expect(configuredRequest).toContain(configuredEvent);
-        await expect
-          .poll(() => peekSystemEvents(configuredSessionKey).includes(configuredEvent), {
-            timeout: 15_000,
-            interval: 50,
-          })
-          .toBe(false);
-        await expect
-          .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
-          .toHaveLength(1);
-        expect(await readDeliveryTrace(deliveryTracePath)).toEqual([
-          {
-            accountId: "default",
-            text: configuredReply,
-            threadId: null,
-            to: "configured-destination",
-          },
-        ]);
-        await expect
-          .poll(() => readSessionTranscript(configuredSessionKey).then(JSON.stringify), {
-            timeout: 15_000,
-            interval: 50,
-          })
-          .toContain(configuredReply);
-        expect(
-          loadSessionEntry({
-            agentId: "main",
-            sessionKey: configuredSessionKey,
-            readConsistency: "latest",
-          })?.sessionId,
-        ).toBe(configuredSessionId);
-        const configuredTranscript = JSON.stringify(
-          await readSessionTranscript(configuredSessionKey),
+        await poll(() => peekSystemEvents(configuredSessionKey).includes(configuredEvent)).toBe(
+          false,
         );
-        expect(configuredTranscript).toContain(configuredReply);
-        expect(JSON.stringify(await readSessionTranscript(mainSessionKey))).not.toContain(
-          configuredReply,
-        );
+        const delivery = (text: string, to: string) => ({
+          accountId: "default",
+          text,
+          threadId: null,
+          to,
+        });
+        const configuredDelivery = delivery(configuredReply, "configured-destination");
+        await poll(() => readDeliveryTrace(deliveryTracePath)).toHaveLength(1);
+        expect(await readDeliveryTrace(deliveryTracePath)).toEqual([configuredDelivery]);
+        await poll(() => transcript(configuredSessionKey)).toContain(configuredReply);
+        expect(readSessionId(configuredSessionKey)).toBe(configuredSessionId);
+        expect(await transcript(mainSessionKey)).not.toContain(configuredReply);
 
-        await expect(
-          client.request<{ ok: boolean }>("system-event", {
-            text: explicitQueuedEvent,
-            sessionKey: explicitSessionKey,
-            wake: false,
-          }),
-        ).resolves.toEqual({ ok: true });
-        expect(peekSystemEvents(explicitSessionKey)).toContain(explicitQueuedEvent);
+        await queueEvent(explicitSessionKey, explicitQueuedEvent);
         const explicitRequestBaseline = providerRequests.length;
         await expect(
           client.request<{ ok: boolean }>("wake", {
@@ -538,58 +393,25 @@ describe("Gateway heartbeat session routing", () => {
             sessionKey: explicitSessionKey,
           }),
         ).resolves.toEqual({ ok: true });
-        await expect
-          .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
-          .toBeGreaterThan(explicitRequestBaseline);
+        await poll(() => providerRequests.length).toBeGreaterThan(explicitRequestBaseline);
         const explicitRequest = JSON.stringify(providerRequests[explicitRequestBaseline]);
         expect(explicitRequest).toContain(explicitQueuedEvent);
         expect(explicitRequest).toContain(explicitWakeText);
-        await expect
-          .poll(
-            () => {
-              const queued = peekSystemEvents(explicitSessionKey);
-              return queued.includes(explicitQueuedEvent) || queued.includes(explicitWakeText);
-            },
-            { timeout: 15_000, interval: 50 },
-          )
-          .toBe(false);
-        await expect
-          .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
-          .toHaveLength(2);
+        await poll(() => {
+          const queued = peekSystemEvents(explicitSessionKey);
+          return queued.includes(explicitQueuedEvent) || queued.includes(explicitWakeText);
+        }).toBe(false);
+        await poll(() => readDeliveryTrace(deliveryTracePath)).toHaveLength(2);
         expect(await readDeliveryTrace(deliveryTracePath)).toEqual([
-          {
-            accountId: "default",
-            text: configuredReply,
-            threadId: null,
-            to: "configured-destination",
-          },
-          {
-            accountId: "default",
-            text: explicitReply,
-            threadId: null,
-            to: "explicit-destination",
-          },
+          configuredDelivery,
+          delivery(explicitReply, "explicit-destination"),
         ]);
-        await expect
-          .poll(() => readSessionTranscript(explicitSessionKey).then(JSON.stringify), {
-            timeout: 15_000,
-            interval: 50,
-          })
-          .toContain(explicitReply);
-        expect(
-          loadSessionEntry({
-            agentId: "main",
-            sessionKey: explicitSessionKey,
-            readConsistency: "latest",
-          })?.sessionId,
-        ).toBe(explicitSessionId);
-        const explicitTranscript = JSON.stringify(await readSessionTranscript(explicitSessionKey));
-        expect(explicitTranscript).toContain(explicitReply);
+        await poll(() => transcript(explicitSessionKey)).toContain(explicitReply);
+        expect(readSessionId(explicitSessionKey)).toBe(explicitSessionId);
+        const explicitTranscript = await transcript(explicitSessionKey);
         expect(explicitTranscript).not.toContain(configuredReply);
-        expect(JSON.stringify(await readSessionTranscript(configuredSessionKey))).not.toContain(
-          explicitReply,
-        );
-        const mainTranscript = JSON.stringify(await readSessionTranscript(mainSessionKey));
+        expect(await transcript(configuredSessionKey)).not.toContain(explicitReply);
+        const mainTranscript = await transcript(mainSessionKey);
         expect(mainTranscript).not.toContain(configuredReply);
         expect(mainTranscript).not.toContain(explicitReply);
         expect((await readDeliveryTrace(deliveryTracePath)).map((entry) => entry.to)).not.toContain(
@@ -604,10 +426,7 @@ describe("Gateway heartbeat session routing", () => {
               reason: "Gateway heartbeat session routing test complete",
             });
           }
-          providerServer.closeAllConnections();
-          await new Promise<void>((resolve) => {
-            providerServer.close(() => resolve());
-          });
+          await closeHttpServer(providerServer);
           envSnapshot.restore();
         } finally {
           fixtureSettled.resolve();

@@ -12,6 +12,7 @@ import {
 } from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -171,6 +172,69 @@ it.each([
       );
     } finally {
       predecessor.resolve(false);
+      releaseFlush.resolve();
+      await waitForSessionMaintenance(sessionKey);
+    }
+  });
+});
+
+it("lets an admitted turn read before its queued maintenance, while external drains wait for cleanup", async () => {
+  await withOpenClawTestState({ label: "maintenance-queued-read" }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = "agent:main:maintenance-queued-read";
+    const entry = {
+      sessionId: "maintenance-queued-read",
+      lifecycleRevision: "initial",
+      updatedAt: 1,
+    };
+    writeSessionEntry(database, sessionKey, entry);
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    const flushStarted = createDeferred();
+    const releaseFlush = createDeferred();
+    const events: string[] = [];
+    memory.runMemoryFlushIfNeeded.mockImplementationOnce(async () => {
+      events.push("flush");
+      flushStarted.resolve();
+      await releaseFlush.promise;
+      return {};
+    });
+    memory.runSessionCompactionIfNeeded.mockImplementationOnce(async () => {
+      events.push("compaction");
+    });
+    try {
+      await withSessionTurn(
+        { sessionKey, sessionId: entry.sessionId, storePath: database.path, agentId: "main" },
+        async () => {
+          withPluginRuntimeGatewayRequestScope(
+            { pluginRegistry: createEmptyPluginRegistry(), isWebchatConnect: () => false },
+            () =>
+              scheduleSessionMaintenance({
+                prepared: { cfg: {}, sessionKey, storePath: database.path, timeoutMs: 60_000 },
+                followupRun: createTestFollowupRun({ sessionKey, sessionId: entry.sessionId }),
+                sessionId: entry.sessionId,
+                lifecycleRevision: entry.lifecycleRevision,
+                lifecycleGeneration: getAgentEventLifecycleGeneration(),
+                startedAt: Date.now(),
+              }),
+          );
+          const checkpoint = waitForSessionMaintenance(sessionKey).then(() => {
+            events.push("read");
+          });
+          // Both admission and the checkpoint have only no-I/O continuations before blocking.
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(events).toEqual(["read"]);
+          await checkpoint;
+        },
+      );
+      const drained = waitForSessionMaintenance(sessionKey).then(() => events.push("drained"));
+      await flushStarted.promise;
+      expect(events).toEqual(["read", "flush"]);
+      releaseFlush.resolve();
+      await drained;
+      expect(events).toEqual(["read", "flush", "compaction", "drained"]);
+    } finally {
       releaseFlush.resolve();
       await waitForSessionMaintenance(sessionKey);
     }

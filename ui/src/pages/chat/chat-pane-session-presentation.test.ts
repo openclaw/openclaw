@@ -96,7 +96,7 @@ describe("chat pane session presentation", () => {
       const state = createPageState(
         context,
         { afterCommit: () => () => {} },
-        { dispatchEvent: () => true, querySelector: () => null },
+        { dispatchEvent: () => true },
       );
       const rendered = vi.fn();
       const view = mountSolid(() => {

@@ -20,9 +20,9 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import {
-  beginSessionWorkAdmission,
-  getActiveSessionLifecycleMutationCount,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  getSessionMutationCount,
+} from "../../sessions/session-controller.lifecycle.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import {
   createChannelTestPluginBase,
@@ -393,14 +393,14 @@ describe("current-session completion media", () => {
   it("does not prepare media when the source generation changes while waiting", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
       const fixture = await createCompletionFixture(state);
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope: fixture.scope.storePath,
         identities: [fixture.scope.sessionKey, fixture.scope.sessionId],
         assertAllowed: () => {},
       });
       const commit = fixture.commit();
       try {
-        await vi.waitFor(() => expect(getActiveSessionLifecycleMutationCount()).toBe(1));
+        await vi.waitFor(() => expect(getSessionMutationCount()).toBe(1));
         expect(await fixture.records()).toEqual([]);
         await replaceSessionEntry(fixture.scope, {
           sessionId: "replacement-session",

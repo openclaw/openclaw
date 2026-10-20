@@ -19,8 +19,6 @@ type KnownNodePendingSource = NodePairingPendingRequest & {
   commands: string[];
 };
 
-type KnownNodeCatalog = Map<string, NodeListNode>;
-
 function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
   return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
 }
@@ -95,7 +93,7 @@ export function createKnownNodeCatalog(params: {
   workerSlotsByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerSlots"]>>;
   workerBundleByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerBundle"]>>;
   issuesByNodeId?: ReadonlyMap<string, NodeListNode["issues"]>;
-}): KnownNodeCatalog {
+}): NodeListNode[] {
   const devicePairingById = new Map(
     params.pairedDevices
       .filter((entry) => hasNonEmptyString(entry.deviceId))
@@ -132,7 +130,7 @@ export function createKnownNodeCatalog(params: {
     ...pendingNodePairingById.keys(),
     ...liveById.keys(),
   ]);
-  const catalog: KnownNodeCatalog = new Map();
+  const catalog: NodeListNode[] = [];
   for (const nodeId of nodeIds) {
     const devicePairing = devicePairingById.get(nodeId);
     const approved = nodePairingById.get(nodeId);
@@ -165,7 +163,7 @@ export function createKnownNodeCatalog(params: {
     const nodeMetadata = (
       key: "version" | "coreVersion" | "uiVersion" | "deviceFamily" | "modelIdentifier",
     ) => firstNormalizedString(live?.[key], nodePairing?.[key], pendingNodePairing?.[key]);
-    catalog.set(nodeId, {
+    catalog.push({
       nodeId,
       displayName: firstNormalizedString(
         // The approved surface owns the operator's rename. Live metadata is a
@@ -215,10 +213,10 @@ export function createKnownNodeCatalog(params: {
       ...(live && params.deviceFolderNodeIds?.has(nodeId)
         ? { workerHost: { deviceFolders: true as const } }
         : {}),
-      ...(hostStats ? { hostStats: structuredClone(hostStats) } : {}),
-      ...(live && workerSlots ? { workerSlots: { ...workerSlots } } : {}),
-      ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),
-      ...(issues?.length ? { issues: [...issues] } : {}),
+      ...(hostStats ? { hostStats } : {}),
+      ...(live && workerSlots ? { workerSlots } : {}),
+      ...(live && workerBundle ? { workerBundle } : {}),
+      ...(issues?.length ? { issues } : {}),
       nodePluginTools: live?.nodePluginTools,
       pathEnv: live?.pathEnv,
       permissions: live?.permissions ?? nodePairing?.permissions,
@@ -245,10 +243,5 @@ export function createKnownNodeCatalog(params: {
       connected: Boolean(live),
     });
   }
-  return catalog;
-}
-
-/** Lists known nodes with connected nodes first and deterministic display ordering. */
-export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
-  return [...catalog.values()].toSorted(compareKnownNodes);
+  return catalog.toSorted(compareKnownNodes);
 }

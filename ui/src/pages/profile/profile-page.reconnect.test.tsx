@@ -10,6 +10,68 @@ import {
   mountProfilePage,
 } from "./profile-page.test-support.tsx";
 
+it("admits the canonical model-account profile and updates its label without reloading accounts", async () => {
+  const initial = createDeferred<{ profile: typeof modelAccountProfile }>();
+  let profile = modelAccountProfile;
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return request.mock.calls.filter(([name]) => name === method).length === 1
+        ? initial.promise
+        : { profile };
+    }
+    if (method === "users.listModelAccounts") {
+      return {
+        profileId: profile.id,
+        accounts: [
+          {
+            authProfileId: "openai:personal",
+            provider: "openai",
+            label: "Personal account",
+            authType: "oauth",
+            selected: false,
+          },
+        ],
+        links: [],
+      };
+    }
+    if (method === "users.prefs.get") {
+      return { status: "ok", entries: {} };
+    }
+    throw new Error(`Unexpected request ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: "merged-profile-alias",
+    name: "Presence label",
+  });
+  harness.emitHello(gatewayHelloForMethods([], ["operator.write"]));
+  const page = mountProfilePage(harness.context);
+  try {
+    await waitForSolid(() =>
+      expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(1),
+    );
+    expect(request.mock.calls.some(([method]) => method === "users.listModelAccounts")).toBe(false);
+    initial.resolve({ profile });
+    await waitForSolid(() => expect(page.textContent).toContain("Personal account"));
+    expect(request).toHaveBeenCalledWith("users.listModelAccounts", { profileId: profile.id });
+    const accounts = page.querySelector("openclaw-model-accounts");
+    const account = accounts?.querySelector('[data-auth-profile-id="openai:personal"]');
+    expect(account).not.toBeNull();
+    expect(accounts?.textContent).toContain("Ada");
+
+    profile = { ...profile, displayName: "Augusta Ada" };
+    const refresh = page.querySelector<HTMLButtonElement>(".profile-refresh")!;
+    await waitForSolid(() => expect(refresh.disabled).toBe(false));
+    refresh.click();
+    await waitForSolid(() => expect(accounts?.textContent).toContain("Augusta Ada"));
+    expect(accounts?.querySelector('[data-auth-profile-id="openai:personal"]')).toBe(account);
+    expect(
+      request.mock.calls.filter(([method]) => method === "users.listModelAccounts"),
+    ).toHaveLength(1);
+  } finally {
+    page.unmount();
+  }
+});
+
 it("retains the name draft and loaded profile through a same-client blip, but retires them for another identity", async () => {
   let profile = modelAccountProfile;
   const request = vi.fn(async (method: string) => {

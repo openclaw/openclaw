@@ -3,7 +3,7 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { chunkItems } from "../../utils/chunk-items.js";
@@ -89,7 +89,7 @@ export function readTranscriptMirrorFacts(
     sourceRunId?: string;
   },
 ): TranscriptMirrorFacts {
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     database.db,
     () => {
       assertSessionTranscriptHot(database.db, resolved.sessionId);

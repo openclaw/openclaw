@@ -223,7 +223,7 @@ export function renewOpenClawStateLeaseUnderWriteFence(
   return result.numAffectedRows === 1n ? expiresAt : undefined;
 }
 
-/** The caller owns the write transaction; a replaced owner cannot release its successor. */
+/** The caller owns write admission; a replaced owner cannot release its successor. */
 export function releaseOpenClawStateLeaseInTransaction(
   db: EngineConnection,
   identity: OpenClawStateLeaseIdentity,

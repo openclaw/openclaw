@@ -53,7 +53,7 @@ describe("Codex app inventory cache", () => {
     );
     const read = cache.read({ key, request, nowMs: 0 });
     expect(read.state).toBe("missing");
-    expect(read.refreshScheduled).toBe(true);
+    expect(request).toHaveBeenCalledTimes(1);
 
     const snapshot = await cache.refreshNow({ key, request, nowMs: 0 });
     expect(snapshot.apps).toEqual(apps);
@@ -66,8 +66,8 @@ describe("Codex app inventory cache", () => {
 
     const fresh = cache.read({ key, request, nowMs: 50 });
     expect(fresh.state).toBe("fresh");
-    expect(fresh.refreshScheduled).toBe(false);
     expect(fresh.snapshot?.apps).toEqual(apps);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes and removes legacy runtime rows targeted by their Apps SDK identity", async () => {
@@ -79,7 +79,7 @@ describe("Codex app inventory cache", () => {
       codexAppInventoryResponse(method, apps, params),
     );
     await cache.refreshNow({ key: "runtime", request });
-    cache.invalidate("runtime", "connector changed");
+    cache.invalidate("runtime");
     await cache.refreshNow({ key: "runtime", request, targetAppIds: [manifestId] });
     expect(cache.read({ key: "runtime", request, suppressRefresh: true })).toMatchObject({
       state: "fresh",
@@ -225,7 +225,7 @@ describe("Codex app inventory cache", () => {
     expect(read.snapshot?.apps).toEqual([app("app-overflow")]);
   });
 
-  it("records refresh errors without discarding the last successful snapshot", async () => {
+  it("preserves the last successful snapshot when a refresh fails", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 1 });
     const key = "runtime";
     await cache.refreshNow({
@@ -250,7 +250,6 @@ describe("Codex app inventory cache", () => {
       request: async (method, params) => codexAppInventoryResponse(method, [app("app-2")], params),
     });
     expect(read.snapshot?.apps).toEqual([app("app-1")]);
-    expect(read.diagnostic?.message).toBe("app inventory failed");
   });
 
   it("fails closed when app metadata cannot be read", async () => {

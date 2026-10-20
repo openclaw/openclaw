@@ -58,6 +58,9 @@ export function selectTranscriptAppendState(
       (join) => join.onTrue(),
     )
     .select([
+      "window.row_transcript_json",
+      "window.row_transcript_updated_at",
+      "window.transcript_updated_at",
       "generation.generation",
       "projection.active_event_count",
       "projection.active_message_count",

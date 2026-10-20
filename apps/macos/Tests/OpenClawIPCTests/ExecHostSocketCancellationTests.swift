@@ -5,7 +5,7 @@ import OpenClawKit
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct ExecHostSocketCancellationTests {
     enum Cancellation: CaseIterable {
         case disconnect
@@ -22,6 +22,7 @@ struct ExecHostSocketCancellationTests {
             let client = fixture.client
             try self.send(command: ["/usr/bin/printf", "half-close-ok"], root: root, client: client)
             #expect(shutdown(client, SHUT_WR) == 0)
+            try await fixture.waitForResponse()
             let response = try await self.readResponse(client)
             #expect(response.ok)
             #expect(response.payload?.stdout == "half-close-ok")
@@ -115,7 +116,7 @@ struct ExecHostSocketCancellationTests {
     func `cancelled native executor never starts a command`() async throws {
         let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        try self.seed(root)
+        try await self.seed(root)
         let sentinel = root.appendingPathComponent("unexpected")
         let request = ExecHostRequest(command: ["/usr/bin/touch", sentinel.path], cwd: root.path)
         let response = await Task.detached {
@@ -134,7 +135,7 @@ struct ExecHostSocketCancellationTests {
     {
         let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        try self.seed(root)
+        try await self.seed(root)
         let fixture = try CancellationFixture(root: root)
         let server = ExecApprovalsSocketServer(
             socketPath: root.appendingPathComponent("exec.sock").path,
@@ -161,10 +162,10 @@ struct ExecHostSocketCancellationTests {
         await fixture.cleanUp(server: server)
     }
 
-    private func seed(_ root: URL) throws {
-        try ExecApprovalsSQLiteStore.write(
+    private func seed(_ root: URL) async throws {
+        try await ExecApprovalsSocketTestSupport.seedPolicy(
             ExecApprovalsFile(version: 1, defaults: nil, agents: [:]),
-            stateDirectoryURL: root)
+            in: root)
     }
 
     private func connect(_ root: URL) throws -> Int32 {
@@ -325,10 +326,13 @@ private final class CancellationFixture: @unchecked Sendable {
 
     func wait(
         for gate: AsyncTestGate,
-        watchdog: Duration = .seconds(CancellationFixture.socketTimeoutSeconds)) async throws
+        watchdog: Duration? = nil) async throws
     {
-        // Reuse the socket watchdog; this is not a startup SLA across MainActor policy work.
-        // Both race losers join on cancellation.
+        guard let watchdog else {
+            try await gate.wait("native command readiness or terminal response")
+            return
+        }
+        // The explicit watchdog test still exercises cleanup before readiness.
         let signalled = try await withThrowingTaskGroup(of: Bool.self) { group in
             group.addTask {
                 await gate.wait()
@@ -346,7 +350,7 @@ private final class CancellationFixture: @unchecked Sendable {
     }
 
     func waitForStart(
-        watchdog: Duration = .seconds(CancellationFixture.socketTimeoutSeconds)) async throws
+        watchdog: Duration? = nil) async throws
         -> (parent: pid_t, child: pid_t)
     {
         try await self.wait(for: self.startup, watchdog: watchdog)
@@ -354,6 +358,11 @@ private final class CancellationFixture: @unchecked Sendable {
             throw StartupFailure.terminal(self.diagnostics)
         }
         return (parent, child)
+    }
+
+    func waitForResponse() async throws {
+        try await self.startup.wait("native execution response")
+        try #require(self.response != nil)
     }
 
     /// Ready is published only after both PID writes and opening the child's release gate.

@@ -204,7 +204,7 @@ function attachExternalCurrentTargetSibling(params: {
       (!requestedTarget.kind || !normalized.kind || normalized.kind === requestedTarget.kind)
     );
   });
-  if (typeof trustedCurrentTarget !== "string" || !trustedCurrentTarget.trim()) {
+  if (!trustedCurrentTarget) {
     return params.ctx;
   }
   return {

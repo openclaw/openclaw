@@ -8,8 +8,8 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runCommandBuffered } from "../process/exec.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolute-deadline.js";
+import { ignoreMissingPath } from "./errno.js";
 import { isPathInside } from "./fs-safe.js";
-import { hasNodeErrorCode } from "./path-guards.js";
 import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 
 export const PKG_INSPECTION_TIMEOUT_MS = 30_000;
@@ -168,12 +168,7 @@ export function createSystemPackageOwnershipInspection(
   const canonicalDirectory = (directory: string): Promise<string> =>
     getOrCreatePromise(directories, directory, async () => {
       const stat = await read("paths", "lstat", () =>
-        fs.lstat(directory).catch((error: unknown) => {
-          if (hasNodeErrorCode(error, "ENOENT")) {
-            return null;
-          }
-          throw error;
-        }),
+        fs.lstat(directory).catch((error: unknown) => ignoreMissingPath(error) ?? null),
       );
       if (stat) {
         return read("paths", "realpath", () => fs.realpath(directory));

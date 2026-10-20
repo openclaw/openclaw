@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import nativePresenceStream from "../../../apps/shared/OpenClawKit/Tests/OpenClawKitTests/Fixtures/presence-deltas.json" with { type: "json" };
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createGatewayEvent,
@@ -31,6 +32,24 @@ afterEach(() => {
 });
 
 describe("Gateway presence delivery", () => {
+  it("matches the shared native presence stream", () => {
+    store.current().request.mockImplementation(() => new Promise(() => {}));
+    const events = vi.fn();
+    store.gateway.subscribeEvents(events);
+    for (const step of nativePresenceStream) {
+      if (step.reconnect) {
+        store.current().opts.onHello?.(hello());
+      }
+      events.mockClear();
+      store.current().opts.onEvent?.(createGatewayEvent("presence", step.payload));
+      if (step.expected === null) {
+        expect(events, step.name).not.toHaveBeenCalled();
+      } else {
+        expect(events.mock.lastCall?.[0].payload, step.name).toEqual({ presence: step.expected });
+      }
+    }
+  });
+
   it("publishes reconstructed snapshots to every consumer in server order", () => {
     const events = vi.fn();
     store.gateway.subscribeEvents(events);

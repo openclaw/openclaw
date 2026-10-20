@@ -297,6 +297,10 @@ function checkPulseBoundaries(data: unknown) {
     : undefined;
 }
 export const validateSessionsListParams = compile(S.SessionsListParamsSchema, checkPulseBoundaries);
+export const validateSessionsSubscribeParams = compile(
+  S.SessionsSubscribeParamsSchema,
+  checkPulseBoundaries,
+);
 export const validateSessionCatalogShareRoute = compile(S.SessionCatalogShareRouteSchema);
 export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListParamsSchema);
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);
@@ -544,6 +548,10 @@ export const validateApprovalHistoryParams = compile(S.ApprovalHistoryParamsSche
 export const validateApprovalResolveParams = compile(S.ApprovalResolveParamsSchema);
 export const validateExecApprovalsGetParams = compile(S.ExecApprovalsGetParamsSchema);
 export const validateExecApprovalsSetParams = compile(S.ExecApprovalsSetParamsSchema);
+export const validateExecApprovalsNativeCommitParams = compile(
+  S.ExecApprovalsNativeCommitParamsSchema,
+);
+export const validateExecApprovalsNativeRequest = compile(S.ExecApprovalsNativeRequestSchema);
 export const validateExecApprovalGetParams = compile(S.ExecApprovalGetParamsSchema);
 export const validateExecApprovalRequestParams = compile(S.ExecApprovalRequestParamsSchema);
 export const validateExecApprovalResolveParams = compile(S.ExecApprovalResolveParamsSchema);

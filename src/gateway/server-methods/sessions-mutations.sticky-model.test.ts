@@ -1,7 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
-import { clearFollowupQueue, getFollowupQueue } from "../../auto-reply/reply/queue/state.js";
+import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
+import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -213,7 +214,6 @@ function runtimeOptions(key: string) {
 }
 
 function queueRuntimeSelection(sessionKey: string) {
-  const queue = getFollowupQueue(sessionKey, { mode: "followup" });
   const queued = {
     agentId: "main",
     agentDir: "/tmp/agent",
@@ -227,7 +227,14 @@ function queueRuntimeSelection(sessionKey: string) {
     timeoutMs: 30_000,
     blockReplyBreak: "message_end" as const,
   };
-  queue.items.push({ prompt: "Queued work", enqueuedAt: 1, run: queued });
+  enqueueFollowupRun(
+    sessionKey,
+    { prompt: "Queued work", enqueuedAt: 1, run: queued },
+    { mode: "followup" },
+    "none",
+    undefined,
+    false,
+  );
   return queued;
 }
 
@@ -527,7 +534,6 @@ describe("sessions.patch personal model-account ownership", () => {
       return { drained: Promise.resolve(), hasWork: () => false, release };
     });
     requestContext.terminalSessions = terminalSessions;
-    requestContext.chatQueuedTurns = new Map();
     requestContext.dedupe = new Map();
     expectUnchanged(
       await patch({

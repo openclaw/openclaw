@@ -11,6 +11,25 @@ import {
 
 export type ComposerTalkCapabilityStatus = "checking" | "ready" | "unavailable" | "unknown";
 
+export type MicrophonePickerProps = {
+  devices: RealtimeTalkInputDevice[];
+  loading: boolean;
+  open: boolean;
+  selectedDeviceId: string;
+  voiceActive: boolean;
+  issue: RealtimeTalkDeviceIssue | null;
+  holdToDictate?: boolean;
+  showRealtimeCapability?: boolean;
+  realtimeStatus: ComposerTalkCapabilityStatus;
+  dictationStatus: ComposerTalkCapabilityStatus;
+  onOpen: () => void;
+  onClose: () => void;
+  onSelect: (deviceId: string) => void;
+  onHoldToDictateChange?: (enabled: boolean) => void;
+  onOpenTalkSettings?: () => void;
+  onOpenDictationSettings?: () => void;
+};
+
 // Each composer owns discovery and the devicechange subscription; delayed results
 // cannot overwrite newer discovery, and only an open picker watches devices.
 export class ComposerMicrophoneOwner extends EventTarget {
@@ -24,6 +43,7 @@ export class ComposerMicrophoneOwner extends EventTarget {
   private catalogConnected = false;
   private catalogSessionKey: string | undefined;
   private catalogRequest = 0;
+  private stopFocus: (() => void) | undefined;
   realtimeStatus: ComposerTalkCapabilityStatus = "unknown";
   dictationStatus: ComposerTalkCapabilityStatus = "unknown";
   // Terminal login changes credentials without replacing the Gateway connection.
@@ -43,7 +63,8 @@ export class ComposerMicrophoneOwner extends EventTarget {
     ) {
       return;
     }
-    window.removeEventListener("focus", this.refreshOnFocus);
+    this.stopFocus?.();
+    this.stopFocus = undefined;
     this.catalogClient = client;
     this.catalogConnected = catalogConnected;
     this.catalogSessionKey = sessionKey;
@@ -53,7 +74,7 @@ export class ComposerMicrophoneOwner extends EventTarget {
     if (!client || !catalogConnected) {
       return;
     }
-    window.addEventListener("focus", this.refreshOnFocus);
+    this.stopFocus = listen(window, "focus", this.refreshOnFocus);
     void this.loadCatalog();
   }
 

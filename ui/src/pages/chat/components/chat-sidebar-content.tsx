@@ -34,18 +34,14 @@ import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import {
-  AttachmentCardHeader,
-  AttachmentPreviewSkeleton,
-  CompactAttachmentCard,
-} from "./chat-attachment-card-solid.tsx";
+import { AttachmentStateCard, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
+import "./chat-audio-player.tsx";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,
   safePlainTextAttachmentHref,
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
-import "./chat-audio-player.tsx";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import "./chat-video-player.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
@@ -227,60 +223,18 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
         />
       </Match>
       <Match when={!model().src || model().imagePreview}>
-        <div
-          class={[
-            "chat-assistant-attachment-card",
-            `chat-assistant-attachment-card--${model().kind}`,
-            "sidebar-attachment-preview__state-card",
-          ]}
-          aria-busy={model().pending ? "true" : undefined}
-        >
-          <AttachmentCardHeader
-            kind={model().kind}
-            label={props.content.title}
-            mimeType={props.content.mimeType ?? undefined}
-            sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
-            downloadHref={model().src ?? undefined}
-            downloadPending={model().pending}
-            visualMode="preview-with-favicon"
-          />
-          <div
-            class="sidebar-attachment-preview__state"
-            style={{ "--preview-ratio": model().ratio }}
-          >
-            <Show when={model().pending || model().imagePreview}>
-              <AttachmentPreviewSkeleton />
-            </Show>
-            <Show when={model().imagePreview && model().src} keyed>
-              {(src) => (
-                <img
-                  class="sidebar-attachment-preview__image"
-                  src={src}
-                  alt={props.content.title}
-                  onLoad={(event) => {
-                    event.currentTarget.dataset.preview = "ready";
-                  }}
-                  onError={(event) => {
-                    event.currentTarget.dataset.preview = "error";
-                  }}
-                />
-              )}
-            </Show>
-            <Show when={!model().pending}>
-              <div class="sidebar-attachment-preview__unavailable">
-                {t("chat.attachments.previewUnavailable")}
-                <Show when={model().error}>{(error) => <span>{error()}</span>}</Show>
-                <Show when={model().retry}>
-                  {(retry) => (
-                    <button class="btn btn--sm" type="button" onClick={() => retry()()}>
-                      {t("common.retry")}
-                    </button>
-                  )}
-                </Show>
-              </div>
-            </Show>
-          </div>
-        </div>
+        <AttachmentStateCard
+          kind={model().kind}
+          label={props.content.title}
+          mimeType={props.content.mimeType ?? undefined}
+          sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+          downloadHref={model().src ?? undefined}
+          downloadPending={model().pending}
+          imagePreview={Boolean(model().imagePreview)}
+          previewRatio={model().ratio}
+          error={model().error}
+          onRetry={model().retry}
+        />
       </Match>
       <Match when={model().kind === "audio"}>
         <openclaw-chat-audio-player

@@ -3,7 +3,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
@@ -111,7 +111,7 @@ export function readLatestAssistantTextFromDatabase(
   database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   scope: Pick<ResolvedTranscriptReadScope, "agentId" | "sessionId" | "sessionKey">,
 ): LatestTranscriptAssistantText | undefined {
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     database.db,
     () => {
       assertSessionTranscriptHot(database.db, scope.sessionId);

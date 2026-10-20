@@ -149,6 +149,7 @@ export class StartedSessionNavigation {
     }).options;
     await navigateWithRouteTransition({
       document,
+      getOutlet: () => context.routeOutlet,
       from: "new-session",
       to: "chat",
       router: context.router,

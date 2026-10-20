@@ -12,6 +12,7 @@ import {
   assertSqliteTableIntegrity,
   isTerminalSqliteIntegrityError,
   runSqliteIntegrityOperationSync,
+  SqliteIntegrityError,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
@@ -155,6 +156,32 @@ function taskOrphans(parent = "task_id", child = "task_id", action = "CASCADE", 
 }
 
 describe("assertSqliteIntegrity", () => {
+  it("retains every finding for offline repair without repeating the check", () => {
+    withDatabase(
+      `CREATE TABLE damaged (value INTEGER CHECK(value > 0));
+       PRAGMA ignore_check_constraints = ON;
+       WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 105)
+       INSERT INTO damaged SELECT -n FROM rows;
+       PRAGMA ignore_check_constraints = OFF;`,
+      (database) => {
+        const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+        try {
+          const failure = caught(() =>
+            assertSqliteIntegrity(database, "offline repair", { allFindings: true }),
+          );
+          expect(failure).toBeInstanceOf(SqliteIntegrityError);
+          if (!(failure instanceof SqliteIntegrityError)) {
+            throw new Error("Expected captured integrity findings");
+          }
+          expect(failure.findings).toHaveLength(105);
+          expect(observer.queries).toEqual(["PRAGMA integrity_check(2147483647);"]);
+        } finally {
+          observer.restore();
+        }
+      },
+    );
+  });
+
   it("refuses structural damage in a table outside the migration scope", () => {
     const databasePath = path.join(tempDirs.make("sqlite-quick-damage-"), "database.sqlite");
     const writer = new (requireNodeSqlite().DatabaseSync)(databasePath);

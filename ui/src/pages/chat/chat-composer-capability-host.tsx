@@ -1,11 +1,12 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, Show } from "solid-js";
+import { createMemo, lazy, Loading, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
 import "../../components/modal-dialog.ts";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import { buildToolsEffectiveRequestKey } from "../../lib/agents/tools-effective.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
@@ -27,11 +28,9 @@ import {
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { nextBooleanToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import { LibraryPinRead } from "../skills/library-detail.tsx";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { ComposerAddServerDialog } from "./components/chat-composer-add-server-dialog.tsx";
 import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.types.ts";
 import {
   ComposerSkillCatalog,
@@ -40,6 +39,17 @@ import {
 import { ComposerLibrarySession } from "./composer-library-session.ts";
 
 registerMcpEnglish();
+
+// Capability dialogs are interaction-only; ordinary chat boot needs neither renderer.
+const LibraryPinRead = lazy(() => import("../skills/library-detail.tsx"), {
+  export: "LibraryPinRead",
+});
+const ComposerAddServerDialog = lazy(
+  () => import("./components/chat-composer-add-server-dialog.tsx"),
+  {
+    export: "ComposerAddServerDialog",
+  },
+);
 
 type ComposerMcpServerScope = "session" | "everywhere";
 
@@ -569,8 +579,18 @@ export function ChatComposerCapabilityDialogs(props: ChatComposerCapabilityDialo
   const view = createMemo(() => props.read());
   return (
     <>
-      <ComposerAddServerDialog {...view()} />
-      <Show when={view().library}>{(library) => <LibraryPinRead {...library()} />}</Show>
+      <Show when={view().open}>
+        <Loading fallback={<LoadingState />}>
+          <ComposerAddServerDialog {...view()} />
+        </Loading>
+      </Show>
+      <Show when={view().library}>
+        {(library) => (
+          <Loading fallback={<LoadingState />}>
+            <LibraryPinRead {...library()} />
+          </Loading>
+        )}
+      </Show>
     </>
   );
 }

@@ -71,6 +71,7 @@ function DetailRow(props: { icon: IconName; text: string | undefined; capacity?:
 }
 
 export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting: boolean }) {
+  let rowElement: HTMLButtonElement | undefined;
   const unavailableReason = () =>
     props.item.disabled ? props.item.title || props.item.description : undefined;
   const description = () => (props.item.compact ? undefined : props.item.description);
@@ -113,7 +114,7 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
       title={props.item.compact ? undefined : props.item.title}
       disabled={props.submitting || (Boolean(props.item.disabled) && !accessibleBlocker())}
       aria-disabled={accessibleBlocker() ? "true" : undefined}
-      ref={select}
+      ref={[select, (element) => (rowElement = element)]}
     >
       {props.item.icon ? (
         <span class="session-menu__icon" aria-hidden="true">
@@ -164,6 +165,7 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
           class="new-session-page__environment-details"
           placement="right-start"
           prop:openOnClick={Boolean(accessibleBlocker() || touchDetails())}
+          prop:descriptionTarget={() => rowElement ?? null}
         >
           <div class="new-session-page__environment-detail-trigger">
             {row()}

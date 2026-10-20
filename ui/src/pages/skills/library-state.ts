@@ -15,9 +15,9 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { observeState } from "../../lib/reactive/observe-state.ts";
 import { assertUploadsEnabled, uploadsEnabled } from "../../lib/uploads.ts";
 import { readLibraryFiles, uploadLibraryArchive } from "./library-files.ts";
-import { observeSkillState } from "./observe-state.ts";
 
 export type LibraryView = "workspace" | "mine" | "team" | "all";
 export type LibraryDraft = {
@@ -56,7 +56,7 @@ export function createSkillLibrary(
   config: () => ApplicationConfigCapability | undefined = () => undefined,
 ) {
   // Drafts and write admission stay synchronous; Solid only observes the owner.
-  const observation = observeSkillState<{
+  const observation = observeState<{
     list: SkillsLibraryListResult | null;
     view: LibraryView | null;
     loading: boolean;
@@ -118,12 +118,12 @@ export function createSkillLibrary(
     return canWrite() && (observation.read().draft?.entry?.canEdit ?? true);
   }
 
-  async function load() {
+  async function load(snapshot = gateway.snapshot) {
     const connection = gateway.capture();
     if (
       !connection ||
       data.loading ||
-      !canCallGatewayMethod(gateway.snapshot, "skills.library.list", "operator.read", {
+      !canCallGatewayMethod(snapshot, "skills.library.list", "operator.read", {
         requireAdvertisement: false,
       })
     ) {
@@ -222,6 +222,11 @@ export function createSkillLibrary(
     canCreate,
     canEdit,
     load,
+    ensureLoaded(snapshot: ApplicationGatewaySnapshot | null) {
+      if (!data.list && !data.loading && !data.error) {
+        void load(snapshot);
+      }
+    },
     create,
     invalidateRequests() {
       data.loading = false;

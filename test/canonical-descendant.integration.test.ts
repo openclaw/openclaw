@@ -516,7 +516,7 @@ async function withFixture(
             // SAFETY: these are the complete Gateway collaborators used by the real fork handler.
             context: {
               getRuntimeConfig: () => config,
-              chatAbortControllers: new Map(),
+              rpcSources: new Map(),
               getSessionEventSubscriberConnIds: () => new Set(),
               broadcastToConnIds: () => {},
             } as unknown as GatewayRequestContext,

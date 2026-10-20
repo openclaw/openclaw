@@ -183,14 +183,14 @@ describe("native Gateway protocol levels", () => {
     assertPattern(
       swiftWizard,
       swiftWizardPath,
-      /"minProtocol": ProtoAnyCodable\(GATEWAY_MIN_PROTOCOL_VERSION\)/,
-      "operator connects must advertise GATEWAY_MIN_PROTOCOL_VERSION as minProtocol.",
+      /let client = GatewayChannelActor\([\s\S]*?connectOptions: GatewayConnectOptions\(\s+role: "operator",[\s\S]*?clientMode: "ui",/,
+      "the wizard must use the shared operator client and its checked protocol range.",
     );
     assertPattern(
       swiftWizard,
       swiftWizardPath,
-      /"maxProtocol": ProtoAnyCodable\(GATEWAY_PROTOCOL_VERSION\)/,
-      "operator connects must advertise GATEWAY_PROTOCOL_VERSION as maxProtocol.",
+      /try await client\.connect\(\)/,
+      "the wizard must connect through the shared protocol handshake.",
     );
 
     const androidPath = "apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt";

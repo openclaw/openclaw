@@ -10,7 +10,7 @@ import {
   readStandaloneRuntimeManifestForRoot,
 } from "../../cli-invocation.mjs";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { hasErrnoCode } from "../infra/errors.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { resolveUserPath } from "../infra/home-dir.js";
 import { readRootJsonObjectSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
@@ -281,9 +281,7 @@ async function ensureRealNodeModulesDir(params: {
   try {
     existing = await fs.lstat(nodeModulesDir);
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
   }
   if (!existing) {
     await params.beforePersistentEffect?.();
@@ -328,10 +326,8 @@ async function linkOpenClawPeerDependency(params: {
   let existing: Stats | null;
   try {
     existing = await fs.lstat(linkPath).catch((error: unknown) => {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return null;
-      }
-      throw error;
+      ignoreMissingPath(error);
+      return null;
     });
     if (
       existing &&

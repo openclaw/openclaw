@@ -1,8 +1,9 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
   createMediaFollowupRun,
   createReplyMediaContextRuntimeMock,
@@ -57,6 +58,13 @@ describe("runReplyAgent media delivery ownership", () => {
               },
             };
             setRuntimeConfigSnapshot(config, config);
+            const replyOperation = createReplyOperation({
+              sessionKey,
+              sessionId: "session",
+              agentId: "qa",
+              resetTriggered: false,
+            });
+            onTestFinished(() => replyOperation.complete());
             const actual = await vi.importActual<
               typeof import("../../media/outbound-attachment.js")
             >("../../media/outbound-attachment.js");
@@ -75,6 +83,7 @@ describe("runReplyAgent media delivery ownership", () => {
               await makeRunReplyAgentParams({
                 sessionKey,
                 provider,
+                replyOperation,
                 followupRun: createMediaFollowupRun({
                   run: {
                     agentId: "qa",

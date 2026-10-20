@@ -24,6 +24,7 @@ import {
 } from "./diagnostic-liveness.js";
 import {
   emitDiagnosticMemorySample,
+  createDiagnosticMemorySampler,
   type EmitDiagnosticMemorySample,
 } from "./diagnostic-memory.js";
 import { emitMessageProcessedDiagnosticEvent } from "./diagnostic-message-content.js";
@@ -78,7 +79,7 @@ import {
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
 
-export { diagnosticLogger } from "./diagnostic-runtime.js";
+export { diagnosticLogger, logSessionStateChange } from "./diagnostic-runtime.js";
 
 const webhookStats = {
   received: 0,
@@ -535,38 +536,6 @@ export function logSessionTurnCreated(params: DiagnosticLogParams<"session.turn.
   markActivity();
 }
 
-export function logSessionStateChange(
-  params: SessionRef & {
-    state: SessionStateValue;
-    reason?: string;
-  },
-) {
-  if (!areDiagnosticsEnabledForProcess()) {
-    return;
-  }
-  const state = getDiagnosticSessionState(params);
-  const prevState = state.state;
-  state.state = params.state;
-  touchDiagnosticSessionState(state);
-  if (params.state === "processing" && prevState !== "processing") {
-    state.activeQueuedTurn = state.queueDepth > 0;
-  }
-  if (params.state === "idle") {
-    state.queueDepth = Math.max(0, state.queueDepth - 1);
-    state.activeQueuedTurn = false;
-  }
-  emitDiagnosticEvent({
-    type: "session.state",
-    sessionId: state.sessionId,
-    sessionKey: state.sessionKey,
-    prevState,
-    state: params.state,
-    reason: params.reason,
-    queueDepth: state.queueDepth,
-  });
-  markActivity();
-}
-
 export function markDiagnosticSessionProgress(params: SessionRef) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
@@ -815,6 +784,9 @@ export function startGatewayDiagnosticHeartbeat(
     reconcileObservations();
   };
   reconcileObservations();
+  const sampleMemory = createDiagnosticMemorySampler(
+    () => !scheduler.signal.aborted && heartbeatJob === job && observing,
+  );
   const tick = () => {
     if (scheduler.signal.aborted || heartbeatJob !== job) {
       return;
@@ -866,13 +838,7 @@ export function startGatewayDiagnosticHeartbeat(
     const shouldEmitLivenessReport = shouldEmitLivenessEvent || shouldEmitLivenessWarning;
     const shouldRecordMemorySample =
       shouldEmitLivenessReport || hasRecentDiagnosticActivity(now) || hasOpenDiagnosticWork(work);
-    if (opts?.emitMemorySample) {
-      opts.emitMemorySample({ emitSample: shouldRecordMemorySample });
-    } else {
-      emitDiagnosticMemorySample({
-        emitSample: shouldRecordMemorySample,
-      });
-    }
+    sampleMemory(shouldRecordMemorySample, opts);
 
     if (!shouldRecordMemorySample) {
       return;

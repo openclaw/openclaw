@@ -9,7 +9,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { drainPendingSessionDelivery as nativeDrain } from "./session-delivery-queue-recovery.js";
+import * as recovery from "./session-delivery-queue-recovery.js";
 import {
   schedulePendingSessionDeliveries,
   scheduleSessionDelivery,
@@ -18,10 +18,13 @@ import {
 import {
   enqueueClaimedSessionDelivery as enqueueClaimed,
   enqueueSessionDelivery as enqueue,
-  loadPendingSessionDelivery as loadPending,
-  loadPendingSessionDeliveries as nativeList,
   releaseSessionDeliveryClaim as releaseClaim,
 } from "./session-delivery-queue-storage.js";
+import * as storage from "./session-delivery-queue-storage.js";
+
+const nativeDrain = recovery.drainPendingSessionDelivery;
+const loadPending = storage.loadPendingSessionDelivery;
+const nativeList = storage.loadPendingSessionDeliveries;
 
 const agentTurn = (messageId = "artifact:ready") => ({
   kind: "agentTurn" as const,
@@ -151,6 +154,7 @@ async function withRuntime(run: (runtime: ReturnType<typeof runtimeFixture>) => 
         await fixture.close();
         await fixture.time.scheduler.stop();
         await closeOpenClawStateDatabaseByPathAsync(fixture.context.admission.databasePath);
+        vi.restoreAllMocks();
       }
     });
   });
@@ -166,11 +170,11 @@ describe("session delivery queue runtime", () => {
     for (let index = 0; index < 8; index += 1) {
       unrelatedIds.push(await r.enqueue(agentTurn(`unrelated:${index}`)));
     }
-    const reloadPending = vi.fn(loadPending);
-    const listPending = vi.fn(nativeList);
-    const drain = vi.fn(nativeDrain);
+    const reloadPending = vi.spyOn(storage, "loadPendingSessionDelivery");
+    const listPending = vi.spyOn(storage, "loadPendingSessionDeliveries");
+    const drain = vi.spyOn(recovery, "drainPendingSessionDelivery");
     const onSettled = vi.fn(async () => {});
-    const stop = r.start({ reloadPending, listPending, drain, onSettled });
+    const stop = r.start({ onSettled });
     await expect(r.schedule(id)).resolves.toBe(true);
     expect(reloadPending).toHaveBeenCalledExactlyOnceWith(id, r.context);
     await r.time.advanceBy(0);
@@ -192,8 +196,8 @@ describe("session delivery queue runtime", () => {
     "backs off after a transient %s without losing the durable entry",
     async (mode, { runtime: r }) => {
       const id = await r.enqueue();
-      const reloadPending = vi.fn(loadPending);
-      const drain = vi.fn(nativeDrain);
+      const reloadPending = vi.spyOn(storage, "loadPendingSessionDelivery");
+      const drain = vi.spyOn(recovery, "drainPendingSessionDelivery");
       if (mode === "lookup failure") {
         reloadPending.mockRejectedValueOnce(new Error("database busy"));
       } else if (mode === "drain failure") {
@@ -201,7 +205,7 @@ describe("session delivery queue runtime", () => {
       } else {
         drain.mockImplementationOnce((params) => loadPending(params.id, params.queueContext));
       }
-      const stop = r.start({ reloadPending, drain });
+      const stop = r.start();
       await expect(r.schedule(id)).resolves.toBe(true);
       await r.time.advanceBy(0);
       if (mode === "lookup failure") {
@@ -277,8 +281,8 @@ describe("session delivery queue runtime", () => {
     const { id } = await enqueueClaimed(systemEvent("released claim"), 60_000, r.context);
     const claimed = await r.pendingClaim(id);
     const staleRead = r.gate(claimed);
-    const reloadPending = vi.fn(loadPending).mockImplementationOnce(() => staleRead.promise);
-    const stop = r.start({ reloadPending });
+    vi.spyOn(storage, "loadPendingSessionDelivery").mockImplementationOnce(() => staleRead.promise);
+    const stop = r.start();
     const staleScheduling = r.track(r.schedule(id));
     await r.release(id);
     const released = await r.pendingClaim(id);
@@ -321,14 +325,16 @@ describe("session delivery queue runtime", () => {
         .fn<() => Promise<void>>()
         .mockRejectedValueOnce(new Error("session locked"))
         .mockResolvedValueOnce();
-      const drain = vi.fn(nativeDrain).mockImplementationOnce(async (params) => {
-        const pending = await r.retryDrain(params);
-        if (lookupFailure) {
-          throw new Error("database busy");
-        }
-        return pending;
-      });
-      const stop = r.start({ deliver, drain });
+      const drain = vi
+        .spyOn(recovery, "drainPendingSessionDelivery")
+        .mockImplementationOnce(async (params) => {
+          const pending = await r.retryDrain(params);
+          if (lookupFailure) {
+            throw new Error("database busy");
+          }
+          return pending;
+        });
+      const stop = r.start({ deliver });
       await r.schedule(id);
       await r.time.advanceBy(0);
       if (lookupFailure) {
@@ -415,26 +421,27 @@ describe("session delivery queue runtime", () => {
           throw new Error("delayed database read failure");
         }
       };
-      const stopOld = r.start({
-        reloadPending: async (entryId) => {
-          await waitForOldRead();
-          return r.pending(entryId);
-        },
-        listPending: async () => {
-          await waitForOldRead();
-          return r.all();
-        },
+      const reloadPending = vi.spyOn(storage, "loadPendingSessionDelivery");
+      reloadPending.mockImplementation(async (entryId) => {
+        await waitForOldRead();
+        return r.pending(entryId);
       });
+      const listPending = vi.spyOn(storage, "loadPendingSessionDeliveries");
+      listPending.mockImplementation(async () => {
+        await waitForOldRead();
+        return r.all();
+      });
+      const stopOld = r.start();
       const scheduling =
         mode === "lookup" ? r.track(r.schedule(id)) : r.track(schedulePendingSessionDeliveries());
       const { stopping } = await expectStopPending(stopOld);
       await expect(r.schedule(id)).resolves.toBe(false);
-      const stopNew = r.start({
-        listPending: async () => {
-          await newRead.promise;
-          return r.all();
-        },
+      reloadPending.mockRestore();
+      listPending.mockImplementation(async () => {
+        await newRead.promise;
+        return r.all();
       });
+      const stopNew = r.start();
       const newScheduling = r.track(schedulePendingSessionDeliveries());
       oldRead.resolve(undefined);
       await scheduling;
@@ -452,11 +459,11 @@ describe("session delivery queue runtime", () => {
   it("keeps the earliest retry across repeated scan failures", async ({ runtime: r }) => {
     await r.enqueue(agentTurn("music:task-scan:agent-loop"));
     const listPending = vi
-      .fn<typeof nativeList>()
+      .spyOn(storage, "loadPendingSessionDeliveries")
       .mockRejectedValueOnce(new Error("database busy"))
       .mockRejectedValueOnce(new Error("database still busy"))
       .mockImplementation(() => r.all());
-    const stop = r.start({ listPending });
+    const stop = r.start();
     await schedulePendingSessionDeliveries();
     expect(r.logger.error).toHaveBeenCalledWith(expect.stringContaining("failed to scan"));
     expect(r.deliver).not.toHaveBeenCalled();

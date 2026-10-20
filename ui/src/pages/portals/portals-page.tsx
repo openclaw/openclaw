@@ -1,5 +1,5 @@
 import type { PortalSummary } from "@openclaw/gateway-protocol";
-import { For, Show, createEffect, createMemo, onCleanup } from "solid-js";
+import { For, Show, createMemo, onCleanup } from "solid-js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import type { PortalPanelToggleDetail } from "../../components/panel-toggle-contract.ts";
@@ -21,14 +21,9 @@ type PortalsPageElement = SolidBridgeElement<PortalsPageProps, PortalsPageMethod
 const owners = new WeakMap<HTMLElement, PortalsModel>();
 
 function PortalsPageContent(props: PortalsPageProps, host: PortalsPageElement) {
-  const model = createPortals(useApplication(), () => props);
+  const model = createPortals(useApplication(), () => host);
   owners.set(host, model);
   onCleanup(() => owners.delete(host));
-  // Target and visibility changes retarget Gateway portal reads and environment polling.
-  createEffect(
-    () => ({ ...props }),
-    (_value, previous) => model.presentationChanged(previous),
-  );
   return (
     <ShellLayoutBoundary traits={{ toolbarHeader: !props.embedded }}>
       <PortalContent model={model} />
@@ -45,7 +40,7 @@ function EmptyState(props: { model: PortalsModel }) {
         fallback={
           <>
             <Show
-              when={state().loading && !state().loaded}
+              when={!state().loaded && (state().loading || !state().connected)}
               fallback={
                 <>
                   <div class="portals-empty__title">
@@ -309,6 +304,7 @@ export const PortalsPage = defineSolidBridge<PortalsPageProps, PortalsPageMethod
       requestedPortalId: { default: null, attribute: false },
       requestedEnvironmentId: { default: null, attribute: false },
     },
+    propertyChanged: (host) => owners.get(host)?.presentationChanged(),
     methods: {
       handleToggleRequest(host: PortalsPageElement, event: Event) {
         const detail =

@@ -1,10 +1,6 @@
-export type TranscriptViewportMeasurement = {
-  clientHeight: number;
-  scrollHeight: number;
-  scrollTop: number;
-};
+export type TranscriptViewportMeasurement = ReturnType<typeof readTranscriptViewport>;
 
-export function readTranscriptViewport(element: HTMLElement): TranscriptViewportMeasurement {
+export function readTranscriptViewport(element: HTMLElement) {
   return {
     scrollTop: element.scrollTop,
     clientHeight: element.clientHeight,

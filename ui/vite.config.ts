@@ -691,6 +691,18 @@ function collectControlUiPublicAssets(publicDir: string): { paths: string[]; has
   return { paths, hash: hash.digest("hex") };
 }
 
+export function controlUiRuntimeDefines(
+  command: "serve" | "build" | undefined,
+  buildInfo: ControlUiBuildInfo,
+) {
+  return {
+    "globalThis.OPENCLAW_UI_DEV_SERVER": JSON.stringify(command === "serve"),
+    ...(command === "serve"
+      ? { "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo) }
+      : {}),
+  };
+}
+
 export default function controlUiViteConfig(
   options: { outDir?: string; command?: "serve" | "build"; buildInfo?: ControlUiBuildInfo } = {},
 ): UserConfig {
@@ -736,9 +748,7 @@ export default function controlUiViteConfig(
       },
     },
     define: {
-      ...(options.command === "serve"
-        ? { "globalThis.OPENCLAW_CONTROL_UI_BUILD_INFO": JSON.stringify(buildInfo) }
-        : {}),
+      ...controlUiRuntimeDefines(options.command, buildInfo),
       "globalThis.OPENCLAW_UI_DEV_GATEWAY": devGateway
         ? JSON.stringify(devGateway.gateway)
         : "undefined",

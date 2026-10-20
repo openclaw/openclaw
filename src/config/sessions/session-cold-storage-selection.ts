@@ -5,7 +5,7 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type {
@@ -32,7 +32,7 @@ export type SessionColdBatchInput = {
 export function selectSessionColdBatch(input: SessionColdBatchInput) {
   return withOpenClawAgentDatabaseReadOnly(
     (database) =>
-      runSqliteDeferredTransactionSync(
+      runSqliteReadSnapshotSync(
         database.db,
         () => {
           const db = getNodeSqliteKysely<DB>(database.db);

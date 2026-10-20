@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import http from "node:http";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
+import { McpServer } from "@modelcontextprotocol/server";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -86,7 +86,7 @@ function connection({ url, authorization }: { url: string; authorization: string
 async function startAuthenticatedMcpProofServer() {
   const addEndpoint = async (owner: string, authorization: string) => {
     const server = new McpServer({ name: `openclaw-${owner}-proof`, version: "1.0.0" });
-    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
+    const transport = new NodeStreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
     const endpoint = {
       owner,
       authorization,

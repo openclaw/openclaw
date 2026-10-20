@@ -75,15 +75,18 @@ close and seal reuse do not advance that timestamp. On Linux, where Node can
 substitute change time for unavailable birthtime, the existing physical-file
 identity policy uses a stable unknown birthtime value.
 
-Schema identity covers the application version, the database family's canonical
-SQL definitions, and the admission policy revision. Admitted facts identify agent
+Schema identity covers the loaded SQLite version, source ID and compile options,
+the Node/Bun runtime versions, the database family's schema version and canonical
+SQL definitions, and the admission policy revision. Unknown SQLite identity disables
+seal reuse. Admitted facts identify agent
 and shared-state databases, including databases at custom paths. A shared-state
 schema change does not invalidate an unchanged agent database's seal, or vice versa.
 Unclassified or mixed admission facts conservatively depend on both schemas.
-Commit and build
-IDs do not invalidate seals for otherwise compatible builds. Maintainers must advance
-the policy revision for migrations or schema-version changes not reflected in canonical
-SQL, and for changes to validation rules or serialized admission facts.
+Application versions, commit IDs, and build IDs do not invalidate seals for otherwise
+compatible storage stacks. Maintainers must advance the policy revision for code-only
+migrations, validation rules, or serialized admission fact changes. SQLite identity
+comes from the existing native library probe, including shared or custom libraries;
+it is not inferred from the application's version or Node's advertised SQLite version.
 Same-version session columns are admission prerequisites, not optional reader
 projections. Declare them in `STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS`: the
 same declarations drive installation, pending-repair detection, and saved-catalog
@@ -103,10 +106,21 @@ same-version installer is represented in admission facts. A complete prior-build
 catalog retains seal reuse without validation SQL; adding requirements alone does
 not invalidate seals whose catalogs already satisfy them.
 
-Updating from an older seal-identity format requires one full validation;
+Updating from an older application-version-bound seal requires one full validation;
 subsequent compatible builds reuse the new seal. Managed drain followed by an
 interrupt uses ordinary close and can publish a seal once its writers settle.
 Forced termination before successful close cannot certify the database.
+
+Agent clean-close receipt messages name the agent. An intermediate `active-leases`
+receipt can precede that same agent's final `written` receipt: idle retained database
+handles still hold leases even when no agent work is running. The final handle must
+release its lease after checkpoint and native close before certifying the seal.
+At the next full integrity gate, `no-proof` means no seal was found. Rejected seals
+report `malformed-proof`, `expired-proof`, `file-mismatch`, or `journal-present`;
+identity changes report `runtime-mismatch`, `sqlite-mismatch`, `schema-mismatch`,
+or `policy-mismatch`. Older seals lack component diagnostics and report
+`identity-mismatch` when their combined identity differs. Matching older seals
+remain reusable; the added diagnostic metadata does not change admission policy.
 
 Worker admission checks current authority after lease cleanup and before opening
 the native agent database. A refusal at that boundary releases its unopened lease
@@ -603,6 +617,17 @@ agent restoration owner revalidates the selected configured paths before
 releasing their holds; normal migrations then prepare them for Gateway startup.
 Repeating Doctor after successful restoration does not restore or back up these stores again.
 
+Reserved system agents (`openclaw` and `crestodian`) cannot be deleted, so journal
+reconstruction no longer creates deletion-recovery holds for them. `doctor --fix`
+reconciles existing reserved holds, including the quarantine receipts left by
+2026.10.5, only when the canonical store's path and internal agent identity match,
+its integrity is healthy, and no deletion row remains. It first preserves verified
+full backups of the agent store and shared recovery records, releases only that
+hold, and lets normal migrations advance the store. Other holds retain their
+existing restoration rules. Until repair succeeds, startup degrades an unmigrated
+held store with a warning naming `openclaw doctor --fix` instead of failing the
+whole Gateway.
+
 This policy accepts the small risk of resurrecting data from a lost pending
 deletion when the entire journal disappeared. A missing-table observation is
 not proof that no journal ever existed. Present-but-incomplete journals,
@@ -669,6 +694,12 @@ remain separate, with no cached readiness result shared between them.
 
 ### Startup on multi-agent hosts
 
+Startup and Gateway agent listing share the configured-plus-reserved agent roster.
+Existing native databases for reserved system agents (`openclaw` and `crestodian`)
+receive inspection and deferred session preparation without an `agents.entries`
+entry. Registered databases that no configured or reserved agent owns remain
+skipped; use Doctor to inspect their retained data.
+
 Foreground startup agent-database checks and session startup maintenance are
 limited to two databases at a time. Each inspection's
 size-derived foreground allowance starts when its scheduled inspection begins, so waiting for a
@@ -687,9 +718,32 @@ is uncertain, writer admission and cleanup custody remain held until execution e
 
 During startup, reaching the inspection's foreground deadline records pending
 preparation and marks that agent **degraded** while the Gateway continues with healthy agents.
-Its sessions remain unavailable, and its database is excluded from automatic
-migration and ordinary writes. The inspection continues in the background within
-the same concurrency limit. Expiring the wait does not establish corruption.
+Its database remains excluded from automatic migration and ordinary writes until
+admission completes.
+Session and agent write RPCs targeting a preparing agent return a retryable startup-unavailable
+error before handler work begins. The reference Gateway client waits by retrying
+that refused request with the same request ID and input, within its original
+deadline and cancellation signal. Expiry or cancellation stops retries; no write
+remains parked at the server. Clients without this retry behavior receive the
+unavailable error immediately and can retry after preparation finishes.
+TUI and Control UI sends and new sessions use the shared five-minute startup
+budget for their client-owned response deadline. Submitted chat messages keep
+waiting when a retained pane is hidden. Stop, discard, or disposing the initiating
+view cancels pending admission retries; unfinished new-session creation also
+cancels when navigation retires its initiating view. SDK, native, and tool callers
+retain their own deadlines.
+Channel ingress and direct agent execution wait for existing preparation without
+holding database or session locks, for up to five minutes plus one minute per
+remaining two-agent inspection batch. Reads keep their existing readiness behavior,
+and admitted requests do not join another agent's preparation.
+Cron configuration and wake RPCs refuse preparing targets before writing.
+Scheduled cron jobs for preparing agents retain queued custody without consuming running
+slots or inheriting the foreground request timeout. Cron initialization continues while
+those jobs observe readiness in the background. Admission completion wakes their queue;
+healthy agents remain eligible. Service or Gateway shutdown cancels the readiness observation
+and leaves those receipts queued for ordinary recovery.
+The inspection continues in the background within
+the same concurrency limit. Expiring either wait does not establish corruption.
 
 A successful inspection alone does not make the agent available. The Gateway
 opens each agent's database and completes its session validation and transcript
@@ -699,6 +753,11 @@ and deletion status remain checked before publication. A failed inspection or
 preparation leaves the agent degraded with the recorded reason; it does not stop
 healthy agents. Shared-state database failures retain their existing startup
 checks.
+
+Operator `send` requests check admission before delivery even when they specify
+only an `agentId` and omit `sessionKey`. Pending preparation returns a retryable
+startup refusal. Failed inspection keeps refusing delivery with the recorded
+repair guidance after startup work settles.
 
 Startup deletion-journal checks use at most eight concurrent reads, so releasing
 more than 128 agents from preparation readiness does not exhaust the shared
@@ -716,8 +775,19 @@ model publications unless the ID also belongs to the configured agent roster.
 Pending preparation does not produce a startup migration warning. Status and
 Doctor derive failed inspection and preparation warnings from current agent
 admission decisions, with the reason and repair guidance. Successful preparation
-clears the agent's pending refusal without requiring a restart. Genuine migration
-warnings remain recorded for the boot. This changes no stored state or update
+clears the agent's pending refusal without requiring a restart. Recovery discovery
+and cron session maintenance exclude pending stores before acquiring their readers,
+so healthy agents continue. Custom session-store selectors retain healthy sibling
+databases when another physical database in the family is unavailable.
+Cron retries after the admission owner publishes the
+agent's availability; it does not log an admission failure while inspection is pending.
+Database admission refusals do not schedule periodic sweeps of healthy stores.
+Session requests retain the typed, retryable inspection-pending response until
+preparation completes. No ordinary reads or writes bypass the integrity gate.
+New database opens wait for an available worker before selecting their execution
+carrier, so a brief busy period on one worker does not bind them behind another
+agent's full integrity scan. Worker limits and existing command ordering are unchanged.
+Genuine migration warnings remain recorded for the boot. This changes no stored state or update
 migration behavior.
 
 Every 60 seconds while recovery is pending, `agent database startup preparation
@@ -805,12 +875,12 @@ uninstalled copies from its identity-marked staging directories, retains any
 exchanged originals, and skips files that already have NOCOW. Unmarked backups
 from older or unknown operations are never deleted automatically.
 
-The official Debian bookworm Docker image cannot perform this optional repair:
-its coreutils 9.1 `mv` lacks `--exchange`/`--no-copy`, and it does not include
-`fuser` (the `psmisc` package) or `getfacl`/`setfacl` (the `acl` package).
-A derived image needs those tools and an exchange-capable GNU `mv`, as well as
-kernel/filesystem support on the mounted state volume. Updates still proceed
-with the existing stores.
+The official Debian trixie Docker image includes an exchange-capable GNU `mv`,
+`fuser` (`psmisc`), `getfacl`/`setfacl` (`acl`), and `lsattr`/`chattr`
+(`e2fsprogs`). The mounted state volume still needs kernel/filesystem support.
+Older bookworm-based images lack the required tools; recreate the container
+with a current image before retrying. Unsupported hosts still proceed with
+updates using the existing stores.
 
 After publication, Doctor re-records the identity of each destination database
 it rewrites so `update cleanup` eligibility survives the rewrite. Recorded
@@ -1124,6 +1194,29 @@ failures remain a refusal: preserve the database and its WAL, then restore a
 verified backup or use SQLite recovery. Runtime and startup never perform this
 repair automatically.
 
+FTS5-only `malformed inverted index` findings on canonical agent search tables
+are also repairable. A Node upgrade or downgrade can change SQLite's `unicode61`
+tokenization (for example, U+FFFE in SQLite 3.54), leaving intact content with an
+incompatible derived index. Doctor preserves a backup and rebuilds only the
+affected, schema-validated FTS tables in one
+transaction. It verifies integrity and foreign keys before clearing quarantine;
+session recovery uses this same repair instead of moving the database aside.
+Unknown or changed FTS definitions and findings mixed with structural damage
+are not eligible for this repair.
+
+Gateway startup makes one automatic repair attempt per database per process when
+every finding names a canonical, schema-validated FTS table. Under exclusive
+writer custody, it uses the same pre-repair backup and transactional rebuild as
+Doctor, then requires clean integrity and foreign-key checks before admission.
+One warning names the agent, affected tables and row counts, SQLite version, and
+backup. Status and Doctor retain this startup outcome. A failed backup or rebuild,
+live foreign writer, unknown FTS definition, or mixed damage keeps the database
+quarantined with the precise Doctor command. Ordinary runtime opens do not attempt
+this repair. If startup cannot repair the indexes, stop the Gateway and run
+`openclaw doctor --fix` with the Node version that will run the Gateway, then
+restart it. Switching SQLite versions again may require another rebuild,
+without changing stored content or the database schema.
+
 <a id="downgrades-are-unsupported" />
 
 <a id="example-state-schema-13-to-12" />
@@ -1144,6 +1237,34 @@ Follow [Downgrade](/install/updating#downgrade) for the managed rollback path,
 retained-originals limits, and restoring a verified pre-update backup. A complete
 recovery point includes the matching package, config, shared state, and every
 agent database. Keep writers stopped while activating restored state.
+
+### Client credential cutover rollback
+
+Before shared state schema 29, client private identities, cached tokens, and
+native socket material live in the shared database. An automatic rollback to
+that format restores the pre-upgrade shared database with those tables intact.
+The older app ignores `client/credentials.sqlite`; do not copy its newer rows
+back manually. Credentials issued between upgrade and rollback are lost and
+affected clients must pair again.
+
+On the next upgrade, Doctor checks the local migration receipt against the
+restored shared source and rebuilds stale local credentials from that source.
+A partial `copied` receipt never permits normal client access. Updated native
+clients refuse a replaced shared source until the matching Doctor repairs the
+binding. Older native clients refuse retired shared credential tables; update
+the app instead of lowering schema markers. PostgreSQL recovery also restores
+the local family captured by its engine-aware driver. Ordinary exported backups
+omit the native socket secret and initialize it again on restore.
+
+An independent native credential source is copied without changing its database,
+permissions, journals, or directory contents. It receives no retirement marker,
+so the old app can still read it after rollback. The local copy records the source
+identity and content hash: an unchanged source preserves refreshed local tokens,
+while a changed or restored source rebuilds the copy. Consumed legacy JSON claims
+survive that rebuild, preventing revoked credentials from being reimported.
+WAL-mode independent sources require the previous release's export or restore
+workflow; the importer refuses them before opening SQLite rather than changing
+their shared-memory files or ignoring committed WAL data.
 
 ### Example: state schema 21 to 20
 

@@ -280,7 +280,7 @@ export function commitSessionEntryPatch(
       }
       result = {
         kind: "session-entry-patch",
-        entry: mutation.entry,
+        ...(input.returnEntry === false ? {} : { entry: mutation.entry }),
         applied: mutation.applied,
         lifecycleEffects,
         publication,

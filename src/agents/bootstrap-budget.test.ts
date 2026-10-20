@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { buildBootstrapPromptWarning } from "./bootstrap-budget-warning.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapBudgetState,
@@ -28,10 +27,6 @@ function bootstrapFile(
   path = `/tmp/${name}`,
 ): WorkspaceBootstrapFile {
   return { name, path, content, missing: false };
-}
-
-function truncatedAnalysis() {
-  return analyze([stat("AGENTS.md", 150, 100)], 120, 200);
 }
 
 function analyze(
@@ -84,8 +79,14 @@ describe("bootstrap budget", () => {
 
   it("gives a budget-dropped file zero injected chars when a sibling shares its basename", () => {
     const bootstrapFiles: WorkspaceBootstrapFile[] = [
-      bootstrapFile("AGENTS.md", "a".repeat(1_000), "/tmp/workspace/AGENTS.md"),
-      bootstrapFile("AGENTS.md", "b".repeat(500), "/tmp/workspace/packages/core/AGENTS.md"),
+      {
+        ...bootstrapFile("AGENTS.md", "a".repeat(1_000), "/tmp/workspace/AGENTS.md"),
+        origin: { kind: "agent-workspace", rootPath: "/tmp/workspace" },
+      },
+      {
+        ...bootstrapFile("AGENTS.md", "b".repeat(500), "/tmp/workspace/packages/core/AGENTS.md"),
+        origin: { kind: "execution-project", rootPath: "/tmp/workspace/packages/core" },
+      },
     ];
 
     const stats = buildBootstrapInjectionStats({
@@ -95,6 +96,7 @@ describe("bootstrap budget", () => {
     const analysis = analyze(stats, 20_000, 1_000);
 
     expect(analysis.totals.injectedChars).toBe(1_000);
+    expect(stats.map((file) => file.origin)).toEqual(bootstrapFiles.map((file) => file.origin));
     expect(analysis.truncatedFiles).toMatchObject([
       {
         path: "/tmp/workspace/packages/core/AGENTS.md",
@@ -202,29 +204,32 @@ describe("bootstrap budget", () => {
     ).toEqual(expected);
   });
 
-  it("respects off/always warning modes", () => {
-    const analysis = truncatedAnalysis();
-    const seen = buildBootstrapPromptWarning({ analysis, mode: "once" });
-    const off = buildBootstrapPromptWarning({
-      analysis,
-      mode: "off",
+  it("warns on repeated truncation while bounding distinct signature history", () => {
+    const files = [stat("AGENTS.md", 150, 100)];
+    const seen = buildBootstrapBudgetState({ files }).bootstrapPromptWarning;
+    const repeated = buildBootstrapBudgetState({
+      files,
       seenSignatures: seen.warningSignaturesSeen,
       previousSignature: seen.signature,
-    });
-    expect(off).toMatchObject({ warningShown: false, lines: [] });
+    }).bootstrapPromptWarning;
+    expect(repeated).toMatchObject({ warningShown: true, lines: [NOTICE] });
+    expect(repeated.warningSignaturesSeen).toEqual([seen.signature]);
 
-    const always = buildBootstrapPromptWarning({
-      analysis,
-      mode: "always",
-      seenSignatures: seen.warningSignaturesSeen,
-      previousSignature: seen.signature,
-    });
-    expect(always).toMatchObject({ warningShown: true, lines: [NOTICE] });
+    const history = Array.from({ length: 32 }, (_, index) => `previous-${index}`);
+    const bounded = buildBootstrapBudgetState({
+      files,
+      seenSignatures: [" ", ...history, "previous-0"],
+      previousSignature: "latest",
+    }).bootstrapPromptWarning;
+    expect(bounded.warningSignaturesSeen).toEqual([...history.slice(2), "latest", seen.signature]);
   });
 
   it("builds truncation report metadata from analysis + warning decision", () => {
-    const analysis = truncatedAnalysis();
-    const warning = buildBootstrapPromptWarning({ analysis, mode: "once" });
+    const { bootstrapAnalysis: analysis, bootstrapPromptWarning: warning } =
+      buildBootstrapBudgetState({
+        config: { agents: { defaults: { bootstrapMaxChars: 120, bootstrapTotalMaxChars: 200 } } },
+        files: [stat("AGENTS.md", 150, 100)],
+      });
     const meta = buildBootstrapTruncationReportMeta({
       analysis,
       warningMode: "once",

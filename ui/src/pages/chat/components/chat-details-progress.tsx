@@ -77,11 +77,3 @@ export function ChatDetailsProgress(props: Props) {
     </openclaw-chat-details-progress>
   );
 }
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-details-progress": HTMLAttributes<HTMLElement>;
-    }
-  }
-}

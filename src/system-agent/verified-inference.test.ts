@@ -13,9 +13,11 @@ import {
 } from "../agents/execution-auth-binding.js";
 import type { AgentHarnessAuthBindingFingerprintParams } from "../agents/harness/types.js";
 import * as modelAuth from "../agents/model-auth.js";
+import * as configModule from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
 import { createInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig as resolveSystemAgentConfiguredRouteFromConfigImpl } from "./inference-route.js";
 import { resolvePersistentApplyInference as resolvePersistentApplyInferenceImpl } from "./setup-inference.js";
 import {
@@ -178,8 +180,8 @@ function mockAuth(apiKey = "verified-key") {
   });
 }
 
-async function bindingFor(baseConfig: OpenClawConfig) {
-  const route = await requireRoute(baseConfig);
+async function bindingFor(baseConfig: OpenClawConfig, preparedRoute?: ConfiguredRoute) {
+  const route = preparedRoute ?? (await requireRoute(baseConfig));
   const authFingerprint = requireFingerprint(
     fingerprintAuthProfileCredential({ profileId: "openai:verified", credential: profile }),
   );
@@ -864,13 +866,25 @@ describe("verified OpenClaw inference binding", () => {
         });
         pluginRegistryState.records = [record, codexRecord];
         const baseConfig = config();
-        const binding = await bindingFor(baseConfig);
+        const configFixture = await createInferenceConfigFixture(baseConfig);
+        const snapshot = configFixture.snapshot;
+        const view = snapshot.runtimeConfig ?? snapshot.config;
+        const route = await resolveSystemAgentConfiguredRouteFromConfig(
+          view,
+          undefined,
+          {},
+          snapshot,
+        );
+        if (!route) {
+          throw new Error("missing physical-artifact test route");
+        }
+        const binding = await bindingFor(view, route);
+        vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(configFixture.read);
 
         await expect(
           resolvePersistentApplyInference({
             binding,
             runtime,
-            deps: configSnapshot(baseConfig),
           }),
         ).resolves.toBe(binding.execution);
 
@@ -880,7 +894,6 @@ describe("verified OpenClaw inference binding", () => {
           resolvePersistentApplyInference({
             binding,
             runtime,
-            deps: configSnapshot(baseConfig),
           }),
         ).resolves.toBeNull();
       } finally {

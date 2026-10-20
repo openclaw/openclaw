@@ -282,12 +282,10 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
   it.each([
     "replaced execution",
     "cancelled",
-    "dispatching",
     "different-turn",
     "different-cohort",
     "ordinary-cohort",
     "missing-cohort",
-    "retrying-cohort",
   ] as const)("does not take a %s child completion", async (reason) => {
     const child = pendingChild();
     const params = adoption(child);
@@ -295,22 +293,12 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
       params.runs.set(child.runId, { ...child, generation: 2 });
     } else if (reason === "cancelled") {
       child.killIntent = { requestedAt: 2_000, reason: "operator stop" };
-    } else if (reason === "dispatching") {
-      child.requesterSettleWake = { status: "dispatching", attemptCount: 1 };
     } else if (reason === "different-cohort" || reason === "ordinary-cohort") {
       child.requesterSettleWake = {
         status: "pending",
         attemptCount: 0,
         batchRunIds: [child.runId, "another-child"],
         ...(reason === "different-cohort" ? { requesterYieldBatch: true, rearmGeneration: 1 } : {}),
-      };
-    } else if (reason === "retrying-cohort") {
-      child.requesterSettleWake = {
-        status: "pending",
-        attemptCount: 1,
-        batchRunIds: [child.runId],
-        requesterYieldBatch: true,
-        rearmGeneration: 1,
       };
     } else if (reason === "missing-cohort") {
       child.requesterSettleWake = {
@@ -532,6 +520,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         expect(append).not.toHaveBeenCalled();
       } else {
         expect(await settling).toBe(true);
+        expect(beforeWrite).toHaveBeenCalledOnce();
         finalizeRequesterBatch(entry.runId, "settled");
         expect(append).toHaveBeenCalledExactlyOnceWith("settled");
       }
@@ -631,6 +620,7 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           schedule,
         }),
       ).toBe(expected);
+      expect(beforeWrite).toHaveBeenCalledTimes(expected ? 1 : 0);
       if (expected) {
         expect(runs.get(entry.runId)!.requesterSettleWake?.batchRunIds).toEqual([entry.runId]);
         expect(schedule).toHaveBeenCalledExactlyOnceWith(
@@ -692,15 +682,16 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         requesterTurnYielded: undefined,
         requesterSettleWake: { status: "pending", requesterYieldBatch: true, batchRunIds },
       });
-      expect(calls).toEqual(
-        kind === "running" ? ["persist", "persist"] : ["persist", "persist", "schedule"],
-      );
-      if (kind !== "running") {
+      if (kind === "running") {
+        expect(schedule).not.toHaveBeenCalled();
+        expect(calls).toEqual(["persist"]);
+      } else {
         expect(schedule).toHaveBeenCalledExactlyOnceWith(
           first.runId,
           runs.get(first.runId),
           "settle",
         );
+        expect(calls).toEqual(["persist", "schedule"]);
       }
       if (kind === "in_progress") {
         expect(runs.get(second.runId)!.delivery?.disposition).toBe("intentional_non_delivery");
@@ -735,6 +726,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
           schedule,
         }),
       ).toBe(true);
+      expect(beforeWrite.mock.calls).toEqual(
+        requesterYielded ? [[completion.runId], [completion.runId]] : [[completion.runId]],
+      );
       if (requesterYielded) {
         expect(runs.get(completion.runId)!.requesterSettleWake).toMatchObject({
           batchRunIds: [completion.runId],
@@ -761,14 +755,12 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
       const runs = new Map([[entry.runId, entry]]);
       const original = structuredClone(entry);
       const failure = new Error("sqlite unavailable");
+      if (reject) {
+        vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation").mockRejectedValueOnce(failure);
+      }
       const settling = settleRuns([entry], {
         requesterYielded: false,
         runs,
-        beforeWrite: () => {
-          if (reject) {
-            throw failure;
-          }
-        },
       });
       if (reject) {
         await expect(settling).rejects.toMatchObject({ outcome: "not-committed", cause: failure });

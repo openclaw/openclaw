@@ -371,20 +371,24 @@ export class MemorySourceIndexKernel {
       markMemoryVectorRebuildRequired(this.database);
       return;
     }
+    // Planning-read failures belong to the outer transaction, not best-effort cleanup.
+    const sparse =
+      ids ??
+      executeSqliteQuerySync(
+        this.database,
+        getNodeSqliteKysely<SourceIndexDatabase>(this.database)
+          .selectFrom("memory_index_chunks")
+          .select("id")
+          .where("path", "=", pathname)
+          .where("source", "=", source)
+          .limit(MAX_VECTOR_POINT_DELETES + 1),
+      ).rows.map((row) => row.id);
+    if (sparse.length === 0) {
+      return;
+    }
     try {
       // Keep cleanup atomic before recording rebuild debt on a caught failure.
       runSqliteImmediateTransactionSync(this.database, () => {
-        const sparse =
-          ids ??
-          executeSqliteQuerySync(
-            this.database,
-            getNodeSqliteKysely<SourceIndexDatabase>(this.database)
-              .selectFrom("memory_index_chunks")
-              .select("id")
-              .where("path", "=", pathname)
-              .where("source", "=", source)
-              .limit(MAX_VECTOR_POINT_DELETES + 1),
-          ).rows.map((row) => row.id);
         if (
           (ids === undefined || cleanup === "complete-replacement") &&
           sparse.length > MAX_VECTOR_POINT_DELETES

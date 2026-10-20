@@ -16,7 +16,6 @@ import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
-  clearDiagnosticEmbeddedRunActivityForSession,
   createDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticArgumentChurnObservation,
@@ -424,12 +423,7 @@ describe("repeated request liveness", () => {
     await vi.advanceTimersByTimeAsync(0);
     await waitForDiagnosticEventsDrained();
     expectRequestAge(ref, 60_000);
-    expect(
-      clearDiagnosticEmbeddedRunActivityForSession({
-        ...ref,
-        activeSessionId: "replacement-owner",
-      }).cleared,
-    ).toBe(true);
+    markDiagnosticEmbeddedRunEnded(ref);
     expectRequestAge(ref, undefined);
   });
 

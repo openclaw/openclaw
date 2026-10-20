@@ -362,6 +362,33 @@ describe("config plugin validation", () => {
 
     it.each([
       [
+        "does not require Codex for a default Decision model beside non-OpenAI chat",
+        { agents: agents({ ...agentWithSubagent(anthropic), decisionModel: "openai/gpt-6-luna" }) },
+        false,
+      ],
+      [
+        "does not require Codex for a per-agent pinned Decision model",
+        {
+          agents: agents(agentWithSubagent(anthropic), {
+            openclaw: { decisionModel: "openai/gpt-6-luna@openai:fixture" },
+          }),
+        },
+        false,
+      ],
+      [
+        "still requires Codex for the same model selected for chat",
+        { agents: agents(agentWithSubagent("openai/gpt-6-luna")) },
+        true,
+      ],
+      [
+        "keeps channel targets named decisionModel on the chat diagnostic path",
+        {
+          agents: agents(agentWithSubagent(anthropic)),
+          channels: { modelByChannel: { telegram: { decisionModel: "openai/gpt-6-luna" } } },
+        },
+        true,
+      ],
+      [
         "scopes request-parameter diagnostics to the affected keyed agent",
         {
           agents: {

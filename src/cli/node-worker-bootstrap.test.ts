@@ -12,11 +12,9 @@ import {
   readConfigFileSnapshot,
   resetConfigRuntimeState,
 } from "../config/config.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { resetNodeHostPluginRegistry } from "../node-host/plugin-node-host.test-support.js";
 import { prepareNodeHostRuntime } from "../node-host/runtime.js";
 import { ensureNodeHostStateReady } from "../node-host/startup-state-readiness.js";
-import { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   resetPluginLoaderTestStateForTest,
@@ -27,6 +25,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   initializeNativeOpenClawStateDatabase,
+  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import { ensureCliExecutionBootstrap } from "./command-execution-startup.js";
@@ -108,6 +107,7 @@ function fixture() {
   writeJson(configPath, config);
   return {
     root,
+    stateDir,
     databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
     configPath,
     config,
@@ -179,17 +179,15 @@ describe("private node worker bootstrap", () => {
     expect(fs.readFileSync(databasePath)).toEqual(before);
   });
 
-  it("initializes native bootstrap before plugin state reads without losing native rows", async () => {
-    const { databasePath } = fixture();
+  it("requires captured Doctor migration for canonical native state before node readiness", async () => {
+    const { stateDir, databasePath } = fixture();
     const rows = seedMacNodeWorkerProofState(databasePath);
+    const before = fs.readFileSync(databasePath);
     await bootstrap();
-    ensureNodeHostStateReady();
-    const store = createPluginStateSyncKeyedStore("fixture-node", {
-      namespace: "bootstrap-proof",
-      maxEntries: 10,
-    });
-    expect(store.entries()).toEqual([]);
+    await expect(ensureNodeHostStateReady()).rejects.toThrow(/openclaw doctor --fix/);
     closeOpenClawStateDatabaseForTest();
+    expect(fs.readFileSync(databasePath)).toEqual(before);
+    expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
     const database = new DatabaseSync(databasePath, { readOnly: true });
     try {
       expect(readMacNodeWorkerProofRows(database)).toEqual(rows);
@@ -203,7 +201,7 @@ describe("private node worker bootstrap", () => {
     const includePath = path.join(root, "channels.json");
     writeJson(includePath, config.channels);
     writeJson(configPath, { ...config, channels: { $include: "channels.json" } });
-    loadOrCreateDeviceIdentity();
+    openOpenClawStateDatabase();
     closeOpenClawStateDatabaseForTest();
     const filesBefore = readFiles(configPath, includePath, databasePath);
 
@@ -237,7 +235,7 @@ describe("private node worker bootstrap", () => {
     } finally {
       allocateSnapshot.mockRestore();
     }
-    ensureNodeHostStateReady();
+    await ensureNodeHostStateReady();
     const prepared = await prepareNodeHostRuntime();
     expect(getRuntimeConfig()).toBe(pinned);
     expect(prepared.manifest.commands).toEqual(

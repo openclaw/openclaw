@@ -1,5 +1,3 @@
-// GitHub Copilot data-residency domain resolution.
-//
 // The allowlist and env/config precedence are provider policy. Deprecated SDK
 // facades keep their dated compatibility copy until its removal window closes.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

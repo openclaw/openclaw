@@ -1,5 +1,4 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-// Directory CLI for chat-channel identity lookup: self, peers, groups, and group members.
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,

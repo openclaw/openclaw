@@ -30,7 +30,7 @@ export class WorkboardStoreRuntime {
   private sessionBoardRevision: WorkboardChange = { epoch: this.cardsRevision.epoch, revision: 1 };
   private writeToken: string | undefined;
   private revision = 0;
-  private readonly listeners = new Set<(change: WorkboardChange) => void>();
+  onChange: ((change: WorkboardChange) => void) | undefined;
   private readonly initialization: Promise<void>;
 
   constructor(
@@ -177,11 +177,6 @@ export class WorkboardStoreRuntime {
     });
   }
 
-  subscribeChanges(listener: (change: WorkboardChange) => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
   invalidateSessionBoards(): void {
     this.sessionBoardRevision = {
       ...this.sessionBoardRevision,
@@ -248,12 +243,10 @@ export class WorkboardStoreRuntime {
       cardsRevision: this.cardsRevision.revision,
       sessionsRevision: this.sessionBoardRevision.revision,
     };
-    for (const listener of this.listeners) {
-      try {
-        listener(change);
-      } catch {
-        // Persistence already succeeded. Observers cannot turn it into a reported failure.
-      }
+    try {
+      this.onChange?.(change);
+    } catch {
+      // Persistence already succeeded. Notification cannot turn it into a reported failure.
     }
   }
 }

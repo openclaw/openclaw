@@ -286,6 +286,7 @@ describe("plugin session extension SessionEntry projection", () => {
     const reservedSlots = {
       workflow: "updatedAt",
       "main-recovery": "mainRestartRecovery",
+      "requester-source": "restartRecoveryRequesterSource",
       recovery: "subagentRecovery",
       "run-error": "lastRunError",
       "transcript-path": "transcriptPath",

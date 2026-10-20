@@ -33,6 +33,7 @@ export type WorkspaceManifestValueInputs = {
     baseCommit: string | null;
     preserveDirectories?: readonly string[];
     includePaths?: readonly string[];
+    buildCacheInputs?: string[];
     hashes?: WorkspaceComputationHashes;
   };
   "workspace.manifest.snapshot": WorkspaceManifestValueInputs["workspace.manifest.capture"];
@@ -87,6 +88,7 @@ export type WorkspaceStageInput<Raw = Uint8Array<ArrayBuffer>> = WorkspaceStageI
   inputPath: string;
   stagingRoot: string;
   stagedResultRef: string;
+  buildCacheInputs?: string[];
 };
 
 export type WorkspaceManifestValueOutputs = {
@@ -141,7 +143,7 @@ export type WorkspaceManifestComputationOperations = {
     };
   };
   "workspace.manifest.staged": {
-    input: { root: string; ref: string };
+    input: { root: string; ref: string; buildCacheInputs?: string[] };
     output: StagedWorkerWorkspaceInventory;
   };
   "workspace.manifest.entries": {

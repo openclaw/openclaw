@@ -71,14 +71,12 @@ export function resolveNodeGatewayOptions(
   const port = options.port === undefined ? baselinePort : parseTcpPort(options.port);
   const endpointChanged = host !== baselineHost || (port !== null && port !== baselinePort);
   const baselineTlsFingerprint = pair?.tlsFingerprint ?? config?.gateway?.tlsFingerprint;
+  // Empty CLI values must not discard the saved endpoint's certificate pin.
   const selectedTlsFingerprint =
     options.tls === false
       ? undefined
-      : options.tlsFingerprint !== undefined
-        ? options.tlsFingerprint
-        : endpointChanged
-          ? undefined
-          : baselineTlsFingerprint;
+      : (normalizeOptionalString(options.tlsFingerprint) ??
+        (endpointChanged ? undefined : baselineTlsFingerprint));
   const baselineTls = pair?.tls ?? config?.gateway?.tls;
   const tlsFingerprint = selectedTlsFingerprint
     ? requireTlsFingerprint(selectedTlsFingerprint)

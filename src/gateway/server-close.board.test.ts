@@ -58,9 +58,7 @@ it("joins an accepted Board read across the close prelude before closing its wor
         };
       });
     restoreRead = () => interception.mockRestore();
-    reading = dispatchGatewayRequestInProcess("board.get", { sessionKey }, dispatchOptions).catch(
-      (error: unknown) => error,
-    );
+    reading = dispatchGatewayRequestInProcess("board.get", { sessionKey }, dispatchOptions);
     await withinTest(
       awaitGateBeforeSettlement(readEntered.promise, reading, "Board read bypassed its worker"),
       signal,
@@ -90,7 +88,12 @@ it("joins an accepted Board read across the close prelude before closing its wor
     releaseRead.resolve();
     const [result] = await withinTest(Promise.all([reading, closing]), signal);
     expect(readSettled).toBe(true);
-    expect(result).toBeInstanceOf(Error);
+    // Accepted work keeps its instance binding until execution and finalizers drain.
+    expect(result).toMatchObject({
+      sessionKey,
+      revision: 1,
+      widgets: [{ name: "status", contentKind: "html", revision: 1 }],
+    });
     expect(database.isOpen).toBe(false);
   } finally {
     releaseRead.resolve();

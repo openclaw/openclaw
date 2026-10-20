@@ -21,6 +21,7 @@ export type SidebarAgentCardProps = {
   menuOpen: boolean;
   menuUnread: boolean;
   switcherAvailable: boolean;
+  onTriggerRef?: (element: HTMLButtonElement) => void;
   onToggleMenu?: (trigger: HTMLElement) => void;
   onMenuPointerMove?: (trigger: HTMLElement, event: PointerEvent) => void;
   onMenuPointerLeave?: () => void;
@@ -57,7 +58,7 @@ export function SidebarAgentCard(props: SidebarAgentCardProps) {
         ]}
       >
         <button
-          ref={(element) => (menuTrigger = element)}
+          ref={[(element) => (menuTrigger = element), props.onTriggerRef]}
           type="button"
           class="sidebar-agent-card__main"
           aria-haspopup="menu"

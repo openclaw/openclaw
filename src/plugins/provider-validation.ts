@@ -2,6 +2,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
+  isPluginManifestOnboardingScope,
+  normalizeProviderAssistantVisibility,
   omitUndefinedManifestFields,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
@@ -20,16 +22,7 @@ function normalizeTextList(values: string[] | undefined): string[] | undefined {
 function normalizeOnboardingScopes(
   values: Array<"text-inference" | "image-generation" | "music-generation"> | undefined,
 ): Array<"text-inference" | "image-generation" | "music-generation"> | undefined {
-  const normalized = Array.from(
-    new Set(
-      (values ?? []).filter(
-        (value): value is "text-inference" | "image-generation" | "music-generation" =>
-          value === "text-inference" ||
-          value === "image-generation" ||
-          value === "music-generation",
-      ),
-    ),
-  );
+  const normalized = Array.from(new Set((values ?? []).filter(isPluginManifestOnboardingScope)));
   return normalized.length > 0 ? normalized : undefined;
 }
 
@@ -82,12 +75,7 @@ function buildNormalizedWizardSetup(
       typeof setup.assistantPriority === "number" && Number.isFinite(setup.assistantPriority)
         ? setup.assistantPriority
         : undefined,
-    assistantVisibility:
-      setup.assistantVisibility === "manual-only" ||
-      setup.assistantVisibility === "visible" ||
-      setup.assistantVisibility === "detected-only"
-        ? setup.assistantVisibility
-        : undefined,
+    assistantVisibility: normalizeProviderAssistantVisibility(setup.assistantVisibility),
     onboardingFeatured: setup.onboardingFeatured === true ? true : undefined,
     groupId: normalizeOptionalString(setup.groupId),
     groupLabel: normalizeOptionalString(setup.groupLabel),

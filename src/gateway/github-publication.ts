@@ -150,7 +150,6 @@ export function createGitHubPublicationCoordinator(params: {
     );
     const worktreeOwner = admitted;
     const { worktree } = worktreeOwner;
-    assertRequester();
     if (!params.placements.validateTurnClaim(request.claim)) {
       throw new Error("GitHub publication lost the live session turn claim after verification.");
     }

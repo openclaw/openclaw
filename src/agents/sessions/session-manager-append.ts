@@ -46,6 +46,7 @@ import { readCommittedSessionManagerReload } from "./session-manager-reload.js";
 import { SessionManagerSuffixPersistence } from "./session-manager-suffix-persistence.js";
 import type {
   AppendPersistenceOptions,
+  ModelChangeEntry,
   SessionEntry,
   SessionMessageEntry,
 } from "./session-manager-types.js";
@@ -325,6 +326,7 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
     entry: T,
     committed: PersistWorkerRecordResult,
     admittedUserId?: string,
+    initialModel?: ModelChangeEntry,
   ): Promise<{
     entry: T;
     anchor?: TranscriptEntryAnchor;
@@ -377,12 +379,20 @@ export class SessionManagerAppend extends SessionManagerSuffixPersistence {
         : undefined);
     this.transcriptVersion = committed.committedVersion;
     this.transcriptMutationAt = committed.committedVersion.updatedAt;
-    return this.adoptPersistedEntry(entry, committed.result, admittedUserId, (append) => {
+    const adoptReload = (append?: {
+      expectedMutationAt: number | null;
+      expectedEntryId: string;
+      admittedUserId: string;
+    }) => {
       if (!reload) {
         throw new Error("Committed session append did not supply its transcript reload");
       }
       this.adoptPreparedTranscriptReload(reload, append);
-    });
+    };
+    if (initialModel && !needsReload) {
+      this.adoptPersistedEntry(initialModel, undefined, admittedUserId, adoptReload);
+    }
+    return this.adoptPersistedEntry(entry, committed.result, admittedUserId, adoptReload);
   }
 
   protected adoptPersistedEntry<T extends SessionEntry>(

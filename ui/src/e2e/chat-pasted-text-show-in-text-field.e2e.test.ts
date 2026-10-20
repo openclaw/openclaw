@@ -145,6 +145,18 @@ suite.define(() => {
       }
       const restore = button(pastedCard, "Show in text field");
       await restore.focus();
+      // A background session refresh must not replace the focused restore control.
+      const sessionRow = await gateway.getSessionRow("agent:main:main");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...sessionRow,
+        key: "agent:main:main",
+        sessionKey: "agent:main:main",
+        reason: "patch",
+        label: "Refreshed paste session",
+        updatedAt: Date.now(),
+      });
+      await page.getByText("Refreshed paste session", { exact: true }).first().waitFor();
+      expect(await restore.evaluate((node) => document.activeElement === node)).toBe(true);
       await page.keyboard.press("Enter");
       await expect.poll(() => composer.inputValue()).toBe(`Keep this draft\n\n${pastedText}`);
       expect(

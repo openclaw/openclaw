@@ -1029,6 +1029,22 @@ describe("private diagnostic data", () => {
   beforeEach(resetDiagnosticEventsForTest);
   afterEach(resetDiagnosticEventsForTest);
 
+  it("shares the frozen empty private payload with OTel listeners", () => {
+    const received: DiagnosticEventPrivateData[] = [];
+    onTrustedInternalDiagnosticEvent((_evt, _meta, data) => received.push(data));
+    onTrustedInternalDiagnosticEvent(
+      markTrustedOtelDiagnosticListener((_evt, _meta, data) => received.push(data)),
+    );
+
+    emitTrustedDiagnosticEvent({ type: "model.usage", usage: { input: 1 } });
+    emitTrustedDiagnosticEvent({ type: "model.usage", usage: { input: 2 } });
+
+    expect(received).toHaveLength(4);
+    expect(received[0]).toEqual({});
+    expect(Object.isFrozen(received[0])).toBe(true);
+    expect(new Set(received).size).toBe(1);
+  });
+
   it("replaces private-data policy with listener interests and clears it on reset", () => {
     const received = vi.fn();
     const readPrivateData = vi.fn(() => "synthetic private error");

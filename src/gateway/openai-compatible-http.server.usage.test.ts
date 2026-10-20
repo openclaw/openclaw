@@ -19,10 +19,11 @@ import {
 
 let server: Awaited<ReturnType<typeof startGatewayServerWithRetries>>["server"];
 let port: number;
+const agentIdentity = { sessionId: "usage-session", provider: "ollama", model: "local-model" };
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    const started = await startGatewayServerWithRetries({
+    ({ port, server } = await startGatewayServerWithRetries({
       port: await getGatewayTestPort(),
       opts: {
         host: "127.0.0.1",
@@ -31,9 +32,7 @@ installGatewayTestHooks({
         openAiChatCompletionsEnabled: true,
         openResponsesEnabled: true,
       },
-    });
-    port = started.port;
-    server = started.server;
+    }));
   },
   cleanup: async () => server?.close({ reason: "HTTP usage suite done" }),
 });
@@ -46,115 +45,102 @@ function mockUsageResult(usage: NormalizedUsage, lastCallUsage?: NormalizedUsage
     emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
     return {
       payloads: [{ text: "Partial answer", mediaUrl: null }],
-      meta: {
-        durationMs: 0,
-        agentMeta: {
-          sessionId: "usage-session",
-          provider: "ollama",
-          model: "local-model",
-          usage,
-          lastCallUsage,
-        },
-      },
+      meta: { durationMs: 0, agentMeta: { ...agentIdentity, usage, lastCallUsage } },
     };
   });
 }
 
-function post(endpoint: "chat/completions" | "responses", body: Record<string, unknown>) {
-  return fetch(`http://127.0.0.1:${port}/v1/${endpoint}`, {
+async function post(endpoint: "chat/completions" | "responses", body: Record<string, unknown>) {
+  const res = await fetch(`http://127.0.0.1:${port}/v1/${endpoint}`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-openclaw-scopes": "operator.write" },
     body: JSON.stringify({
       model: "openclaw",
       ...(endpoint === "responses"
         ? { input: "hi" }
-        : { messages: [{ role: "user", content: "hi" }] }),
+        : { messages: [{ role: "user", content: "hi" }], stream_options: { include_usage: true } }),
       ...body,
     }),
   });
+  expect(res.status).toBe(200);
+  return res;
 }
 
-const unavailableUsage = {
-  input: 11,
-  output: 7,
-  total: 18,
-  usageReport: { state: "unavailable" as const },
-};
+function chunksFrom(data: string[]) {
+  return data
+    .filter((entry) => entry !== "[DONE]")
+    .map((entry) => JSON.parse(entry) as OpenAI.ChatCompletionChunk);
+}
+function expectDone(data: string[]) {
+  expect(data.filter((entry) => entry === "[DONE]")).toHaveLength(1);
+  expect(data.at(-1)).toBe("[DONE]");
+}
 const earlierUsage = { input: 11, output: 7, total: 18 };
+const unavailableUsage = { ...earlierUsage, usageReport: { state: "unavailable" as const } };
 
 describe("OpenAI-compatible HTTP usage", () => {
-  it("omits usage when a Responses stream fails before producing a result", async () => {
-    agentCommandMock.mockClear();
-    agentCommandMock.mockRejectedValueOnce(new Error("Synthetic run failure"));
-    const res = await post("responses", { stream: true });
-    expect(res.status).toBe(200);
-    const events = parseSseEvents(await res.text());
-    const { response } = parseSseData(findSseEvent(events, "response.failed")) as {
-      response: ResponseResource;
-    };
-    expect(response.status).toBe("failed");
-    expect(response).not.toHaveProperty("usage");
-    expect(events.filter((event) => event.data === "[DONE]")).toHaveLength(1);
-  });
-
-  it.each([false, true])(
-    "omits unavailable Chat usage without losing the response (stream=%s)",
-    async (stream) => {
-      mockUsageResult(unavailableUsage, earlierUsage);
-      const res = await post("chat/completions", {
-        stream,
-        stream_options: { include_usage: true },
-      });
-      expect(res.status).toBe(200);
-      if (!stream) {
-        const response = (await res.json()) as OpenAI.ChatCompletion;
-        expect(response.choices[0]?.message.content).toBe("Partial answer");
-        expect(response).not.toHaveProperty("usage");
+  it.each([
+    { endpoint: "chat/completions", stream: false, failed: false },
+    { endpoint: "chat/completions", stream: true, failed: false },
+    { endpoint: "responses", stream: false, failed: false },
+    { endpoint: "responses", stream: true, failed: false },
+    { endpoint: "responses", stream: true, failed: true },
+  ] as const)(
+    "omits usage without losing the $endpoint response (stream=$stream, failed=$failed)",
+    async ({ endpoint, stream, failed }) => {
+      if (failed) {
+        agentCommandMock.mockClear();
+        agentCommandMock.mockRejectedValueOnce(new Error("Synthetic run failure"));
+      } else {
+        mockUsageResult(unavailableUsage, earlierUsage);
+      }
+      const res = await post(endpoint, { stream });
+      const text = await res.text();
+      if (endpoint === "chat/completions") {
+        if (!stream) {
+          const response = JSON.parse(text) as OpenAI.ChatCompletion;
+          expect(response.choices[0]?.message.content).toBe("Partial answer");
+          expect(response).not.toHaveProperty("usage");
+        } else {
+          const data = parseSseDataLines(text);
+          const chunks = chunksFrom(data);
+          const choices = chunks.flatMap((chunk) => chunk.choices);
+          expect(choices.map((choice) => choice.delta.content ?? "").join("")).toBe(
+            "Partial answer",
+          );
+          expect(choices.map((choice) => choice.finish_reason).filter(Boolean)).toEqual(["stop"]);
+          expect(chunks.every((chunk) => !("usage" in chunk))).toBe(true);
+          expectDone(data);
+        }
         return;
       }
-      const data = parseSseDataLines(await res.text());
-      const chunks = data
-        .filter((entry) => entry !== "[DONE]")
-        .map((entry) => JSON.parse(entry) as OpenAI.ChatCompletionChunk);
-      const choices = chunks.flatMap((chunk) => chunk.choices);
-      expect(choices.map((choice) => choice.delta.content ?? "").join("")).toBe("Partial answer");
-      expect(choices.map((choice) => choice.finish_reason).filter(Boolean)).toEqual(["stop"]);
-      expect(chunks.every((chunk) => !("usage" in chunk))).toBe(true);
-      expect(data.filter((entry) => entry === "[DONE]")).toHaveLength(1);
-      expect(data.at(-1)).toBe("[DONE]");
-    },
-  );
-
-  it.each([false, true])(
-    "omits unavailable Responses usage without losing continuity (stream=%s)",
-    async (stream) => {
-      mockUsageResult(unavailableUsage, earlierUsage);
-      const res = await post("responses", { stream });
-      expect(res.status).toBe(200);
-      const text = await res.text();
+      const status = failed ? "failed" : "completed";
       const events = stream ? parseSseEvents(text) : [];
       const response = stream
         ? (
-            parseSseData(findSseEvent(events, "response.completed")) as {
+            parseSseData(findSseEvent(events, `response.${status}`)) as {
               response: ResponseResource;
             }
           ).response
         : (JSON.parse(text) as ResponseResource);
-      expect(response.status).toBe("completed");
+      expect(response.status).toBe(status);
+      expect(response).not.toHaveProperty("usage");
+      if (stream) {
+        expectDone(events.map((event) => event.data));
+        if (!failed) {
+          expect(
+            collectSseEventTypes(events).filter((type) =>
+              ["response.completed", "response.incomplete", "response.failed"].includes(type),
+            ),
+          ).toEqual(["response.completed"]);
+        }
+      }
+      if (failed) {
+        return;
+      }
       expect(response.output).toMatchObject([
         { type: "message", content: [{ type: "output_text", text: "Partial answer" }] },
       ]);
-      expect(response).not.toHaveProperty("usage");
-      if (stream) {
-        expect(
-          collectSseEventTypes(events).filter((type) =>
-            ["response.completed", "response.incomplete", "response.failed"].includes(type),
-          ),
-        ).toEqual(["response.completed"]);
-        expect(events.filter((event) => event.data === "[DONE]")).toHaveLength(1);
-        expect(events.at(-1)?.data).toBe("[DONE]");
-      }
-
       const sessionKey = (agentCommandMock.mock.calls[0]?.[0] as { sessionKey: string } | undefined)
         ?.sessionKey;
       expect(sessionKey).toBeTypeOf("string");
@@ -162,16 +148,14 @@ describe("OpenAI-compatible HTTP usage", () => {
         payloads: [{ text: "Continued", mediaUrl: null }],
         meta: { durationMs: 0 },
       });
-      const continued = await post("responses", { previous_response_id: response.id });
-      expect(continued.status).toBe(200);
-      await continued.text();
+      await (await post("responses", { previous_response_id: response.id })).text();
       expect(agentCommandMock.mock.calls[1]?.[0]).toMatchObject({ sessionKey });
     },
   );
 
   it.each([
     {
-      name: "includes aggregate usage in the final stream chunk",
+      name: "aggregate",
       usage: { input: 12, output: 5, cacheRead: 3, cacheWrite: 0, total: 20 },
       lastCallUsage: undefined,
       expected: {
@@ -182,31 +166,27 @@ describe("OpenAI-compatible HTTP usage", () => {
       },
     },
     {
-      name: "uses last-call usage when the aggregate is zero",
+      name: "fallback for legacy zero aggregate",
       usage: { input: 0, output: 0, total: 0 },
       lastCallUsage: { input: 55, output: 7, total: 62 },
       expected: { prompt_tokens: 55, completion_tokens: 7, total_tokens: 62 },
     },
     {
-      name: "preserves measured zero aggregate usage over an earlier call",
+      name: "measured zero over earlier call",
       usage: { input: 0, output: 0, total: 0, usageReport: { state: "available" as const } },
       lastCallUsage: { input: 55, output: 7, total: 62 },
       expected: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
     },
-  ])("$name", async ({ usage, lastCallUsage, expected }) => {
-    mockUsageResult(usage, lastCallUsage);
-    const res = await post("chat/completions", {
-      stream: true,
-      stream_options: { include_usage: true },
-    });
-    expect(res.status).toBe(200);
-    const data = parseSseDataLines(await res.text());
-    expect(data.at(-1)).toBe("[DONE]");
-    const chunks = data
-      .filter((entry) => entry !== "[DONE]")
-      .map((entry) => JSON.parse(entry) as OpenAI.ChatCompletionChunk);
-    const usageChunk = chunks.find((chunk) => "usage" in chunk);
-    expect(usageChunk?.usage).toEqual(expected);
-    expect(usageChunk?.choices).toStrictEqual([]);
-  });
+  ])(
+    "reports $name usage in the final stream chunk",
+    async ({ usage, lastCallUsage, expected }) => {
+      mockUsageResult(usage, lastCallUsage);
+      const res = await post("chat/completions", { stream: true });
+      const data = parseSseDataLines(await res.text());
+      expect(data.at(-1)).toBe("[DONE]");
+      const usageChunk = chunksFrom(data).find((chunk) => "usage" in chunk);
+      expect(usageChunk?.usage).toEqual(expected);
+      expect(usageChunk?.choices).toStrictEqual([]);
+    },
+  );
 });

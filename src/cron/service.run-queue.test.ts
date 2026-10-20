@@ -1,3 +1,4 @@
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { observeCronJobCommits } from "../../test/helpers/cron/runtime-mutation.js";
 import { createDueIsolatedJob } from "../../test/helpers/cron/service-regression-fixtures.js";
@@ -6,6 +7,14 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  readAgentDatabaseAdmissionRefusal,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database-preflight.types.js";
 import * as stateRead from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -18,10 +27,16 @@ import {
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { CronService } from "./service.js";
 import {
+  createFinishedBarrier,
   createCronServiceWithStateForTest,
   setupCronServiceSuite,
 } from "./service.test-harness.js";
-import { drainCronRunQueue, stopCronRunQueue, waitForCronRunQueue } from "./service/run-queue.js";
+import {
+  commitCronRunRequests,
+  drainCronRunQueue,
+  stopCronRunQueue,
+  waitForCronRunQueue,
+} from "./service/run-queue.js";
 import { runCronSchedulerMaintenance } from "./service/scheduler-maintenance.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
@@ -44,6 +59,344 @@ function commandJob(id: string, nextRunAtMs = NOW + 60_000): CronJob {
     payload: { kind: "command", argv: ["synthetic", id] },
   };
 }
+
+it("finishes cron initialization while missed command jobs await their agents", async ({
+  signal,
+}) => {
+  const { storePath } = await makeStorePath();
+  const jobs = ["never-ready", "later-ready"].map((agentId) =>
+    Object.assign(commandJob(agentId, NOW - 1_000), { agentId }),
+  );
+  await saveCronStore(storePath, { version: 1, jobs });
+  await withAgentDatabaseStartupAdmission(async (admission) => {
+    const env = { ...process.env };
+    const inspections = jobs.map(() => createDeferred<OpenClawDatabaseSchemaPreflight>());
+    const refusals = admission.defer({
+      env,
+      inspections: jobs.map((job, index) => ({
+        target: {
+          agentId: job.agentId,
+          path: openOpenClawAgentDatabase({ agentId: job.agentId, env }).path,
+        },
+        result: inspections[index]!.promise,
+      })),
+      reason: "synthetic missed command startup admission",
+    });
+    recordAgentDatabaseAdmissions(refusals, { env, source: "startup" });
+    const lifetime = admission.adopt();
+    admission.activate({
+      isCurrent: () => true,
+      preparationReady: Promise.resolve(),
+      openAgent: async () => {},
+      migrateAgent: async () => {},
+      publishAgent: async () => {},
+    });
+    const finished = createFinishedBarrier();
+    const laterFinished = finished.waitForOk("later-ready");
+    const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
+    const { cron, state } = createCronServiceWithStateForTest({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => NOW,
+      storePath,
+      cronEnabled: true,
+      defaultAgentId: "main",
+      log: logger,
+      enqueueSystemEvent() {},
+      requestHeartbeat() {},
+      runIsolatedAgentJob: async () => ({ status: "ok" }),
+      runCommandJob,
+      onEvent: finished.onEvent,
+    });
+    const receipts = () =>
+      runOpenClawStateWriteTransaction(({ db }) =>
+        db
+          .prepare(
+            "SELECT job_id, receipt_id, status FROM cron_run_receipts WHERE store_key = ? ORDER BY job_id",
+          )
+          .all(storePath),
+      );
+    const starting = cron.start();
+    try {
+      await withinTest(starting, signal);
+      expect(runCommandJob).not.toHaveBeenCalled();
+      expect((await loadCronStore(storePath)).jobs.map((job) => job.state)).toEqual([
+        expect.objectContaining({ queuedAtMs: NOW }),
+        expect.objectContaining({ queuedAtMs: NOW }),
+      ]);
+      const queuedReceipts = receipts();
+      expect(queuedReceipts).toEqual([
+        { job_id: "later-ready", receipt_id: expect.any(String), status: "running" },
+        { job_id: "never-ready", receipt_id: expect.any(String), status: "running" },
+      ]);
+
+      inspections[1]!.resolve({ incompatible: [], indeterminate: [] });
+      await withinTest(laterFinished, signal);
+      await drainCronRunQueue(state);
+      expect(runCommandJob).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ job: expect.objectContaining({ id: "later-ready" }) }),
+      );
+      expect(receipts()).toEqual([{ ...queuedReceipts[0], status: "ok" }, queuedReceipts[1]]);
+      const neverReady = (await loadCronStore(storePath)).jobs.find(
+        (job) => job.id === "never-ready",
+      );
+      expect(neverReady?.state.queuedAtMs).toBe(NOW);
+      expect(neverReady?.state.runningAtMs).toBeUndefined();
+    } finally {
+      cron.stop();
+      for (const inspection of inspections) {
+        inspection.resolve({ incompatible: [], indeterminate: [] });
+      }
+      await Promise.all([starting, cron.waitForIdle(), lifetime.stop()]);
+      recordAgentDatabaseAdmissions([], { env, source: "startup" });
+    }
+  });
+});
+
+it.for(["manual", "scheduled"] as const)(
+  "keeps service-scoped preparing jobs queued while a healthy agent runs: %s",
+  async (source, { signal }) => {
+    const { storePath } = await makeStorePath();
+    const slowJobs = Array.from({ length: 8 }, (_, index) => ({
+      ...commandJob(`slow-${index}`, NOW),
+      agentId: "preparing",
+    }));
+    const healthyJob = commandJob("healthy", NOW);
+    await saveCronStore(storePath, { version: 1, jobs: [...slowJobs, healthyJob] });
+    await withAgentDatabaseStartupAdmission(async (admission) => {
+      const inspection = createDeferred<OpenClawDatabaseSchemaPreflight>();
+      const env = {
+        ...process.env,
+        OPENCLAW_STATE_DIR: path.join(path.dirname(storePath), "admission-state"),
+      };
+      const refusal = admission.defer({
+        env,
+        inspections: [
+          {
+            target: {
+              agentId: "preparing",
+              path: openOpenClawAgentDatabase({ agentId: "preparing", env }).path,
+            },
+            result: inspection.promise,
+          },
+        ],
+        reason: "synthetic queued startup admission",
+      });
+      recordAgentDatabaseAdmissions(refusal, { env, source: "startup" });
+      const lifetime = admission.adopt();
+      admission.activate({
+        isCurrent: () => true,
+        preparationReady: Promise.resolve(),
+        openAgent: async () => {},
+        migrateAgent: async () => {},
+        publishAgent: async () => {},
+      });
+      const healthyStarted = createDeferred();
+      const healthyRelease = createDeferred();
+      const ran: string[] = [];
+      const { cron, state } = createCronServiceWithStateForTest({
+        env,
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => NOW,
+        storePath,
+        cronEnabled: true,
+        defaultAgentId: "main",
+        log: logger,
+        enqueueSystemEvent() {},
+        requestHeartbeat() {},
+        isAgentAvailable: (agentId) => !readAgentDatabaseAdmissionRefusal(agentId, { env }),
+        runIsolatedAgentJob: async () => ({ status: "ok" }),
+        runCommandJob: async ({ job }) => {
+          ran.push(job.id);
+          if (job.id === healthyJob.id) {
+            healthyStarted.resolve();
+            await healthyRelease.promise;
+          }
+          return { status: "ok" };
+        },
+      });
+      try {
+        const requests =
+          source === "manual"
+            ? await commitCronRunRequests(state, [...slowJobs, healthyJob], {
+                source,
+                mode: "force",
+              })
+            : [];
+        const completed =
+          source === "scheduled"
+            ? onTimer(state)
+            : drainCronRunQueue(state).then(async () => {
+                await Promise.all(requests.map((request) => request.completion));
+              });
+        void completed.catch(() => {});
+        if (source === "manual") {
+          await drainCronRunQueue(state);
+        } else {
+          await withinTest(healthyStarted.promise, signal);
+        }
+        const queued = (await loadCronStore(storePath)).jobs;
+        expect(
+          queued
+            .filter((job) => job.agentId === "preparing")
+            .every(
+              (job) => job.state.queuedAtMs !== undefined && job.state.runningAtMs === undefined,
+            ),
+        ).toBe(true);
+        await withinTest(healthyStarted.promise, signal);
+        expect(ran).toEqual([healthyJob.id]);
+        // A different service can still be preparing the same agent id.
+        recordAgentDatabaseAdmissions(
+          refusal.map((entry) => createAgentDatabaseInspectionRefusal({ ...entry, pending: true })),
+          { source: "startup" },
+        );
+        healthyRelease.resolve();
+        inspection.resolve({ incompatible: [], indeterminate: [] });
+        await withinTest(completed, signal);
+        expect(ran).toEqual([healthyJob.id, ...slowJobs.map((job) => job.id)]);
+      } finally {
+        healthyRelease.resolve();
+        inspection.resolve({ incompatible: [], indeterminate: [] });
+        cron.stop();
+        await Promise.all([cron.waitForIdle(), lifetime.stop()]);
+        recordAgentDatabaseAdmissions([], { source: "startup" });
+      }
+    });
+  },
+);
+
+it.for([
+  "ready",
+  "inspection-failed",
+  "ownership-lost",
+  "service-stopped",
+  "gateway-stopped",
+] as const)(
+  "retains cron custody beyond the foreground admission budget: %s",
+  async (outcome, { signal }) => {
+    const { storePath } = await makeStorePath();
+    const job = { ...commandJob("slow-startup"), agentId: "preparing" };
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+    await withAgentDatabaseStartupAdmission(async (admission) => {
+      const env = { ...process.env };
+      const inspection = createDeferred<OpenClawDatabaseSchemaPreflight>();
+      const refusals = admission.defer({
+        env,
+        inspections: [
+          {
+            target: {
+              agentId: job.agentId,
+              path: openOpenClawAgentDatabase({ agentId: job.agentId, env }).path,
+            },
+            result: inspection.promise,
+          },
+        ],
+        reason: "synthetic slow startup",
+      });
+      recordAgentDatabaseAdmissions(refusals, { env, source: "startup" });
+      const lifetime = admission.adopt();
+      let ownsPreparation = true;
+      admission.activate({
+        isCurrent: () => ownsPreparation,
+        preparationReady: Promise.resolve(),
+        openAgent: async () => {},
+        migrateAgent: async () => {},
+        publishAgent: async () => {},
+      });
+      const observed = createDeferred();
+      const waitForPreparation = admission.waitForAgentPreparation.bind(admission);
+      vi.spyOn(admission, "waitForAgentPreparation").mockImplementation((id, options) => {
+        const waiting = waitForPreparation(id, options);
+        observed.resolve();
+        return waiting;
+      });
+      const runCommandJob = vi.fn(async () => ({ status: "ok" as const }));
+      const { cron, state } = createCronServiceWithStateForTest({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => NOW,
+        storePath,
+        cronEnabled: true,
+        defaultAgentId: "main",
+        log: logger,
+        enqueueSystemEvent() {},
+        requestHeartbeat() {},
+        runIsolatedAgentJob: async () => ({ status: "ok" }),
+        runCommandJob,
+      });
+      try {
+        const [request] = await commitCronRunRequests(state, [job], {
+          source: "manual",
+          mode: "force",
+        });
+        if (!request) {
+          throw new Error("Expected the queued cron request");
+        }
+        const receiptStatus = () =>
+          runOpenClawStateWriteTransaction(({ db }) =>
+            db
+              .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+              .get(request.runReceipt.receiptId),
+          );
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        await drainCronRunQueue(state);
+        await withinTest(observed.promise, signal);
+        // A foreground request expires, while the same startup owner keeps preparing.
+        const foreground = waitForPreparation(job.agentId, { env, forWrite: true });
+        const timedOut = expect(foreground).rejects.toThrow("still preparing");
+        await vi.advanceTimersByTimeAsync(360_001);
+        await timedOut;
+        vi.useRealTimers();
+        expect(receiptStatus()).toEqual({ status: "running" });
+        const queued = (await loadCronStore(storePath)).jobs[0]?.state;
+        expect(queued?.queuedAtMs).toBe(NOW);
+        expect(queued?.runningAtMs).toBeUndefined();
+        expect(runCommandJob).not.toHaveBeenCalled();
+
+        if (outcome === "service-stopped" || outcome === "gateway-stopped") {
+          if (outcome === "service-stopped") {
+            cron.stop();
+          } else {
+            const stopped = lifetime.stop();
+            inspection.resolve({ incompatible: [], indeterminate: [] });
+            await stopped;
+          }
+          await withinTest(waitForCronRunQueue(state), signal);
+          expect(await request.completion).toMatchObject({ ran: false, reason: "stopped" });
+          expect(receiptStatus()).toEqual({ status: "running" });
+          expect((await loadCronStore(storePath)).jobs[0]?.state.queuedAtMs).toBe(NOW);
+          expect(runCommandJob).not.toHaveBeenCalled();
+        } else {
+          if (outcome === "inspection-failed") {
+            inspection.reject(new Error("synthetic terminal inspection failure"));
+          } else {
+            ownsPreparation = outcome !== "ownership-lost";
+            inspection.resolve({ incompatible: [], indeterminate: [] });
+          }
+          if (outcome === "ready") {
+            await withinTest(request.completion, signal);
+          } else {
+            await expect(withinTest(request.completion, signal)).rejects.toThrow(
+              outcome === "inspection-failed"
+                ? "synthetic terminal inspection failure"
+                : "Gateway no longer owns preparation",
+            );
+          }
+          await withinTest(waitForCronRunQueue(state), signal);
+          expect(receiptStatus()).toEqual({ status: outcome === "ready" ? "ok" : "skipped" });
+          expect(runCommandJob).toHaveBeenCalledTimes(outcome === "ready" ? 1 : 0);
+          expect((await loadCronStore(storePath)).jobs[0]?.state.queuedAtMs).toBeUndefined();
+          await drainCronRunQueue(state);
+          expect(runCommandJob).toHaveBeenCalledTimes(outcome === "ready" ? 1 : 0);
+        }
+      } finally {
+        vi.useRealTimers();
+        inspection.resolve({ incompatible: [], indeterminate: [] });
+        cron.stop();
+        await Promise.all([cron.waitForIdle(), lifetime.stop()]);
+        recordAgentDatabaseAdmissions([], { env, source: "startup" });
+      }
+    });
+  },
+);
 
 it.for(["complete", "cancel", "lost-result"] as const)(
   "handles a same-store on-exit predecessor without joining unrelated work: %s",

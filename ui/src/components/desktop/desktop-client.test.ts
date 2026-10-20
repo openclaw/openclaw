@@ -25,6 +25,11 @@ function createFakeRfb() {
     readonly disconnect = vi.fn();
     readonly sendKey = vi.fn();
 
+    // Match noVNC's EventTargetMixin, which accepts no listener options.
+    override addEventListener(type: string, callback: EventListenerOrEventListenerObject | null) {
+      super.addEventListener(type, callback);
+    }
+
     constructor(
       readonly target: HTMLElement,
       readonly channel: string | WebSocket,
@@ -75,6 +80,23 @@ afterEach(() => {
 });
 
 describe("DesktopClient", () => {
+  it("retires noVNC callbacks after its permanent disconnect", async () => {
+    const { instances, connect } = setupClient();
+    const onConnect = vi.fn();
+    const onDisconnect = vi.fn();
+    const onSecurityFailure = vi.fn();
+    await connect({ onConnect, onDisconnect, onSecurityFailure });
+    const rfb = instances[0]!;
+    rfb.dispatchEvent(new Event("connect"));
+    rfb.dispatchEvent(new CustomEvent("disconnect", { detail: { clean: true } }));
+    rfb.dispatchEvent(new Event("connect"));
+    rfb.dispatchEvent(new CustomEvent("securityfailure", { detail: { status: 1 } }));
+    rfb.dispatchEvent(new CustomEvent("disconnect", { detail: { clean: true } }));
+    expect(onConnect).toHaveBeenCalledTimes(1);
+    expect(onDisconnect).toHaveBeenCalledExactlyOnceWith({ clean: true });
+    expect(onSecurityFailure).not.toHaveBeenCalled();
+  });
+
   it.each([
     { trusted: true, held: false },
     { trusted: true, held: true },

@@ -13,6 +13,8 @@ import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
 import {
   adjustTextareaHeight,
+  handleTextareaOverflowInteraction,
+  handleTextareaOverflowScroll,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
   scheduleTextareaHeightAdjustment,
@@ -35,6 +37,7 @@ export function SessionRailComposer(props: {
   attachmentProps: ChatAttachmentControlsProps;
   submit: () => void;
   onDraftChange?: (draft: string) => void;
+  textareaRef: (element: HTMLTextAreaElement) => void;
 }) {
   let textarea!: HTMLTextAreaElement;
   createEffect(
@@ -92,16 +95,29 @@ export function SessionRailComposer(props: {
                 }
               }
             }}
-            onKeyDown={keydown}
+            onKeyDown={(event) => {
+              handleTextareaOverflowInteraction(event);
+              keydown(event);
+            }}
+            onBeforeInput={handleTextareaOverflowInteraction}
+            onCompositionStart={handleTextareaOverflowInteraction}
+            onWheel={handleTextareaOverflowInteraction}
+            onPointerDown={handleTextareaOverflowInteraction}
+            onScroll={handleTextareaOverflowScroll}
             onCompositionEnd={recordCompositionEnd}
             onKeyUp={clearCompositionEnd}
-            onBlur={clearCompositionEnd}
+            onBlur={(event) => {
+              handleTextareaOverflowInteraction(event);
+              clearCompositionEnd(event);
+            }}
             onInput={(event) => {
+              handleTextareaOverflowInteraction(event);
               adjustTextareaHeight(event.currentTarget);
               props.onDraftChange?.(event.currentTarget.value);
             }}
             ref={(element) => {
               textarea = element;
+              props.textareaRef(element);
               observeTextareaOverflow(element);
               scheduleTextareaHeightAdjustment(element);
             }}

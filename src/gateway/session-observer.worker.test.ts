@@ -107,10 +107,10 @@ function observerFixture(
   const broadcast = vi.fn();
   const persisted = vi.fn<NonNullable<SessionObserverDeps["persistDigest"]>>(async () => true);
   let now = 1_000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
   const cfg = { session: { store: useDefaultStore ? undefined : database.path } };
   const observer = createSessionObserver({
     getConfig: () => cfg,
-    now: () => now,
     subscribers,
     broadcastToConnIds: broadcast,
     ...(persistDigests ? {} : { persistDigest: persisted }),
@@ -391,7 +391,7 @@ it("does not write a dormant predecessor digest into a replacement store", async
 
 it("joins the worker-backed persistence of a legacy event adapter", async () => {
   await withObserver(async ({ observer, peer }) => {
-    observer.handleEvent(preambleEvent("Legacy admission"));
+    expect(observer.handleEvent(preambleEvent("Legacy admission"))).toBeUndefined();
     const disposal = observer.disposeAsync();
     const afterClose = preambleEvent("Rejected after close");
     observer.handleEvent(afterClose);
@@ -439,7 +439,7 @@ it("lets the publisher finish its nested write before persisting the background 
     let disposal: Promise<void> | undefined;
     try {
       await runOpenClawAgentWriteAdmission(options, async () => {
-        harness.observer.handleEvent(preambleEvent("Reviewing"));
+        await harness.observer.handleEventAsync(preambleEvent("Reviewing"));
         expect(persistDigest).toHaveBeenCalledOnce();
         expect(digestEntered).toBe(false);
         await runOpenClawAgentWorkerWrite(options, async () => {

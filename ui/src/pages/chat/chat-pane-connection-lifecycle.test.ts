@@ -418,7 +418,11 @@ describe("chat pane connection lifecycle", () => {
     await Promise.resolve();
     Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
     lifecycle.disconnectedCallback();
-    expect(removeVisibilityListener).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+    expect(removeVisibilityListener).toHaveBeenCalledWith(
+      "visibilitychange",
+      expect.any(Function),
+      undefined,
+    );
 
     Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: true });
     connectPaneTestView(lifecycle);
@@ -443,6 +447,7 @@ describe("chat pane connection lifecycle", () => {
     expect(addVisibilityListener).not.toHaveBeenCalledWith(
       "visibilitychange",
       expect.any(Function),
+      undefined,
     );
   });
 

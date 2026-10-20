@@ -335,15 +335,23 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                 <>
                   <Show when={!isNodeSetup()}>
                     <For each={[current().setupCode]}>
-                      {(code) => (
-                        <button
-                          class="btn primary"
-                          type="button"
-                          onClick={(event) => void handleCopyButton(event, code, copyLabel())}
-                        >
-                          <Icon name="copy" /> <span data-copy-label>{copyLabel()}</span>
-                        </button>
-                      )}
+                      {(code) => {
+                        let label!: HTMLSpanElement;
+                        return (
+                          <button
+                            class="btn primary"
+                            type="button"
+                            onClick={(event) =>
+                              void handleCopyButton(event, code, copyLabel(), { label })
+                            }
+                          >
+                            <Icon name="copy" />{" "}
+                            <span ref={(element) => (label = element)} data-copy-label>
+                              {copyLabel()}
+                            </span>
+                          </button>
+                        );
+                      }}
                     </For>
                   </Show>
                   <button class="btn" type="button" onClick={() => props.onRefresh()}>

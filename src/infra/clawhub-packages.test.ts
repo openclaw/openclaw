@@ -1,5 +1,5 @@
 // Verifies ClawHub package metadata, security, and artifact resolver APIs.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   fetchClawHubPackageArtifact,
   fetchClawHubPackageSecurity,
@@ -38,19 +38,21 @@ function jsonResponse(body: unknown) {
   });
 }
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("clawhub packages", () => {
   it("requests official search results before ClawHub applies the result cap", async () => {
     let requestedUrl = "";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      requestedUrl = input instanceof Request ? input.url : String(input);
+      return jsonResponse({ results: [] });
+    });
     await expect(
       searchClawHubPackages({
         query: " research ",
         family: "claw",
         isOfficial: true,
         limit: 1,
-        fetchImpl: async (input) => {
-          requestedUrl = input instanceof Request ? input.url : String(input);
-          return jsonResponse({ results: [] });
-        },
       }),
     ).resolves.toEqual([]);
     expect(new URL(requestedUrl).pathname).toBe("/api/v1/packages/search");
@@ -92,13 +94,13 @@ describe("clawhub packages", () => {
       },
     };
     let requestedUrl = "";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      requestedUrl = input instanceof Request ? input.url : String(input);
+      return jsonResponse(report);
+    });
     await expect(
       fetchClawHubPackageArtifact({
         ...packageSelector,
-        fetchImpl: async (input) => {
-          requestedUrl = input instanceof Request ? input.url : String(input);
-          return jsonResponse(report);
-        },
       }),
     ).resolves.toEqual(report);
     expect(new URL(requestedUrl).pathname).toBe(
@@ -108,13 +110,13 @@ describe("clawhub packages", () => {
 
   it("fetches typed package security reports", async () => {
     let requestedUrl = "";
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      requestedUrl = input instanceof Request ? input.url : String(input);
+      return jsonResponse(securityReport);
+    });
     await expect(
       fetchClawHubPackageSecurity({
         ...packageSelector,
-        fetchImpl: async (input) => {
-          requestedUrl = input instanceof Request ? input.url : String(input);
-          return jsonResponse(securityReport);
-        },
       }),
     ).resolves.toEqual({
       ...securityReport,
@@ -133,24 +135,26 @@ describe("clawhub packages", () => {
   });
 
   it("rejects malformed package security reports", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      jsonResponse({ trust: { ...securityReport.trust, reasons: "clean", stale: false } }),
+    );
     await expect(
       fetchClawHubPackageSecurity({
         ...packageSelector,
-        fetchImpl: async () =>
-          jsonResponse({ trust: { ...securityReport.trust, reasons: "clean", stale: false } }),
       }),
     ).rejects.toThrow("expected reasons to be a string array");
   });
 
   it("rejects package security reports without their audit overview", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      jsonResponse({
+        securityAuditUrl: securityReport.securityAuditUrl,
+        trust: { blockedFromDownload: false, reasons: [], pending: false, stale: false },
+      }),
+    );
     await expect(
       fetchClawHubPackageSecurity({
         ...packageSelector,
-        fetchImpl: async () =>
-          jsonResponse({
-            securityAuditUrl: securityReport.securityAuditUrl,
-            trust: { blockedFromDownload: false, reasons: [], pending: false, stale: false },
-          }),
       }),
     ).rejects.toThrow("expected overview to be a non-empty string");
   });

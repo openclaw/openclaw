@@ -279,6 +279,40 @@ describe("auditGatewayServiceConfig command", () => {
 });
 
 describe("auditGatewayServiceConfig environment sources", () => {
+  it("classifies expired egress trust as repairable drift, not a custom setting", async () => {
+    const result = await audit(
+      {
+        programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
+        environment: {
+          PATH: "/usr/local/bin:/usr/bin:/bin",
+          NODE_EXTRA_CA_CERTS: "/state/a/secret-egress-proxy/gateway-expired/trust-bundle.pem",
+          CUSTOM_SETTING: "retained",
+        },
+      },
+      {
+        expectedCommand: {
+          programArguments: ["/usr/bin/node", "/opt/openclaw/openclaw.mjs", "gateway"],
+          environment: { PATH: "/usr/local/bin:/usr/bin:/bin", CUSTOM_SETTING: "retained" },
+        },
+      },
+    );
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        code: "gateway-egress-proxy-env-embedded",
+        environmentKeys: ["NODE_EXTRA_CA_CERTS"],
+      }),
+    );
+    expect(result.definitionDrift).toContainEqual(
+      expect.objectContaining({
+        kind: "outdated",
+        key: "Environment.NODE_EXTRA_CA_CERTS",
+      }),
+    );
+    expect(result.definitionDrift).not.toContainEqual(
+      expect.objectContaining({ kind: "unknown-edit" }),
+    );
+  });
+
   it.each([
     { source: undefined, token: "old-token", embedded: true, mismatch: true },
     { source: "inline-and-file", token: "new-token", embedded: true, mismatch: false },

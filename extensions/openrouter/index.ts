@@ -4,6 +4,7 @@ import type {
   ProviderDefaultThinkingPolicyContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
+  ProviderNormalizeToolSchemasContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { findNormalizedProviderValue } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -16,6 +17,12 @@ import {
   getLoadedOpenRouterModelCapabilities,
   loadOpenRouterModelCapabilities,
 } from "openclaw/plugin-sdk/provider-stream-family";
+import {
+  buildProviderToolCompatFamilyHooks,
+  SCHEMA_MAP_KEYS,
+  SCHEMA_NESTED_KEYS,
+} from "openclaw/plugin-sdk/provider-tools";
+import { resolveProviderUsageApiKeyAuth } from "openclaw/plugin-sdk/provider-usage";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildOpenRouterDecisionProvider, isOpenRouterDecisionModel } from "./decision-provider.js";
@@ -41,12 +48,111 @@ import {
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
 import { resolveOpenRouterThinkingProfile } from "./thinking-policy.js";
-import { inspectOpenRouterToolSchemas, normalizeOpenRouterToolSchemas } from "./tool-schemas.js";
 import { fetchOpenRouterUsage } from "./usage.js";
 import {
   buildOpenRouterVideoGenerationProvider,
   listOpenRouterVideoModelCatalog,
 } from "./video-generation-provider.js";
+
+const openAiTools = buildProviderToolCompatFamilyHooks("openai");
+const schemaTypes = new Set(["null", "boolean", "object", "array", "number", "integer", "string"]);
+
+function readSchemaTypes(type: unknown): string[] | undefined {
+  const types = Array.isArray(type) ? type : [type];
+  return types.length > 0 &&
+    types.every((entry) => typeof entry === "string" && schemaTypes.has(entry))
+    ? types
+    : undefined;
+}
+
+function canMoveParentType(branches: unknown[], parentTypes: string[]): boolean {
+  return (
+    branches.length > 0 &&
+    branches.every((branch) => {
+      const record = readRecord(branch);
+      // Unknown references, boolean schemas and nested unions cannot safely inherit a type.
+      if (!record || "$ref" in record || "anyOf" in record || "oneOf" in record) {
+        return false;
+      }
+      if (!("type" in record)) {
+        return true;
+      }
+      return (
+        readSchemaTypes(record.type)?.every(
+          (type) =>
+            parentTypes.includes(type) || (type === "integer" && parentTypes.includes("number")),
+        ) === true
+      );
+    })
+  );
+}
+
+function normalizeMoonshotSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    return schema.map(normalizeMoonshotSchema);
+  }
+  const record = readRecord(schema);
+  if (!record) {
+    return schema;
+  }
+  return normalizeMoonshotSchemaObject(record);
+}
+
+function normalizeMoonshotSchemaObject(record: Record<string, unknown>): Record<string, unknown> {
+  // Traverse schema locations only: default/examples/enum can contain arbitrary user data.
+  // fromEntries preserves own __proto__ keys without invoking Object.prototype setters.
+  const next = Object.fromEntries(
+    Object.entries(record).map(([key, value]) => {
+      const entries = SCHEMA_MAP_KEYS.has(key) ? readRecord(value) : undefined;
+      if (entries) {
+        return [
+          key,
+          Object.fromEntries(
+            Object.entries(entries).map(([name, child]) => [name, normalizeMoonshotSchema(child)]),
+          ),
+        ];
+      }
+      return [key, SCHEMA_NESTED_KEYS.has(key) ? normalizeMoonshotSchema(value) : value];
+    }),
+  );
+  const parentTypes = readSchemaTypes(next.type);
+  const branches = next.anyOf;
+  if (!parentTypes || !Array.isArray(branches) || !canMoveParentType(branches, parentTypes)) {
+    return next;
+  }
+  // Moonshot requires anyOf branch types. Distribute the parent's conjunctive type only
+  // when every typed branch is already a subset; retain all other parent constraints.
+  // oneOf has no evidenced rewrite here. Never apply DeepSeek's first-branch reduction.
+  const { type, ...result } = next;
+  const typedBranches: unknown[] = [];
+  for (const branch of branches) {
+    const branchRecord = readRecord(branch);
+    typedBranches.push(
+      branchRecord && !("type" in branchRecord) ? { type, ...branchRecord } : branch,
+    );
+  }
+  result.anyOf = typedBranches;
+  return result;
+}
+
+const moonshotTools = {
+  normalizeToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) =>
+    ctx.tools.map((tool) => {
+      const parameters = readRecord(tool.parameters);
+      return parameters ? { ...tool, parameters: normalizeMoonshotSchemaObject(parameters) } : tool;
+    }),
+  // Retained unions are valid schema contracts, not DeepSeek-incompatible diagnostics.
+  inspectToolSchemas: (_ctx: ProviderNormalizeToolSchemasContext) => [],
+};
+
+function resolveOpenRouterToolFamily(modelId: string) {
+  const normalized =
+    normalizeOpenRouterModelFamilyId(normalizeOpenRouterApiModelId(modelId)) ?? modelId;
+  if (normalized.startsWith("moonshot/") || normalized.startsWith("moonshotai/")) {
+    return moonshotTools;
+  }
+  return openAiTools;
+}
 
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
@@ -325,8 +431,10 @@ export default defineSingleProviderPluginEntry({
           ? { sanitizeToolCallIds: true, toolCallIdMode: "strict9" as const }
           : {}),
       }),
-      normalizeToolSchemas: normalizeOpenRouterToolSchemas,
-      inspectToolSchemas: inspectOpenRouterToolSchemas,
+      normalizeToolSchemas: (ctx) =>
+        resolveOpenRouterToolFamily(ctx.modelId ?? "").normalizeToolSchemas(ctx),
+      inspectToolSchemas: (ctx) =>
+        resolveOpenRouterToolFamily(ctx.modelId ?? "").inspectToolSchemas(ctx),
       resolveReasoningOutputMode: () => "native",
       resolveThinkingProfile: (ctx) =>
         resolveOpenRouterThinkingProfile(ctx.modelId, withOpenRouterCatalogThinking(ctx)),
@@ -337,14 +445,7 @@ export default defineSingleProviderPluginEntry({
       wrapSimpleCompletionStreamFn: wrapOpenRouterProviderStream,
       isCacheTtlEligible: ({ modelId }) =>
         OPENROUTER_CACHE_TTL_MODEL_FAMILY.test(normalizeOpenRouterModelFamilyId(modelId) ?? ""),
-      resolveUsageAuth: async (ctx) => {
-        const apiKey = (
-          await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
-            envDirect: [ctx.env.OPENROUTER_API_KEY],
-          })
-        )?.[0];
-        return apiKey ? { token: apiKey } : null;
-      },
+      resolveUsageAuth: (ctx) => resolveProviderUsageApiKeyAuth(ctx, [ctx.env.OPENROUTER_API_KEY]),
       fetchUsageSnapshot: async (ctx) =>
         await fetchOpenRouterUsage({
           token: ctx.token,

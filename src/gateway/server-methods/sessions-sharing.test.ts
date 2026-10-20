@@ -15,7 +15,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
-import * as sharingLifecycle from "../../sessions/session-lifecycle-admission.js";
+import * as sharingLifecycle from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -39,7 +39,7 @@ import {
 } from "../session-sharing.js";
 import { canReceivePreparedSessionEvent } from "../session-sharing.test-utils.js";
 import type { SessionsListResult } from "../session-utils.types.js";
-import { createControlUiHandlers } from "./control-ui.js";
+import { controlUiHandlers } from "./control-ui.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import { sessionReadHandlers as registeredSessionReadHandlers } from "./sessions-read.js";
@@ -346,7 +346,7 @@ it("never previews sessions hidden from sessions.list", () =>
     await initializeSessionReadContext(previewContext);
     const previewFor = async (client: GatewayClient) => {
       const responses: Parameters<RespondFn>[] = [];
-      await createControlUiHandlers()["controlUi.sessionPreview"]?.({
+      await controlUiHandlers["controlUi.sessionPreview"]?.({
         params: { sessionKey },
         client,
         context: previewContext,
@@ -373,24 +373,20 @@ it("rejects a visibility mutation when the queued session instance changed", () 
     await seed(sessionKey, "session-authorized", { visibility: "shared" });
     const broadcast = vi.fn();
     const requestContext = context(broadcast);
-    const run = sharingLifecycle.runExclusiveSessionLifecycleMutation;
-    vi.spyOn(sharingLifecycle, "runExclusiveSessionLifecycleMutation").mockImplementationOnce(
-      async (operation, params) => {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey },
-          {
-            sessionId: "session-replaced",
-            updatedAt: Date.now(),
-            visibility: "shared",
-          },
-        );
-        expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).toBe(
-          "session-replaced",
-        );
-        await getSessionRowProjection(requestContext)!.prepareMembership();
-        return run(operation, params);
-      },
-    );
+    const run = sharingLifecycle.runSessionMutation;
+    vi.spyOn(sharingLifecycle, "runSessionMutation").mockImplementationOnce(async (params) => {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: "session-replaced",
+          updatedAt: Date.now(),
+          visibility: "shared",
+        },
+      );
+      expect(loadSessionEntry({ agentId: "main", sessionKey })?.sessionId).toBe("session-replaced");
+      await getSessionRowProjection(requestContext)!.prepareMembership();
+      return run(params);
+    });
 
     await expect(
       call("session.visibility.set", { sessionKey, visibility: "draft" }, requestContext),

@@ -151,8 +151,11 @@ it.for([
       expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(1);
       // A failing owner is released through the real terminal registry, not an abandoned wait.
       releaseTimer = setTimeout(() => {
-        emergencyRelease = true;
-        releaseWait();
+        // Full Gateway cleanup may outlast an already-settled observation.
+        if (!settled) {
+          emergencyRelease = true;
+          releaseWait();
+        }
       }, 5_000);
       if (finish === "disconnect") {
         const disconnected = once(ws, "close");

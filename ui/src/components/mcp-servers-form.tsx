@@ -10,6 +10,7 @@ export function McpServersForm(props: {
   disabled: boolean;
   blockedReason: string | null;
   autofocus?: boolean;
+  onNameRef?: (element: HTMLInputElement) => void;
   presentation?: "inline" | "modal";
   error?: string | null;
   onSubmit: (form: McpServerForm) => void;
@@ -55,6 +56,7 @@ export function McpServersForm(props: {
       <label>
         <span>{t("mcpServers.nameLabel")}</span>
         <input
+          ref={props.onNameRef}
           name="mcp-name"
           autofocus={props.autofocus}
           class="settings-input"

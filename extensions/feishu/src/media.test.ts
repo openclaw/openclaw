@@ -1,7 +1,10 @@
-import fs from "node:fs/promises";
 import { Readable } from "node:stream";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { runFfmpeg, runFfprobe } from "openclaw/plugin-sdk/media-runtime";
+import {
+  MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+  type runFfprobe,
+  type transcodeAudioBufferToOpus,
+} from "openclaw/plugin-sdk/media-runtime";
 import { withEnvAsync, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -27,7 +30,7 @@ const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const loadWebMediaMock = vi.hoisted(() =>
   vi.fn<(url: string, options: { localRoots?: readonly string[] }) => Promise<unknown>>(),
 );
-const runFfmpegMock = vi.hoisted(() => vi.fn<typeof runFfmpeg>());
+const transcodeAudioMock = vi.hoisted(() => vi.fn<typeof transcodeAudioBufferToOpus>());
 const runFfprobeMock = vi.hoisted(() => vi.fn<typeof runFfprobe>());
 
 const fileCreateMock = vi.hoisted(() =>
@@ -74,7 +77,7 @@ vi.mock("./runtime.js", () => ({
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
-  return { ...actual, runFfmpeg: runFfmpegMock, runFfprobe: runFfprobeMock };
+  return { ...actual, transcodeAudioBufferToOpus: transcodeAudioMock, runFfprobe: runFfprobeMock };
 });
 
 function sendMedia(options: Omit<Parameters<typeof sendMediaFeishu>[0], "cfg" | "to">) {
@@ -181,10 +184,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     loadWebMediaMock.mockResolvedValue(webMedia("remote.opus", "audio/ogg", "remote-audio"));
 
     messageResourceGetMock.mockImplementation(async () => resourceResponse("resource-bytes"));
-    runFfmpegMock.mockImplementation(async (args: string[]) => {
-      await fs.writeFile(args.at(-1) ?? "", Buffer.from("opus-output"));
-      return "";
-    });
+    transcodeAudioMock.mockResolvedValue(Buffer.from("opus-output"));
     runFfprobeMock.mockResolvedValue("1.234\n");
   });
   it("respects ttsSupplement.visibleTextAlreadyDelivered over audioAsVoice", () => {
@@ -204,6 +204,7 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     await sendMedia({ mediaBuffer: Buffer.from("opus"), fileName: "reply.ogg" });
 
+    expect(transcodeAudioMock).not.toHaveBeenCalled();
     expect(uploadData()).not.toHaveProperty("duration");
     expect(JSON.parse(messageData().content ?? "{}")).toEqual({ file_key: "file_key_1" });
   });
@@ -227,7 +228,7 @@ describe("sendMediaFeishu msg_type routing", () => {
     loadWebMediaMock.mockResolvedValueOnce(mp3Media);
     try {
       if (degraded) {
-        runFfmpegMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
+        transcodeAudioMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
       }
       const result = await sendMedia({
         mediaUrl: "https://example.com/reply.mp3",
@@ -244,11 +245,16 @@ describe("sendMediaFeishu msg_type routing", () => {
         expect(mockCallArgs(warnSpy)[0]).toContain("audioAsVoice transcode failed");
         expect(mockCallArgs(warnSpy)[1]).toBeInstanceOf(Error);
       } else {
-        const [args] = mockCallArgs(runFfmpegMock);
-        for (const arg of ["-c:a", "libopus", "-ar", "48000", "-b:a", "64k", "-f", "ogg"]) {
-          expect(args).toContain(arg);
-        }
-        expect(args.slice(-3, -1)).toEqual(["-f", "ogg"]);
+        expect(transcodeAudioMock).toHaveBeenCalledExactlyOnceWith({
+          audioBuffer: Buffer.from("remote-mp3"),
+          inputFileName: "reply.mp3",
+          tempPrefix: "feishu-voice-",
+          outputFileName: "voice.ogg",
+          sampleRateHz: 48_000,
+          bitrate: "64k",
+          channels: 1,
+          maxDurationSeconds: MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS,
+        });
       }
     } finally {
       warnSpy?.mockRestore();

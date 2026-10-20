@@ -278,11 +278,10 @@ it.each([
         });
         const restartSafeAdmission = resolveRestartSafeChatAdmission({
           acpMeta: null,
-          activeRunScopeKey: sessionKey,
           ...scope,
           cfg,
           clientRunId: runId,
-          context: { chatAbortControllers: new Map(), chatQueuedTurns: new Map() },
+          context: {},
           entry,
           initialSessionEntry: entry,
           now: Date.now(),

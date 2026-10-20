@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
@@ -151,18 +152,29 @@ function mockTransport(options: Partial<Omit<TransportOptions, "runtime">> = {},
     stop: vi.fn(async () => {}),
     writeOutput: vi.fn(async () => {}),
   };
+  const createNodeAudioTransport = node
+    ? vi.fn<typeof createNodeMeetingRealtimeAudioTransport>(() => nodeAudioTransport)
+    : vi.fn<typeof createNodeMeetingRealtimeAudioTransport>();
   const transport = createTransport({
     ...transportOptions,
     ...options,
     runtime: {
       createBindings,
       createLocalAudioTransport: node ? vi.fn() : vi.fn(() => localAudio),
-      createNodeAudioTransport: node ? vi.fn(() => nodeAudioTransport) : vi.fn(),
+      createNodeAudioTransport,
       startAgentRealtimeEngine: startAgent,
       startRealtimeEngine: vi.fn(),
     } as unknown as TransportOptions["runtime"],
   });
-  return { transport, engine, createBindings, startAgent, dispose, nodeAudioTransport };
+  return {
+    transport,
+    engine,
+    createBindings,
+    startAgent,
+    dispose,
+    nodeAudioTransport,
+    createNodeAudioTransport,
+  };
 }
 
 const launchParams = {
@@ -229,12 +241,101 @@ describe("meeting Chrome transport", () => {
     });
     dispose.mockRejectedValueOnce(new Error("cleanup failed"));
     await expect(launch()).rejects.toBe(bindingFailure);
+    expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(
+        /audio transport cleanup after realtime startup failure.*cleanup failed/,
+      ),
+    );
     expect(dispose).toHaveBeenCalledTimes(2);
     expect(browserMocks.leave).toHaveBeenCalledTimes(testCase.expectedLeaves * 2);
     const recovered = await launch();
     expect(recovered.audioBridge).toEqual({ type: "command-pair", ...engine });
     expect(recovered.audioBridge?.providerId).toBe("openai");
   });
+
+  it.each(["rollback", "owned-constructor", "owned-dispose", "owned-node-stop"] as const)(
+    "reports failed node cleanup without replacing the startup error (%s)",
+    async (scenario) => {
+      const { transport, createBindings, createNodeAudioTransport, nodeAudioTransport } =
+        mockTransport(
+          { startupFailurePolicy: scenario === "rollback" ? "rollback" : "owned" },
+          true,
+        );
+      const startupFailure = new Error("meeting startup refused");
+      const cleanupToken = "sk-abcdefghijklmnopqrstuv";
+      const cleanupFailure = new Error(`Authorization: Bearer ${cleanupToken}`);
+      if (scenario === "owned-constructor") {
+        createNodeAudioTransport.mockImplementationOnce(() => {
+          throw startupFailure;
+        });
+      } else if (scenario === "owned-dispose" || scenario === "owned-node-stop") {
+        createBindings.mockImplementationOnce(() => {
+          throw startupFailure;
+        });
+        if (scenario === "owned-node-stop") {
+          createNodeAudioTransport.mockImplementationOnce(createNodeMeetingRealtimeAudioTransport);
+        } else {
+          nodeAudioTransport.dispose.mockRejectedValueOnce(cleanupFailure);
+        }
+      }
+      browserMocks.open.mockResolvedValue({
+        launched: true,
+        browser: { inCall: true },
+        tab: { targetId: "owned-tab", openedByPlugin: true },
+      });
+      let startAttempted = false;
+      const runtime = createPluginRuntime();
+      const invoke = vi.spyOn(runtime.nodes, "invoke").mockImplementation(async ({ params }) => {
+        const action = asOptionalRecord(params)?.action;
+        if (action === "start") {
+          startAttempted = true;
+          if (scenario === "rollback") {
+            throw startupFailure;
+          }
+          return { payload: { audioBridge: { type: "node-command-pair" }, bridgeId: "bridge-1" } };
+        }
+        if (action === "stop" || (action === "stopByUrl" && startAttempted)) {
+          throw cleanupFailure;
+        }
+        return { payload: { ok: true } };
+      });
+
+      await expect(transport.launchOnNode({ ...launchParams, runtime })).rejects.toBe(
+        startupFailure,
+      );
+      const phase =
+        scenario === "rollback"
+          ? "node meeting"
+          : scenario === "owned-constructor"
+            ? "node bridge"
+            : "node audio transport";
+      expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          scenario === "owned-node-stop"
+            ? "node audio bridge stop did not complete"
+            : `${phase} cleanup after realtime startup failure`,
+        ),
+      );
+      expect(vi.mocked(logger.warn).mock.calls[0]?.[0]).not.toContain(cleanupToken);
+      expect(browserMocks.leave).toHaveBeenCalledOnce();
+      if (scenario === "owned-constructor" || scenario === "owned-node-stop") {
+        expect(invoke).toHaveBeenCalledWith(
+          expect.objectContaining({ params: { action: "stop", bridgeId: "bridge-1" } }),
+        );
+      } else if (scenario === "owned-dispose") {
+        expect(nodeAudioTransport.dispose).toHaveBeenCalledOnce();
+        expect(
+          invoke.mock.calls.some(([call]) => asOptionalRecord(call.params)?.action === "stop"),
+        ).toBe(false);
+      } else {
+        expect(
+          invoke.mock.calls.filter(
+            ([call]) => asOptionalRecord(call.params)?.action === "stopByUrl",
+          ),
+        ).toHaveLength(2);
+      }
+    },
+  );
 
   it("enables output generations when the node host advertises support", async () => {
     const { transport, nodeAudioTransport } = mockTransport({}, true);

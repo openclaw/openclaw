@@ -82,7 +82,6 @@ export type SessionCompanionAskDeps = {
   resolveUtilityModelRef?: typeof resolveUtilityModelRefForAgent;
   contextReader: SessionCompanionContextReader;
   run?: (params: SessionCompanionRunParams) => Promise<string>;
-  now?: () => number;
 };
 
 type SessionCompanionAskRuntimeParams = SessionCompanionAskDeps & {

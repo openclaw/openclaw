@@ -52,6 +52,10 @@ agent-qualified key. For example, if the `ops` agent is configured:
 openclaw system event --text "Deploy finished" --session-key agent:ops:main --mode now
 ```
 
+With `heartbeat.isolatedSession: true`, a targeted wake reads and consumes the
+event from the selected session while running in a fresh heartbeat session.
+Events queued for other sessions stay untouched.
+
 <Note>
 **Timing exception with `--session-key`:** when `--session-key` is supplied,
 `--mode next-heartbeat` collapses to an immediate targeted wake instead of

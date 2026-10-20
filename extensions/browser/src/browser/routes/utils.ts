@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  parseBooleanValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isLocalManagedProfile } from "../config.js";
 import {
   BrowserProfileUnavailableError,
@@ -13,6 +16,8 @@ import {
 } from "../server-context.js";
 import { isProfileRestartRequiredError } from "../server-context.lifecycle.js";
 import type { BrowserRequest, BrowserResponse } from "./types.js";
+
+const ROUTE_BOOLEAN_OPTIONS = { truthy: ["true", "1", "yes"], falsy: ["false", "0", "no"] };
 
 export function getProfileContext(
   req: BrowserRequest,
@@ -103,20 +108,10 @@ export function readHttpOrigin(value: unknown): string | null {
 
 /** Coerce route boolean values from booleans or common string forms. */
 export function toBoolean(value: unknown) {
-  if (typeof value === "boolean") {
-    return value;
-  }
-  if (typeof value !== "string" && typeof value !== "number") {
-    return undefined;
-  }
-  const normalized = String(value).trim().toLowerCase();
-  if (normalized === "true" || normalized === "1" || normalized === "yes") {
-    return true;
-  }
-  if (normalized === "false" || normalized === "0" || normalized === "no") {
-    return false;
-  }
-  return undefined;
+  return parseBooleanValue(
+    typeof value === "number" ? String(value) : value,
+    ROUTE_BOOLEAN_OPTIONS,
+  );
 }
 
 export function toStringArray(value: unknown): string[] | undefined {

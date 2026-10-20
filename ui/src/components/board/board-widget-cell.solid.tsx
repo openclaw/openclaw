@@ -1,15 +1,6 @@
 import { createErrorBoundary } from "@solidjs/signals";
-import type { JSX as SolidJSX } from "@solidjs/web";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  Show,
-  Switch,
-  Match,
-  untrack,
-} from "solid-js";
+import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, onCleanup, Show, Switch, Match } from "solid-js";
 import {
   ensureCustomElementDefined,
   isOptionalElementDefined,
@@ -47,17 +38,16 @@ import {
   type BoardWidgetCellMethods,
   type BoardWidgetCellProps,
 } from "./board-widget-cell-options.ts";
-import {
-  BoardDisabledPlugin,
-  BoardCoreWidget,
-  BoardWidgetRejected,
-} from "./board-widget-cell-render.solid.tsx";
 import { BoardWidgetError } from "./board-widget-error.tsx";
 import { createBoardWidgetFrame, BoardWidgetFrame } from "./board-widget-frame.tsx";
 import { BoardWidgetMenu } from "./board-widget-menu.tsx";
 
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
 const cells = new WeakMap<HTMLElement, BoardWidgetCellHandle>();
+
+export function boardWidgetPresentationReady(host: HTMLElement): boolean {
+  return cells.get(host)?.presentationReady ?? false;
+}
 
 function BoardWidgetCellContent(
   props: BoardWidgetCellProps,
@@ -66,21 +56,33 @@ function BoardWidgetCellContent(
   const context = useOptionalApplication();
   Object.defineProperty(host, "presentationReady", {
     configurable: true,
-    get: () => cells.get(host)?.presentationReady ?? false,
+    get: () => boardWidgetPresentationReady(host),
   });
   onCleanup(() => cells.delete(host));
-  const [actionError, setActionError] = createSignal("");
+  const actionBinding = createMemo(
+    () =>
+      [
+        props.boardRevision,
+        props.widget?.name,
+        props.widget?.instanceId,
+        props.widget?.revision,
+      ] as const,
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
+  );
+  const [actionError, setActionError] = createSignal(() => {
+    actionBinding();
+    return "";
+  });
   const [actionPending, setActionPending] = createSignal(false);
   const [widgetRoot, setWidgetRoot] = createSignal<HTMLElement>();
-  const [bodyErrored, setBodyErrored] = createSignal(false, { ownedWrite: true });
+  let mcpElement: HTMLElementTagNameMap["mcp-app-view"] | undefined;
   // Signals commit later; admission must reject a second action in the same tick.
   let actionInFlight = false;
   let menu: MenuHandle | undefined;
-  let resetBodyError: (() => void) | undefined;
   let connected = true;
+  // Retain the MCP renderer until its teardown acknowledgement releases it.
   const [renderedMcp, setRenderedMcp] = createSignal(
-    untrack(() => props.widget?.contentKind === "mcp-app"),
-    { ownedWrite: true },
+    (previous = false) => props.widget?.contentKind === "mcp-app" || previous,
   );
   const active = () => props.active !== false;
   const canMutate = () => props.canMutate !== false;
@@ -111,6 +113,19 @@ function BoardWidgetCellContent(
     },
     { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
+  // A replacement binding retries a failed body; healthy bindings retain their subtree.
+  const [bodyError, setBodyError] = createSignal<{ error: unknown } | undefined>(
+    () => {
+      void props.widget;
+      void props.boardRevision;
+      void props.widgetFrameUrl;
+      plugins.revision();
+      gatewayBinding();
+      return undefined;
+    },
+    { ownedWrite: true },
+  );
+  const bodyErrored = () => bodyError() !== undefined;
   const loader = createLazyCustomElementRequests();
   const loadState = projectOwner(loader, (owner) => owner.visibleState);
   const loadError = () => {
@@ -137,11 +152,6 @@ function BoardWidgetCellContent(
     widget: () => props.widget,
   });
   const frameState = projectOwner(frame, (owner) => owner);
-  const state = createMemo(() => ({
-    ...appView.snapshot(),
-    error: actionError(),
-    pending: actionPending(),
-  }));
   const activeKinds = () => gateway.read()?.hello?.controlUiWidgetKinds ?? [];
   const contribution = createMemo(() =>
     props.widget?.contentKind === "plugin" && !props.widget.frameUrl
@@ -204,46 +214,30 @@ function BoardWidgetCellContent(
     frame.presentationReady;
   cells.set(host, {
     get presentationReady() {
-      return untrack(presentationReady);
+      return presentationReady();
     },
+    focusWidget: () => widgetRoot()?.focus(),
     selectMenuItem,
     async teardown() {
-      await host
-        .querySelector<HTMLElement & { teardown?: () => Promise<void> }>("mcp-app-view")
-        ?.teardown?.();
+      await mcpElement?.teardown?.();
     },
     restartAfterTeardown() {
-      host
-        .querySelector<HTMLElement & { restartAfterTeardown?: () => void }>("mcp-app-view")
-        ?.restartAfterTeardown?.();
+      mcpElement?.restartAfterTeardown?.();
     },
   });
-  let previousWidget = untrack(() => props.widget);
-  let previousBoardRevision = untrack(() => props.boardRevision);
   createEffect(
     () => [props.widget, props.boardRevision, active(), contribution(), gatewayBinding()] as const,
     // Owner callbacks intentionally read the current binding captured above.
-    () => {
-      if (previousBoardRevision !== props.boardRevision) {
-        setActionError("");
+    ([widget, , isActive, coreWidget], previous) => {
+      const previousWidget = previous?.[0];
+      if (previousWidget && previousWidget !== widget) {
+        frame.widgetChanged(previousWidget, widget);
       }
-      previousBoardRevision = props.boardRevision;
-      if (previousWidget && previousWidget !== props.widget) {
-        if (
-          previousWidget.name !== props.widget?.name ||
-          previousWidget.instanceId !== props.widget?.instanceId ||
-          previousWidget.revision !== props.widget?.revision
-        ) {
-          setActionError("");
-        }
-        frame.widgetChanged(previousWidget, props.widget);
-      }
-      previousWidget = props.widget;
       frame.activityChanged();
       for (const element of CORE_BOARD_WIDGET_ELEMENTS) {
-        loader.requestWhileActive(element, active() && contribution() === element);
+        loader.requestWhileActive(element, isActive && coreWidget === element);
       }
-      if (props.widget?.contentKind === "mcp-app") {
+      if (widget?.contentKind === "mcp-app") {
         void ensureCustomElementDefined("mcp-app-view", loadMcpAppView).catch(() => undefined);
       }
     },
@@ -268,30 +262,8 @@ function BoardWidgetCellContent(
       appView.synchronize(props.callbacks, root ?? null);
       frame.update();
       if (props.loadingCovered && presentationReady()) {
-        host.dispatchEvent(new Event("openclaw-board-widget-presentation", { bubbles: true }));
+        props.callbacks?.presentationReady?.();
       }
-    },
-  );
-  createEffect(
-    () => props.widget?.contentKind,
-    (kind) => {
-      if (kind === "mcp-app") {
-        setRenderedMcp(true);
-      } else if (!host.querySelector("mcp-app-view")) {
-        setRenderedMcp(false);
-      }
-    },
-  );
-  let observedErrorBinding = false;
-  createEffect(
-    () => [props.widget, props.widgetFrameUrl, plugins.revision(), gatewayBinding()] as const,
-    () => {
-      // The first observation belongs to the initial render, including its error fallback.
-      if (observedErrorBinding && bodyErrored()) {
-        setBodyErrored(false);
-        resetBodyError?.();
-      }
-      observedErrorBinding = true;
     },
   );
   onCleanup(() => {
@@ -301,22 +273,33 @@ function BoardWidgetCellContent(
     }
     frame.disconnect();
   });
-  const unavailable = () => props.busy || state().pending || !canMutate();
+  const unavailable = () => props.busy || actionPending() || !canMutate();
   const AccessNotice = () => (
     <Show
       when={props.widget?.grantState === "pending"}
       fallback={
         <Show when={props.widget?.grantState === "rejected"}>
-          <BoardWidgetRejected
-            disabled={unavailable()}
-            onRemove={() => void runAction(() => props.callbacks!.remove(props.widget!))}
-          />
+          <div
+            class="board-widget__grant board-widget__grant--rejected"
+            data-test-id="board-rejected"
+          >
+            <strong>{t("board.widget.rejected")}</strong>
+            <span>{t("board.widget.rejectedDetail")}</span>
+            <button
+              class="btn btn--small"
+              type="button"
+              disabled={unavailable()}
+              onClick={() => void runAction(() => props.callbacks!.remove(props.widget!))}
+            >
+              {t("board.widget.remove")}
+            </button>
+          </div>
         </Show>
       }
     >
       <BoardPendingCapabilities
         widget={props.widget!}
-        disabled={props.busy || state().pending || !canGrant()}
+        disabled={props.busy || actionPending() || !canGrant()}
         onGrant={(decision) =>
           void runAction(
             () => props.callbacks!.grant(props.widget!.name, decision),
@@ -324,8 +307,8 @@ function BoardWidgetCellContent(
           )
         }
         error={
-          <Show when={state().error}>
-            <BoardWidgetError error={state().error} action inline />
+          <Show when={actionError()}>
+            <BoardWidgetError error={actionError()} action inline />
           </Show>
         }
       />
@@ -338,6 +321,7 @@ function BoardWidgetCellContent(
     return props.widget!;
   };
   const Plugin = () => {
+    const CoreWidget = dynamic(() => contribution()?.tagName);
     const pluginId = () => pluginIdForWidgetKind(props.widget?.pluginKind);
     const key = () => `${pluginId()}/${props.widget?.pluginKind?.slice(pluginId().length + 1)}`;
     const advertised = () =>
@@ -368,11 +352,7 @@ function BoardWidgetCellContent(
     return (
       <Switch
         fallback={
-          <BoardDisabledPlugin
-            pluginId={pluginId()}
-            disabled={unavailable()}
-            onRemove={() => void runAction(() => props.callbacks!.remove(props.widget!))}
-          >
+          <div class="board-widget__disabled-plugin" data-test-id="board-disabled-plugin">
             <Show
               when={disabled()}
               fallback={
@@ -381,7 +361,15 @@ function BoardWidgetCellContent(
             >
               <CustomPluginUiDisabled context={context} pluginId={pluginId()} />
             </Show>
-          </BoardDisabledPlugin>
+            <button
+              class="btn btn--small"
+              type="button"
+              disabled={unavailable()}
+              onClick={() => void runAction(() => props.callbacks!.remove(props.widget!))}
+            >
+              {t("board.widget.remove")}
+            </button>
+          </div>
         }
       >
         <Match when={contribution()}>
@@ -392,11 +380,12 @@ function BoardWidgetCellContent(
                 when={(loadState.revision(), isOptionalElementDefined(contribution()!))}
                 fallback={<Loading />}
               >
-                <BoardCoreWidget
-                  tagName={contribution()?.tagName}
-                  widget={props.widget}
-                  session={props.session}
-                  active={active()}
+                <CoreWidget
+                  {...{
+                    "prop:widget": props.widget,
+                    "prop:session": props.session ?? { sessionKey: "" },
+                    "prop:active": active(),
+                  }}
                 />
               </Show>
             }
@@ -449,16 +438,19 @@ function BoardWidgetCellContent(
       <Match when={renderedMcp()}>
         <BoardMcpAppContent
           accessNotice={<AccessNotice />}
-          active={state().active}
-          appView={state().state}
+          active={appView.snapshot().active}
+          appView={appView.snapshot().state}
           busy={unavailable()}
-          loading={state().loading}
-          nearVisible={state().nearVisible}
+          loading={appView.snapshot().loading}
+          nearVisible={appView.snapshot().nearVisible}
           sessionKey={props.sessionKey ?? ""}
           widget={props.widget!}
           expired={() => appView.expire()}
           remove={() => void runAction(() => props.callbacks!.remove(props.widget!))}
           retry={() => appView.retry()}
+          viewRef={(element) => {
+            mcpElement = element;
+          }}
           retired={() => {
             if (props.widget?.contentKind !== "mcp-app") {
               setRenderedMcp(false);
@@ -477,6 +469,21 @@ function BoardWidgetCellContent(
     </Switch>
   );
 
+  const BodyBoundary = () => (
+    <>
+      {createErrorBoundary(
+        () => (
+          <Body />
+        ),
+        (error) => {
+          const caught = error();
+          setBodyError((current) => current ?? { error: caught });
+          return null;
+        },
+      )}
+    </>
+  );
+
   const presentation = () =>
     props.widget?.contentKind === "html" || props.widget?.frameUrl
       ? (props.widget.presentation ?? "card")
@@ -485,7 +492,7 @@ function BoardWidgetCellContent(
   const scrollable = () =>
     Boolean(
       bodyErrored() ||
-      state().error ||
+      actionError() ||
       props.widget?.grantState === "pending" ||
       props.widget?.grantState === "rejected" ||
       props.widget?.contentKind === "mcp-app" ||
@@ -592,7 +599,7 @@ function BoardWidgetCellContent(
               <BoardWidgetMenu
                 widget={props.widget!}
                 tabs={props.tabs ?? []}
-                disabled={props.busy || state().pending}
+                disabled={props.busy || actionPending()}
                 onSelect={selectMenuItem}
                 ref={(handle) => {
                   menu = handle;
@@ -610,20 +617,12 @@ function BoardWidgetCellContent(
             },
           ]}
         >
-          {createErrorBoundary(
-            () => (
-              <Body />
-            ),
-            (error, reset) => {
-              resetBodyError = reset;
-              // Signal equality keeps repeated fallback renders from republishing the error.
-              setBodyErrored(true);
-              return <BoardWidgetError error={error()} />;
-            },
-          )}
-          <Show when={state().error && props.widget!.grantState !== "pending"}>
+          <Show when={bodyError()} fallback={<BodyBoundary />}>
+            {(failure) => <BoardWidgetError error={failure().error} />}
+          </Show>
+          <Show when={actionError() && props.widget!.grantState !== "pending"}>
             <div class="board-widget__error-overlay">
-              <BoardWidgetError error={state().error} action />
+              <BoardWidgetError error={actionError()} action />
             </div>
           </Show>
         </div>
@@ -671,6 +670,7 @@ export const BoardWidgetCell = defineSolidBridge<BoardWidgetCellProps, BoardWidg
       loadingCovered: { default: false, type: Boolean },
     },
     methods: {
+      focusWidget: (host) => cells.get(host)?.focusWidget(),
       selectMenuItem: (host, value) => cells.get(host)?.selectMenuItem(value),
       teardown: async (host) => {
         await cells.get(host)?.teardown();

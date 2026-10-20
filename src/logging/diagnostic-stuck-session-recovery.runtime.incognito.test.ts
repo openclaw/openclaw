@@ -1,11 +1,3 @@
-// Preserve module setup before modules that consume it.
-// oxfmt-ignore
-import {
-  mocks,
-  observeRecoveryContextLog,
-  resetMocks,
-  warnLogMessages,
-} from "./diagnostic-stuck-session-recovery.runtime.test-harness.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
@@ -14,106 +6,107 @@ import {
 } from "../../test/helpers/promise.js";
 import * as placement from "../agents/session-placement-admission.js";
 import { setDiagnosticsEnabledForProcess } from "../infra/diagnostic-events.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { getSessionControllerOperation } from "../sessions/session-controller.state.js";
+import { testing } from "../sessions/session-controller.test-support.js";
+import { diagnosticLogger } from "./diagnostic-runtime.js";
 import {
   getDiagnosticSessionState,
-  peekDiagnosticSessionState,
   pruneDiagnosticSessionStates,
   resetDiagnosticSessionStateForTest,
+  resolveDiagnosticSessionKey,
   retireDiagnosticSessionObservations,
 } from "./diagnostic-session-state.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 
-beforeEach(async () => {
+const warn = vi.fn<typeof diagnosticLogger.warn>();
+const ageMs = 720_000;
+
+function begin(incognito: boolean, suffix = "recovery") {
+  const sessionId = `${incognito ? "private" : "ordinary"}-${suffix}-id`;
+  const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}${suffix}`;
+  const marker = incognito ? "SYNTHETIC_PRIVATE_FAILURE" : "SYNTHETIC_ORDINARY_FAILURE";
+  const state = getDiagnosticSessionState({ sessionId, sessionKey });
+  state.state = "processing";
+  const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+  operation.setPhase("running");
+  const cancel = vi.fn(() => operation.complete());
+  operation.attachBackend({ kind: "embedded", cancel });
+  return { sessionId, sessionKey, marker, state, operation, cancel };
+}
+
+function expectRecoveryLogs(incognito: boolean, sessionId: string, marker?: string) {
+  if (incognito) {
+    expect(warn).not.toHaveBeenCalled();
+  } else {
+    const output = warn.mock.calls.map(([message]) => message).join("\n");
+    expect(output).toContain(sessionId);
+    if (marker) {
+      expect(output).toContain(marker);
+    }
+  }
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(0);
   resetDiagnosticSessionStateForTest();
   setDiagnosticsEnabledForProcess(true);
-  await resetMocks();
+  warn.mockClear();
+  vi.spyOn(diagnosticLogger, "warn").mockImplementation(warn);
 });
 
 afterEach(() => {
+  testing.resetSessionControllerForTest();
   setDiagnosticsEnabledForProcess(false);
   resetDiagnosticSessionStateForTest();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
-describe.each(["key", "session-id"] as const)("Incognito recovery with %s", (identity) => {
-  it.each([
-    "returned-failure",
-    "internal-exception",
-    "release",
-    "active-run",
-    "reclaim-run",
-    "reclaim-reply",
-  ] as const)(
-    "preserves %s outcomes and actions without private formatted output",
-    async (scenario) => {
-      for (const incognito of [true, false]) {
-        await resetMocks();
-        const sessionId = incognito ? "private-recovery-id" : "ordinary-recovery-id";
-        const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}recovery`;
-        const state = getDiagnosticSessionState({ sessionId, sessionKey });
-        state.state = "processing";
+describe.each([true, false])("controller recovery with Incognito=%s", (incognito) => {
+  describe.each(["key", "session-id"] as const)("identified by %s", (identity) => {
+    it.each(["returned-failure", "internal-exception", "observe", "abort"] as const)(
+      "preserves %s outcomes and actions without private formatted output",
+      async (scenario) => {
+        const { sessionId, sessionKey, marker, state, operation, cancel } = begin(incognito);
         const ref = identity === "key" ? { sessionId, sessionKey } : { sessionId };
-        const marker = incognito ? "SYNTHETIC_PRIVATE_FAILURE" : "SYNTHETIC_ORDINARY_FAILURE";
-        const recoverTerminalTurn = vi.spyOn(placement, "recoverTerminalSessionPlacementTurn");
-        recoverTerminalTurn.mockResolvedValue(undefined);
+        const recoverTerminalTurn = vi
+          .spyOn(placement, "recoverTerminalSessionPlacementTurn")
+          .mockResolvedValue(undefined);
         if (scenario === "returned-failure") {
           recoverTerminalTurn.mockResolvedValue(marker);
         } else if (scenario === "internal-exception") {
-          mocks.getCommandLaneActiveTaskIds.mockImplementationOnce(() => {
+          operation.watchdog.beginExecution(() => {
             throw new Error(marker);
           });
-        } else if (scenario === "active-run" || scenario === "reclaim-run") {
-          mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(sessionId);
-          mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(true);
-        } else if (scenario === "reclaim-reply") {
-          mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(sessionId);
-          mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+        } else if (scenario === "observe") {
+          operation.watchdog.beginWait({ kind: "human_question", isCurrent: () => true });
         }
-        mocks.abortEmbeddedAgentRun.mockReturnValue(true);
-        mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
-        mocks.resetCommandLane.mockReturnValue(1);
+        vi.setSystemTime(ageMs);
 
-        const reclaimed = scenario === "reclaim-run" || scenario === "reclaim-reply";
-        const contextLogged =
-          !incognito && (reclaimed || scenario === "release")
-            ? observeRecoveryContextLog(sessionId)
-            : undefined;
         const outcome = await recoverStuckDiagnosticSession({
           ...ref,
+          operation,
           stateGeneration: state.generation ?? 0,
-          ageMs: scenario === "active-run" ? 180_000 : 720_000,
+          ageMs,
           queueDepth: 1,
         });
-        if (contextLogged) {
-          await contextLogged;
-        }
-        expect(recoverTerminalTurn).toHaveBeenCalledWith(ref, expect.any(Function));
+
         expect(outcome).toMatchObject(ref);
-        if (scenario === "returned-failure") {
-          expect(outcome).toMatchObject({
-            status: "failed",
-            action: "fail_worker_turn",
-            reason: "terminal_worker",
-            error: marker,
-          });
-        } else if (scenario === "internal-exception") {
+        expect(outcome.sessionKey).toBe(identity === "key" ? sessionKey : undefined);
+        if (scenario === "returned-failure" || scenario === "internal-exception") {
           expect(outcome).toMatchObject({
             status: "failed",
             action: "none",
             reason: "exception",
             error: `Error: ${marker}`,
           });
-        } else if (scenario === "release") {
-          expect(outcome).toMatchObject({
-            status: "released",
-            action: "release_lane",
-            released: 1,
-          });
-        } else if (scenario === "active-run") {
+        } else if (scenario === "observe") {
           expect(outcome).toMatchObject({
             status: "skipped",
             action: "observe_only",
-            reason: "active_embedded_run",
+            reason: "active_reply_work",
           });
         } else {
           expect(outcome).toMatchObject({
@@ -121,55 +114,54 @@ describe.each(["key", "session-id"] as const)("Incognito recovery with %s", (ide
             action: "abort_embedded_run",
             aborted: true,
             drained: true,
-            released: 1,
+            forceCleared: false,
+            released: 0,
           });
+          expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
         }
-        expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledTimes(reclaimed ? 1 : 0);
-        expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledTimes(reclaimed ? 1 : 0);
-        expect(mocks.resetCommandLane).toHaveBeenCalledTimes(
-          reclaimed || scenario === "release" ? 1 : 0,
+        expect(cancel).toHaveBeenCalledTimes(scenario === "abort" ? 1 : 0);
+        expect(getSessionControllerOperation(sessionKey)).toBe(
+          scenario === "abort" ? undefined : operation,
         );
-        if (reclaimed) {
-          expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith(sessionId);
-          expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith(sessionId, 15_000);
-        }
-        if (incognito) {
-          expect.soft(warnLogMessages()).toEqual([]);
-        } else {
-          expect(warnLogMessages().length).toBeGreaterThan(0);
-          expect(warnLogMessages().join("\n")).toContain(sessionId);
-          if (scenario === "returned-failure" || scenario === "internal-exception") {
-            expect(warnLogMessages().join("\n")).toContain(marker);
-          }
-        }
-        recoverTerminalTurn.mockRestore();
-      }
-    },
-  );
-});
+        expectRecoveryLogs(
+          incognito,
+          sessionId,
+          scenario === "returned-failure" || scenario === "internal-exception" ? marker : undefined,
+        );
+      },
+    );
+  });
 
-it.for(["returned-failure", "rejected-placement"] as const)(
-  "preserves ID-only privacy and %s outcomes after diagnostic state retirement",
-  async (scenario, { signal }) => {
-    for (const incognito of [true, false]) {
-      await resetMocks();
-      const sessionId = incognito ? "private-retired-id" : "ordinary-retired-id";
-      const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}retired`;
-      const marker = incognito ? "SYNTHETIC_PRIVATE_FAILURE" : "SYNTHETIC_ORDINARY_FAILURE";
-      const state = getDiagnosticSessionState({ sessionId, sessionKey });
-      state.state = "processing";
+  it.for([
+    { retirement: "before-recovery", scenario: "returned-failure" },
+    { retirement: "before-recovery", scenario: "rejected-placement" },
+    { retirement: "during-placement", scenario: "returned-failure" },
+    { retirement: "during-placement", scenario: "rejected-placement" },
+  ] as const)(
+    "preserves ID-only privacy and $scenario outcomes with retirement $retirement",
+    async ({ retirement, scenario }, { signal }) => {
+      const { sessionId, sessionKey, marker, state, operation, cancel } = begin(
+        incognito,
+        "retired",
+      );
+      const stateGeneration = state.generation ?? 0;
       const placementStarted = createDeferred();
       const terminalTurn = createDeferred<string | undefined>();
-      const recoverTerminalTurn = vi
-        .spyOn(placement, "recoverTerminalSessionPlacementTurn")
-        .mockImplementationOnce(() => {
-          placementStarted.resolve();
-          return terminalTurn.promise;
-        });
+      vi.spyOn(placement, "recoverTerminalSessionPlacementTurn").mockImplementationOnce(() => {
+        placementStarted.resolve();
+        return terminalTurn.promise;
+      });
+      vi.setSystemTime(ageMs);
+      if (retirement === "before-recovery") {
+        retireDiagnosticSessionObservations();
+        pruneDiagnosticSessionStates(Date.now() + 31 * 60_000, true);
+        expect(resolveDiagnosticSessionKey({ sessionId })).toBeUndefined();
+      }
       const recovery = recoverStuckDiagnosticSession({
         sessionId,
-        stateGeneration: state.generation ?? 0,
-        ageMs: 720_000,
+        operation,
+        stateGeneration,
+        ageMs,
         queueDepth: 1,
       });
 
@@ -182,9 +174,11 @@ it.for(["returned-failure", "rejected-placement"] as const)(
           ),
           signal,
         );
-        retireDiagnosticSessionObservations();
-        pruneDiagnosticSessionStates(Date.now() + 31 * 60_000, true);
-        expect(peekDiagnosticSessionState({ sessionId })).toBeUndefined();
+        if (retirement === "during-placement") {
+          retireDiagnosticSessionObservations();
+          pruneDiagnosticSessionStates(Date.now() + 31 * 60_000, true);
+        }
+        expect(resolveDiagnosticSessionKey({ sessionId })).toBeUndefined();
         if (scenario === "returned-failure") {
           terminalTurn.resolve(marker);
         } else {
@@ -192,30 +186,22 @@ it.for(["returned-failure", "rejected-placement"] as const)(
         }
         const outcome = await withinTest(recovery, signal);
 
-        if (incognito) {
-          expect(warnLogMessages()).toEqual([]);
-        } else {
-          expect(warnLogMessages().join("\n")).toContain(marker);
-          expect(warnLogMessages().join("\n")).toContain(sessionId);
-        }
+        expectRecoveryLogs(incognito, sessionId, marker);
         expect(outcome).toEqual({
           status: "failed",
-          action: scenario === "returned-failure" ? "fail_worker_turn" : "none",
-          reason: scenario === "returned-failure" ? "terminal_worker" : "exception",
+          action: "none",
+          reason: "exception",
           sessionId,
           sessionKey: undefined,
-          error: scenario === "returned-failure" ? marker : `Error: ${marker}`,
+          error: `Error: ${marker}`,
         });
-        expect(mocks.abortEmbeddedAgentRun).not.toHaveBeenCalled();
-        expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
-        expect(mocks.waitForEmbeddedAgentRunEnd).not.toHaveBeenCalled();
-        expect(mocks.resetCommandLane).not.toHaveBeenCalled();
-        expect(peekDiagnosticSessionState({ sessionId })).toBeUndefined();
+        expect(cancel).not.toHaveBeenCalled();
+        expect(getSessionControllerOperation(sessionKey)).toBe(operation);
+        expect(resolveDiagnosticSessionKey({ sessionId })).toBeUndefined();
       } finally {
         terminalTurn.resolve(undefined);
         await recovery;
-        recoverTerminalTurn.mockRestore();
       }
-    }
-  },
-);
+    },
+  );
+});

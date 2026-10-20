@@ -359,19 +359,18 @@ describe("channel-health-monitor", () => {
     const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await advanceHealthCheck();
-    expect(manager.startChannel).toHaveBeenCalledTimes(2);
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await advanceHealthCheck();
-    expect(manager.startChannel).toHaveBeenCalledTimes(2);
-    // With exact virtual wakes, one free continuation is followed by one
-    // cooldown-limited restart every three checks. Real wakes can arrive late.
+    expect(manager.startChannel).toHaveBeenCalledTimes(1);
+    // Exact virtual wakes permit one restart every three checks. Real wakes can arrive late.
     for (let check = 2; check < 12; check += 1) {
       await advanceHealthCheck();
     }
-    expect(manager.startChannel).toHaveBeenCalledTimes(6);
+    expect(manager.startChannel).toHaveBeenCalledTimes(5);
     monitor.stop();
   });
 
-  it("runs one free continuation inside the production cooldown", async () => {
+  it("does not bypass cooldown when reconnect attempts change", async () => {
     const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
     const manager = createSnapshotManager(
       {
@@ -386,86 +385,17 @@ describe("channel-health-monitor", () => {
     const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
     await advanceHealthCheck();
-    expect(manager.startChannel).toHaveBeenCalledTimes(2);
-    monitor.stop();
-  });
-
-  it("does not re-arm the free continuation on a transient reconnect-attempt bump", async () => {
-    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
-    const manager = createSnapshotManager(
-      {
-        discord: {
-          default: account,
-        },
-      },
-      {
-        startChannel: vi.fn(async () => markRestartPending(account)),
-      },
-    );
-    const monitor = await startAndRunCheck(manager);
     expect(manager.startChannel).toHaveBeenCalledTimes(1);
-    await advanceHealthCheck();
-    expect(manager.startChannel).toHaveBeenCalledTimes(2);
 
     // Supervisor retry bumps attempts while the account stays stuck pending…
     account.reconnectAttempts = 2;
     await advanceHealthCheck();
-    // …and returning to zero must not grant another unmetered continuation.
+    // …and returning to zero still observes the ordinary cooldown.
     account.reconnectAttempts = 0;
     await advanceHealthCheck();
     await advanceHealthCheck();
-    // A normal budgeted restart at the expired cooldown does not re-arm the pass.
-    expect(manager.startChannel).toHaveBeenCalledTimes(3);
-    monitor.stop();
-  });
-
-  it("grants a fresh pending continuation after the account recovers", async () => {
-    const account: Partial<ChannelAccountSnapshot> = disconnectedAccount(Date.now() - 300_000);
-    let startBehavior: "pending" | "healthy" = "pending";
-    const manager = createSnapshotManager(
-      {
-        discord: {
-          default: account,
-        },
-      },
-      {
-        startChannel: vi.fn(async () => {
-          if (startBehavior === "pending") {
-            account.running = false;
-            account.connected = false;
-            account.restartPending = true;
-            account.reconnectAttempts = 0;
-          } else {
-            account.running = true;
-            account.connected = true;
-            account.restartPending = false;
-          }
-          return new Map();
-        }),
-      },
-    );
-    const monitor = await startAndRunCheck(manager);
-    expect(manager.startChannel).toHaveBeenCalledTimes(1);
-
-    startBehavior = "healthy";
-    await advanceHealthCheck();
+    // Only the expired cooldown permits the next restart.
     expect(manager.startChannel).toHaveBeenCalledTimes(2);
-
-    // Healthy pass clears the used continuation.
-    await advanceHealthCheck();
-    expect(manager.startChannel).toHaveBeenCalledTimes(2);
-
-    // A new timed-out recovery earns a free continuation, without advancing the
-    // last budgeted restart: the following check can use the expired cooldown.
-    startBehavior = "pending";
-    account.running = false;
-    account.connected = false;
-    account.restartPending = true;
-    account.reconnectAttempts = 0;
-    await advanceHealthCheck();
-    expect(manager.startChannel).toHaveBeenCalledTimes(3);
-    await advanceHealthCheck();
-    expect(manager.startChannel).toHaveBeenCalledTimes(4);
     monitor.stop();
   });
 

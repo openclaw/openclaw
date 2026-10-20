@@ -3,6 +3,7 @@
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -40,7 +41,9 @@ vi.doMock("./runtime-plugins.js", () => ({
 }));
 const { ModelRegistry } = await import("./sessions/model-registry.js");
 const { runEmbeddedAgent } = await import("./embedded-agent-runner/run.js");
-const { refreshPreparedModelRuntimeSnapshots } = await import("./prepared-model-runtime.js");
+const preparedModelRuntime = await import("./prepared-model-runtime.js");
+const { refreshPreparedModelRuntimeSnapshots } = preparedModelRuntime;
+const { log } = await import("./embedded-agent-runner/logger.js");
 const { prepareSystemAgentRunAdmission } = await import("./admitted-run-context.js");
 const { setRuntimeConfigSnapshot } = await import("../config/runtime-snapshot.js");
 beforeEach(() => {
@@ -140,6 +143,93 @@ async function run(cfg: OpenClawConfig, runId: string) {
 }
 
 describe("connection retry transport refresh", () => {
+  it.each(["rejecting release", "hung release", "rejecting discard"] as const)(
+    "preserves the successful turn after %s",
+    async (scenario) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      vi.stubEnv("OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS", "100");
+      const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+      const disposalStarted = createDeferredCore();
+      const disposalFinished = createDeferredCore();
+      const acquire = preparedModelRuntime.acquirePreparedModelRuntimeSnapshot;
+      const acquireSpy = vi
+        .spyOn(preparedModelRuntime, "acquirePreparedModelRuntimeSnapshot")
+        .mockImplementation(async (...args) => {
+          const lease = await acquire(...args);
+          return {
+            ...lease,
+            [Symbol.asyncDispose]: async () => {
+              await lease[Symbol.asyncDispose]();
+              disposalStarted.resolve();
+              if (scenario === "hung release") {
+                await disposalFinished.promise;
+              } else {
+                throw new Error("fixture lease disposal failed");
+              }
+            },
+          };
+        });
+      try {
+        const initial = config("http://127.0.0.1:21431/v1", "synthetic-old-key", "old-route");
+        const discard = scenario === "rejecting discard";
+        const current = config(
+          discard ? "https://model.example/v1" : "http://127.0.0.1:21432/v1",
+          discard ? undefined : "synthetic-current-key",
+          "current-route",
+        );
+        await publish(initial);
+        attempt.mockImplementationOnce(async (params) => {
+          await publish(current);
+          return makeEmbeddedRunnerAttempt({
+            sessionIdUsed: params.sessionId,
+            terminal: {
+              kind: "failed",
+              source: "prompt",
+              error: Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" }),
+            },
+          });
+        });
+        attempt.mockImplementationOnce(async (params) => {
+          expect(params.model.baseUrl).toBe(
+            discard ? "http://127.0.0.1:21431/v1" : "http://127.0.0.1:21432/v1",
+          );
+          expect(params.resolvedApiKey).toBe(
+            discard ? "synthetic-old-key" : "synthetic-current-key",
+          );
+          return success(params.sessionId);
+        });
+        const result = run(initial, `cleanup-${scenario.replaceAll(" ", "-")}`);
+        const settled = vi.fn();
+        void result.then(settled, settled);
+        const assertion = expect(result).resolves.toMatchObject({
+          payloads: [{ text: "recovered" }],
+        });
+        await disposalStarted.promise;
+        if (scenario === "hung release") {
+          await vi.advanceTimersByTimeAsync(99);
+          expect(settled).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(1);
+        }
+        await assertion;
+        expect((await result).meta.error).toBeUndefined();
+        expect(attempt).toHaveBeenCalledTimes(2);
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining(
+            scenario === "hung release"
+              ? "agent cleanup timed out"
+              : "fixture lease disposal failed",
+          ),
+        );
+      } finally {
+        disposalFinished.resolve();
+        acquireSpy.mockRestore();
+        warn.mockRestore();
+        vi.unstubAllEnvs();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it.each([
     [
       "changed origin",
@@ -209,9 +299,33 @@ describe("connection retry transport refresh", () => {
       const history = [
         { role: "user" as const, content: "Original recorded request.", timestamp: 1 },
       ];
-      const observations: EmbeddedRunAttemptParams[] = [];
+      type AttemptObservation = Pick<
+        EmbeddedRunAttemptParams,
+        | "provider"
+        | "modelId"
+        | "resolvedApiKey"
+        | "model"
+        | "admittedRunContext"
+        | "config"
+        | "sessionTarget"
+        | "continuation"
+      >;
+      const observations: AttemptObservation[] = [];
       attempt.mockImplementation(async (params) => {
-        observations.push(params);
+        // Run disposal clears continuation payloads; record their dispatch-time facts.
+        observations.push({
+          provider: params.provider,
+          modelId: params.modelId,
+          resolvedApiKey: params.resolvedApiKey,
+          model: params.model,
+          admittedRunContext: params.admittedRunContext,
+          config: params.config,
+          sessionTarget: params.sessionTarget,
+          continuation: params.continuation && {
+            prompt: params.continuation.prompt,
+            messages: [...params.continuation.messages],
+          },
+        });
         if (observations.length === 1) {
           expect(params).toMatchObject({
             model: { baseUrl: before, headers: { "X-Local-Route": "old-route" } },

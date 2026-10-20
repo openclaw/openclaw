@@ -25,9 +25,7 @@ export function resolveAuthProfilePortability(
   }
   if (credential.type === "oauth") {
     const portable =
-      [credential.access, credential.refresh].some(
-        (value) => typeof value === "string" && value.trim().length > 0,
-      ) && override === true;
+      Boolean(credential.access?.trim() || credential.refresh?.trim()) && override === true;
     return portable
       ? { portable: true, reason: "oauth-provider-opted-in" }
       : { portable: false, reason: "non-portable-oauth-refresh-token" };

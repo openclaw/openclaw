@@ -68,8 +68,8 @@ import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 
 // Model the already-running updater's older schema contract. The candidate
 // worker is a real unmocked process with the checkout's current contract.
-vi.mock("../../state/openclaw-state-db-contract.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../state/openclaw-state-db-contract.js")>();
+vi.mock("../../state/openclaw-schema-versions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../state/openclaw-schema-versions.js")>();
   return { ...actual, OPENCLAW_STATE_SCHEMA_VERSION: actual.OPENCLAW_STATE_SCHEMA_VERSION - 1 };
 });
 

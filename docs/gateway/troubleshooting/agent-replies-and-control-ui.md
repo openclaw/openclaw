@@ -21,6 +21,8 @@ An error naming the **Gateway state database** identifies a storage failure obse
 
 A transcript writer ownership error means the run lost its session write claim. Retry in the current session and inspect Gateway logs if it recurs. Storage failures do not trigger provider credential rotation or automatic replay of the run.
 
+Gateway write requests such as `sessions.create` also report disk-full guidance with `UNAVAILABLE` and `details.code: "SQLITE_FULL"`. Free space on the Gateway host before continuing. When the worker cannot confirm the write outcome, `retryable` is false: check whether the session or change exists before retrying. The failure does not prove that nothing was saved.
+
 Use `openclaw logs --follow` to correlate the run with storage activity. SQLite can contend between connections or worker threads in one Gateway process; seeing only one process with the database open does not rule out contention. See [database concurrency notes](/reference/database-schemas#integrity-checks). Avoid full database compaction while runs are active.
 
 ## Provider rejected the request

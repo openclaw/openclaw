@@ -34,6 +34,62 @@ export async function readLocalWorkspaceRuntimes(workspaceDir: string) {
   ];
 }
 
+/** Inspect existing allocation custody; image reads never provision a runtime. */
+export async function prepareLocalWorkspaceImageRead(params: {
+  workspaceDir: string;
+  containerRoot: string;
+  targets: readonly string[];
+  assertCurrent: () => void;
+}) {
+  const runtimes = await readLocalWorkspaceRuntimes(params.workspaceDir);
+  const assertCurrent = () => {
+    params.assertCurrent();
+    for (const runtime of runtimes) {
+      runtime.assertCurrent();
+    }
+  };
+  assertCurrent();
+  if (!runtimes.length) {
+    throw new Error("Sandbox image backing is unavailable");
+  }
+  const { sandboxContainerShowsWorkspacePaths } = await import("./mount-plan.js");
+  for (const runtime of runtimes) {
+    const { engine, backendTarget } = localWorkspaceRuntimeEngine(runtime);
+    await validateSandboxContainerEngineTarget(engine, backendTarget);
+    assertCurrent();
+    if (
+      !(await sandboxContainerShowsWorkspacePaths({
+        ...params,
+        engine,
+        containerName: runtime.entry.containerName,
+        assertCurrent,
+      }))
+    ) {
+      throw new Error("Sandbox image backing is unavailable");
+    }
+  }
+  assertCurrent();
+  return assertCurrent;
+}
+
+function localWorkspaceRuntimeEngine(
+  runtime: Awaited<ReturnType<typeof readLocalWorkspaceRuntimes>>[number],
+) {
+  const backendId = runtime.kind === "browser" ? "docker" : runtime.entry.backendId;
+  const backendTarget = runtime.kind === "container" ? runtime.entry.backendTarget : undefined;
+  if (backendId !== "docker" && backendId !== "podman") {
+    throw new Error("Local workspace backend cannot fence host projection writes");
+  }
+  if (backendId === "podman" && !backendTarget) {
+    throw new Error("Local workspace Podman engine owner is missing");
+  }
+  return {
+    engine:
+      backendId === "podman" ? bindPodmanSandboxEngine(backendTarget!) : DOCKER_SANDBOX_ENGINE,
+    backendTarget,
+  };
+}
+
 export type LocalWorkspacePausedRuntime = { name: string; id: string };
 
 export function parseLocalWorkspacePausedRuntimes(
@@ -82,16 +138,7 @@ export async function quiesceLocalWorkspace(params: {
   const retirements: Array<() => Promise<void>> = [];
   for (const { runtime, bridges } of selected) {
     const { entry } = runtime;
-    const backendId = runtime.kind === "browser" ? "docker" : runtime.entry.backendId;
-    const backendTarget = runtime.kind === "container" ? runtime.entry.backendTarget : undefined;
-    if (backendId !== "docker" && backendId !== "podman") {
-      throw new Error("Local workspace backend cannot fence host projection writes");
-    }
-    if (backendId === "podman" && !backendTarget) {
-      throw new Error("Local workspace Podman engine owner is missing");
-    }
-    const engine =
-      backendId === "podman" ? bindPodmanSandboxEngine(backendTarget!) : DOCKER_SANDBOX_ENGINE;
+    const { engine, backendTarget } = localWorkspaceRuntimeEngine(runtime);
     // Stopped allocations remain owned resources, but were never live writers.
     const captureRetirement = (id: string | null) =>
       retirements.push(async () => {

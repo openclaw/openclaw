@@ -682,12 +682,6 @@ async function verifyAndPublishSqliteSnapshot(
               published.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
               assertSqliteIntegrity(published, options.targetPath, options.integrity);
               options.validate?.(published, options.targetPath);
-              const publishedUserVersion = readSqliteUserVersion(published);
-              if (publishedUserVersion !== userVersion) {
-                throw new Error(
-                  `SQLite snapshot user_version changed during publication: expected ${userVersion}, got ${publishedUserVersion}`,
-                );
-              }
             } finally {
               published.close();
             }

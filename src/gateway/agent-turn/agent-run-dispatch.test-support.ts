@@ -1,18 +1,17 @@
 import { vi } from "vitest";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createChatRunState } from "../server-chat-state.js";
+import { createTestRpcSource } from "./rpc-source.test-support.js";
 import type { AgentTurnContext } from "./types.js";
 
-function createContext(): AgentTurnContext {
+export function createAgentTurnTestContext(): AgentTurnContext {
   return {
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
     agentRunSeq: new Map(),
     broadcast: vi.fn(),
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     chatRunState: createChatRunState(),
     dedupe: new Map(),
     deps: {},
@@ -40,16 +39,16 @@ function createContext(): AgentTurnContext {
 export function createTrackedDispatch() {
   const runId = "dispatch-run";
   const sessionKey = "agent:main:dispatch-owner";
-  const context = createContext();
-  const entry: ChatAbortControllerEntry = {
-    controller: new AbortController(),
-    sessionId: "dispatch-session",
-    sessionKey,
-    lifecycleGeneration: getAgentEventLifecycleGeneration(),
-    operationalRunInstance: { runId, instanceId: "original-instance" },
-    startedAtMs: 1,
-    expiresAtMs: Number.MAX_SAFE_INTEGER,
-  };
-  context.chatAbortControllers.set(runId, entry);
+  const context = createAgentTurnTestContext();
+  const entry = createTestRpcSource(
+    {
+      sessionId: "dispatch-session",
+      sessionKey,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      operationalRunInstance: { runId, instanceId: "original-instance" },
+    },
+    runId,
+  );
+  rpcSourceTesting.set(runId, entry);
   return { runId, sessionKey, context, entry };
 }

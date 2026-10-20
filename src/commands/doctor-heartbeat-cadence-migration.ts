@@ -126,7 +126,7 @@ export async function ensureHeartbeatMonitorJobs(
 ): Promise<Map<string, CronJob>> {
   return await withDoctorCronService(storePath, cfg, async (cron) => {
     const jobs = await cron.list({ includeDisabled: true });
-    const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
+    const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env, readOnly: true });
     const { specs } = resolveHeartbeatMonitorPlan(cfg, jobs, { schedulerSeed });
     const monitors = new Map<string, CronJob>();
     for (const spec of specs) {
@@ -164,7 +164,7 @@ export async function maybeMigrateHeartbeatCadenceToCron(params: {
   }
 
   await withDoctorCronService(storePath, params.cfg, async (cron) => {
-    const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env });
+    const schedulerSeed = resolveHeartbeatSchedulerSeed(undefined, { env, readOnly: true });
     const result = await applyHeartbeatMonitorJobs({
       cron,
       cfg: params.cfg,

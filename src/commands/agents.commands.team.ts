@@ -2,7 +2,7 @@ import { createAgentTeam } from "../agents/agent-team.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { throwExpectedCliError } from "../cli/failure-output.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 import { shortenHomePath } from "../utils.js";
 
 type AgentsTeamCreateOptions = {
@@ -14,10 +14,7 @@ type AgentsTeamCreateOptions = {
   json?: boolean;
 };
 
-export async function agentsTeamCreateCommand(
-  opts: AgentsTeamCreateOptions,
-  runtime: RuntimeEnv = defaultRuntime,
-): Promise<void> {
+export async function agentsTeamCreateCommand(opts: AgentsTeamCreateOptions): Promise<void> {
   const result = await runWithLocalStateOwner({
     method: "agents.team.create",
     params: {},

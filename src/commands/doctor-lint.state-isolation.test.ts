@@ -475,101 +475,118 @@ describe("doctor lint state isolation", () => {
     },
   );
 
-  it("reuses one writable inspection image per report and prepares none when unused", async () => {
-    await withOpenClawTestState({ prefix: "doctor-lint-writable-reuse-" }, async (state) => {
-      await state.writeConfig({
-        plugins: { enabled: false },
-        memory: { search: { enabled: false } },
-      });
-      const source = openOpenClawStateDatabase({ env: state.env });
-      const privateStates: Array<ReturnType<typeof openOpenClawStateDatabase>> = [];
-      const observed: Array<{ source: unknown; previous: unknown }> = [];
-      const checkIds = [
-        "core/doctor/skills-readiness",
-        "core/doctor/runtime-tool-schemas",
-        "core/doctor/project-clone-shape",
-      ];
-      mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
-        ...checkIds.map((id, index) => ({
-          id,
-          kind: "core",
-          description: "inspects and updates disposable plugin state",
-          async detect(ctx: HealthCheckContext) {
-            const options = {
-              env: {
-                ...ctx.env,
-                OPENCLAW_STATE_DIR: resolveActivePluginInstallRoots().stateDir,
-              },
-            };
-            privateStates.push(openOpenClawStateDatabase(options));
-            observed.push({
-              source: readConfigMachineState("doctorLint.source", options),
-              previous: readConfigMachineState("doctorLint.privateStep", options),
-            });
-            writeConfigMachineState("doctorLint.privateStep", index, options);
-            return [];
-          },
-        })),
-        {
-          id: "core/doctor/no-private-state",
-          kind: "core",
-          description: "does not require writable plugin state",
-          async detect() {
-            return [];
-          },
-        },
-      ]);
-      const prepare = vi.spyOn(sqliteSnapshotSource, "prepareSqliteReadOnlyLocationSync");
-      const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
-      const previousPaths = new Set<string>();
-      try {
-        for (const value of ["first report", "next report"]) {
-          writeConfigMachineState("doctorLint.source", value, { env: state.env });
-          const before = snapshotDoctorLintSqliteFamily(source.path);
-          prepare.mockClear();
-          privateStates.length = 0;
-          observed.length = 0;
-          const exitCode = await runDoctorLintCli(runtime, { json: true });
-          const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-          expect(report.findings).toEqual([]);
-          expect(exitCode).toBe(0);
-          expect(prepare.mock.calls.filter(([location]) => location === source.path)).toHaveLength(
-            1,
-          );
-          expect(observed).toEqual([
-            { source: value, previous: undefined },
-            { source: value, previous: 0 },
-            { source: value, previous: 1 },
-          ]);
-          const privatePaths = new Set(privateStates.map(({ path: location }) => location));
-          expect(privatePaths.size).toBe(1);
-          for (const location of privatePaths) {
-            expect(location).not.toBe(source.path);
-            expect(previousPaths.has(location)).toBe(false);
-            expect(fs.existsSync(location)).toBe(false);
-            previousPaths.add(location);
-          }
-          expect(privateStates.every(({ db }) => !db.isOpen)).toBe(true);
-          expect(source.db.isOpen).toBe(true);
-          expect(snapshotDoctorLintSqliteFamily(source.path)).toEqual(before);
-        }
-        const beforeUnused = snapshotDoctorLintSqliteFamily(source.path);
-        prepare.mockClear();
-        const exitCode = await runDoctorLintCli(runtime, {
-          json: true,
-          onlyIds: ["core/doctor/no-private-state"],
+  it.each(["live WAL", "closed WAL"] as const)(
+    "reuses one writable inspection image per report from %s and prepares none when unused",
+    async (mode) => {
+      await withOpenClawTestState({ prefix: "doctor-lint-writable-reuse-" }, async (state) => {
+        await state.writeConfig({
+          plugins: { enabled: false },
+          memory: { search: { enabled: false } },
         });
-        const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
-        expect(report).toMatchObject({ checksRun: 1, findings: [] });
-        expect(exitCode).toBe(0);
-        expect(prepare).not.toHaveBeenCalled();
-        expect(snapshotDoctorLintSqliteFamily(source.path)).toEqual(beforeUnused);
-      } finally {
-        stdout.mockRestore();
-        prepare.mockRestore();
-      }
-    });
-  });
+        const source = openOpenClawStateDatabase({ env: state.env });
+        const privateStates: Array<ReturnType<typeof openOpenClawStateDatabase>> = [];
+        const observed: Array<{ source: unknown; previous: unknown }> = [];
+        const checkIds = [
+          "core/doctor/skills-readiness",
+          "core/doctor/runtime-tool-schemas",
+          "core/doctor/project-clone-shape",
+        ];
+        mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
+          ...checkIds.map((id, index) => ({
+            id,
+            kind: "core",
+            description: "inspects and updates disposable plugin state",
+            async detect(ctx: HealthCheckContext) {
+              const options = {
+                env: {
+                  ...ctx.env,
+                  OPENCLAW_STATE_DIR: resolveActivePluginInstallRoots().stateDir,
+                },
+              };
+              privateStates.push(openOpenClawStateDatabase(options));
+              observed.push({
+                source: readConfigMachineState("doctorLint.source", options),
+                previous: readConfigMachineState("doctorLint.privateStep", options),
+              });
+              writeConfigMachineState("doctorLint.privateStep", index, options);
+              return [];
+            },
+          })),
+          {
+            id: "core/doctor/no-private-state",
+            kind: "core",
+            description: "does not require writable plugin state",
+            async detect() {
+              return [];
+            },
+          },
+        ]);
+        const prepare = vi.spyOn(sqliteSnapshotSource, "prepareSqliteReadOnlyLocationSync");
+        const fork = vi.spyOn(sqliteSnapshotSource, "forkSqlitePrivateSnapshot");
+        const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+        const previousPaths = new Set<string>();
+        try {
+          for (const value of ["first report", "next report"]) {
+            writeConfigMachineState("doctorLint.source", value, { env: state.env });
+            if (mode === "closed WAL") {
+              await closeOpenClawStateDatabaseAsync();
+              expect(fs.existsSync(`${source.path}-wal`)).toBe(false);
+            }
+            const before = snapshotDoctorLintSqliteFamily(source.path);
+            prepare.mockClear();
+            fork.mockClear();
+            privateStates.length = 0;
+            observed.length = 0;
+            const exitCode = await runDoctorLintCli(runtime, { json: true });
+            const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+            expect(report.findings).toEqual([]);
+            expect(exitCode).toBe(0);
+            expect(
+              prepare.mock.calls.filter(([location]) => location === source.path),
+            ).toHaveLength(0);
+            expect(fork).toHaveBeenCalledOnce();
+            expect(fork.mock.calls[0]![0]).not.toBe(source.path);
+            if (mode === "closed WAL") {
+              expect(fork.mock.calls[0]![1].wal).toBeNull();
+            }
+            expect(observed).toEqual([
+              { source: value, previous: undefined },
+              { source: value, previous: 0 },
+              { source: value, previous: 1 },
+            ]);
+            const privatePaths = new Set(privateStates.map(({ path: location }) => location));
+            expect(privatePaths.size).toBe(1);
+            for (const location of privatePaths) {
+              expect(location).not.toBe(source.path);
+              expect(previousPaths.has(location)).toBe(false);
+              expect(fs.existsSync(location)).toBe(false);
+              previousPaths.add(location);
+            }
+            expect(privateStates.every(({ db }) => !db.isOpen)).toBe(true);
+            expect(source.db.isOpen).toBe(mode === "live WAL");
+            expect(snapshotDoctorLintSqliteFamily(source.path)).toEqual(before);
+          }
+          const beforeUnused = snapshotDoctorLintSqliteFamily(source.path);
+          prepare.mockClear();
+          fork.mockClear();
+          const exitCode = await runDoctorLintCli(runtime, {
+            json: true,
+            onlyIds: ["core/doctor/no-private-state"],
+          });
+          const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+          expect(report).toMatchObject({ checksRun: 1, findings: [] });
+          expect(exitCode).toBe(0);
+          expect(prepare).not.toHaveBeenCalled();
+          expect(fork).not.toHaveBeenCalled();
+          expect(snapshotDoctorLintSqliteFamily(source.path)).toEqual(beforeUnused);
+        } finally {
+          stdout.mockRestore();
+          prepare.mockRestore();
+          fork.mockRestore();
+        }
+      });
+    },
+  );
 
   it.each(["advisory", "selected"] as const)(
     "shares private bytes within each %s report and refreshes the next report",

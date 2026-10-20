@@ -11,36 +11,29 @@ import {
 } from "../../lib/gateway-errors.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { createPageRequest } from "../../lib/page-request.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import type { SessionUsageQuery } from "../../lib/sessions/usage.ts";
 import { isUsageCacheIncomplete, resolveUsagePublication } from "./cache-status.ts";
-import type { ProviderUsageSummary } from "./data-types.ts";
 import { createUsageExportRequest } from "./export.ts";
 import { createDefaultUsageDateRange, toggleUsageRangeSelection } from "./helpers.ts";
+import { createProviderUsageLoader } from "./provider-usage-load.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
-import { type ProviderUsageSnapshot, requestUsageSnapshot } from "./request-usage-snapshot.ts";
-import type { UsageProps, UsageRouteData } from "./types.ts";
+import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import { createUsageDetails } from "./usage-details.ts";
+import type {
+  UsageDetailPresentation,
+  UsageDisplayState,
+  UsageFilterState,
+  UsageRouteData,
+  UsageSessionEntry,
+} from "./usage-state-types.ts";
 
 type UsagePresentation = {
   display: Pick<
-    UsageProps["display"],
+    UsageDisplayState,
     "chartMode" | "dailyChartMode" | "contextExpanded" | "headerPinned"
   >;
-  detail: Pick<
-    UsageProps["detail"],
-    | "timeSeriesMode"
-    | "timeSeriesBreakdownMode"
-    | "timeSeriesCursorStart"
-    | "timeSeriesCursorEnd"
-    | "sessionLogsExpanded"
-    | "logFilters"
-  >;
-};
-type UsageOwnerView = Omit<UsageProps, "display" | "detail"> & {
-  result: SessionsUsageResult | null;
-  display: Omit<UsageProps["display"], keyof UsagePresentation["display"]>;
-  detail: Omit<UsageProps["detail"], keyof UsagePresentation["detail"]>;
+  detail: UsageDetailPresentation;
 };
 
 export function createUsagePage(context: ApplicationContext) {
@@ -52,11 +45,9 @@ export function createUsagePage(context: ApplicationContext) {
     result: SessionsUsageResult | null;
     costSummary: CostUsageSummary | null;
   } | null = null;
-  let providerUsageSummary: ProviderUsageSummary | null = null;
-  let providerUsageUnavailable = false;
-  let providerUsageIncomplete = false;
   let usageError: string | null = null;
-  let filters: Omit<UsageProps["filters"], "selectedSessions"> = {
+  let sessionLoadedAtMs: number | null = null;
+  let filters: Omit<UsageFilterState, "selectedSessions"> = {
     ...createDefaultUsageDateRange(),
     scope: "family",
     creatorKey: null,
@@ -67,7 +58,7 @@ export function createUsagePage(context: ApplicationContext) {
     timeZone: "local",
   };
   // Sorting and recent selection belong to the next request, before Solid commits.
-  let display: UsageOwnerView["display"] = {
+  let display: Omit<UsageDisplayState, keyof UsagePresentation["display"]> = {
     sessionSort: "recent",
     sessionSortDir: "desc",
     recentSessions: [],
@@ -91,7 +82,7 @@ export function createUsagePage(context: ApplicationContext) {
   });
   let usageSelectedSessions: string[] = [];
   let usageOffset = 0;
-  let selectedSession: UsageProps["data"]["selectedSession"] = null;
+  let selectedSession: UsageSessionEntry | null = null;
   let usageAgentId: string | null = null;
   const timers: { dateDebounceTimer: number | null; queryDebounceTimer: number | null } = {
     dateDebounceTimer: null,
@@ -109,6 +100,10 @@ export function createUsagePage(context: ApplicationContext) {
   const refreshPolicy = new UsageRefreshPolicy({
     isLoading: usageLoading,
     reload: (reason) => {
+      // Retries exist for incomplete provider plans; they never re-read session usage.
+      if (reason === "poll") {
+        return providerUsage.load();
+      }
       if (reason === "manual") {
         usageUpdatedAt = usagePublication().updatedAt;
       }
@@ -117,7 +112,7 @@ export function createUsagePage(context: ApplicationContext) {
         reason === "manual" && usageSelectedSessions.length === 1
           ? usageSelectedSessions[0]
           : undefined;
-      return loadUsage(sessionKey);
+      return loadAll(sessionKey);
     },
     onIncompleteUsageExhausted: notify,
   });
@@ -130,6 +125,7 @@ export function createUsagePage(context: ApplicationContext) {
       }
       refreshPolicy.interrupt();
       usageRequest.reset();
+      providerUsage.cancel();
       details.cancel();
     },
     onSnapshot: handleGatewaySnapshot,
@@ -182,16 +178,12 @@ export function createUsagePage(context: ApplicationContext) {
       } else if (current && !snapshot.ok) {
         applyUsageError(snapshot.error.cause);
       }
-      applyUsageLoadState(
-        snapshot.ok ? snapshot.value.providerUsage : snapshot.error.providerUsage,
-        value.epoch,
-        current && snapshot.ok ? undefined : null,
-      );
+      markUsageLoaded(value.epoch, current && snapshot.ok ? Date.now() : null);
       refreshPolicy.flushPending();
     },
     onError: (error) => {
       applyUsageError(error);
-      applyUsageLoadState({ state: "pending" }, connectionEpoch, null);
+      markUsageLoaded(connectionEpoch, null);
       refreshPolicy.flushPending();
     },
   });
@@ -223,7 +215,7 @@ export function createUsagePage(context: ApplicationContext) {
       gateway.connected &&
       !usageLoading()
     ) {
-      void loadUsage();
+      void loadAll();
     }
     notify();
   }
@@ -257,7 +249,8 @@ export function createUsagePage(context: ApplicationContext) {
       result: data.result,
       costSummary: data.costSummary,
     };
-    applyUsageLoadState(data.providerUsage, connectionEpoch, data.loadedAtMs);
+    markUsageLoaded(connectionEpoch, data.loadedAtMs);
+    void providerUsage.load();
     usageError = data.error;
     const preloadUpdatedAt = resolveUsagePublication(
       data.gatewaySnapshot.usagePublications,
@@ -276,6 +269,7 @@ export function createUsagePage(context: ApplicationContext) {
       routeDataEnabled = false;
     }
     usageSnapshot = null;
+    providerUsage.cancel();
     resetProviderUsage();
     usageError = null;
     usageAgentId = context.agentSelection.state.scopeId;
@@ -284,31 +278,32 @@ export function createUsagePage(context: ApplicationContext) {
   }
 
   function resetProviderUsage() {
-    providerUsageSummary = null;
-    providerUsageUnavailable = false;
-    providerUsageIncomplete = false;
+    sessionLoadedAtMs = null;
+    providerUsage.reset();
     refreshPolicy.resetPayload();
   }
 
-  function applyUsageLoadState(
-    snapshot: ProviderUsageSnapshot,
-    connection: unknown,
-    loadedAtMs: number | null = Date.now(),
-  ): void {
-    if (snapshot.state === "settled") {
-      const result = snapshot.result;
-      providerUsageUnavailable = !result.ok;
-      providerUsageIncomplete = !result.ok || result.value.refreshing === true;
-      if (result.ok && !providerUsageIncomplete) {
-        providerUsageSummary = result.value;
-      }
-    }
-    // Session rollups converge on publication; only provider usage needs timed retries.
-    refreshPolicy.setLastLoadedAtMs(
-      snapshot.state === "pending" || usageCacheIncomplete() ? null : loadedAtMs,
-      { incomplete: providerUsageIncomplete, connection },
-    );
+  // Only the session read owns freshness: a provider result reuses the last session timestamp,
+  // so provider plans add their retry state and never make a failed session read look fresh.
+  // Session rollups converge on publication; only provider usage needs timed retries.
+  function markUsageLoaded(connection: unknown, loadedAtMs = sessionLoadedAtMs): void {
+    sessionLoadedAtMs = loadedAtMs;
+    refreshPolicy.setLastLoadedAtMs(usageCacheIncomplete() ? null : loadedAtMs, {
+      incomplete: providerUsage.incomplete,
+      connection,
+    });
   }
+
+  const providerUsage = createProviderUsageLoader({
+    client: () => (gateway.connected ? gateway.client : null),
+    epoch: () => connectionEpoch,
+    isCurrent: (epoch) => epoch === connectionEpoch,
+    onResult: (epoch) => markUsageLoaded(epoch),
+    onSettled: () => {
+      refreshPolicy.flushPending();
+      notify();
+    },
+  });
 
   function usagePublication() {
     return resolveUsagePublication(gateway.snapshot?.usagePublications, currentQuery().agentId);
@@ -406,6 +401,10 @@ export function createUsagePage(context: ApplicationContext) {
     return !routeDataInitialized || timers.dateDebounceTimer !== null || usageRequest.pending;
   }
 
+  function loadAll(refreshSessionKey?: string): Promise<void> {
+    return Promise.all([loadUsage(refreshSessionKey), providerUsage.load()]).then(() => undefined);
+  }
+
   function loadUsage(refreshSessionKey?: string): Promise<void> {
     const client = gateway.client;
     if (!client || !gateway.connected) {
@@ -465,7 +464,7 @@ export function createUsagePage(context: ApplicationContext) {
     if (change.identityChanged || change.becameConnected) {
       connectionEpoch = {};
       if (routeDataInitialized) {
-        void refreshPolicy.request("reconnect");
+        void refreshPolicy.request("reconnect").then(() => providerUsage.resume());
       }
     } else if (usageCommitted && routeDataInitialized) {
       void refreshPolicy.request("publication");
@@ -517,7 +516,7 @@ export function createUsagePage(context: ApplicationContext) {
     refreshOverview();
   }
 
-  function read(): UsageOwnerView {
+  function read() {
     const timeSeries = details.timeSeries.data;
     return {
       result: usageResult(),
@@ -535,12 +534,13 @@ export function createUsagePage(context: ApplicationContext) {
         costDaily: usageCalendarSummary()?.daily ?? [],
         cacheRefresh: usageCacheIncomplete()
           ? usageRefreshFailed()
-            ? "failed"
-            : "retrying"
-          : "complete",
-        providerUsage: providerUsageSummary?.providers ?? [],
-        providerUsageStalled: providerUsageIncomplete && refreshPolicy.incompleteUsageExhausted,
-        providerUsageUnavailable,
+            ? ("failed" as const)
+            : ("retrying" as const)
+          : ("complete" as const),
+        providerUsage: providerUsage.summary?.providers ?? [],
+        // The gateway never converged the refresh; the empty list is not an answer.
+        providerUsageStalled: providerUsage.incomplete && refreshPolicy.incompleteUsageExhausted,
+        providerUsageUnavailable: providerUsage.unavailable,
       },
       filters: { ...filters, selectedSessions: usageSelectedSessions },
       display,
@@ -559,16 +559,18 @@ export function createUsagePage(context: ApplicationContext) {
       },
       callbacks: {
         filters: {
-          onDatesChange: (dates) => {
+          onDatesChange: (dates: Partial<Pick<UsageFilterState, "startDate" | "endDate">>) => {
             setFilters(dates);
             scheduleUsageLoad();
           },
-          onScopeChange: (scope) => {
+          onScopeChange: (
+            scope: Partial<Pick<UsageFilterState, "scope" | "creatorKey" | "timeZone">>,
+          ) => {
             setFilters(scope);
             clearSelectionsAndDetails();
             void refreshPolicy.request("manual");
           },
-          onRefresh: () => {
+          onRefresh: (): void | Promise<void> => {
             for (const receipt of usagePublication().failures) {
               acknowledgedUsageFailures.add(receipt);
             }
@@ -579,7 +581,7 @@ export function createUsagePage(context: ApplicationContext) {
               draft.display.headerPinned = !draft.display.headerPinned;
             });
           },
-          onSelectHour: (hour, shiftKey) => {
+          onSelectHour: (hour: number, shiftKey: boolean) => {
             setFilters({
               selectedHours: toggleUsageRangeSelection(
                 filters.selectedHours,
@@ -591,7 +593,7 @@ export function createUsagePage(context: ApplicationContext) {
             });
             refreshOverview();
           },
-          onQueryDraftChange: (query) => {
+          onQueryDraftChange: (query: string) => {
             setFilters({ queryDraft: query });
             clearDebounce("queryDebounceTimer");
             timers.queryDebounceTimer = window.setTimeout(() => {
@@ -605,7 +607,7 @@ export function createUsagePage(context: ApplicationContext) {
             setFilters({ queryDraft: "", query: "" });
             refreshOverview();
           },
-          onSelectDay: (day, shiftKey, orderedDays) => {
+          onSelectDay: (day: string, shiftKey: boolean, orderedDays: string[]) => {
             setFilters({
               selectedDays: toggleUsageRangeSelection(
                 filters.selectedDays,
@@ -640,14 +642,14 @@ export function createUsagePage(context: ApplicationContext) {
           onExportJson: () => {
             void usageExportRequest.run("json");
           },
-          onExportCsv: (format) => {
+          onExportCsv: (format: "sessions-csv" | "daily-csv") => {
             void usageExportRequest.run(format);
           },
-          onPageChange: (offset) => {
+          onPageChange: (offset: number) => {
             usageOffset = offset;
             void loadUsage();
           },
-          onChange: (next) => {
+          onChange: (next: Partial<UsageDisplayState>) => {
             const { sessionSort, sessionSortDir, sessionsTab, recentSessions, ...local } = next;
             display = {
               sessionSort: sessionSort ?? display.sessionSort,
@@ -679,23 +681,25 @@ export function createUsagePage(context: ApplicationContext) {
               draft.detail.sessionLogsExpanded = !draft.detail.sessionLogsExpanded;
             });
           },
-          onLogFiltersChange: (next) => {
+          onLogFiltersChange: (next: Partial<UsageDetailPresentation["logFilters"]>) => {
             setPresentation((draft) => {
               Object.assign(draft.detail.logFilters, next);
             });
           },
           onSelectSession: selectSession,
-          onTimeSeriesModeChange: (mode) => {
+          onTimeSeriesModeChange: (mode: UsageDetailPresentation["timeSeriesMode"]) => {
             setPresentation((draft) => {
               draft.detail.timeSeriesMode = mode;
             });
           },
-          onTimeSeriesBreakdownChange: (mode) => {
+          onTimeSeriesBreakdownChange: (
+            mode: UsageDetailPresentation["timeSeriesBreakdownMode"],
+          ) => {
             setPresentation((draft) => {
               draft.detail.timeSeriesBreakdownMode = mode;
             });
           },
-          onTimeSeriesCursorRangeChange: (start, end) => {
+          onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => {
             if (details.timeSeries.data === timeSeries) {
               setPresentation((draft) => {
                 draft.detail.timeSeriesCursorStart = start;
@@ -707,16 +711,8 @@ export function createUsagePage(context: ApplicationContext) {
       },
     };
   }
-  const projection = projectSource(context, {
-    read,
-    subscribe: (_source, listener) => {
-      publish = listener;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(context, read);
+  publish = projection.publish;
   gateway.connect();
   const stopAgentScope = observeAgentScope(context.agentSelection);
   onCleanup(() => {
@@ -732,7 +728,7 @@ export function createUsagePage(context: ApplicationContext) {
   });
 
   return {
-    read(): UsageProps {
+    read() {
       const state = projection.read();
       return {
         ...state,

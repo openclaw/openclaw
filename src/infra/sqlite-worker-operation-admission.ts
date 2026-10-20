@@ -5,7 +5,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
-import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
+import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-errors.js";
 import { sqlPublicationAnchor, type PostgresSqlConnection } from "./sql-connection.js";
 import {
   captureSqliteDatabaseAdmissions,

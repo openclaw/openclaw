@@ -259,7 +259,7 @@ export async function admitToolCallBatch(
       }
       return;
     }
-    const churn = reconcileToolCallExecutionParams(sessionState, {
+    const active = reconcileToolCallExecutionParams(sessionState, {
       toolName: admitted.toolName,
       toolParams: readyCall.args,
       toolCallId: readyCall.toolCallId,
@@ -267,10 +267,11 @@ export async function admitToolCallBatch(
       warningThreshold,
     });
     markDiagnosticArgumentChurnObservation({
+      watchdogAttempt: ctx.watchdogAttempt,
       sessionKey: ctx.sessionKey,
       sessionId: ctx.sessionId,
       runId: ctx.runId,
-      active: churn.active,
+      active,
     });
     committedIds.add(readyCall.toolCallId);
   };

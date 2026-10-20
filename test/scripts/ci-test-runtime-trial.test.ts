@@ -59,7 +59,7 @@ const defaults = [
     eventName: "workflow_dispatch",
     previousPolicy: "dual",
     policy: "dual-all",
-    digest: "cbd832cc5d5fe53a88b1959821899f68f4a1b746d5af94c3855883bbea8b779d",
+    digest: "86598cc288a105d40ad4bdf2a4cc6b2d0635d75183e18a209f4bc9c062922849",
   },
 ] as const;
 

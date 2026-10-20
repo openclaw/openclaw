@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useSqliteWorkerFault } from "../../test/helpers/sqlite-worker-fault.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -37,6 +39,8 @@ const pruneFault = useSqliteWorkerFault([
     sql: `CREATE TEMP TRIGGER fail_audit_identity_prune BEFORE DELETE ON main.execution_identity_contexts
       BEGIN SELECT RAISE(ABORT, 'synthetic identity prune failure'); END;`,
   },
+  { match: /^insert into audit_events\b/u, exitOnMatch: 2 },
+  { match: /^insert into audit_events\b/u, exitOnMatch: 1 },
 ]);
 
 let restoreConstructor: (() => void) | undefined;
@@ -48,7 +52,7 @@ afterEach(async () => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("audit writer shared worker", () => {
-  it.each(["cold", "existing shared actor"] as const)(
+  it.each(["cold", "existing shared actor", "worker death after committed prefix"] as const)(
     "flushes the %s audit FIFO without host SQLite",
     async (mode) => {
       const stateDir = tempDirs.make("openclaw-audit-writer-");
@@ -81,6 +85,19 @@ describe("audit writer shared worker", () => {
       expect(nativeOpens).toBe(1);
       nativeOpens = 0;
       const counters = observeMainThreadSql({ includeClose: true });
+      let processRequests = 0;
+      const stopObserving = onInternalDiagnosticEvent(
+        (event) => {
+          if (
+            event.type === "worker.request" &&
+            event.phase === "queued" &&
+            event.requestClass === "audit.writer.process"
+          ) {
+            processRequests += 1;
+          }
+        },
+        { include: ["worker.request"] },
+      );
       const writer = createAuditEventWriter({
         scheduler: createTestGatewayScheduler(),
         stateDir,
@@ -94,6 +111,9 @@ describe("audit writer shared worker", () => {
       const clearSink = configureExecutionIdentityAdmissionSink(writer.recordExecutionIdentity);
       try {
         await writer.ready;
+        if (mode === "worker death after committed prefix") {
+          pruneFault.enable(1);
+        }
         expect(
           enqueueExecutionIdentityContextAtAdmission(
             {
@@ -124,9 +144,13 @@ describe("audit writer shared worker", () => {
             refs: { target: { namespace: "session", value: "private-session-target" } },
           }),
         ).toBe(true);
-        expect(writer.record(input())).toBe(true);
         recorder.recordMessage(messageEvent("message.outbound.queued"));
-        recorder.recordMessage(messageEvent("message.outbound.finished"));
+        recorder.recordMessage({
+          ...messageEvent("message.outbound.finished"),
+          runId: receipt.runId,
+          executionIdentityToken: token,
+        });
+        expect(writer.record(input())).toBe(true);
       } finally {
         clearSink();
         try {
@@ -134,13 +158,22 @@ describe("audit writer shared worker", () => {
           expect(nativeOpens).toBe(0);
           counters.expectIdle();
         } finally {
+          stopObserving();
           counters.restore();
           restoreConstructor();
         }
       }
 
-      expect(errors).toEqual([]);
+      const replayed = mode === "worker death after committed prefix";
       const owner = openOpenClawStateDatabase(database).db;
+      expect(owner.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
+        count: 2,
+      });
+      expect(
+        owner.prepare("SELECT COUNT(*) AS count FROM outbound_message_execution_bindings").get(),
+      ).toEqual({ count: 1 });
+      expect(errors).toHaveLength(replayed ? 1 : 0);
+      expect(processRequests).toBe(replayed ? 2 : 1);
       expect(
         owner.prepare("SELECT run_id FROM audit_events WHERE kind = 'agent_run'").get(),
       ).toEqual({
@@ -161,6 +194,7 @@ describe("audit writer shared worker", () => {
         limit: 10,
         now: receipt.occurredAt + 1,
       }).receipts;
+      expect(decisions).toHaveLength(2);
       expect(decisions).toContainEqual(receipt);
       expect(decisions).toContainEqual(
         expect.objectContaining({
@@ -174,6 +208,50 @@ describe("audit writer shared worker", () => {
       expect(owner.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
     },
   );
+
+  it("drops a repeatedly crashing batch and persists work queued after its first failure", async () => {
+    const stateDir = tempDirs.make("openclaw-audit-poison-batch-");
+    const newerQueued = createDeferred();
+    const errors: string[] = [];
+    const writer = createAuditEventWriter({
+      scheduler: createTestGatewayScheduler(),
+      stateDir,
+      onError: (error) => {
+        errors.push(error);
+        // Every attempt to insert an audit event kills the real worker again.
+        pruneFault.enable(2);
+        if (errors.length === 1) {
+          recorder.recordMessage(messageEvent("message.outbound.queued"));
+          newerQueued.resolve();
+        }
+      },
+    });
+    const recorder = createAuditEventRecorder({
+      scheduler: createTestGatewayScheduler(),
+      getConfig: () => ({ logging: { audit: { messages: "all" } } }),
+      writer,
+    });
+    try {
+      await writer.ready;
+      pruneFault.enable(2);
+      expect(writer.record({ ...input(), sourceId: "poison" })).toBe(true);
+      await newerQueued.promise;
+      await recorder.stop();
+
+      const owner = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: stateDir } }).db;
+      expect(owner.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({
+        count: 0,
+      });
+      expect(
+        owner.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get(),
+      ).toEqual({
+        count: 1,
+      });
+      expect(errors).toHaveLength(3);
+    } finally {
+      await recorder.stop();
+    }
+  });
 
   it("keeps earlier family commits and later cleanup when one prune transaction fails", async () => {
     const database = {

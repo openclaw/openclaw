@@ -388,24 +388,24 @@ function recordDiagnosticEvent(
       recordSessionDiagnosticEvent(store, evt);
       return;
     case "queue.lane.enqueue":
-    case "queue.lane.dequeue":
+    case "queue.lane.dequeue": {
+      const labels = { lane: normalizeDiagnosticLane(evt.lane) };
       store.gauge(
         "openclaw_queue_lane_size",
         "Current diagnostic queue lane size.",
-        {
-          lane: normalizeDiagnosticLane(evt.lane),
-        },
+        labels,
         numericValue(evt.queueSize),
       );
       if (evt.type === "queue.lane.dequeue") {
         store.histogram(
           "openclaw_queue_lane_wait_seconds",
           "Queue lane wait time in seconds.",
-          { lane: normalizeDiagnosticLane(evt.lane) },
+          labels,
           seconds(evt.waitMs),
         );
       }
       return;
+    }
     case "session.state":
     case "session.stuck":
     case "session.turn.created":

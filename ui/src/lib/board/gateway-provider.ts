@@ -67,7 +67,7 @@ export class GatewayBoardProvider implements BoardProvider {
     this.snapshot$ = this.snapshotSignal;
     this.loadError$ = this.loadErrorSignal;
     this.events = this.eventStream;
-    this.subscribe(client);
+    this.attachGatewayEvents(client);
     if (connected) {
       void this.activate();
     }
@@ -110,7 +110,7 @@ export class GatewayBoardProvider implements BoardProvider {
     this.snapshotLoaded = false;
     this.setLoadError(null);
     this.snapshotSignal.set(emptyBoardSnapshot(this.sessionKey));
-    this.subscribe(client);
+    this.attachGatewayEvents(client);
     if (connected) {
       void this.activate();
     }
@@ -269,7 +269,7 @@ export class GatewayBoardProvider implements BoardProvider {
     return result;
   }
 
-  private subscribe(client: BoardGatewayClient): void {
+  private attachGatewayEvents(client: BoardGatewayClient): void {
     // Gateway event subscriptions return teardown; this is not a native DOM listener.
     this.unsubscribe = client.addEventListener((event) => {
       if (this.disposed || client !== this.client) {

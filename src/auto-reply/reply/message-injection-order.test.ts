@@ -1,32 +1,29 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import {
-  queueEmbeddedAgentMessageWithOutcomeAsync as queueEmbedded,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import {
   createEmbeddedRunHandle as createHandle,
+  registerTestEmbeddedRun,
   testing as embeddedTesting,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
-import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import type {
+  ReplyBackendMessageInjectionV2 as Injection,
+  ReplyToolAuthorityOverlay as Overlay,
+} from "../../sessions/session-controller.contracts.js";
+import {
+  beginReplyMessageInjectionTarget as beginInjection,
+  captureReplyMessageInjectionTarget,
+} from "../../sessions/session-controller.js";
+import { steerSessionControllerOperation } from "../../sessions/session-controller.steer.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { controlRealtimeVoiceAgentRun as controlTalk } from "../../talk/agent-run-control.js";
 import { realtimeVoiceControlRuntime as talkRuntime } from "../../talk/agent-run-control.runtime.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import type {
-  ReplyBackendMessageInjectionV2 as Injection,
-  ReplyToolAuthorityOverlay as Overlay,
-} from "./reply-run-registry.contracts.js";
-import {
-  beginReplyMessageInjectionTarget as beginInjection,
-  replyRunRegistry,
-} from "./reply-run-registry.js";
 import {
   createTestReplyOperation as createOperation,
   queueReplyMessageInjectionTarget as queueTarget,
 } from "./reply-run-registry.test-helpers.js";
-import { testing } from "./reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 const sessionId = "session-1";
@@ -39,7 +36,12 @@ const authority = (senderIsOwner = false, senderId?: string): Overlay => ({
 });
 const recorder = (text: string) =>
   createUserTurnTranscriptRecorder({ input: { text }, target: () => undefined });
-type Enqueue = (text: string, check: () => void, prepare?: () => Promise<void>) => Promise<void>;
+type Enqueue = (
+  text: string,
+  check: () => void,
+  prepare?: () => Promise<void>,
+  options?: Parameters<NonNullable<Injection["queueMessage"]>>[1],
+) => Promise<void>;
 function makeBackend(
   runId: string,
   toolAuthorityFingerprint: string,
@@ -49,11 +51,11 @@ function makeBackend(
   const sink: Injection = {
     version: 2,
     isAvailable: () => true,
-    queueMessage: (text, _options, assertCurrent) => queue(text, assertCurrent),
+    queueMessage: (text, options, assertCurrent) => queue(text, assertCurrent, undefined, options),
   };
   if (prepared) {
-    sink.queueMessageAsync = (text, _options, preparation) =>
-      queue(text, preparation.assertCurrent, preparation.prepareCurrent);
+    sink.queueMessageAsync = (text, options, preparation) =>
+      queue(text, preparation.assertCurrent, preparation.prepareCurrent, options);
   }
   return {
     ...createHandle({ runId, toolAuthorityFingerprint }),
@@ -65,7 +67,7 @@ function makeBackend(
 
 afterEach(() => {
   embeddedTesting.resetActiveEmbeddedRuns();
-  testing.resetReplyRunRegistry();
+  testing.resetSessionControllerForTest();
   vi.useRealTimers();
 });
 
@@ -79,10 +81,20 @@ it.each([
     let current = true;
     let context: string | undefined;
     const createRecorder = vi.fn(recorder);
-    const enqueue = vi.fn<typeof talkRuntime.queueGuardedEmbeddedAgentMessageWithOutcomeAsync>(
-      async (id, _text, _options, canInject) => {
+    const enqueue = vi.fn(
+      async (
+        queuedSessionId: string,
+        _text: string,
+        _options: Parameters<NonNullable<Injection["queueMessage"]>>[1],
+        canInject: () => boolean,
+      ) => {
         expect(canInject()).toBe(true);
-        return { queued: true, sessionId: id, target: "embedded_run", gatewayHealth: "live" };
+        return {
+          queued: true as const,
+          sessionId: queuedSessionId,
+          target: "embedded_run" as const,
+          gatewayHealth: "live" as const,
+        };
       },
     );
     const result = await controlTalk(
@@ -95,7 +107,11 @@ it.each([
         },
         mode,
         text: "also check the migration",
-        getToolAuthorityOverlay: () => authority(true),
+        getToolAuthorityOverlay: () => ({
+          senderIsOwner: true,
+          disableTools: false,
+          traceAuthorized: false,
+        }),
         prepareToolAuthorityOverlay: async () => {
           await Promise.resolve();
           context = "prepared legacy Talk context";
@@ -105,7 +121,12 @@ it.each([
         createUserTurnTranscriptRecorder: createRecorder,
       },
       {
-        ...talkRuntime,
+        abortEmbeddedAgentRun: () => false,
+        queueEmbeddedAgentMessageWithOutcomeAsync: async () => {
+          throw new Error("The released adapter must use guarded injection");
+        },
+        getDiagnosticSessionActivitySnapshot: talkRuntime.getDiagnosticSessionActivitySnapshot,
+        resolveActiveEmbeddedRunSessionId: () => sessionId,
         resolveActiveEmbeddedRunOwnerByRunId: () => ({
           runId: "legacy-talk-run",
           sessionId,
@@ -145,7 +166,7 @@ it("requires a fresh target to use a replacement backend on the same operation",
     messageInjection: { isAvailable: () => true, queueMessage },
   });
   operation.attachBackend(legacyBackend(firstQueue));
-  const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+  const target = captureReplyMessageInjectionTarget(operation)!;
   const replacementQueue = vi.fn(async () => {});
   operation.attachBackend(legacyBackend(replacementQueue));
 
@@ -155,7 +176,7 @@ it("requires a fresh target to use a replacement backend on the same operation",
   });
   expect([firstQueue.mock.calls, replacementQueue.mock.calls]).toEqual([[], []]);
 
-  const fresh = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+  const fresh = captureReplyMessageInjectionTarget(operation)!;
   await expect(queueTarget(fresh, "replacement")).resolves.toEqual({
     status: "accepted",
   });
@@ -167,11 +188,11 @@ it("requires a fresh target to use a replacement backend on the same operation",
 
 it.each([
   { first: "gateway", second: "gateway", transition: "deliver" },
-  { first: "embedded", second: "embedded", transition: "deliver" },
-  { first: "gateway", second: "embedded", transition: "deliver" },
-  { first: "embedded", second: "gateway", transition: "deliver" },
-  { first: "gateway", second: "embedded", transition: "refuse" },
-  { first: "embedded", second: "gateway", transition: "replace" },
+  { first: "controller", second: "controller", transition: "deliver" },
+  { first: "gateway", second: "controller", transition: "deliver" },
+  { first: "controller", second: "gateway", transition: "deliver" },
+  { first: "gateway", second: "controller", transition: "refuse" },
+  { first: "controller", second: "gateway", transition: "replace" },
   { first: "talk", second: "gateway", transition: "deliver" },
   { first: "talk", second: "talk", transition: "deliver" },
 ] as const)(
@@ -201,34 +222,34 @@ it.each([
     });
     await operation.bindToolAuthorityRouteAsync({ provider: "test", model: "test" });
     const install = (runId: string) => {
-      const handle = makeBackend(runId, "authority", (text, assertCurrent) => {
+      const handle = makeBackend(runId, "authority", (text, assertCurrent, _prepare, options) => {
         assertCurrent();
         calls.push(text);
+        options?.onQueueAccepted?.(true);
         return delivered.promise;
       });
-      setActiveEmbeddedRun(sessionId, handle, sessionKey);
-      operation.attachBackend(handle);
+      registerTestEmbeddedRun(sessionId, handle, sessionKey, undefined, undefined, operation);
     };
     install("original-run");
     operation.setPhase("running");
-    const send = (surface: "gateway" | "embedded" | "talk", text: string) => {
+    const send = (surface: "gateway" | "controller" | "talk", text: string) => {
       const overlay = authority(true, text);
       const options = { isInboundUserMessage: true, toolAuthorityOverlay: overlay };
-      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey)!;
+      const target = captureReplyMessageInjectionTarget(operation)!;
       let steeringContext: string | undefined;
       const result =
         surface === "gateway"
           ? beginInjection(target, text, options).then((attempt) => attempt.outcome)
-          : surface === "embedded"
-            ? queueEmbedded(sessionId, text, options)
+          : surface === "controller"
+            ? steerSessionControllerOperation({ operation, text, options })
             : controlTalk({
                 sessionKey,
                 runTarget: {
                   runId: target.runId!,
                   signal: operation.abortSignal,
                   isCurrent: () =>
-                    talkRuntime.resolveActiveEmbeddedRunOwnerByRunId(target.runId!)?.sessionId ===
-                    sessionId,
+                    talkRuntime.resolveSourceRunOwner(target.runId!, operation.abortSignal)
+                      ?.sessionId === sessionId,
                 },
                 mode: "steer",
                 text,
@@ -280,77 +301,163 @@ it.each([
   },
 );
 
-it("classifies a refused raw projection as an authority mismatch before backend invocation", async () => {
-  const queueMessage = vi.fn(async () => {});
-  const handle = makeBackend("refused-run", "creator", queueMessage);
-  await withGatewayToolCallerIdentity(
-    {
-      agentId: "main",
-      sessionKey,
-      embeddedRunToolAuthorityBinding: () => ({
-        source: "attempt",
-        assertActive: () => {},
-        project: () => undefined,
-        projectAsync: async () => {
-          throw new Error("caller policy differs");
-        },
-      }),
+it("classifies refused caller policy projection as an authority mismatch before backend invocation", async () => {
+  const refusedSessionId = "refused-projection";
+  const refusedSessionKey = "agent:main:refused-projection";
+  const operation = createOperation({ sessionId: refusedSessionId, sessionKey: refusedSessionKey });
+  const projectAsync = vi.fn(async () => {
+    throw new Error("caller policy differs");
+  });
+  await operation.bindToolAuthoritySnapshotAsync({
+    fingerprint: () => "creator",
+    fingerprintAsync: async () => "creator",
+    project: () => {
+      throw new Error("caller policy differs");
     },
-    () => setActiveEmbeddedRun(sessionId, handle, sessionKey),
+    projectAsync,
+  });
+  await operation.bindToolAuthorityRouteAsync({ provider: "test", model: "test" });
+  const queueMessage = vi.fn(async () => {});
+  const handle = {
+    ...createHandle({ runId: "refused-run", toolAuthorityFingerprint: "creator" }),
+    messageInjectionV2: {
+      version: 2 as const,
+      isAvailable: () => true,
+      queueMessage,
+      queueMessageAsync: queueMessage,
+    },
+  };
+  registerTestEmbeddedRun(
+    refusedSessionId,
+    handle,
+    refusedSessionKey,
+    undefined,
+    undefined,
+    operation,
   );
+  operation.setPhase("running");
   await expect(
-    queueEmbedded(sessionId, "refused", {
-      isInboundUserMessage: true,
-      toolAuthorityOverlay: authority(),
+    steerSessionControllerOperation({
+      operation,
+      text: "refused",
+      options: {
+        isInboundUserMessage: true,
+        toolAuthorityOverlay: {
+          senderIsOwner: false,
+          disableTools: false,
+          traceAuthorized: false,
+        },
+      },
     }),
-  ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+  ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+  expect(projectAsync).toHaveBeenCalled();
   expect(queueMessage).not.toHaveBeenCalled();
 });
 
 it.each([
-  { backend: "legacy", revoked: false },
-  { backend: "legacy", revoked: true },
-  { backend: "prepared", revoked: false },
-  { backend: "prepared", revoked: true },
+  { backend: "legacy", revoked: false, acceptBeforeRevocation: false },
+  { backend: "legacy", revoked: true, acceptBeforeRevocation: false },
+  { backend: "prepared", revoked: false, acceptBeforeRevocation: false },
+  { backend: "prepared", revoked: true, acceptBeforeRevocation: false },
+  { backend: "legacy", revoked: true, acceptBeforeRevocation: true },
+  { backend: "prepared", revoked: true, acceptBeforeRevocation: true },
 ] as const)(
-  "refreshes Talk caller policy before $backend enqueue (revoked: $revoked)",
-  async ({ backend, revoked }) => {
+  "refreshes Talk caller policy before $backend enqueue (revoked: $revoked, accepted: $acceptBeforeRevocation)",
+  async ({ backend, revoked, acceptBeforeRevocation }) => {
+    const talkSessionId = `talk-policy-${backend}-${revoked}`;
+    const talkSessionKey = `agent:main:${talkSessionId}`;
     const run = createQueueTestRun({ prompt: "preserve this Talk input" });
-    Object.assign(run.run, { agentId: "main", sessionId, sessionKey });
-    const operation = createOperation();
+    Object.assign(run.run, {
+      agentId: "main",
+      sessionId: talkSessionId,
+      sessionKey: talkSessionKey,
+      messageProvider: "telegram",
+      senderId: "talk-requester",
+    });
+    const operation = createOperation({ sessionId: talkSessionId, sessionKey: talkSessionKey });
     await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
     const fingerprint = await operation.bindToolAuthorityRouteAsync(run.run);
     const entered = createDeferredCore();
     const resume = createDeferredCore();
     const enqueue = vi.fn();
-    const handle = makeBackend(
-      sessionId,
-      fingerprint,
-      async (text, assertCurrent, prepare) => {
-        entered.resolve();
-        await resume.promise;
-        await prepare?.();
+    const waitForCaller = async () => {
+      entered.resolve();
+      await resume.promise;
+    };
+    const injection: Injection = {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage: async (text, options, assertCurrent) => {
+        if (acceptBeforeRevocation) {
+          assertCurrent();
+          enqueue(text);
+          options?.onQueueAccepted?.(true);
+        }
+        await waitForCaller();
         assertCurrent();
-        enqueue(text);
+        if (!acceptBeforeRevocation) {
+          enqueue(text);
+        }
       },
-      backend === "prepared",
-    );
-    operation.attachBackend(handle);
+      ...(backend === "prepared"
+        ? {
+            queueMessageAsync: (async (text, options, preparation) => {
+              if (acceptBeforeRevocation) {
+                await preparation.prepareCurrent();
+                preparation.assertCurrent();
+                enqueue(text);
+                options?.onQueueAccepted?.(true);
+              }
+              await waitForCaller();
+              await preparation.prepareCurrent();
+              preparation.assertCurrent();
+              if (!acceptBeforeRevocation) {
+                enqueue(text);
+              }
+            }) satisfies NonNullable<Injection["queueMessageAsync"]>,
+          }
+        : {}),
+    };
+    const handle = {
+      ...createHandle({ runId: talkSessionId, toolAuthorityFingerprint: fingerprint }),
+      kind: "embedded" as const,
+      cancel() {},
+      messageInjectionV2: injection,
+    };
+    registerTestEmbeddedRun(talkSessionId, handle, talkSessionKey, undefined, undefined, operation);
     operation.setPhase("running");
-    setActiveEmbeddedRun(sessionId, handle, sessionKey);
-    let overlay = authority();
+    let overlay: Overlay = {
+      messageProvider: "telegram",
+      senderId: "talk-requester",
+      senderIsOwner: false,
+      disableTools: false,
+      traceAuthorized: false,
+    };
     const outcome = controlTalk({
-      sessionKey,
+      sessionKey: talkSessionKey,
       mode: "steer",
       text: run.prompt,
       getToolAuthorityOverlay: () => overlay,
     });
     try {
-      await awaitGateBeforeSettlement(entered.promise, outcome, "Talk preparation not entered");
-      overlay = { ...overlay, disableTools: revoked };
+      await awaitGateBeforeSettlement(
+        entered.promise,
+        outcome,
+        "Talk did not reach backend preparation",
+      );
+      if (revoked) {
+        overlay = { ...overlay, disableTools: true };
+      }
       resume.resolve();
-      await expect(outcome).resolves.toMatchObject({ queued: !revoked });
-      expect(enqueue.mock.calls).toEqual(revoked ? [] : [[run.prompt]]);
+      await expect(outcome).resolves.toMatchObject({
+        queued: !revoked || acceptBeforeRevocation,
+        ...(acceptBeforeRevocation ? { ok: false, reason: "delivery_unconfirmed" } : {}),
+      });
+      if (revoked && !acceptBeforeRevocation) {
+        expect(enqueue).not.toHaveBeenCalled();
+      } else {
+        expect(enqueue).toHaveBeenCalledExactlyOnceWith(run.prompt);
+      }
     } finally {
       resume.resolve();
       await outcome;

@@ -7,9 +7,10 @@ import {
 } from "@openclaw/uirouter";
 import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import type { SolidRouteProps } from "../app-route-types.ts";
+import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
 import {
   SESSION_COMPOSER_FOCUS_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
@@ -59,8 +60,11 @@ function ownedRenderer(teardown: () => Promise<void>) {
     <>
       <mcp-app-view
         ref={(element) => {
-          Reflect.set(element, "restartAfterTeardown", vi.fn());
-          Reflect.set(element, "teardown", teardown);
+          const target = Object.assign(element, {
+            restartAfterTeardown: vi.fn(),
+            teardown,
+          });
+          onTestFinished(registerMcpAppUnmountTarget(target));
         }}
       />
       <div data-testid="route-value" data-presented={String(props.presented)}>

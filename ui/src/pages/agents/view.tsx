@@ -1,5 +1,4 @@
 import { Show, Switch, Match, createMemo } from "solid-js";
-import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
@@ -10,17 +9,15 @@ import {
   SettingsNavRow,
   LearnMoreLink,
 } from "../../components/solid/settings-ui.tsx";
+import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
-import type { AgentsPanel } from "../../lib/agents/index.ts";
-import {
-  currentConfigObject,
-  type RuntimeConfigState,
-} from "../../lib/config/config-state-model.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { currentConfigObject } from "../../lib/config/config-state-model.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ReasonedDisabledControl } from "../plugins/reasoned-disabled-control.tsx";
-import type { AgentConfigActions } from "./config-actions.tsx";
+import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentMemoryPanel } from "./memory/memory-panel.tsx";
 import { AgentFiles } from "./panels-files.tsx";
 import { AgentOverview } from "./panels-overview.tsx";
@@ -28,25 +25,17 @@ import { AgentSkills } from "./panels-skills.tsx";
 import { AgentChannels, AgentCron } from "./panels-status-files.tsx";
 import { AgentTools } from "./panels-tools-skills.tsx";
 
+registerEnglishCatalog(registerSettingsEnglish);
+registerEnglishCatalog(registerPluginManagementEnglish);
+
 const AGENTS_DOCS_URL = "https://docs.openclaw.ai/concepts/multi-agent";
 
-export type AgentsProps = {
-  access: {
-    canCreateAgent: boolean;
-    canPatchConfig: boolean;
-    canUpdateConfig: boolean;
-    canUpdateIdentity: boolean;
-    canWriteFiles: boolean;
-    canRunCron: boolean;
-  };
-  basePath: string;
-  loading: boolean;
-  error: string | null;
-  agentsList: AgentsListResult | null;
-  selectedAgentId: string | null;
-  activePanel: AgentsPanel;
+export type AgentsProps = Omit<
+  AgentsPageView,
+  "config" | "overview" | "onOpenMemoryImport" | "onOpenMemorySettings"
+> & {
   config: Pick<
-    RuntimeConfigState,
+    AgentsPageView["config"],
     | "configForm"
     | "configSnapshot"
     | "configLoading"
@@ -54,43 +43,10 @@ export type AgentsProps = {
     | "configFormDirty"
     | "lastError"
   >;
-  channels: Omit<Parameters<typeof AgentChannels>[0], "context" | "configForm" | "onSelectPanel">;
-  cron: Omit<
-    Parameters<typeof AgentCron>[0],
-    "basePath" | "context" | "canRunNow" | "onSelectPanel"
-  >;
-  agentFiles: Omit<Parameters<typeof AgentFiles>[0], "agentId" | "canWrite">;
-  agentIdentityById: Record<string, AgentIdentityResult>;
-  overview: Omit<
-    Parameters<typeof AgentOverview>[0],
-    | keyof AgentConfigActions
-    | "agent"
-    | "defaultId"
-    | "configForm"
-    | "agentFilesList"
-    | "agentIdentity"
-    | "canUpdateIdentity"
-    | "onSelectPanel"
-  >;
-  agentSkills: Omit<
-    Parameters<typeof AgentSkills>[0],
-    keyof AgentConfigActions | "agentId" | "configForm" | "canPatchConfig"
-  >;
-  tools: Omit<
-    Parameters<typeof AgentTools>[0],
-    keyof AgentConfigActions | "agentId" | "configForm"
-  >;
-  pinnedAgentIds: readonly string[];
-  onTogglePinnedAgent: (agentId: string) => void;
-  onRefresh: () => void;
-  onCreateAgent: () => void;
-  onSelectPanel: (panel: AgentsPanel) => void;
-  onConfigReload: () => void;
-  onConfigSave: () => void;
-  onOpenMemoryImport?: () => void;
-  onOpenMemorySettings?: () => void;
-  onOpenAgentDefaults: () => void;
-  onSetDefault: (agentId: string) => void;
+  overview: Omit<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired"> &
+    Partial<Pick<AgentsPageView["overview"], "modelSelectionPolicy" | "modelCatalogRetired">>;
+  onOpenMemoryImport?: AgentsPageView["onOpenMemoryImport"];
+  onOpenMemorySettings?: AgentsPageView["onOpenMemorySettings"];
 };
 
 export function AgentsPageHeader() {
@@ -111,9 +67,13 @@ export function AgentsPageHeader() {
 export function Agents(props: AgentsProps) {
   const config = createMemo(() => currentConfigObject(props.config), { equals: false });
   const defaultId = () =>
-    props.agentsList?.selectionRequired ? null : (props.agentsList?.defaultId ?? null);
+    props.readData().agentsList?.selectionRequired
+      ? null
+      : (props.readData().agentsList?.defaultId ?? null);
   const selectedAgent = createMemo(
-    () => props.agentsList?.agents.find((agent) => agent.id === props.selectedAgentId) ?? null,
+    () =>
+      props.readData().agentsList?.agents.find((agent) => agent.id === props.selectedAgentId) ??
+      null,
   );
   const configActions = () => ({
     configForm: config(),
@@ -128,20 +88,20 @@ export function Agents(props: AgentsProps) {
     buildAgentContext(
       selectedAgent()!,
       config(),
-      props.agentFiles.agentFilesList,
+      props.readData().agentFilesList,
       defaultId(),
       props.agentIdentityById[props.selectedAgentId!] ?? null,
     );
   const tabCounts = (): Record<string, number | null> => ({
-    files: props.agentFiles.agentFilesList?.files?.length ?? null,
+    files: props.readData().agentFilesList?.files?.length ?? null,
     skills:
-      props.selectedAgentId && props.agentSkills.activeAgentId === props.selectedAgentId
-        ? (props.agentSkills.report?.skills.length ?? null)
+      props.selectedAgentId && props.readData().agentSkillsAgentId === props.selectedAgentId
+        ? (props.readData().agentSkillsReport?.skills.length ?? null)
         : null,
-    channels: props.channels.snapshot
-      ? Object.keys(props.channels.snapshot.channelAccounts ?? {}).length
+    channels: props.readChannels().channelsSnapshot
+      ? Object.keys(props.readChannels().channelsSnapshot?.channelAccounts ?? {}).length
       : null,
-    cron: props.selectedAgentId ? props.cron.jobsTotal || null : null,
+    cron: props.selectedAgentId ? props.readData().cron.cronJobsTotal || null : null,
   });
   return (
     <div class="agents-layout">
@@ -164,15 +124,22 @@ export function Agents(props: AgentsProps) {
               {(agent) => (
                 <>
                   <Show when={agent().id} keyed>
-                    {(id) => (
-                      <button
-                        type="button"
-                        class="btn btn--sm btn--ghost"
-                        onClick={(event) => void handleCopyButton(event, id, t("agents.copyId"))}
-                      >
-                        <span data-copy-label>{t("agents.copyId")}</span>
-                      </button>
-                    )}
+                    {(id) => {
+                      let label!: HTMLSpanElement;
+                      return (
+                        <button
+                          type="button"
+                          class="btn btn--sm btn--ghost"
+                          onClick={(event) =>
+                            void handleCopyButton(event, id, t("agents.copyId"), { label })
+                          }
+                        >
+                          <span ref={(element) => (label = element)} data-copy-label>
+                            {t("agents.copyId")}
+                          </span>
+                        </button>
+                      );
+                    }}
                   </Show>
                   <button
                     type="button"
@@ -232,7 +199,7 @@ export function Agents(props: AgentsProps) {
               <HubTabs
                 {...{
                   id: "agents",
-                  active: props.activePanel,
+                  active: props.readData().agentsPanel,
                   tabs: (
                     [
                       ["overview", "agents.tabs.overview"],
@@ -253,7 +220,7 @@ export function Agents(props: AgentsProps) {
                 id="agent-panel"
                 class="settings-stack"
                 role="tabpanel"
-                aria-labelledby={`agents-tab-${props.activePanel}`}
+                aria-labelledby={`agents-tab-${props.readData().agentsPanel}`}
               >
                 <Show when={props.config.lastError}>
                   <div class="callout danger" role="alert">
@@ -261,15 +228,16 @@ export function Agents(props: AgentsProps) {
                   </div>
                 </Show>
                 <Switch>
-                  <Match when={props.activePanel === "overview"}>
+                  <Match when={props.readData().agentsPanel === "overview"}>
                     <Show when={agent().id} keyed>
                       {(agentId) => (
                         <AgentOverview
                           {...props.overview}
+                          readData={props.readData}
                           {...configActions()}
                           agent={agent()}
                           defaultId={defaultId()}
-                          agentFilesList={props.agentFiles.agentFilesList}
+                          agentFilesList={props.readData().agentFilesList}
                           agentIdentity={props.agentIdentityById[agentId] ?? null}
                           canUpdateIdentity={props.access.canUpdateIdentity}
                           onSelectPanel={props.onSelectPanel}
@@ -277,42 +245,51 @@ export function Agents(props: AgentsProps) {
                       )}
                     </Show>
                   </Match>
-                  <Match when={props.activePanel === "files"}>
+                  <Match when={props.readData().agentsPanel === "files"}>
                     <AgentFiles
                       {...props.agentFiles}
+                      readData={props.readData}
                       agentId={agent().id}
                       canWrite={props.access.canWriteFiles}
                     />
                   </Match>
-                  <Match when={props.activePanel === "tools"}>
-                    <AgentTools {...props.tools} {...configActions()} agentId={agent().id} />
+                  <Match when={props.readData().agentsPanel === "tools"}>
+                    <AgentTools
+                      {...props.tools}
+                      {...configActions()}
+                      readData={props.readData}
+                      agentId={agent().id}
+                    />
                   </Match>
-                  <Match when={props.activePanel === "skills"}>
+                  <Match when={props.readData().agentsPanel === "skills"}>
                     <AgentSkills
                       {...props.agentSkills}
+                      readData={props.readData}
                       {...configActions()}
                       agentId={agent().id}
                       canPatchConfig={props.access.canPatchConfig}
                     />
                   </Match>
-                  <Match when={props.activePanel === "channels"}>
+                  <Match when={props.readData().agentsPanel === "channels"}>
                     <AgentChannels
                       {...props.channels}
+                      readState={props.readChannels}
                       context={context()}
                       configForm={config()}
                       onSelectPanel={props.onSelectPanel}
                     />
                   </Match>
-                  <Match when={props.activePanel === "cron"}>
+                  <Match when={props.readData().agentsPanel === "cron"}>
                     <AgentCron
                       {...props.cron}
+                      readState={() => props.readData().cron}
                       basePath={props.basePath}
                       context={context()}
                       canRunNow={props.access.canRunCron}
                       onSelectPanel={props.onSelectPanel}
                     />
                   </Match>
-                  <Match when={props.activePanel === "memory"}>
+                  <Match when={props.readData().agentsPanel === "memory"}>
                     <div class="settings-group agent-memory-import-row">
                       <SettingsNavRow
                         title={t("tabs.memory")}
@@ -325,7 +302,7 @@ export function Agents(props: AgentsProps) {
                         onClick={() => props.onOpenMemoryImport?.()}
                       />
                     </div>
-                    <AgentMemoryPanel agentId={agent().id} />
+                    <AgentMemoryPanel initialAgentTarget={props.memoryTarget} />
                   </Match>
                 </Switch>
               </div>

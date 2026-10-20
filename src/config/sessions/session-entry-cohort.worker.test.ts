@@ -1,10 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareEmbeddedRunSession } from "../../agents/embedded-agent-runner/run/session-bootstrap.js";
-import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import { bindReplyOperationDatabaseAdmission } from "../../auto-reply/reply/reply-turn-database-admission.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
 import * as readOnly from "../../state/openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { loadAgentEntryReadOperations } from "../../state/openclaw-agent-execution-operations.js";

@@ -110,10 +110,7 @@ async function handleRequest(request: BridgeRequest) {
         reply = { id: request.id, generation };
       } else {
         const results = await client.query(request.sql, [...request.parameters]);
-        const result: QueryResult | undefined = Array.isArray(results) ? results.at(-1) : results;
-        if (!result) {
-          throw new Error("PostgreSQL returned no query result");
-        }
+        const result: QueryResult = Array.isArray(results) ? results.at(-1)! : results;
         // A trailing SELECT must not hide an earlier write in the same SQL batch.
         const commands = (Array.isArray(results) ? results : [results]).map(
           ({ command }) => command,

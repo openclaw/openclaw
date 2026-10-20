@@ -1,5 +1,3 @@
-// Shared OpenClaw banner: the dot-matrix lobster mascot beside the OPENCLAW
-// wordmark, with a short startup animation on rich interactive terminals.
 // Used by the wizard flows (doctor/onboard/configure) and the foreground
 // gateway run; non-TTY and CI paths always get the plain static banner.
 import {

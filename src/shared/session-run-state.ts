@@ -5,7 +5,7 @@ type SessionRunState = {
   status?: SessionRunStatus;
 };
 
-export function isSessionRunActive(state: SessionRunState): boolean {
+export function isSessionRunStateActive(state: SessionRunState): boolean {
   if (state.status && state.status !== "queued" && state.status !== "running") {
     return false;
   }

@@ -5,6 +5,9 @@ import type {
 } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
+
+registerModelSetupEnglish();
 
 type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
   kind: ProviderLoginOption["kind"] | "setup-secret";

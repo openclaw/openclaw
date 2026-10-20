@@ -76,12 +76,10 @@ import {
   MODEL_SELECTION_LOCKED_RESET_MESSAGE,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { acknowledgeReplySessionTransition } from "../../sessions/session-controller.session-reader.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
-import {
-  SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-  interruptSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import {
@@ -101,8 +99,6 @@ import type { FinalizedTemplateContext as TemplateContext } from "../templating.
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
 import { readBeforeResetMessages } from "./commands-reset-hooks.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
-import { acknowledgeReplySessionTransition } from "./reply-run-registry.state.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   assertPreparedConversationBindingRouteCurrent,
@@ -143,6 +139,7 @@ import {
   stopSessionResetSubagents,
 } from "./session-reset-cleanup.js";
 import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
+import { runReplySessionRolloverMutation } from "./session-rollover-mutation.js";
 import {
   resolveReplySessionFreshness,
   resolveReplySessionRolloverState,
@@ -236,14 +233,21 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
   let rollover = await runLockedAttempt(undefined, storeWriterIdentity);
   while (rollover.kind !== "complete") {
     const candidate = rollover;
-    const identities = [candidate.sessionKey, candidate.sessionId];
     let preparedOutcome: InitSessionStateAttemptOutcome | undefined;
+    let stopResetSubagents = async (applyParentStop: () => Promise<boolean>) => {
+      await applyParentStop();
+      return { stopped: 0, failed: 0 };
+    };
     // Drain foreign owners before the rollover takes the writer lane. Holding
     // that lane while waiting would deadlock owners that release after a write.
-    rollover = await runExclusiveSessionLifecycleMutation("rollover", {
-      scope: attemptContext.storePath,
-      identities,
+    rollover = await runReplySessionRolloverMutation<InitSessionStateAttemptOutcome>({
+      storePath: attemptContext.storePath,
+      sessionKey: candidate.sessionKey,
+      sessionId: candidate.sessionId,
+      explicitReset: candidate.resetTriggered,
       signal: params.signal,
+      shouldPreempt: () => preparedOutcome === undefined,
+      stopChildren: async (applyParentStop) => await stopResetSubagents(applyParentStop),
       prepare: async () => {
         // Cancellation affects live work; do not drain a replacement session
         // selected while this rollover waited for its lifecycle turn.
@@ -259,47 +263,37 @@ async function initSessionStateAttempt(params: InitSessionStateParams): Promise<
           preparedOutcome = await runLockedAttempt();
           return;
         }
-        const drained = await interruptSessionWorkAdmissions({
-          scope: attemptContext.storePath,
-          identities,
-          timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
-        });
-        if (!drained) {
-          throw new Error(
-            `timed out draining work before reply session rollover: ${candidate.sessionKey}`,
-          );
-        }
         if (candidate.resetTriggered) {
-          // Child cancellation is an effect: resolve its current parent before
-          // selecting children, without an additional pre-drain preparation.
-          const current = await runLockedAttempt();
-          if (
-            current.kind === "complete" ||
-            current.sessionId !== candidate.sessionId ||
-            current.lifecycleRevision !== candidate.lifecycleRevision
-          ) {
-            preparedOutcome = current;
-            return;
-          }
-          // Child finalizers may need the same store writer. Drain them here,
-          // outside that lane, before an explicit reset can commit or run its tail.
-          const cleanup = await prepareSessionResetCleanupGuard({
-            agentId: attemptContext.agentId,
-            sessionKey: candidate.sessionKey,
-            storePath: attemptContext.storePath,
-            expectedSession: current,
-            assertCurrent: () => params.signal?.throwIfAborted(),
-          });
-          try {
-            await stopSessionResetSubagents({
-              cfg: params.cfg,
-              sessionKey: candidate.sessionKey,
+          stopResetSubagents = async (applyParentStop) => {
+            // Child cancellation must still target the parent selected by this
+            // mutation after any awaited preparation or stopping-owner callback.
+            const current = await runLockedAttempt();
+            if (
+              current.kind === "complete" ||
+              current.sessionId !== candidate.sessionId ||
+              current.lifecycleRevision !== candidate.lifecycleRevision
+            ) {
+              throw new ReplySessionInitConflictError(candidate.sessionKey);
+            }
+            const cleanup = await prepareSessionResetCleanupGuard({
               agentId: attemptContext.agentId,
-              assertCurrent: cleanup.assertCurrent,
+              sessionKey: candidate.sessionKey,
+              storePath: attemptContext.storePath,
+              expectedSession: current,
+              assertCurrent: () => params.signal?.throwIfAborted(),
             });
-          } finally {
-            cleanup.release();
-          }
+            try {
+              return await stopSessionResetSubagents({
+                cfg: params.cfg,
+                sessionKey: candidate.sessionKey,
+                agentId: attemptContext.agentId,
+                assertCurrent: cleanup.assertCurrent,
+                beforeKill: applyParentStop,
+              });
+            } finally {
+              cleanup.release();
+            }
+          };
         }
       },
       // Check the current identity once at the commit instead of rebuilding the
@@ -531,7 +525,10 @@ async function initSessionStateAttemptLocked(
         canReuseExistingEntry) ||
         (entryFreshness?.fresh ?? false)) &&
         !terminalMainTranscriptNewerThanRegistry));
-  const activeReplyOperation = replyRunRegistry.get(sessionKey);
+  const activeReplyOperation = getSessionControllerOperation(
+    sessionKey,
+    captureSessionTarget({ storeScope: storePath, sessionKey, agentId }),
+  );
   const deferImplicitRolloverForActiveRun =
     !resetTriggered &&
     !freshEntry &&
@@ -882,6 +879,7 @@ async function initSessionStateAttemptLocked(
   }
   clearCommittedSessionResetRuntimeState({
     previousSessionEntry,
+    storePath,
     agentId,
     sessionKey,
     signal: params.signal,

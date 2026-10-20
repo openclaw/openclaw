@@ -21,6 +21,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import {
   loadSessionEntry,
   loadTranscriptEvents,
+  patchSessionEntryCore,
   recoverSessionEntryFromRestartTombstone,
   replaceSessionEntry,
 } from "./session-accessor.js";
@@ -90,6 +91,7 @@ async function createFixture() {
 describe("recoverSessionEntryFromRestartTombstone", () => {
   it("clones and publishes the atomic archived successor transition without host SQLite", async () => {
     const fixture = await createFixture();
+    await patchSessionEntryCore(fixture.scope(), () => ({ label: "Latest source metadata" }));
     await waitForSessionTranscriptIndexReconcilesInStateDir(fixture.root);
     const successorEntry = {
       sessionId: "successor-session",
@@ -144,6 +146,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
     expect(loadSessionEntry(fixture.scope(fixture.sourceKey))).toMatchObject({
       archivedAt: expect.any(Number),
       archiveReason: "restart-recovery",
+      label: "Latest source metadata",
       mainRestartRecovery: {
         cycleId: "cycle-1",
         revision: 5,

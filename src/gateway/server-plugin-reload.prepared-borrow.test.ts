@@ -1,3 +1,4 @@
+import "./server-startup-module-mocks.test-support.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -23,7 +24,6 @@ import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugi
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { createHookRunner } from "../plugins/hooks.js";
 import { activatePluginRegistry } from "../plugins/loader-shared.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
@@ -62,6 +62,9 @@ import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
 import { runGatewayStartupObservers } from "./server-startup-observers.js";
+
+const { installGatewaySubagentModuleLoad } =
+  await import("./server-startup-module-mocks.test-support.js");
 
 function modelConfig(workspace: string): Pick<OpenClawConfig, "agents" | "models"> {
   return {
@@ -608,6 +611,7 @@ describe("published Gateway plugin services", () => {
           },
         });
         const { initial, registryOwner, scheduler, runtime, log, reloadOptions } = fixture;
+        const startupModuleRestorers: Array<() => void> = [];
         let runLease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>> | undefined;
         try {
           // Match post-attach startup: publish configured model owners, start services,
@@ -623,10 +627,30 @@ describe("published Gateway plugin services", () => {
               services = handle;
             },
           });
+          await installGatewaySubagentModuleLoad(
+            async () => {},
+            async () => {},
+            startupModuleRestorers,
+          );
+          const sentinel = vi
+            .spyOn(
+              await import("./server-update-sentinel.js"),
+              "prepareLatestUpdateRestartSentinel",
+            )
+            .mockResolvedValue(null);
+          startupModuleRestorers.push(() => sentinel.mockRestore());
           await runGatewayStartupObservers({
             registry: initial.pluginRegistry,
             resolveGatewayContext: () => undefined,
-            loadSubagentRegistryActivation: async () => () => {},
+            loadSubagentRegistryActivation: async () =>
+              (await import("../agents/subagents/registry/subagent-registry.js"))
+                .activateSubagentRegistry,
+            createHookRunner: async (...args) =>
+              (await import("../plugins/hooks.js")).createHookRunner(...args),
+            refreshLatestUpdateRestartSentinel: async () =>
+              (await import("./server-update-sentinel.js")).prepareLatestUpdateRestartSentinel(
+                state.env,
+              ),
             signal: runtime.requestEntryLifetime.signal,
             port: 0,
             config,
@@ -634,8 +658,6 @@ describe("published Gateway plugin services", () => {
             getCron: () => undefined,
             log,
             logHooks: logs,
-            createHookRunner,
-            refreshLatestUpdateRestartSentinel: async () => {},
           });
           if (mode === "hot enable") {
             expect(fixture.tools(toolName, runLease, config)).toEqual([]);
@@ -709,12 +731,18 @@ describe("published Gateway plugin services", () => {
           await gatewayInstance.waitForRetainedWork(runtime.requestEntryLifetime.signal);
           expect(gatewayInstance.retainedWorkCount).toBe(retainedBeforeRun);
         } finally {
-          await runLease?.[Symbol.asyncDispose]();
-          await closePreparedModelRuntimeSnapshots();
-          await services?.stop({ strict: true });
-          await fixture.close();
-          vi.unstubAllEnvs();
-          vi.unstubAllGlobals();
+          try {
+            await runLease?.[Symbol.asyncDispose]();
+            await closePreparedModelRuntimeSnapshots();
+            await services?.stop({ strict: true });
+            await fixture.close();
+            vi.unstubAllEnvs();
+            vi.unstubAllGlobals();
+          } finally {
+            for (const restore of startupModuleRestorers.toReversed()) {
+              restore();
+            }
+          }
         }
       });
     },

@@ -191,7 +191,6 @@ describe("gateway method authorization", () => {
             broadcast: vi.fn(),
             broadcastToConnIds: vi.fn(),
             getSessionEventSubscriberConnIds: () => new Set(),
-            chatAbortControllers: new Map(),
           },
           extraHandlers: {
             "sessions.patch": async (options) => {
@@ -310,7 +309,6 @@ describe("gateway method authorization", () => {
         );
         const { request, respond } = dispatch(method, requestParams, {
           client: identifiedClient(profileId),
-          context: { chatAbortControllers: new Map() },
           extraHandlers: { [method]: handler },
         });
         await request;

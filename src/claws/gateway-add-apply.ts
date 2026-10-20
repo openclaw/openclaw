@@ -98,7 +98,6 @@ export async function applyClawAddForGateway(
       ...(input.baseUrl ? { baseUrl: input.baseUrl } : {}),
       ...(input.token ? { token: input.token } : {}),
       ...(input.timeoutMs ? { timeoutMs: input.timeoutMs } : {}),
-      ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
       ...(input.stateDir ? { stateDir: input.stateDir } : {}),
       run: async (source, trust, persistSource) =>
         await withOpenClawStateLease(

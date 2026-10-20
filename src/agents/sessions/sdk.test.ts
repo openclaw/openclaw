@@ -127,7 +127,7 @@ async function createSdkSession({
 }
 
 async function createSessionAndStreamModel(model: Model): Promise<SimpleStreamOptions> {
-  streamMocks.streamSimple.mockClear();
+  streamMocks.streamSimple.mockReset().mockImplementation(createRecoveredAssistantStream);
   const { session } = await createSdkSession({
     model,
     modelRegistry: createTestModelRegistry(),
@@ -286,59 +286,6 @@ describe("AgentSession getLastAssistantText", () => {
     const session = await createSessionFromManager(sessionManager);
 
     expect(session.getLastAssistantText()).toBe("previous answer");
-  });
-});
-
-describe("AgentSession tree navigation", () => {
-  it("leaves the tree unchanged when branch summarization returns reasoning only", async () => {
-    const authStorage = AuthStorage.inMemory();
-    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
-    const sessionManager = SessionManager.inMemory();
-    const rootId = sessionManager.appendMessage(makeUserMessage("shared root", 1));
-    const abandonedLeafId = sessionManager.appendMessage(makeUserMessage("abandoned branch", 2));
-    sessionManager.branch(rootId);
-    const targetId = sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "target branch" }],
-      api: testModel.api,
-      provider: testModel.provider,
-      model: testModel.id,
-      usage: createZeroUsageFixture(),
-      stopReason: "stop",
-      timestamp: 3,
-    });
-    sessionManager.branch(abandonedLeafId);
-    streamMocks.streamSimple.mockReset();
-    streamMocks.streamSimple.mockImplementation(() =>
-      createAssistantResultStream({
-        role: "assistant",
-        content: [{ type: "thinking", thinking: "internal summary reasoning" }],
-        api: testModel.api,
-        provider: testModel.provider,
-        model: testModel.id,
-        usage: createZeroUsageFixture(),
-        stopReason: "stop",
-        timestamp: 4,
-      }),
-    );
-    const { session } = await createSdkSession({
-      sessionManager,
-      modelRegistry: createTestModelRegistry(authStorage),
-    });
-    const entriesBefore = sessionManager.getEntries();
-    const leafBefore = sessionManager.getLeafId();
-
-    await expect(session.navigateTree(targetId, { summarize: true })).rejects.toThrow(
-      "Branch summary failed: model returned no summary text",
-    );
-
-    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    expect(sessionManager.getEntries()).toEqual(entriesBefore);
-    expect(sessionManager.getLeafId()).toBe(leafBefore);
-    expect(sessionManager.getEntries().some((entry) => entry.type === "branch_summary")).toBe(
-      false,
-    );
-    session.dispose();
   });
 });
 

@@ -59,10 +59,8 @@ export function SessionsPageContent(props: { page: SessionsPageOwner }) {
 
 export function SessionsPage(props: { routeData?: SessionsRouteData }) {
   // The mount seeds the sessions owner; later route receipts retarget its Gateway queries.
-  const page = createSessionsPage(
-    useApplication(),
-    untrack(() => props.routeData),
-  );
+  const initialRouteData = untrack(() => props.routeData);
+  const page = createSessionsPage(useApplication(), initialRouteData);
   createEffect(
     () => props.routeData,
     (routeData) => page.setRouteData(routeData),

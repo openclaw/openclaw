@@ -176,6 +176,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       assertMutationCurrent?.();
       capture?.assertCurrent();
       creatorOptions?.assertInferenceSelectionCurrent?.();
+      creatorOptions?.assertOperatorSourceCurrent?.();
     };
     try {
       // Consume once, then retain the result and its current-authority guard through commit.

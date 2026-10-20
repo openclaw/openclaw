@@ -1,7 +1,7 @@
-// Video generation runtime coordinates provider auth, fallbacks, and job polling.
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveMediaGeometryOverrides } from "../media-generation/geometry-normalization.js";
 import { createMediaProviderLookup } from "../media-generation/provider-registry.js";
 import {
   getVideoGenerationProvider,
@@ -19,10 +19,18 @@ import {
   buildVideoGenerationCapabilityFailure,
   resolveProviderWithModelCapabilities,
 } from "./capability-overlays.js";
-import { resolveVideoGenerationSupportedDurations } from "./duration-support.js";
-import { resolveVideoGenerationOverrides } from "./normalization.js";
+import {
+  normalizeVideoGenerationDuration,
+  resolveVideoGenerationSupportedDurations,
+  selectSupportedVideoDuration,
+} from "./duration-support.js";
 import type { GenerateVideoParams, GenerateVideoRuntimeResult } from "./runtime-types.js";
-import type { VideoGenerationProviderOptionType, VideoGenerationResult } from "./types.js";
+import type {
+  VideoGenerationIgnoredOverride,
+  VideoGenerationNormalization,
+  VideoGenerationProviderOptionType,
+  VideoGenerationResult,
+} from "./types.js";
 
 const log = createSubsystemLogger("video-generation");
 const MODEL_CAPABILITY_LOOKUP_TIMEOUT_MS = 5_000;
@@ -206,7 +214,7 @@ async function runVideoGeneration(
           !supportedDurations &&
           typeof maxDuration === "number" &&
           // Compare the normalized (rounded) duration, not the raw float, since
-          // resolveVideoGenerationOverrides applies Math.round before sending to the provider.
+          // Normalization applies Math.round before sending to the provider.
           // A request for 4.4s against maxDurationSeconds=4 rounds to 4 and is valid.
           Math.round(requestedDuration) > maxDuration
         ) {
@@ -217,18 +225,48 @@ async function runVideoGeneration(
       }
 
       return async (attempts): Promise<GenerateVideoRuntimeResult> => {
-        const sanitized = resolveVideoGenerationOverrides({
-          provider: activeProvider,
-          model: candidate.model,
+        const sanitized = resolveMediaGeometryOverrides({
           size: params.size,
           aspectRatio: params.aspectRatio,
           resolution: params.resolution,
-          durationSeconds: params.durationSeconds,
-          audio: params.audio,
-          watermark: params.watermark,
-          inputImageCount,
-          inputVideoCount,
+          capabilities: modeCapabilities,
+          reportUnrecognizedOverrides: true,
+          useAspectRatioForRequestedSize: true,
         });
+        const ignoredOverrides: VideoGenerationIgnoredOverride[] = sanitized.ignoredOverrides;
+        const normalization: VideoGenerationNormalization = sanitized.normalization;
+        let { audio, watermark } = params;
+        if (modeCapabilities && typeof audio === "boolean" && !modeCapabilities.supportsAudio) {
+          ignoredOverrides.push({ key: "audio", value: audio });
+          audio = undefined;
+        }
+        if (
+          modeCapabilities &&
+          typeof watermark === "boolean" &&
+          !modeCapabilities.supportsWatermark
+        ) {
+          ignoredOverrides.push({ key: "watermark", value: watermark });
+          watermark = undefined;
+        }
+        const requestedDurationSeconds = normalizeVideoGenerationDuration({
+          durationSeconds: params.durationSeconds,
+        });
+        const durationSeconds =
+          requestedDurationSeconds !== undefined && supportedDurations
+            ? selectSupportedVideoDuration(requestedDurationSeconds, supportedDurations)
+            : requestedDurationSeconds;
+        if (
+          typeof requestedDurationSeconds === "number" &&
+          typeof durationSeconds === "number" &&
+          requestedDurationSeconds !== durationSeconds
+        ) {
+          normalization.durationSeconds = {
+            requested: requestedDurationSeconds,
+            applied: durationSeconds,
+            ...(supportedDurations?.length ? { supportedValues: supportedDurations } : {}),
+          };
+        }
+        const appliedNormalization = Object.keys(normalization).length ? normalization : undefined;
         const generationRequest: Parameters<typeof provider.generateVideo>[0] & {
           [SUPPORTED_DURATIONS_HINT]?: readonly number[];
         } = {
@@ -241,9 +279,9 @@ async function runVideoGeneration(
           size: sanitized.size,
           aspectRatio: sanitized.aspectRatio,
           resolution: sanitized.resolution,
-          durationSeconds: sanitized.durationSeconds,
-          audio: sanitized.audio,
-          watermark: sanitized.watermark,
+          durationSeconds,
+          audio,
+          watermark,
           inputImages: params.inputImages,
           inputVideos: params.inputVideos,
           inputAudios: params.inputAudios,
@@ -281,12 +319,12 @@ async function runVideoGeneration(
           provider: candidate.provider,
           model: result.model ?? candidate.model,
           attempts,
-          normalization: sanitized.normalization,
-          ignoredOverrides: sanitized.ignoredOverrides,
+          normalization: appliedNormalization,
+          ignoredOverrides,
           metadata: {
             ...result.metadata,
             ...buildMediaGenerationNormalizationMetadata({
-              normalization: sanitized.normalization,
+              normalization: appliedNormalization,
               requestedSizeForDerivedAspectRatio: params.size,
               includeSupportedDurationSeconds: true,
             }),

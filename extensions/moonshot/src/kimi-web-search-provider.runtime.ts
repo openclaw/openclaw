@@ -5,16 +5,14 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import {
+  externalContentStamp,
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
   DEFAULT_SEARCH_COUNT,
-  MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
-  readConfiguredSecretString,
-  readPositiveIntegerParam,
-  readProviderEnvValue,
-  readStringParam,
+  readWebSearchApiKey,
+  readWebSearchQueryAndCount,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
@@ -43,13 +41,6 @@ type KimiConfig = {
   apiKey?: string;
   baseUrl?: string;
 };
-
-function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
-  return (
-    readConfiguredSecretString(kimi?.apiKey, "plugins.entries.moonshot.config.webSearch.apiKey") ??
-    readProviderEnvValue(["KIMI_API_KEY", "MOONSHOT_API_KEY"])
-  );
-}
 
 function resolveKimiBaseUrl(kimi?: KimiConfig, openClawConfig?: OpenClawConfig): string {
   const explicitBaseUrl = normalizeOptionalString(kimi?.baseUrl);
@@ -139,7 +130,11 @@ export async function executeKimiWebSearchProviderTool(
   }
 
   const kimiConfig: KimiConfig = asNonArrayRecord(searchConfig?.kimi);
-  const apiKey = resolveKimiApiKey(kimiConfig);
+  const apiKey = readWebSearchApiKey(
+    kimiConfig.apiKey,
+    "plugins.entries.moonshot.config.webSearch.apiKey",
+    ["KIMI_API_KEY", "MOONSHOT_API_KEY"],
+  );
   if (!apiKey) {
     return {
       error: "missing_kimi_api_key",
@@ -149,14 +144,8 @@ export async function executeKimiWebSearchProviderTool(
     };
   }
 
-  const query = readStringParam(args, "query", { required: true });
-  const count = resolveSearchCount(
-    readPositiveIntegerParam(args, "count", {
-      max: MAX_SEARCH_COUNT,
-      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-    }) ?? searchConfig?.maxResults,
-    DEFAULT_SEARCH_COUNT,
-  );
+  const { query, count: requestedCount } = readWebSearchQueryAndCount(args, searchConfig);
+  const count = resolveSearchCount(requestedCount, DEFAULT_SEARCH_COUNT);
   const baseUrl = resolveKimiBaseUrl(kimiConfig, ctx.config);
   const cacheKey = buildSearchCacheKey(["kimi", query, baseUrl, count]);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
@@ -180,12 +169,7 @@ export async function executeKimiWebSearchProviderTool(
     provider: "kimi",
     count: results.length,
     tookMs: Date.now() - start,
-    externalContent: {
-      untrusted: true,
-      source: "web_search",
-      provider: "kimi",
-      wrapped: true,
-    },
+    externalContent: externalContentStamp("kimi"),
     results,
   };
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
