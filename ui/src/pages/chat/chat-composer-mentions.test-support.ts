@@ -32,12 +32,12 @@ export const people: UsersMentionableResult = {
   ],
   truncated: false,
 };
-export const mention = (profileId: string, start = 0, end = 5): HumanMention => ({
-  profileId,
-  start,
-  end,
-});
+export function mention(profileId: string, start = 0, end = 5): HumanMention {
+  return { profileId, start, end };
+}
 const composerTextareas: NewSessionComposerTextarea[] = [];
+type EditOptions = Pick<InputEventInit, "inputType" | "data"> &
+  Partial<Record<"start" | "end" | "caret", number>>;
 
 export async function resetMentionComposerFixture() {
   composerTextareas.splice(0).forEach((composerTextarea) => composerTextarea.disconnect());
@@ -148,28 +148,18 @@ export function composerFixture(
   }
   renderCurrent();
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-  const edit = (
-    next: string,
-    options: {
-      start?: number;
-      end?: number;
-      caret?: number;
-      inputType?: string;
-      data?: string | null;
-    } = {},
-  ) => {
+  const edit = (next: string, options: EditOptions = {}) => {
+    const start = options.start ?? textarea.value.length;
+    const caret = options.caret ?? next.length;
     const eventInit = {
       bubbles: true,
       inputType: options.inputType ?? "insertText",
       data: options.data ?? next,
     };
-    textarea.setSelectionRange(
-      options.start ?? textarea.value.length,
-      options.end ?? options.start ?? textarea.value.length,
-    );
+    textarea.setSelectionRange(start, options.end ?? start);
     textarea.dispatchEvent(new InputEvent("beforeinput", eventInit));
     textarea.value = next;
-    textarea.setSelectionRange(options.caret ?? next.length, options.caret ?? next.length);
+    textarea.setSelectionRange(caret, caret);
     textarea.dispatchEvent(new InputEvent("input", eventInit));
     renderCurrent();
   };

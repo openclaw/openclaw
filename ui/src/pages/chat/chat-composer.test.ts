@@ -27,7 +27,12 @@ function renderComposer(overrides: Parameters<typeof props>[0], attached = false
   renderComposerInto(container, composerProps);
   const query = <T extends Element = HTMLElement>(selector: string) =>
     container.querySelector<T>(selector);
-  return { container, props: composerProps, query };
+  return {
+    container,
+    props: composerProps,
+    query,
+    textarea: query<HTMLTextAreaElement>("textarea")!,
+  };
 }
 
 const microphoneGuidance =
@@ -82,10 +87,8 @@ async function mountTalk(
 it("shares the active caret on input and selection-only changes", () => {
   const draft = "First line\n😀 second line\nLast line  ";
   const onTypingChange = vi.fn();
-  const { container, query } = renderComposer({ draft, onTypingChange });
+  const { container, textarea } = renderComposer({ draft, onTypingChange });
   document.body.append(container);
-  onTestFinished(() => container.remove());
-  const textarea = query<HTMLTextAreaElement>("textarea")!;
   textarea.focus();
   textarea.setSelectionRange(14, 14);
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
@@ -109,7 +112,7 @@ it.each([
   const submit = vi.fn(() => {
     typingAtSubmit = onTypingChange.mock.lastCall;
   });
-  const { query } = renderComposer({
+  const { textarea } = renderComposer({
     draft,
     getDraft: () => draft,
     onDraftChange: (next) => {
@@ -127,7 +130,6 @@ it.each([
         }
       : {}),
   });
-  const textarea = query<HTMLTextAreaElement>("textarea")!;
   textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
   expect(onTypingChange).toHaveBeenLastCalledWith(true, draft, textarea.selectionEnd);
@@ -141,15 +143,14 @@ it.each([
 
 it("labels the send action as Suggest and emits ephemeral typing state", () => {
   const onTypingChange = vi.fn();
-  const view = renderComposer({
+  const { query, textarea } = renderComposer({
     suggestionComposer: true,
     draft: "Suggest this",
     onTypingChange,
   });
-  expect(view.query(".agent-chat__control-label")?.textContent).toContain("Suggest");
-  expect(view.query<HTMLButtonElement>('button[aria-label="Add attachment"]')?.disabled).toBe(true);
+  expect(query(".agent-chat__control-label")?.textContent).toContain("Suggest");
+  expect(query<HTMLButtonElement>('button[aria-label="Add attachment"]')?.disabled).toBe(true);
 
-  const textarea = view.query<HTMLTextAreaElement>("textarea")!;
   expect(textarea).not.toBeNull();
   textarea.value = "hello";
   textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
@@ -285,16 +286,11 @@ it("clears a live whitespace draft when the last rendered draft was already empt
   const onDraftChange = vi.fn((next: string) => {
     currentDraft = next;
   });
-  const { query } = renderComposer({
+  const { textarea } = renderComposer({
     draft: "",
     getDraft: () => currentDraft,
     onDraftChange,
   });
-  const textarea = query<HTMLTextAreaElement>("textarea");
-  if (!textarea) {
-    throw new Error("expected composer textarea");
-  }
-
   textarea.value = currentDraft;
   textarea.dispatchEvent(new FocusEvent("blur", { bubbles: true }));
 
