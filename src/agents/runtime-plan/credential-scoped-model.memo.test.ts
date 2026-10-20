@@ -1,14 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { subscriptionRoute } from "./auth-fixtures.test-support.js";
+import { authProvider, subscriptionRoute } from "./auth-fixtures.test-support.js";
 import { createPreparedRuntimeModelMaterializer } from "./credential-scoped-model.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
 // Fresh object per call, matching prepare-auth minting new plans every turn.
 function buildPlan(overrides: Partial<AgentRuntimeAuthPlan> = {}): AgentRuntimeAuthPlan {
   return {
-    providerForAuth: "openai",
-    authProfileProviderForAuth: "openai",
+    ...authProvider,
     forwardedAuthProfileId: "openai:subscription",
     selectedAuthMode: "token",
     modelRoute: { ...subscriptionRoute },
@@ -23,32 +22,27 @@ const routedModel = {
   baseUrl: "https://chatgpt.com/backend-api/codex",
 };
 
-type RouteMemo = Map<string, Promise<typeof routedModel>>;
 type Resolution = { model?: typeof routedModel | null; error?: string };
 
-function buildMaterializer(params: {
-  memo?: RouteMemo;
-  providerOwnsDynamicModelRefresh?: boolean;
-  resolveModel: () => Promise<Resolution>;
-}) {
-  return createPreparedRuntimeModelMaterializer({
-    provider: "openai",
-    modelId: "gpt-5.5",
-    // Base model deliberately mismatched so materialization must resolve.
-    getModel: () => ({ ...routedModel, baseUrl: "https://api.openai.com/v1" }),
-    nativeModelOwned: false,
-    providerUsesProfileScopedModelMetadata: true,
-    providerOwnsDynamicModelRefresh: params.providerOwnsDynamicModelRefresh,
-    ...(params.memo ? { generationRouteModelMemo: params.memo } : {}),
-    resolveModel: params.resolveModel,
-  });
-}
-
 describe("generation route-model memo", () => {
-  let memo: RouteMemo;
+  let memo: Map<string, Promise<typeof routedModel>>;
   const resolveModel = vi.fn<() => Promise<Resolution>>();
-  const run = (options: { providerOwnsDynamicModelRefresh?: boolean } = {}) =>
-    buildMaterializer({ memo, resolveModel, ...options });
+  const run = (
+    options: Partial<
+      Parameters<typeof createPreparedRuntimeModelMaterializer<typeof routedModel>>[0]
+    > = {},
+  ) =>
+    createPreparedRuntimeModelMaterializer({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      // Mismatched base URL forces route materialization.
+      getModel: () => ({ ...routedModel, baseUrl: "https://api.openai.com/v1" }),
+      nativeModelOwned: false,
+      providerUsesProfileScopedModelMetadata: true,
+      generationRouteModelMemo: memo,
+      resolveModel,
+      ...options,
+    });
   beforeEach(() => {
     memo = new Map();
     resolveModel.mockReset().mockResolvedValue({ model: routedModel });
@@ -73,42 +67,32 @@ describe("generation route-model memo", () => {
         selectedAuthMode: undefined,
       }),
     );
-    await materializer.materialize(
-      buildPlan({
-        forwardedAuthProfileId: "openai:subscription",
-        selectedAuthMode: "token",
-      }),
-    );
+    await materializer.materialize(buildPlan());
     expect(resolveModel).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves provider-owned dynamic-model refreshes across turns", async () => {
-    const runA = run({ providerOwnsDynamicModelRefresh: true });
-    const runB = run({ providerOwnsDynamicModelRefresh: true });
-
-    await runA.materialize(buildPlan());
-    await runB.materialize(buildPlan());
+  it.each([
+    { name: "provider-owned dynamic refresh", options: { providerOwnsDynamicModelRefresh: true } },
+    { name: "no generation memo", options: { generationRouteModelMemo: undefined } },
+  ])("resolves each run with $name", async ({ options }) => {
+    await run(options).materialize(buildPlan());
+    await run(options).materialize(buildPlan());
     expect(resolveModel).toHaveBeenCalledTimes(2);
   });
 
   it("never pins a rejected resolution for the generation", async () => {
     resolveModel.mockResolvedValueOnce({ error: "transient provider failure" });
-    const runA = run();
-    const runB = run();
-
-    await expect(runA.materialize(buildPlan())).rejects.toThrow("transient provider failure");
+    await expect(run().materialize(buildPlan())).rejects.toThrow("transient provider failure");
     expect(memo.size).toBe(0);
-    await expect(runB.materialize(buildPlan())).resolves.toBe(routedModel);
+    await expect(run().materialize(buildPlan())).resolves.toBe(routedModel);
     expect(resolveModel).toHaveBeenCalledTimes(2);
   });
 
   it("covers route-less plans so non-OpenAI providers share resolutions too", async () => {
-    const runA = run();
-    const runB = run();
     const routeless = () => buildPlan({ modelRoute: undefined });
 
-    await expect(runA.materialize(routeless())).resolves.toBe(routedModel);
-    await expect(runB.materialize(routeless())).resolves.toBe(routedModel);
+    await expect(run().materialize(routeless())).resolves.toBe(routedModel);
+    await expect(run().materialize(routeless())).resolves.toBe(routedModel);
     expect(resolveModel).toHaveBeenCalledTimes(1);
   });
 
@@ -119,14 +103,10 @@ describe("generation route-model memo", () => {
         await run().materialize(buildPlan());
       }
       const buildBaseReturningMaterializer = (base: typeof routedModel) =>
-        createPreparedRuntimeModelMaterializer({
-          provider: "openai",
-          modelId: "gpt-5.5",
+        run({
           getModel: () => base,
           nativeModelOwned,
           providerUsesProfileScopedModelMetadata: nativeModelOwned,
-          generationRouteModelMemo: memo,
-          resolveModel,
         });
       const baseA = { ...routedModel };
       const baseB = { ...routedModel };
@@ -158,14 +138,5 @@ describe("generation route-model memo", () => {
     expect(memo.size).toBe(64);
     await expect(turn(0)).resolves.toBe(replacement);
     expect(resolveModel).toHaveBeenCalledTimes(66);
-  });
-
-  it("keeps run-local behavior unchanged when no memo is provided", async () => {
-    const runA = buildMaterializer({ resolveModel });
-    const runB = buildMaterializer({ resolveModel });
-
-    await runA.materialize(buildPlan());
-    await runB.materialize(buildPlan());
-    expect(resolveModel).toHaveBeenCalledTimes(2);
   });
 });

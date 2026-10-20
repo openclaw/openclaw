@@ -1,46 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const pluginRegistryMocks = vi.hoisted(() => {
-  const loadManifestRegistry = vi.fn();
-  return {
-    loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
-    loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
-    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
-    loadPluginMetadataSnapshot: vi.fn((params: unknown) => {
-      const registry = loadManifestRegistry(params) ?? { plugins: [], diagnostics: [] };
-      return {
-        index: {
-          plugins: registry.plugins.map((plugin: { id: string; origin?: string }) => ({
-            pluginId: plugin.id,
-            origin: plugin.origin ?? "global",
-            enabled: true,
-            enabledByDefault: true,
-          })),
-        },
-        plugins: registry.plugins,
-      };
-    }),
-  };
-});
-
-vi.mock("../../plugins/manifest-registry-installed.js", () => ({
-  loadPluginManifestRegistryForInstalledIndex:
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
-}));
-
-vi.mock("../../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry:
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry,
-  loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
-}));
+const mocks = vi.hoisted(() => ({ metadata: vi.fn() }));
 
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
+  loadPluginMetadataSnapshot: mocks.metadata,
 }));
 
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { codexHarness, platformRoute, subscriptionRoute } from "./auth-fixtures.test-support.js";
 import { buildAgentRuntimeAuthPlan } from "./auth.js";
+
+const buildPlan = (params: Partial<Parameters<typeof buildAgentRuntimeAuthPlan>[0]>) =>
+  buildAgentRuntimeAuthPlan({
+    provider: "openai",
+    authProfileProvider: "openai",
+    config: {},
+    sessionAuthProfileId: "openai:work",
+    ...params,
+  });
 
 describe("buildAgentRuntimeAuthPlan", () => {
   it.each([
@@ -59,26 +36,15 @@ describe("buildAgentRuntimeAuthPlan", () => {
 
   beforeEach(() => {
     clearPluginMetadataLifecycleCaches();
-    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
-    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
-    pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
+    mocks.metadata.mockReset().mockReturnValue({ index: { plugins: [] }, plugins: [] });
   });
 
   it.each([
     { label: "explicit flag", config: {}, providerAuthAliasesEnabled: false },
     { label: "plugin config", config: { plugins: { enabled: false } } },
   ])("does not load provider aliases disabled by $label", (params) => {
-    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      plugins: [
-        {
-          id: "alias-owner",
-          origin: "global",
-          providerAuthAliases: { fixture: "provider-two" },
-        },
-      ],
-      diagnostics: [],
+    mocks.metadata.mockImplementationOnce(() => {
+      throw new Error("Disabled aliases must not load plugin metadata");
     });
 
     const plan = buildAgentRuntimeAuthPlan({
@@ -88,20 +54,18 @@ describe("buildAgentRuntimeAuthPlan", () => {
       providerAuthAliasesEnabled: params.providerAuthAliasesEnabled,
     });
 
-    expect(plan.providerForAuth).toBe("fixture");
-    expect(plan.authProfileProviderForAuth).toBe("fixture");
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(plan).toMatchObject({
+      providerForAuth: "fixture",
+      authProfileProviderForAuth: "fixture",
+    });
+    expect(mocks.metadata).not.toHaveBeenCalled();
   });
 
   it("preserves the selected model route and locked profile source", () => {
-    const plan = buildAgentRuntimeAuthPlan({
-      provider: "openai",
-      authProfileProvider: "openai",
+    const plan = buildPlan({
       authProfileMode: "token",
-      sessionAuthProfileId: "openai:work",
       sessionAuthProfileSource: "user",
       modelRoute: subscriptionRoute,
-      config: {},
     });
 
     expect(plan).toMatchObject({
@@ -118,15 +82,11 @@ describe("buildAgentRuntimeAuthPlan", () => {
   });
 
   it("does not forward profiles when the harness rejects host auth", () => {
-    const plan = buildAgentRuntimeAuthPlan({
-      provider: "openai",
-      authProfileProvider: "openai",
+    const plan = buildPlan({
       authProfileMode: "api_key",
-      sessionAuthProfileId: "openai:work",
       sessionAuthProfileSource: "auto",
       sessionAuthProfileCandidateIds: ["openai:work"],
       modelRoute: platformRoute,
-      config: {},
       ...codexHarness,
       allowHarnessAuthProfileForwarding: false,
     });
