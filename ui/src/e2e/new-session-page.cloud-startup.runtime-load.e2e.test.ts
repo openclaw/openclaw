@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-placement-recovery.ts";
@@ -21,11 +22,15 @@ import {
   controlUiSessionUrl,
   createdSessionListResult,
   installMockGateway,
+  LOCAL_GIT_WORKSPACE_RESPONSES,
   navigateInApp,
   waitForCommittedChatRoute,
   waitForGatewayRecoveryScope,
 } from "./new-session-page.test-support.ts";
 
+const button = (scope: Page | Locator, name: string) =>
+  scope.getByRole("button", { name, exact: true });
+const discardStarts = "Discard unsaved starts and reload";
 const buildId = "startup-recovery-proof";
 let buildRoot: string;
 const suite = createControlUiE2eSuite({
@@ -86,19 +91,7 @@ suite.define(() => {
         serverBuildId: buildId,
         workspaceGit: true,
         methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main", workspace: "/workspace/cloud-proof", workspaceGit: true },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
-          "worktrees.branches": {
-            branches: [{ kind: "local", name: "main" }],
-            defaultBranch: "main",
-            repositoryStatus: "git",
-          },
+          ...LOCAL_GIT_WORKSPACE_RESPONSES,
           "environments.list": {
             environments: [],
             profiles: [{ id: "test-cloud", providerId: "crabbox" }],
@@ -118,10 +111,10 @@ suite.define(() => {
         await expect.poll(() => composer.isDisabled()).toBe(false);
         await waitForGatewayRecoveryScope(page);
         const owner = await evaluateControlUiContext(page, (application) => {
-          const { gateway: applicationGateway } = application;
+          const { gateway: connection } = application;
           return {
-            gatewayUrl: applicationGateway.connection.gatewayUrl,
-            recoveryScope: applicationGateway.snapshot.client!.recoveryScope,
+            gatewayUrl: connection.connection.gatewayUrl,
+            recoveryScope: connection.snapshot.client!.recoveryScope,
           };
         });
         const recovery: SessionPlacementPendingRecovery = {
@@ -168,7 +161,7 @@ suite.define(() => {
         await expect.poll(() => documentProbes).toBeGreaterThan(0);
         const alert = pane.getByRole("alert").filter({ hasText: "startup needs attention" });
         try {
-          await alert.getByRole("button", { name: "Retry", exact: true }).waitFor();
+          await button(alert, "Retry").waitFor();
         } finally {
           await capture(`${incognito ? "mixed" : "saved"}-startup-load-failure.png`);
         }
@@ -190,7 +183,7 @@ suite.define(() => {
           );
           expect(await readStartup()).toEqual(failed);
         }
-        await alert.getByRole("button", { name: "Retry", exact: true }).waitFor();
+        await button(alert, "Retry").waitFor();
         const held = await pane.evaluate(async (element) => {
           const { state } = element as HTMLElement & { state: ChatPageHost };
           state.handleChatDraftChange("later ordinary turn");
@@ -205,10 +198,10 @@ suite.define(() => {
           const timeOrigin = await page.evaluate(() => performance.timeOrigin);
           await page.locator(".sidebar-rail .sidebar-new-session").click();
           await page.locator("#new-session-where-trigger").click();
-          await page
-            .locator(".oc-popover.new-session-page__where-popover")
-            .getByRole("button", { name: "test-cloud", exact: true })
-            .click();
+          await button(
+            page.locator(".oc-popover.new-session-page__where-popover"),
+            "test-cloud",
+          ).click();
           await page.getByRole("switch", { name: "Incognito" }).click();
           await page.locator(".new-session-page__message").fill(privateMessage);
           await page.getByRole("button", { name: "Start session" }).click();
@@ -220,7 +213,7 @@ suite.define(() => {
           for (const selectedKey of [privateKey, sessionKey]) {
             await navigateToControlUiSession(page, selectedKey);
             await expect.poll(() => alert.locator("strong").textContent()).toContain(warning);
-            expect(await alert.getByRole("button", { name: "Retry", exact: true }).count()).toBe(0);
+            expect(await button(alert, "Retry").count()).toBe(0);
             expect(await alert.locator("details").count()).toBe(0);
             await capture(
               `${selectedKey === privateKey ? "incognito" : "saved"}-reload-blocked.png`,
@@ -308,9 +301,7 @@ suite.define(() => {
           );
           await page.route(configRuntime, (route) => route.abort("failed"));
           await navigateInApp(page, "appearance");
-          const reload = page
-            .locator(".lazy-view-error")
-            .getByRole("button", { name: "Reload", exact: true });
+          const reload = button(page.locator(".lazy-view-error"), "Reload");
           await reload.waitFor();
           // Route imports may probe to retry in place even when private work
           // blocks document replacement. Manual reload must still stop at the guard.
@@ -326,11 +317,8 @@ suite.define(() => {
           // Only these explicit actions authorize discarding the unsaved Incognito start.
           if (escape === "toast") {
             const automaticReload = page.waitForEvent("domcontentloaded");
-            await page
-              .locator("openclaw-toast-host")
-              .getByRole("button", { name: "Discard unsaved starts and reload", exact: true })
-              .click();
-            const review = page.getByRole("button", { name: "Review private draft", exact: true });
+            await button(page.locator("openclaw-toast-host"), discardStarts).click();
+            const review = button(page, "Review private draft");
             const outcome = await Promise.race([
               automaticReload.then(() => "reloaded" as const),
               review.waitFor().then(() => "held" as const),
@@ -349,18 +337,14 @@ suite.define(() => {
               await dialog.getByRole("textbox", { name: "Draft text", exact: true }).inputValue(),
             ).toBe(separateDraft);
             await capture("mixed-private-draft-preserved.png");
-            await dialog
-              .getByRole("button", { name: "Discard this draft and refresh", exact: true })
-              .click();
+            await button(dialog, "Discard this draft and refresh").click();
           } else {
             await navigateToControlUiSession(page, sessionKey);
-            await alert
-              .getByRole("button", { name: "Discard unsaved starts and reload", exact: true })
-              .click();
+            await button(alert, discardStarts).click();
           }
         } else {
           documentReachable = true;
-          await alert.getByRole("button", { name: "Retry", exact: true }).click();
+          await button(alert, "Retry").click();
         }
         expect(await gateway.waitForRequest("sessions.send")).toMatchObject({
           params: { key: sessionKey, message, idempotencyKey: messageId },

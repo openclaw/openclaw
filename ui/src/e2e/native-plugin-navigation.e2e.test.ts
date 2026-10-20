@@ -41,8 +41,11 @@ suite.define(() => {
               body: pluginModule(new URL(route.request().url()).pathname.split("/").at(-2)!, false),
             }),
           );
+          const revisionOne = page.getByRole("heading", { name: "Fixture revision one" });
+          const plugins = page.getByRole("heading", { name: "Plugins", exact: true });
+          const customize = page.getByRole("heading", { name: "Customize UI", exact: true });
           await page.goto(`${suite.server.baseUrl}plugin?plugin=ui-fixture&id=proof`);
-          await page.getByRole("heading", { name: "Fixture revision one" }).waitFor();
+          await revisionOne.waitFor();
           const sidebar = page.locator("openclaw-app-sidebar");
           const pagesButton = sidebar
             .locator(".sidebar-rail")
@@ -52,6 +55,12 @@ suite.define(() => {
           const pluginLink = pages.getByRole("link", { name: "UI fixture", exact: true });
           await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe("page");
           const builtInLink = pages.getByRole("link", { name: "Plugins", exact: true });
+          const selected = async (active: boolean) => {
+            await (active ? revisionOne : plugins).waitFor();
+            await expect
+              .poll(() => pluginLink.getAttribute("aria-current"))
+              .toBe(active ? "page" : null);
+          };
           await expect
             .poll(async () => {
               const width = await pluginLink.evaluate((link) => link.getBoundingClientRect().width);
@@ -61,41 +70,30 @@ suite.define(() => {
               return Math.abs(width - builtInWidth);
             })
             .toBeLessThan(0.5);
-          expect(
-            await page.getByRole("heading", { name: "Customize UI", exact: true }).count(),
-          ).toBe(0);
+          expect(await customize.count()).toBe(0);
           await builtInLink.click();
-          await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
-          await expect.poll(() => pluginLink.getAttribute("aria-current")).toBeNull();
+          await selected(false);
           await pluginLink.click();
-          await page.getByRole("heading", { name: "Fixture revision one" }).waitFor();
-          await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe("page");
+          await selected(true);
           await page.goBack();
-          await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
-          await expect.poll(() => pluginLink.getAttribute("aria-current")).toBeNull();
+          await selected(false);
           await page.goForward();
-          await page.getByRole("heading", { name: "Fixture revision one" }).waitFor();
-          await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe("page");
+          await selected(true);
           await page.goto(
             `${suite.server.baseUrl}plugin?p.filter=review&id=proof&plugin=ui-fixture`,
           );
-          await page.getByRole("heading", { name: "Fixture revision one" }).waitFor();
+          await revisionOne.waitFor();
           await pagesButton.click();
           await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe("page");
           await builtInLink.click();
-          await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
-          await expect.poll(() => pluginLink.getAttribute("aria-current")).toBeNull();
-          expect(
-            await page.getByRole("heading", { name: "Customize UI", exact: true }).count(),
-          ).toBe(0);
+          await selected(false);
+          expect(await customize.count()).toBe(0);
           await page.goto(`${suite.server.baseUrl}settings/plugins?tab=advanced`);
-          await page.getByRole("heading", { name: "Plugins", exact: true }).waitFor();
+          await plugins.waitFor();
           await gateway.waitForRequest("plugins.controlUi.report");
           expect(pageErrors).toEqual([]);
           if (!admin) {
-            expect(
-              await page.getByRole("heading", { name: "Customize UI", exact: true }).count(),
-            ).toBe(0);
+            expect(await customize.count()).toBe(0);
             return;
           }
           await page.locator("openclaw-plugin-manager .settings-group").waitFor();

@@ -11,7 +11,6 @@ import {
 const suite = createNewSessionPageE2eSuite();
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const proofStage = process.env.OPENCLAW_AGENT_IDENTITY_PROOF_STAGE ?? "after";
-const captureBefore = proofStage === "before";
 
 const agentsList = {
   agents: [
@@ -68,12 +67,25 @@ async function capture(target: Page | Locator, name: string, fullPage = true) {
 
 const captureElement = (locator: Locator, name: string) => capture(locator, name, false);
 
+async function identityPage(options: Parameters<typeof installMockGateway>[1] = {}) {
+  const context = await suite.browser.newContext(CONTEXT);
+  const page = await context.newPage();
+  const gateway = await installMockGateway(page, {
+    defaultAgentId: "main",
+    ...options,
+    methodResponses: {
+      "agent.identity.get": agentIdentities,
+      "agents.list": agentsList,
+      ...options.methodResponses,
+    },
+  });
+  const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+  return { context, page, gateway, picker };
+}
+
 suite.define(() => {
   it("drops a pending skill completion after an agent switch", async () => {
-    const context = await suite.browser.newContext(CONTEXT);
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      defaultAgentId: "main",
+    const { context, page, gateway, picker } = await identityPage({
       deferredMethods: ["commands.list"],
       featureMethods: [
         "chat.metadata",
@@ -83,8 +95,6 @@ suite.define(() => {
         "sessions.dispatch",
       ],
       methodResponses: {
-        "agent.identity.get": agentIdentities,
-        "agents.list": agentsList,
         "chat.metadata": { models: [] },
       },
     });
@@ -98,14 +108,12 @@ suite.define(() => {
       await composer.dispatchEvent("select");
       await gateway.waitForRequest("commands.list");
 
-      const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
       await picker.evaluate((element) => {
         (element as HTMLElement & { onSelect: (agentId: string) => void }).onSelect("research");
       });
       await gateway.resolveDeferred("commands.list", {
         commands: [
           {
-            description: "Only available to the previous agent.",
             name: "main_only",
             source: "skill",
             skillModelVisible: true,
@@ -126,32 +134,7 @@ suite.define(() => {
   it.each(["dark", "light"] as const)(
     "uses resolved identity in the New Session hero and picker in %s mode",
     async (theme) => {
-      const context = await suite.browser.newContext(CONTEXT);
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
-        defaultAgentId: "main",
-        methodResponses: {
-          "agent.identity.get": agentIdentities,
-          "agents.list": agentsList,
-          "sessions.list": {
-            count: 2,
-            defaults: { contextTokens: null, model: null, modelProvider: null },
-            path: "",
-            sessions: (
-              [
-                ["refactor-plan", "Review the auth refactor plan", 90_000],
-                ["test-matrix", "Build the release test matrix", 300_000],
-              ] as const
-            ).map(([key, displayName, age]) => ({
-              key: `agent:main:${key}`,
-              kind: "direct",
-              displayName,
-              updatedAt: Date.now() - age,
-            })),
-            ts: Date.now(),
-          },
-        },
-      });
+      const { context, page, gateway, picker } = await identityPage();
 
       try {
         await setTheme(page, theme);
@@ -159,7 +142,6 @@ suite.define(() => {
         await gateway.waitForRequest("agent.identity.get");
 
         const hero = page.locator(".agent-chat__welcome h2");
-        const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
         const sidebar = page.locator("openclaw-app-sidebar");
         await pollLocatorText(sidebar.locator(".sidebar-agent-card__name")).toContain("Pacino");
         await hero.waitFor();
@@ -174,19 +156,13 @@ suite.define(() => {
         await picker.locator(".agent-select__label").waitFor();
         await page.waitForLoadState("networkidle");
         const identityRequests = await gateway.getRequests("agent.identity.get");
-        expect(identityRequests).toHaveLength(1);
-        expect(identityRequests[0]).toMatchObject({ params: { agentId: "main" } });
+        expect(identityRequests).toMatchObject([{ params: { agentId: "main" } }]);
         await picker.locator(".agent-select__trigger").click();
         await capture(page, `${theme}-named-picker-open.png`);
         await captureElement(
           picker.locator(".agent-select__trigger"),
           `${theme}-named-trigger-crop.png`,
         );
-        if (captureBefore) {
-          expect(await hero.textContent()).toBe("main");
-          expect(await picker.locator(".agent-select__label").textContent()).toBe("main");
-          return;
-        }
         await pollLocatorText(hero).toBe("Pacino");
         await pollLocatorText(picker.locator(".agent-select__label")).toBe("Pacino");
         const selectedAgent = picker.locator(
@@ -202,13 +178,9 @@ suite.define(() => {
           exact: true,
         });
         await pollLocatorText(unnamedAgent).toContain("research");
-        const longNameAgent = picker.getByRole("menuitemradio", {
-          name: "Deployment Safety and Release Verification Agent",
-          exact: true,
-        });
-        await pollLocatorText(longNameAgent).toContain(
-          "Deployment Safety and Release Verification Agent",
-        );
+        const longName = "Deployment Safety and Release Verification Agent";
+        const longNameAgent = picker.getByRole("menuitemradio", { name: longName, exact: true });
+        await pollLocatorText(longNameAgent).toContain(longName);
         await longNameAgent.hover();
         await captureElement(longNameAgent, `${theme}-long-name-hover.png`);
 

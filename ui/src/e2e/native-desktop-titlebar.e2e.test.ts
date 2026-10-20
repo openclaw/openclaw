@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -13,6 +13,23 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Native desktop titlebar E2E" });
+const namedButton = (scope: Page | Locator, name: string) =>
+  scope.getByRole("button", { name, exact: true });
+const attribute = (locator: Locator, name: string) => expect.poll(() => locator.getAttribute(name));
+
+async function drag(page: Page, x: number, y: number) {
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x + 20, y);
+  await page.mouse.up();
+}
+
+function installChat(page: Page, content: string) {
+  return installMockGateway(page, {
+    featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+    historyMessages: [{ role: "assistant", content }],
+  });
+}
 
 async function installWindowChrome(page: Page, platform: "linux" | "windows" | "macos") {
   const chromeScript = readFileSync(
@@ -101,7 +118,7 @@ suite.define(() => {
           rootClasses: "",
           controls: 0,
         });
-        await page.getByRole("button", { name: "Settings", exact: true }).click({ trial: true });
+        await namedButton(page, "Settings").click({ trial: true });
       });
     },
   );
@@ -118,10 +135,7 @@ suite.define(() => {
           ? createControlUiE2eArtifactDir("native-desktop-titlebar", proofParent)
           : undefined;
         const actions = await installWindowChrome(page, platform);
-        await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
-          historyMessages: [{ role: "assistant", content: "Titlebar selection regression." }],
-        });
+        await installChat(page, "Titlebar selection regression.");
         await page.goto(suite.server.baseUrl);
         await page.locator(".chat-pane__header").waitFor();
         const toolbar = page.locator(".macos-titlebar-controls");
@@ -157,6 +171,7 @@ suite.define(() => {
           }
         };
         const capture = async (state: string) => {
+          await assertChromeClear();
           if (proofDir) {
             await page.screenshot({
               animations: "disabled",
@@ -164,8 +179,8 @@ suite.define(() => {
             });
           }
         };
-        await page.getByRole("button", { name: "Minimize window", exact: true }).click();
-        await page.getByRole("button", { name: "Close window", exact: true }).click();
+        await namedButton(page, "Minimize window").click();
+        await namedButton(page, "Close window").click();
         expect(await actions()).toEqual(["ready", "minimize", "close"]);
         expect(
           await page.evaluate(() => Reflect.get(window, "__OPENCLAW_NATIVE_HISTORY__")),
@@ -175,7 +190,6 @@ suite.define(() => {
         expect(
           await page.evaluate(() => Reflect.get(window, "__OPENCLAW_NATIVE_HISTORY__")),
         ).toEqual({ canGoBack: false, canGoForward: false });
-        await assertChromeClear();
         await capture("chat-expanded");
         const transcript = page
           .locator(".chat-thread")
@@ -200,28 +214,21 @@ suite.define(() => {
         expect(await actions()).toEqual(beforeTextPress);
         const bar = await toolbar.boundingBox();
         expect(bar).not.toBeNull();
-        await page.mouse.move(bar!.x + 140, 40);
-        await page.mouse.down();
-        await page.mouse.move(bar!.x + 160, 40);
-        await page.mouse.up();
+        await drag(page, bar!.x + 140, 40);
         await expect
           .poll(async () => (await actions()).filter((action) => action === "drag"))
           .toHaveLength(1);
         await page.mouse.dblclick(bar!.x + 140, 40);
         const maximize = page.locator('.openclaw-window-controls [data-action="toggle-maximize"]');
-        await expect.poll(() => maximize.getAttribute("aria-label")).toBe("Restore window");
+        await attribute(maximize, "aria-label").toBe("Restore window");
         await maximize.click();
-        await expect.poll(() => maximize.getAttribute("aria-label")).toBe("Maximize window");
+        await attribute(maximize, "aria-label").toBe("Maximize window");
         const beforeNavigation = await actions();
         await page.locator(".sidebar-session-toolbar__collapse").click();
         expect(await actions()).toEqual(beforeNavigation);
-        await expect
-          .poll(() => page.locator(".shell").getAttribute("class"))
-          .toContain("shell--nav-collapsed");
-        await assertChromeClear();
+        await attribute(page.locator(".shell"), "class").toContain("shell--nav-collapsed");
         await capture("chat-collapsed");
         await openChatSidePanelType(page, "Side chat");
-        await assertChromeClear();
         await capture("chat-side-panel");
         // Narrow panes intentionally omit the dock selector.
         if (width > 900) {
@@ -231,11 +238,9 @@ suite.define(() => {
           }
         }
         await focusChatSidePanel(page);
-        await assertChromeClear();
         await capture("chat-focused-panel");
         await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
         await page.locator(".new-session-page__message").waitFor();
-        await assertChromeClear();
         await capture("new-session");
         await page.evaluate(() =>
           window.dispatchEvent(
@@ -253,10 +258,7 @@ suite.define(() => {
         ] as const) {
           const bounds = await page.locator(selector).boundingBox();
           expect(bounds).not.toBeNull();
-          await page.mouse.move(bounds!.x + x, bounds!.y + 26);
-          await page.mouse.down();
-          await page.mouse.move(bounds!.x + x + 20, bounds!.y + 26);
-          await page.mouse.up();
+          await drag(page, bounds!.x + x, bounds!.y + 26);
         }
         await expect
           .poll(async () => (await actions()).filter((action) => action === "drag"))
@@ -275,9 +277,7 @@ suite.define(() => {
           .poll(async () => (await actions()).slice(beforeModal))
           .toEqual(["native-frame", "ready"]);
         await expect.poll(() => caption.isVisible()).toBe(true);
-        await caption
-          .getByRole("button", { name: "Minimize window", exact: true })
-          .click({ trial: true });
+        await namedButton(caption, "Minimize window").click({ trial: true });
       },
     );
   });
@@ -294,10 +294,7 @@ suite.define(() => {
         if (host.startsWith("tauri-")) {
           await installWindowChrome(page, macos ? "macos" : "linux");
         }
-        await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
-          historyMessages: [{ role: "assistant", content: "Selectable transcript content." }],
-        });
+        await installChat(page, "Selectable transcript content.");
         await page.goto(`${suite.server.baseUrl}chat`);
         const row = page.locator(".sidebar-session-toolbar");
         const collapse = row.getByRole("button", { name: "Collapse sidebar" });
@@ -328,9 +325,7 @@ suite.define(() => {
         });
         expect(geometry.rail.width).toBe(52);
         if (native) {
-          expect(geometry.row.y).toBe(0);
-          expect(geometry.row.height).toBe(52);
-          expect(geometry.panelPadding).toBe("0px");
+          expect(geometry).toMatchObject({ row: { y: 0, height: 52 }, panelPadding: "0px" });
           expect(geometry.title.y + geometry.title.height / 2).toBeCloseTo(26, 1);
           expect(geometry.title.x).toBe(macos ? 92 : 68);
           expect(geometry.agent.y + geometry.agent.height / 2).toBe(macos ? 70 : 26);
@@ -368,8 +363,7 @@ suite.define(() => {
               right: headerBounds.right,
             };
           });
-          expect(panelGeometry.y).toBe(geometry.row.y);
-          expect(panelGeometry.height).toBe(geometry.row.height);
+          expect(panelGeometry).toMatchObject({ y: geometry.row.y, height: geometry.row.height });
           expect(panelGeometry.center).toBeCloseTo(geometry.row.y + geometry.row.height / 2, 1);
           expect(panelGeometry.collapseCenter).toBeCloseTo(panelGeometry.center, 1);
           expect(panelGeometry.collapseRight).toBe(panelGeometry.right - 8);

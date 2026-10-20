@@ -9,6 +9,7 @@ type NotificationProof = {
   event: string | null;
   userActivation: boolean;
 };
+type NotificationWindow = Window & { notificationProof: NotificationProof[] };
 
 const suite = createControlUiE2eSuite({
   name: "Native notification loading",
@@ -44,22 +45,19 @@ suite.define(() => {
           if (native) {
             await page.addInitScript(() => {
               const messages: NotificationProof[] = [];
+              const openclawNotifications = {
+                postMessage({ type }: { type: string }) {
+                  messages.push({
+                    type,
+                    event: window.event?.type ?? null,
+                    userActivation: navigator.userActivation.isActive,
+                  });
+                },
+              };
               Object.assign(window, {
                 notificationProof: messages,
                 __OPENCLAW_NATIVE_NOTIFICATIONS__: { permission: "notDetermined" },
-                webkit: {
-                  messageHandlers: {
-                    openclawNotifications: {
-                      postMessage(message: { type: string }) {
-                        messages.push({
-                          type: message.type,
-                          event: window.event?.type ?? null,
-                          userActivation: navigator.userActivation.isActive,
-                        });
-                      },
-                    },
-                  },
-                },
+                webkit: { messageHandlers: { openclawNotifications } },
               });
             });
           }
@@ -103,22 +101,15 @@ suite.define(() => {
           await composer.fill("Check notification startup.");
           expect(notificationModules).toHaveLength(native ? 1 : 0);
           await page.screenshot({ path: path.join(suite.artifactDir, "ready.png") });
+          const send = page.getByRole("button", {
+            name: route === "new" ? "Start session" : "Send message",
+            exact: true,
+          });
           if (background) {
-            await expect
-              .poll(() =>
-                page
-                  .getByRole("button", { name: "Start session", exact: true })
-                  .getAttribute("aria-disabled"),
-              )
-              .toBe("false");
+            await expect.poll(() => send.getAttribute("aria-disabled")).toBe("false");
             await composer.press("Control+Enter");
           } else {
-            await page
-              .getByRole("button", {
-                name: route === "new" ? "Start session" : "Send message",
-                exact: true,
-              })
-              .click();
+            await send.click();
           }
           const request = await gateway.waitForRequest(
             route === "new" ? "sessions.create" : "chat.send",
@@ -126,16 +117,18 @@ suite.define(() => {
           expect(request.params).toMatchObject({ message: "Check notification startup." });
           if (native) {
             const messages = await page.evaluate(
-              () =>
-                (window as typeof window & { notificationProof: NotificationProof[] })
-                  .notificationProof,
+              () => (window as NotificationWindow).notificationProof,
             );
-            expect(messages).toContainEqual({ type: "status", event: null, userActivation: false });
-            expect(messages).toContainEqual({
-              type: "request-permission",
-              event: background ? "keydown" : "click",
-              userActivation: true,
-            });
+            expect(messages).toEqual(
+              expect.arrayContaining([
+                { type: "status", event: null, userActivation: false },
+                {
+                  type: "request-permission",
+                  event: background ? "keydown" : "click",
+                  userActivation: true,
+                },
+              ]),
+            );
           }
           expect(notificationModules).toHaveLength(native ? 1 : 0);
           expect(errors).toEqual([]);

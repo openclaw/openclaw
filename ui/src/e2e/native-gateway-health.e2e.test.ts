@@ -114,16 +114,7 @@ suite.define(() => {
           }
         };
         await installNativeHost(page);
-        const gateway = await installMockGateway(page, {
-          presenceUsers: [
-            { self: true, id: "proof-user", name: "Alex", email: "alex@example.test" },
-          ],
-          assistantName: "Assistant",
-          agentModel: "example/sample-model",
-          models: [{ id: "sample-model", name: "Sample model", provider: "example" }],
-          sessions: [],
-          historyMessages: [],
-        });
+        const gateway = await installMockGateway(page, { sessions: [], historyMessages: [] });
         await page.goto(`${suite.server.baseUrl}new`);
         await waitForControlUiGatewayReady(page);
         expect((await gateway.getRequests("connect")).length).toBeGreaterThan(0);
@@ -133,41 +124,42 @@ suite.define(() => {
         await page.getByRole("menu", { name: "Team", exact: true }).waitFor({ state: "visible" });
         const currentHealth = switcher.locator(".sidebar-gateway-health");
         const teamHealth = gatewayRow(page, "profile:team").locator(".sidebar-gateway-health");
-        const assertHealth = async (health: string, label: string) => {
+        const identity = page.locator(".sidebar-identity-card");
+        const footer = page.locator(".sidebar-shell__footer .gateway-status");
+        let firstConnectCount = 0;
+        for (const [phase, health, label] of [
+          ["after-connected", "ok", "Connected"],
+          ["connection-lost", "error", "Unreachable"],
+          ["after-reconnected", "ok", "Connected"],
+        ]) {
+          if (phase === "connection-lost") {
+            firstConnectCount = (await gateway.getRequests("connect")).length;
+            await gateway.setOnline(false);
+          } else if (phase === "after-reconnected") {
+            await gateway.setOnline(true);
+            await gateway.waitForRequest("connect", { after: firstConnectCount });
+            await waitForControlUiGatewayReady(page);
+          }
           await expect.poll(() => teamHealth.getAttribute("data-health")).toBe(health);
           expect(await teamHealth.getAttribute("aria-label")).toBe(label);
           await expect.poll(() => currentHealth.getAttribute("data-health")).toBe(health);
-        };
-        await assertHealth("ok", "Connected");
-        const identity = page.locator(".sidebar-identity-card");
-        expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
-        await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("connected");
-        await page.locator(".sidebar-shell__footer .gateway-status").waitFor({ state: "detached" });
-        await assertSelectionUnchanged(page);
-        await page.mouse.move(1100, 850);
-        await capture("after-connected.png");
-
-        const firstConnectCount = (await gateway.getRequests("connect")).length;
-        await gateway.setOnline(false);
-        await assertHealth("error", "Unreachable");
-        await expect
-          .poll(() => identity.getAttribute("data-connection-status"))
-          .toBe("reconnecting");
-        await page
-          .locator(".sidebar-shell__footer .gateway-status")
-          .getByRole("button", { name: "Reconnecting… — Retry now", exact: true })
-          .waitFor();
-        await assertSelectionUnchanged(page);
-        await capture("connection-lost.png");
-
-        await gateway.setOnline(true);
-        await gateway.waitForRequest("connect", { after: firstConnectCount });
-        await waitForControlUiGatewayReady(page);
-        await assertHealth("ok", "Connected");
-        await assertSelectionUnchanged(page);
-        expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
-        await expect.poll(() => identity.getAttribute("data-connection-status")).toBe("connected");
-        await page.locator(".sidebar-shell__footer .gateway-status").waitFor({ state: "detached" });
+          await expect
+            .poll(() => identity.getAttribute("data-connection-status"))
+            .toBe(health === "ok" ? "connected" : "reconnecting");
+          if (health === "ok") {
+            expect(await identity.locator(".sidebar-gateway-health").count()).toBe(0);
+            await footer.waitFor({ state: "detached" });
+          } else {
+            await footer
+              .getByRole("button", { name: "Reconnecting… — Retry now", exact: true })
+              .waitFor();
+          }
+          await assertSelectionUnchanged(page);
+          if (phase === "after-connected") {
+            await page.mouse.move(1100, 850);
+          }
+          await capture(phase + ".png");
+        }
         const reportedHealth = await page.evaluate(() => {
           const reports = Reflect.get(window, "nativeHealthReports") as Array<{ health: string }>;
           return reports.map((report) => report.health);

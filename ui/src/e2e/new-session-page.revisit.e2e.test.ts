@@ -71,46 +71,42 @@ async function capture(page: Page, target: ReturnType<Page["locator"]>, name: st
 }
 
 suite.define(() => {
-  it("automatically reloads once and restores a working new session composer", async () => {
-    await withDraft(async ({ page, gateway, composer }) => {
-      await failDraftRender(page, false);
-      await openDraft(page);
-      await composer.waitFor({ state: "visible", timeout: 10_000 });
-      expect(await page.evaluate(() => sessionStorage.getItem("test.newSessionBoots"))).toBe("2");
-      await composer.fill("Recovered automatically");
-      await composer.press("Enter");
-      await gateway.waitForRequest("sessions.create");
-      await openChat(page);
-    }, false);
-  });
-  it("shows a retry instead of a blank page when the native draft renderer fails", async () => {
-    await withDraft(async ({ page, gateway, composer }) => {
-      await failDraftRender(page, true);
-      await openDraft(page);
-      await page.waitForFunction(() => sessionStorage.getItem("test.newSessionBoots") === "2");
-      const error = page.locator("openclaw-new-session-page .lazy-view-error");
-      try {
-        await error.waitFor({ state: "visible", timeout: 5000 });
-      } catch (failure) {
-        await page.screenshot({ path: path.join(suite.artifactDir, "before-blank.png") });
-        throw failure;
-      }
-      await capture(page, error, "after-visible-error.png");
-      // A manual retry of the persistent failure must not trigger a third document load.
-      await error.getByRole("button", { name: "Retry", exact: true }).click();
-      await error.waitFor({ state: "visible" });
-      expect(await page.evaluate(() => sessionStorage.getItem("test.newSessionBoots"))).toBe("2");
-      await page.evaluate(() => Reflect.set(globalThis, "failNewSessionRender", false));
-      await error.getByRole("button", { name: "Retry", exact: true }).click();
-      await composer.fill("Recovered without a browser refresh");
-      expect(await composer.inputValue()).toBe("Recovered without a browser refresh");
-      expect(await error.count()).toBe(0);
-      await capture(page, composer, "after-retry.png");
-      await composer.press("Enter");
-      await gateway.waitForRequest("sessions.create");
-      await openChat(page);
-    }, false);
-  });
+  it.each([false, true])(
+    "restores the composer after a render failure (persistent: %s)",
+    async (persistent) => {
+      await withDraft(async ({ page, gateway, composer }) => {
+        await failDraftRender(page, persistent);
+        await openDraft(page);
+        if (persistent) {
+          await page.waitForFunction(() => sessionStorage.getItem("test.newSessionBoots") === "2");
+          const error = page.locator("openclaw-new-session-page .lazy-view-error");
+          await error.waitFor({ state: "visible", timeout: 5000 });
+          await capture(page, error, "after-visible-error.png");
+          // Retrying a persistent failure must not trigger a third document load.
+          await error.getByRole("button", { name: "Retry", exact: true }).click();
+          await error.waitFor({ state: "visible" });
+          expect(await page.evaluate(() => sessionStorage.getItem("test.newSessionBoots"))).toBe(
+            "2",
+          );
+          await page.evaluate(() => Reflect.set(globalThis, "failNewSessionRender", false));
+          await error.getByRole("button", { name: "Retry", exact: true }).click();
+          await composer.fill("Recovered without a browser refresh");
+          expect(await composer.inputValue()).toBe("Recovered without a browser refresh");
+          expect(await error.count()).toBe(0);
+          await capture(page, composer, "after-retry.png");
+        } else {
+          await composer.waitFor({ state: "visible", timeout: 10_000 });
+          expect(await page.evaluate(() => sessionStorage.getItem("test.newSessionBoots"))).toBe(
+            "2",
+          );
+          await composer.fill("Recovered automatically");
+        }
+        await composer.press("Enter");
+        await gateway.waitForRequest("sessions.create");
+        await openChat(page);
+      }, false);
+    },
+  );
 
   it("keeps a draft and avoids automatic reload after the composer was usable", async () => {
     await withDraft(async ({ page, composer }) => {
@@ -183,14 +179,7 @@ suite.define(() => {
         await openChat(page);
         await page.getByRole("link", { name: "New conversation" }).first().click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-        try {
-          await composer.waitFor({ state: "visible", timeout: 5000 });
-        } catch (error) {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "blank-" + visit + ".png"),
-          });
-          throw error;
-        }
+        await composer.waitFor({ state: "visible", timeout: 5000 });
         expect(await composer.isEnabled()).toBe(true);
       }
       await capture(page, composer, "new-session-revisited.png");
