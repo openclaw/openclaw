@@ -42,6 +42,10 @@ vi.mock("../infra/sqlite-readonly-worker.js", async (importOriginal) => {
 
 const readJournal = vi.mocked(readAgentDeletionJournalStatusInWorker);
 const overload = () => new WorkerTaskError("worker task capacity reached", "overloaded");
+function expectAdmission(prepared: string[], failed: string[], reads: number) {
+  expect(admissionState).toEqual({ prepared, failed });
+  expect(readJournal).toHaveBeenCalledTimes(reads);
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -116,9 +120,7 @@ it("prepares more than 128 agents without overflowing state-read admission", asy
 it("retries shared-pool capacity rejections and prepares the agent", async () => {
   readJournal.mockRejectedValueOnce(overload()).mockRejectedValueOnce(overload());
   await prepareAgents(1);
-  expect(admissionState.prepared).toEqual(["agent-0"]);
-  expect(admissionState.failed).toEqual([]);
-  expect(readJournal).toHaveBeenCalledTimes(4);
+  expectAdmission(["agent-0"], [], 4);
 });
 
 it.each(["pending", "complete"] as const)(
@@ -126,9 +128,7 @@ it.each(["pending", "complete"] as const)(
   async (status) => {
     readJournal.mockResolvedValue(status);
     await prepareAgents(1);
-    expect(admissionState.prepared).toEqual([]);
-    expect(admissionState.failed).toEqual(["agent-0"]);
-    expect(readJournal).toHaveBeenCalledTimes(1);
+    expectAdmission([], ["agent-0"], 1);
   },
 );
 
@@ -138,9 +138,7 @@ it.each([
 ])("records $name as degraded", async ({ error, attempts }) => {
   readJournal.mockRejectedValue(error);
   await prepareAgents(1);
-  expect(admissionState.prepared).toEqual([]);
-  expect(admissionState.failed).toEqual(["agent-0"]);
-  expect(readJournal).toHaveBeenCalledTimes(attempts);
+  expectAdmission([], ["agent-0"], attempts);
 });
 
 it("does not start queued journal reads after Gateway ownership changes", async () => {

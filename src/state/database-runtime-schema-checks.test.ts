@@ -72,6 +72,16 @@ const counts: Array<{
   dataVersion: number;
 }> = [];
 
+function recordCounts(owner: string, database: EngineConnection) {
+  const sql = trace.execute.mock.calls.filter(([db]) => db === database).map(([, text]) => text);
+  counts.push({
+    owner,
+    userVersion: sql.filter((text) => /^PRAGMA user_version\b/i.test(text)).length,
+    sqliteMaster: sql.filter((text) => /\bsqlite_(master|schema)\b/i.test(text)).length,
+    dataVersion: sql.filter(trace.isVersionProbe).length,
+  });
+}
+
 beforeAll(async () => {
   setRuntimeConfigSnapshot({});
   const scope = {
@@ -105,26 +115,13 @@ beforeAll(async () => {
     ["agent", agent.db],
     ["state", state.db],
   ] as const) {
-    const sql = trace.execute.mock.calls.filter(([db]) => db === database).map(([, text]) => text);
-    counts.push({
-      owner,
-      userVersion: sql.filter((text) => /^PRAGMA user_version\b/i.test(text)).length,
-      sqliteMaster: sql.filter((text) => /\bsqlite_(master|schema)\b/i.test(text)).length,
-      dataVersion: sql.filter(trace.isVersionProbe).length,
-    });
+    recordCounts(owner, database);
   }
   trace.execute.mockClear();
   for (let i = 0; i < 100; i++) {
     expect(withExistingOpenClawStateDatabaseReadOnly(({ db }) => db, scope)).toBe(state.db);
   }
-  const sql = trace.execute.mock.calls.filter(([db]) => db === state.db).map(([, text]) => text);
-  counts.push({
-    owner: "state-readonly",
-    userVersion: sql.filter((text) => /^PRAGMA user_version\b/i.test(text)).length,
-    sqliteMaster: sql.filter((text) => /\bsqlite_(master|schema)\b/i.test(text)).length,
-    dataVersion: sql.filter(trace.isVersionProbe).length,
-  });
-  console.info("Admitted database checks for 100 reads per entry point:", counts);
+  recordCounts("state-readonly", state.db);
 });
 
 it("keeps admitted reads free of schema checks and freshness probes", () => {
