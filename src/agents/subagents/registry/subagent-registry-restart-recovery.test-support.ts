@@ -46,7 +46,8 @@ vi.mock("../../../config/sessions/session-entry-current-runtime.js", () => ({
   captureSessionEntryCurrentRead: (scope: { sessionKey: string }) => ({
     source: {
       agentId: "main",
-      path: mocks.storePath,
+      // An admitted reader retains the physical database, even for a logical sessions.json scope.
+      path: "/tmp/openclaw-subagent-recovery/agents/main/agent/openclaw-agent.sqlite",
       databaseIdentity: "recovery-fixture",
       sessionKey: scope.sessionKey,
     },
