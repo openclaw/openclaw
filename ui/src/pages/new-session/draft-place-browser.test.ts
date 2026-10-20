@@ -29,6 +29,13 @@ const nextTask = () =>
   });
 const calls = (request: ReturnType<typeof vi.fn>, method: string) =>
   request.mock.calls.filter(([called]) => called === method).length;
+const requestFor = (
+  handlers: Record<string, (params?: { path?: string }) => unknown>,
+  fallback: () => unknown = () => ({ projects: [] }),
+) =>
+  vi.fn(async (method: string, params?: { path?: string }) =>
+    (handlers[method] ?? fallback)(params),
+  );
 
 function createBrowser(
   request: (method: string) => Promise<unknown>,
@@ -56,11 +63,7 @@ function createBrowser(
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
       connection: { gatewayUrl: "ws://gateway.example" },
-      snapshot: {
-        phase: "connected",
-        client,
-        hello,
-      },
+      snapshot: { phase: "connected", client, hello },
     },
     agents: { state: { agentsList: { sessionPlacement: {} } } },
     sessions: {
@@ -99,21 +102,14 @@ function createBrowser(
   gateway.synchronize(context.gateway);
   const onProjectMissing = vi.fn();
   const onSelectProject = vi.fn();
-  const browser = new DraftPlaceBrowser(
-    gateway,
-    () => ({
-      context,
-      isAdmin,
-    }),
-    {
-      changed: vi.fn(),
-      updateComplete: () => view?.updateComplete ?? Promise.resolve(),
-      onProjectMissing,
-      onSelectProject,
-      onApprovedListing: vi.fn(),
-      activeElement: () => view?.root.ownerDocument.activeElement ?? null,
-    },
-  );
+  const browser = new DraftPlaceBrowser(gateway, () => ({ context, isAdmin }), {
+    changed: vi.fn(),
+    updateComplete: () => view?.updateComplete ?? Promise.resolve(),
+    onProjectMissing,
+    onSelectProject,
+    onApprovedListing: vi.fn(),
+    activeElement: () => view?.root.ownerDocument.activeElement ?? null,
+  });
   onTestFinished(() => {
     gateway.disconnect();
     browser?.disconnect();
@@ -141,7 +137,7 @@ function createBrowser(
 
 describe("DraftPlaceBrowser", () => {
   it.each(["current", "closed", "disconnected", "focus moved", "returned"])(
-    "hands keyboard focus to the current project view after rendering (%s)",
+    "focuses only the current project view after rendering (%s)",
     async (change) => {
       const update = createDeferred<boolean>();
       const root = document.body.appendChild(document.createElement("div"));
@@ -244,14 +240,9 @@ describe("DraftPlaceBrowser", () => {
 
   it("keeps the current listing's repository probe while filtering its entries", async () => {
     const branches = createDeferred<{ repositoryStatus: "git" }>();
-    const request = vi.fn(async (method: string) => {
-      if (method === "worktrees.branches") {
-        return branches.promise;
-      }
-      if (method === "fs.listDir") {
-        return listing();
-      }
-      return { projects: [] };
+    const request = requestFor({
+      "worktrees.branches": () => branches.promise,
+      "fs.listDir": () => listing(),
     });
     const { browser } = createBrowser(request, undefined, true, true);
     browser.selectGatewayBrowser("/workspace");
@@ -274,33 +265,35 @@ describe("DraftPlaceBrowser", () => {
     const registration = createDeferred<typeof registered>();
     let directoryPath = "/workspace";
     let registrations = 0;
-    const request = vi.fn(async (method: string, params?: { path?: string }) => {
-      if (method === "projects.register") {
-        registrations += 1;
-        if (change === "retry" && registrations === 1) {
-          throw new Error("registry unavailable");
-        }
-        return registration.promise;
-      }
-      if (method === "worktrees.branches") {
-        return { repositoryStatus: "git" };
-      }
-      if (method === "fs.listDir") {
-        if (params?.path === "/elsewhere") {
-          throw new Error("directory not found");
-        }
-        return listing(directoryPath);
-      }
-      return { projects: [registered] };
-    });
+    const request = requestFor(
+      {
+        "projects.register": () => {
+          registrations += 1;
+          if (change === "retry" && registrations === 1) {
+            throw new Error("registry unavailable");
+          }
+          return registration.promise;
+        },
+        "worktrees.branches": () => ({ repositoryStatus: "git" }),
+        "fs.listDir": (params) => {
+          if (params?.path === "/elsewhere") {
+            throw new Error("directory not found");
+          }
+          return listing(directoryPath);
+        },
+      },
+      () => ({ projects: [registered] }),
+    );
     const { browser, onSelectProject } = createBrowser(request, undefined, true, true);
     browser.selectGatewayBrowser("/workspace");
     await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
     if (change === "retry") {
       await browser.registerBrowserProject("/workspace");
       expect(browser.browser.error).toContain("registry unavailable");
-      expect(browser.browserRegistering).toBe(false);
-      expect(browser.browserProjectPath).toBe("/workspace");
+      expect(browser).toMatchObject({
+        browserRegistering: false,
+        browserProjectPath: "/workspace",
+      });
     }
     const pending = browser.registerBrowserProject("/workspace");
     const initiallyBusy = browser.browserRegistering;
@@ -323,10 +316,10 @@ describe("DraftPlaceBrowser", () => {
         browser.browser.setDraft("/elsewhere/x");
         if (failedDirectory) {
           await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
-          expect(browser.browser.listing?.path).toBe("/workspace");
-          expect(browser.browser.loading).toBe(false);
-          expect(browser.browser.error).toBeNull();
-          expect(browser.browserProjectPath).toBeNull();
+          expect(browser).toMatchObject({
+            browser: { listing: { path: "/workspace" }, loading: false, error: null },
+            browserProjectPath: null,
+          });
         } else {
           // Flush request continuations while the directory debounce is still pending.
           await Promise.resolve();
@@ -366,7 +359,7 @@ describe("DraftPlaceBrowser", () => {
   });
 
   it.each(["loaded", "pending"])(
-    "reloads the project catalog after an owner reset without reconnecting (%s)",
+    "reloads catalogs after owner reset without reconnecting (%s)",
     async (initial) => {
       const retired = project("retired", "Retired");
       const current = project("current", "Current");
@@ -390,7 +383,7 @@ describe("DraftPlaceBrowser", () => {
   );
 
   it.each(["disconnect", "failure"])(
-    "retains the selected project until a catalog confirms its removal (%s)",
+    "retains selection until the catalog confirms removal (%s)",
     async (unavailable) => {
       const selected = project("project", "Project");
       const request = vi.fn(async () => ({ projects: [selected] }));
@@ -487,22 +480,19 @@ describe("DraftGatewayState", () => {
       });
       await pending.promise;
       await nextTask();
-      expect(fixture.browser.projects).toEqual([]);
-      expect(fixture.gateway.environments).toBeNull();
+      expect(fixture).toMatchObject({ browser: { projects: [] }, gateway: { environments: null } });
       current.resolve({ projects: [], environments: [], profiles: [] });
     },
   );
 
   it("discovers places from authenticated hello without refetching or losing input during migration", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "system.info") {
-        return { machineName: "Gateway A" };
-      }
-      if (method === "projects.list") {
-        return { projects: [{ id: "project", displayName: "Project" }] };
-      }
-      return { environments: [], profiles: [] };
-    });
+    const request = requestFor(
+      {
+        "system.info": () => ({ machineName: "Gateway A" }),
+        "projects.list": () => ({ projects: [{ id: "project", displayName: "Project" }] }),
+      },
+      () => ({ environments: [], profiles: [] }),
+    );
     const fixture = createBrowser(request, undefined, false);
     fixture.hello.features.methods.push("system.info");
     fixture.hello.auth.scopes.push("operator.write");
@@ -521,8 +511,10 @@ describe("DraftGatewayState", () => {
     fixture.update();
     expect(fixture.gateway.gatewayName).toBe("Gateway A");
     expect(fixture.onInvalidate).not.toHaveBeenCalled();
-    expect(fixture.browser.browser.draft).toBe("/draft-folder");
-    expect(fixture.browser.projectId).toBe("project");
+    expect(fixture.browser).toMatchObject({
+      browser: { draft: "/draft-folder" },
+      projectId: "project",
+    });
     expect(calls(request, "projects.list")).toBe(1);
     expect(calls(request, "environments.list")).toBe(1);
 
@@ -564,34 +556,14 @@ describe("DraftGatewayState", () => {
   });
 
   it.each([
-    {
-      advertised: true,
-      response: { machineName: "Gateway B" },
-      name: "Gateway B",
-      scopes: ["operator.read"],
-    },
-    {
-      advertised: false,
-      response: { machineName: "Hidden Gateway" },
-      name: "",
-      scopes: ["operator.read"],
-    },
-    {
-      advertised: true,
-      response: { hostname: "host.example" },
-      name: "host",
-      scopes: ["operator.read"],
-    },
-    { advertised: true, response: null, name: "", scopes: ["operator.read"] },
-    {
-      advertised: true,
-      response: { machineName: "Private Gateway" },
-      name: "",
-      scopes: ["operator.sessions.read"],
-    },
-  ])(
-    "settles name discovery with advertisement $advertised and response $response",
-    async ({ advertised, response, name, scopes }) => {
+    [true, { machineName: "Gateway B" }, "Gateway B", "operator.read"],
+    [false, { machineName: "Hidden Gateway" }, "", "operator.read"],
+    [true, { hostname: "host.example" }, "host", "operator.read"],
+    [true, null, "", "operator.read"],
+    [true, { machineName: "Private Gateway" }, "", "operator.sessions.read"],
+  ] as const)(
+    "settles name discovery (advertised: %s, response: %j)",
+    async (advertised, response, name, scope) => {
       const pending = createDeferred<typeof response>();
       let current: typeof response | Promise<typeof response> = { machineName: "Current Gateway" };
       const request = vi.fn(async (method: string) => {
@@ -613,16 +585,14 @@ describe("DraftGatewayState", () => {
       fixture.update();
       expect(fixture.gateway.gatewayName).toBe("");
       fixture.hello.features.methods = advertised ? ["system.info"] : [];
-      fixture.hello.auth.scopes = scopes;
+      fixture.hello.auth.scopes = [scope];
       fixture.context.gateway.snapshot.phase = "connected";
       fixture.update();
       expect(fixture.gateway.gatewayName).toBe("");
       pending.resolve(response);
       await nextTask();
       await waitForFast(() => expect(fixture.gateway.gatewayName).toBe(name));
-      expect(calls(request, "system.info")).toBe(
-        advertised && scopes.includes("operator.read") ? 2 : 1,
-      );
+      expect(calls(request, "system.info")).toBe(advertised && scope === "operator.read" ? 2 : 1);
     },
   );
 

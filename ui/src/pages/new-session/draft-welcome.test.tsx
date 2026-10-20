@@ -1,28 +1,29 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
 import { expect, it } from "vitest";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { DraftWelcome } from "./draft-welcome.tsx";
 
-function roster(result: SessionsListResult) {
+const row = (id: string, label: string, updatedAt: number, agent = "main"): GatewaySessionRow => ({
+  key: `agent:${agent}:dashboard:${id}`,
+  kind: "direct",
+  label,
+  updatedAt,
+});
+
+function roster(rows: GatewaySessionRow[], revision = 1) {
   const listeners = new Set<() => void>();
   return {
-    state: { result },
+    state: { result: sessionsResult(rows, revision) },
     listeners,
     subscribe(notify: () => void) {
       listeners.add(notify);
-      return () => {
-        listeners.delete(notify);
-      };
+      return () => listeners.delete(notify);
     },
-    publish() {
-      for (const notify of listeners) {
-        notify();
-      }
-    },
+    publish: () => listeners.forEach((notify) => notify()),
   };
 }
 
@@ -30,21 +31,14 @@ it("prepares recents only for their owner and scope, parks display facts, and re
   let rosterReads = 0;
   let oldestAt = 1;
   const oldest: GatewaySessionRow = {
-    key: "agent:main:dashboard:old",
-    kind: "direct",
-    label: "Oldest",
+    ...row("old", "Oldest", oldestAt),
     get updatedAt() {
       rosterReads += 1;
       return oldestAt;
     },
   };
-  const rows: GatewaySessionRow[] = Array.from({ length: 5 }, (_, index) => ({
-    key: "agent:main:dashboard:recent-" + index,
-    kind: "direct",
-    label: "Recent " + index,
-    updatedAt: 100 + index,
-  }));
-  const first = roster(sessionsResult([...rows, oldest], 1));
+  const rows = Array.from({ length: 5 }, (_, i) => row(`recent-${i}`, `Recent ${i}`, 100 + i));
+  const first = roster([...rows, oldest]);
   let owner = first;
   const options: Parameters<typeof DraftWelcome>[0]["options"] = {
     assistantName: "Assistant",
@@ -93,12 +87,7 @@ it("prepares recents only for their owner and scope, parks display facts, and re
   flush();
   expect(recentName()).toBe("Visible newest");
 
-  const second = roster(
-    sessionsResult(
-      [{ key: "agent:other:dashboard:recent", kind: "direct", label: "Other agent", updatedAt: 1 }],
-      2,
-    ),
-  );
+  const second = roster([row("recent", "Other agent", 1, "other")], 2);
   owner = second;
   options.sessionKey = "agent:other:main";
   refresh();

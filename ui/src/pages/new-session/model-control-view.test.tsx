@@ -48,14 +48,7 @@ it("keeps one mounted model view live without depending on draft revisions", asy
     const mountedOption = option();
     expect(mountedOption).not.toBeNull();
     render.mockClear();
-    // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the receiver.
-    const originalLowerCase = String.prototype.toLocaleLowerCase;
-    const labels = vi.spyOn(String.prototype, "toLocaleLowerCase").mockImplementation(function (
-      this: string,
-      ...args: Parameters<string["toLocaleLowerCase"]>
-    ) {
-      return Reflect.apply(originalLowerCase, this, args);
-    });
+    const labels = vi.spyOn(String.prototype, "toLocaleLowerCase");
     try {
       const result = first.context.sessions.state.result!;
       result.sessions.push({
