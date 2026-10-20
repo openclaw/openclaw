@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -14,34 +15,26 @@ it("prepares complete Gateway entries while preserving main aliases and exact-ro
       session: { mainKey: "primary" },
     };
     const sessionKey = "agent:main:primary";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey, env },
-      {
-        sessionId: "worker-projection",
-        updatedAt: 1,
-        skillsSnapshot: { prompt: "Complete saved skill instructions", skills: [] },
-      },
-    );
-    const childKey = "agent:main:child";
-    const childScope = { agentId: "main", sessionKey: childKey, env };
-    replaceSessionEntrySync(childScope, {
-      sessionId: "child",
+    const seed = (key: string, entry: SessionEntry) =>
+      replaceSessionEntrySync({ agentId: "main", sessionKey: key, env }, entry);
+    seed(sessionKey, {
+      sessionId: "worker-projection",
       updatedAt: 1,
+      skillsSnapshot: { prompt: "Complete saved skill instructions", skills: [] },
+    });
+    const childKey = "agent:main:child";
+    const seedChild = (fields: Partial<SessionEntry>) =>
+      seed(childKey, { sessionId: "child", updatedAt: 1, ...fields });
+    seedChild({
       parentSessionKey: sessionKey,
       skillsSnapshot: { prompt: "Child payload stays out of discovery", skills: [] },
     });
     const input = { cfg, key: "main", agentId: "main", env, includeStoreChildEntries: true };
     await loadGatewaySessionEntryReadOnlyInWorker(input);
     const internalKey = "agent:main:internal-session-effects:fixture";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: internalKey, env },
-      { sessionId: "internal-effects", updatedAt: 1 },
-    );
+    seed(internalKey, { sessionId: "internal-effects", updatedAt: 1 });
     const sibling = "agent:main:matrix:channel:!mixed:example.org";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: sibling, env },
-      { sessionId: sibling, updatedAt: 1 },
-    );
+    seed(sibling, { sessionId: sibling, updatedAt: 1 });
     const database = openOpenClawAgentDatabase({ agentId: "main", env });
     database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
       JSON.stringify({
@@ -87,16 +80,16 @@ it("prepares complete Gateway entries while preserving main aliases and exact-ro
     } finally {
       sql.restore();
     }
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey, env },
-      { sessionId: "updated-worker-projection", updatedAt: 2, label: "Updated in process" },
-    );
+    seed(sessionKey, {
+      sessionId: "updated-worker-projection",
+      updatedAt: 2,
+      label: "Updated in process",
+    });
     expect((await loadGatewaySessionEntryReadOnlyInWorker(input)).entry).toMatchObject({
       sessionId: "updated-worker-projection",
       label: "Updated in process",
     });
-    replaceSessionEntrySync(childScope, {
-      sessionId: "child",
+    seedChild({
       updatedAt: 2,
       spawnedBy: sessionKey,
       label: "Changed in process",
@@ -104,8 +97,7 @@ it("prepares complete Gateway entries while preserving main aliases and exact-ro
     expect((await loadGatewaySessionEntryReadOnlyInWorker(input)).store[childKey]?.label).toBe(
       "Changed in process",
     );
-    replaceSessionEntrySync(childScope, {
-      sessionId: "child",
+    seedChild({
       updatedAt: 3,
       parentSessionKey: "agent:main:other",
     });

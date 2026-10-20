@@ -10,6 +10,21 @@ import {
 } from "./session-utils-store.js";
 import { seedSessionEntries, withStateDirEnv } from "./session-utils.test-support.js";
 
+function acpMeta(
+  agent: string,
+  runtimeSessionName: string,
+  lastActivityAt = 1,
+): NonNullable<SessionEntry["acp"]> {
+  return {
+    backend: "acpx",
+    agent,
+    runtimeSessionName,
+    mode: "oneshot",
+    state: "idle",
+    lastActivityAt,
+  };
+}
+
 describe("gateway deleted-agent session checks", () => {
   test("resolveDeletedAgentIdFromSessionKey rejects non-alias main keys when main is absent", () => {
     const cfg = {
@@ -31,19 +46,12 @@ describe("gateway deleted-agent session checks", () => {
       const cfg = { agents: { entries: { main: {} } } } satisfies OpenClawConfig;
       for (const agent of ["claude", "cursor"]) {
         const key = `agent:${agent}:acp:11111111-1111-4111-8111-111111111111`;
-        const acpMeta: NonNullable<SessionEntry["acp"]> = {
-          backend: "acpx",
-          agent,
-          runtimeSessionName: key,
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: 1,
-        };
-        const entry: SessionEntry = { sessionId: `synthetic-${agent}`, updatedAt: 1, acp: acpMeta };
+        const meta = acpMeta(agent, key);
+        const entry: SessionEntry = { sessionId: `synthetic-${agent}`, updatedAt: 1, acp: meta };
         expect(await prepareDeletedAgentSessionCheck({ cfg, sessionKey: key, entry })).toBe(agent);
-        expect(resolveDeletedAgentIdFromSessionKey(cfg, key, acpMeta)).toBeNull();
+        expect(resolveDeletedAgentIdFromSessionKey(cfg, key, meta)).toBeNull();
         expect(
-          resolveDeletedAgentIdFromSessionKey(cfg, `agent:${agent}:acp:binding:test`, acpMeta),
+          resolveDeletedAgentIdFromSessionKey(cfg, `agent:${agent}:acp:binding:test`, meta),
         ).toBe(agent);
       }
     });
@@ -59,20 +67,11 @@ describe("gateway deleted-agent session checks", () => {
         updatedAt: 1,
         lifecycleRevision: "lifecycle-1",
       } satisfies SessionEntry;
-      seedSessionEntries(storePath, {
-        [acpKey]: entry,
-      });
+      seedSessionEntries(storePath, { [acpKey]: entry });
       seedCanonicalAcpSessionMeta({
         sessionKey: legacyAcpKey,
         lifecycleRevision: "lifecycle-1",
-        meta: {
-          backend: "acpx",
-          agent: "claude",
-          runtimeSessionName: legacyAcpKey,
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: 1,
-        },
+        meta: acpMeta("claude", legacyAcpKey),
       });
       const cfg = {
         session: {
@@ -80,38 +79,22 @@ describe("gateway deleted-agent session checks", () => {
         },
         agents: { entries: { main: {} } },
       } as OpenClawConfig;
+      const input = { cfg, sessionKey: acpKey, entry };
 
       expect(
-        await prepareDeletedAgentSessionCheck({
-          cfg,
-          sessionKey: acpKey,
-          entry,
-          acpMetadataSessionKey: acpKey,
-        }),
+        await prepareDeletedAgentSessionCheck({ ...input, acpMetadataSessionKey: acpKey }),
       ).toBeNull();
       seedCanonicalAcpSessionMeta({
         sessionKey: acpKey,
         lifecycleRevision: "lifecycle-2",
-        meta: {
-          backend: "acpx",
-          agent: "claude",
-          runtimeSessionName: legacyAcpKey,
-          mode: "oneshot",
-          state: "idle",
-          lastActivityAt: 2,
-        },
+        meta: acpMeta("claude", legacyAcpKey, 2),
       });
-      expect(await prepareDeletedAgentSessionCheck({ cfg, sessionKey: acpKey, entry })).toBe(
-        "claude",
-      );
+      expect(await prepareDeletedAgentSessionCheck(input)).toBe("claude");
       const replacement = { ...entry, lifecycleRevision: "lifecycle-2" };
-      expect(
-        await prepareDeletedAgentSessionCheck({ cfg, sessionKey: acpKey, entry: replacement }),
-      ).toBeNull();
+      expect(await prepareDeletedAgentSessionCheck({ ...input, entry: replacement })).toBeNull();
       let current = true;
       const pending = prepareDeletedAgentSessionCheck({
-        cfg,
-        sessionKey: acpKey,
+        ...input,
         entry: replacement,
         assertCurrent: () => {
           if (!current) {

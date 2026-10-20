@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, symlinkSync } from "node:fs";
+import { existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -10,6 +10,7 @@ import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import {
@@ -38,11 +39,7 @@ import {
   listSessions,
   requestContext,
 } from "./server-methods/sessions-read-cache.test-support.js";
-import type {
-  GatewayRequestContext,
-  GatewayRequestHandler,
-  RespondFn,
-} from "./server-methods/types.js";
+import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
   resolveGatewaySessionStoreTargetWithStoreAsync,
@@ -68,6 +65,41 @@ vi.mock("./github-publication-availability.js", async () => {
 
 afterEach(() => resetConfigRuntimeState());
 
+function seedEntry(
+  key: string,
+  sessionId: string,
+  fields: Partial<SessionEntry> = {},
+  agentId = "main",
+) {
+  return replaceSessionEntry({ agentId, sessionKey: key }, { sessionId, updatedAt: 1, ...fields });
+}
+
+const handlers = {
+  ...sessionCreateHandlers,
+  ...sessionMutationHandlers,
+  ...sessionByKeyReadHandlers,
+  ...chatHistoryHandlers,
+};
+
+async function request(
+  context: GatewayRequestContext,
+  method: string,
+  params: Record<string, unknown>,
+) {
+  const respond = vi.fn();
+  await handlers[method]!({
+    req: { type: "req", id: method, method },
+    params,
+    client: null,
+    context,
+    isWebchatConnect: () => false,
+    respond,
+  });
+  expect(respond.mock.calls).toHaveLength(1);
+  expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
+  return respond.mock.calls[0]?.[1];
+}
+
 async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) => Promise<void>) {
   await withStateDirEnv("gateway-global-lookup-", async ({ stateDir }) => {
     const cfg = {
@@ -82,10 +114,7 @@ async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) =>
     try {
       for (const agentId of ["main", "research"]) {
         for (const sessionKey of ["global", `agent:${agentId}:global`]) {
-          await replaceSessionEntry(
-            { agentId, sessionKey },
-            { sessionId: `${agentId}-${sessionKey}`, updatedAt: 1 },
-          );
+          await seedEntry(sessionKey, `${agentId}-${sessionKey}`, {}, agentId);
         }
       }
       await run(cfg);
@@ -101,10 +130,7 @@ describe("global session lookup ownership", () => {
   it("rejects an unreadable canonical candidate instead of returning its alias", async () => {
     await withGlobalSessions("main", async (cfg) => {
       const alias = "agent:main:main";
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey: alias },
-        { sessionId: "retained-alias", updatedAt: 1 },
-      );
+      await seedEntry(alias, "retained-alias");
       await resolveGatewaySessionStoreTargetWithStoreAsync({ cfg, key: "agent:main:global" });
       await runOpenClawAgentWriteAdmission({ agentId: "main" }, () => {
         openOpenClawAgentDatabase({ agentId: "main" })
@@ -124,57 +150,33 @@ describe("global session lookup ownership", () => {
     });
   });
 
-  it.each<{
-    agentId: string;
-    clone: false | undefined;
-    createsDatabase: boolean;
-    unreadableRegistry?: true;
-  }>([{ agentId: "retired", clone: undefined, createsDatabase: false }])(
-    "preserves scalar database admission for $agentId (clone: $clone, unreadable registry: $unreadableRegistry)",
-    async (scenario) => {
-      await withStateDirEnv("gateway-scalar-store-admission-", async ({ stateDir }) => {
-        const cfg: OpenClawConfig = {
-          agents: { ownership: "explicit", entries: { main: {} } },
-          session: {
-            store: path.join(
-              stateDir,
-              "agents",
-              scenario.unreadableRegistry ? scenario.agentId : "{agentId}",
-              "sessions",
-              "sessions.json",
-            ),
-          },
-        };
-        setRuntimeConfigSnapshot(cfg, cfg);
-        const key = `agent:${scenario.agentId}:dashboard:new-session`;
-        if (scenario.unreadableRegistry) {
-          mkdirSync(path.join(stateDir, "state", "openclaw.sqlite"), { recursive: true });
-        }
-        const resolve = async () =>
-          await resolveGatewaySessionStoreTargetInWorker({
-            cfg,
-            key,
-            clone: scenario.clone,
-            projection: "list",
-            exactRead: true,
-            readOnly: false,
-          });
-        if (scenario.unreadableRegistry) {
-          await expect(resolve()).rejects.toThrow();
-        } else {
-          expect(await resolve()).toMatchObject({
-            agentId: scenario.agentId,
-            canonicalKey: key,
-            storeKeys: [key],
-            storePath: path.join(stateDir, "agents", scenario.agentId, "sessions", "sessions.json"),
-          });
-        }
-        expect(existsSync(resolveOpenClawAgentSqlitePath({ agentId: scenario.agentId }))).toBe(
-          scenario.createsDatabase,
-        );
+  it("does not create a database for a retired scalar owner", async () => {
+    await withStateDirEnv("gateway-scalar-store-admission-", async ({ stateDir }) => {
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { main: {} } },
+        session: {
+          store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+      };
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const key = "agent:retired:dashboard:new-session";
+      expect(
+        await resolveGatewaySessionStoreTargetInWorker({
+          cfg,
+          key,
+          projection: "list",
+          exactRead: true,
+          readOnly: false,
+        }),
+      ).toMatchObject({
+        agentId: "retired",
+        canonicalKey: key,
+        storeKeys: [key],
+        storePath: path.join(stateDir, "agents", "retired", "sessions", "sessions.json"),
       });
-    },
-  );
+      expect(existsSync(resolveOpenClawAgentSqlitePath({ agentId: "retired" }))).toBe(false);
+    });
+  });
 
   it("preserves exact lookup failures without retrying an alias", async () => {
     await withGlobalSessions("main", async (cfg) => {
@@ -207,10 +209,7 @@ describe("global session lookup ownership", () => {
         setRuntimeConfigSnapshot(cfg, cfg);
         const key = "agent:main:retained";
         for (const sessionKey of duplicate ? [key, "agent:main:main"] : [key]) {
-          await replaceSessionEntry(
-            { agentId: "main", sessionKey },
-            { sessionId: sessionKey, updatedAt: 1 },
-          );
+          await seedEntry(sessionKey, sessionKey);
         }
         // Normal planning rejects this explicit replacement owner. Legacy success
         // and duplicate selection errors must both finish before that boundary.
@@ -328,14 +327,8 @@ describe("retained exact row publications", () => {
         };
         setRuntimeConfigSnapshot(cfg, cfg);
         const key = "global";
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey: key },
-          { sessionId: "retained-row", updatedAt: 1 },
-        );
-        await replaceSessionEntry(
-          { agentId: "research", sessionKey: key },
-          { sessionId: "unrelated-row", updatedAt: 1 },
-        );
+        await seedEntry(key, "retained-row");
+        await seedEntry(key, "unrelated-row", {}, "research");
         const unrelatedDatabase = openOpenClawAgentDatabase({ agentId: "research" });
         const selected = await withGatewaySessionStoreTarget(
           { cfg, key: "main", agentId: "main" },
@@ -497,108 +490,77 @@ describe("retained exact row publications", () => {
   });
 });
 
-describe("exact session model projections", () => {
-  it.each([{ selection: "inherited", model: "gpt-5.5", source: "inherited" }])(
-    "keeps $selection model selection aligned across list, exact rows and events",
-    async ({ selection, model, source }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const cfg: OpenClawConfig = {
-          agents: {
-            entries: { main: {} },
-            defaults: { model: { primary: "openai/gpt-5.4" } },
-          },
-        };
-        setRuntimeConfigSnapshot(cfg, cfg);
-        const parentKey = "agent:main:dashboard:model-parent";
-        const childKey = "agent:main:dashboard:model-child";
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey: parentKey },
-          {
-            sessionId: "model-parent",
-            updatedAt: 1,
-            providerOverride: "openai",
-            modelOverride: "gpt-5.5",
-            modelOverrideSource: "user",
-            modelOverrideRouteResolution: "resolved",
-          },
-        );
-        await replaceSessionEntry(
-          { agentId: "main", sessionKey: childKey },
-          {
-            sessionId: "model-child",
-            updatedAt: 2,
-            parentSessionKey: parentKey,
-            ...(selection === "direct"
-              ? {
-                  providerOverride: "openai",
-                  modelOverride: "gpt-5.6-sol",
-                  modelOverrideSource: "user" as const,
-                  modelOverrideRouteResolution: "resolved" as const,
-                }
-              : selection === "default"
-                ? { modelOverrideSource: "default" as const }
-                : {}),
-          },
-        );
-        const expected = { modelProvider: "openai", model, modelOverrideSource: source };
-        const context = requestContext(cfg);
-        const listed = await listSessions({
-          client: identifiedClient("synthetic-model-reader"),
-          context,
-          request: { agentId: "main", limit: 10 },
-        });
-        expect(listed.sessions.find((row) => row.key === childKey)).toMatchObject(expected);
-        expect
-          .soft(getSessionRowProjection(context)?.snapshot({ key: childKey, agentId: "main" }).row)
-          .toMatchObject(expected);
+it("keeps inherited model selection aligned across list, exact rows and events", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { main: {} },
+        defaults: { model: { primary: "openai/gpt-5.4" } },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const parentKey = "agent:main:dashboard:model-parent";
+    const childKey = "agent:main:dashboard:model-child";
+    await seedEntry(parentKey, "model-parent", {
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
+    });
+    await seedEntry(childKey, "model-child", {
+      updatedAt: 2,
+      parentSessionKey: parentKey,
+    });
+    const expected = {
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      modelOverrideSource: "inherited",
+    };
+    const context = requestContext(cfg);
+    const listed = await listSessions({
+      client: identifiedClient("synthetic-model-reader"),
+      context,
+      request: { agentId: "main", limit: 10 },
+    });
+    expect(listed.sessions.find((row) => row.key === childKey)).toMatchObject(expected);
+    expect
+      .soft(getSessionRowProjection(context)?.snapshot({ key: childKey, agentId: "main" }).row)
+      .toMatchObject(expected);
 
-        const described = vi.fn();
-        await sessionByKeyReadHandlers["sessions.describe"]!({
-          params: { key: childKey },
-          req: { type: "req", id: "model-describe", method: "sessions.describe" },
-          client: null,
-          context,
-          isWebchatConnect: () => false,
-          respond: described,
-        });
-        expect(described.mock.calls[0]?.[0]).toBe(true);
-        expect.soft(described.mock.calls[0]?.[1]).toMatchObject({ session: expected });
-
-        const history = vi.fn();
-        await chatHistoryHandlers["chat.history"]!({
-          params: { sessionKey: childKey },
-          req: { type: "req", id: "model-history", method: "chat.history" },
-          client: null,
-          context: createDirectChatContext({
+    expect
+      .soft(await request(context, "sessions.describe", { key: childKey }))
+      .toMatchObject({ session: expected });
+    expect
+      .soft(
+        await request(
+          createDirectChatContext({
             sessionRowProjectionOwner: context.sessionRowProjectionOwner,
           }),
-          isWebchatConnect: () => false,
-          respond: history,
-        });
-        expect(history.mock.calls[0]?.[0]).toBe(true);
-        expect.soft(history.mock.calls[0]?.[1]).toMatchObject({ sessionInfo: expected });
+          "chat.history",
+          { sessionKey: childKey },
+        ),
+      )
+      .toMatchObject({ sessionInfo: expected });
 
-        const broadcast = vi.fn();
-        const eventContext = {
-          ...context,
-          getSessionEventSubscriberConnIds: () => new Set(["synthetic-model-viewer"]),
-          broadcastToConnIds: broadcast,
-        };
-        try {
-          emitSessionsChanged(eventContext, {
-            sessionKey: childKey,
-            agentId: "main",
-            reason: "patch",
-          });
-          await flushPendingSessionsChangedEvents(eventContext);
-          expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
-          expect.soft(broadcast.mock.calls[0]?.[1]).toMatchObject({ session: expected });
-        } finally {
-          await flushPendingSessionsChangedEvents(eventContext);
-        }
+    const broadcast = vi.fn();
+    const eventContext = {
+      ...context,
+      getSessionEventSubscriberConnIds: () => new Set(["synthetic-model-viewer"]),
+      broadcastToConnIds: broadcast,
+    };
+    try {
+      emitSessionsChanged(eventContext, {
+        sessionKey: childKey,
+        agentId: "main",
+        reason: "patch",
       });
-    },
-  );
+      await flushPendingSessionsChangedEvents(eventContext);
+      expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
+      expect.soft(broadcast.mock.calls[0]?.[1]).toMatchObject({ session: expected });
+    } finally {
+      await flushPendingSessionsChangedEvents(eventContext);
+    }
+  });
 });
 
 it.each([
@@ -646,24 +608,8 @@ it.each([
         }),
         readPreparedGatewayModelCatalog: async () => ({ entries: catalog }),
       });
-      const request = async (
-        handler: GatewayRequestHandler,
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
-        const respond = vi.fn();
-        await handler({
-          req: { type: "req", id: method, method },
-          params,
-          client: null,
-          context,
-          isWebchatConnect: () => false,
-          respond,
-        });
-        expect(respond.mock.calls).toHaveLength(1);
-        expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
-        return respond.mock.calls[0]?.[1];
-      };
+      const invoke = (method: string, params: Record<string, unknown>) =>
+        request(context, method, params);
       const parentAgents = shared ? [parentAgent] : ["main", parentAgent];
       for (const agentId of parentAgents) {
         await replaceSessionEntry(
@@ -673,14 +619,14 @@ it.each([
       }
       const foreignParent =
         layout === "cross-agent"
-          ? await request(sessionCreateHandlers["sessions.create"]!, "sessions.create", {
+          ? await invoke("sessions.create", {
               agentId: "main",
             })
           : undefined;
       if (foreignParent) {
         expect(foreignParent.key).toMatch(/^agent:main:dashboard:/);
       }
-      const created = await request(sessionCreateHandlers["sessions.create"]!, "sessions.create", {
+      const created = await invoke("sessions.create", {
         agentId: "work",
         parentSessionKey: foreignParent?.key ?? (shared ? "agent:ops:main" : "global"),
       });
@@ -701,14 +647,14 @@ it.each([
 
       // The child predates these pins, so creation cannot have copied a direct selection.
       for (const agentId of parentAgents) {
-        await request(sessionMutationHandlers["sessions.patch"]!, "sessions.patch", {
+        await invoke("sessions.patch", {
           key: "global",
           agentId,
           model: agentId === "main" ? "ollama/qwen3:8b" : "ollama/qwen3:14b",
         });
       }
       if (foreignParent) {
-        await request(sessionMutationHandlers["sessions.patch"]!, "sessions.patch", {
+        await invoke("sessions.patch", {
           key: foreignParent.key,
           agentId: "main",
           model: "ollama/qwen3:8b",
@@ -716,10 +662,10 @@ it.each([
       }
       expect(loadSessionEntry(childScope)?.modelOverride).toBeUndefined();
       if (selection !== "inherited") {
-        await request(sessionMutationHandlers["sessions.patch"]!, "sessions.patch", {
+        await invoke("sessions.patch", {
           key: created.key,
           agentId: "work",
-          model: selection === "default" ? null : "ollama/qwen3:32b",
+          model: null,
         });
       }
       const combined = loadCombinedSessionStoreForGatewayCore(cfg);
@@ -752,7 +698,7 @@ it.each([
         .toMatchObject(expected);
       await expect
         .soft(
-          request(sessionByKeyReadHandlers["sessions.describe"]!, "sessions.describe", {
+          invoke("sessions.describe", {
             key: created.key,
             agentId: "work",
           }),
@@ -760,7 +706,7 @@ it.each([
         .resolves.toMatchObject({ session: expected });
       await expect
         .soft(
-          request(chatHistoryHandlers["chat.history"]!, "chat.history", {
+          invoke("chat.history", {
             sessionKey: created.key,
             agentId: "work",
           }),
