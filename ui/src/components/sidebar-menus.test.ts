@@ -1,16 +1,13 @@
 /* @vitest-environment jsdom */
 
-import { render as mountSolid } from "@solidjs/web";
-import { createRoot, flush } from "solid-js";
+import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorktreeRecord } from "../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import {
   catalogPage,
-  createContext,
   createGateway,
   createGatewayHarness,
   createSessions,
@@ -23,71 +20,51 @@ import {
   createTestGatewayClient,
 } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
 } from "../test-helpers/native-gateways.ts";
 import { menuItemLabels, openSubmenu } from "../test-helpers/session-menu.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
-import { createSidebarMenus } from "./sidebar-menus.tsx";
+import { getAppSidebarOwner } from "./app-sidebar.tsx";
+setupSidebarTest();
 
-describe("sidebar menus session routes", () => {
-  it("keeps the current catalog session when switching either face", () => {
-    const sessionKey = buildCatalogSessionKey({
-      catalogId: "claude",
-      hostId: "gateway:local",
-      threadId: "thread-1",
-    });
-    const context = createContext(
-      createGateway({} as GatewayBrowserClient),
-      createSessions("main", [sessionKey]),
-      TWO_AGENTS,
-    );
-    Object.assign(context, { basePath: "" });
-    const onNavigate = vi.fn();
-    const host = {
-      activeRouteId: "chat",
-      basePath: "",
-      enabledRouteIds: ["chat", "dashboard"],
-      getRouteSessionKey: () => sessionKey,
-      onNavigate,
-      sessionDataContext: context,
-      terminalAvailable: false,
-    } as unknown as SidebarMenusOwner;
-    const container = document.createElement("div");
-    const { menus, disposeMenus } = createRoot((disposeRoot) => ({
-      menus: createSidebarMenus({
-        host,
-        element: container,
-        commit: () => Promise.resolve(true),
-      }),
-      disposeMenus: disposeRoot,
-    }));
-
-    document.body.append(container);
-    let dispose: (() => void) | undefined;
-    try {
-      const search = "?catalog=claude&host=gateway%3Alocal&thread=thread-1";
-      for (const route of ["chat", "dashboard"] as const) {
-        dispose?.();
-        dispose = mountSolid(() => menus.renderRoute(route, host), container);
-        flush();
-        const link = container.querySelector<HTMLAnchorElement>("a");
-        expect(link?.getAttribute("href")).toBe(`/${route}/main${search}`);
-        link?.click();
-        expect(onNavigate).toHaveBeenLastCalledWith(route, { pathname: `/${route}/main`, search });
-      }
-    } finally {
-      dispose?.();
-      container.remove();
-      disposeMenus();
-    }
+it("keeps the current catalog session when switching either face", async () => {
+  const sessionKey = buildCatalogSessionKey({
+    catalogId: "claude",
+    hostId: "gateway:local",
+    threadId: "thread-1",
   });
+  const { sidebar, context } = await mountSidebar(
+    createGateway(createTestGatewayClient(async () => ({}))),
+    createSessions("main", [sessionKey]),
+    "panel",
+    TWO_AGENTS,
+  );
+  Object.assign(context, { basePath: "" });
+  const onNavigate = vi.fn();
+  Object.assign(sidebar, {
+    activeRouteId: "chat",
+    basePath: "",
+    enabledRouteIds: ["chat", "dashboard"],
+    sessionKey,
+    onNavigate,
+  });
+  await sidebar.updateComplete;
+  const host = getAppSidebarOwner(sidebar.hostElement)!;
+  const search = "?catalog=claude&host=gateway%3Alocal&thread=thread-1";
+  for (const route of ["chat", "dashboard"] as const) {
+    const view = mountSolid(() => host.sidebarMenus.renderRoute(route, host));
+    flush();
+    const link = view.container.querySelector<HTMLAnchorElement>("a");
+    expect(link?.getAttribute("href")).toBe(`/${route}/main${search}`);
+    link?.click();
+    expect(onNavigate).toHaveBeenLastCalledWith(route, { pathname: `/${route}/main`, search });
+    view.unmount();
+  }
 });
-
 describe("mounted sidebar menus", () => {
-  setupSidebarTest();
   afterEach(clearNativeGatewayTestState);
   async function mountConnected(
     gateway: Parameters<typeof mountSidebar>[0],
@@ -162,8 +139,9 @@ describe("mounted sidebar menus", () => {
     "native disconnect and reconnect",
   ] as const)("keeps session-menu work scoped across %s", async (transition) => {
     setNativeGatewayTestState("local");
-    const retired = createDeferred<{ worktrees: WorktreeRecord[] }>();
-    const current = createDeferred<{ worktrees: WorktreeRecord[] }>();
+    type WorktreePage = { worktrees: Pick<WorktreeRecord, "id" | "path">[] };
+    const retired = createDeferred<WorktreePage>();
+    const current = createDeferred<WorktreePage>();
     const worktrees = vi.fn().mockReturnValueOnce(retired.promise).mockReturnValue(current.promise);
     const request = createGatewayRequestMock((method) =>
       method === "worktrees.list" ? worktrees() : Promise.resolve({}),
@@ -180,21 +158,8 @@ describe("mounted sidebar menus", () => {
         ),
       },
     });
-    const response: { worktrees: WorktreeRecord[] } = {
-      worktrees: [
-        {
-          id: "wt-1",
-          name: "checkout",
-          repoFingerprint: "0123456789abcdef",
-          repoRoot: "/synthetic/repo",
-          path: "/synthetic/worktrees/checkout",
-          branch: "main",
-          baseRef: "main",
-          ownerKind: "session",
-          createdAt: 1,
-          lastActiveAt: 1,
-        },
-      ],
+    const response: WorktreePage = {
+      worktrees: [{ id: "wt-1", path: "/synthetic/worktrees/checkout" }],
     };
     try {
       const gateway = createGatewayHarness(createTestGatewayClient(request));
@@ -248,8 +213,7 @@ describe("mounted sidebar menus", () => {
       }
       await waitForSolid(() => {
         const editor = openIn.querySelector<HTMLButtonElement>('[data-value="open-in:vscode"]');
-        expect(editor).not.toBeNull();
-        expect(editor?.disabled).toBe(false);
+        expect(editor).toMatchObject({ disabled: false });
       });
     } finally {
       retired.resolve({ worktrees: [] });

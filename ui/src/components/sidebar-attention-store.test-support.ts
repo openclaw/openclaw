@@ -7,6 +7,7 @@ import { hiddenScopeUpgradeCapability } from "../test-helpers/application-contex
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 
 export type CompactCronPage = CronJobsListResult<CronCompactJob>;
+const inertCapability = <T>(value: T) => ({ ...value, subscribe: () => () => undefined });
 
 export function cronPage(id?: string): CompactCronPage {
   const jobs = id
@@ -42,23 +43,19 @@ export function createStore(
   connectionBootstrap?: ApplicationContext["connectionBootstrap"],
   selection?: ApplicationContext["agentSelection"],
 ) {
-  const agentSelection =
-    selection ??
-    ({
-      state: { selectedId: "main", scopeId: null },
-      subscribe: () => () => undefined,
-    } as unknown as ApplicationContext["agentSelection"]);
   return createSidebarAttentionStore({
     gateway,
-    agentSelection,
-    agents: {
+    agentSelection:
+      selection ??
+      (inertCapability({
+        state: { selectedId: "main", scopeId: null },
+      }) as unknown as ApplicationContext["agentSelection"]),
+    agents: inertCapability({
       state: { agentsList: null },
-      subscribe: () => () => undefined,
-    } as unknown as ApplicationContext["agents"],
-    overlays: {
+    }) as unknown as ApplicationContext["agents"],
+    overlays: inertCapability({
       snapshot: { approvalQueue: [] },
-      subscribe: () => () => undefined,
-    } as unknown as ApplicationContext["overlays"],
+    }) as unknown as ApplicationContext["overlays"],
     scopeUpgrade: hiddenScopeUpgradeCapability,
     connectionBootstrap,
   });
