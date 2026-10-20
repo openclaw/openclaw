@@ -14,9 +14,9 @@ function setup() {
 }
 
 describe("shared/gateway-bind-url", () => {
-  it("returns null for loopback/default binds", () => {
+  it.each([undefined, "loopbackish"])("does not probe hosts for bind=%s", (bind) => {
     const { resolve, expectNoProbes } = setup();
-    expect(resolve()).toBeNull();
+    expect(resolve({ bind })).toBeNull();
     expectNoProbes();
   });
 
@@ -49,11 +49,5 @@ describe("shared/gateway-bind-url", () => {
     expect(resolve({ bind: "lan" })).toEqual({
       error: "gateway.bind=lan set, but no private LAN IP was found.",
     });
-  });
-
-  it("returns null for unrecognized bind values without probing pickers", () => {
-    const { resolve, expectNoProbes } = setup();
-    expect(resolve({ bind: "loopbackish" })).toBeNull();
-    expectNoProbes();
   });
 });

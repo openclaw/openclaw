@@ -1,27 +1,18 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { addIgnoreRules } from "./ignore-rules.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { addIgnoreRules, type IgnoreMatcher } from "./ignore-rules.js";
 
-function oversizedIgnoreFileContent(): string {
-  return `#${"x".repeat(4 * 1024 * 1024)}`;
-}
+const oversizedIgnoreFileContent = () => `#${"x".repeat(4 * 1024 * 1024)}`;
 
-function expectPaths(
-  ig: ReturnType<typeof addIgnoreRules>,
-  ignored: string[],
-  visible: string[] = [],
-) {
-  for (const pathname of ignored) {
-    expect(ig.ignores(pathname), pathname).toBe(true);
-  }
-  for (const pathname of visible) {
-    expect(ig.ignores(pathname), pathname).toBe(false);
-  }
+function expectPaths(ig: IgnoreMatcher, ignored: string[], visible: string[] = []) {
+  expect(ignored.map((pathname) => ig.ignores(pathname))).toEqual(ignored.map(() => true));
+  expect(visible.map((pathname) => ig.ignores(pathname))).toEqual(visible.map(() => false));
 }
 
 describe("addIgnoreRules", () => {
+  const dirs = useAutoCleanupTempDirTracker(afterEach);
   let tempDir: string;
   const write = (content: string, name = ".gitignore", dir = tempDir) =>
     fs.writeFileSync(path.join(dir, name), content, "utf-8");
@@ -33,11 +24,7 @@ describe("addIgnoreRules", () => {
   };
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ignore-rules-"));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { force: true, recursive: true });
+    tempDir = dirs.make("openclaw-ignore-rules-");
   });
 
   it("keeps root-anchored patterns and negations at the top level", () => {
@@ -50,14 +37,14 @@ describe("addIgnoreRules", () => {
     expectPaths(scan(), ["ignored-file"], ["unrelated-file"]);
   });
 
-  it("enforces the rule-count budget across ignore files", () => {
-    write("a\n".repeat(10_000));
-    write("b\n".repeat(10_001), ".ignore");
-    expect(scan().ignores("unrelated-file")).toBe(true);
-  });
-
-  it("fails closed before compiling an excessively long pattern", () => {
-    write("a".repeat(16 * 1024 + 1));
+  it.each([
+    ["rule count across files", "a\n".repeat(10_000), "b\n".repeat(10_001)],
+    ["individual pattern length", "a".repeat(16 * 1024 + 1), ""],
+  ])("fails closed on excessive %s", (_name, gitignore, ignore) => {
+    write(gitignore);
+    if (ignore) {
+      write(ignore, ".ignore");
+    }
     expect(scan().ignores("unrelated-file")).toBe(true);
   });
 
@@ -112,18 +99,13 @@ describe("addIgnoreRules", () => {
   });
 
   it("follows a chain of symlinks to the final regular .gitignore", () => {
-    const realDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ignore-rules-real-"));
-    try {
-      write("node_modules/\n", "real.gitignore", realDir);
-      const linkA = path.join(realDir, "link-a");
-      const linkB = path.join(realDir, "link-b");
-      fs.symlinkSync(path.join(realDir, "real.gitignore"), linkA);
-      fs.symlinkSync(linkA, linkB);
-      fs.symlinkSync(linkB, path.join(tempDir, ".gitignore"));
-
-      expect(scan().ignores("node_modules/foo")).toBe(true);
-    } finally {
-      fs.rmSync(realDir, { force: true, recursive: true });
-    }
+    const realDir = dirs.make("openclaw-ignore-rules-real-");
+    write("node_modules/\n", "real.gitignore", realDir);
+    const linkA = path.join(realDir, "link-a");
+    const linkB = path.join(realDir, "link-b");
+    fs.symlinkSync(path.join(realDir, "real.gitignore"), linkA);
+    fs.symlinkSync(linkA, linkB);
+    fs.symlinkSync(linkB, path.join(tempDir, ".gitignore"));
+    expect(scan().ignores("node_modules/foo")).toBe(true);
   });
 });

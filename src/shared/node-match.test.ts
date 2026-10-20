@@ -18,16 +18,12 @@ describe("shared/node-match", () => {
     target.remoteIp = "198.51.100.17";
     const query = kind === "id" ? target.nodeId : target.remoteIp;
     const normalize = vi.spyOn(String.prototype, "normalize");
-    let selected: string;
-    let normalizations: number;
     try {
-      selected = resolve(nodes, query);
-      normalizations = normalize.mock.calls.length;
+      const result = [resolve(nodes, query), normalize.mock.calls.length];
+      expect(result).toEqual([target.nodeId, 0]);
     } finally {
       normalize.mockRestore();
     }
-    expect(selected).toBe(target.nodeId);
-    expect(normalizations).toBe(0);
   });
 
   it("keeps equally strong current and unspecified client ties ambiguous", () => {
@@ -49,15 +45,10 @@ describe("shared/node-match", () => {
       resolve([node("mac-123", "Mac Studio", { remoteIp: "100.0.0.1" }), node("pi-456")], "nope"),
     ).toThrow(/unknown node: nope.*known: Mac Studio, pi-456/);
 
-    expect(() =>
-      resolve(
-        [
-          node("ios-a", "iPhone", { connected: true }),
-          node("ios-b", "iPhone", { connected: true }),
-        ],
-        "iphone",
-      ),
-    ).toThrow(/ambiguous node: iphone.*node=ios-a.*node=ios-b/);
+    const iphones = ["ios-a", "ios-b"].map((id) => node(id, "iPhone", { connected: true }));
+    expect(() => resolve(iphones, "iphone")).toThrow(
+      /ambiguous node: iphone.*node=ios-a.*node=ios-b/,
+    );
 
     expect(() => resolve([], "")).toThrow(/node required/);
   });
@@ -68,29 +59,21 @@ describe("shared/node-match", () => {
     expect(() => resolve(nodes, "###")).toThrow(/unknown node: ###/);
   });
 
-  it("preserves combining marks that distinguish Unicode display names", () => {
-    const nodes = [node("hi-short-i", "किताब"), node("hi-short-u", "कुताब")];
-    expect(resolve(nodes, "किताब")).toBe("hi-short-i");
-    expect(resolve(nodes, "कुताब")).toBe("hi-short-u");
+  it.each([
+    ["script marks", ["किताब", "कुताब"], ["किताब", "कुताब"]],
+    ["emoji decoration", ["Mac ❤️ Studio", "Node 1️⃣"], ["Mac Studio", "Node 1"]],
+  ] as const)("normalizes %s without confusing nodes", (_name, names, queries) => {
+    const nodes = names.map((name, index) => node(String(index), name));
+    expect(queries.map((query) => resolve(nodes, query))).toEqual(["0", "1"]);
   });
 
-  it("ignores emoji decoration marks during display-name matching", () => {
-    const nodes = [node("heart", "Mac ❤️ Studio"), node("keycap", "Node 1️⃣")];
-    expect(resolve(nodes, "Mac Studio")).toBe("heart");
-    expect(resolve(nodes, "Node 1")).toBe("keycap");
-  });
-
-  it("keeps compact display-name selectors below exact name matches", () => {
-    const nodes = [
-      node("mac-compact", "Mac Studio"),
-      node("mac-exact", "MacStudio"),
-      node("cafe-compact", "Cafe\u0301 01"),
-      node("cafe-exact", "Cafe\u030101"),
-    ];
-    expect(resolve(nodes, "MacStudio", true)).toBe("mac-exact");
-    expect(resolve([nodes[0]!, nodes[2]!], "MacStudio", true)).toBe("mac-compact");
-    expect(resolve([nodes[2]!, nodes[3]!], "Café01", true)).toBe("cafe-exact");
-    expect(resolve([nodes[2]!], "Café01", true)).toBe("cafe-compact");
+  it.each([
+    ["Mac Studio", "MacStudio", "MacStudio"],
+    ["Cafe\u0301 01", "Cafe\u030101", "Café01"],
+  ])("prefers exact %s matches to compact selectors", (spaced, compact, query) => {
+    const nodes = [node("compact", spaced), node("exact", compact)];
+    expect(resolve(nodes, query, true)).toBe("exact");
+    expect(resolve(nodes.slice(0, 1), query, true)).toBe("compact");
   });
 
   it("requires callers to opt in to compact display-name selectors", () => {

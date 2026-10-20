@@ -2,7 +2,7 @@ import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json
 import { afterEach, describe, expect, it } from "vitest";
 import { applyJsonSchemaDefaults, findJsonSchemaShapeError } from "./json-schema-defaults.js";
 
-describe("normalizeJsonSchemaForTypeBox", () => {
+describe("JSON Schema helpers", () => {
   it("combines pattern properties that collide after unicode repair", () => {
     const normalized = normalizeJsonSchemaForTypeBox({
       type: "object",
@@ -52,9 +52,6 @@ describe("normalizeJsonSchemaForTypeBox", () => {
       "<schema>.type: unsupported JSON Schema type",
     );
   });
-});
-
-describe("applyJsonSchemaDefaults prototype safety", () => {
   const readPollution = () => (Object.prototype as Record<string, unknown>).polluted;
   const polluting = { type: "object", properties: { polluted: { default: "yes" } } };
 
@@ -62,35 +59,20 @@ describe("applyJsonSchemaDefaults prototype safety", () => {
     delete (Object.prototype as Record<string, unknown>).polluted;
   });
 
-  it("does not pollute Object.prototype through a __proto__ property schema", () => {
-    const schema = { type: "object", properties: Object.fromEntries([["__proto__", polluting]]) };
-    const result = applyJsonSchemaDefaults(schema, {});
-
-    expect(readPollution()).toBeUndefined();
-    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
-    expect(Object.hasOwn(result, "polluted")).toBe(false);
-  });
-
-  it("does not pollute Object.prototype through a __proto__ pattern property schema", () => {
-    const schema = { type: "object", patternProperties: { ".*": polluting } };
-    const value = JSON.parse('{"__proto__":{}}');
-
-    applyJsonSchemaDefaults(schema, value);
-
-    expect(readPollution()).toBeUndefined();
-  });
-
-  it("does not pollute Object.prototype through a __proto__ additional property schema", () => {
-    const schema = { type: "object", additionalProperties: polluting };
-    const value = JSON.parse('{"__proto__":{}}');
-
-    applyJsonSchemaDefaults(schema, value);
-
-    expect(readPollution()).toBeUndefined();
-  });
-});
-
-describe("JSON Schema child traversal", () => {
+  it.each(["properties", "patternProperties", "additionalProperties"] as const)(
+    "does not pollute Object.prototype through %s",
+    (keyword) => {
+      const children =
+        keyword === "additionalProperties"
+          ? polluting
+          : Object.fromEntries([[keyword === "properties" ? "__proto__" : ".*", polluting]]);
+      const value = keyword === "properties" ? {} : JSON.parse('{"__proto__":{}}');
+      const result = applyJsonSchemaDefaults({ type: "object", [keyword]: children }, value);
+      expect(readPollution()).toBeUndefined();
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+      expect(Object.hasOwn(result, "polluted")).toBe(false);
+    },
+  );
   it.each([
     ["properties", "map"],
     ["unevaluatedProperties", "value"],

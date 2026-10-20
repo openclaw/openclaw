@@ -26,32 +26,28 @@ describe("lazy promises", () => {
     expect(create).toHaveBeenCalledTimes(2);
   });
 
-  it("evicts settled in-flight work without deleting a replacement", async () => {
-    const { cache, load } = cachedLoad({ evictOnSettled: true });
-    const deferred = createDeferred<string>();
-    const first = load("a", () => deferred.promise);
-    const replacement = Promise.resolve("replacement");
-    cache.set("a", replacement);
-
-    deferred.resolve("first");
-    await expect(first).resolves.toBe("first");
-    expect(cache.get("a")).toBe(replacement);
-
-    await expect(load("b", async () => "settled")).resolves.toBe("settled");
-    expect(cache.has("b")).toBe(false);
-  });
-
-  it("does not let a stale rejection delete a replacement", async () => {
-    const { cache, load } = cachedLoad({ cacheRejections: false });
-    const deferred = createDeferred<string>();
-    const first = load("a", () => deferred.promise);
-    const replacement = Promise.resolve("replacement");
-    cache.set("a", replacement);
-
-    deferred.reject(new Error("stale"));
-    await expect(first).rejects.toThrow("stale");
-    expect(cache.get("a")).toBe(replacement);
-  });
+  it.each([true, false])(
+    "preserves replacements after stale settlement (resolve=%s)",
+    async (resolve) => {
+      const { cache, load } = cachedLoad(
+        resolve ? { evictOnSettled: true } : { cacheRejections: false },
+      );
+      const deferred = createDeferred<string>();
+      const first = load("a", () => deferred.promise);
+      const replacement = Promise.resolve("replacement");
+      cache.set("a", replacement);
+      if (resolve) {
+        deferred.resolve("first");
+        await expect(first).resolves.toBe("first");
+        await expect(load("b", async () => "settled")).resolves.toBe("settled");
+        expect(cache.has("b")).toBe(false);
+      } else {
+        deferred.reject(new Error("stale"));
+        await expect(first).rejects.toThrow("stale");
+      }
+      expect(cache.get("a")).toBe(replacement);
+    },
+  );
   it("returns a reusable single-flight loader", async () => {
     let calls = 0;
     const load = createLazyPromise(async () => `loaded-${++calls}`);
