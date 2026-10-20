@@ -10,6 +10,7 @@ import {
 } from "./cli-process-child.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const SHUTDOWN_WARNING = "gateway_stop hook exceeded 2500ms; continuing";
 
 describe("message CLI plugin cleanup", () => {
   it.each([
@@ -32,25 +33,21 @@ describe("message CLI plugin cleanup", () => {
       docsPath: "/channels/test",
       blurb: "Synthetic local channel",
     };
+    const writeJson = (name: string, value: unknown) =>
+      fs.writeFile(path.join(pluginDir, name), JSON.stringify(value));
     await fs.mkdir(pluginDir);
-    await fs.writeFile(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: id,
-        version: "1.0.0",
-        type: "module",
-        openclaw: { extensions: ["./index.js"], setupEntry: "./index.js", channel: meta },
-      }),
-    );
-    await fs.writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id,
-        channels: [id],
-        configSchema: { type: "object" },
-        channelConfigs: { [id]: { schema: { type: "object" } } },
-      }),
-    );
+    await writeJson("package.json", {
+      name: id,
+      version: "1.0.0",
+      type: "module",
+      openclaw: { extensions: ["./index.js"], setupEntry: "./index.js", channel: meta },
+    });
+    await writeJson("openclaw.plugin.json", {
+      id,
+      channels: [id],
+      configSchema: { type: "object" },
+      channelConfigs: { [id]: { schema: { type: "object" } } },
+    });
     await fs.writeFile(
       path.join(pluginDir, "index.js"),
       `import fs from "node:fs";
@@ -87,23 +84,16 @@ export default { id: plugin.id, register(api) {
     );
 
     const result = await runCliProcessChild({
-      ...(pending
-        ? {
-            interact: async (
-              child: import("node:child_process").ChildProcessWithoutNullStreams,
-            ) => {
-              try {
-                await waitForCliProcessStderrMarker(
-                  child,
-                  "gateway_stop hook exceeded 2500ms; continuing",
-                );
-                expect(child.exitCode).toBeNull();
-              } finally {
-                child.stdin.end();
-              }
-            },
+      interact: pending
+        ? async (child) => {
+            try {
+              await waitForCliProcessStderrMarker(child, SHUTDOWN_WARNING);
+              expect(child.exitCode).toBeNull();
+            } finally {
+              child.stdin.end();
+            }
           }
-        : {}),
+        : undefined,
       nodeArgs: [
         // Share immutable CLI code; each case still owns a fresh process and plugin lifecycle.
         ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
@@ -148,7 +138,7 @@ export default { id: plugin.id, register(api) {
       }
     }
     if (pending) {
-      expect(result.stderr).toContain("gateway_stop hook exceeded 2500ms; continuing");
+      expect(result.stderr).toContain(SHUTDOWN_WARNING);
     }
   });
 });

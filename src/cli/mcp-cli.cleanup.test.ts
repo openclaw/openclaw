@@ -21,6 +21,16 @@ const CLEANUP_ERROR = "MCP runtime cleanup could not confirm closure";
 const CLEANUP_ERROR_WITH_RECOVERY =
   /MCP runtime cleanup could not confirm closure.*session termination support.*rerun/;
 const CATALOG_ERROR = "fixture catalog unavailable";
+const rpcResults: Record<string, unknown> = {
+  initialize: {
+    protocolVersion: PROTOCOL_VERSION,
+    capabilities: { tools: {} },
+    serverInfo: { name: "cleanup-fixture", version: "1" },
+  },
+  "tools/list": {
+    tools: [{ name: "ping", inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }],
+  },
+};
 
 describe("MCP CLI cleanup reporting", () => {
   let endpoint: string;
@@ -59,45 +69,24 @@ describe("MCP CLI cleanup reporting", () => {
               response.writeHead(202).end();
               return;
             }
-            response.setHeader("content-type", "application/json");
             if (message.method === "initialize") {
               response.setHeader("mcp-session-id", SESSION_ID);
-              response.end(
-                JSON.stringify({
-                  jsonrpc: "2.0",
-                  id: message.id,
-                  result: {
-                    protocolVersion: PROTOCOL_VERSION,
-                    capabilities: { tools: {} },
-                    serverInfo: { name: "cleanup-fixture", version: "1" },
-                  },
-                }),
-              );
+            }
+            const result = rpcResults[message.method];
+            if (!Object.hasOwn(rpcResults, message.method)) {
+              response.writeHead(400).end();
               return;
             }
-            if (message.method === "tools/list") {
-              response.end(
-                JSON.stringify({
-                  jsonrpc: "2.0",
-                  id: message.id,
-                  ...(failCatalog
-                    ? { error: { code: -32603, message: CATALOG_ERROR } }
-                    : {
-                        result: {
-                          tools: [
-                            {
-                              name: "ping",
-                              inputSchema: { type: "object" },
-                              annotations: { readOnlyHint: true },
-                            },
-                          ],
-                        },
-                      }),
-                }),
-              );
-              return;
-            }
-            response.writeHead(400).end();
+            response.setHeader("content-type", "application/json");
+            response.end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: message.id,
+                ...(message.method === "tools/list" && failCatalog
+                  ? { error: { code: -32603, message: CATALOG_ERROR } }
+                  : { result }),
+              }),
+            );
           })().catch((error: unknown) =>
             response.destroy(error instanceof Error ? error : undefined),
           );
@@ -111,9 +100,7 @@ describe("MCP CLI cleanup reporting", () => {
     };
   });
 
-  afterAll(async () => {
-    await closeFixture?.();
-  });
+  afterAll(async () => await closeFixture?.());
 
   beforeEach(() => {
     resetMcpCliTestState();
@@ -122,13 +109,11 @@ describe("MCP CLI cleanup reporting", () => {
     deleteHeaders.length = 0;
   });
 
-  afterEach(async () => {
-    await cleanupMcpCliTestState();
-  });
+  afterEach(cleanupMcpCliTestState);
 
   async function withMcpConfig(
-    servers: Record<string, unknown>,
     run: (configPath: string) => Promise<void>,
+    servers: Record<string, unknown> = { docs: { url: endpoint, transport: "streamable-http" } },
   ) {
     await withTempHome("openclaw-mcp-cleanup-", async (home) => {
       vi.spyOn(process, "cwd").mockReturnValue(await createWorkspace());
@@ -136,10 +121,6 @@ describe("MCP CLI cleanup reporting", () => {
       await fs.writeFile(configPath, `${JSON.stringify({ mcp: { servers } })}\n`);
       await run(configPath);
     });
-  }
-
-  function serverConfig() {
-    return { url: endpoint, transport: "streamable-http" };
   }
 
   async function probe(args: string[]) {
@@ -164,7 +145,7 @@ describe("MCP CLI cleanup reporting", () => {
     { status: 500, confirmed: false },
   ])("reports catalog and cleanup status for DELETE $status", async ({ status, confirmed }) => {
     deleteStatus = status;
-    await withMcpConfig({ docs: serverConfig() }, async () => {
+    await withMcpConfig(async () => {
       await probe(["--json"]);
 
       expect(mockLog).toHaveBeenCalledTimes(1);
@@ -188,7 +169,7 @@ describe("MCP CLI cleanup reporting", () => {
   });
 
   it("prints discovered tools but fails a text probe when cleanup is uncertain", async () => {
-    await withMcpConfig({ docs: serverConfig() }, async () => {
+    await withMcpConfig(async () => {
       await probe([]);
 
       const output = mockLog.mock.calls.map(([line]) => String(line)).join("\n");
@@ -200,7 +181,7 @@ describe("MCP CLI cleanup reporting", () => {
   });
 
   it("includes uncertain cleanup as an error in the Doctor JSON report", async () => {
-    await withMcpConfig({ docs: serverConfig() }, async () => {
+    await withMcpConfig(async () => {
       await expect(
         runMcpCommand(["mcp", "doctor", "docs", "--probe", "--json"]),
       ).rejects.toMatchObject({ code: 1 });
@@ -223,26 +204,29 @@ describe("MCP CLI cleanup reporting", () => {
   it.each(["add", "configure"] as const)(
     "does not save %s configuration after failed verification cleanup",
     async (command) => {
-      await withMcpConfig(command === "add" ? {} : { docs: serverConfig() }, async (configPath) => {
-        const before = await fs.readFile(configPath, "utf8");
-        const args =
-          command === "add"
-            ? ["mcp", "add", "docs", "--url", endpoint, "--transport", "streamable-http"]
-            : ["mcp", "configure", "docs", "--include", "ping", "--probe"];
+      await withMcpConfig(
+        async (configPath) => {
+          const before = await fs.readFile(configPath, "utf8");
+          const args =
+            command === "add"
+              ? ["mcp", "add", "docs", "--url", endpoint, "--transport", "streamable-http"]
+              : ["mcp", "configure", "docs", "--include", "ping", "--probe"];
 
-        await expect(runMcpCommand(args)).rejects.toMatchObject({ code: 1 });
+          await expect(runMcpCommand(args)).rejects.toMatchObject({ code: 1 });
 
-        expect(errors()).toMatch(CLEANUP_ERROR_WITH_RECOVERY);
-        expect(errors()).toContain("Configuration was not saved.");
-        expect(await fs.readFile(configPath, "utf8")).toBe(before);
-        expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
-      });
+          expect(errors()).toMatch(CLEANUP_ERROR_WITH_RECOVERY);
+          expect(errors()).toContain("Configuration was not saved.");
+          expect(await fs.readFile(configPath, "utf8")).toBe(before);
+          expect(deleteHeaders).toEqual([{ session: SESSION_ID, protocol: PROTOCOL_VERSION }]);
+        },
+        command === "add" ? {} : undefined,
+      );
     },
   );
 
   it("preserves the discovery diagnostic when cleanup also fails", async () => {
     failCatalog = true;
-    await withMcpConfig({ docs: serverConfig() }, async () => {
+    await withMcpConfig(async () => {
       await probe(["--json"]);
 
       expect(JSON.parse(lastLogLine())).toMatchObject({
