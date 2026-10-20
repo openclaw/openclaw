@@ -4,7 +4,6 @@ import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import { loadBrowserMeetingPlugins } from "./browser-plugin.test-support.js";
 
 const { zoomMeetingsPlugin: plugin } = await loadBrowserMeetingPlugins();
-const name = "Zoom";
 const command = "zoommeetings.chrome";
 const commands = {
   audioInputCommand: ["custom-input", "--read"],
@@ -12,6 +11,13 @@ const commands = {
   bargeInInputCommand: ["custom-barge-in"],
 };
 const audio = { audioBackend: "auto", audioBufferBytes: 4_096, audioFormat: "pcm16-24khz" };
+const node = {
+  caps: ["browser"],
+  commands: ["browser.proxy", command],
+  connected: true,
+  displayName: "Zoom-node",
+  nodeId: "node-1",
+};
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -23,17 +29,7 @@ describe("shared browser meeting configuration and setup", () => {
     runtime.nodes = {
       invoke: vi.fn(async () => ({ ok: true })),
       openDuplex: vi.fn(),
-      list: vi.fn(async () => ({
-        nodes: [
-          {
-            caps: ["browser"],
-            commands: ["browser.proxy", command],
-            connected: true,
-            displayName: `${name}-node`,
-            nodeId: "node-1",
-          },
-        ],
-      })),
+      list: vi.fn(async () => ({ nodes: [node] })),
     };
   });
   function setup(
@@ -41,7 +37,7 @@ describe("shared browser meeting configuration and setup", () => {
     chrome = {},
   ) {
     return plugin.setupStatus({
-      config: resolveConfig({ chrome, chromeNode: { node: `${name}-node` } }),
+      config: resolveConfig({ chrome, chromeNode: { node: "Zoom-node" } }),
       fullConfig: {},
       runtime,
       options: { transport: "chrome-node", ...options },
@@ -63,16 +59,15 @@ describe("shared browser meeting configuration and setup", () => {
   });
 
   it("resolves explicit overrides", () => {
-    const realtime = {
-      voiceProvider: "google",
-      model: "voice-model",
-      providers: { google: { apiKey: "ref" } },
-    };
     const selected = {
       defaultMode: "bidi",
       chrome: commands,
       chromeNode: { node: "mac-node" },
-      realtime,
+      realtime: {
+        voiceProvider: "google",
+        model: "voice-model",
+        providers: { google: { apiKey: "ref" } },
+      },
     };
     expect(resolveConfig(selected)).toMatchObject({
       ...selected,
@@ -95,62 +90,46 @@ describe("shared browser meeting configuration and setup", () => {
     expect(plugin.config.resolveGatewayOperationTimeoutMs(config)).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
-  it.each([false, true])(
-    "probes selected-node talk-back prerequisites with overrides=%s",
-    async (overrides) => {
-      const status = await setup({ mode: "agent" }, overrides ? commands : {});
+  const readyMessage = "Remote virtual audio backend and command-pair prerequisites are ready";
+  const missingMessage = "SoX audio command not found on the node.";
+  it.each([
+    ["agent", {}, true, readyMessage],
+    ["agent", commands, true, readyMessage],
+    ["bidi", {}, false, missingMessage],
+    ["transcribe", {}, true, "Zoom live-caption capture is enabled and ready"],
+  ] as const)("checks remote %s setup with %j", async (mode, overrides, ok, message) => {
+    if (!ok) {
+      vi.mocked(runtime.nodes.invoke).mockRejectedValue(new Error(missingMessage));
+    }
+    const status = await setup({ mode }, overrides);
+    expect(status.ok).toBe(ok);
+    const id = mode === "transcribe" ? "captions" : "chrome-node-audio-prerequisites";
+    expect(status.checks).toContainEqual({ id, message, ok });
+    if (mode === "transcribe") {
+      expect(runtime.nodes.invoke).not.toHaveBeenCalled();
+    } else {
       expect(runtime.nodes.invoke).toHaveBeenCalledWith({
         command,
         nodeId: "node-1",
-        params: { action: "setup", ...audio, ...(overrides ? commands : {}) },
+        params: { action: "setup", ...audio, ...overrides },
         timeoutMs: 12_000,
       });
-      expect(status.checks).toContainEqual({
-        id: "chrome-node-audio-prerequisites",
-        message: "Remote virtual audio backend and command-pair prerequisites are ready",
-        ok: true,
-      });
-      expect(status.ok).toBe(true);
-    },
-  );
-
-  it("reports observe-only captions without probing audio", async () => {
-    const status = await setup({ mode: "transcribe" });
-    expect(status.checks).toContainEqual({
-      id: "captions",
-      message: `${name} live-caption capture is enabled and ready`,
-      ok: true,
-    });
-    expect(runtime.nodes.invoke).not.toHaveBeenCalled();
+    }
   });
 
-  it.each(["chrome-node", "chrome"] as const)(
-    "reports unavailable audio prerequisites on %s",
-    async (transport) => {
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      vi.mocked(runtime.nodes.invoke).mockRejectedValue(
-        new Error("SoX audio command not found on the node."),
-      );
-      runtime.system = { ...runtime.system, runCommandWithTimeout: vi.fn() };
-      const status = await setup({ mode: transport === "chrome" ? "agent" : "bidi", transport });
-      expect(status.ok).toBe(false);
-      expect(status.checks).toContainEqual({
-        id:
-          transport === "chrome" ? "chrome-local-audio-device" : "chrome-node-audio-prerequisites",
-        message:
-          transport === "chrome"
-            ? expect.stringContaining("unsupported on win32")
-            : "SoX audio command not found on the node.",
-        ok: false,
-      });
-      if (transport === "chrome") {
-        expect(status.checks.some((check) => check.id === "chrome-local-audio-commands")).toBe(
-          false,
-        );
-        expect(runtime.system.runCommandWithTimeout).not.toHaveBeenCalled();
-      }
-    },
-  );
+  it("stops local audio probing on an unsupported platform", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    runtime.system = { ...runtime.system, runCommandWithTimeout: vi.fn() };
+    const status = await setup({ mode: "agent", transport: "chrome" });
+    expect(status.ok).toBe(false);
+    expect(status.checks).toContainEqual({
+      id: "chrome-local-audio-device",
+      message: expect.stringContaining("unsupported on win32"),
+      ok: false,
+    });
+    expect(status.checks.some((check) => check.id === "chrome-local-audio-commands")).toBe(false);
+    expect(runtime.system.runCommandWithTimeout).not.toHaveBeenCalled();
+  });
 
   it("replaces setup probe commands with trusted configured commands", async () => {
     const invokeNode = vi.fn(async () => ({ ok: true as const }));

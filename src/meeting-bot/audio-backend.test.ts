@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ensureMeetingAudioBackend, resolveMeetingAudioRuntimeForFormat } from "./audio-backend.js";
+import { createPulseCommands } from "./audio-backend.test-support.js";
 
 const PIPEWIRE_SINK_NAME = "openclaw_meeting_audio";
 const PIPEWIRE_MONITOR_NAME = `${PIPEWIRE_SINK_NAME}.monitor`;
@@ -7,21 +8,10 @@ const PIPEWIRE_SOURCE_NAME = PIPEWIRE_SINK_NAME;
 const defaults = { backend: "auto", bufferBytes: 4_096, format: "pcm16-24khz" } as const;
 
 function pulseRunner(loaded = false) {
-  const devices = { sinks: loaded, sources: loaded };
+  const run = createPulseCommands(loaded);
   return vi.fn(async (argv: string[]) => {
-    let stdout = "";
-    if (argv[1] === "info") {
-      stdout = "Server Name: PulseAudio (on PipeWire)";
-    } else if (argv[1] === "load-module") {
-      devices.sinks ||= argv[2] === "module-null-sink";
-      devices.sources ||= argv[2] === "module-remap-source";
-      stdout = "17";
-    } else if (argv[1] === "list") {
-      const kind = argv[3] === "sinks" ? "sinks" : "sources";
-      const id = kind === "sinks" ? 42 : 43;
-      stdout = devices[kind] ? `${id}\t${PIPEWIRE_SINK_NAME}\tPipeWire\ts16le\tSUSPENDED` : "";
-    }
-    return { code: 0, stdout };
+    const { status: code, ...result } = run(argv);
+    return { code, ...result };
   });
 }
 

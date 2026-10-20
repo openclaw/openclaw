@@ -15,17 +15,16 @@ function createVerifier(
   return verifier;
 }
 
-function pcmEnergyFrames(amplitudes: readonly number[]): Buffer {
-  const samplesPerFrame = 240;
-  const audio = Buffer.alloc(amplitudes.length * samplesPerFrame * 2);
-  amplitudes.forEach((amplitude, frameIndex) => {
-    const roundedAmplitude = Math.round(amplitude);
-    for (let sampleIndex = 0; sampleIndex < samplesPerFrame; sampleIndex += 1) {
-      const sample = sampleIndex % 2 === 0 ? roundedAmplitude : -roundedAmplitude;
-      audio.writeInt16LE(sample, (frameIndex * samplesPerFrame + sampleIndex) * 2);
-    }
-  });
-  return audio;
+function pcmEnergyFrames(amplitudes: readonly number[], scale = 1): Buffer {
+  return Buffer.concat(
+    amplitudes.map((amplitude) => {
+      const roundedAmplitude = Math.round(amplitude * scale);
+      const pair = Buffer.alloc(4);
+      pair.writeInt16LE(roundedAmplitude, 0);
+      pair.writeInt16LE(-roundedAmplitude, 2);
+      return Buffer.alloc(240 * 2).fill(pair);
+    }),
+  );
 }
 
 const outputEnvelope = Array.from({ length: 80 }, (_, index) => 400 + ((index * 7919) % 12_000));
@@ -50,7 +49,7 @@ describe("meeting output loopback verifier", () => {
     expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(0);
 
     nowMs = 1_100;
-    const captured = pcmEnergyFrames(outputEnvelope.map((amplitude) => amplitude * 0.5));
+    const captured = pcmEnergyFrames(outputEnvelope, 0.5);
     verifier.recordInput(captured);
     const health = verifier.getHealth();
     expect(health.lastOutputLoopbackAt).toBe("1970-01-01T00:00:01.100Z");
@@ -66,8 +65,9 @@ describe("meeting output loopback verifier", () => {
     );
     vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const verifier = createVerifier({ audioFormat: "g711-ulaw-8khz" }, output);
+    const health = verifier.getHealth;
     verifier.recordInput(output);
-    const verified = verifier.getHealth();
+    const verified = health();
     expect(verified.verifiedOutputGeneration).toBe(1);
 
     // Six seconds queued after the match keep the same generation past its original deadline.
@@ -76,58 +76,48 @@ describe("meeting output loopback verifier", () => {
     nowMs = 6_000;
     verifier.recordOutput(output);
     verifier.recordInput(output);
-    expect(verifier.getHealth()).toEqual(verified);
+    expect(health()).toEqual(verified);
     nowMs = 12_600;
     verifier.recordOutput(Buffer.alloc(0));
-    expect(verifier.getHealth()).toEqual(verified);
+    expect(health()).toEqual(verified);
 
     nowMs += 1;
     verifier.recordOutput(output);
-    expect(verifier.getHealth()).toMatchObject({
-      outputGeneration: 2,
-      verifiedOutputGeneration: 1,
-    });
+    expect(health()).toMatchObject({ outputGeneration: 2, verifiedOutputGeneration: 1 });
     verifier.recordInput(output);
-    expect(verifier.getHealth()).toMatchObject({
+    expect(health()).toMatchObject({
       verifiedOutputGeneration: 2,
       outputLoopbackSignalBytes: output.byteLength * 2,
     });
-    const nextVerified = verifier.getHealth();
+    const nextVerified = health();
     verifier.cancelOutput();
     verifier.recordInput(output);
-    expect(verifier.getHealth()).toEqual(nextVerified);
+    expect(health()).toEqual(nextVerified);
   });
 
-  it("matches loopback delayed by a sub-frame sample offset", () => {
-    const output = pcmEnergyFrames(outputEnvelope.slice(0, 30));
-    const capture = Buffer.concat([Buffer.alloc(120 * 2), output]);
-    const verifier = createVerifier({}, output);
+  const first = pcmEnergyFrames(outputEnvelope.slice(0, 30));
+  const second = pcmEnergyFrames(outputEnvelope.slice(30, 60));
+  const silence = pcmEnergyFrames(Array(30).fill(0));
+  const recent = Buffer.concat([silence.subarray(4_800), second]);
+  const quietCapture = Buffer.concat([
+    pcmEnergyFrames(outputEnvelope.slice(0, 20), 0.0005),
+    pcmEnergyFrames(unrelatedEnvelope.slice(0, 20)),
+  ]);
+  it.each<[string, Buffer[], Buffer, boolean]>([
+    ["sub-frame delay", [first], Buffer.concat([Buffer.alloc(240), first]), true],
+    ["silent streamed spacing", [first, silence, second], recent, true],
+    [
+      "below-threshold correlation",
+      [pcmEnergyFrames(outputEnvelope.slice(0, 20))],
+      quietCapture,
+      false,
+    ],
+  ])("checks %s", (_name, chunks, capture, matches) => {
+    const verifier = createVerifier({}, chunks[0]);
+    for (const chunk of chunks.slice(1)) {
+      verifier.recordOutput(chunk);
+    }
     verifier.recordInput(capture);
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(capture.byteLength);
-  });
-
-  it("rejects a correlated waveform below the signal threshold", () => {
-    const output = pcmEnergyFrames(outputEnvelope.slice(0, 20));
-    const attenuated = pcmEnergyFrames(
-      outputEnvelope.slice(0, 20).map((amplitude) => amplitude * 0.0005),
-    );
-    const unrelatedLoudAudio = pcmEnergyFrames(unrelatedEnvelope.slice(0, 20));
-
-    const verifier = createVerifier({}, output);
-    verifier.recordInput(Buffer.concat([attenuated, unrelatedLoudAudio]));
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(0);
-  });
-
-  it("preserves silent spacing between streamed output chunks", () => {
-    const first = pcmEnergyFrames(outputEnvelope.slice(0, 30));
-    const silence = pcmEnergyFrames(Array(30).fill(0));
-    const second = pcmEnergyFrames(outputEnvelope.slice(30, 60));
-    const expectedRecentReference = Buffer.concat([silence.subarray(4_800), second]);
-
-    const verifier = createVerifier({}, first);
-    verifier.recordOutput(silence);
-    verifier.recordOutput(second);
-    verifier.recordInput(expectedRecentReference);
-    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(expectedRecentReference.byteLength);
+    expect(verifier.getHealth().outputLoopbackSignalBytes).toBe(matches ? capture.byteLength : 0);
   });
 });

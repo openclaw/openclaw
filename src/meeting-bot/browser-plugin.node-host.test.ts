@@ -4,9 +4,7 @@ import "../test-utils/prepare-compiled-subprocesses.js";
 import { loadBrowserMeetingPlugins } from "./browser-plugin.test-support.js";
 
 type Probe = (
-  command: string,
-  args: string[],
-  options: { timeout: number },
+  ...args: [string, string[], { timeout: number }]
 ) => Pick<SpawnSyncReturns<string>, "status" | "stdout" | "stderr" | "error">;
 const spawnSync = vi.hoisted(() => vi.fn<Probe>());
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -16,11 +14,8 @@ vi.mock("node:child_process", async (importOriginal) => ({
 
 const successfulProbe = { status: 0, stderr: "", stdout: "BlackHole 2ch" };
 const commandCheck = 'command -v "$1" >/dev/null 2>&1';
-const setupParams = JSON.stringify({
-  action: "setup",
-  audioInputCommand: ["capture"],
-  audioOutputCommand: ["play"],
-});
+const setupParams = (audioInputCommand = ["capture"], audioOutputCommand = ["play"]) =>
+  JSON.stringify({ action: "setup", audioInputCommand, audioOutputCommand });
 const ready = JSON.stringify({
   ok: true,
   audioBackend: "blackhole-2ch",
@@ -63,18 +58,17 @@ describe.each([
 
   it("shares one deadline across sequential probes", async () => {
     mockClock([0, 0, 6_000, 8_000]);
-    await expect(plugin.nodeHandler(setupParams)).resolves.toBe(ready);
+    await expect(plugin.nodeHandler(setupParams())).resolves.toBe(ready);
     expect(spawnSync.mock.calls.map((call) => call[2].timeout)).toEqual([10_000, 4_000, 2_000]);
   });
 
   it("probes the default sox executable only once", async () => {
     await expect(
       plugin.nodeHandler(
-        JSON.stringify({
-          action: "setup",
-          audioInputCommand: plugin.config.defaultAudioInputCommand,
-          audioOutputCommand: plugin.config.defaultAudioOutputCommand,
-        }),
+        setupParams(
+          plugin.config.defaultAudioInputCommand,
+          plugin.config.defaultAudioOutputCommand,
+        ),
       ),
     ).resolves.toBe(ready);
     expect(spawnSync).toHaveBeenCalledTimes(2);
@@ -83,20 +77,17 @@ describe.each([
 
   it("does not start another probe after the shared deadline expires", async () => {
     mockClock([1_000, 1_000, 11_000]);
-    await expect(plugin.nodeHandler(setupParams)).rejects.toThrow(timeoutMessage);
+    await expect(plugin.nodeHandler(setupParams())).rejects.toThrow(timeoutMessage);
     expect(spawnSync).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["profiler", "command"])(
-    "distinguishes %s timeout from missing prerequisites",
-    async (probe) => {
-      if (probe === "command") {
-        spawnSync.mockReturnValueOnce(successfulProbe);
-      }
-      const error = Object.assign(new Error(`spawnSync ${probe} ETIMEDOUT`), { code: "ETIMEDOUT" });
-      spawnSync.mockReturnValueOnce({ status: null, stderr: "", stdout: "", error });
-      await expect(plugin.nodeHandler(setupParams)).rejects.toThrow(timeoutMessage);
-      expect(spawnSync).toHaveBeenCalledTimes(probe === "command" ? 2 : 1);
-    },
-  );
+  it.each(["profiler", "command"])("reports %s timeouts", async (probe) => {
+    if (probe === "command") {
+      spawnSync.mockReturnValueOnce(successfulProbe);
+    }
+    const error = Object.assign(new Error(`spawnSync ${probe} ETIMEDOUT`), { code: "ETIMEDOUT" });
+    spawnSync.mockReturnValueOnce({ status: null, stderr: "", stdout: "", error });
+    await expect(plugin.nodeHandler(setupParams())).rejects.toThrow(timeoutMessage);
+    expect(spawnSync).toHaveBeenCalledTimes(probe === "command" ? 2 : 1);
+  });
 });

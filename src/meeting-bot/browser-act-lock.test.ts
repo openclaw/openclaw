@@ -11,20 +11,15 @@ describe("meeting browser act lock", () => {
   afterEach(() => vi.useRealTimers());
 
   it("serializes async evaluations for one browser target", async () => {
-    let active = 0;
-    let maxActive = 0;
     const firstGate = createDeferred();
     const events: string[] = [];
     const entered = createDeferred();
     const evaluate = (name: string, gate?: Promise<void>) =>
       run("target-1", async () => {
-        active += 1;
-        maxActive = Math.max(maxActive, active);
         events.push(`start-${name}`);
         entered.resolve();
         await gate;
         events.push(`end-${name}`);
-        active -= 1;
       });
 
     const first = evaluate("first", firstGate.promise);
@@ -37,7 +32,6 @@ describe("meeting browser act lock", () => {
       await Promise.all([first, second]);
     }
 
-    expect(maxActive).toBe(1);
     expect(events).toEqual(["start-first", "end-first", "start-second", "end-second"]);
   });
 
@@ -54,27 +48,21 @@ describe("meeting browser act lock", () => {
   it("does not start an evaluation after its queue deadline", async () => {
     const firstGate = createDeferred();
     const first = run("target-deadline", () => firstGate.promise);
-    let expiredStarted = false;
-    const expired = run(
-      "target-deadline",
-      async () => {
-        expiredStarted = true;
-      },
-      1_000,
-    );
+    const expiredOperation = vi.fn(async () => {});
+    const expired = run("target-deadline", expiredOperation, 1_000);
 
     const expiredResult = expect(expired).rejects.toThrow(
       "timed out waiting for browser tab control",
     );
     await vi.advanceTimersByTimeAsync(1_000);
     await expiredResult;
-    expect(expiredStarted).toBe(false);
+    expect(expiredOperation).not.toHaveBeenCalled();
 
     const third = run("target-deadline", async () => "recovered");
     firstGate.resolve();
     await first;
     await expect(third).resolves.toBe("recovered");
-    expect(expiredStarted).toBe(false);
+    expect(expiredOperation).not.toHaveBeenCalled();
   });
 
   it("does not time out after the evaluation acquires the target", async () => {
