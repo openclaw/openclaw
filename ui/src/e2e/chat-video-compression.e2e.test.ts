@@ -1,8 +1,6 @@
 import { readFileSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -20,8 +18,8 @@ const upload = (page: Page, name: string, buffer = oversized) =>
     .setInputFiles({ name, mimeType: "video/mp4", buffer });
 
 suite.define(() => {
-  it("loads the encoder only after consent and sends a playable bounded copy", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+  it("loads the encoder only after consent and sends a playable bounded copy", () =>
+    suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
       const requests: string[] = [];
       page.on("request", (request) => requests.push(request.url()));
       const encoderRequests = () =>
@@ -40,20 +38,12 @@ suite.define(() => {
       await compress.waitFor();
       expect(await send.isDisabled()).toBe(true);
       expect(encoderRequests()).toEqual([]);
-      const frame = await takeControlUiScreenshotFrame(
-        page,
-        page.locator(".agent-chat__composer-shell"),
-        [compress, composer],
-        { animations: "disabled" },
-      );
-      await writeFile(suite.artifactDir + "/compression-offer.png", frame.png);
       await compress.click();
-      await composer.fill("The draft stays editable while preparing a video.");
+      const draft = "Editable during preparation.";
+      await composer.fill(draft);
       await composer.press("End");
       await composer.press("!");
-      expect(await composer.inputValue()).toBe(
-        "The draft stays editable while preparing a video.!",
-      );
+      expect(await composer.inputValue()).toBe(draft + "!");
       await composer.focus();
       const ime = await page.context().newCDPSession(page);
       await ime.send("Input.imeSetComposition", {
@@ -63,9 +53,7 @@ suite.define(() => {
       });
       await page.locator(".chat-attachment-thumb--preparation").waitFor({ state: "detached" });
       expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
-      expect(await composer.inputValue()).toBe(
-        "The draft stays editable while preparing a video.!入力",
-      );
+      expect(await composer.inputValue()).toBe(draft + "!入力");
       await ime.send("Input.insertText", { text: "入力" });
       await ime.detach();
       expect(encoderRequests().length).toBeGreaterThan(0);
@@ -73,7 +61,6 @@ suite.define(() => {
       await send.click();
       const request = await gateway.waitForRequest("chat.send");
       const params = request.params as {
-        message: string;
         attachments: Array<{ content: string; mimeType: string; fileName: string }>;
       };
       const output = params.attachments[0]!;
@@ -90,18 +77,13 @@ suite.define(() => {
         try {
           await new Promise<void>((resolve, reject) => {
             player.addEventListener("loadeddata", () => resolve(), { once: true });
-            player.addEventListener(
-              "error",
-              () => reject(new Error("Compressed video is not playable")),
-              { once: true },
-            );
+            player.addEventListener("error", () => reject(new Error("Decode failed")), {
+              once: true,
+            });
           });
           await player.play();
-          return {
-            width: player.videoWidth,
-            height: player.videoHeight,
-            duration: player.duration,
-          };
+          const { videoWidth: width, videoHeight: height, duration } = player;
+          return { width, height, duration };
         } finally {
           player.pause();
           player.removeAttribute("src");
@@ -111,11 +93,10 @@ suite.define(() => {
       }, output);
       expect(playback).toMatchObject({ width: 320, height: 180 });
       expect(playback.duration).toBeCloseTo(1, 1);
-    });
-  });
+    }));
 
-  it("explains invalid media and unavailable browser codecs without sending", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page, context }) => {
+  it("explains invalid media and unavailable browser codecs without sending", () =>
+    suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page, context }) => {
       const gateway = await installMockGateway(page, { attachmentMaxBytes: limit });
       // Exercise the real worker and codec negotiation with a missing WebCodecs
       // capability, not a mocked successful/failed compression implementation.
@@ -149,11 +130,10 @@ suite.define(() => {
       await expectError(unsupportedError);
       expect(await gateway.getRequests("chat.send")).toEqual([]);
       expect(await button(page, "Send message").isEnabled()).toBe(true);
-    });
-  });
+    }));
 
-  it("offers the same cancelable preparation in New Session", async () => {
-    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+  it("offers the same cancelable preparation in New Session", () =>
+    suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
       await installMockGateway(page, { attachmentMaxBytes: limit });
       await page.goto(suite.server.baseUrl + "new");
       await upload(page, "screen.mp4");
@@ -161,6 +141,5 @@ suite.define(() => {
       await page.locator('.chat-attachment-thumb[aria-busy="true"]').waitFor();
       await button(page, "Remove screen.mp4").click();
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
-    });
-  });
+    }));
 });

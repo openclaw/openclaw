@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 
-/** This fixture owns only synthetic widget documents and a mocked Gateway. */
+/** Synthetic documents and mocked Gateway only; never record content or URLs. */
 export async function installWidgetPromptDiagnostics(context: BrowserContext): Promise<void> {
   await context.addInitScript(() => {
     const events: unknown[] = [];
@@ -27,25 +27,21 @@ export async function installWidgetPromptDiagnostics(context: BrowserContext): P
         ...detail,
       });
     };
+    const recordInput = (event: Event) =>
+      record(event.type, {
+        trusted: event.isTrusted,
+        target: element(event.target),
+        ...(event instanceof MouseEvent ? { x: event.clientX, y: event.clientY } : {}),
+      });
     for (const kind of ["pointerdown", "pointerup", "click", "focusin", "focusout"]) {
-      document.addEventListener(
-        kind,
-        (event) =>
-          record(kind, {
-            trusted: event.isTrusted,
-            target: element(event.target),
-            ...(event instanceof MouseEvent ? { x: event.clientX, y: event.clientY } : {}),
-          }),
-        true,
-      );
+      document.addEventListener(kind, recordInput, true);
     }
     window.addEventListener("message", (event) => {
       const type = event.data?.type;
-      if (
-        type !== "openclaw:widget-size" &&
-        type !== "openclaw:widget-prompt-offer" &&
-        type !== "openclaw:widget-bridge-ready"
-      ) {
+      const allowed = ["size", "prompt-offer", "bridge-ready"].map(
+        (kind) => `openclaw:widget-${kind}`,
+      );
+      if (!allowed.includes(type)) {
         return;
       }
       record(type, {
@@ -70,35 +66,22 @@ export async function installWidgetPromptDiagnostics(context: BrowserContext): P
 }
 
 export async function retainWidgetPromptFailure(page: Page, artifactDir: string): Promise<void> {
-  const frames = await Promise.all(
-    page
-      .frames()
-      .slice(0, 8)
-      .map(async (frame, index) => {
-        try {
-          const events = await frame.evaluate(
-            () =>
-              (window as Window & { openclawSyntheticWidgetTimeline?: unknown[] })
-                .openclawSyntheticWidgetTimeline ?? [],
-          );
-          return { index, events };
-        } catch {
-          return { index, unavailable: true };
-        }
-      }),
-  );
-  // No URLs, message bodies, credentials, DOM dumps, or arbitrary page errors.
+  const frames = [];
+  for (const [index, frame] of page.frames().slice(0, 8).entries()) {
+    try {
+      const events = await frame.evaluate(
+        () =>
+          (window as Window & { openclawSyntheticWidgetTimeline?: unknown[] })
+            .openclawSyntheticWidgetTimeline ?? [],
+      );
+      frames.push({ index, events });
+    } catch {
+      frames.push({ index, unavailable: true });
+    }
+  }
+  const report = { fixture: "chat-widget-sandbox", synthetic: true, version: 1, frames };
   await writeFile(
     path.join(artifactDir, "widget-prompt-failure.json"),
-    JSON.stringify(
-      {
-        fixture: "chat-widget-sandbox",
-        synthetic: true,
-        version: 1,
-        frames,
-      },
-      null,
-      2,
-    ),
+    JSON.stringify(report, null, 2),
   );
 }

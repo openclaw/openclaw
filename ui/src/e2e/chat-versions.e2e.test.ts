@@ -1,12 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
-import { extractSessionBranchHeadline } from "../../../src/config/sessions/session-message-cut-content.js";
-import {
-  takeControlUiScreenshotFrame,
-  waitForControlUiProofSurface,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -17,25 +10,17 @@ const helpText =
   "Saved copies of this conversation from rewinds or repairs. You can return to an earlier version here.";
 
 suite.define(() => {
-  it("explains versions on demand without switching, and preserves keyboard selection", async () => {
-    await suite.withPage(
+  it("explains versions on demand without switching, and preserves keyboard selection", () =>
+    suite.withPage(
       { viewport: { width: 1200, height: 800 }, colorScheme: "dark" },
       async ({ page }) => {
-        const branch = (leafEntryId: string, content: string, messageCount: number) => ({
-          leafEntryId,
-          headline: extractSessionBranchHeadline({
-            type: "message",
-            message: { role: "assistant", content },
-          }),
-          messageCount,
-          active: leafEntryId === "current",
-        });
-        const capture = async (name: string, surface: Locator, anchors = [surface]) => {
-          const frame = await takeControlUiScreenshotFrame(page, surface, anchors, {
-            animations: "disabled",
-          });
-          await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
-        };
+        const branch = (
+          leafEntryId: string,
+          headline: string,
+          messageCount: number,
+          active = false,
+        ) => ({ leafEntryId, headline, messageCount, active });
+        const draft = "Here is a concise draft:";
         const gateway = await installMockGateway(page, {
           sessionKey: key,
           agentModel: "mock/mock-model",
@@ -45,29 +30,20 @@ suite.define(() => {
             { key: previousKey, label: "Planning", kind: "direct", updatedAt: Date.now() - 1 },
           ],
           historyMessages: [
-            { id: "prompt", role: "user", content: "Help me write a short release announcement." },
-            {
-              id: "answer",
-              role: "assistant",
-              content:
-                "Here is a concise draft:\n\n## A simpler way to stay organized\n\nFind your conversations faster, keep your workspace tidy, and pick up where you left off.",
-            },
+            { id: "prompt", role: "user", content: "Write a release announcement." },
+            { id: "answer", role: "assistant", content: draft },
           ],
           methodResponses: {
             "sessions.branches.list": {
               branches: [
-                branch("current", "**A simpler way to stay organized**", 4),
-                branch(
-                  "earlier",
-                  "## A more detailed [release announcement](https://example.com)",
-                  6,
-                ),
+                branch("current", "A simpler way to stay organized", 4, true),
+                branch("earlier", "Earlier announcement", 6),
               ],
             },
           },
         });
         await page.goto(new URL(controlUiSessionPath(previousKey), suite.server.baseUrl).href);
-        await page.getByText("Here is a concise draft:", { exact: false }).waitFor();
+        await page.getByText(draft, { exact: false }).waitFor();
         await page
           .locator(
             `.sidebar-recent-session[data-session-key="${key}"] a.sidebar-recent-session__link`,
@@ -75,7 +51,7 @@ suite.define(() => {
           .click();
         await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(key));
         const pane = page.locator(`openclaw-chat-pane[data-mcp-app-owner-key*="${key}"]`);
-        await pane.getByText("Here is a concise draft:", { exact: false }).waitFor();
+        await pane.getByText(draft, { exact: false }).waitFor();
         const trigger = pane.getByRole("button", { name: "Versions", exact: true });
         await trigger.press("Enter");
         const menu = pane.locator(".chat-pane__branches-menu");
@@ -94,49 +70,45 @@ suite.define(() => {
           current.locator(".chat-pane__branch-active svg"),
         ]);
         // Measure one DOM generation so a rerender cannot detach an icon between reads.
-        const { infoIconBox, headline, textBox, checkBox, checkIconBox } =
-          await menuSurface.evaluate((surface) => {
-            const active = surface.querySelector('.chat-pane__branch-item[data-active="true"]');
-            const measure = (element: Element | null) => {
-              if (
-                !element?.isConnected ||
-                !element.checkVisibility({ checkOpacity: true, visibilityProperty: true })
-              ) {
-                return null;
-              }
-              const { x, y, width, height } = element.getBoundingClientRect();
-              return width > 0 && height > 0 ? { x, y, width, height } : null;
-            };
-            return {
-              infoIconBox: measure(surface.querySelector(".chat-pane__versions-info svg")),
-              headline: active?.querySelector(".chat-pane__branch-headline")?.textContent,
-              textBox: measure(active?.querySelector(".chat-pane__branch-copy") ?? null),
-              checkBox: measure(active?.querySelector(".chat-pane__branch-active") ?? null),
-              checkIconBox: measure(active?.querySelector(".chat-pane__branch-active svg") ?? null),
-            };
-          });
-        expect(infoIconBox).not.toBeNull();
-        expect(headline).toBe("A simpler way to stay organized");
-        expect(textBox).not.toBeNull();
-        expect(checkBox).not.toBeNull();
-        expect(checkIconBox).not.toBeNull();
-        expect(
-          Math.abs(
-            infoIconBox!.x + infoIconBox!.width / 2 - checkIconBox!.x - checkIconBox!.width / 2,
-          ),
-        ).toBeLessThanOrEqual(1);
-        expect(checkBox!.x).toBeGreaterThanOrEqual(textBox!.x + textBox!.width);
-        expect(
-          Math.abs(checkBox!.y + checkBox!.height / 2 - textBox!.y - textBox!.height / 2),
-        ).toBeLessThanOrEqual(1);
-        await capture("after", menuSurface, [info, menu.locator(".chat-pane__branch-item").last()]);
+        const geometry = await menuSurface.evaluate((surface) => {
+          const active = '.chat-pane__branch-item[data-active="true"]';
+          const measure = (selector: string) => {
+            const element = surface.querySelector(selector);
+            if (
+              !element?.isConnected ||
+              !element.checkVisibility({ checkOpacity: true, visibilityProperty: true })
+            ) {
+              throw new Error(`Invisible versions element: ${selector}`);
+            }
+            const { x, y, width, height } = element.getBoundingClientRect();
+            if (width <= 0 || height <= 0) {
+              throw new Error(`Empty versions element: ${selector}`);
+            }
+            return { x, y, width, height };
+          };
+          const infoBox = measure(".chat-pane__versions-info svg");
+          const text = measure(`${active} .chat-pane__branch-copy`);
+          const badge = measure(`${active} .chat-pane__branch-active`);
+          const check = measure(`${active} .chat-pane__branch-active svg`);
+          const centerX = (box: typeof infoBox) => box.x + box.width / 2;
+          const centerY = (box: typeof infoBox) => box.y + box.height / 2;
+          return {
+            headline: surface.querySelector(`${active} .chat-pane__branch-headline`)?.textContent,
+            iconOffset: Math.abs(centerX(infoBox) - centerX(check)),
+            textGap: badge.x - text.x - text.width,
+            verticalOffset: Math.abs(centerY(badge) - centerY(text)),
+          };
+        });
+        expect(geometry.headline).toBe("A simpler way to stay organized");
+        expect(geometry.iconOffset).toBeLessThanOrEqual(1);
+        expect(geometry.textGap).toBeGreaterThanOrEqual(0);
+        expect(geometry.verticalOffset).toBeLessThanOrEqual(1);
 
         await info.press("Enter");
         await help.waitFor();
         expect((await menu.locator(".chat-pane__versions-help").textContent())?.trim()).toBe(
           helpText,
         );
-        await capture("after-help", help);
         expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);
 
         await page.keyboard.press("Escape");
@@ -160,7 +132,6 @@ suite.define(() => {
         await trigger.press("Enter");
         await info.press("Enter");
         await help.waitFor();
-        await capture("before-back", help);
         const switchCount = (await gateway.getRequests("sessions.branches.switch")).length;
         await page.goBack();
         await expect
@@ -169,7 +140,6 @@ suite.define(() => {
         const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
         const composer = activePane.locator(".agent-chat__composer-combobox textarea");
         await composer.waitFor();
-        await capture("after-back", activePane, [composer]);
         expect(await pane.count()).toBe(1);
         expect(await pane.getAttribute("inert")).not.toBeNull();
         await expect.poll(() => menuSurface.isVisible()).toBe(false);
@@ -178,6 +148,5 @@ suite.define(() => {
         expect(await composer.inputValue()).toBe("Continue planning after browser Back");
         expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(switchCount);
       },
-    );
-  });
+    ));
 });

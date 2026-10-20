@@ -1,7 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -45,21 +42,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, { historyMessages: history });
       await page.goto(`${suite.server.baseUrl}chat`);
       const transcript = page.locator(".chat-thread-inner");
-      const capture = async (name: string, text: string, first = false) => {
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
-          return;
-        }
-        const anchor = transcript.getByText(text, { exact: true });
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          transcript,
-          [first ? anchor.first() : anchor],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
-      };
       await transcript.getByText(backend, { exact: true }).first().waitFor();
-      await capture("voice-transcript", backend, true);
       const disclosure = transcript.locator("details", {
         has: page.getByText("Voice transcript", { exact: true }),
       });
@@ -69,7 +52,6 @@ suite.define(() => {
       expect(await transcript.getByText(backend, { exact: true }).count()).toBe(2);
       await disclosure.locator("summary").click();
       await transcript.getByText(speech, { exact: true }).waitFor();
-      await capture("voice-transcript-expanded", speech);
       await page.reload();
       await transcript.getByText(backend, { exact: true }).first().waitFor();
       expect(await disclosure.getAttribute("open")).toBeNull();
