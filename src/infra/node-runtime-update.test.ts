@@ -4,7 +4,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveUpdatedNodeRuntime } from "../../node-runtime-update.mjs";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const mocks = vi.hoisted(() => ({
   spawn:
@@ -40,10 +42,16 @@ const privateNode = (root: string) =>
     "node",
     ...(process.platform === "win32" ? ["node.exe"] : ["bin", "node"]),
   );
+async function createRuntime() {
+  const root = path.join(tempDirs.make("openclaw-node-update-"), ".openclaw");
+  const candidate = privateNode(root);
+  await writeRuntime(candidate);
+  return { root, candidate };
+}
 
-async function writeRuntime(candidate: string, contents: string) {
+async function writeRuntime(candidate: string) {
   await fs.mkdir(path.dirname(candidate), { recursive: true });
-  await fs.writeFile(candidate, contents);
+  await fs.writeFile(candidate, "private runtime fixture");
 }
 
 function probeResult(version: string): SpawnSyncReturns<string> {
@@ -70,14 +78,11 @@ it.each([
   vi.stubEnv("NODE_OPTIONS", undefined);
   const childProcess =
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
-  await withTempDir("openclaw-node-recovery-", async (directory) => {
-    const home = await fs.realpath(directory);
-    const candidate = privateNode(path.join(home, ".openclaw"));
-    await writeRuntime(candidate, "synthetic runtime; the probe uses the current Node");
-    const preload = path.join(home, "binding.mjs");
-    await fs.writeFile(
-      preload,
-      `
+  const { root, candidate } = await createRuntime();
+  const preload = path.join(root, "binding.mjs");
+  await fs.writeFile(
+    preload,
+    `
       import { DatabaseSync } from "node:sqlite";
       Object.defineProperty(process.versions, "node", { value: ${JSON.stringify(version)} });
       if (!${lossless}) {
@@ -96,95 +101,81 @@ it.each([
         };
       }
     `,
-    );
-    mocks.spawn.mockImplementation((_file, args, options) =>
-      childProcess.spawnSync(
-        process.execPath,
-        ["--import", pathToFileURL(preload).href, ...args],
-        options,
-      ),
-    );
+  );
+  mocks.spawn.mockImplementation((_file, args, options) =>
+    childProcess.spawnSync(
+      process.execPath,
+      ["--import", pathToFileURL(preload).href, ...args],
+      options,
+    ),
+  );
 
-    expect(await resolveUpdatedNodeRuntime(path.join(home, ".openclaw"))).toBe(
-      lossless ? candidate : null,
-    );
-    expect(mocks.spawn).toHaveBeenCalledOnce();
-    expect(mocks.spawn.mock.calls[0]?.[2].timeout).toBe(5_000);
-    const result = mocks.spawn.mock.results[0];
-    if (result?.type !== "return") {
-      throw new Error("Runtime probe did not return");
-    }
-    expect(JSON.parse(result.value.stdout)).toMatchObject({
-      version,
-      probe: { available: true, text: lossless, blob: true, json: true },
-    });
+  expect(await resolveUpdatedNodeRuntime(root)).toBe(lossless ? candidate : null);
+  expect(mocks.spawn).toHaveBeenCalledOnce();
+  expect(mocks.spawn.mock.calls[0]?.[2].timeout).toBe(5_000);
+  const result = mocks.spawn.mock.results[0];
+  if (result?.type !== "return") {
+    throw new Error("Runtime probe did not return");
+  }
+  expect(JSON.parse(result.value.stdout)).toMatchObject({
+    version,
+    probe: { available: true, text: lossless, blob: true, json: true },
   });
 });
 
-it.each([true, false])(
-  "provisions a target-compatible private runtime without a TTY (compatible=%s)",
-  async (compatible) => {
-    await withTempDir("openclaw-node-target-", async (directory) => {
-      const root = path.join(await fs.realpath(directory), ".openclaw");
-      const candidate = privateNode(root);
-      await writeRuntime(candidate, "existing private Node");
-      let installed = false;
-      mocks.spawn.mockImplementation(() =>
-        probeResult(installed && compatible ? "26.8.1" : "24.19.0"),
-      );
-      const installCommand = vi.fn(
-        async (_command: string, args: string[], installEnv: NodeJS.ProcessEnv) => {
-          expect(args).toContain("26.8.1");
-          expect(installEnv).toEqual(targetRuntime.env);
-          installed = true;
-          return 0;
-        },
-      );
-      const result = await resolveUpdatedNodeRuntime(root, {
-        ...targetRuntime,
-        installCommand,
-      });
-      expect(installCommand).toHaveBeenCalledOnce();
-      expect(result).toBe(compatible ? candidate : null);
-    });
-  },
-);
+it.each([true, false])("provisions without a TTY (compatible=%s)", async (compatible) => {
+  const { root, candidate } = await createRuntime();
+  let installed = false;
+  mocks.spawn.mockImplementation(() => probeResult(installed && compatible ? "26.8.1" : "24.19.0"));
+  const installCommand = vi.fn(
+    async (_command: string, args: string[], installEnv: NodeJS.ProcessEnv) => {
+      expect(args).toContain("26.8.1");
+      expect(installEnv).toEqual(targetRuntime.env);
+      installed = true;
+      return 0;
+    },
+  );
+  const result = await resolveUpdatedNodeRuntime(root, {
+    ...targetRuntime,
+    installCommand,
+  });
+  expect(installCommand).toHaveBeenCalledOnce();
+  expect(result).toBe(compatible ? candidate : null);
+});
 
 it.skipIf(process.platform === "win32").each(["compatible", "incompatible", "missing"] as const)(
   "rechecks the published private Node alias after %s installation",
   async (outcome) => {
-    await withTempDir("openclaw-private-node-alias-", async (directory) => {
-      const root = path.join(await fs.realpath(directory), ".openclaw");
-      const tools = path.join(root, "tools", "cli-node", "tools");
-      const oldRoot = path.join(tools, "node-v24.19.0");
-      const newRoot = path.join(tools, "node-v26.8.1");
-      const oldNode = path.join(oldRoot, "bin", "node");
-      const newNode = path.join(newRoot, "bin", "node");
-      const alias = path.join(tools, "node");
-      for (const node of [oldNode, newNode]) {
-        await writeRuntime(node, "private runtime fixture");
+    const root = path.join(tempDirs.make("openclaw-private-node-alias-"), ".openclaw");
+    const tools = path.join(root, "tools", "cli-node", "tools");
+    const oldRoot = path.join(tools, "node-v24.19.0");
+    const newRoot = path.join(tools, "node-v26.8.1");
+    const oldNode = path.join(oldRoot, "bin", "node");
+    const newNode = path.join(newRoot, "bin", "node");
+    const alias = path.join(tools, "node");
+    for (const node of [oldNode, newNode]) {
+      await writeRuntime(node);
+    }
+    await fs.symlink(path.basename(oldRoot), alias, "dir");
+    mocks.spawn.mockImplementation((file) =>
+      probeResult(file === newNode && outcome === "compatible" ? "26.8.1" : "24.19.0"),
+    );
+    const installCommand = vi.fn(async () => {
+      await fs.unlink(alias);
+      if (outcome !== "missing") {
+        await fs.symlink(path.basename(newRoot), alias, "dir");
       }
-      await fs.symlink(path.basename(oldRoot), alias, "dir");
-      mocks.spawn.mockImplementation((file) =>
-        probeResult(file === newNode && outcome === "compatible" ? "26.8.1" : "24.19.0"),
-      );
-      const installCommand = vi.fn(async () => {
-        await fs.unlink(alias);
-        if (outcome !== "missing") {
-          await fs.symlink(path.basename(newRoot), alias, "dir");
-        }
-        return 0;
-      });
-      const result = await resolveUpdatedNodeRuntime(root, {
-        ...targetRuntime,
-        installCommand,
-      });
-      expect(installCommand).toHaveBeenCalledOnce();
-      expect(result).toBe(outcome === "compatible" ? newNode : null);
-      expect(mocks.spawn.mock.calls.map(([file]) => file)).toEqual(
-        outcome === "missing" ? [oldNode] : [oldNode, newNode],
-      );
-      expect(await fs.readFile(oldNode, "utf8")).toBe("private runtime fixture");
+      return 0;
     });
+    const result = await resolveUpdatedNodeRuntime(root, {
+      ...targetRuntime,
+      installCommand,
+    });
+    expect(installCommand).toHaveBeenCalledOnce();
+    expect(result).toBe(outcome === "compatible" ? newNode : null);
+    expect(mocks.spawn.mock.calls.map(([file]) => file)).toEqual(
+      outcome === "missing" ? [oldNode] : [oldNode, newNode],
+    );
+    expect(await fs.readFile(oldNode, "utf8")).toBe("private runtime fixture");
   },
 );

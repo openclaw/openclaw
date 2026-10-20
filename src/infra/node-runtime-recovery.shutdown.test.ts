@@ -1,12 +1,10 @@
-import { ChildProcess, type SpawnOptions } from "node:child_process";
+import { ChildProcess } from "node:child_process";
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { resolveOpenClawCliRespawn } from "../../cli-invocation.mjs";
 import { CLI_PARENT_BOUND_PRELOAD } from "../../cli-parent-lifetime.mjs";
 import { runRespawnedChild } from "../../node-runtime-recovery.mjs";
 
-const spawn = vi.hoisted(() =>
-  vi.fn<(command: string, args: string[], options: SpawnOptions) => ChildProcess>(),
-);
+const spawn = vi.hoisted(() => vi.fn<typeof import("node:child_process").spawn>());
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn,
@@ -37,30 +35,30 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-function respawn(env: NodeJS.ProcessEnv = {}) {
-  completion = runRespawnedChild(
-    resolveOpenClawCliRespawn({
-      execPath: "node",
-      entryPath: "child.mjs",
-      execArgv: [],
-      args: [],
-      env,
-    }),
-  );
-  return completion;
+function respawn(options: Parameters<typeof resolveOpenClawCliRespawn>[0]) {
+  return (completion = runRespawnedChild(resolveOpenClawCliRespawn(options)));
 }
 
-function configureProcess(platform: NodeJS.Platform, args: readonly string[]) {
+function start(platform: NodeJS.Platform, args: readonly string[], env: NodeJS.ProcessEnv = {}) {
   vi.spyOn(process, "platform", "get").mockReturnValue(platform);
   vi.spyOn(process, "argv", "get").mockReturnValue(["node", "openclaw.mjs", ...args]);
+  const previous = process.listeners("SIGTERM");
+  const done = respawn({ execPath: "node", entryPath: "child.mjs", execArgv: [], args: [], env });
+  return {
+    done,
+    previous,
+    forward: process.listeners("SIGTERM").find((listener) => !previous.includes(listener))!,
+  };
 }
 
 function expectExitSignal(platform: NodeJS.Platform, signal: NodeJS.Signals) {
-  if (platform === "win32") {
-    expect(processKill).not.toHaveBeenCalled();
-  } else {
-    expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, signal);
-  }
+  expect(processKill.mock.calls).toEqual(platform === "win32" ? [] : [[process.pid, signal]]);
+}
+
+async function closeChild(code: number | null, signal: NodeJS.Signals | null, exitCode: number) {
+  child.emit("close", code, signal);
+  await expect(completion).resolves.toBe(true);
+  expect(process.exitCode).toBe(exitCode);
 }
 
 it.each([
@@ -71,15 +69,13 @@ it.each([
 ] as const)(
   "bounds $platform $args shutdown without preempting the serving owner",
   async ({ platform, args, nativeBudgetMs }) => {
-    configureProcess(platform, ["--profile=fixture", ...args]);
-    const previous = new Set(process.listeners("SIGTERM"));
     const env = {
       OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.fixture",
       XPC_SERVICE_NAME: "ai.openclaw.fixture",
     };
-    const active = respawn(env);
+    const { done, previous, forward } = start(platform, ["--profile=fixture", ...args], env);
     let completed = false;
-    void active.then(() => {
+    void done.then(() => {
       completed = true;
     });
     expect(spawn).toHaveBeenCalledExactlyOnceWith(
@@ -87,13 +83,12 @@ it.each([
       ["--import", CLI_PARENT_BOUND_PRELOAD, "child.mjs"],
       expect.objectContaining({ env }),
     );
-    const signal = process.listeners("SIGTERM").find((listener) => !previous.has(listener));
-    expect(signal).toBeDefined();
-    signal!("SIGTERM");
+    expect(forward).toBeDefined();
+    forward("SIGTERM");
     expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
     vi.advanceTimersByTime(nativeBudgetMs - 2_001);
     expect(kill).toHaveBeenCalledTimes(1);
-    signal!("SIGTERM");
+    forward("SIGTERM");
     expect(kill).toHaveBeenCalledTimes(2);
     vi.advanceTimersByTime(1);
     expect(kill).toHaveBeenCalledTimes(3);
@@ -106,11 +101,9 @@ it.each([
     expect(process.exitCode).toBeUndefined();
     child.emit("exit", null, childSignal);
     expect(process.exitCode).toBeUndefined();
-    child.emit("close", null, childSignal);
-    await expect(completion).resolves.toBe(true);
-    expect(process.exitCode).toBe(platform === "win32" ? 1 : 137);
+    await closeChild(null, childSignal, platform === "win32" ? 1 : 137);
     expectExitSignal(platform, childSignal);
-    expect(process.listeners("SIGTERM")).toEqual([...previous]);
+    expect(process.listeners("SIGTERM")).toEqual(previous);
   },
 );
 
@@ -124,10 +117,7 @@ it.each([
 ] as const)(
   "records actual $platform $childSignal only after pipes close",
   async ({ platform, childSignal, expected }) => {
-    configureProcess(platform, ["gateway"]);
-    const previous = process.listeners("SIGTERM");
-    respawn();
-    const forward = process.listeners("SIGTERM").find((listener) => !previous.includes(listener))!;
+    const { previous, forward } = start(platform, ["gateway"]);
     forward("SIGTERM");
     child.emit("exit", null, childSignal);
     forward("SIGTERM");
@@ -135,9 +125,7 @@ it.each([
     expect(kill).toHaveBeenCalledExactlyOnceWith("SIGTERM");
     expect(process.exitCode).toBeUndefined();
     expect(process.listeners("SIGTERM")).toContain(forward);
-    child.emit("close", null, childSignal);
-    await expect(completion).resolves.toBe(true);
-    expect(process.exitCode).toBe(expected);
+    await closeChild(null, childSignal, expected);
     expectExitSignal(platform, childSignal);
     expect(process.listeners("SIGTERM")).toEqual(previous);
   },
@@ -148,20 +136,12 @@ it("records spawn failure only after its close notification", async () => {
   completion = runRespawnedChild({ command: "missing-node", args: [], env: {} });
   child.emit("error", new Error("spawn ENOENT"));
   expect(process.exitCode).toBeUndefined();
-  child.emit("close", -2, null);
-  await expect(completion).resolves.toBe(true);
-  expect(process.exitCode).toBe(1);
+  await closeChild(-2, null, 1);
 });
 
 it("passes standalone CLI args and parent binding unchanged to the launcher child", async () => {
   vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
-  completion = runRespawnedChild(
-    resolveOpenClawCliRespawn({
-      entryPath: "/app/runtime/openclaw.mjs",
-      args: ["doctor", "--fix"],
-      env: {},
-    }),
-  );
+  respawn({ entryPath: "/app/runtime/openclaw.mjs", args: ["doctor", "--fix"], env: {} });
   expect(spawn).toHaveBeenCalledExactlyOnceWith(
     process.execPath,
     ["doctor", "--fix"],
@@ -169,6 +149,5 @@ it("passes standalone CLI args and parent binding unchanged to the launcher chil
       env: { OPENCLAW_CLI_RESPAWN_PARENT: String(process.pid) },
     }),
   );
-  child.emit("close", 0, null);
-  await expect(completion).resolves.toBe(true);
+  await closeChild(0, null, 0);
 });

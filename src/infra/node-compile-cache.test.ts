@@ -26,8 +26,7 @@ async function cacheFixture(prefix: string) {
 }
 
 it("remains synchronously importable from CommonJS bundles", async () => {
-  const root = tempDirs.make("openclaw-cache-commonjs-");
-  const outfile = path.join(root, "cache.cjs");
+  const outfile = path.join(tempDirs.make("openclaw-cache-commonjs-"), "cache.cjs");
   await build({
     entryPoints: [modulePath],
     outfile,
@@ -36,15 +35,12 @@ it("remains synchronously importable from CommonJS bundles", async () => {
     format: "cjs",
     logLevel: "silent",
   });
-  await run(process.execPath, ["-e", `require(${JSON.stringify(outfile)})`], {
-    env: {},
-  });
+  await run(process.execPath, ["-e", `require(${JSON.stringify(outfile)})`], { env: {} });
 });
 
 it("prewarms the release graph, respecting the disabled cache policy", async () => {
   const root = tempDirs.make("openclaw-cache-prewarm-");
   const launcher = path.join(root, "gateway-prewarm.mjs");
-  const cache = path.join(root, "cache");
   for (const name of [
     "gateway-prewarm.mjs",
     "node-compile-cache.mjs",
@@ -65,7 +61,7 @@ it("prewarms the release graph, respecting the disabled cache policy", async () 
     writeFileSync(new URL("../loaded", import.meta.url), getCompileCacheDir());
   `,
   );
-  const env: NodeJS.ProcessEnv = { ...process.env, NODE_COMPILE_CACHE: cache };
+  const env: NodeJS.ProcessEnv = { ...process.env, NODE_COMPILE_CACHE: path.join(root, "cache") };
   delete env.NODE_DISABLE_COMPILE_CACHE;
   await run(process.execPath, [launcher], { env: { ...env, NODE_DISABLE_COMPILE_CACHE: "1" } });
   await expect(fs.stat(path.join(root, "loaded"))).rejects.toMatchObject({ code: "ENOENT" });
@@ -108,15 +104,13 @@ it.each([false, true])(
       // Capture disk contents before native process teardown could persist them.
       process.stdout.write(JSON.stringify({ enabled: directory !== undefined, first, later }));
     `;
-    const env: NodeJS.ProcessEnv = { ...process.env };
-    delete env.NODE_COMPILE_CACHE;
-    delete env.NODE_COMPILE_CACHE_READONLY;
-    delete env.NODE_DISABLE_COMPILE_CACHE;
-    delete env.NODE_OPTIONS;
-    if (disabled) {
-      env.NODE_DISABLE_COMPILE_CACHE = "1";
-    }
-    const { stdout } = await evalModule(script, env);
+    const { stdout } = await evalModule(script, {
+      ...process.env,
+      NODE_COMPILE_CACHE: undefined,
+      NODE_COMPILE_CACHE_READONLY: undefined,
+      NODE_DISABLE_COMPILE_CACHE: disabled ? "1" : undefined,
+      NODE_OPTIONS: undefined,
+    });
     const observed = JSON.parse(stdout);
     if (disabled) {
       expect(observed).toEqual({ enabled: false, first: 0, later: 0 });
@@ -148,12 +142,8 @@ it.each([
 });
 
 async function sparseFile(file: string, bytes: number) {
-  const handle = await fs.open(file, "w");
-  try {
-    await handle.truncate(bytes);
-  } finally {
-    await handle.close();
-  }
+  await fs.writeFile(file, "");
+  await fs.truncate(file, bytes);
 }
 
 it("keeps inherited cache namespaces flat and retains recently prepared builds", async () => {

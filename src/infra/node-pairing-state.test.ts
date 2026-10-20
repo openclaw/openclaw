@@ -1,5 +1,4 @@
-// Tests authenticated node generations derived from paired-device rows.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import {
   captureAuthenticatedNodePairingState,
   captureNodePairingGeneration,
@@ -13,23 +12,25 @@ vi.mock("./device-pairing.js", async () => {
   return { ...actual, getPairedDevice: mocks.getPairedDevice };
 });
 
-function pairedNode(overrides: Partial<PairedDevice> = {}): PairedDevice {
+const token = { token: "test-token", role: "node", scopes: [], createdAtMs: 150 };
+const surface = {
+  caps: ["screen"],
+  commands: ["screen.snapshot"],
+  permissions: { accessibility: false },
+};
+function pairedNode(
+  overrides: Partial<PairedDevice> = {},
+  tokenPatch: Partial<typeof token> & { revokedAtMs?: number } = {},
+): PairedDevice {
   return {
     deviceId: "node-1",
     publicKey: "test-key",
     role: "node",
     roles: ["node", "operator"],
-    tokens: {
-      node: {
-        token: "test-token",
-        role: "node",
-        scopes: [],
-        createdAtMs: 150,
-      },
-    },
+    tokens: { node: { ...token, ...tokenPatch } },
     createdAtMs: 100,
     approvedAtMs: 200,
-    nodeSurface: { createdAtMs: 300, approvedAtMs: 400 },
+    nodeSurface: { createdAtMs: 300, approvedAtMs: 400, ...surface },
     ...overrides,
   };
 }
@@ -48,79 +49,60 @@ function returnDevices(...devices: PairedDevice[]) {
   }
 }
 
-function withNodeToken(overrides: Partial<NonNullable<PairedDevice["tokens"]>[string]>) {
-  const node = pairedNode();
-  return pairedNode({ tokens: { ...node.tokens, node: { ...node.tokens!.node!, ...overrides } } });
-}
+beforeEach(() => {
+  mocks.getPairedDevice.mockReset();
+});
 
-describe("node pairing generation", () => {
-  beforeEach(() => {
-    mocks.getPairedDevice.mockReset();
+it("binds connected sessions to the public key and node token used at authentication", async () => {
+  const original = pairedNode();
+  returnDevices(
+    original,
+    { ...original, publicKey: "fake" },
+    pairedNode({}, { token: "decoy-token" }),
+  );
+
+  await expect(authenticateNode(original)).resolves.toMatchObject({
+    generation: { nodeId: original.deviceId },
+    approvedSurface: surface,
   });
+  expect(mocks.getPairedDevice).toHaveBeenCalledTimes(1);
+  await expect(authenticateNode(original)).resolves.toBeNull();
+  await expect(authenticateNode(original)).resolves.toBeNull();
+});
 
-  it("binds connected sessions to the public key and node token used at authentication", async () => {
-    const original = pairedNode({
-      nodeSurface: {
-        createdAtMs: 300,
-        approvedAtMs: 400,
-        caps: ["screen"],
-        commands: ["screen.snapshot"],
-        permissions: { accessibility: false },
-      },
-    });
-    returnDevices(
-      original,
-      { ...original, publicKey: "fake" },
-      withNodeToken({ token: "decoy-token" }),
-    );
+it("keeps pairing identity stable when the pending surface is approved", async () => {
+  const pending = pairedNode({ nodeSurface: undefined });
+  const approved = pairedNode();
+  returnDevices(pending, approved);
+  const pendingState = await authenticateNode(pending);
+  const approvedState = await authenticateNode(pending);
 
-    await expect(authenticateNode(original)).resolves.toMatchObject({
-      generation: { nodeId: original.deviceId },
-      approvedSurface: {
-        caps: ["screen"],
-        commands: ["screen.snapshot"],
-        permissions: { accessibility: false },
-      },
-    });
-    expect(mocks.getPairedDevice).toHaveBeenCalledTimes(1);
-    await expect(authenticateNode(original)).resolves.toBeNull();
-    await expect(authenticateNode(original)).resolves.toBeNull();
+  expect(pendingState?.generation).toBeNull();
+  expect(pendingState?.approvedSurface).toEqual({
+    caps: [],
+    commands: [],
+    permissions: undefined,
   });
+  expect(approvedState?.generation).not.toBeNull();
+  expect(approvedState?.identity.key).toBe(pendingState?.identity.key);
+});
 
-  it("keeps pairing identity stable when the pending surface is approved", async () => {
-    const pending = pairedNode({ nodeSurface: undefined });
-    const approved = pairedNode();
-    returnDevices(pending, approved);
-    const pendingState = await authenticateNode(pending);
-    const approvedState = await authenticateNode(pending);
+it("rejects admission without an active node token or approved node surface", async () => {
+  returnDevices(
+    pairedNode({ tokens: undefined }),
+    pairedNode({}, { revokedAtMs: 501 }),
+    pairedNode({ nodeSurface: undefined }),
+  );
 
-    expect(pendingState?.generation).toBeNull();
-    expect(pendingState?.approvedSurface).toEqual({
-      caps: [],
-      commands: [],
-      permissions: undefined,
-    });
-    expect(approvedState?.generation).not.toBeNull();
-    expect(approvedState?.identity.key).toBe(pendingState?.identity.key);
-  });
+  await expect(captureNodePairingGeneration("node-1")).resolves.toBeNull();
+  await expect(captureNodePairingGeneration("node-1")).resolves.toBeNull();
+  await expect(captureNodePairingGeneration("node-1")).resolves.toBeNull();
+});
 
-  it("rejects admission without an active node token or approved node surface", async () => {
-    returnDevices(
-      pairedNode({ tokens: undefined }),
-      withNodeToken({ revokedAtMs: 501 }),
-      pairedNode({ nodeSurface: undefined }),
-    );
+it("rejects admission without a durable approved node role", async () => {
+  mocks.getPairedDevice.mockResolvedValueOnce(
+    pairedNode({ role: "operator", roles: ["operator"] }),
+  );
 
-    await expect(captureNodePairingGeneration("node-1")).resolves.toBeNull();
-    await expect(captureNodePairingGeneration("node-1")).resolves.toBeNull();
-    await expect(captureNodePairingGeneration("node-1")).resolves.toBeNull();
-  });
-
-  it("rejects admission without a durable approved node role", async () => {
-    mocks.getPairedDevice.mockResolvedValueOnce(
-      pairedNode({ role: "operator", roles: ["operator"] }),
-    );
-
-    await expect(captureNodePairingGeneration("node-1")).resolves.toBeNull();
-  });
+  await expect(captureNodePairingGeneration("node-1")).resolves.toBeNull();
 });
