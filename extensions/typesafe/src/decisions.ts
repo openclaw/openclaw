@@ -105,7 +105,7 @@ function bindHostedFacts(inference: Inference, id: string, config: RuntimeConfig
 }
 
 /** Translate the host-selected decision contract through the TypeSafe transport. */
-export function createDecisionProvider(getConfig: () => RuntimeConfig): DecisionProviderV1 {
+function createDecisionProvider(getConfig: () => RuntimeConfig): DecisionProviderV1 {
   return {
     id: "typesafe",
     contractVersion: 1,

@@ -7,6 +7,7 @@ import type { WorkerMessageMetric } from "../../src/infra/worker-message-metrics
 import type { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 
 export const GATEWAY_PROFILE_CHANNEL = "openclaw-gateway-bench-profile";
+export const GATEWAY_GC_TRACE_MARKER = "OPENCLAW_GATEWAY_BENCH_GC ";
 export const GATEWAY_HEAP_SAMPLE_INTERVAL = 32 * 1024;
 export const GATEWAY_CPU_SAMPLE_INTERVAL_MICROS = 1_000;
 
@@ -83,6 +84,103 @@ function readProfileArtifacts(profilePath: string): GatewayProfileArtifacts {
     ...(existsSync(workerMessagesPath)
       ? { workerMessages: JSON.parse(readFileSync(workerMessagesPath, "utf8")) }
       : {}),
+  };
+}
+
+/** Read promoted bytes from V8, excluding worker isolates and GC outside this capture. */
+export function readGatewayGcTrace(logPath: string, profilePath: string) {
+  let identifying = false;
+  let identified = false;
+  let pid: number | undefined;
+  const isolates = new Set<string>();
+  let capturing = false;
+  let completed = false;
+  let promotedBytes = 0;
+  let gcCount = 0;
+  let excludedWorkerGcCount = 0;
+  for (const line of readFileSync(logPath, "utf8").split("\n")) {
+    if (line.startsWith(GATEWAY_GC_TRACE_MARKER)) {
+      const marker: { phase: string; pid: number; profilePath?: string } = JSON.parse(
+        line.slice(GATEWAY_GC_TRACE_MARKER.length),
+      );
+      if (marker.phase === "identify-start") {
+        if (identifying || identified) {
+          throw new Error("GC trace contains multiple Gateway identification windows");
+        }
+        pid = marker.pid;
+        identifying = true;
+      } else if (marker.phase === "identify-stop") {
+        if (!identifying || marker.pid !== pid || isolates.size !== 1) {
+          throw new Error("GC trace did not identify exactly one main isolate");
+        }
+        identifying = false;
+        identified = true;
+      } else if (marker.profilePath === profilePath) {
+        if (marker.phase === "heap-start") {
+          if (!identified || marker.pid !== pid || capturing || completed) {
+            throw new Error("GC trace has an invalid heap capture start");
+          }
+          capturing = true;
+        } else if (marker.phase === "heap-stop") {
+          if (!capturing || marker.pid !== pid) {
+            throw new Error("GC trace has an invalid heap capture stop");
+          }
+          capturing = false;
+          completed = true;
+        }
+      }
+      continue;
+    }
+    const trace = /^\[(\d+):(0x[\da-f]+)(?::\d+)?\]\s+\d+\s+ms:\s+(.*)$/i.exec(line);
+    if (!trace || Number(trace[1]) !== pid) {
+      continue;
+    }
+    const isolate = trace[2];
+    const fields = trace[3];
+    if (!isolate || !fields) {
+      continue;
+    }
+    if (!identifying && !capturing) {
+      continue;
+    }
+    if (capturing && !isolates.has(isolate)) {
+      excludedWorkerGcCount += 1;
+      continue;
+    }
+    // Recent V8 versions retain the flag but emit JSON instead of name=value pairs.
+    const collection: { gc?: string; promoted?: number } = fields.startsWith("GC: ")
+      ? JSON.parse(fields.slice(4))
+      : {
+          gc: /(?:^|\s)gc=(\S+)/.exec(fields)?.[1],
+          promoted: Number(/(?:^|\s)promoted=(\S+)/.exec(fields)?.[1]),
+        };
+    if (!collection.gc) {
+      continue;
+    }
+    if (identifying) {
+      isolates.add(isolate);
+    } else if (capturing) {
+      const bytes = collection.promoted;
+      if (typeof bytes !== "number" || !Number.isSafeInteger(bytes) || bytes < 0) {
+        throw new Error("Main-isolate GC trace is missing a valid promoted byte count");
+      }
+      promotedBytes += bytes;
+      gcCount += 1;
+    }
+  }
+  if (!identified || !completed || capturing) {
+    throw new Error("GC trace is missing identification or the complete heap capture window");
+  }
+  return {
+    scope: "main-isolate" as const,
+    source: "v8-trace-gc-nvp" as const,
+    logPath,
+    profilePath,
+    pid,
+    isolate: [...isolates][0],
+    promotedBytes,
+    gcCount,
+    excludedWorkerGcCount,
   };
 }
 

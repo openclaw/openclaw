@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import { evaluate } from "./client.js";
 import type { RuntimeConfig } from "./config.js";
-import { createDecisionProvider, createPreparedDecisionProvider } from "./decisions.js";
+import { createPreparedDecisionProvider } from "./decisions.js";
 import { EvaluationError } from "./errors.js";
+import { legacyWireFixture } from "./prepared.test-support.js";
 vi.mock("./client.js", () => ({ evaluate: vi.fn() }));
 const batch: DecisionBatch = {
   state: "synthetic",
@@ -22,19 +23,23 @@ beforeEach(() => {
 });
 describe("host decision adapter", () => {
   it("does not convert caller cancellation or implementation errors into fallback", async () => {
+    const provider = legacyWireFixture(
+      createPreparedDecisionProvider(() => config),
+      () => config,
+    );
     const controller = new AbortController();
     vi.mocked(evaluate).mockImplementation(async () => {
       controller.abort(new Error("caller closed"));
       throw new EvaluationError("cancelled", "transport");
     });
     await expect(
-      createDecisionProvider(() => config).evaluate(batch, {
+      provider.evaluate(batch, {
         ...context(),
         signal: controller.signal,
       }),
     ).rejects.toThrow("caller closed");
     vi.mocked(evaluate).mockRejectedValue(new Error("private detail"));
-    const failure = createDecisionProvider(() => config).evaluate(batch, context());
+    const failure = provider.evaluate(batch, context());
     await expect(failure).rejects.toMatchObject({
       name: "Error",
       message: "TypeSafe decision adapter contract failure.",
