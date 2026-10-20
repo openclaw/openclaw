@@ -1,19 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import { MascotAnimator } from "./mascot-animator.ts";
-import { staticMascotPose, type MascotMood, type MascotPose } from "./mascot-pose.ts";
-
-const MOODS: MascotMood[] = [
-  "idle",
-  "curious",
-  "thinking",
-  "working",
-  "happy",
-  "celebrating",
-  "sad",
-  "sleepy",
-  "attentive",
-];
+import { MASCOT_MOODS, staticMascotPose, type MascotPose } from "./mascot-pose.ts";
 
 function expectPoseInBounds(pose: MascotPose): void {
   for (const [value, min, max] of [
@@ -43,7 +31,7 @@ function expectPoseInBounds(pose: MascotPose): void {
 
 describe("MascotAnimator", () => {
   it("keeps every mood inside drawable channel bounds for 30 seconds", () => {
-    for (const [index, mood] of MOODS.entries()) {
+    for (const [index, mood] of MASCOT_MOODS.entries()) {
       const animator = new MascotAnimator(1_000 + index);
       animator.setMood(mood, 0);
       for (let frame = 0; frame <= 30 * 30; frame += 1) {
@@ -77,9 +65,6 @@ describe("MascotAnimator", () => {
     expect(cleared.mouthRound).toBe(0);
     expect(cleared.gaze).not.toEqual({ x: 0, y: 0.6 });
   });
-});
-
-describe("staticMascotPose", () => {
   it("preserves the identifying expression for each motionless mood", () => {
     expect(staticMascotPose("thinking").gaze.y).toBeLessThan(0);
     expect(staticMascotPose("working")).toMatchObject({ hardHat: 1, rightClawDegrees: -28 });
