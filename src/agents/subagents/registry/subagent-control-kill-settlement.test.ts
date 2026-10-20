@@ -82,11 +82,9 @@ it.each(["operations", "claimed inputs"] as const)(
         },
         onError: () => "continue",
       });
-      expect(stopped.activeCancelled).toBe(1);
-      expect(stopped.failures).toMatchObject([{ error: revoked }]);
+      expect(stopped).toMatchObject({ activeCancelled: 1, failures: [{ error: revoked }] });
       expect(cancelled.operation.abortSignal.aborted).toBe(true);
-      expect(untouched.operation.abortSignal.aborted).toBe(false);
-      expect(untouched.operation.result).toBeNull();
+      expect(untouched.operation).toMatchObject({ abortSignal: { aborted: false }, result: null });
 
       joined = settleSubagentKillSources({ cleanup: capture });
       let settled = false;
@@ -101,8 +99,7 @@ it.each(["operations", "claimed inputs"] as const)(
       await cancelled.input.settlement.promise;
       await vi.advanceTimersByTimeAsync(SESSION_CONTROLLER_DRAIN_TIMEOUT_MS);
       expect(await joined).toEqual({});
-      expect(untouched.operation.result).toBeNull();
-      expect(untouched.operation.abortSignal.aborted).toBe(false);
+      expect(untouched.operation).toMatchObject({ abortSignal: { aborted: false }, result: null });
       expect(untouched.input.retirementRequested).not.toBe(true);
     } finally {
       cancelled.finish();

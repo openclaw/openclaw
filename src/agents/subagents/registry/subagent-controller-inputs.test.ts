@@ -15,10 +15,10 @@ import { bindSessionControllerEntryTarget } from "../../../sessions/session-cont
 import { resetSessionControllerStateForTest } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { reserveSubagentCompletionControllerSource } from "../announce/subagent-announce-controller-source.js";
+import { reserveSubagentCompletionControllerSource as reserveCompletion } from "../announce/subagent-announce-controller-source.js";
 import {
-  hasSubagentControllerInput,
-  retireSubagentControllerInputs,
+  hasSubagentControllerInput as hasInput,
+  retireSubagentControllerInputs as retireInputs,
   subagentCompletionSourceId,
 } from "./subagent-controller-inputs.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -32,10 +32,16 @@ function pendingWake(batchRunIds: string[]) {
   return { status: "pending" as const, attemptCount: 0, batchRunIds, rearmGeneration: 4 };
 }
 
-function expectAborted(...expected: Array<[SessionControllerInput, boolean]>) {
-  for (const [input, aborted] of expected) {
-    expect(input.abortSignal.aborted).toBe(aborted);
-  }
+function expectRetired(
+  entry: SubagentRunRecord,
+  selected: SessionControllerInput,
+  ...untouched: SessionControllerInput[]
+) {
+  expect(hasInput(entry)).toBe(true);
+  retireInputs(entry);
+  expect(selected.abortSignal.aborted).toBe(true);
+  untouched.forEach((input) => expect(input.abortSignal.aborted).toBe(false));
+  expect(hasInput(entry)).toBe(false);
 }
 
 function child(overrides: Partial<SubagentRunRecord> = {}) {
@@ -72,12 +78,8 @@ function reserve(
 
 afterEach(async () => {
   const claims = new Set(inputs.flatMap((input) => (input.claim ? [input.claim] : [])));
-  for (const claim of claims) {
-    releaseSessionControllerClaim(claim);
-  }
-  for (const input of inputs) {
-    retireSessionControllerInput(input);
-  }
+  claims.forEach((claim) => releaseSessionControllerClaim(claim));
+  inputs.forEach((input) => retireSessionControllerInput(input));
   await Promise.all(inputs.map((input) => input.settlement.promise));
   inputs.length = 0;
   subagentRuns.clear();
@@ -100,17 +102,10 @@ it("finds and retires only the exact completion source in its physical requester
     reserve("subagent-completion:child-a:4", { sessionKey: "other-requester" }),
     reserve("subagent-completion:child-a:4", { agentId: "research" }),
   ];
-  expect(hasSubagentControllerInput(entry)).toBe(false);
+  expect(hasInput(entry)).toBe(false);
 
   const exact = reserve("subagent-completion:child-a:4");
-  expect(hasSubagentControllerInput(entry)).toBe(true);
-  retireSubagentControllerInputs(entry);
-
-  expect(exact.abortSignal.aborted).toBe(true);
-  expect(hasSubagentControllerInput(entry)).toBe(false);
-  for (const input of unrelated) {
-    expect(input.abortSignal.aborted).toBe(false);
-  }
+  expectRetired(entry, exact, ...unrelated);
 });
 
 it.each(["default", "custom", "memory"] as const)(
@@ -123,15 +118,11 @@ it.each(["default", "custom", "memory"] as const)(
         layout === "custom"
           ? state.path("custom", "sessions.json")
           : path.join(state.sessionsDir(), "sessions.json");
-      const physicalStore =
-        layout === "custom"
-          ? state.path("custom", "openclaw-agent.sqlite")
-          : state.statePath(
-              "agents",
-              "main",
-              "agent",
-              layout === "memory" ? "incognito-openclaw-agent.sqlite" : "openclaw-agent.sqlite",
-            );
+      const directory =
+        layout === "custom" ? state.path("custom") : state.statePath("agents", "main", "agent");
+      const databaseName =
+        layout === "memory" ? "incognito-openclaw-agent.sqlite" : "openclaw-agent.sqlite";
+      const physicalStore = path.join(directory, databaseName);
       setRuntimeConfigSnapshot(layout === "custom" ? { session: { store: logicalStore } } : {});
       await replaceSessionEntry(
         { agentId: "main", sessionKey, storePath: logicalStore },
@@ -142,26 +133,20 @@ it.each(["default", "custom", "memory"] as const)(
         },
       );
       const entry = child({ requesterSessionKey: sessionKey, requesterStorePath: physicalStore });
-      const input = expectDefined(
-        await reserveSubagentCompletionControllerSource(entry),
-        "Requester reservation",
-      );
+      const input = expectDefined(await reserveCompletion(entry), "Requester reservation");
       inputs.push(input);
       try {
         expect(input.target?.storeScope).toBe(layout === "memory" ? physicalStore : logicalStore);
-        expect(hasSubagentControllerInput(entry)).toBe(true);
+        expect(hasInput(entry)).toBe(true);
         const target = expectDefined(input.target, "Requester reservation target");
         // A later binding can change the mailbox observation, but not this source's store.
         bindSessionControllerEntryTarget(
           input.mailbox.owner,
           captureSessionTarget({ ...target, physicalStorePath: physicalStore + ".other" }),
         );
-        expect(hasSubagentControllerInput(entry)).toBe(true);
-        expect(
-          hasSubagentControllerInput({ ...entry, requesterStorePath: physicalStore + ".other" }),
-        ).toBe(false);
-        retireSubagentControllerInputs(entry);
-        expect(input.abortSignal.aborted).toBe(true);
+        expect(hasInput(entry)).toBe(true);
+        expect(hasInput({ ...entry, requesterStorePath: physicalStore + ".other" })).toBe(false);
+        expectRetired(entry, input);
       } finally {
         retireSessionControllerInput(input);
         await input.settlement.promise;
@@ -189,34 +174,29 @@ it.each(
     subagentRuns.set(entry.runId, entry);
     subagentRuns.set(sibling.runId, sibling);
     if (difference !== "retired") {
-      subagentRuns.set(
-        "child-c",
-        child({
-          ...requester,
-          runId: "child-c",
-          requesterSettleWake:
-            difference === "no wake"
-              ? undefined
-              : { ...wake, rearmGeneration: difference === "generation" ? 5 : 4 },
-          requesterStorePath:
-            difference === "store" ? "/private/tmp/other/sessions.json" : storePath,
-          requesterSessionKey: difference === "key" ? "other-requester" : requesterSessionKey,
-          requesterAgentId: difference === "agent" ? "research" : requester.requesterAgentId,
-        }),
-      );
+      const exclusions: Record<typeof difference, Partial<SubagentRunRecord>> = {
+        generation: { requesterSettleWake: { ...wake, rearmGeneration: 5 } },
+        store: { requesterStorePath: "/private/tmp/other/sessions.json" },
+        key: { requesterSessionKey: "other-requester" },
+        agent: { requesterAgentId: "research" },
+        "no wake": { requesterSettleWake: undefined },
+      };
+      const excluded = child({
+        ...requester,
+        runId: "child-c",
+        requesterSettleWake: { ...wake },
+        ...exclusions[difference],
+      });
+      subagentRuns.set(excluded.runId, excluded);
     }
     const batchPrefix = `requester-settle:${legacy ? "unknown" : "main"}:${requesterSessionKey}`;
     const scope = { sessionKey: requesterSessionKey };
     const obsolete = reserve(`${batchPrefix}:child-a,child-b,child-c,retired-child:yield-4`, scope);
     const foreignOnly = reserve(`${batchPrefix}:child-c:yield-4`, scope);
-    expect(hasSubagentControllerInput(entry)).toBe(false);
+    expect(hasInput(entry)).toBe(false);
 
     const surviving = reserve(`${batchPrefix}:child-a,child-b:yield-4`, scope);
-    expect(hasSubagentControllerInput(entry)).toBe(true);
-    retireSubagentControllerInputs(entry);
-
-    expectAborted([surviving, true], [obsolete, false], [foreignOnly, false]);
-    expect(hasSubagentControllerInput(entry)).toBe(false);
+    expectRetired(entry, surviving, obsolete, foreignOnly);
   },
 );
 
@@ -230,13 +210,10 @@ it("keeps a pause notice's singleton identity separate from its completion batch
   subagentRuns.set("child-b", child({ runId: "child-b", requesterSettleWake: { ...wake } }));
   const completionBatch = reserve("requester-settle:main:global:child-a,child-b:yield-4");
   const groupedPause = reserve("requester-settle:main:global:child-a,child-b:yield-4:pause");
-  expect(hasSubagentControllerInput(entry)).toBe(false);
+  expect(hasInput(entry)).toBe(false);
 
   const pause = reserve("requester-settle:main:global:child-a:yield-4:pause");
-  expect(hasSubagentControllerInput(entry)).toBe(true);
-  retireSubagentControllerInputs(entry);
-
-  expectAborted([pause, true], [completionBatch, false], [groupedPause, false]);
+  expectRetired(entry, pause, completionBatch, groupedPause);
 });
 
 it("retires unclaimed reservations while a selected turn retains its input", async () => {
@@ -245,11 +222,12 @@ it("retires unclaimed reservations while a selected turn retains its input", asy
   const claim = expectDefined(tryClaimSessionControllerTask(selected), "controller claim");
   const queued = reserve("subagent-completion:child-a:4");
 
-  retireSubagentControllerInputs(entry);
+  retireInputs(entry);
 
-  expectAborted([selected, false], [queued, true]);
-  expect(hasSubagentControllerInput(entry)).toBe(true);
+  expect(selected.abortSignal.aborted).toBe(false);
+  expect(queued.abortSignal.aborted).toBe(true);
+  expect(hasInput(entry)).toBe(true);
   releaseSessionControllerClaim(claim);
   await claim.settlement.promise;
-  expect(hasSubagentControllerInput(entry)).toBe(false);
+  expect(hasInput(entry)).toBe(false);
 });

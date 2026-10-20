@@ -5,7 +5,8 @@ import {
   SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
 } from "../../../sessions/session-controller.lifecycle.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { enqueueControlRun } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
 import type { registerLateDescendantControlTests } from "./subagent-control.late-registration.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -61,14 +62,7 @@ export function registerAdmissionDrainControlTests({
 
       const dispatch = vi.fn(async () => {});
       if (queued) {
-        enqueueSwarmRun({
-          groupId: "drain",
-          runId: entry.runId,
-          maxConcurrent: 1,
-          activeRunIds: ["holder"],
-          start: dispatch,
-          onStartFailure: () => true,
-        });
+        enqueueControlRun("drain", entry.runId, ["holder"], dispatch);
       }
       vi.useFakeTimers();
       const pendingKill = killAllControlledSubagentRuns({
