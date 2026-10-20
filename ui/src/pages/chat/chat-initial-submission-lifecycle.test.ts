@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
@@ -50,81 +50,77 @@ function initialSubmissionFixture() {
   return { host, input, retained, readmit, submitNewer, replace: () => (sessionId = "physical-b") };
 }
 
-describe("initial submission lifecycle", () => {
-  it("preserves cache-only resets and binds the first authoritative physical session", async () => {
-    const { host, input, retained, readmit, replace } = initialSubmissionFixture();
-    applyChatCacheSnapshot(host, {
-      messages: [],
-      sessionId: "cached-placeholder",
-      pagination: { hasMore: false },
-    });
+it("preserves cache-only resets and binds the first authoritative physical session", async () => {
+  const { host, input, retained, readmit, replace } = initialSubmissionFixture();
+  applyChatCacheSnapshot(host, {
+    messages: [],
+    sessionId: "cached-placeholder",
+    pagination: { hasMore: false },
+  });
+  resetChatHistoryProjection(host);
+  admitChatSubmission(host, undefined);
+  expect(host.chatMessages).toEqual([input.message]);
+  await loadChatHistory(host);
+  expect(host).toMatchObject({ currentSessionId: "physical-a", chatMessages: [input.message] });
+  replace();
+  await loadChatHistory(host);
+  expect(host).toMatchObject({ currentSessionId: "physical-b", chatMessages: [] });
+  expect(retained).toMatchObject({ pending: false, message: null });
+  readmit();
+  expect(host.chatMessages).toEqual([]);
+});
+
+it.each(["completed", "uncertain", "not-started", "rejected", "newer handoff"] as const)(
+  "retires an initial prompt only after an issued clear (%s)",
+  async (result) => {
+    const { host, input, retained, readmit, submitNewer } = initialSubmissionFixture();
+    await loadChatHistory(host);
+    const response = createDeferred<"completed">();
+    const reset = vi.spyOn(host.sessions, "reset");
+    if (result === "rejected") {
+      reset.mockRejectedValue(new Error("Reset was refused"));
+    } else if (result === "newer handoff") {
+      reset.mockReturnValue(response.promise);
+    } else {
+      reset.mockResolvedValue(result);
+    }
+    const clearing = clearChatHistory(host);
+    if (result === "newer handoff") {
+      const newerMessage = submitNewer();
+      response.resolve("completed");
+      await clearing;
+      expect(host.chatMessages).toEqual([newerMessage]);
+      expect(retained).toMatchObject({ pending: false, message: null });
+      return;
+    }
+    await clearing;
     resetChatHistoryProjection(host);
-    admitChatSubmission(host, undefined);
-    expect(host.chatMessages).toEqual([input.message]);
+    readmit();
+    expect(host.chatMessages).toEqual(
+      result === "completed" || result === "uncertain" ? [] : [input.message],
+    );
+  },
+);
+
+it.each(["reset", "new"])(
+  "retires initial ownership on authoritative %s and admits a newer run",
+  async (reason) => {
+    const { host, readmit, submitNewer } = initialSubmissionFixture();
     await loadChatHistory(host);
-    expect(host.currentSessionId).toBe("physical-a");
-    expect(host.chatMessages).toEqual([input.message]);
-    replace();
+    handlePageGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: host.sessionKey,
+        sessionId: host.currentSessionId,
+        agentId: "main",
+        reason,
+      },
+    });
     await loadChatHistory(host);
-    expect(host.currentSessionId).toBe("physical-b");
-    expect(host.chatMessages).toEqual([]);
-    expect(retained).toMatchObject({ pending: false, message: null });
     readmit();
     expect(host.chatMessages).toEqual([]);
-  });
-
-  it.each(["completed", "uncertain", "not-started", "rejected", "newer handoff"] as const)(
-    "retires an initial prompt only after an issued clear (%s)",
-    async (result) => {
-      const { host, input, retained, readmit, submitNewer } = initialSubmissionFixture();
-      await loadChatHistory(host);
-      const response = createDeferred<"completed">();
-      const reset = vi.spyOn(host.sessions, "reset");
-      if (result === "rejected") {
-        reset.mockRejectedValue(new Error("Reset was refused"));
-      } else if (result === "newer handoff") {
-        reset.mockReturnValue(response.promise);
-      } else {
-        reset.mockResolvedValue(result);
-      }
-      const clearing = clearChatHistory(host);
-      if (result === "newer handoff") {
-        const newerMessage = submitNewer();
-        response.resolve("completed");
-        await clearing;
-        expect(host.chatMessages).toEqual([newerMessage]);
-        expect(retained).toMatchObject({ pending: false, message: null });
-        return;
-      }
-      await clearing;
-      resetChatHistoryProjection(host);
-      readmit();
-      expect(host.chatMessages).toEqual(
-        result === "completed" || result === "uncertain" ? [] : [input.message],
-      );
-    },
-  );
-
-  it.each(["reset", "new"])(
-    "retires initial ownership on authoritative %s and admits a newer run",
-    async (reason) => {
-      const { host, readmit, submitNewer } = initialSubmissionFixture();
-      await loadChatHistory(host);
-      handlePageGatewayEvent(host, {
-        type: "event",
-        event: "sessions.changed",
-        payload: {
-          sessionKey: host.sessionKey,
-          sessionId: host.currentSessionId,
-          agentId: "main",
-          reason,
-        },
-      });
-      await loadChatHistory(host);
-      readmit();
-      expect(host.chatMessages).toEqual([]);
-      const newerMessage = submitNewer();
-      expect(host.chatMessages).toEqual([newerMessage]);
-    },
-  );
-});
+    const newerMessage = submitNewer();
+    expect(host.chatMessages).toEqual([newerMessage]);
+  },
+);

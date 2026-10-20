@@ -72,8 +72,6 @@ it("shows connected review waits without changing delivery versions or crossing 
   );
   const before = host.chatQueue;
   const container = document.createElement("div");
-  const text = (selector: string) => container.querySelector(selector)?.textContent;
-  const deliveryText = () => text(".chat-question-summary__delivery");
   document.body.append(container);
   const props = createChatProps({
     sessionKey: host.sessionKey,
@@ -138,9 +136,15 @@ it("shows connected review waits without changing delivery versions or crossing 
   expect(host.chatQueue).toEqual(before);
   draw();
   expect(container.textContent).toContain("Waiting for reconnect");
-  expect(text(".chat-queue__badge")).toContain("Waiting for reconnect");
-  expect(text(".chat-send-status")).toContain("Waiting for reconnect");
-  expect(deliveryText()).toContain("Waiting for reconnect");
+  expect(container.querySelector(".chat-queue__badge")?.textContent).toContain(
+    "Waiting for reconnect",
+  );
+  expect(container.querySelector(".chat-send-status")?.textContent).toContain(
+    "Waiting for reconnect",
+  );
+  expect(container.querySelector(".chat-question-summary__delivery")?.textContent).toContain(
+    "Waiting for reconnect",
+  );
 
   host.connected = true;
   host.connectionEpoch += 1;
@@ -166,8 +170,10 @@ it("shows connected review waits without changing delivery versions or crossing 
   expect(pending?.textContent).toContain("Queued");
   expect(pending?.querySelector(".chat-send-status__discard")).not.toBeNull();
   expect(pending?.querySelector(".chat-send-status__retry")).toBeNull();
-  expect(deliveryText()).toContain("Answer queued");
-  expect(text(".chat-queue__global-state")?.trim()).toBe(
+  expect(container.querySelector(".chat-question-summary__delivery")?.textContent).toContain(
+    "Answer queued",
+  );
+  expect(container.querySelector(".chat-queue__global-state")?.textContent?.trim()).toBe(
     "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
   );
   expect(requestCalls(host.request, "chat.send")).toEqual([]);
@@ -178,7 +184,9 @@ it("shows connected review waits without changing delivery versions or crossing 
   expect(
     container.querySelector(".chat-send-status[data-send-state='waiting-reconnect']"),
   ).not.toBeNull();
-  expect(deliveryText()).toContain("Waiting for reconnect");
+  expect(container.querySelector(".chat-question-summary__delivery")?.textContent).toContain(
+    "Waiting for reconnect",
+  );
   host.connected = true;
   draw();
   expect(container.textContent).not.toContain("Waiting for reconnect");

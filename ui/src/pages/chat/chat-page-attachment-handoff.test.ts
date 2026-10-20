@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-page-attachment-handoff.test/"} */
 
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { registerMcpAppUnmountTarget } from "../../components/mcp-app-unmount.ts";
 
@@ -15,9 +15,8 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 }));
 
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
-import { settleChatPage, setNavigationContext, stubMatchMedia } from "./chat-page.test-support.ts";
-import "./chat-page.ts";
+import { createChatPageFixture, useChatPageFixture } from "./chat-page-lifecycle.test-support.ts";
+import { settleChatPage } from "./chat-page.test-support.ts";
 
 type RenderedPane = HTMLElement & {
   paneId: string;
@@ -37,49 +36,35 @@ async function split(page: HTMLElementTagNameMap["openclaw-chat-page"]) {
   await settleChatPage(page);
 }
 
-describe("chat page staged attachment rebound", () => {
-  beforeEach(() => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("sessionStorage", createStorageMock());
-    stubMatchMedia(false);
-  });
+useChatPageFixture();
 
-  afterEach(() => {
-    document.body.replaceChildren();
-    vi.unstubAllGlobals();
-  });
+it("reactivates a closed pane when delayed MCP teardown rebounds to the same owner", async () => {
+  const { page, mount } = createChatPageFixture("main");
+  await mount();
+  await split(page);
 
-  it("reactivates a closed pane when delayed MCP teardown rebounds to the same owner", async () => {
-    const page = document.createElement("openclaw-chat-page");
-    setNavigationContext(page);
-    page.data = { sessionKey: "main" };
-    document.body.append(page);
-    await settleChatPage(page);
-    await split(page);
+  const closingPane = page.querySelectorAll<RenderedPane>("openclaw-chat-pane")[1]!;
+  const discard = vi.fn();
+  const resume = vi.fn();
+  closingPane.discardStagedAttachments = discard;
+  closingPane.resumeStagedAttachments = resume;
+  const teardown = deferred();
+  const mcpApp = document.createElement("mcp-app-view");
+  const restartAfterTeardown = vi.fn();
+  mcpApp.restartAfterTeardown = restartAfterTeardown;
+  mcpApp.teardown = vi.fn(() => teardown.promise);
+  onTestFinished(registerMcpAppUnmountTarget(mcpApp));
+  closingPane.append(mcpApp);
 
-    const closingPane = page.querySelectorAll<RenderedPane>("openclaw-chat-pane")[1]!;
-    const discard = vi.fn();
-    const resume = vi.fn();
-    closingPane.discardStagedAttachments = discard;
-    closingPane.resumeStagedAttachments = resume;
-    const teardown = deferred();
-    const mcpApp = document.createElement("mcp-app-view");
-    const restartAfterTeardown = vi.fn();
-    mcpApp.restartAfterTeardown = restartAfterTeardown;
-    mcpApp.teardown = vi.fn(() => teardown.promise);
-    onTestFinished(registerMcpAppUnmountTarget(mcpApp));
-    closingPane.append(mcpApp);
+  closingPane.onClosePane?.(closingPane.paneId);
+  await settleChatPage(page);
+  expect(discard).toHaveBeenCalledOnce();
+  expect(closingPane.isConnected).toBe(true);
 
-    closingPane.onClosePane?.(closingPane.paneId);
-    await settleChatPage(page);
-    expect(discard).toHaveBeenCalledOnce();
-    expect(closingPane.isConnected).toBe(true);
+  await split(page);
+  expect(resume).toHaveBeenCalled();
 
-    await split(page);
-    expect(resume).toHaveBeenCalled();
-
-    teardown.resolve();
-    await expect.poll(() => restartAfterTeardown).toHaveBeenCalledOnce();
-    expect(page.querySelectorAll<RenderedPane>("openclaw-chat-pane")[1]).toBe(closingPane);
-  });
+  teardown.resolve();
+  await expect.poll(() => restartAfterTeardown).toHaveBeenCalledOnce();
+  expect(page.querySelectorAll<RenderedPane>("openclaw-chat-pane")[1]).toBe(closingPane);
 });
