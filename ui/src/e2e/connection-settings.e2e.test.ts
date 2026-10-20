@@ -88,6 +88,13 @@ suite.define(() => {
       });
       await details.locator("summary").click();
       const reconnect = button(details, "Reconnect");
+      const reconnecting = button(connection, "Reconnecting…");
+      const holdConnect = async (action: Locator) => {
+        const after = (await gateway.getRequests("connect")).length;
+        await gateway.deferNext("connect");
+        await action.click();
+        return gateway.waitForRequest("connect", { after });
+      };
       await expect.poll(() => reconnect.isEnabled()).toBe(true);
       expect(await details.textContent()).toContain("30s");
 
@@ -99,12 +106,8 @@ suite.define(() => {
       expect(await gateway.getSocketCount()).toBe(socketCount);
 
       await secret.fill("synthetic-applied-secret");
-      const connectsBeforeApply = (await gateway.getRequests("connect")).length;
-      await gateway.deferNext("connect");
-      await apply.click();
-      const handshake = await gateway.waitForRequest("connect", { after: connectsBeforeApply });
+      const handshake = await holdConnect(apply);
       expect(handshake.params).toMatchObject({ auth: { token: "synthetic-applied-secret" } });
-      const reconnecting = button(connection, "Reconnecting…");
       await reconnecting.waitFor();
       expect(await reconnecting.isDisabled()).toBe(true);
       expect(await gateway.getSocketCount()).toBe(socketCount + 1);
@@ -115,10 +118,7 @@ suite.define(() => {
       if (!(await details.evaluate((element) => (element as HTMLDetailsElement).open))) {
         await details.locator("summary").click();
       }
-      const connectsBeforeReconnect = (await gateway.getRequests("connect")).length;
-      await gateway.deferNext("connect");
-      await reconnect.click();
-      await gateway.waitForRequest("connect", { after: connectsBeforeReconnect });
+      await holdConnect(reconnect);
       await reconnecting.waitFor();
       expect(await reconnect.isDisabled()).toBe(true);
       expect(await gateway.getSocketCount()).toBe(socketCount + 2);

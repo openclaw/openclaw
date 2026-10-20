@@ -34,13 +34,10 @@ async function expectUnclipped(item: Locator) {
         const bounds = menu.getBoundingClientRect();
         const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
         return (
-          rect.top >= bounds.top &&
-          rect.bottom <= bounds.bottom &&
+          rect.top >= Math.max(bounds.top, 0) &&
+          rect.bottom <= Math.min(bounds.bottom, innerHeight) &&
           rect.left >= 0 &&
           rect.right <= innerWidth &&
-          rect.top >= 0 &&
-          rect.bottom <= innerHeight &&
-          hit !== null &&
           element.contains(hit)
         );
       }),
@@ -60,28 +57,14 @@ suite.define(() => {
             { once: true },
           );
           const actions: unknown[] = [];
+          const openclawGateways = { postMessage: (message: unknown) => actions.push(message) };
           Object.assign(window, {
             __OPENCLAW_NATIVE_GATEWAYS__: initial,
             nativeGatewayActions: actions,
-            webkit: {
-              messageHandlers: {
-                openclawGateways: {
-                  postMessage: (message: unknown) => actions.push(message),
-                },
-              },
-            },
+            webkit: { messageHandlers: { openclawGateways } },
           });
         }, snapshot);
-        await installMockGateway(page, {
-          presenceUsers: [
-            { self: true, id: "proof-user", name: "Alex", email: "alex@example.test" },
-          ],
-          assistantName: "Assistant",
-          agentModel: "example/sample-model",
-          models: [{ id: "sample-model", name: "Sample model", provider: "example" }],
-          sessions: [],
-          historyMessages: [],
-        });
+        await installMockGateway(page, { sessions: [], historyMessages: [] });
         await page.goto(`${suite.server.baseUrl}new`);
         await waitForControlUiGatewayReady(page);
         let menu = await openMenu(page);

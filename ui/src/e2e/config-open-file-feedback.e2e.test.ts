@@ -1,11 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import {
-  configSnapshot,
-  objectSchema,
-  pageRunner,
-} from "./config-composer-fixtures.test-support.ts";
+import { configSnapshot, objectSchema } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -13,10 +9,9 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 const configPath = "/tmp/openclaw-config-open-feedback/openclaw.json";
-const withPage = pageRunner(suite, { serviceWorkers: "block" });
-const openButton = (page: Page) => page.getByRole("button", { name: "Open", exact: true });
+const openerError = "No desktop opener is available.";
 
-async function installClipboardProof(page: Page): Promise<void> {
+async function openRawSettings(page: Page, response?: unknown) {
   await page.addInitScript(() => {
     const copied: string[] = [];
     Object.defineProperty(globalThis, "configOpenFileCopied", { value: copied });
@@ -29,10 +24,6 @@ async function installClipboardProof(page: Page): Promise<void> {
       },
     });
   });
-}
-
-async function openRawSettings(page: Page, response?: unknown) {
-  await installClipboardProof(page);
   const config = { laboratory: { enabled: true } };
   const gateway = await installMockGateway(page, {
     featureMethods: ["config.openFile"],
@@ -69,49 +60,40 @@ async function expectOpenFailure(page: Page, message: string): Promise<void> {
 }
 
 suite.define(() => {
-  it("announces when the host opener succeeds", async () => {
-    await withPage(async ({ page }) => {
-      await openRawSettings(page, { ok: true, path: configPath });
-      await openButton(page).click();
-
-      const status = page
-        .getByRole("status")
-        .filter({ hasText: "Configuration file opened on Gateway host." });
-      await expect.poll(() => status.count()).toBe(1);
-      expect(await status.textContent()).not.toContain(configPath);
-      expect(await page.evaluate(() => Reflect.get(globalThis, "configOpenFileCopied"))).toEqual(
-        [],
-      );
-    });
-  });
-
-  it("announces the path fallback when the host opener returns a failure", async () => {
-    await withPage(async ({ page }) => {
-      await openRawSettings(page, {
-        ok: false,
-        path: configPath,
-        error: "No desktop opener is available.",
+  it.each(["succeeds", "returns a failure", "rejects"])(
+    "announces the outcome when the open request %s",
+    async (outcome) => {
+      await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+        const rejects = outcome === "rejects";
+        const ok = outcome === "succeeds";
+        const gateway = await openRawSettings(
+          page,
+          rejects ? undefined : { ok, path: configPath, ...(ok ? {} : { error: openerError }) },
+        );
+        if (rejects) {
+          await gateway.deferNext("config.openFile");
+        }
+        await page.getByRole("button", { name: "Open", exact: true }).click();
+        if (rejects) {
+          await gateway.waitForRequest("config.openFile");
+          await gateway.rejectDeferred("config.openFile", {
+            code: "UNAVAILABLE",
+            message: openerError,
+          });
+        }
+        if (!ok) {
+          await expectOpenFailure(page, openerError);
+        } else {
+          const status = page
+            .getByRole("status")
+            .filter({ hasText: "Configuration file opened on Gateway host." });
+          await expect.poll(() => status.count()).toBe(1);
+          expect(await status.textContent()).not.toContain(configPath);
+          expect(
+            await page.evaluate(() => Reflect.get(globalThis, "configOpenFileCopied")),
+          ).toEqual([]);
+        }
       });
-
-      await openButton(page).click();
-
-      await expectOpenFailure(page, "No desktop opener is available.");
-    });
-  });
-
-  it("announces the path fallback when the open request rejects", async () => {
-    await withPage(async ({ page }) => {
-      const gateway = await openRawSettings(page);
-      await gateway.deferNext("config.openFile");
-
-      await openButton(page).click();
-      await gateway.waitForRequest("config.openFile");
-      await gateway.rejectDeferred("config.openFile", {
-        code: "UNAVAILABLE",
-        message: "No desktop opener is available.",
-      });
-
-      await expectOpenFailure(page, "No desktop opener is available.");
-    });
-  });
+    },
+  );
 });

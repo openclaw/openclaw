@@ -23,37 +23,32 @@ function enumMocks() {
       largeMode: null,
     },
   };
-  const nullableMode = {
+  const nullableMode = (title: string, values: (string | null)[] = ["fixed", "other", null]) => ({
+    title,
     type: ["string", "null"],
-    enum: ["fixed", "other", null],
+    enum: values,
+  });
+  const largeValues = ["fixed", "other", "third", "fourth", "fifth", "sixth", null];
+  const properties = {
+    choices: {
+      type: "array",
+      title: "Unique choices",
+      uniqueItems: true,
+      items: { type: "string", enum: ["alpha", "beta", "gamma"] },
+    },
+    requiredMode: nullableMode("Required mode"),
+    optionalMode: nullableMode("Optional mode"),
+    unionMode: {
+      title: "Union mode",
+      anyOf: [{ const: "fixed" }, { const: "other" }, { type: "null" }],
+    },
+    largeMode: nullableMode("Large mode", largeValues),
   };
   return {
     "config.get": configSnapshot(config, "enum-controls", true),
     "config.schema": {
       schema: objectSchema("", {
-        laboratory: objectSchema(
-          "",
-          {
-            choices: {
-              type: "array",
-              title: "Unique choices",
-              uniqueItems: true,
-              items: { type: "string", enum: ["alpha", "beta", "gamma"] },
-            },
-            requiredMode: { ...nullableMode, title: "Required mode" },
-            optionalMode: { ...nullableMode, title: "Optional mode" },
-            unionMode: {
-              title: "Union mode",
-              anyOf: [{ const: "fixed" }, { const: "other" }, { type: "null" }],
-            },
-            largeMode: {
-              ...nullableMode,
-              title: "Large mode",
-              enum: ["fixed", "other", "third", "fourth", "fifth", "sixth", null],
-            },
-          },
-          { required: ["requiredMode"] },
-        ),
+        laboratory: objectSchema("", properties, { required: ["requiredMode"] }),
       }),
       uiHints: {},
       version: "enum-controls",
@@ -69,11 +64,9 @@ suite.define(() => {
       const second = page.locator('.cfg-array [role="radiogroup"]').nth(1);
       const selected = () =>
         second
-          .getByRole("radio")
+          .getByRole("radio", { checked: true })
           .evaluateAll((radios) =>
-            radios
-              .filter((radio) => (radio as HTMLInputElement).checked)
-              .map((radio) => radio.closest("label")?.textContent?.trim()),
+            radios.map((radio) => radio.closest("label")?.textContent?.trim()),
           );
       await expect.poll(selected).toEqual(["beta"]);
       await second.getByRole("radio", { name: "alpha", exact: true }).click();

@@ -17,6 +17,12 @@ suite.define(() => {
       const textarea = page.locator(".agent-chat__composer-combobox textarea");
       const mask = () => textarea.evaluate((el) => getComputedStyle(el).maskImage);
       const expectEditing = async (key?: string) => expect(await mask(), key).toBe("none");
+      const pressEditing = async (...keys: string[]) => {
+        for (const key of keys) {
+          await textarea.press(key);
+          await expectEditing(key);
+        }
+      };
       const overflow = () => textarea.evaluate((el) => getComputedStyle(el).overflowY);
       const scrollTop = () => textarea.evaluate((el) => el.scrollTop);
       const mac = process.platform === "darwin";
@@ -36,8 +42,8 @@ suite.define(() => {
       await expectEditing();
       expect(await overflow()).toBe("auto");
 
-      // Moving the caret is still editing, even when the last line stays in place.
-      const lastLineKeys = [
+      // Moving the caret must preserve editing protection after every key.
+      await pressEditing(
         "ArrowLeft",
         "ArrowRight",
         mac ? "Alt+ArrowLeft" : "Control+ArrowLeft",
@@ -47,11 +53,7 @@ suite.define(() => {
         mac ? "Meta+ArrowLeft" : "Home",
         mac ? "Meta+ArrowRight" : "End",
         "ArrowDown",
-      ];
-      for (const key of lastLineKeys) {
-        await textarea.press(key);
-        await expectEditing(key);
-      }
+      );
 
       const typingScrollTop = await scrollTop();
       await textarea.hover();
@@ -59,8 +61,7 @@ suite.define(() => {
       await expect.poll(scrollTop).toBeLessThan(typingScrollTop);
       await expect.poll(mask).not.toBe("none");
       // Keyboard navigation must also enter editing protection after pointer browsing.
-      await textarea.press("ArrowLeft");
-      await expectEditing();
+      await pressEditing("ArrowLeft");
       await page.mouse.wheel(0, -80);
       await expect.poll(mask).not.toBe("none");
       // Typing after browsing still clears the fade before native caret scrolling.
@@ -77,16 +78,10 @@ suite.define(() => {
         )
         .toEqual({ caret: 0, firstLineVisible: true });
       await expectEditing();
-      for (const key of ["ArrowDown", "PageDown", "PageUp"]) {
-        await textarea.press(key);
-        await expectEditing(key);
-      }
-      await textarea.press("x");
-      await expectEditing();
+      await pressEditing("ArrowDown", "PageDown", "PageUp", "x");
       await textarea.press(mac ? "Meta+ArrowDown" : "Control+End");
       await textarea.press("Shift+Enter");
-      await textarea.press("x");
-      await expectEditing();
+      await pressEditing("x");
       await expect.poll(scrollTop).toBeGreaterThan(0);
 
       await textarea.fill("Short draft");
