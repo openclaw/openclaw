@@ -23,11 +23,8 @@ import {
   tempDirs,
   warnPrivateFinalSpy,
 } from "./agent-runner.misc.runreplyagent.test-support.js";
-import {
-  createTestQueueSettings,
-  createTestQueuedFollowupRun,
-  createTestTemplateContext,
-} from "./agent-runner.test-fixtures.js";
+import { createBaseRun } from "./agent-runner.runreplyagent.test-support.js";
+import { createTestQueueSettings } from "./agent-runner.test-fixtures.js";
 import { deliverFollowupDecision } from "./followup-delivery.js";
 import { createDefaults, createTurn } from "./followup-delivery.test-helpers.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
@@ -143,29 +140,26 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
       successfulCronAdds: params.successfulCronAdds,
     });
 
-    const sessionCtx = createTestTemplateContext({
-      Provider: "whatsapp",
-      OriginatingChannel: "whatsapp",
-      OriginatingTo: "+15550001111",
-      AccountId: "primary",
-      MessageSid: "msg",
-      ChatType: params.chatType ?? "direct",
-      InboundEventKind: params.inboundEventKind,
-    });
-    const followupRun = createTestQueuedFollowupRun({
-      prompt: "hello",
-      summaryLine: params.summaryLine ?? "hello",
-      strandedReplyRetry: params.strandedReplyRetry,
-      enqueuedAt: Date.now(),
-      toolsAllow: ["message", "read"],
-      transcriptPrompt: params.transcriptPrompt,
+    const { sessionCtx, followupRun } = createBaseRun({
+      context: {
+        Provider: "whatsapp",
+        OriginatingChannel: "whatsapp",
+        OriginatingTo: "+15550001111",
+        AccountId: "primary",
+        MessageSid: "msg",
+        ChatType: params.chatType ?? "direct",
+        InboundEventKind: params.inboundEventKind,
+      },
+      followup: {
+        summaryLine: params.summaryLine ?? "hello",
+        strandedReplyRetry: params.strandedReplyRetry,
+        toolsAllow: ["message", "read"],
+        transcriptPrompt: params.transcriptPrompt,
+      },
       run: {
         agentId: "main",
         agentDir: path.join(rootDir, "agent"),
-        sessionId: "session",
         sessionKey,
-        messageProvider: "whatsapp",
-        sessionFile: path.join(rootDir, "session.jsonl"),
         workspaceDir: tmp,
         // Carry the canonical tool-only run fact and keep downstream policy aligned,
         // so the private final is never eligible for automatic source delivery.
@@ -173,17 +167,9 @@ describe("runReplyAgent stranded message_tool_only finals (#85714)", () => {
           session: { store: storePath },
           messages: { visibleReplies: "message_tool" },
         },
-        skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude",
         thinkingCatalog: [{ provider: "anthropic", id: "claude", input: ["text"] }],
         thinkLevel: "low",
         reasoningLevel: "on",
-        verboseLevel: "off",
-        elevatedLevel: "off",
-        bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
         sourceReplyDeliveryMode: "message_tool_only",
         extraSystemPrompt: "Use message(action=send) for all visible replies.",
         terminalReplyExpectation:

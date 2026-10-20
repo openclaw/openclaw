@@ -1,4 +1,4 @@
-import { assert, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
@@ -11,8 +11,20 @@ const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }));
 vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
 
 describe("createAgentLifecycleTerminalBackstop", () => {
+  beforeEach(() => emitAgentEvent.mockClear());
+
+  function createTerminal(
+    overrides: Partial<Parameters<typeof createAgentLifecycleTerminalBackstop>[0]> = {},
+  ) {
+    return createAgentLifecycleTerminalBackstop({
+      runId: "run",
+      getLifecycleGeneration: () => "generation",
+      resolveTerminationFields: () => ({}),
+      ...overrides,
+    });
+  }
+
   it("publishes a preparation failure once instead of its cancellation side effect", async () => {
-    emitAgentEvent.mockClear();
     const preparation: { failure?: Error } = {};
     const terminal = await runWithAgentWorkspaceReadiness(
       {
@@ -22,10 +34,9 @@ describe("createAgentLifecycleTerminalBackstop", () => {
         getFailure: () => preparation.failure,
       },
       async () =>
-        createAgentLifecycleTerminalBackstop({
+        createTerminal({
           runId: "preparing",
           sessionKey: "agent:main:preparing",
-          getLifecycleGeneration: () => "generation",
           resolveTerminationFields: () => ({ aborted: true, stopReason: "aborted" }),
         }),
     );
@@ -50,12 +61,7 @@ describe("createAgentLifecycleTerminalBackstop", () => {
   });
 
   it.each([false, true])("keeps only the selected attempt receipt (retry=%s)", (retry) => {
-    emitAgentEvent.mockClear();
-    const terminal = createAgentLifecycleTerminalBackstop({
-      runId: "run",
-      getLifecycleGeneration: () => "generation",
-      resolveTerminationFields: () => ({}),
-    });
+    const terminal = createTerminal();
     terminal.note({
       stream: "lifecycle",
       data: {
@@ -79,13 +85,7 @@ describe("createAgentLifecycleTerminalBackstop", () => {
   });
 
   it.each([false, true])("replaces pending or captured attempt facts (captured=%s)", (captured) => {
-    emitAgentEvent.mockClear();
-    const terminal = createAgentLifecycleTerminalBackstop({
-      runId: "recovered",
-      startedAt: 100,
-      getLifecycleGeneration: () => "generation",
-      resolveTerminationFields: () => ({}),
-    });
+    const terminal = createTerminal({ runId: "recovered", startedAt: 100 });
     terminal.note({
       stream: "lifecycle",
       data: {
@@ -126,7 +126,6 @@ describe("createAgentLifecycleTerminalBackstop", () => {
   });
 
   it("publishes the provider-owned OAuth summary instead of the wrapped diagnostic", () => {
-    emitAgentEvent.mockClear();
     const summary =
       "Your refresh token has already been used to generate a new access token. Please try signing in again.";
     const rawDiagnostic = `OAuth token refresh failed for openai: {"error":{"message":"${summary}"}}`;
@@ -139,10 +138,9 @@ describe("createAgentLifecycleTerminalBackstop", () => {
       summary,
     });
     const error = new Error("wrapped OAuth refresh failure", { cause: oauthError });
-    const terminal = createAgentLifecycleTerminalBackstop({
+    const terminal = createTerminal({
       runId: "oauth-refresh-failure",
       getLifecycleGeneration: () => "test-generation",
-      resolveTerminationFields: () => ({}),
     });
 
     terminal.emit("error", error);
@@ -181,15 +179,13 @@ describe("createAgentLifecycleTerminalBackstop", () => {
         .mockImplementation(() => {
           throw new Error("Terminal presentation must not discover providers");
         });
-      emitAgentEvent.mockClear();
       try {
         const profileId = "openai:private-profile";
         const rawCause = `Codex app-server auth profile "${profileId}" was not found`;
-        const terminal = createAgentLifecycleTerminalBackstop({
+        const terminal = createTerminal({
           runId: "missing-selected-profile",
           sessionKey: "agent:main:test",
           getLifecycleGeneration: () => "test-generation",
-          resolveTerminationFields: () => ({}),
         });
 
         const error =

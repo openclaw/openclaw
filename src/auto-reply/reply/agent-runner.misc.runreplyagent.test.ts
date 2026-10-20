@@ -70,10 +70,6 @@ import { scheduleFollowupDrain } from "./queue.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-function createCliBackendTestConfig() {
-  return {};
-}
-
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
 }
@@ -82,20 +78,16 @@ type RunWithModelFallbackParams = TestModelFallbackRunnerParams;
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
-function expectRecordFields(
-  value: unknown,
-  expected: Record<string, unknown>,
-  label: string,
-): Record<string, unknown> {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
-  }
-  return record;
+function sessionFixture(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId: "session", updatedAt: Date.now(), ...overrides };
+}
+
+function sessionState(sessionKey: string, sessionEntry: SessionEntry) {
+  return { sessionKey, sessionEntry, sessionStore: { [sessionKey]: sessionEntry } };
 }
 
 function expectReplyText(result: unknown, text: string): void {
-  expectRecordFields(result, { text }, "reply result");
+  expect(requireRecord(result, "reply result")).toMatchObject({ text });
 }
 
 type MockCallSource = {
@@ -105,11 +97,7 @@ type MockCallSource = {
 };
 
 function firstMockCallArg(mock: MockCallSource, label: string): unknown {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} to have at least one call`);
-  }
-  return call[0];
+  return expectDefined(mock.mock.calls[0], `expected ${label} to have at least one call`)[0];
 }
 
 // Hoist mocks before static dependencies, but defer the runner to avoid incomplete cyclic exports.
@@ -190,11 +178,9 @@ describe("runReplyAgent auto-compaction token update", () => {
     const tmp = tempDirs.make(params.tmpPrefix);
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = sessionFixture({
       totalTokens: 50_000,
-    };
+    });
 
     await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
 
@@ -220,9 +206,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         workspaceDir: params.workspaceDir ?? rootDir,
       },
       reply: {
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
+        ...sessionState(sessionKey, sessionEntry),
         storePath,
       },
     });
@@ -257,13 +241,11 @@ describe("runReplyAgent auto-compaction token update", () => {
     const tmp = tempDirs.make("openclaw-preflight-drain-");
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "agent:main:main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = sessionFixture({
       totalTokens: 200_000,
       totalTokensFresh: true,
       totalTokensVersion: 1 as const,
-    };
+    });
     await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
     compactState.compactEmbeddedAgentSessionMock.mockRejectedValueOnce(new GatewayDrainingError());
 
@@ -271,9 +253,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       run: { agentId: "main", agentDir: path.join(rootDir, "agent"), reasoningLevel: "on" },
       reply: {
         queueKey: sessionKey,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
+        ...sessionState(sessionKey, sessionEntry),
         storePath,
       },
     }).run();
@@ -296,14 +276,12 @@ describe("runReplyAgent auto-compaction token update", () => {
       const storePath = path.join(tmp, "sessions.json");
       const sessionKey = "agent:main:main";
       const scope = { agentId: "main", sessionId: "session", sessionKey, storePath };
-      const sessionEntry: SessionEntry = {
-        sessionId: "session",
-        updatedAt: Date.now(),
+      const sessionEntry = sessionFixture({
         totalTokens: 10_920,
         totalTokensFresh: true,
         totalTokensVersion: 1,
         compactionCount: 0,
-      };
+      });
       const prompt = "What is two plus two? Answer in one short sentence without tools.";
       const onReplyOperationOwned = vi.fn<(operation: ReplyOperation) => boolean>(() => true);
       const delivery = createDeferred();
@@ -428,9 +406,7 @@ describe("runReplyAgent auto-compaction token update", () => {
           },
           reply: {
             commandBody: prompt,
-            sessionEntry,
-            sessionStore: { [sessionKey]: sessionEntry },
-            sessionKey,
+            ...sessionState(sessionKey, sessionEntry),
             storePath,
             opts: { onReplyOperationOwned },
           },
@@ -528,7 +504,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       "utf-8",
     );
     const sessionKey = "main";
-    const sessionEntry = { sessionId: "session", updatedAt: Date.now(), totalTokens: 50_000 };
+    const sessionEntry = sessionFixture({ totalTokens: 50_000 });
     runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
       const onAgentEvent = requireRecord(params, "embedded agent params").onAgentEvent;
       if (typeof onAgentEvent === "function") {
@@ -560,9 +536,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         },
       },
       reply: {
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
+        ...sessionState(sessionKey, sessionEntry),
       },
     }).run();
 
@@ -571,11 +545,9 @@ describe("runReplyAgent auto-compaction token update", () => {
 
   it("keeps a provided reply operation active until final delivery completes", async () => {
     const sessionKey = "main";
-    const sessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = sessionFixture({
       totalTokens: 50_000,
-    };
+    });
     const replyOperation = createReplyOperation({
       sessionKey,
       sessionId: sessionEntry.sessionId,
@@ -597,9 +569,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       run: { agentId: "main", agentDir: path.join(rootDir, "agent"), reasoningLevel: "on" },
       reply: {
         queueKey: sessionKey,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
+        ...sessionState(sessionKey, sessionEntry),
         replyOperation,
       },
     }).run();
@@ -690,9 +660,7 @@ describe("runReplyAgent auto-compaction token update", () => {
         },
         reply: {
           queueKey: sessionKey,
-          sessionEntry,
-          sessionStore: { [sessionKey]: sessionEntry },
-          sessionKey,
+          ...sessionState(sessionKey, sessionEntry),
           storePath,
           opts: { abortSignal: upstreamAbort.signal, onReplyOperationOwned },
         },
@@ -837,89 +805,56 @@ describe("runReplyAgent block streaming", () => {
 });
 
 describe("runReplyAgent inline tool verbosity", () => {
-  it.each([{ stored: "full", override: "on", expected: ["Tool summary"] }] as const)(
-    "delivers tool progress with inline $override over stored $stored",
-    async ({ stored, override, expected }) => {
-      const storePath = path.join(rootDir, "sessions.json");
-      const sessionKey = "main";
-      const sessionEntry: SessionEntry = {
-        sessionId: "session",
-        updatedAt: Date.now(),
-        verboseLevel: stored,
-      };
-      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-      const onToolResult = vi.fn(async (_payload: ReplyPayload) => {});
-      const onRunVerbosityResolved = vi.fn();
-      runEmbeddedAgentMock.mockImplementationOnce(
-        async (params: RunEmbeddedAgentInternalParams) => {
-          expect(onRunVerbosityResolved).toHaveBeenCalledExactlyOnceWith({
-            verboseLevelOverride: override,
-            resolvedVerboseLevel: override,
-          });
-          if (params.shouldEmitToolResult?.()) {
-            await params.onToolResult?.({ text: "Tool summary" });
-          }
-          if (params.shouldEmitToolOutput?.()) {
-            await params.onToolResult?.({ text: "Tool output" });
-          }
-          return { payloads: [{ text: "Done" }], meta: {} };
-        },
-      );
-      const result = await createBaseRun({
-        run: { sessionKey, verboseLevel: override, verboseLevelOverride: override },
-        reply: {
-          sessionKey,
-          storePath,
-          sessionEntry,
-          sessionStore: { [sessionKey]: sessionEntry },
-          resolvedVerboseLevel: override,
-          opts: { onToolResult, onRunVerbosityResolved },
-        },
-      }).run();
-      expect(onToolResult.mock.calls.map(([payload]) => payload.text)).toEqual(expected);
-      expect(loadSessionEntry({ storePath, sessionKey })?.verboseLevel).toBe(stored);
-      expectReplyText(result, "Done");
-    },
-  );
+  it("delivers tool progress with inline on over stored full", async () => {
+    const stored = "full";
+    const override = "on";
+    const storePath = path.join(rootDir, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = sessionFixture({
+      verboseLevel: stored,
+    });
+    await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
+    const onToolResult = vi.fn(async (_payload: ReplyPayload) => {});
+    const onRunVerbosityResolved = vi.fn();
+    runEmbeddedAgentMock.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
+      expect(onRunVerbosityResolved).toHaveBeenCalledExactlyOnceWith({
+        verboseLevelOverride: override,
+        resolvedVerboseLevel: override,
+      });
+      if (params.shouldEmitToolResult?.()) {
+        await params.onToolResult?.({ text: "Tool summary" });
+      }
+      if (params.shouldEmitToolOutput?.()) {
+        await params.onToolResult?.({ text: "Tool output" });
+      }
+      return { payloads: [{ text: "Done" }], meta: {} };
+    });
+    const result = await createBaseRun({
+      run: { sessionKey, verboseLevel: override, verboseLevelOverride: override },
+      reply: {
+        sessionKey,
+        storePath,
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        resolvedVerboseLevel: override,
+        opts: { onToolResult, onRunVerbosityResolved },
+      },
+    }).run();
+    expect(onToolResult.mock.calls.map(([payload]) => payload.text)).toEqual(["Tool summary"]);
+    expect(loadSessionEntry({ storePath, sessionKey })?.verboseLevel).toBe(stored);
+    expectReplyText(result, "Done");
+  });
 });
 
 describe("runReplyAgent Active Memory inline debug", () => {
   it.each([
-    {
-      selection: "turn",
-      override: "raw",
-      live: "off",
-      authorized: true,
-      returned: true,
-      raw: true,
-    },
-    {
-      selection: "live",
-      override: undefined,
-      live: "raw",
-      authorized: true,
-      returned: false,
-      raw: true,
-    },
-    {
-      selection: "off",
-      override: "off",
-      live: "raw",
-      authorized: true,
-      returned: true,
-      raw: false,
-    },
-    {
-      selection: "unauthorized",
-      override: "raw",
-      live: "raw",
-      authorized: false,
-      returned: false,
-      raw: false,
-    },
+    ["turn", "raw", "off", true, true, true],
+    ["live", undefined, "raw", true, false, true],
+    ["off", "off", "raw", true, true, false],
+    ["unauthorized", "raw", "raw", false, false, false],
   ] as const)(
-    "keeps selected trace after native final delivery: $selection",
-    async ({ override, live, authorized, returned, raw }) => {
+    "keeps selected trace after native final delivery: %s",
+    async (_selection, override, live, authorized, returned, raw) => {
       const storePath = path.join(tempDirs.make("openclaw-delivered-trace-"), "sessions.json");
       const sessionKey = "main";
       const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: 1, traceLevel: "off" };
@@ -954,9 +889,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
           traceLevelOverride: override,
         },
         reply: {
-          sessionEntry,
-          sessionStore: { [sessionKey]: sessionEntry },
-          sessionKey,
+          ...sessionState(sessionKey, sessionEntry),
           storePath,
           blockStreamingEnabled: true,
           opts: { onPreparedBlockReply },
@@ -1049,9 +982,7 @@ describe("runReplyAgent Active Memory inline debug", () => {
       },
       reply: {
         queueKey: sessionKey,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
+        ...sessionState(sessionKey, sessionEntry),
         storePath,
         resolvedVerboseLevel,
       },
@@ -1062,26 +993,17 @@ describe("runReplyAgent Active Memory inline debug", () => {
     return result;
   }
 
-  it.each([
-    { stored: "raw", override: "raw", authorized: false, trace: false, raw: false },
-  ] as const)(
-    "honors turn trace $override over stored $stored with authorization=$authorized",
-    async ({ stored, override, authorized, trace, raw }) => {
-      const result = await runActiveMemoryDebugCase(
-        { sessionId: "session", updatedAt: Date.now(), traceLevel: stored },
-        { run: { traceLevelOverride: override, traceAuthorized: authorized } },
-      );
-      const text = (Array.isArray(result) ? result : [result])
-        .map((payload) => payload?.text)
-        .join("\n");
-      expect(text).toContain("Normal reply");
-      expect(text.includes("Active Memory Debug:")).toBe(trace);
-      expect(text.includes("Model Input (User Role)")).toBe(raw);
-      if (raw) {
-        expect(text).toContain("trace=raw");
-      }
-    },
-  );
+  it("does not expose raw turn or stored trace without authorization", async () => {
+    const result = await runActiveMemoryDebugCase(sessionFixture({ traceLevel: "raw" }), {
+      run: { traceLevelOverride: "raw", traceAuthorized: false },
+    });
+    const text = (Array.isArray(result) ? result : [result])
+      .map((payload) => payload?.text)
+      .join("\n");
+    expect(text).toContain("Normal reply");
+    expect(text).not.toContain("Active Memory Debug:");
+    expect(text).not.toContain("Model Input (User Role)");
+  });
 
   it.each([
     { stored: "off", live: "on", override: undefined, trace: true },
@@ -1102,20 +1024,17 @@ describe("runReplyAgent Active Memory inline debug", () => {
     },
   );
 
-  it.each([{ stored: "on", selected: "off", traceLevel: "raw", status: false }] as const)(
-    "selects plugin status using turn verbosity $selected over stored $stored",
-    async ({ stored, selected, traceLevel, status }) => {
-      const result = await runActiveMemoryDebugCase(
-        { sessionId: "session", updatedAt: Date.now(), verboseLevel: stored, traceLevel },
-        { resolvedVerboseLevel: selected, run: { verboseLevelOverride: selected } },
-      );
-      const text = (Array.isArray(result) ? result : [result])
-        .map((payload) => payload?.text)
-        .join("\n");
-      expect(text.includes("🧩 Active Memory: status=ok")).toBe(status);
-      expect(text.includes("Model Input (User Role)")).toBe(traceLevel === "raw");
-    },
-  );
+  it("disables plugin status using turn verbosity off over stored on", async () => {
+    const result = await runActiveMemoryDebugCase(
+      sessionFixture({ verboseLevel: "on", traceLevel: "raw" }),
+      { resolvedVerboseLevel: "off", run: { verboseLevelOverride: "off" } },
+    );
+    const text = (Array.isArray(result) ? result : [result])
+      .map((payload) => payload?.text)
+      .join("\n");
+    expect(text).not.toContain("🧩 Active Memory: status=ok");
+    expect(text).toContain("Model Input (User Role)");
+  });
 
   function runRawTraceCase(params: {
     commandBody: string;
@@ -1160,12 +1079,10 @@ describe("runReplyAgent Active Memory inline debug", () => {
     const tmp = tempDirs.make("openclaw-trace-raw-usage-");
     const storePath = path.join(tmp, "sessions.json");
     const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = sessionFixture({
       traceLevel: "raw",
       compactionCount: 3,
-    };
+    });
 
     await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
     const transcript = await SessionManager.openAsync(
@@ -1353,11 +1270,9 @@ describe("runReplyAgent Active Memory inline debug", () => {
     const storePath = path.join(tmp, "sessions.json");
     const sessionFile = path.join(tmp, "session.jsonl");
     const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = sessionFixture({
       traceLevel: "raw",
-    };
+    });
 
     await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
     await fs.writeFile(sessionFile, "", "utf-8");
@@ -1396,11 +1311,9 @@ describe("runReplyAgent Active Memory inline debug", () => {
     const storePath = path.join(tmp, "sessions.json");
     const sessionFile = path.join(tmp, "session.jsonl");
     const sessionKey = "main";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = sessionFixture({
       traceLevel: "raw",
-    };
+    });
 
     await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
     await fs.writeFile(sessionFile, "", "utf-8");
@@ -1492,7 +1405,7 @@ describe("runReplyAgent claude-cli routing", () => {
       run: {
         agentId: "main",
         messageProvider: "webchat",
-        config: createCliBackendTestConfig(),
+        config: {},
         traceAuthorized: true,
         provider: "claude-cli",
         model: "opus-4.5",
@@ -1536,7 +1449,7 @@ describe("runReplyAgent messaging tool dedupe", () => {
       run: {
         sessionKey,
         messageProvider,
-        config: createCliBackendTestConfig(),
+        config: {},
         thinkLevel: "low",
       },
       reply: { queueKey: "main", sessionKey, storePath: opts.storePath },
@@ -1654,7 +1567,7 @@ describe("runReplyAgent reminder commitment guard", () => {
       },
       run: {
         messageProvider: "telegram",
-        config: createCliBackendTestConfig(),
+        config: {},
         thinkLevel: "low",
       },
       reply: params?.omitSessionKey ? {} : { sessionKey: params?.sessionKey ?? "main" },
@@ -1699,7 +1612,7 @@ describe("runReplyAgent fallback reasoning tags", () => {
         agentId: "main",
         agentDir: path.join(rootDir, "agent"),
         sessionKey,
-        config: createCliBackendTestConfig(),
+        config: {},
       },
       reply: { queueKey: "main", sessionEntry: params?.sessionEntry, sessionKey },
     }).run();
@@ -1732,14 +1645,12 @@ describe("runReplyAgent fallback reasoning tags", () => {
     const root = await fs.realpath(tempDirs.make("openclaw-memory-flush-tags-"));
     const storePath = path.join(root, "sessions.json");
     const sessionKey = "agent:main:memory-flush-tags";
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = sessionFixture({
       totalTokens: 1_000_000,
       totalTokensFresh: true,
       totalTokensVersion: 1,
       compactionCount: 0,
-    };
+    });
     await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 1_000,
@@ -1769,13 +1680,11 @@ describe("runReplyAgent fallback reasoning tags", () => {
         agentDir: path.join(root, "agent"),
         sessionKey,
         workspaceDir: root,
-        config: createCliBackendTestConfig(),
+        config: {},
       },
       reply: {
         queueKey: sessionKey,
-        sessionEntry,
-        sessionStore: { [sessionKey]: sessionEntry },
-        sessionKey,
+        ...sessionState(sessionKey, sessionEntry),
         storePath,
       },
     }).run();
@@ -1798,17 +1707,15 @@ describe("runReplyAgent response usage footer", () => {
     provider?: string;
     model?: string;
   }) {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
+    const sessionEntry = sessionFixture({
       responseUsage: params.responseUsage,
-    };
+    });
     return createBaseRun({
       run: {
         agentId: "main",
         agentDir: path.join(rootDir, "agent"),
         sessionKey: params.sessionKey,
-        config: params.config ?? createCliBackendTestConfig(),
+        config: params.config ?? {},
         provider: params.provider ?? "anthropic",
         model: params.model ?? "claude",
         thinkLevel: "low",
@@ -1966,7 +1873,7 @@ describe("runReplyAgent transient HTTP failures", () => {
       context: { Provider: "telegram", MessageSid: "msg" },
       run: {
         messageProvider: "telegram",
-        config: createCliBackendTestConfig(),
+        config: {},
         thinkLevel: "low",
       },
     }).run();
@@ -1994,7 +1901,7 @@ describe("runReplyAgent billing error classification", () => {
       context: { Provider: "telegram", MessageSid: "msg" },
       run: {
         messageProvider: "telegram",
-        config: createCliBackendTestConfig(),
+        config: {},
         thinkLevel: "low",
       },
       reply: { defaultModel: "anthropic/claude" },
@@ -2012,7 +1919,7 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
       context: { Provider: "telegram", MessageSid: "msg" },
       run: {
         messageProvider: "telegram",
-        config: createCliBackendTestConfig(),
+        config: {},
         thinkLevel: "low",
       },
       reply: { defaultModel: "anthropic/claude" },
@@ -2050,11 +1957,9 @@ describe("runReplyAgent mid-turn rate-limit fallback", () => {
     const result = await createRun();
     const payload = Array.isArray(result) ? result[0] : result;
 
-    expectRecordFields(
-      payload,
-      { mediaUrl: "https://example.test/image.png" },
-      "media-only retry-limit payload",
-    );
+    expect(requireRecord(payload, "media-only retry-limit payload")).toMatchObject({
+      mediaUrl: "https://example.test/image.png",
+    });
     expect(payload?.text).toBeUndefined();
   });
 });
@@ -2089,7 +1994,7 @@ describe("runReplyAgent visible work delivery", () => {
         session: { store: storePath },
         plugins: { enabled: false },
       };
-      const sessionEntry = { sessionId: "session", updatedAt: Date.now() };
+      const sessionEntry = sessionFixture();
       await replaceSessionEntry({ storePath, sessionKey: "agent:main:main" }, sessionEntry);
       const ctx = buildTestCtx({
         Body: "Start visible work",

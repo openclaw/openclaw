@@ -1,6 +1,6 @@
 // Tests final media delivery through the run-reply-agent path.
 import path from "node:path";
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -16,47 +16,27 @@ vi.mock("../../agents/context.js", () => ({
   resolveContextTokensForModel: () => 200_000,
 }));
 
-vi.mock("../../agents/model-selection.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/model-selection.js")>(
-    "../../agents/model-selection.js",
-  );
-  return {
-    ...actual,
-    isCliProvider: () => false,
-  };
-});
+vi.mock("../../agents/model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/model-selection.js")>()),
+  isCliProvider: () => false,
+}));
 
-vi.mock("../../agents/sandbox/context.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/sandbox/context.js")>(
-    "../../agents/sandbox/context.js",
-  );
-  return {
-    ...actual,
-    ensureSandboxWorkspaceForSession: async () => null,
-    prepareSandboxWorkspaceForSession: async () => null,
-  };
-});
+vi.mock("../../agents/sandbox/context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/sandbox/context.js")>()),
+  ensureSandboxWorkspaceForSession: async () => null,
+  prepareSandboxWorkspaceForSession: async () => null,
+}));
 
-vi.mock("../../infra/diagnostic-events.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/diagnostic-events.js")>(
-    "../../infra/diagnostic-events.js",
-  );
-  return {
-    ...actual,
-    emitTrustedDiagnosticEvent: vi.fn(),
-    isDiagnosticsEnabled: () => false,
-  };
-});
+vi.mock("../../infra/diagnostic-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/diagnostic-events.js")>()),
+  emitTrustedDiagnosticEvent: vi.fn(),
+  isDiagnosticsEnabled: () => false,
+}));
 
-vi.mock("../../infra/diagnostics-timeline.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/diagnostics-timeline.js")>(
-    "../../infra/diagnostics-timeline.js",
-  );
-  return {
-    ...actual,
-    measureDiagnosticsTimelineSpan: async (_name: string, run: () => unknown) => await run(),
-  };
-});
+vi.mock("../../infra/diagnostics-timeline.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/diagnostics-timeline.js")>()),
+  measureDiagnosticsTimelineSpan: async (_name: string, run: () => unknown) => await run(),
+}));
 
 vi.mock("../../media/outbound-attachment.js", () => ({
   resolveOutboundAttachmentFromUrl: (...args: unknown[]) =>
@@ -82,24 +62,17 @@ vi.mock("./agent-runner-memory.js", () => ({
     sessionEntry,
 }));
 
-vi.mock("./agent-runner-utils.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("./agent-runner-utils.js")>("./agent-runner-utils.js");
-  return {
-    ...actual,
-    resolveQueuedReplyExecutionConfig: async (config: unknown) => config,
-  };
-});
+vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-utils.js")>()),
+  resolveQueuedReplyExecutionConfig: async (config: unknown) => config,
+}));
 
-vi.mock("./queue.js", async () => {
-  const actual = await vi.importActual<typeof import("./queue.js")>("./queue.js");
-  return {
-    ...actual,
-    enqueueFollowupRun: (...args: unknown[]) => enqueueFollowupRunMock(...args),
-    refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
-    scheduleFollowupDrain: (...args: unknown[]) => scheduleFollowupDrainMock(...args),
-  };
-});
+vi.mock("./queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queue.js")>()),
+  enqueueFollowupRun: (...args: unknown[]) => enqueueFollowupRunMock(...args),
+  refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
+  scheduleFollowupDrain: (...args: unknown[]) => scheduleFollowupDrainMock(...args),
+}));
 
 vi.mock("./session-updates.js", () => ({
   incrementCompactionCount: async () => undefined,
@@ -234,9 +207,7 @@ describe("runReplyAgent final MEDIA replies", () => {
         };
       };
       const normalizeMediaPaths = runnerParams.replyMediaContext?.normalizePayload;
-      if (!normalizeMediaPaths) {
-        throw new Error("runReplyAgent did not pass replyMediaContext to the agent turn");
-      }
+      assert(normalizeMediaPaths, "runReplyAgent must pass replyMediaContext to the agent turn");
       const commonParams = {
         isHeartbeat: false,
         blockStreamingEnabled: false,
@@ -263,9 +234,7 @@ describe("runReplyAgent final MEDIA replies", () => {
         mediaUrl: "/tmp/outbound-media/1-chart.png",
       });
       const payload = finalPayloads.replyPayloads[0];
-      if (!payload) {
-        throw new Error("expected parsed final payload");
-      }
+      assert(payload, "expected parsed final payload");
       return {
         runId: "media-test",
         outcome: { kind: "rejected", payload },
@@ -280,9 +249,7 @@ describe("runReplyAgent final MEDIA replies", () => {
     );
 
     expect(Array.isArray(result)).toBe(false);
-    if (!result || Array.isArray(result)) {
-      throw new Error("expected single reply payload");
-    }
+    assert(result && !Array.isArray(result), "expected single reply payload");
     expect(result).toMatchObject({
       text: "final",
       mediaUrl: "/tmp/outbound-media/1-chart.png",
