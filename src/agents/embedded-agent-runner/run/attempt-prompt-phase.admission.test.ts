@@ -1,5 +1,5 @@
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { resolveDefaultSessionStorePath } from "../../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -16,15 +16,13 @@ const { createFixture, mocks } = await vi.hoisted(
 );
 const tempStateDirs = useSessionStoreTempDirs(afterAll, "openclaw-prompt-projection-admission-");
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  mocks.applyPromptToolsAllow.mockReset();
-});
 afterEach(() => vi.unstubAllEnvs());
 
 it.each([false, true])(
   "admits projection persistence before provider dispatch and rechecks cancellation (abort: %s)",
   async (abort) => {
+    vi.clearAllMocks();
+    mocks.applyPromptToolsAllow.mockReset();
     vi.stubEnv("OPENCLAW_STATE_DIR", tempStateDirs.make());
     const scope = {
       agentId: "main",
@@ -62,24 +60,21 @@ it.each([false, true])(
     try {
       await requested.promise;
       await yieldToEventLoop();
-      expect(markers()).toEqual([]);
-      expect(dispatched).toBe(false);
+      expect([markers(), dispatched]).toEqual([[], false]);
       const reason = new Error("attempt cancelled while waiting for database");
       if (abort) {
         input.runAbortController.abort(reason);
       }
       release.resolve();
       await Promise.all([worker, phase]);
+      expect(dispatched).toBe(!abort);
+      expect(markers()).toMatchObject(abort ? [] : [{ customType: "openclaw.cache-ttl" }]);
       if (abort) {
-        expect(markers()).toEqual([]);
-        expect(dispatched).toBe(false);
         expect(mocks.handlePromptError).toHaveBeenCalledWith(
           expect.objectContaining({ error: reason }),
         );
       } else {
         expect(mocks.handlePromptError).not.toHaveBeenCalled();
-        expect(markers()).toMatchObject([{ customType: "openclaw.cache-ttl" }]);
-        expect(dispatched).toBe(true);
       }
     } finally {
       release.resolve();

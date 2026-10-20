@@ -2,7 +2,7 @@ import { Type } from "typebox";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ProgressCardPutResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
-import type { Model } from "../../../llm/types.js";
+import type { Context, Model } from "../../../llm/types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
 import { createReplyOperation, type ReplyOperation } from "../../../sessions/session-controller.js";
@@ -43,6 +43,18 @@ afterEach(() => {
 
 function respond(...args: Parameters<typeof createAssistant>) {
   return createAssistantResultStream(createAssistant(...args));
+}
+type Turn = (model: Model, context: Context, request: number) => ReturnType<typeof respond>;
+type ScriptedTurn = string | ReturnType<typeof toolCall>[] | Turn;
+function mockTurns(...turns: [ScriptedTurn, ...ScriptedTurn[]]) {
+  let requests = 0;
+  streamMocks.streamSimple.mockImplementation((model, context) => {
+    const turn = turns[Math.min(requests++, turns.length - 1)]!;
+    return typeof turn === "function"
+      ? turn(model, context, requests)
+      : respond(model, turn, typeof turn === "string" ? "stop" : "toolUse");
+  });
+  return () => requests;
 }
 function toolCall(id: string, name: string, args: Record<string, unknown> = {}) {
   return { type: "toolCall" as const, id, name, arguments: args };
@@ -177,23 +189,13 @@ it.each([
       streamReplies: !nonStreamedMedia,
       trustedLocalMediaToolNames: new Set(["repair"]),
     });
-    let requests = 0;
-    streamMocks.streamSimple.mockImplementation((model, context) => {
-      requests += 1;
-      if (requests === 1) {
-        return respond(
-          model,
-          [
-            toolCall("first-repair", "repair"),
-            toolCall("save-plan", nested ? "exec" : "progress_card", { plan }),
-          ],
-          "toolUse",
-        );
-      }
-      if (requests === 2) {
-        return respond(model, "Stopped: one repair remains.");
-      }
-      if (requests === 3) {
+    const requests = mockTurns(
+      [
+        toolCall("first-repair", "repair"),
+        toolCall("save-plan", nested ? "exec" : "progress_card", { plan }),
+      ],
+      "Stopped: one repair remains.",
+      (model, context) => {
         if (nonStreamedMedia) {
           expect(prepared.subscription.getPendingToolMediaReply()).toEqual(expectedPendingMedia);
         }
@@ -205,15 +207,15 @@ it.each([
           ),
         ).toBe(true);
         return respond(model, [toolCall("remaining-repair", "repair")], "toolUse");
-      }
-      return respond(model, "Both repairs verified.");
-    });
+      },
+      "Both repairs verified.",
+    );
 
     await session.prompt("Repair both failures and verify them.");
     await prepared.subscription.waitForPendingEvents();
 
     expect(repair.mock.calls.map(([id]) => id)).toEqual(["first-repair", "remaining-repair"]);
-    expect(requests).toBe(4);
+    expect(requests()).toBe(4);
     expect(gatewayCall).toHaveBeenCalledOnce();
     expect(
       events.filter((event) => event.stream === "lifecycle" && event.data.phase === "end"),
@@ -253,30 +255,26 @@ it("keeps a reply that already reports the blocker as the only reply after the c
   vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue(cardWith(plan));
   const { session, prepared } = await planSession(completionCheck);
   const answer = "Files: big.log (9 KB), notes.md (1 KB). May I delete big.log?";
-  let requests = 0;
-  streamMocks.streamSimple.mockImplementation((model, context) => {
-    requests += 1;
-    if (requests === 1) {
-      return respond(model, [toolCall("save", "progress_card", { plan })], "toolUse");
-    }
-    if (requests === 2) {
-      return respond(model, answer);
-    }
-    // Stand-in for the live model: it restates the blocker unless the check offers silence.
-    const check = JSON.stringify(context.messages.at(-1)?.content);
-    expect(check).toContain("latest successfully saved plan");
-    return respond(
-      model,
-      check.includes(SILENT_REPLY_TOKEN)
-        ? SILENT_REPLY_TOKEN
-        : "Deleting big.log still needs your approval.",
-    );
-  });
+  const requests = mockTurns(
+    [toolCall("save", "progress_card", { plan })],
+    answer,
+    (model, context) => {
+      // Stand-in for the live model: it restates the blocker unless the check offers silence.
+      const check = JSON.stringify(context.messages.at(-1)?.content);
+      expect(check).toContain("latest successfully saved plan");
+      return respond(
+        model,
+        check.includes(SILENT_REPLY_TOKEN)
+          ? SILENT_REPLY_TOKEN
+          : "Deleting big.log still needs your approval.",
+      );
+    },
+  );
 
   await session.prompt("List the files, then ask me before deleting the largest one.");
   await prepared.subscription.waitForPendingEvents();
 
-  expect(requests).toBe(3);
+  expect(requests()).toBe(3);
   const payloads = payloadsFor(prepared, true);
   expect(payloads.map((payload) => payload.text)).toEqual([answer]);
 });
@@ -335,28 +333,26 @@ it.each([
         : { terminalReplyExpectation: "required" as const }),
     },
   });
-  let requests = 0;
-  streamMocks.streamSimple.mockImplementation((model: Model) => {
-    requests += 1;
+  const requests = mockTurns((model, _context, request) => {
     return respond(
       model,
-      requests <= writes
+      request <= writes
         ? [
             toolCall(
-              "save-" + requests,
+              "save-" + request,
               "progress_card",
-              requests === 1 ? { plan: pending } : replacementArgs,
+              request === 1 ? { plan: pending } : replacementArgs,
             ),
           ]
         : replacement === "silent"
           ? "NO_REPLY"
           : "Waiting for the user's permission; no more authorized actions.",
-      requests <= writes ? "toolUse" : "stop",
+      request <= writes ? "toolUse" : "stop",
     );
   });
   await session.prompt("Investigate the failure, but do not proceed without permission.");
   await prepared.subscription.waitForPendingEvents();
-  expect(requests).toBe(writes + 1 + checks);
+  expect(requests()).toBe(writes + 1 + checks);
   expect(
     session.messages.filter(
       (message) =>
@@ -381,7 +377,6 @@ it.each([
   const plan = [{ step: "Remaining repair", status: "pending" as const }];
   vi.spyOn(gatewayTool, "callInProcessGatewayTool").mockResolvedValue(cardWith(plan));
   const controller = new AbortController();
-  let requests = 0;
   const onFinalize = vi.fn(async () => {
     if (owner === "closed during hook") {
       prepared.subscription.unsubscribe();
@@ -397,6 +392,28 @@ it.each([
           createMockPluginRegistry([{ hookName: "before_agent_finalize", handler: onFinalize }]),
         )
       : undefined;
+  const requests = mockTurns((model, _context, request) => {
+    if (request > 1 && owner === "cancelled") {
+      controller.abort();
+    }
+    const assistant = createAssistant(
+      model,
+      request === 1
+        ? [toolCall("save", "progress_card", { plan })]
+        : "The owner stopped this work.",
+      request === 1 ? "toolUse" : owner === "output limited" ? "length" : "stop",
+    );
+    if (request > 1 && owner === "provider refusal") {
+      assistant.diagnostics = [
+        {
+          type: "provider_refusal",
+          timestamp: 0,
+          details: { provider: model.provider, category: "refusal" },
+        },
+      ];
+    }
+    return createAssistantResultStream(assistant);
+  });
   const { session, prepared } = await planSession(completionCheck, {
     hookRunner,
     runAbortController: controller,
@@ -411,37 +428,15 @@ it.each([
     },
     getRunState: () => ({
       aborted: controller.signal.aborted,
-      timedOut: owner === "timed out" && requests > 1,
-      yieldDetected: owner === "yielded" && requests > 1,
+      timedOut: owner === "timed out" && requests() > 1,
+      yieldDetected: owner === "yielded" && requests() > 1,
       promptError: undefined,
     }),
   });
-  streamMocks.streamSimple.mockImplementation((model: Model) => {
-    requests += 1;
-    if (requests > 1 && owner === "cancelled") {
-      controller.abort();
-    }
-    const assistant = createAssistant(
-      model,
-      requests === 1
-        ? [toolCall("save", "progress_card", { plan })]
-        : "The owner stopped this work.",
-      requests === 1 ? "toolUse" : owner === "output limited" ? "length" : "stop",
-    );
-    if (requests > 1 && owner === "provider refusal") {
-      assistant.diagnostics = [
-        {
-          type: "provider_refusal",
-          timestamp: 0,
-          details: { provider: model.provider, category: "refusal" },
-        },
-      ];
-    }
-    return createAssistantResultStream(assistant);
-  });
+
   await session.prompt("Repair the remaining failure.");
   await prepared.subscription.waitForPendingEvents();
-  expect(requests).toBe(2 + checks);
+  expect(requests()).toBe(2 + checks);
   expect(completionCheck.checked).toBe(checks > 0);
   if (owner === "hook budget exhausted") {
     expect(onFinalize).not.toHaveBeenCalled();

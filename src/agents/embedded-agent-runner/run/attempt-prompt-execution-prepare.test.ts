@@ -1,12 +1,12 @@
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import { beforeEach, expect, it, vi } from "vitest";
 
-const hoisted = vi.hoisted(() => ({
+const { detectAndLoadPromptImages } = vi.hoisted(() => ({
   detectAndLoadPromptImages: vi.fn(),
 }));
 
 vi.mock("./images.js", () => ({
-  detectAndLoadPromptImages: hoisted.detectAndLoadPromptImages,
+  detectAndLoadPromptImages,
 }));
 
 import { prepareEmbeddedAttemptPromptExecution as prepare } from "./prompt-image-preparation.js";
@@ -31,6 +31,7 @@ function createInput(
   overrides: Partial<PromptExecutionInput> = {},
   attempt: Partial<PromptExecutionInput["attempt"]> = {},
 ): PromptExecutionInput {
+  const fsBridge = { readFile: vi.fn() };
   return {
     attempt: {
       workspaceDir: "/agent/workspace",
@@ -43,21 +44,20 @@ function createInput(
     effectiveFsWorkspaceOnly: true,
     effectiveWorkspace: "/tmp/workspace",
     prompt: "inspect image.png",
-    sandbox: {
-      enabled: true,
-      fsBridge: { readFile: vi.fn() },
-      workspaceDir: "/sandbox/workspace",
-    },
+    sandbox: { enabled: true, fsBridge, workspaceDir: "/sandbox/workspace" },
     skipPromptSubmission: false,
     ...overrides,
   } as PromptExecutionInput;
 }
 
+const loadedResult = imageResult({
+  images: [image("loaded")],
+  imageFactIndexes: [null],
+  loadedCount: 1,
+});
 beforeEach(() => {
   vi.clearAllMocks();
-  hoisted.detectAndLoadPromptImages.mockResolvedValue(
-    imageResult({ images: [image("loaded")], imageFactIndexes: [null], loadedCount: 1 }),
-  );
+  detectAndLoadPromptImages.mockResolvedValue(structuredClone(loadedResult));
 });
 
 it("returns an isolated empty image result when prompt submission is already skipped", async () => {
@@ -66,20 +66,17 @@ it("returns an isolated empty image result when prompt submission is already ski
   const second = await prepare(createInput({ skipPromptSubmission: true }));
 
   expect(second).toEqual(imageResult());
-  expect(hoisted.detectAndLoadPromptImages).not.toHaveBeenCalled();
+  expect(detectAndLoadPromptImages).not.toHaveBeenCalled();
 });
 
 it.each([true, false])(
   "loads prompt images with workspace policy (sandbox: %s)",
   async (sandbox) => {
-    const input = createInput();
-    if (!sandbox) {
-      input.sandbox = null;
-    }
+    const input = createInput(sandbox ? {} : { sandbox: null });
 
     const result = await prepare(input);
 
-    expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith({
+    expect(detectAndLoadPromptImages).toHaveBeenCalledWith({
       prompt: "inspect image.png",
       workspaceDir: "/tmp/workspace",
       agentWorkspaceDir: "/agent/workspace",
@@ -90,22 +87,17 @@ it.each([true, false])(
       maxDimensionPx: 2048,
       workspaceOnly: true,
       sandbox: sandbox
-        ? {
-            root: "/sandbox/workspace",
-            bridge: input.sandbox?.fsBridge,
-          }
+        ? { root: "/sandbox/workspace", bridge: input.sandbox?.fsBridge }
         : undefined,
     });
-    expect(result).toEqual(
-      imageResult({ images: [image("loaded")], imageFactIndexes: [null], loadedCount: 1 }),
-    );
+    expect(result).toEqual(loadedResult);
   },
 );
 
 it("reports failed hydration without consuming the embedded attempt fact", async () => {
   const media = [{ path: "/tmp/missing.png", contentType: "image/png" }];
   const input = createInput({}, { media });
-  hoisted.detectAndLoadPromptImages.mockResolvedValueOnce(
+  detectAndLoadPromptImages.mockResolvedValueOnce(
     imageResult({ failedMediaCount: 1, skippedCount: 1 }),
   );
 
@@ -125,7 +117,7 @@ it("delegates recorder resolution and ingress facts to the canonical hydrator", 
 
   await prepare(input);
 
-  expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
+  expect(detectAndLoadPromptImages).toHaveBeenCalledWith(
     expect.objectContaining({ media, userTurnTranscriptRecorder: recorder }),
   );
   expect(recorder.resolveMessage).not.toHaveBeenCalled();

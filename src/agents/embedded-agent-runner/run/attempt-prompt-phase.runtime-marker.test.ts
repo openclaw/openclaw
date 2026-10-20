@@ -62,7 +62,6 @@ it("retains runtime-only input without attributing it to a human through the rea
   using promptStateLease = retainEmbeddedSessionPromptState(markerSessionId);
   sessionRuntime.sessionPromptState = promptStateLease.state;
   sessionRuntime.toolResultPromptProjectionState = promptStateLease.state.toolResults;
-  sessionRuntime.transcriptPolicy.appendOnlyRuntimeContext = true;
   input.attempt = {
     ...input.attempt,
     model: testModel,

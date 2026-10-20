@@ -47,23 +47,9 @@ function createInput(overrides: Partial<PromptErrorInput> = {}): PromptErrorInpu
   } as PromptErrorInput;
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  hoisted.isMidTurnPrecheckSignal.mockReturnValue(false);
-  hoisted.isSessionsYieldAbortError.mockReturnValue(false);
-});
+beforeEach(() => vi.resetAllMocks());
 
-it("returns ordinary provider failures to the prompt state owner", async () => {
-  const error = new Error("provider failed");
-
-  await expect(handleError(createInput({ error }))).resolves.toEqual({
-    promptFailure: { error, source: "prompt" },
-  });
-
-  expect(hoisted.releaseLeasedSteering).toHaveBeenCalledWith(error);
-});
-
-it("routes mid-turn prechecks under the owned transcript context", async () => {
+it.each([false, true])("routes prompt failures (mid-turn precheck: %s)", async (precheck) => {
   const request = {
     route: "compact_only",
     estimatedPromptTokens: 12,
@@ -72,20 +58,21 @@ it("routes mid-turn prechecks under the owned transcript context", async () => {
     toolResultReducibleChars: 0,
     effectiveReserveTokens: 1,
   } as const;
-  const error = { request };
-  hoisted.isMidTurnPrecheckSignal.mockReturnValue(true);
-
-  await expect(handleError(createInput({ error }))).resolves.toEqual({});
-
-  expect(hoisted.withOwnedTranscriptWrite).toHaveBeenCalledOnce();
-  expect(hoisted.handleMidTurnPrecheckRequest).toHaveBeenCalledWith(request);
+  const error = precheck ? { request } : new Error("provider failed");
+  hoisted.isMidTurnPrecheckSignal.mockReturnValue(precheck);
+  await expect(handleError(createInput({ error }))).resolves.toEqual(
+    precheck ? {} : { promptFailure: { error, source: "prompt" } },
+  );
+  expect(hoisted.releaseLeasedSteering).toHaveBeenCalledWith(error);
+  if (precheck) {
+    expect(hoisted.withOwnedTranscriptWrite).toHaveBeenCalledOnce();
+    expect(hoisted.handleMidTurnPrecheckRequest).toHaveBeenCalledWith(request);
+  }
 });
 
 it("settles yield aborts, strips artifacts, and persists handoff context", async () => {
   const settlePromise = Promise.resolve();
-  const error = new Error("yield handoff");
   const input = createInput({
-    error,
     yieldAbortSettled: settlePromise,
     yieldDetected: true,
     yieldMessage: "wait for follow-up",
@@ -114,23 +101,18 @@ it("settles yield aborts, strips artifacts, and persists handoff context", async
   );
 });
 
-it.each(["steering release", "yield settlement"] as const)(
+it.each(["releaseLeasedSteering", "waitForEmbeddedAbortSettle"] as const)(
   "marks yield state before fallible %s",
   async (phase) => {
     const recoveryError = new Error("recovery failed");
     let marked = false;
     hoisted.isSessionsYieldAbortError.mockReturnValue(true);
-    const recovery =
-      phase === "steering release"
-        ? hoisted.releaseLeasedSteering
-        : hoisted.waitForEmbeddedAbortSettle;
-    recovery.mockImplementationOnce(async () => {
+    hoisted[phase].mockImplementationOnce(async () => {
       expect(marked).toBe(true);
       throw recoveryError;
     });
 
     const input = createInput({
-      error: new Error("yield handoff"),
       markYieldAborted: () => {
         marked = true;
       },
