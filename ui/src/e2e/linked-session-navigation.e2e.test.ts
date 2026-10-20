@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -93,15 +91,9 @@ suite.define(() => {
               (context) => context.sessions.state.result?.sessions.map((row) => row.key) ?? null,
             );
           await expect.poll(primaryKeys).toEqual([]);
-          const primaryBeforeClick = await primaryKeys();
           const href = await link.getAttribute("href");
           expect(href).toBe("/chat/main/12345678aaaa40008000000000000001");
           expect(href).not.toContain("__openclaw");
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "before-click.png"),
-            fullPage: true,
-          });
-          const listRequests = await gateway.getRequests(`${scenario.surface}.list`);
           if (scenario.activation === "href") {
             await page.goto(new URL(href!, page.url()).href);
           } else {
@@ -111,54 +103,18 @@ suite.define(() => {
           const transcript = page.getByText(targetText, { exact: true });
           const settle = () => chooser.or(transcript).first().waitFor({ state: "visible" });
           await settle();
-          const afterClick = {
-            url: page.url(),
+          const observe = async () => ({
             chooser: await chooser.isVisible(),
             targetVisible: await transcript.isVisible(),
             otherVisible: await page.getByText(otherText, { exact: true }).isVisible(),
-            resolveRequests: await gateway.getRequests("sessions.resolve"),
             startupRequests: await gateway.getRequests("chat.startup"),
-          };
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "after-click.png"),
-            fullPage: true,
           });
+          const afterClick = await observe();
           await page.reload();
           await settle();
-          const afterReload = {
-            url: page.url(),
-            chooser: await chooser.isVisible(),
-            targetVisible: await transcript.isVisible(),
-            otherVisible: await page.getByText(otherText, { exact: true }).isVisible(),
-            resolveRequests: await gateway.getRequests("sessions.resolve"),
-            startupRequests: await gateway.getRequests("chat.startup"),
-          };
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "after-reload.png"),
-            fullPage: true,
-          });
-          await writeFile(
-            path.join(suite.artifactDir, "receipt.json"),
-            JSON.stringify(
-              {
-                scenario,
-                primaryBeforeClick,
-                href,
-                targetKey,
-                otherKey: other.key,
-                listRequests,
-                afterClick,
-                afterReload,
-              },
-              null,
-              2,
-            ),
-          );
-          expect(afterClick.chooser).toBe(false);
-          expect(afterClick.targetVisible).toBe(true);
-          expect(afterReload.chooser).toBe(false);
-          expect(afterReload.targetVisible).toBe(true);
+          const afterReload = await observe();
           for (const stage of [afterClick, afterReload]) {
+            expect(stage).toMatchObject({ chooser: false, targetVisible: true });
             expect(stage.otherVisible).toBe(false);
             expect(stage.startupRequests.map((request) => request.params)).toContainEqual(
               expect.objectContaining({ sessionKey: targetKey }),

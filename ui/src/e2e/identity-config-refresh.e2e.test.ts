@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -43,12 +41,6 @@ suite.define(() => {
       viewport: { width: 1440, height: 900 },
     });
     const page = await context.newPage();
-    const screenshots: string[] = [];
-    const capture = async (name: string) => {
-      const file = path.join(suite.artifactDir, name);
-      await page.screenshot({ path: file });
-      screenshots.push(file);
-    };
     try {
       const gateway = await installMockGateway(page, {
         assistantName: initialName,
@@ -70,7 +62,6 @@ suite.define(() => {
       await composer.fill(draft);
       const sessionUrl = page.url();
       expect(await page.locator(".chat-group").count()).toBe(0);
-      await capture("initial.png");
 
       const successfulResponses = await page.evaluateHandle(
         ({ nextIdentity, nextRoster }) => {
@@ -82,14 +73,14 @@ suite.define(() => {
           if (!fixture) {
             throw new Error("Mock Gateway is not installed");
           }
-          const rows: Array<{ method: string; params: unknown; response: unknown }> = [];
+          const rows: string[] = [];
           for (const [method, response] of [
             ["agent.identity.get", nextIdentity],
             ["agents.list", nextRoster],
           ] as const) {
-            fixture.setRequestHandler(method, ({ params, respond }) => {
+            fixture.setRequestHandler(method, ({ respond }) => {
               respond(response);
-              rows.push({ method, params, response });
+              rows.push(method);
             });
           }
           return rows;
@@ -104,20 +95,16 @@ suite.define(() => {
           event,
           event === "config.changed" ? { hash: "synthetic-identity-change" } : { agentId: "main" },
         );
-        await expect
-          .poll(() =>
-            successfulResponses.evaluate(
-              (rows) => rows.filter((row) => row.method === "agents.list").length,
-            ),
-          )
-          .toBeGreaterThanOrEqual(1);
-        await expect
-          .poll(() =>
-            successfulResponses.evaluate(
-              (rows) => rows.filter((row) => row.method === "agent.identity.get").length,
-            ),
-          )
-          .toBeGreaterThanOrEqual(1);
+        for (const method of ["agents.list", "agent.identity.get"]) {
+          await expect
+            .poll(() =>
+              successfulResponses.evaluate(
+                (rows, name) => rows.filter((entry) => entry === name).length,
+                method,
+              ),
+            )
+            .toBeGreaterThanOrEqual(1);
+        }
         await expect.poll(() => heading.textContent()).toBe(nextName);
         await expect.poll(() => avatarText.getAttribute("data-avatar")).toBe(nextAvatar);
         await expect.poll(() => page.title()).toContain(nextName);
@@ -131,7 +118,6 @@ suite.define(() => {
         expect(page.url()).toBe(sessionUrl);
         expect(await page.locator(".chat-group").count()).toBe(0);
         expect((await gateway.getRequests("chat.send")).length).toBe(0);
-        await capture("settled.png");
 
         await page.getByRole("button", { name: "Send message" }).click();
         const request = await gateway.waitForRequest("chat.send");
@@ -146,39 +132,6 @@ suite.define(() => {
         )?.trim();
         expect(page.url()).toBe(sessionUrl);
         expect((await gateway.getRequests("chat.send")).length).toBe(1);
-        await capture("roundtrip.png");
-        const responses = await successfulResponses.jsonValue();
-        await writeFile(
-          path.join(suite.artifactDir, "receipts.json"),
-          JSON.stringify(
-            {
-              initial: {
-                name: initialName,
-                avatar: initialAvatar,
-                sessionUrl,
-                draft,
-                transcriptRows: 0,
-              },
-              observed,
-              sender,
-              responses,
-              screenshots,
-              controls: {
-                sessionPreserved: true,
-                draftPreserved: true,
-                transcriptPreserved: true,
-                sendsBeforeSubmit: 0,
-                sendsAfterSubmit: 1,
-                sentSession: params.sessionKey,
-                sentMessage: params.message,
-                reply,
-                replyVisible: true,
-              },
-            },
-            null,
-            2,
-          ),
-        );
         expect(
           { ...observed, sender },
           "config identity display follows committed identity",

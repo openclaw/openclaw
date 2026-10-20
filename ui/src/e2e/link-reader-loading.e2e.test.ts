@@ -1,10 +1,6 @@
-import { writeFileSync } from "node:fs";
-import path from "node:path";
 import { chromium } from "playwright";
 import { expect, it } from "vitest";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   resolvePlaywrightChromiumExecutablePath,
@@ -69,17 +65,6 @@ it("makes the overview readable before extras and retains visible content throug
     const panel = page.locator("openclaw-link-reader-panel");
     const content = panel.locator(".lr-content:not([hidden])");
     await panel.locator(".lr-skeleton").waitFor();
-    const dir = createControlUiE2eArtifactDir("reader-loading");
-    const capture = async (name: string) => {
-      const frame = await takeControlUiScreenshotFrame(
-        page,
-        panel,
-        [panel.locator(".lr-toolbar")],
-        { elements: [panel], animations: "disabled" },
-      );
-      writeFileSync(path.join(dir, name + ".png"), frame.elements[0]!.png);
-    };
-    await capture("cold");
     await gateway.waitForRequest("forge.detail", { match: { section: "overview" } });
     await gateway.resolveDeferred("forge.detail", overview, { match: { section: "overview" } });
     await panel.getByRole("heading", { name: overview.title, exact: true }).waitFor();
@@ -87,9 +72,7 @@ it("makes the overview readable before extras and retains visible content throug
     await gateway.waitForRequest("forge.detail", { match: { section: "discussion" } });
     expect((await gateway.getRequests("forge.detail", { section: "files" })).length).toBe(0);
     expect(await panel.getByText("Loading Checks…", { exact: true }).count()).toBe(1);
-    await capture("after");
     await page.setViewportSize({ width: 390, height: 844 });
-    await capture("mobile");
     expect(await content.evaluate((node) => node.scrollWidth <= node.clientWidth + 1)).toBe(true);
     await page.setViewportSize({ width: 1280, height: 900 });
     await gateway.rejectDeferred(
@@ -145,7 +128,6 @@ it("makes the overview readable before extras and retains visible content throug
     await expect.poll(() => panel.locator(".lr-files .lr-file").count()).toBe(1);
     expect(await document!.evaluate((node) => node.isConnected)).toBe(true);
     await gateway.waitForRequest("forge.detail", { after: 1, match: { section: "files" } });
-    await capture("refresh");
   } finally {
     await context.close();
     await browser.close();

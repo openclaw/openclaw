@@ -1,15 +1,11 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import {
   buildControlUiFocusPath,
   type ControlUiFocusBuildTarget,
 } from "@openclaw/session-url-contract";
-import type { Page, Video } from "playwright";
-import { beforeEach, expect, it } from "vitest";
+import type { Locator, Page } from "playwright";
+import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -27,22 +23,11 @@ import {
 } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeWebChrome } from "./native-nav.test-support.ts";
 
-let artifactDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    artifactDir = createControlUiE2eArtifactDir("lazy-custom-element-recovery");
-  }
-});
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const railProofDirParent = process.env.OPENCLAW_UI_RAIL_PROOF_DIR?.trim();
-let railProofDir: string | undefined;
-beforeEach(() => {
-  railProofDir = railProofDirParent
-    ? createControlUiE2eArtifactDir("lazy-custom-element-recovery", railProofDirParent)
-    : undefined;
-});
 const nativeTitlebarModule = "ui/src/components/macos-titlebar-controls.runtime-solid.tsx";
 const viewport = { height: 900, width: 1280 };
+const pageOptions = { locale: "en-US", serviceWorkers: "block", viewport } as const;
+const button = (host: Page | Locator, name: string) =>
+  host.getByRole("button", { name, exact: true });
 const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 
 const suite = createControlUiE2eSuite({
@@ -50,6 +35,16 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
+
+function observeDocuments(page: Page) {
+  let count = 0;
+  page.on("request", (request) => {
+    if (request.resourceType() === "document") {
+      count += 1;
+    }
+  });
+  return () => count;
+}
 
 async function installChunkFailure(
   page: Page,
@@ -100,8 +95,8 @@ async function expectRealChunkFailure(page: Page, label: string) {
   const text = await error.textContent();
   expect(text).toContain(label);
   expect(text).toContain("Failed to fetch dynamically imported module");
-  await error.getByRole("button", { name: "Retry", exact: true }).waitFor();
-  await error.getByRole("button", { name: "Close", exact: true }).waitFor();
+  await button(error, "Retry").waitFor();
+  await button(error, "Close").waitFor();
   return error;
 }
 
@@ -112,7 +107,7 @@ async function retryThroughReload(
   action = "Retry",
 ): Promise<void> {
   const reloaded = page.waitForEvent("domcontentloaded");
-  await error.getByRole("button", { name: action, exact: true }).click();
+  await button(error, action).click();
   // Admit recovery only after the user action: restoring before click lets
   // the automatic probe navigate away before Playwright dispatches it.
   failure.restoreDocument();
@@ -213,7 +208,6 @@ const systemBusyness = {
   label: "System busyness",
   tag: "openclaw-debug-overlay-content",
   modulePath: "ui/src/pages/debug/debug-overlay-content.ts",
-  proofName: "system-busyness",
   dock: undefined,
   frame: (page: Page) => page.locator(".debug-overlay"),
   close: (page: Page) =>
@@ -234,11 +228,9 @@ const dockedCases = [
     label: "Assistant sidebar",
     tag: "openclaw-assistant-panel-content",
     modulePath: "ui/src/components/assistant-panel-content.ts",
-    proofName: `home-${dock}`,
     dock,
     frame: (page: Page) => page.locator(".assistant-panel"),
-    close: (page: Page) =>
-      page.getByRole("button", { name: "Close assistant sidebar", exact: true }),
+    close: (page: Page) => button(page, "Close assistant sidebar"),
     open: async (page: Page) => {
       await page.locator(".sidebar-footer-bar__home").click();
     },
@@ -251,7 +243,6 @@ const dockedCases = [
     name: "System busyness frame",
     tag: "openclaw-debug-overlay",
     modulePath: "ui/src/pages/debug/debug-overlay.tsx",
-    proofName: "system-busyness-frame",
   },
 ];
 
@@ -315,46 +306,43 @@ async function installDockedScenario(
 
 suite.define(() => {
   it("recovers the login gate after its chunk fails without loading it during admission", async () => {
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport },
-      async ({ page }) => {
-        const failure = await installChunkFailure(
-          page,
-          controlUiE2eBuiltModuleRequest("ui/src/components/login-gate.ts"),
-        );
-        const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
-        const rejectLogin = async () => {
-          await gateway.waitForRequest("connect");
-          await gateway.rejectDeferred("connect", {
-            code: "INVALID_REQUEST",
-            message: "token missing",
-            details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
-          });
-        };
-        await page.goto(suite.server.baseUrl);
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const failure = await installChunkFailure(
+        page,
+        controlUiE2eBuiltModuleRequest("ui/src/components/login-gate.ts"),
+      );
+      const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
+      const rejectLogin = async () => {
         await gateway.waitForRequest("connect");
-        await page.locator(".connect-splash").waitFor();
-        expect(failure.chunkDocumentCount()).toBe(0);
-        await rejectLogin();
-        const error = page.locator(".lazy-view-error");
-        await error.waitFor();
-        expect(await error.textContent()).toContain("Failed to fetch dynamically imported module");
-        expect(failure.chunkDocumentCount()).toBe(1);
-        await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
-        await retryThroughReload(page, error, failure, "Reload");
-        await rejectLogin();
-        await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
-        expect(failure.chunkDocumentCount()).toBe(2);
-        expect(await error.count()).toBe(0);
-        const connectCount = (await gateway.getRequests("connect")).length;
-        await gateway.deferNext("connect");
-        await page.getByRole("button", { name: "Connect", exact: true }).click();
-        await gateway.waitForRequest("connect", { after: connectCount });
-        await gateway.resolveDeferred("connect");
-        await waitForControlUiGatewayReady(page);
-        expect(await page.locator("openclaw-login-gate").count()).toBe(0);
-      },
-    );
+        await gateway.rejectDeferred("connect", {
+          code: "INVALID_REQUEST",
+          message: "token missing",
+          details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+        });
+      };
+      await page.goto(suite.server.baseUrl);
+      await gateway.waitForRequest("connect");
+      await page.locator(".connect-splash").waitFor();
+      expect(failure.chunkDocumentCount()).toBe(0);
+      await rejectLogin();
+      const error = page.locator(".lazy-view-error");
+      await error.waitFor();
+      expect(await error.textContent()).toContain("Failed to fetch dynamically imported module");
+      expect(failure.chunkDocumentCount()).toBe(1);
+      await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+      await retryThroughReload(page, error, failure, "Reload");
+      await rejectLogin();
+      await page.locator('.login-gate__failure[data-kind="auth-required"]').waitFor();
+      expect(failure.chunkDocumentCount()).toBe(2);
+      expect(await error.count()).toBe(0);
+      const connectCount = (await gateway.getRequests("connect")).length;
+      await gateway.deferNext("connect");
+      await button(page, "Connect").click();
+      await gateway.waitForRequest("connect", { after: connectCount });
+      await gateway.resolveDeferred("connect");
+      await waitForControlUiGatewayReady(page);
+      expect(await page.locator("openclaw-login-gate").count()).toBe(0);
+    });
   });
 
   it("does not reload after a lazy surface is dismissed during its retry probe", async () => {
@@ -363,88 +351,68 @@ suite.define(() => {
       releaseProbe = resolve;
     });
     try {
-      await suite.withPage(
-        { locale: "en-US", serviceWorkers: "block", viewport },
-        async ({ page }) => {
-          await page.clock.install();
-          await page.addInitScript(() => {
-            const observed = window as Window & { completedSuccessfulHeadFrames?: number };
-            const originalFetch = window.fetch;
-            window.fetch = async (...args) => {
-              const response = await originalFetch(...args);
-              if (args[1]?.method === "HEAD" && response.ok) {
-                // Observe the frame after the real fetch and its reload promise chain settle.
-                requestAnimationFrame(() => {
-                  observed.completedSuccessfulHeadFrames =
-                    (observed.completedSuccessfulHeadFrames ?? 0) + 1;
-                });
-              }
-              return response;
-            };
-          });
-          const failure = await installChunkFailure(
-            page,
-            controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
-            { manualProbe },
-          );
-          await installMockGateway(page);
-          let documentRequests = 0;
-          page.on("request", (request) => {
-            if (request.resourceType() === "document") {
-              documentRequests += 1;
+      await suite.withPage(pageOptions, async ({ page }) => {
+        await page.clock.install();
+        await page.addInitScript(() => {
+          const observed = window as Window & { completedSuccessfulHeadFrames?: number };
+          const originalFetch = window.fetch;
+          window.fetch = async (...args) => {
+            const response = await originalFetch(...args);
+            if (args[1]?.method === "HEAD" && response.ok) {
+              // Observe the frame after the real fetch and its reload promise chain settle.
+              requestAnimationFrame(() => {
+                observed.completedSuccessfulHeadFrames =
+                  (observed.completedSuccessfulHeadFrames ?? 0) + 1;
+              });
             }
-          });
-          await page.goto(`${suite.server.baseUrl}chat`);
-          await waitForControlUiGatewayReady(page);
-          await page.keyboard.press("ControlOrMeta+k");
-          const error = await expectRealChunkFailure(page, "command palette");
-          await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
-          if (captureUiProof) {
-            await page.screenshot({ path: path.join(artifactDir, "dismissed-retry-before.png") });
-          }
+            return response;
+          };
+        });
+        const failure = await installChunkFailure(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
+          { manualProbe },
+        );
+        await installMockGateway(page);
+        const documentRequests = observeDocuments(page);
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await waitForControlUiGatewayReady(page);
+        await page.keyboard.press("ControlOrMeta+k");
+        const error = await expectRealChunkFailure(page, "command palette");
+        await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
 
-          const reloaded = new Promise<void>((resolve) => {
-            page.once("domcontentloaded", () => resolve());
-          });
-          await error.getByRole("button", { name: "Retry", exact: true }).click();
-          failure.restoreDocument();
-          await expect.poll(failure.recoveryProbeCount).toBeGreaterThanOrEqual(1);
-          await page.keyboard.press("Escape");
-          const paletteModal = page.locator('openclaw-modal-dialog[label="command palette"]');
-          await expect.poll(() => paletteModal.count()).toBe(0);
-          releaseProbe();
-          await expect
-            .poll(
-              async () =>
-                documentRequests > 1 ||
-                (await page.evaluate(
-                  () =>
-                    (window as Window & { completedSuccessfulHeadFrames?: number })
-                      .completedSuccessfulHeadFrames ?? 0,
-                )) >= 1,
-            )
-            .toBe(true);
-          // A generic automatic retry used to wake one second after this
-          // first settled frame. Close must remain authoritative beyond it.
-          await page.clock.runFor(1_500);
-          if (documentRequests > 1) {
-            await reloaded;
-          }
-          await waitForControlUiGatewayReady(page);
-          if (captureUiProof) {
-            await page.screenshot({ path: path.join(artifactDir, "dismissed-retry-after.png") });
-          }
-          console.info("LAZY_RETRY_DISMISSED", {
-            documentRequests,
-            headCount: failure.headCount(),
-          });
-          expect(documentRequests).toBe(1);
-          expect(await paletteModal.count()).toBe(0);
-          expect(
-            await page.evaluate(() => sessionStorage.getItem("openclaw:lazy-event")),
-          ).toBeNull();
-        },
-      );
+        const reloaded = new Promise<void>((resolve) => {
+          page.once("domcontentloaded", () => resolve());
+        });
+        await button(error, "Retry").click();
+        failure.restoreDocument();
+        await expect.poll(failure.recoveryProbeCount).toBeGreaterThanOrEqual(1);
+        await page.keyboard.press("Escape");
+        const paletteModal = page.locator('openclaw-modal-dialog[label="command palette"]');
+        await expect.poll(() => paletteModal.count()).toBe(0);
+        releaseProbe();
+        await expect
+          .poll(
+            async () =>
+              documentRequests() > 1 ||
+              (await page.evaluate(
+                () =>
+                  (window as Window & { completedSuccessfulHeadFrames?: number })
+                    .completedSuccessfulHeadFrames ?? 0,
+              )) >= 1,
+          )
+          .toBe(true);
+        // A generic automatic retry used to wake one second after this
+        // first settled frame. Close must remain authoritative beyond it.
+        await page.clock.runFor(1_500);
+        if (documentRequests() > 1) {
+          await reloaded;
+        }
+        await waitForControlUiGatewayReady(page);
+        expect(documentRequests()).toBe(1);
+        expect(await paletteModal.count()).toBe(0);
+        expect(await page.evaluate(() => sessionStorage.getItem("openclaw:lazy-event"))).toBeNull();
+      });
     } finally {
       releaseProbe();
     }
@@ -452,54 +420,37 @@ suite.define(() => {
 
   for (const testCase of focusedCases) {
     it(`reloads the focused ${testCase.name} after its real hashed chunk fails`, async () => {
-      await suite.withPage(
-        { locale: "en-US", serviceWorkers: "block", viewport },
-        async ({ page }) => {
-          const failure = await installChunkFailure(
-            page,
-            controlUiE2eBuiltModuleRequest(testCase.modulePath),
-          );
-          await installMockGateway(page, testCase.gateway);
-          let documentRequests = 0;
-          page.on("request", (request) => {
-            if (request.resourceType() === "document") {
-              documentRequests += 1;
-            }
-          });
+      await suite.withPage(pageOptions, async ({ page }) => {
+        const failure = await installChunkFailure(
+          page,
+          controlUiE2eBuiltModuleRequest(testCase.modulePath),
+        );
+        await installMockGateway(page, testCase.gateway);
+        const documentRequests = observeDocuments(page);
 
-          expect(
-            (await page.goto(new URL(testCase.path, suite.server.baseUrl).href))?.status(),
-          ).toBe(200);
-          const error = await expectRealChunkFailure(page, testCase.label);
-          const failedPathname = new URL(page.url()).pathname;
-          expect(failure.chunkDocumentCount()).toBe(1);
-          await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
-          expect(documentRequests).toBe(1);
+        expect((await page.goto(new URL(testCase.path, suite.server.baseUrl).href))?.status()).toBe(
+          200,
+        );
+        const error = await expectRealChunkFailure(page, testCase.label);
+        const failedPathname = new URL(page.url()).pathname;
+        expect(failure.chunkDocumentCount()).toBe(1);
+        await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+        expect(documentRequests()).toBe(1);
 
-          await retryThroughReload(page, error, failure);
-          await testCase.ready(page);
+        await retryThroughReload(page, error, failure);
+        await testCase.ready(page);
 
-          await expect.poll(failure.chunkDocumentCount).toBe(2);
-          expect(new URL(page.url()).pathname).toBe(failedPathname);
-          expect(documentRequests).toBe(2);
-        },
-      );
+        await expect.poll(failure.chunkDocumentCount).toBe(2);
+        expect(new URL(page.url()).pathname).toBe(failedPathname);
+        expect(documentRequests()).toBe(2);
+      });
     });
   }
 
   it("restores the command-palette action after a real stale-chunk reload", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport,
-      ...(captureUiProof ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
-    });
-    let video: Video | null = null;
+    const context = await suite.newBrowserContext(pageOptions);
     try {
       const page = await context.newPage();
-      if (captureUiProof) {
-        video = page.video();
-      }
       const failure = await installChunkFailure(
         page,
         controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
@@ -514,14 +465,6 @@ suite.define(() => {
       const error = await expectRealChunkFailure(page, "command palette");
       await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
       expect(failure.chunkDocumentCount()).toBe(1);
-      if (captureUiProof) {
-        await writeFile(
-          path.join(artifactDir, "failure.png"),
-          await takeControlUiViewportScreenshot(page, error, [
-            error.getByRole("button", { name: "Retry", exact: true }),
-          ]),
-        );
-      }
 
       await retryThroughReload(page, error, failure);
       await page
@@ -531,232 +474,170 @@ suite.define(() => {
 
       await expect.poll(failure.chunkDocumentCount).toBe(2);
       expect(await page.locator("openclaw-command-palette").count()).toBe(1);
-      if (captureUiProof) {
-        await writeFile(
-          path.join(artifactDir, "recovered.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".cmd-palette"), [
-            page
-              .locator("openclaw-command-palette")
-              .getByRole("textbox", { name: "Search or start a task…" }),
-          ]),
-        );
-      }
     } finally {
       await suite.closeBrowserContext(context);
-      if (captureUiProof && video) {
-        await video.saveAs(path.join(artifactDir, "recovery.webm"));
-      }
     }
   });
 
   it.each(["new", "chat"] as const)(
     "keeps the outer System busyness frame nonmodal and transfers its current mode on %s",
     async (route) => {
-      await suite.withPage(
-        { locale: "en-US", serviceWorkers: "block", viewport },
-        async ({ page }) => {
-          const held = await holdModuleResponse(
-            page,
-            controlUiE2eBuiltModuleRequest("ui/src/pages/debug/debug-overlay.tsx"),
-          );
-          try {
-            const composer = await installDockedScenario(page, undefined, route);
-            expect(
-              await page.evaluate(() => customElements.get("openclaw-debug-overlay") === undefined),
-            ).toBe(true);
-            expect(held.requests()).toBe(0);
-            await systemBusyness.open(page);
-            await held.request;
-            const frame = page.locator(".debug-overlay");
-            await frame.waitFor();
-            expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
-            let expanded = await frame.boundingBox();
-            expect(expanded).not.toBeNull();
-            const handle = (await frame.locator("header").boundingBox())!;
-            await page.mouse.move(handle.x + 30, handle.y + 20);
-            await page.mouse.down();
-            await page.mouse.move(handle.x - 30, handle.y, { steps: 3 });
-            await page.mouse.up();
-            expanded = await frame.boundingBox();
-            await composer.fill("Still editable during the outer load");
-            await frame
-              .getByRole("button", { name: "Minimize system busyness", exact: true })
-              .click();
-            await expect
-              .poll(() => frame.getAttribute("class"))
-              .toContain("debug-overlay--minimized");
-            await frame.evaluate(async (element) => {
-              await new Promise(requestAnimationFrame);
-              await new Promise(requestAnimationFrame);
-              await Promise.all(element.getAnimations().map((animation) => animation.finished));
-            });
-            const minimized = await frame.boundingBox();
-            expect(minimized).not.toBeNull();
-            expect(minimized!.height).toBeLessThan(expanded!.height);
-            await composer.press("Escape");
-            expect(await frame.isVisible()).toBe(true);
-            await frame
-              .getByRole("button", { name: "Expand system busyness", exact: true })
-              .click();
-            await expect.poll(() => frame.boundingBox()).toEqual(expanded);
-            await frame
-              .getByRole("button", { name: "Minimize system busyness", exact: true })
-              .click();
-            if (captureUiProof) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(artifactDir, `system-busyness-${route}-outer-loading.png`),
-              });
-            }
-            held.release();
-            await page.locator("openclaw-debug-overlay .debug-overlay--minimized").waitFor();
-            await expect.poll(() => frame.boundingBox()).toEqual(minimized);
-            expect(await composer.inputValue()).toBe("Still editable during the outer load");
-            await frame
-              .getByRole("button", { name: "Expand system busyness", exact: true })
-              .click();
-            await systemBusyness.ready(page).waitFor();
-            await expect.poll(() => frame.boundingBox()).toEqual(expanded);
-            if (captureUiProof) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(artifactDir, `system-busyness-${route}-outer-ready.png`),
-              });
-            }
-            await frame
-              .getByRole("button", { name: "Minimize system busyness", exact: true })
-              .click();
-            await frame.getByRole("button", { name: "Close", exact: true }).press("Escape");
-            await frame.waitFor({ state: "hidden" });
-            expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
-          } finally {
-            held.release();
-          }
-        },
-      );
+      await suite.withPage(pageOptions, async ({ page }) => {
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/pages/debug/debug-overlay.tsx"),
+        );
+        try {
+          const composer = await installDockedScenario(page, undefined, route);
+          expect(
+            await page.evaluate(() => customElements.get("openclaw-debug-overlay") === undefined),
+          ).toBe(true);
+          expect(held.requests()).toBe(0);
+          await systemBusyness.open(page);
+          await held.request;
+          const frame = page.locator(".debug-overlay");
+          await frame.waitFor();
+          expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+          let expanded = await frame.boundingBox();
+          expect(expanded).not.toBeNull();
+          const handle = (await frame.locator("header").boundingBox())!;
+          await page.mouse.move(handle.x + 30, handle.y + 20);
+          await page.mouse.down();
+          await page.mouse.move(handle.x - 30, handle.y, { steps: 3 });
+          await page.mouse.up();
+          expanded = await frame.boundingBox();
+          await composer.fill("Still editable during the outer load");
+          await button(frame, "Minimize system busyness").click();
+          await expect
+            .poll(() => frame.getAttribute("class"))
+            .toContain("debug-overlay--minimized");
+          await frame.evaluate(async (element) => {
+            await new Promise(requestAnimationFrame);
+            await new Promise(requestAnimationFrame);
+            await Promise.all(element.getAnimations().map((animation) => animation.finished));
+          });
+          const minimized = await frame.boundingBox();
+          expect(minimized).not.toBeNull();
+          expect(minimized!.height).toBeLessThan(expanded!.height);
+          await composer.press("Escape");
+          expect(await frame.isVisible()).toBe(true);
+          await button(frame, "Expand system busyness").click();
+          await expect.poll(() => frame.boundingBox()).toEqual(expanded);
+          await button(frame, "Minimize system busyness").click();
+          held.release();
+          await page.locator("openclaw-debug-overlay .debug-overlay--minimized").waitFor();
+          await expect.poll(() => frame.boundingBox()).toEqual(minimized);
+          expect(await composer.inputValue()).toBe("Still editable during the outer load");
+          await button(frame, "Expand system busyness").click();
+          await systemBusyness.ready(page).waitFor();
+          await expect.poll(() => frame.boundingBox()).toEqual(expanded);
+          await button(frame, "Minimize system busyness").click();
+          await button(frame, "Close").press("Escape");
+          await frame.waitFor({ state: "hidden" });
+          expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+        } finally {
+          held.release();
+        }
+      });
     },
   );
 
   it("keeps Home header controls aligned on a cold New session while its body loads", async () => {
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport },
-      async ({ page }) => {
-        // Home preloads Chat styles before importing its body. Delay that dependency
-        // so a warm stylesheet cannot conceal missing eager frame styles.
-        const held = await holdModuleResponse(
-          page,
-          controlUiE2eRouteStylesheetRequest("chat", "new"),
-        );
-        try {
-          const composer = await installDockedScenario(page, "right", "new");
-          await page.locator(".sidebar-footer-bar__home").click();
-          await held.request;
-          if (captureUiProof) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, "home-new-loading.png"),
-            });
-          }
-          const header = page.locator(".assistant-panel-header");
-          const headerBounds = await header.boundingBox();
-          const titleBounds = await header.locator(".assistant-panel-title").boundingBox();
-          expect(headerBounds?.height).toBe(48);
-          expect(titleBounds).not.toBeNull();
-          for (const control of await header.locator(".assistant-panel-actions button").all()) {
-            const bounds = await control.boundingBox();
-            expect(bounds?.width).toBe(28);
-            expect(bounds?.height).toBe(28);
-            expect(bounds!.x).toBeGreaterThanOrEqual(titleBounds!.x + titleBounds!.width);
-            expect(bounds!.y).toBeGreaterThanOrEqual(headerBounds!.y);
-            expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(
-              headerBounds!.y + headerBounds!.height,
-            );
-          }
-          await composer.fill("Keep working while Home loads");
-          await page.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
-          await page.locator(".assistant-panel").waitFor({ state: "hidden" });
-          expect(await composer.inputValue()).toBe("Keep working while Home loads");
-        } finally {
-          held.release();
+    await suite.withPage(pageOptions, async ({ page }) => {
+      // Home preloads Chat styles before importing its body. Delay that dependency
+      // so a warm stylesheet cannot conceal missing eager frame styles.
+      const held = await holdModuleResponse(
+        page,
+        controlUiE2eRouteStylesheetRequest("chat", "new"),
+      );
+      try {
+        const composer = await installDockedScenario(page, "right", "new");
+        await page.locator(".sidebar-footer-bar__home").click();
+        await held.request;
+        const header = page.locator(".assistant-panel-header");
+        const headerBounds = await header.boundingBox();
+        const titleBounds = await header.locator(".assistant-panel-title").boundingBox();
+        expect(headerBounds?.height).toBe(48);
+        expect(titleBounds).not.toBeNull();
+        for (const control of await header.locator(".assistant-panel-actions button").all()) {
+          const bounds = await control.boundingBox();
+          expect(bounds?.width).toBe(28);
+          expect(bounds?.height).toBe(28);
+          expect(bounds!.x).toBeGreaterThanOrEqual(titleBounds!.x + titleBounds!.width);
+          expect(bounds!.y).toBeGreaterThanOrEqual(headerBounds!.y);
+          expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(
+            headerBounds!.y + headerBounds!.height,
+          );
         }
-      },
-    );
+        await composer.fill("Keep working while Home loads");
+        await button(page, "Close assistant sidebar").click();
+        await page.locator(".assistant-panel").waitFor({ state: "hidden" });
+        expect(await composer.inputValue()).toBe("Keep working while Home loads");
+      } finally {
+        held.release();
+      }
+    });
   });
 
   it.each(dockedCases)(
     "loads $name in place and keeps dismissal authoritative",
     async (testCase) => {
-      await suite.withPage(
-        { locale: "en-US", serviceWorkers: "block", viewport },
-        async ({ page }) => {
-          const held = await holdModuleResponse(
-            page,
-            controlUiE2eBuiltModuleRequest(testCase.modulePath),
-          );
-          try {
-            const composer = await installDockedScenario(page, testCase.dock);
-            expect(held.requests()).toBe(0);
-            await testCase.open(page);
-            await held.request;
-            if (captureUiProof) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(artifactDir, `${testCase.proofName}-loading.png`),
-              });
-            }
-            const frame = testCase.frame(page);
-            expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
-            await frame.getByRole("status", { name: "Loading…", exact: true }).first().waitFor();
-            expect(await frame.getAttribute("aria-label")).toBe(testCase.label);
-            const loadingBounds = await frame.boundingBox();
-            expect(loadingBounds).not.toBeNull();
-            if (testCase.dock) {
-              expect(loadingBounds?.[testCase.dock === "right" ? "width" : "height"]).toBe(
-                testCase.dock === "right" ? 520 : 360,
-              );
-              await expect
-                .poll(async () => {
-                  const bounds = await composer.boundingBox();
-                  if (!bounds || !loadingBounds) {
-                    return false;
-                  }
-                  return testCase.dock === "right"
-                    ? bounds.x + bounds.width <= loadingBounds.x + 1
-                    : bounds.y + bounds.height <= loadingBounds.y + 1;
-                })
-                .toBe(true);
-            }
-            expect(await composer.inputValue()).toBe("Keep working");
-            await composer.click({ position: { x: 8, y: 8 } });
-            await composer.press("ControlOrMeta+a");
-            await page.keyboard.type("Keep working while the panel loads");
-            expect(await composer.inputValue()).toBe("Keep working while the panel loads");
-            await testCase.close(page).click();
-            await frame.waitFor({ state: "hidden" });
-
-            held.release();
-            await page.evaluate(
-              (tag) => customElements.whenDefined(tag).then(() => undefined),
-              testCase.tag,
+      await suite.withPage(pageOptions, async ({ page }) => {
+        const held = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest(testCase.modulePath),
+        );
+        try {
+          const composer = await installDockedScenario(page, testCase.dock);
+          expect(held.requests()).toBe(0);
+          await testCase.open(page);
+          await held.request;
+          const frame = testCase.frame(page);
+          expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+          await frame.getByRole("status", { name: "Loading…", exact: true }).first().waitFor();
+          expect(await frame.getAttribute("aria-label")).toBe(testCase.label);
+          const loadingBounds = await frame.boundingBox();
+          expect(loadingBounds).not.toBeNull();
+          if (testCase.dock) {
+            expect(loadingBounds?.[testCase.dock === "right" ? "width" : "height"]).toBe(
+              testCase.dock === "right" ? 520 : 360,
             );
-            expect(await frame.isVisible()).toBe(false);
-            expect(await testCase.ready(page).isVisible()).toBe(false);
-            await testCase.open(page);
-            await testCase.ready(page).waitFor();
-            await expect.poll(() => frame.boundingBox()).toEqual(loadingBounds);
-            expect(await composer.inputValue()).toBe("Keep working while the panel loads");
-            expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
-            if (captureUiProof) {
-              await page.screenshot({
-                animations: "disabled",
-                path: path.join(artifactDir, `${testCase.proofName}-ready.png`),
-              });
-            }
-          } finally {
-            held.release();
+            await expect
+              .poll(async () => {
+                const bounds = await composer.boundingBox();
+                if (!bounds || !loadingBounds) {
+                  return false;
+                }
+                return testCase.dock === "right"
+                  ? bounds.x + bounds.width <= loadingBounds.x + 1
+                  : bounds.y + bounds.height <= loadingBounds.y + 1;
+              })
+              .toBe(true);
           }
-        },
-      );
+          expect(await composer.inputValue()).toBe("Keep working");
+          await composer.click({ position: { x: 8, y: 8 } });
+          await composer.press("ControlOrMeta+a");
+          await page.keyboard.type("Keep working while the panel loads");
+          expect(await composer.inputValue()).toBe("Keep working while the panel loads");
+          await testCase.close(page).click();
+          await frame.waitFor({ state: "hidden" });
+
+          held.release();
+          await page.evaluate(
+            (tag) => customElements.whenDefined(tag).then(() => undefined),
+            testCase.tag,
+          );
+          expect(await frame.isVisible()).toBe(false);
+          expect(await testCase.ready(page).isVisible()).toBe(false);
+          await testCase.open(page);
+          await testCase.ready(page).waitFor();
+          await expect.poll(() => frame.boundingBox()).toEqual(loadingBounds);
+          expect(await composer.inputValue()).toBe("Keep working while the panel loads");
+          expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+        } finally {
+          held.release();
+        }
+      });
     },
   );
 
@@ -772,219 +653,165 @@ suite.define(() => {
         ),
       ),
   )("recovers $name from its in-place stale-chunk error via $recovery", async (testCase) => {
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport },
-      async ({ page }) => {
-        const failure = await installChunkFailure(
-          page,
-          controlUiE2eBuiltModuleRequest(testCase.modulePath),
-          {
-            automaticReload: testCase.automaticReload,
-          },
-        );
-        const composer = await installDockedScenario(page, testCase.dock);
-        const automaticReload = testCase.automaticReload
-          ? page.waitForEvent("domcontentloaded")
-          : undefined;
-        await testCase.open(page);
-        const frame = testCase.frame(page);
-        const error = frame.locator(".lazy-view-error");
-        if (automaticReload) {
-          await automaticReload;
-          await waitForControlUiGatewayReady(page);
-        } else {
-          await error.waitFor();
-          if (captureUiProof) {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(artifactDir, `${testCase.proofName}-error.png`),
-            });
-          }
-          expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
-          expect(await error.textContent()).toContain(testCase.label);
-          expect(await error.textContent()).toContain(
-            "Failed to fetch dynamically imported module",
-          );
-          expect(await testCase.close(page).isVisible()).toBe(true);
-          await composer.click({ position: { x: 8, y: 8 } });
-          expect(await composer.inputValue()).toBe("Keep working");
-          await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
-
-          await retryThroughReload(page, error, failure);
-        }
-        await testCase.ready(page).waitFor();
-        expect(failure.chunkDocumentCount()).toBe(2);
-        expect(await page.locator(".lazy-view-error, openclaw-modal-dialog").count()).toBe(0);
+    await suite.withPage(pageOptions, async ({ page }) => {
+      const failure = await installChunkFailure(
+        page,
+        controlUiE2eBuiltModuleRequest(testCase.modulePath),
+        {
+          automaticReload: testCase.automaticReload,
+        },
+      );
+      const composer = await installDockedScenario(page, testCase.dock);
+      const automaticReload = testCase.automaticReload
+        ? page.waitForEvent("domcontentloaded")
+        : undefined;
+      await testCase.open(page);
+      const frame = testCase.frame(page);
+      const error = frame.locator(".lazy-view-error");
+      if (automaticReload) {
+        await automaticReload;
+        await waitForControlUiGatewayReady(page);
+      } else {
+        await error.waitFor();
+        expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
+        expect(await error.textContent()).toContain(testCase.label);
+        expect(await error.textContent()).toContain("Failed to fetch dynamically imported module");
+        expect(await testCase.close(page).isVisible()).toBe(true);
+        await composer.click({ position: { x: 8, y: 8 } });
         expect(await composer.inputValue()).toBe("Keep working");
-        if (captureUiProof) {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(artifactDir, `${testCase.proofName}-recovered.png`),
-          });
-        }
-        if (!testCase.dock) {
-          await page.reload();
-          await waitForControlUiGatewayReady(page);
-          expect(await frame.isVisible()).toBe(false);
-          expect(await composer.inputValue()).toBe("Keep working");
-        }
-      },
-    );
+        await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+
+        await retryThroughReload(page, error, failure);
+      }
+      await testCase.ready(page).waitFor();
+      expect(failure.chunkDocumentCount()).toBe(2);
+      expect(await page.locator(".lazy-view-error, openclaw-modal-dialog").count()).toBe(0);
+      expect(await composer.inputValue()).toBe("Keep working");
+      if (!testCase.dock) {
+        await page.reload();
+        await waitForControlUiGatewayReady(page);
+        expect(await frame.isVisible()).toBe(false);
+        expect(await composer.inputValue()).toBe("Keep working");
+      }
+    });
   });
 
   it("keeps native titlebar state and actions current while its chunk is loading", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport,
-        ...(railProofDir ? { recordVideo: { dir: railProofDir, size: viewport } } : {}),
-      },
-      async ({ page }) => {
-        await installNativeWebChrome(page);
-        await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
-        });
-        const errors: string[] = [];
-        page.on("pageerror", (error) => errors.push(error.message));
-        const held = await holdModuleResponse(
-          page,
-          controlUiE2eBuiltModuleRequest(nativeTitlebarModule),
-        );
-        try {
-          const response = await page.goto(suite.server.baseUrl, { waitUntil: "domcontentloaded" });
-          expect(response?.status()).toBe(200);
-          await page.locator(".sidebar-rail").waitFor({ state: "attached" });
-          await held.request;
-          const element = page.locator("openclaw-macos-titlebar-controls");
-          expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
-          await page.evaluate(() => {
-            window.dispatchEvent(
-              new CustomEvent("openclaw:native-history-state", {
-                detail: { canGoBack: true, canGoForward: false },
-              }),
-            );
-            window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
-          });
-          await expect
-            .poll(() => page.locator(".shell").getAttribute("class"))
-            .toContain("shell--nav-collapsed");
-          if (railProofDir) {
-            await page.screenshot({ path: path.join(railProofDir, "native-titlebar-loading.png") });
-          }
-
-          held.release();
-          const toolbar = page.locator(".macos-titlebar-controls");
-          await toolbar.waitFor({ state: "visible" });
-          await expect
-            .poll(() => toolbar.getByRole("button", { name: "Back" }).isDisabled())
-            .toBe(false);
-          await expect
-            .poll(() => toolbar.getByRole("button", { name: "Forward" }).isDisabled())
-            .toBe(true);
-          await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
-          await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-          await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-          expect(held.requests()).toBe(1);
-          expect(errors).toEqual([]);
-          if (railProofDir) {
-            await page.screenshot({ path: path.join(railProofDir, "native-titlebar-loaded.png") });
-          }
-        } finally {
-          held.release();
-        }
-      },
-    );
-  });
-
-  it("recovers the native titlebar visibly after its chunk fails", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport,
-        ...(railProofDir ? { recordVideo: { dir: railProofDir, size: viewport } } : {}),
-      },
-      async ({ page }) => {
-        await page.clock.install();
-        await page.addInitScript(() => {
-          const observed = window as Window & { completedFailedHeadFrames?: number };
-          const originalFetch = window.fetch;
-          window.fetch = async (...args) => {
-            const response = await originalFetch(...args);
-            if (args[1]?.method === "HEAD" && response.status === 503) {
-              requestAnimationFrame(() => {
-                observed.completedFailedHeadFrames = (observed.completedFailedHeadFrames ?? 0) + 1;
-              });
-            }
-            return response;
-          };
-        });
-        await installNativeWebChrome(page);
-        const failure = await installChunkFailure(
-          page,
-          controlUiE2eBuiltModuleRequest(nativeTitlebarModule),
-        );
-        await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
-        });
-        let documentRequests = 0;
-        page.on("request", (request) => {
-          if (request.resourceType() === "document") {
-            documentRequests += 1;
-          }
-        });
-        const response = await page.goto(suite.server.baseUrl, {
-          waitUntil: "domcontentloaded",
-        });
+    await suite.withPage(pageOptions, async ({ page }) => {
+      await installNativeWebChrome(page);
+      await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+      });
+      const errors: string[] = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      const held = await holdModuleResponse(
+        page,
+        controlUiE2eBuiltModuleRequest(nativeTitlebarModule),
+      );
+      try {
+        const response = await page.goto(suite.server.baseUrl, { waitUntil: "domcontentloaded" });
         expect(response?.status()).toBe(200);
         await page.locator(".sidebar-rail").waitFor({ state: "attached" });
-        const error = await expectRealChunkFailure(page, "openclaw-macos-titlebar-controls");
-        await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
-        expect(failure.chunkDocumentCount()).toBe(1);
-        const completedFailedHeadFrames = () =>
-          page.evaluate(
-            () =>
-              (window as Window & { completedFailedHeadFrames?: number })
-                .completedFailedHeadFrames ?? 0,
+        await held.request;
+        const element = page.locator("openclaw-macos-titlebar-controls");
+        expect(await element.evaluate((node) => node.matches(":defined"))).toBe(false);
+        await page.evaluate(() => {
+          window.dispatchEvent(
+            new CustomEvent("openclaw:native-history-state", {
+              detail: { canGoBack: true, canGoForward: false },
+            }),
           );
-        await expect.poll(completedFailedHeadFrames).toBeGreaterThanOrEqual(1);
-        await pauseVirtualClock(page);
-        const failedProbes = await completedFailedHeadFrames();
-        // Cross the recovery owner's maximum backoff so another real HEAD
-        // fails while the error and its dismissal action remain available.
-        await page.clock.runFor(15_001);
+          window.dispatchEvent(new CustomEvent("openclaw:native-toggle-sidebar"));
+        });
         await expect
-          .poll(async () => {
-            await page.clock.runFor(17);
-            return completedFailedHeadFrames();
-          })
-          .toBeGreaterThan(failedProbes);
-        expect(documentRequests).toBe(1);
-        await error.getByRole("button", { name: "Close", exact: true }).waitFor();
-        if (railProofDir) {
-          await page.screenshot({
-            path: path.join(railProofDir, "native-titlebar-failed.png"),
-          });
-        }
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--nav-collapsed");
 
-        await page.clock.resume();
-        await retryThroughReload(page, error, failure);
+        held.release();
         const toolbar = page.locator(".macos-titlebar-controls");
         await toolbar.waitFor({ state: "visible" });
-        await page.locator(".sidebar-session-toolbar__collapse").click();
+        await expect
+          .poll(() => toolbar.getByRole("button", { name: "Back" }).isDisabled())
+          .toBe(false);
+        await expect
+          .poll(() => toolbar.getByRole("button", { name: "Forward" }).isDisabled())
+          .toBe(true);
         await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
         await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-        expect(await error.count()).toBe(0);
-        expect(failure.chunkDocumentCount()).toBe(2);
-        expect(documentRequests).toBe(2);
-        if (railProofDir) {
-          await page.screenshot({
-            path: path.join(railProofDir, "native-titlebar-recovered.png"),
-          });
-        }
-      },
-    );
+        expect(held.requests()).toBe(1);
+        expect(errors).toEqual([]);
+      } finally {
+        held.release();
+      }
+    });
+  });
+
+  it("recovers the native titlebar visibly after its chunk fails", async () => {
+    await suite.withPage(pageOptions, async ({ page }) => {
+      await page.clock.install();
+      await page.addInitScript(() => {
+        const observed = window as Window & { completedFailedHeadFrames?: number };
+        const originalFetch = window.fetch;
+        window.fetch = async (...args) => {
+          const response = await originalFetch(...args);
+          if (args[1]?.method === "HEAD" && response.status === 503) {
+            requestAnimationFrame(() => {
+              observed.completedFailedHeadFrames = (observed.completedFailedHeadFrames ?? 0) + 1;
+            });
+          }
+          return response;
+        };
+      });
+      await installNativeWebChrome(page);
+      const failure = await installChunkFailure(
+        page,
+        controlUiE2eBuiltModuleRequest(nativeTitlebarModule),
+      );
+      await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+      });
+      const documentRequests = observeDocuments(page);
+      const response = await page.goto(suite.server.baseUrl, {
+        waitUntil: "domcontentloaded",
+      });
+      expect(response?.status()).toBe(200);
+      await page.locator(".sidebar-rail").waitFor({ state: "attached" });
+      const error = await expectRealChunkFailure(page, "openclaw-macos-titlebar-controls");
+      await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+      expect(failure.chunkDocumentCount()).toBe(1);
+      const completedFailedHeadFrames = () =>
+        page.evaluate(
+          () =>
+            (window as Window & { completedFailedHeadFrames?: number }).completedFailedHeadFrames ??
+            0,
+        );
+      await expect.poll(completedFailedHeadFrames).toBeGreaterThanOrEqual(1);
+      await pauseVirtualClock(page);
+      const failedProbes = await completedFailedHeadFrames();
+      // Cross the recovery owner's maximum backoff so another real HEAD
+      // fails while the error and its dismissal action remain available.
+      await page.clock.runFor(15_001);
+      await expect
+        .poll(async () => {
+          await page.clock.runFor(17);
+          return completedFailedHeadFrames();
+        })
+        .toBeGreaterThan(failedProbes);
+      expect(documentRequests()).toBe(1);
+      await button(error, "Close").waitFor();
+
+      await page.clock.resume();
+      await retryThroughReload(page, error, failure);
+      const toolbar = page.locator(".macos-titlebar-controls");
+      await toolbar.waitFor({ state: "visible" });
+      await page.locator(".sidebar-session-toolbar__collapse").click();
+      await page.locator(".sidebar-rail__create a, .sidebar-rail__create button").click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+      await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+      expect(await error.count()).toBe(0);
+      expect(failure.chunkDocumentCount()).toBe(2);
+      expect(documentRequests()).toBe(2);
+    });
   });
 });

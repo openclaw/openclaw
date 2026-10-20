@@ -1,10 +1,8 @@
-// Control UI tests cover the initial-connect splash shown instead of the
-// login gate while the Gateway resolves its first connection attempt.
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
-import { beforeEach, afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -28,13 +26,6 @@ const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-let artifactDir: string | undefined;
-beforeEach(() => {
-  artifactDir = artifactRoot
-    ? createControlUiE2eArtifactDir("initial-connect-splash", artifactRoot)
-    : undefined;
-});
 const viewport = { height: 900, width: 1280 };
 
 let browser: Browser;
@@ -45,7 +36,6 @@ async function createPage(): Promise<Page> {
   const context = await browser.newContext({
     locale: "en-US",
     viewport,
-    ...(artifactDir ? { recordVideo: { dir: artifactDir, size: viewport } } : {}),
   });
   openContexts.add(context);
   const page = await context.newPage();
@@ -66,18 +56,6 @@ async function createPageWithoutRecording(): Promise<Page> {
   const context = await browser.newContext({ locale: "en-US" });
   openContexts.add(context);
   return context.newPage();
-}
-
-async function takeProofScreenshot(page: Page, name: string, content: Locator[]): Promise<Buffer> {
-  const png = await takeControlUiViewportScreenshot(
-    page,
-    page.locator(".connect-splash, .shell"),
-    content,
-  );
-  if (artifactDir) {
-    await writeFile(path.join(artifactDir, `${name}.png`), png);
-  }
-  return png;
 }
 
 async function proofContentPainted(page: Page, proof: Buffer, content: Locator): Promise<boolean> {
@@ -101,12 +79,6 @@ async function proofContentPainted(page: Page, proof: Buffer, content: Locator):
     },
     { png: proof.toString("base64"), bounds: contentBounds! },
   );
-}
-
-async function captureProof(page: Page, name: string, content: Locator[]): Promise<void> {
-  if (artifactDir) {
-    await takeProofScreenshot(page, name, content);
-  }
 }
 
 async function traceLoginGateMounts(page: Page): Promise<() => Promise<boolean>> {
@@ -193,9 +165,11 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     expect(await page.getByText("Loading panel", { exact: true }).count()).toBe(0);
     expect(await page.locator("openclaw-app-sidebar").count()).toBe(0);
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
-    const proof = await takeProofScreenshot(page, "01-connecting-shimmer", [
-      skeleton.locator(".loading-skeleton__composer"),
-    ]);
+    const proof = await takeControlUiViewportScreenshot(
+      page,
+      page.locator(".connect-splash, .shell"),
+      [skeleton.locator(".loading-skeleton__composer")],
+    );
     const painted = await proofContentPainted(page, proof, skeleton);
     expect(painted, "connecting proof must contain the skeleton").toBe(true);
     const highlight = skeleton.locator(".loading-skeleton__composer");
@@ -261,7 +235,6 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     expect(
       await highlight.evaluate((element) => element.getAnimations({ subtree: true }).length),
     ).toBe(0);
-    await captureProof(page, "01-mobile-reduced-motion", [highlight]);
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: "no-preference" });
 
@@ -270,10 +243,6 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     expect(await page.locator(".connect-splash").count()).toBe(0);
     expect(await loginGateMounted()).toBe(false);
     expect(loginModuleRequests).toEqual([]);
-    await captureProof(page, "02-connected-content", [
-      page.locator(".sidebar-rail"),
-      page.locator(".agent-chat__composer-combobox textarea"),
-    ]);
   });
 
   it("shows a shimmer skeleton until the chat route finishes loading", async () => {
@@ -311,9 +280,6 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       await skeleton.waitFor();
       expect(await loadingState.getAttribute("aria-busy")).toBeNull();
       expect(await loadingState.locator("openclaw-mascot").count()).toBe(0);
-      await captureProof(page, "03-pending-chat-shimmer", [
-        skeleton.locator(".loading-skeleton__composer"),
-      ]);
 
       for (const size of [viewport, { width: 1440, height: 1440 }, { width: 390, height: 844 }]) {
         await page.setViewportSize(size);
@@ -355,20 +321,12 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
           0,
         );
         expect(bottomGap, "loading composer stays near the bottom").toBeLessThan(64);
-        await captureProof(page, `03-pending-chat-${size.width}x${size.height}`, [
-          skeleton.locator(".loading-skeleton__header"),
-          skeleton.locator(".loading-skeleton__composer"),
-        ]);
       }
       await page.setViewportSize(viewport);
 
       releaseChatModule();
       await page.locator("openclaw-chat-page").waitFor();
       expect(await loadingState.count()).toBe(0);
-      await captureProof(page, "04-loaded-chat-content", [
-        page.locator(".sidebar-rail"),
-        page.locator(".agent-chat__composer-combobox textarea"),
-      ]);
     } finally {
       releaseChatModule();
     }
@@ -384,9 +342,6 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await page.locator(".connect-splash").waitFor();
     expect(await page.locator("openclaw-login-gate").count()).toBe(0);
     expect(await loginGateMounted()).toBe(false);
-    await captureProof(page, "05-credentialless-connecting-shimmer", [
-      page.locator(".connect-splash .loading-skeleton__composer"),
-    ]);
 
     await gateway.resolveDeferred("connect");
     await page.locator("openclaw-app-shell").waitFor();
@@ -468,7 +423,6 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     const loadingSectionTops = loadingGeometry.map((heading) => heading.top);
     expect(await page.locator(".connect-splash").count()).toBe(0);
     expect([...requestedWorkspaceModules]).toEqual([]);
-    await captureProof(page, "06-first-run-routed-before-detection", [loadingSections]);
     await page.setViewportSize({ height: 844, width: 390 });
     await expect
       .poll(() =>
@@ -477,7 +431,6 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
         ),
       )
       .toBe(true);
-    await captureProof(page, "06b-first-run-routed-before-detection-mobile", [loadingSections]);
     await page.setViewportSize(viewport);
 
     await gateway.resolveDeferred("openclaw.setup.detect", {
@@ -525,8 +478,6 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       Math.max(...readySectionTops.map((top, index) => Math.abs(top - loadingSectionTops[index]!))),
     ).toBeLessThanOrEqual(13);
     expect([...requestedWorkspaceModules]).toEqual([]);
-    const setupHeading = page.getByRole("heading", { name: "Connect a verified AI model" });
-    await captureProof(page, "07-first-run-model-setup-ready", [setupHeading]);
     await page.setViewportSize({ height: 844, width: 390 });
     await expect
       .poll(() =>
@@ -535,7 +486,6 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
         ),
       )
       .toBe(true);
-    await captureProof(page, "07b-first-run-model-setup-ready-mobile", [setupHeading]);
   });
 
   it.each(["entrance", "ancestor entrance", "lazy content"] as const)(
@@ -617,12 +567,6 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
         pending === "ancestor entrance" ? recoveryTitle : surface,
         [recovery],
       );
-      if (artifactDir) {
-        await writeFile(
-          path.join(artifactDir, `capture-readiness-${pending.replaceAll(" ", "-")}.png`),
-          proof,
-        );
-      }
       // The crop contains recovery words, not the card border or animated dot.
       expect(
         await proofContentPainted(page, proof, recoveryTitle),
@@ -1020,9 +964,6 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await expect
       .poll(async () => await splash.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("1");
-    await captureProof(page, "06-gateway-starting-progress", [
-      splash.locator(".loading-skeleton__composer"),
-    ]);
 
     await expect
       .poll(async () => (await gateway.getRequests("connect")).length)

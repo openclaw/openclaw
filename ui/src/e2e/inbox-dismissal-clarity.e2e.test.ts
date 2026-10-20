@@ -1,4 +1,3 @@
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -100,12 +99,11 @@ suite.define(() => {
         await mention.waitFor();
         await update.waitFor();
         await approval.waitFor();
-        expect(await mention.locator("summary .sidebar-issues-panel__entity").textContent()).toBe(
-          "Release review",
-        );
-        expect(await mention.locator("summary .sidebar-issues-panel__state").textContent()).toBe(
-          "Riley mentioned you",
-        );
+        expect(
+          await mention
+            .locator("summary .sidebar-issues-panel__entity, summary .sidebar-issues-panel__state")
+            .allTextContents(),
+        ).toEqual(["Release review", "Riley mentioned you"]);
         for (const notification of [mention, update]) {
           const summary = notification.locator("summary");
           const body = notification.locator(".sidebar-issues-panel__body");
@@ -126,24 +124,16 @@ suite.define(() => {
           await summary.click();
           await body.waitFor({ state: "hidden" });
         }
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, `inbox-${width}.png`),
-            animations: "disabled",
-          });
+        for (const [item, name] of [
+          [automation, "Dismiss Release digest"],
+          [mention, "Dismiss Release review"],
+        ] as const) {
+          expect(
+            (
+              await item.getByRole("button", { name, exact: item === mention }).textContent()
+            )?.trim(),
+          ).toBe("");
         }
-        expect(
-          (
-            await automation.getByRole("button", { name: "Dismiss Release digest" }).textContent()
-          )?.trim(),
-        ).toBe("");
-        expect(
-          (
-            await mention
-              .getByRole("button", { name: "Dismiss Release review", exact: true })
-              .textContent()
-          )?.trim(),
-        ).toBe("");
         expect(await panel.locator(".sidebar-issues-panel__dismiss-help").count()).toBe(0);
         await update.getByRole("button", { name: /^Dismiss .*OpenClaw updated/ }).click();
         await update.waitFor({ state: "hidden" });
@@ -162,9 +152,9 @@ suite.define(() => {
           (await gateway.getRequests("mentions.dismiss")).map((request) => request.params),
         ).toEqual([{ ids: ["mention-review"] }]);
         expect(await approval.count()).toBe(1);
-        expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
-        expect(await gateway.getRequests("cron.update")).toHaveLength(0);
-        expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
+        for (const method of ["exec.approval.resolve", "cron.update", "chat.abort"]) {
+          expect(await gateway.getRequests(method), method).toHaveLength(0);
+        }
       },
     );
   });
