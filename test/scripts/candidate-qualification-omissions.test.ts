@@ -5,9 +5,31 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { buildFrozenTargetWorkflowRequest } from "../../scripts/lib/frozen-target-workflow-request.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readFixtureJson } from "./z0632-fixtures.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
+const targetSha = "a".repeat(40);
+const contextRef = "release/2026.9.7";
+function workflowEnv() {
+  return {
+    ...process.env,
+    GITHUB_REPOSITORY: "openclaw/openclaw",
+    GITHUB_RUN_ID: "77",
+    GITHUB_RUN_ATTEMPT: "1",
+    TARGET_SHA: targetSha,
+    TARGET_CONTEXT_REF: contextRef,
+    RERUN_GROUP: "all",
+    LIVE_SUITE_FILTER: "",
+    RELEASE_PACKAGE_SPEC: "",
+    PACKAGE_ACCEPTANCE_PACKAGE_SPEC: "",
+  };
+}
+
+function emptyInputs(names: string) {
+  return Object.fromEntries(names.split(" ").map((name) => [name, ""]));
+}
+
 function step(job: string, name: string) {
   const selected = workflow.jobs[job].steps.find((entry: { name?: string }) => entry.name === name);
   if (!selected) {
@@ -16,8 +38,6 @@ function step(job: string, name: string) {
   return selected;
 }
 
-// Exercise the workflow adapter: release context is not permission to omit
-// candidate-owned scenarios, while explicit cross-revision diagnostics remain.
 describe("frozen qualification workflow request", () => {
   it.each([
     { distinct: false, context: true, explicit: false, omissions: false },
@@ -26,19 +46,16 @@ describe("frozen qualification workflow request", () => {
     { distinct: false, context: true, explicit: true, omissions: true },
   ])("selects omission mode for %j", ({ distinct, context, explicit, omissions }) => {
     const result = buildFrozenTargetWorkflowRequest({
-      ...process.env,
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_RUN_ID: "77",
-      GITHUB_RUN_ATTEMPT: "1",
+      ...workflowEnv(),
       ADMISSION_WORKFLOW: "parent",
       ADMISSION_WORKFLOW_REF: "refs/heads/release-ci/aaaaaaaaaaaa-1",
       ADMISSION_SELECTED_ROOT: ".",
-      ADMISSION_SELECTED_SHA: "a".repeat(40),
+      ADMISSION_SELECTED_SHA: targetSha,
       ADMISSION_TOOLING_ROOT: ".",
       ADMISSION_TOOLING_SHA: (distinct ? "b" : "a").repeat(40),
       ADMISSION_INPUTS: JSON.stringify({
-        ref: "a".repeat(40),
-        target_context_ref: context ? "release/2026.9.7" : "",
+        ref: targetSha,
+        target_context_ref: context ? contextRef : "",
         allow_frozen_target_scenario_omissions: explicit,
       }),
     });
@@ -71,32 +88,23 @@ describe("candidate qualification child dispatch", () => {
         {
           cwd: root,
           env: {
-            ...process.env,
+            ...workflowEnv(),
             RUNNER_TEMP: root,
             GITHUB_OUTPUT: join(root, "output"),
-            GITHUB_REPOSITORY: "openclaw/openclaw",
             GITHUB_SHA: (distinct ? "b" : "a").repeat(40),
-            TARGET_SHA: "a".repeat(40),
-            TARGET_CONTEXT_REF: "release/2026.9.7",
             RELEASE_PROFILE: "beta",
             RELEASE_SOAK: "false",
-            QUALIFICATION_ADMISSION_JSON: "",
-            QUALIFICATION_BASELINES_JSON: "",
-            UPGRADE_SURVIVOR_SCENARIOS: "",
+            ...emptyInputs(
+              "QUALIFICATION_ADMISSION_JSON QUALIFICATION_BASELINES_JSON UPGRADE_SURVIVOR_SCENARIOS",
+            ),
             ALLOW_UNRELEASED_CHANGELOG: "true",
             PACKAGE_PUBLISHED: "false",
-            RELEASE_PACKAGE_SPEC: "",
-            PACKAGE_ACCEPTANCE_PACKAGE_SPEC: "",
-            RERUN_GROUP: "all",
-            LIVE_SUITE_FILTER: "",
             // This is the original workflow expression's value for a nonempty release context.
             ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "true",
           },
         },
       );
-      const request = JSON.parse(
-        readFileSync(join(root, "full-release-candidate-request.json"), "utf8"),
-      );
+      const request = readFixtureJson(root, "full-release-candidate-request.json");
       expect(request.allowFrozenTargetScenarioOmissions).toBe(distinct);
     },
   );
@@ -114,18 +122,14 @@ describe("candidate qualification child dispatch", () => {
       mkdirSync(bin);
       const calls = join(root, "calls");
       const sha = (distinct ? "b" : "a").repeat(40);
-      const ref = "release-ci/" + sha.slice(0, 12) + "-1";
-      const title =
-        (kind === "plugin-prerelease" ? "Plugin Prerelease" : "OpenClaw Release Checks") +
-        " full-release-validation-77-1-" +
-        kind +
-        "-independent";
+      const ref = `release-ci/${sha.slice(0, 12)}-1`;
+      const titlePrefix =
+        kind === "plugin-prerelease" ? "Plugin Prerelease" : "OpenClaw Release Checks";
+      const title = `${titlePrefix} full-release-validation-77-1-${kind}-independent`;
       const gh = join(bin, "gh");
       writeFileSync(
         gh,
-        `#!` +
-          process.execPath +
-          `
+        `#!${process.execPath}
 const fs = require('node:fs');
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.CALLS, JSON.stringify(args) + '\\n');
@@ -142,26 +146,23 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
         cwd: root,
         timeout: 10_000,
         env: {
-          ...process.env,
+          ...workflowEnv(),
           PATH: bin + delimiter + process.env.PATH,
           CALLS: calls,
           GITHUB_OUTPUT: join(root, "output"),
           GITHUB_STEP_SUMMARY: join(root, "summary"),
-          GITHUB_REPOSITORY: "openclaw/openclaw",
-          GITHUB_RUN_ID: "77",
-          GITHUB_RUN_ATTEMPT: "1",
           CHILD_EVIDENCE_REUSE: "false",
           CHILD_WORKFLOW_KIND: kind,
           CHILD_WORKFLOW_REF: ref,
           PARENT_WORKFLOW_SHA: sha,
-          TARGET_SHA: "a".repeat(40),
-          TARGET_REF: "a".repeat(40),
-          TARGET_CONTEXT_REF: "release/2026.9.7",
+          TARGET_REF: targetSha,
           PHASE: "independent",
           TEST_TITLE: title,
           PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON: "[]",
           EXTENSION_TEST_EXCLUDE_PATTERNS_JSON: "[]",
-          CANDIDATE_ARTIFACT_JSON: "",
+          ...emptyInputs(
+            "CANDIDATE_ARTIFACT_JSON TELEGRAM_WAIVER CROSS_OS_SUITE_FILTER CODEX_PLUGIN_SPEC",
+          ),
           PROVIDER: "openai",
           MODE: "both",
           RELEASE_PROFILE: "stable",
@@ -169,13 +170,6 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:process.env.C
           FAIL_FAST: "false",
           ALLOW_UNRELEASED_CHANGELOG: "false",
           SKIP_PACKAGE_TELEGRAM_E2E: "false",
-          TELEGRAM_WAIVER: "",
-          RERUN_GROUP: "all",
-          LIVE_SUITE_FILTER: "",
-          CROSS_OS_SUITE_FILTER: "",
-          RELEASE_PACKAGE_SPEC: "",
-          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: "",
-          CODEX_PLUGIN_SPEC: "",
         },
       });
       const dispatch = readFileSync(calls, "utf8")

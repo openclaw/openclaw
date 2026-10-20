@@ -1,26 +1,26 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { renderReleaseDocsMirror } from "../../scripts/lib/release-docs-mirror.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const version = "2026.8.2";
 const footer =
   '<p><a href="https://github.com/openclaw/openclaw/blob/main/CHANGELOG.md">View full changelog</a></p>';
 
-function render(section: string, version = "2026.8.2", split = false) {
+function render(section: string, split = false) {
   const root = tempDirs.make("openclaw-changelog-html-");
   const file = path.join(root, "CHANGELOG.md");
-  writeFileSync(file, split ? "# Changelog\n\n- [Release](CHANGELOG/2026.8.2.md)\n" : section);
-  if (split) {
-    mkdirSync(path.join(root, "CHANGELOG"));
-    writeFileSync(path.join(root, "CHANGELOG", `${version}.md`), section);
-  }
-  return renderFile(file, version);
+  writeFixtureFiles(root, {
+    "CHANGELOG.md": split ? `# Changelog\n\n- [Release](CHANGELOG/${version}.md)\n` : section,
+    ...(split ? { [`CHANGELOG/${version}.md`]: section } : {}),
+  });
+  return renderFile(file);
 }
 
-function renderFile(file: string, version: string) {
+function renderFile(file: string) {
   return spawnSync("bash", ["scripts/changelog-to-html.sh", version, file], {
     encoding: "utf8",
     timeout: 10_000,
@@ -28,14 +28,14 @@ function renderFile(file: string, version: string) {
   });
 }
 
-function expectHtml(result: ReturnType<typeof renderFile>, content: string, version = "2026.8.2") {
+function expectHtml(result: ReturnType<typeof renderFile>, content: string) {
   expect(result.status, result.stderr).toBe(0);
   expect(result.stdout).toBe(`<h2>OpenClaw ${version}</h2>\n${content}\n${footer}\n`);
 }
 
 describe("changelog release HTML", () => {
   it("renders the selected split file through the source index", () => {
-    const result = render("## 2026.8.2\n\n### Fixes\n- Current release.\n", "2026.8.2", true);
+    const result = render("## 2026.8.2\n\n### Fixes\n- Current release.\n", true);
     expectHtml(result, "<h3>Fixes</h3>\n<ul>\n<li>Current release.</li>\n</ul>");
   });
 
@@ -43,25 +43,23 @@ describe("changelog release HTML", () => {
     "renders a docs mirror through its %s with one release heading",
     (route) => {
       const rootDir = tempDirs.make("openclaw-changelog-html-mirror-");
-      const version = "2026.8.2";
       const source = `docs/releases/${version}.md`;
-      const indexPath = path.join(rootDir, "CHANGELOG.md");
-      const entryPath = path.join(rootDir, "CHANGELOG", `${version}.md`);
-      mkdirSync(path.join(rootDir, "docs/releases"), { recursive: true });
-      mkdirSync(path.join(rootDir, "CHANGELOG/records"), { recursive: true });
-      writeFileSync(
-        path.join(rootDir, source),
-        '---\ntitle: "Release notes"\n---\n\n- Current release.\n',
+      writeFixtureFiles(rootDir, {
+        [source]: '---\ntitle: "Release notes"\n---\n\n- Current release.\n',
+        "CHANGELOG.md": `# Changelog\n\n- [${version}](CHANGELOG/${version}.md)\n`,
+        [`CHANGELOG/records/${version}.md`]: `## ${version}\n\n### Complete contribution record\n\nFrozen record.\n`,
+      });
+      writeFixtureFiles(rootDir, {
+        [`CHANGELOG/${version}.md`]: renderReleaseDocsMirror({
+          rootDir,
+          version,
+          sources: [source],
+        }),
+      });
+      const result = renderFile(
+        path.join(rootDir, route === "index" ? "CHANGELOG.md" : `CHANGELOG/${version}.md`),
       );
-      writeFileSync(indexPath, `# Changelog\n\n- [${version}](CHANGELOG/${version}.md)\n`);
-      writeFileSync(
-        path.join(rootDir, "CHANGELOG/records", `${version}.md`),
-        `## ${version}\n\n### Complete contribution record\n\nFrozen record.\n`,
-      );
-      writeFileSync(entryPath, renderReleaseDocsMirror({ rootDir, version, sources: [source] }));
-
-      const result = renderFile(route === "index" ? indexPath : entryPath, version);
-      expectHtml(result, "<h3>Release notes</h3>\n<ul>\n<li>Current release.</li>\n</ul>", version);
+      expectHtml(result, "<h3>Release notes</h3>\n<ul>\n<li>Current release.</li>\n</ul>");
     },
   );
 
@@ -103,17 +101,13 @@ describe("changelog release HTML", () => {
     );
     const result = render(`## 2026.8.2\n\n### Contributions\n${entries.join("\n")}\n`);
     expect(result.error).toBeUndefined();
-    expectHtml(
-      result,
-      "<h3>Contributions</h3>\n<ul>\n" +
-        entries
-          .map(
-            (_, index) =>
-              `<li><strong>Fix ${index}</strong>: preserve <code>bytes</code> & <a href="https://example.com/${index}">credit</a></li>`,
-          )
-          .join("\n") +
-        "\n</ul>",
-    );
+    const expected = entries
+      .map(
+        (_, index) =>
+          `<li><strong>Fix ${index}</strong>: preserve <code>bytes</code> & <a href="https://example.com/${index}">credit</a></li>`,
+      )
+      .join("\n");
+    expectHtml(result, `<h3>Contributions</h3>\n<ul>\n${expected}\n</ul>`);
   });
 
   it("keeps the missing-version fallback", () => {
