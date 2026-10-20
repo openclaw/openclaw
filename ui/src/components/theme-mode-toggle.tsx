@@ -21,7 +21,6 @@ export function ThemeModeToggle(props: Props) {
           {...props.menuAttributes}
           type="button"
           class="theme-mode-toggle"
-          role="menuitem"
           aria-label={tooltip()}
           onClick={(event) => {
             props.onChange?.(
