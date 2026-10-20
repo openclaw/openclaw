@@ -243,6 +243,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-companion-context.test.ts",
   "src/gateway/session-companion-rpc.test.ts",
   "src/gateway/session-companion-runtime.test.ts",
+  "src/gateway/session-companion.test.ts",
   "src/gateway/session-control-preflights.incognito.test.ts",
   "src/gateway/session-control.incognito.test.ts",
   "src/gateway/session-cost-usage-lifetime.test.ts",

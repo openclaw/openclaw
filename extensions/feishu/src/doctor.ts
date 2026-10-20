@@ -216,10 +216,10 @@ function collectFeishuSessionTargets(params: {
   );
 }
 
-function collectJsonFiles(rootDir: string, limit = 200): string[] {
+function collectJsonFiles(rootDir: string): string[] {
   const files: string[] = [];
   const visit = (dir: string) => {
-    if (files.length >= limit) {
+    if (files.length >= 200) {
       return;
     }
     for (const entry of readDirectoryEntriesSync(dir).toSorted((left, right) =>
@@ -233,7 +233,7 @@ function collectJsonFiles(rootDir: string, limit = 200): string[] {
       if (entry.isFile() && entry.name.endsWith(".json")) {
         files.push(fullPath);
       }
-      if (files.length >= limit) {
+      if (files.length >= 200) {
         return;
       }
     }

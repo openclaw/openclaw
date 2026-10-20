@@ -7,6 +7,7 @@ import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import * as clipboard from "../../lib/clipboard.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
   createGatewayRequestMock,
@@ -143,6 +144,12 @@ describe("chat pane retained presentation", () => {
 });
 
 describe("chat pane header state", () => {
+  const workspaceSession = {
+    key: "agent:main:current",
+    kind: "direct",
+    updatedAt: 0,
+  } satisfies GatewaySessionRow;
+
   it("aborts a stale header delete confirm and shows a retry notice when the connection is replaced while it is open", async () => {
     const restoreDialogPolyfill = installDialogPolyfill();
     try {
@@ -279,14 +286,10 @@ describe("chat pane header state", () => {
       client: createGatewayBrowserClientFixture(),
       sessions: createSessionCapabilityFixture(),
     });
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    const copy = vi.fn(async () => true);
-    pane.handleHeaderMenuAction("copy-path", session, "/src/openclaw", "feature/header", copy);
-    pane.handleHeaderMenuAction("copy-branch", session, "/src/openclaw", "feature/header", copy);
+    const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(true);
+    onTestFinished(() => copy.mockRestore());
+    pane.handleHeaderMenuAction("copy-path", workspaceSession, "/src/openclaw", "feature/header");
+    pane.handleHeaderMenuAction("copy-branch", workspaceSession, "/src/openclaw", "feature/header");
     await Promise.resolve();
     expect(copy).toHaveBeenNthCalledWith(1, "/src/openclaw");
     expect(copy).toHaveBeenNthCalledWith(2, "feature/header");
@@ -299,14 +302,10 @@ describe("chat pane header state", () => {
     });
     const errors = observeErrors(state);
     expect(errors()).toEqual({ lastError: null, chatError: null });
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    const copy = vi.fn(async () => false);
+    const copy = vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(false);
+    onTestFinished(() => copy.mockRestore());
 
-    pane.handleHeaderMenuAction("copy-path", session, "/src/openclaw", "feature/header", copy);
+    pane.handleHeaderMenuAction("copy-path", workspaceSession, "/src/openclaw", "feature/header");
 
     await vi.waitFor(() => expect(state.chatError).toBe("Copy failed"));
     flush();
@@ -473,12 +472,7 @@ describe("chat pane header state", () => {
       client: createGatewayBrowserClientFixture({ request }),
       sessions: createSessionCapabilityFixture(),
     });
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    pane.handleHeaderMenuAction("reveal", session, "/src/openclaw", null);
+    pane.handleHeaderMenuAction("reveal", workspaceSession, "/src/openclaw", null);
     await vi.waitFor(() => expect(state.chatError).toBe("No desktop available."));
     expect(state.lastError).toBe(state.chatError);
   });
@@ -504,13 +498,7 @@ describe("chat pane header state", () => {
       client: createGatewayBrowserClientFixture({ request }),
       sessions: createSessionCapabilityFixture(),
     });
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-
-    pane.handleHeaderMenuAction("reveal", session, "/src/openclaw", null);
+    pane.handleHeaderMenuAction("reveal", workspaceSession, "/src/openclaw", null);
     await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
     retire(pane);
     revealed.resolve({ ok: false, error: "No desktop available." });

@@ -413,6 +413,7 @@ export async function fetchClawHubPluginCatalog(
   const shared = {
     baseUrl: params.baseUrl,
     token: params.token,
+    skipAuth: params.skipAuth,
     timeoutMs: params.timeoutMs,
   };
   if (query) {

@@ -4,6 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fingerprintRuntime from "./desktop-generation-fingerprint.js";
 import {
   createCodexDesktopGenerationService,
   waitForCodexDesktopGeneration,
@@ -22,6 +23,21 @@ type WatchRegistration = {
   watcher: FakeWatcher;
 };
 
+const watchPath = vi.hoisted(() =>
+  vi.fn<
+    (
+      watchedPath: string,
+      options: { recursive: boolean },
+      listener: WatchRegistration["listener"],
+    ) => FSWatcher
+  >(),
+);
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  watch: watchPath,
+}));
+vi.mock("./desktop-generation-fingerprint.js", { spy: true });
+
 function createServiceContext(
   warn: OpenClawPluginServiceContextV2["logger"]["warn"],
   serviceHealth: NonNullable<OpenClawPluginServiceContextV2["serviceHealth"]>,
@@ -39,30 +55,29 @@ function createHarness(initialFingerprint: string, initialWatchFailures = 0) {
   let watchFailures = initialWatchFailures;
   let fingerprint = initialFingerprint;
   const registrations: WatchRegistration[] = [];
-  const readFingerprint = vi.fn(async () => fingerprint);
+  const readFingerprint = vi
+    .spyOn(fingerprintRuntime, "readMacOSDesktopGenerationFingerprint")
+    .mockClear()
+    .mockImplementation(async () => fingerprint);
   const onGenerationChange = vi.fn();
   const clearFailure = vi.fn();
   const reportFailure = vi.fn();
   const warn = vi.fn();
   let watchAttempts = 0;
   const context = createServiceContext(warn, { clearFailure, reportFailure });
-  const service = createCodexDesktopGenerationService(
-    { onGenerationChange },
-    {
-      platform: "darwin",
-      readFingerprint,
-      watchPath: (watchedPath, options, listener) => {
-        watchAttempts += 1;
-        if (watchFailures > 0) {
-          watchFailures -= 1;
-          throw new Error("watch registration unavailable");
-        }
-        const watcher = new FakeWatcher();
-        registrations.push({ watchedPath, recursive: options.recursive, listener, watcher });
-        return watcher as FSWatcher;
-      },
-    },
-  );
+  watchPath.mockImplementation((watchedPath, options, listener) => {
+    watchAttempts += 1;
+    if (watchFailures > 0) {
+      watchFailures -= 1;
+      throw new Error("watch registration unavailable");
+    }
+    const watcher = new FakeWatcher();
+    registrations.push({ watchedPath, recursive: options.recursive, listener, watcher });
+    return watcher as FSWatcher;
+  });
+  const platform = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+  const service = createCodexDesktopGenerationService({ onGenerationChange });
+  platform.mockRestore();
   return {
     service,
     context,
@@ -101,6 +116,7 @@ describe("Codex desktop generation service", () => {
     }
     current = undefined;
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it("refreshes on acquisition when the stable root cannot be watched", async () => {

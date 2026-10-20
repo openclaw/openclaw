@@ -5,7 +5,6 @@ import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
-  SpeechVoiceOption,
 } from "openclaw/plugin-sdk/speech";
 import {
   createSpeechDirectiveParser,
@@ -369,52 +368,6 @@ function createElevenLabsDirectiveParser(
   );
 }
 
-async function listElevenLabsVoices(params: {
-  apiKey: string;
-  baseUrl?: string;
-  timeoutMs?: number;
-}): Promise<SpeechVoiceOption[]> {
-  const normalizedBaseUrl = normalizeElevenLabsBaseUrl(params.baseUrl);
-  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
-    await import("openclaw/plugin-sdk/provider-http");
-  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
-    await import("openclaw/plugin-sdk/ssrf-runtime");
-  const { response, release } = await fetchWithSsrFGuard({
-    url: `${normalizedBaseUrl}/v1/voices`,
-    init: {
-      headers: {
-        "xi-api-key": params.apiKey,
-      },
-    },
-    timeoutMs: params.timeoutMs,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
-    auditContext: "elevenlabs.voices",
-  });
-  try {
-    await assertOkOrThrowProviderError(response, "ElevenLabs voices API error");
-    const json = await readProviderJsonResponse<{
-      voices?: Array<{
-        voice_id?: string;
-        name?: string;
-        category?: string;
-        description?: string;
-      }>;
-    }>(response, "elevenlabs.voices");
-    return Array.isArray(json.voices)
-      ? json.voices
-          .map((voice) => ({
-            id: voice.voice_id?.trim() ?? "",
-            name: trimToUndefined(voice.name),
-            category: trimToUndefined(voice.category),
-            description: trimToUndefined(voice.description),
-          }))
-          .filter((voice) => voice.id.length > 0)
-      : [];
-  } finally {
-    await release();
-  }
-}
-
 type ElevenLabsSynthesisRequest = Pick<
   SpeechSynthesisRequest,
   "providerConfig" | "providerOverrides" | "text" | "timeoutMs"
@@ -522,11 +475,45 @@ export function buildElevenLabsSpeechProvider({
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }
-      return listElevenLabsVoices({
-        apiKey,
-        baseUrl: req.baseUrl ?? config?.baseUrl,
+      const normalizedBaseUrl = normalizeElevenLabsBaseUrl(req.baseUrl ?? config?.baseUrl);
+      const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+        await import("openclaw/plugin-sdk/provider-http");
+      const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+        await import("openclaw/plugin-sdk/ssrf-runtime");
+      const { response, release } = await fetchWithSsrFGuard({
+        url: `${normalizedBaseUrl}/v1/voices`,
+        init: {
+          headers: {
+            "xi-api-key": apiKey,
+          },
+        },
         timeoutMs: req.timeoutMs,
+        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(normalizedBaseUrl),
+        auditContext: "elevenlabs.voices",
       });
+      try {
+        await assertOkOrThrowProviderError(response, "ElevenLabs voices API error");
+        const json = await readProviderJsonResponse<{
+          voices?: Array<{
+            voice_id?: string;
+            name?: string;
+            category?: string;
+            description?: string;
+          }>;
+        }>(response, "elevenlabs.voices");
+        return Array.isArray(json.voices)
+          ? json.voices
+              .map((voice) => ({
+                id: voice.voice_id?.trim() ?? "",
+                name: trimToUndefined(voice.name),
+                category: trimToUndefined(voice.category),
+                description: trimToUndefined(voice.description),
+              }))
+              .filter((voice) => voice.id.length > 0)
+          : [];
+      } finally {
+        await release();
+      }
     },
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured,

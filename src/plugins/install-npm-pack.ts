@@ -172,7 +172,6 @@ export async function installPluginFromNpmPackArchive(
       onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
       beforePersistentApply: params.beforePersistentApply,
       npmResolution,
-      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
     }),
   );
   emitSuccessfulPluginInstallSecurityEvent(result, {

@@ -54,7 +54,6 @@ vi.mock("../../skills/runtime/session-snapshot.js", () => ({
   resolveReusableWorkspaceSkillSnapshot: vi.fn(async () => ({
     snapshot: { prompt: "", skills: [] },
     shouldRefresh: false,
-    snapshotVersion: 0,
   })),
 }));
 
@@ -124,7 +123,7 @@ function preparationGate(phase: "approvals" | "skills") {
   } else {
     vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
       await wait();
-      return { snapshot: { prompt: "", skills: [] }, shouldRefresh: false, snapshotVersion: 0 };
+      return { snapshot: { prompt: "", skills: [] }, shouldRefresh: false };
     });
   }
   return { entered, resume };
@@ -274,7 +273,7 @@ it("refreshes skills without overwriting other session fields", async () => {
     vi.mocked(resolveReusableWorkspaceSkillSnapshot).mockImplementationOnce(async () => {
       entered.resolve();
       await resume.promise;
-      return { snapshot: skillsSnapshot, shouldRefresh: true, snapshotVersion: 0 };
+      return { snapshot: skillsSnapshot, shouldRefresh: true };
     });
     const pending = ensureSkillSnapshot({
       ...scope,

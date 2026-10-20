@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { registerAgentHarness } from "../agents/harness/registry.js";
 import type { AgentHarnessResetParams } from "../agents/harness/types.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
+import { bindHeartbeatReply } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -27,6 +28,7 @@ it.each([
   "resets native ownership appropriately for $name",
   async ({ isolatedSession, seedPredecessor, resets }) => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      bindHeartbeatReply(replySpy);
       const cfg = heartbeatTestConfig(tmpDir, "none", "whatsapp", storePath);
       cfg.agents!.defaults!.heartbeat!.isolatedSession = isolatedSession;
       const baseKey = resolveMainSessionKey(cfg);
@@ -57,7 +59,6 @@ it.each([
       await expect(
         runHeartbeatOnce({
           cfg,
-          deps: { getReplyFromConfig: replySpy },
         }),
       ).resolves.toMatchObject({ status: "ran" });
       expect(replySpy).toHaveBeenCalledOnce();
