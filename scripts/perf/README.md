@@ -1241,6 +1241,24 @@ workload in the shared Gateway/client process; they are context, not full-browse
 or production capacity measurements. This script models a reproducible lifecycle
 pattern, not a claim that all observed viewer traffic is redundant.
 
+For payload attribution, use `--scenario payloads --clients 40 --agents 24`.
+This prewarms the real public health collector, then measures one cold attach
+wave and `--rounds` reconnect waves with reused signed devices. It records
+per-field UTF-8 JSON byte totals for hello responses, health events, and presence
+events; connect p50/p99; and socket-to-hello-plus-initial-presence readiness.
+After the first maintenance tick, each wave records a synthetic context-engine
+quarantine through its owner and explicitly probes public health to prove changed
+health still broadcasts. Health RPC sizes
+are separate from the per-wave hello + health + presence traffic total. Fields
+contain sizes only; nested field totals overlap their parent. The default web
+profile uses `presence-deltas` and `hello-health-on-demand`; `--compact-payloads`
+adds `health-summary` and `hello-presence-self`. With `--client-profile native`,
+only `health-summary` is added, preserving the profile's legacy CLI controls.
+Plugins, channels, cron, and heartbeat execution are disabled; this is a small
+synthetic agent roster, not a production-state or browser-rendering benchmark.
+Run concurrent baseline/candidate pairs with the same `--start-at` and swap CPU
+halves for the next pair, as above.
+
 ## Measure session roster refreshes during row churn
 
 `session-roster-churn-measure.ts` starts an isolated loopback Gateway, creates 270

@@ -193,41 +193,47 @@ describe("sendGatewayHello update detail scope", () => {
     vi.mocked(getHealthCache).mockReturnValue(null);
   });
 
-  it.each([false, true])(
-    "sends cached health unless the client opts out (%s)",
-    async (onDemand) => {
-      const health: HealthSummary = {
-        ok: true,
-        ts: 123,
-        durationMs: 1,
-        channels: {},
-        channelOrder: [],
-        channelLabels: {},
-        heartbeatSeconds: 0,
-        agents: [],
-        sessions: { path: "", count: 5000, recent: [] },
-      };
-      vi.mocked(getHealthCache).mockReturnValue(health);
-      const context = makeContext("operator", ["operator.read"]);
-      context.connectParams = {
-        ...context.connectParams,
-        ...(onDemand ? { caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND] } : {}),
-      };
-
-      await sendGatewayHello(
-        context as never,
-        makeState("operator", ["operator.read"]) as never,
-        {},
-      );
-
-      expect(helloSnapshot(context)).toMatchObject({
-        presence: [],
-        stateVersion: { presence: 1, health: 1 },
-        uptimeMs: 1,
-      });
-      expect(helloSnapshot(context)?.health).toEqual(onDemand ? {} : health);
+  it.each([
+    { caps: [], mode: "full" },
+    { caps: [GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY], mode: "summary" },
+    { caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND], mode: "empty" },
+    {
+      caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND, GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY],
+      mode: "empty",
     },
-  );
+  ])("negotiates $mode cached health in hello", async ({ caps, mode }) => {
+    const summary = {
+      ok: true as const,
+      ts: 123,
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+    };
+    const health: HealthSummary = {
+      ...summary,
+      agents: [],
+      sessions: { path: "", count: 5000, recent: [] },
+    };
+    vi.mocked(getHealthCache).mockReturnValue(health);
+    const context = makeContext("operator", ["operator.read"]);
+    context.connectParams = {
+      ...context.connectParams,
+      caps,
+    };
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloSnapshot(context)).toMatchObject({
+      presence: [],
+      stateVersion: { presence: 1, health: 1 },
+      uptimeMs: 1,
+    });
+    expect(helloSnapshot(context)?.health).toEqual(
+      mode === "empty" ? {} : mode === "summary" ? summary : health,
+    );
+  });
 
   it.each([undefined, []])(
     "sends hello without membership reads for idle presence (%j)",
