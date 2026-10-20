@@ -13,16 +13,16 @@ vi.mock("./native-module-require.js", async (importOriginal) => ({
   tryNativeRequireModule: loadNative,
 }));
 
-const readerKeys = [
-  "getCurrentPluginMetadataSnapshot",
-  "loadPluginMetadataSnapshot",
-  "listOpenClawPluginManifestMetadata",
-  "listKnownProviderAuthEnvVarNamesCore",
-] as const;
+const reads = {
+  getCurrentPluginMetadataSnapshot: () => getCurrentPluginMetadataSnapshotRequiredRuntime({}),
+  loadPluginMetadataSnapshot: () => loadPluginMetadataSnapshotRuntime({ config: {} }),
+  listOpenClawPluginManifestMetadata: () => listOpenClawPluginManifestMetadataRuntime(),
+  listKnownProviderAuthEnvVarNamesCore: () => listKnownProviderAuthEnvVarNamesRuntime(),
+};
 let previousReaders: PropertyDescriptorMap;
 function clearReaders() {
-  for (const key of readerKeys) {
-    delete snapshotReaderSlot[key];
+  for (const key of Object.keys(reads)) {
+    Reflect.deleteProperty(snapshotReaderSlot, key);
   }
 }
 beforeEach(() => {
@@ -35,25 +35,6 @@ afterEach(() => {
   Object.defineProperties(snapshotReaderSlot, previousReaders);
 });
 
-const reads = [
-  {
-    name: "current snapshot",
-    run: () => getCurrentPluginMetadataSnapshotRequiredRuntime({}),
-  },
-  { name: "snapshot load", run: () => loadPluginMetadataSnapshotRuntime({ config: {} }) },
-  { name: "manifest metadata", run: () => listOpenClawPluginManifestMetadataRuntime() },
-  { name: "provider env names", run: () => listKnownProviderAuthEnvVarNamesRuntime() },
-];
-
-function captureFailure(run: () => unknown): unknown {
-  try {
-    run();
-  } catch (error) {
-    return error;
-  }
-  return undefined;
-}
-
 it("keeps a registered missing-current result distinct from an unavailable runtime", () => {
   snapshotReaderSlot.getCurrentPluginMetadataSnapshot = () => undefined;
   expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBeUndefined();
@@ -61,29 +42,37 @@ it("keeps a registered missing-current result distinct from an unavailable runti
 });
 
 it.each(
-  reads.flatMap(({ name, run }) => ["registered", "native"].map((owner) => ({ name, run, owner }))),
+  Object.entries(reads).flatMap(([name, run]) =>
+    ["registered", "native"].map((owner) => ({ name, run, owner })),
+  ),
 )("preserves the original $owner $name error", ({ run, owner }) => {
   const failure = new Error("metadata owner failed");
   const fail = () => {
     throw failure;
   };
   if (owner === "registered") {
-    for (const key of readerKeys) {
-      snapshotReaderSlot[key] = fail;
-    }
+    Object.assign(
+      snapshotReaderSlot,
+      Object.fromEntries(Object.keys(reads).map((key) => [key, fail])),
+    );
   } else {
     loadNative.mockImplementation(fail);
   }
-  expect(captureFailure(run)).toBe(failure);
+  const call = vi.fn(run);
+  expect(call).toThrow();
+  expect(call.mock.results[0]?.value).toBe(failure);
   if (owner === "registered") {
     expect(loadNative).not.toHaveBeenCalled();
   }
 });
 
-it.each(reads)("refuses a second transformed metadata owner for $name", ({ run }) => {
-  loadNative.mockReturnValue({ ok: false });
-  expect(run).toThrow("Host plugin metadata runtime requires native loading");
-});
+it.each(Object.entries(reads))(
+  "refuses a second transformed metadata owner for %s",
+  (_name, run) => {
+    loadNative.mockReturnValue({ ok: false });
+    expect(run).toThrow("Host plugin metadata runtime requires native loading");
+  },
+);
 
 it.each(["registered", "native"] as const)(
   "forwards policy inputs and results unchanged through the %s owner",

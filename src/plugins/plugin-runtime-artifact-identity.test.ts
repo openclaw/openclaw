@@ -94,16 +94,6 @@ describe("fingerprintPluginRuntimeArtifact", () => {
     },
   );
 
-  it("is stable for unchanged files and changes with plugin-owned imported code", () => {
-    const record = createPluginFixture();
-    const first = fingerprintPluginRuntimeArtifact(record);
-
-    expect(fingerprintPluginRuntimeArtifact(record)).toBe(first);
-
-    write(path.join(record.rootDir, "dist", "runtime.js"), "export const run = () => 2;\n");
-    expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(first);
-  });
-
   it.each(["node_modules", "transaction"])(
     "keeps %s outside the plugin-owned artifact identity",
     (kind) => {

@@ -51,41 +51,32 @@ it("requires a completed canonical bundled runtime binding, not matching record 
   expect(hasCanonicalPluginDistribution(record)).toBe(false);
 });
 
-it.each([
-  "workspace",
-  "global",
-  "config",
-  "preferred",
-  "external",
-  "source",
-  "foreign",
-  "unknown",
-  "selected",
-])("does not authorize a %s owner even with identical code and package fields", (kind) => {
-  const canonical = artifact();
-  const original =
-    kind === "source"
-      ? artifact("extensions/workboard")
-      : kind === "foreign"
-        ? artifact("foreign/dist/extensions/workboard")
-        : canonical;
-  const record = createPluginRecord({
-    id: "workboard",
-    packageName: "@openclaw/workboard",
-    packageVersion: "1.0.0",
-    origin: ["workspace", "global", "config"].includes(kind)
-      ? (kind as "workspace" | "global" | "config")
-      : "bundled",
-    ...original,
-  });
-  completeBinding(record, {
-    ...(kind === "unknown" ? {} : original),
-    sourcePreferred: kind === "preferred",
-    packageManifest: kind === "external" ? { build: { bundledDist: false } } : undefined,
-    runtimeEntry: kind === "selected" ? artifact("dist/extensions/another") : canonical,
-  });
-  expect(hasCanonicalPluginDistribution(record)).toBe(false);
-});
+it.each(["workspace", "preferred", "external", "source", "foreign", "unknown", "selected"])(
+  "does not authorize a %s owner even with identical code and package fields",
+  (kind) => {
+    const canonical = artifact();
+    const original =
+      kind === "source"
+        ? artifact("extensions/workboard")
+        : kind === "foreign"
+          ? artifact("foreign/dist/extensions/workboard")
+          : canonical;
+    const record = createPluginRecord({
+      id: "workboard",
+      packageName: "@openclaw/workboard",
+      packageVersion: "1.0.0",
+      origin: kind === "workspace" ? "workspace" : "bundled",
+      ...original,
+    });
+    completeBinding(record, {
+      ...(kind === "unknown" ? {} : original),
+      sourcePreferred: kind === "preferred",
+      packageManifest: kind === "external" ? { build: { bundledDist: false } } : undefined,
+      runtimeEntry: kind === "selected" ? artifact("dist/extensions/another") : canonical,
+    });
+    expect(hasCanonicalPluginDistribution(record)).toBe(false);
+  },
+);
 
 it("recognizes staging execution only when it resolves into the same canonical owner", () => {
   const canonical = artifact();

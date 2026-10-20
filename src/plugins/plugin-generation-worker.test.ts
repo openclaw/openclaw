@@ -36,10 +36,22 @@ import type { PluginSourceAdmissionReceipt } from "./plugin-source-admission.typ
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 
 type Fixture = ReturnType<typeof createFixture>;
 const prepare = (fixture: Fixture) =>
   preparePluginGenerationArtifact({ rootDir: fixture.root, source: fixture.entry });
+async function withPrepared<T>(
+  preparing: ReturnType<typeof prepare>,
+  run: (artifact: Awaited<ReturnType<typeof prepare>>["artifact"]) => T,
+) {
+  const { artifact } = await preparing;
+  try {
+    return await run(artifact);
+  } finally {
+    await artifact.disposeAsync();
+  }
+}
 const workersActive = () =>
   captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }).hasActiveWorkers;
 const expectBytes = (filename: string, fixture: Fixture) =>
@@ -103,51 +115,44 @@ it("scopes worker admission metadata while reusing native captures from another 
   await withWorkerFixture("worker-admission-scope", async ({ state, fixture, cache }) => {
     const neighbor = createFixture(state.path("installed-neighbor"), false);
     const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
+    preparePluginNativeAdmissions(fixture.index, cache);
+    preparePluginNativeAdmissions(neighbor.index, cache);
+    const shared = capturePluginGenerationArtifact(neighbor.root);
     try {
-      preparePluginNativeAdmissions(fixture.index, cache);
-      preparePluginNativeAdmissions(neighbor.index, cache);
-      const shared = capturePluginGenerationArtifact(neighbor.root);
-      try {
-        const sharedNative = fs.realpathSync(shared.resolve(neighbor.filename));
-        for (const warm of [false, true]) {
-          posts.mockClear();
-          const prepared = await prepare(fixture);
-          try {
-            const task = posts.mock.calls
-              .map(([value]) => (isRecord(value) ? value.input : undefined))
-              .find((input) => isRecord(input) && input.operation === "capture");
-            expect(task).toBeDefined();
-            // The observed task is the real capture packet, before structured cloning.
-            const { admission } = task as Extract<GenerationWorkerInput, { operation: "capture" }>;
-            expect([...admission.owners.keys()]).toEqual([fixture.root]);
-            expect(admission.owners.get(fixture.root)).toEqual({
-              pluginId: "fixture",
-              rootDir: fixture.root,
-              source: fixture.entry,
-              setupSource: undefined,
-              installRecordHash: undefined,
-            });
-            expect([...admission.receipts.keys()]).toEqual(warm ? [`${fixture.root}\0`] : []);
-            expect(nativeAdmissionStateFor().receipts.size).toBe(2);
-            expectBytes(prepared.artifact.resolve(fixture.filename), fixture);
-            const captured = prepared.artifact.captureResolvedModule(neighbor.filename)!;
-            const sharedStat = fs.statSync(sharedNative, { bigint: true });
-            expect(fs.statSync(captured, { bigint: true })).toMatchObject({
-              dev: sharedStat.dev,
-              ino: sharedStat.ino,
-            });
-            expectBytes(captured, neighbor);
-          } finally {
-            await prepared.artifact.disposeAsync();
-          }
-          expect(workersActive()).toBe(false);
-          expect(nativeAdmissionStateFor().roots.size).toBeGreaterThan(0);
-        }
-      } finally {
-        await shared.disposeAsync();
+      const sharedNative = fs.realpathSync(shared.resolve(neighbor.filename));
+      for (const warm of [false, true]) {
+        posts.mockClear();
+        await withPrepared(prepare(fixture), async (artifact) => {
+          const task = posts.mock.calls
+            .map(([value]) => (isRecord(value) ? value.input : undefined))
+            .find((input) => isRecord(input) && input.operation === "capture");
+          expect(task).toBeDefined();
+          // The observed task is the real capture packet, before structured cloning.
+          const { admission } = task as Extract<GenerationWorkerInput, { operation: "capture" }>;
+          expect([...admission.owners.keys()]).toEqual([fixture.root]);
+          expect(admission.owners.get(fixture.root)).toEqual({
+            pluginId: "fixture",
+            rootDir: fixture.root,
+            source: fixture.entry,
+            setupSource: undefined,
+            installRecordHash: undefined,
+          });
+          expect([...admission.receipts.keys()]).toEqual(warm ? [`${fixture.root}\0`] : []);
+          expect(nativeAdmissionStateFor().receipts.size).toBe(2);
+          expectBytes(artifact.resolve(fixture.filename), fixture);
+          const captured = artifact.captureResolvedModule(neighbor.filename)!;
+          const sharedStat = fs.statSync(sharedNative, { bigint: true });
+          expect(fs.statSync(captured, { bigint: true })).toMatchObject({
+            dev: sharedStat.dev,
+            ino: sharedStat.ino,
+          });
+          expectBytes(captured, neighbor);
+        });
+        expect(workersActive()).toBe(false);
+        expect(nativeAdmissionStateFor().roots.size).toBeGreaterThan(0);
       }
     } finally {
-      posts.mockRestore();
+      await shared.disposeAsync();
     }
   });
 });
@@ -196,7 +201,6 @@ it("releases host preparation custody after unexpected worker exit with an outst
       // Pool retirement releases preparation custody asynchronously after confirmed exit.
       await vi.waitFor(() => expect(fs.existsSync(captured)).toBe(false));
     } finally {
-      posts.mockRestore();
       await closeDefaultRetainedNativeWorkerSource();
     }
   });
@@ -308,12 +312,7 @@ it("finishes a capture after more than two minutes without retiring its worker",
       try {
         await vi.advanceTimersByTimeAsync(120_001);
         releasePublication();
-        const prepared = await preparing;
-        try {
-          expectSource(prepared.artifact, fixture.entry);
-        } finally {
-          await prepared.artifact.disposeAsync();
-        }
+        await withPrepared(preparing, (artifact) => expectSource(artifact, fixture.entry));
       } finally {
         vi.useRealTimers();
       }
@@ -337,10 +336,9 @@ it("publishes native admission to pinned install roots while capture storage is 
         withPluginInstallRoots(roots, () =>
           withStorage(state.stateDir, async () => {
             preparePluginNativeAdmissions(fixture.index, cache);
-            const prepared = await prepare(fixture);
-            try {
+            await withPrepared(prepare(fixture), async (artifact) => {
               expect(fs.existsSync(state.statePath("tmp", "plugin-captures"))).toBe(false);
-              const captured = fs.realpathSync(prepared.artifact.resolve(fixture.filename));
+              const captured = fs.realpathSync(artifact.resolve(fixture.filename));
               expectBytes(captured, fixture);
               const persisted = await readPersistedInstalledPluginIndex({
                 stateDir: roots.stateDir,
@@ -351,9 +349,7 @@ it("publishes native admission to pinned install roots while capture storage is 
                 stateDir: state.stateDir,
               });
               expect(Object.keys(redirected?.plugins[0]?.sourceAdmissions ?? {})).toHaveLength(0);
-            } finally {
-              await prepared.artifact.disposeAsync();
-            }
+            });
           }),
         ),
       );
