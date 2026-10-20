@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi } from "vitest";
+import { assert, expect, it, vi } from "vitest";
 import { createRestartRecoveryOperatorSource } from "../agents/operator-run-recovery-source.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../agents/subagents/registry/subagent-lifecycle-events.js";
@@ -102,25 +102,21 @@ it("suspends native completion delivery after its one recorded failure", async (
         role: "operator",
         authMethod: "token",
       });
-      const captured = expectDefined(
-        await captureGatewayOperatorRunAuthority({
-          client: expectDefined(captureAgentTurnPrincipal(client), "operator principal"),
-          context,
-          sourceAuthority: null,
-        }),
-        "admitted original operator",
-      );
+      const captured = await captureGatewayOperatorRunAuthority({
+        client: expectDefined(captureAgentTurnPrincipal(client), "operator principal"),
+        context,
+        sourceAuthority: null,
+      });
+      assert(captured, "admitted original operator");
       try {
-        const operatorRecoverySource = expectDefined(
-          createRestartRecoveryOperatorSource({
-            authority: captured.authority,
-            entry: requester,
-            agentId: "main",
-            sessionKey: subagent.requesterSessionKey,
-            sourceRunId: "completion-expiry-requester-turn",
-          }),
-          "host-captured original operator source",
-        );
+        const operatorRecoverySource = createRestartRecoveryOperatorSource({
+          authority: captured.authority,
+          entry: requester,
+          agentId: "main",
+          sessionKey: subagent.requesterSessionKey,
+          sourceRunId: "completion-expiry-requester-turn",
+        });
+        assert(operatorRecoverySource, "host-captured original operator source");
         await addSubagentRunForTests({
           ...subagent,
           requesterStorePath: testState.sessionStorePath,

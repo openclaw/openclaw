@@ -7,6 +7,10 @@ import { setImmediate } from "node:timers/promises";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type WebSocketClient from "ws";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
@@ -134,13 +138,11 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
       ws.on("message", (data) => {
         const frame = parseMinimalGatewayRequestFrame(data);
         requests.push(frame);
-        if (frame.method === "connect") {
-          connectReceived.resolve();
+        if (frame.method !== "connect") {
+          return;
         }
-        if (
-          frame.method === "connect" &&
-          (behavior === "transport error" || behavior === "hello then transport error")
-        ) {
+        connectReceived.resolve();
+        if (behavior === "transport error" || behavior === "hello then transport error") {
           socket.cork();
           if (behavior === "hello then transport error") {
             sendMinimalGatewayResponse(ws, frame.id!, buildMinimalGatewayHelloOkPayload());
@@ -150,7 +152,7 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
           socket.uncork();
           return;
         }
-        if (frame.method === "connect" && behavior !== "no response") {
+        if (behavior !== "no response") {
           ws.send(
             JSON.stringify({
               type: "res",
@@ -170,42 +172,23 @@ async function createAcquisitionPeer(behavior: PeerBehavior) {
   });
   const close = async () => {
     // Release a withheld close handshake only after acquisition has entered server cleanup.
-    for (const peer of wss.clients) {
-      peer.resume();
-    }
+    wss.clients.forEach((peer) => peer.resume());
     if (server.listening) {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
     }
   };
   const dispose = async () => {
     // Assertions precede this safety net, including for still-CONNECTING sockets.
-    const clientClosures = clients.map(async (client) => {
-      if (client.readyState !== WebSocket.CLOSED) {
-        const closure = new Promise<void>((resolve) => {
-          client.once("close", () => resolve());
-        });
-        client.terminate();
-        await closure;
-      }
-    });
-    for (const socket of sockets) {
-      socket.destroy();
-    }
+    const clientClosures = clients.map(closeGatewayTestWebSocket);
+    sockets.forEach((socket) => socket.destroy());
     await Promise.all(clientClosures);
     await closeMinimalGatewayServer(wss);
     await close();
   };
   try {
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("acquisition peer did not bind");
-    }
+    const port = Number(new URL(await listenLoopback(server)).port);
     return {
-      port: address.port,
+      port,
       clients,
       closed,
       errors,

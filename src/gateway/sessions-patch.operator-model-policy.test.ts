@@ -48,23 +48,17 @@ function fixture(defaultOnly = false) {
     modelOverride: "blocked",
     contextWindow: "extended",
   };
-  let current = true;
+  const source = new AbortController();
   let modelPolicy = prepareOperatorModelPolicy({ cfg, policy: { deny: ["fixture/blocked"] } });
   const operatorAuthority = createAdmittedRunOperatorAuthority({
     profileId: "limited-operator",
     scopes: ["operator.write"],
-    assertCurrent: () => {
-      if (!current) {
-        throw new Error("operator source changed");
-      }
-    },
+    assertCurrent: () => source.signal.throwIfAborted(),
     get modelPolicy() {
       return modelPolicy;
     },
   });
-  const revoke = () => {
-    current = false;
-  };
+  const revoke = () => source.abort(new Error("operator source changed"));
   const tighten = () => {
     modelPolicy = prepareOperatorModelPolicy({ cfg, policy: { allow: [] } });
   };

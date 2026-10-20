@@ -44,20 +44,19 @@ describe("snooze", () => {
 
   test("preserves the pin and original stamp until a different wake time is chosen", async () => {
     const value = fixture({ pinnedAt: 10, parentSessionKey: MAIN_SESSION_KEY });
-    const patch = (snoozedUntil: number) => value.patch({ snoozedUntil });
-    expect(expectPatchOk(await patch(wakeAt))).toMatchObject({
-      snoozedUntil: wakeAt,
-      snoozedAt: now,
-      pinnedAt: 10,
-    });
-    expect(value.store[key]).not.toHaveProperty("archivedAt");
-    vi.mocked(Date.now).mockReturnValue(now + 100);
-    expect(expectPatchOk(await patch(wakeAt)).snoozedAt).toBe(now);
-    expect(expectPatchOk(await patch(wakeAt + 100))).toMatchObject({
-      snoozedUntil: wakeAt + 100,
-      snoozedAt: now + 100,
-      pinnedAt: 10,
-    });
+    for (const [clock, snoozedUntil, snoozedAt] of [
+      [now, wakeAt, now],
+      [now + 100, wakeAt, now],
+      [now + 100, wakeAt + 100, now + 100],
+    ] as const) {
+      vi.mocked(Date.now).mockReturnValue(clock);
+      expect(expectPatchOk(await value.patch({ snoozedUntil }))).toMatchObject({
+        snoozedUntil,
+        snoozedAt,
+        pinnedAt: 10,
+      });
+      expect(value.store[key]).not.toHaveProperty("archivedAt");
+    }
   });
 
   test.each<[string, Entry, Patch, string]>([
