@@ -694,7 +694,9 @@ it.each(["owned", "flag-only", "changed namespace", "released owner", "replaced 
         const admission = maintenance.run(() =>
           guardUpdateDoctorSchemaUpgrade({ schemas: f.schemas }),
         );
-        if (mode === "flag-only") {
+        if (mode === "owned") {
+          expect(await admission).toBe(f.schemas);
+        } else if (mode === "flag-only") {
           await expect(admission).rejects.toMatchObject({ code: "update-schema-bump-unfenced" });
         } else {
           await expect(admission).rejects.toThrow(

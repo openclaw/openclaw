@@ -5,7 +5,6 @@ import type {
   WorkerTranscriptMessage,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
-import { makeAgentUserMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { createZeroUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
@@ -68,10 +67,15 @@ export const PROVIDER_REPLAY = {
 
 export function createTurnMessages(userText = "Inspect the workspace"): WorkerTranscriptMessage[] {
   return [
-    makeAgentUserMessage({ content: [{ type: "text", text: userText }], timestamp: 100 }),
+    {
+      role: "user",
+      content: [{ type: "text", text: userText }],
+      timestamp: 100,
+    },
     {
       role: "assistant",
       content: [
+        { type: "thinking", thinking: "I will inspect it." },
         {
           type: "toolCall",
           id: "call-read-1",
@@ -81,6 +85,14 @@ export function createTurnMessages(userText = "Inspect the workspace"): WorkerTr
       ],
       ...MODEL,
       providerReplay: structuredClone(PROVIDER_REPLAY),
+      diagnostics: [
+        {
+          type: "provider-warning",
+          timestamp: 201,
+          error: { name: "", message: "diagnostic", stack: "", code: 0 },
+          details: { empty: "", enabled: false },
+        },
+      ],
       usage: ZERO_USAGE,
       stopReason: "toolUse",
       timestamp: 200,

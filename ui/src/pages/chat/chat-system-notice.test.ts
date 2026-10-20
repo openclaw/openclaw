@@ -56,9 +56,24 @@ it.each([
     "An automation failed — asked the agent to investigate and continue if needed.",
     false,
   ],
-  ["restart-sentinel", "System · gateway restarted", "Gateway restarted.", false],
-  ["cli_harness_context", "System · injected context", "Skill context", true],
-  ["claude_cli_task_notification", "System · background task", "Task completed", true],
+  [
+    "restart-sentinel",
+    "System · gateway restarted",
+    "Gateway restarted during update 2026.8.2 -> 2026.8.3.",
+    false,
+  ],
+  [
+    "cli_harness_context",
+    "System · injected context",
+    "Base directory for this skill: /tmp/skills/autoreview\n\n# Auto Review",
+    true,
+  ],
+  [
+    "claude_cli_task_notification",
+    "System · background task",
+    "<task-notification>\n<status>completed</status>\n</task-notification>",
+    true,
+  ],
   ...[undefined, " restart-sentinel "].map(
     (sourceTool) => [sourceTool, "System", "Keep the raw fallback copy.", false] as const,
   ),
