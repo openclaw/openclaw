@@ -205,9 +205,8 @@ describe("doctor SQLite maintenance lock", () => {
       expect(run).not.toHaveBeenCalled();
       await expect(fs.readFile(marker, "utf8")).resolves.toBe("Gateway data\n");
       await expect(fs.readFile(owner.ownerLockPath, "utf8")).resolves.toBe(owner.raw);
-      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).toThrow(
-        /cannot verify Gateway ownership.*heartbeat age does not prove.*inside the Gateway container/,
-      );
+      // Ordinary SQLite access does not grant the maintenance custody refused above.
+      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).not.toThrow();
     },
   );
 
@@ -256,9 +255,7 @@ describe("doctor SQLite maintenance lock", () => {
       await fs.utimes(owner.ownerLockPath, expired, expired);
       const run = vi.fn();
 
-      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).toThrow(
-        /cannot verify Gateway ownership.*openclaw gateway recover-lock/,
-      );
+      expect(() => assertStateDatabaseAccessAllowed(owner.databasePath)).not.toThrow();
       await expect(fixture.maintain(run)).rejects.toThrow(
         /cannot verify Gateway ownership.*openclaw gateway recover-lock/,
       );
