@@ -109,6 +109,12 @@ const plans: ChannelLegacyStateMigrationPlan[] = [
     sourcePath: "/oauth/creds.json",
     targetPath: "/oauth/demo/creds.json",
   },
+  {
+    kind: "copy",
+    label: "Backup",
+    sourcePath: "/state/backup.json",
+    targetPath: "/state/demo/backup.json",
+  },
 ];
 it.each([
   { input: [], preview: null },
@@ -118,6 +124,7 @@ it.each([
       preview: [
         "- Cache: /state/cache.json",
         "- Credentials: /oauth/creds.json → /oauth/demo/creds.json",
+        "- Backup: /state/backup.json → /state/demo/backup.json",
       ],
     },
   },
@@ -139,5 +146,6 @@ it.each([
   expect(runLegacyMigrationPlans).toHaveBeenCalledExactlyOnceWith([
     { ...plans[0], stateDir: "/state" },
     plans[1],
+    plans[2],
   ]);
 });

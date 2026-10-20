@@ -560,8 +560,11 @@ describe("DraftGatewayState", () => {
   ] as const)(
     "settles name discovery (advertised: %s, response: %j)",
     async (advertised, response, name, scope) => {
-      const pending = createDeferred<typeof response>();
-      let current: typeof response | Promise<typeof response> = { machineName: "Current Gateway" };
+      type SystemInfoResponse = { machineName?: string; hostname?: string } | null;
+      const pending = createDeferred<SystemInfoResponse>();
+      let current: SystemInfoResponse | Promise<SystemInfoResponse> = {
+        machineName: "Current Gateway",
+      };
       const request = vi.fn(async (method: string) => {
         if (method === "projects.list") {
           return { projects: [] };
