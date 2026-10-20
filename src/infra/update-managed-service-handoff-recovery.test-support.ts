@@ -45,7 +45,12 @@ export function createManagedHandoffRecoveryFixture(root: string) {
     timeoutMs: null,
   };
   const repairFacts = vi.spyOn(cleanup, "readManagedHandoffRepairFacts").mockResolvedValue(facts);
-  const processCensus: { matchingPids: number[]; unverifiedPids: number[]; error?: string } = {
+  const processCensus: {
+    matchingPids: number[];
+    unverifiedPids: number[];
+    warnings?: string[];
+    error?: string;
+  } = {
     matchingPids: [],
     unverifiedPids: [],
   };
@@ -64,8 +69,8 @@ export function createManagedHandoffRecoveryFixture(root: string) {
   const databasePath = path.join(control, "managed-update-handoffs.sqlite");
   const database = createManagedHandoffLeaseDatabase(databasePath);
   const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
-  const current = () => {
-    const found = store.read(root);
+  const current = (key = root) => {
+    const found = store.read(key);
     if (found.kind !== "current") {
       throw new Error("Expected a retained handoff");
     }
@@ -82,27 +87,32 @@ export function createManagedHandoffRecoveryFixture(root: string) {
     facts,
     diagnosticPath,
     current,
-    seed(options: { ageMs?: number; timeoutMs?: number } = {}): ManagedHandoffLease {
+    seed(
+      options: { ageMs?: number; timeoutMs?: number; legacy?: string } = {},
+    ): ManagedHandoffLease {
       const updatedAt = Date.now() - (options.ageMs ?? 45 * 60_000 + 1_000);
+      const key = options.legacy ? `${root}/.openclaw-update-child-${options.legacy}` : root;
       const payload = JSON.stringify({
         version: 2,
         executor,
         helper,
-        action: { kind: "triage", phase: "uncertain", lifetime: { kind: "foreground", boot } },
+        action: options.legacy
+          ? { kind: "update" }
+          : { kind: "triage", phase: "uncertain", lifetime: { kind: "foreground", boot } },
       });
       facts.timeoutMs = options.timeoutMs ?? null;
       database(true, (db) =>
         executeSqliteQuerySync(
           db,
           leaseQueries(db).insertInto("managed_update_handoffs").values({
-            install_root: root,
+            install_root: key,
             owner: "prior-owner",
             payload_json: payload,
             updated_at: updatedAt,
           }),
         ),
       );
-      return current();
+      return current(key);
     },
     readMetadata(lease: ManagedHandoffLease) {
       return database(true, (db) =>

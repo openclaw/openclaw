@@ -35,6 +35,7 @@ const { values } = parseArgs({
     samples: { type: "string", default: "40" },
     "poll-ms": { type: "string", default: "0" },
     "churn-ms": { type: "string", default: "0" },
+    "nested-cwd": { type: "boolean" },
     "start-at": { type: "string" },
     output: { type: "string" },
     revision: { type: "string" },
@@ -57,6 +58,7 @@ summary polls. Combine --tabs 3 with
 checkout. The RPC boundary starts an isolated loopback Gateway on --port >=40000.
 Use --tracked 267000 at seed time for an unchanged large tracked inventory. Files
 are empty and written sequentially; Linux Dirty memory is checked every 1,000 files.
+Use --nested-cwd to launch sessions from the existing new/ subdirectory.
 Add --poll-state-dir <other seeded fixture> to poll multiple checkouts concurrently
 through separate sessions. Extra fixtures are read-only and prohibit --mutate.
 Use --observe-git-queues to collect queue timings through benchmark-only loader
@@ -504,7 +506,7 @@ async function measureRpc(fixture: object) {
       await ready.promise;
     }
     const targets = checkoutRoots.map((cwd, checkout) => ({
-      cwd,
+      cwd: values["nested-cwd"] ? path.join(cwd, "new") : cwd,
       params: {
         sessionKey: `agent:main:synthetic-diff-contention${checkout ? `-${checkout}` : ""}`,
         scope: "all",

@@ -148,7 +148,6 @@ function normalizeGraphAttachment(att: MSTeamsAttachmentLike): MSTeamsAttachment
     contentType: normalizeContentType(att.contentType),
     contentUrl: att.contentUrl ?? undefined,
     name: att.name ?? undefined,
-    thumbnailUrl: att.thumbnailUrl ?? undefined,
     content,
   };
 }
@@ -262,7 +261,7 @@ export async function downloadMSTeamsGraphMedia(params: {
     });
   } catch (err) {
     logGraphFailure("token acquisition", err);
-    return { media: [], messageUrl, tokenError: true };
+    return { media: [], tokenError: true };
   }
 
   let messageAttachments: MSTeamsAttachmentLike[] = [];
@@ -356,6 +355,5 @@ export async function downloadMSTeamsGraphMedia(params: {
     attachmentCount: filteredAttachments.length + sharePointMedia.length,
     hostedStatus: hosted.status,
     attachmentStatus: messageStatus,
-    messageUrl,
   };
 }

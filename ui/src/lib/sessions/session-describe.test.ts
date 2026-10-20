@@ -93,6 +93,38 @@ describe("session descriptor reads", () => {
     expect(h.read).toHaveBeenCalledTimes(8);
   });
 
+  it.each(["done", "running"] as const)(
+    "resamples unchanged accumulated runtime when a %s session starts another run",
+    async (status) => {
+      const previous: GatewaySessionRow = {
+        ...initial,
+        status,
+        lastRunId: "old-run",
+        runtimeMs: 500,
+      };
+      vi.setSystemTime(1_000);
+      h.setRow(previous);
+      await h.sessions.describe({ key });
+      vi.setSystemTime(10_000);
+      const running: GatewaySessionRow = {
+        ...previous,
+        updatedAt: 2,
+        status: "running",
+        lastRunId: "new-run",
+        activeRunIds: ["new-run"],
+      };
+      h.event("sessions.changed", { session: running, ancestorSessions: [] });
+      expect((await h.sessions.describe({ key })).session?.runtimeSampledAt).toBe(10_000);
+      vi.setSystemTime(20_000);
+      h.event("sessions.changed", {
+        session: { ...running, updatedAt: 3, activeRunIds: ["new-run"], label: "Renamed" },
+        ancestorSessions: [],
+      });
+      expect((await h.sessions.describe({ key })).session?.runtimeSampledAt).toBe(10_000);
+      expect(h.read).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("reuses a descriptor across unchanged row observations without a time limit", async () => {
     const first = { ...initial, snapshotAt: 1 };
     h.setRow(first);
@@ -110,9 +142,57 @@ describe("session descriptor reads", () => {
     expect(await h.sessions.describe({ key })).toEqual(described);
   });
 
+  it.each([false, true])(
+    "reuses full event snapshots with previews=%s when reopening details",
+    async (previews) => {
+      const params = { key, includeDerivedTitles: previews, includeLastMessage: previews };
+      h.setRow({ ...initial, label: "Original", contextTokens: 32_768 });
+      await h.sessions.describe(params);
+      for (let revision = 2; revision <= 12; revision++) {
+        vi.setSystemTime(revision * 1_000);
+        const next = {
+          ...initial,
+          updatedAt: revision,
+          contextTokens: 65_536,
+          totalTokens: revision,
+          runtimeMs: revision * 100,
+        };
+        h.setRow(next);
+        const enrichment =
+          revision % 2 === 0
+            ? {
+                derivedTitle: "Current title",
+                lastMessagePreview: "Current message",
+                lastAssistantMessage: "Current reply",
+              }
+            : {};
+        h.event(revision % 2 ? "session.message" : "sessions.changed", {
+          agentId: "main",
+          reason: "patch",
+          session: {
+            ...next,
+            ...enrichment,
+          },
+          ancestorSessions: [],
+        });
+        expect(await h.sessions.describe(params)).toEqual({
+          session: {
+            ...next,
+            runtimeSampledAt: revision * 1_000,
+            ...(previews ? enrichment : {}),
+          },
+        });
+      }
+      expect(h.read).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it.each([
     { cause: "observed revision", phase: "completed", coverage: null },
     { cause: "sessions.changed", phase: "pending", coverage: null },
+    { cause: "sessions.changed", phase: "completed", coverage: null },
+    { cause: "compact row", phase: "completed", coverage: null },
+    { cause: "replacement", phase: "completed", coverage: null },
     { cause: "config.changed", phase: "completed", coverage: null },
     { cause: "chat.metadata.changed", phase: "completed", coverage: null },
     { cause: "refresh", phase: "pending", coverage: null },
@@ -142,7 +222,12 @@ describe("session descriptor reads", () => {
       const metadata = cause === "config.changed" || cause === "chat.metadata.changed";
       const next = metadata
         ? { ...parent, contextTokens: 262_144 }
-        : { ...parent, updatedAt: 2, label: "New revision" };
+        : {
+            ...parent,
+            ...(cause === "replacement" ? { sessionId: "replacement" } : {}),
+            updatedAt: 2,
+            label: "New revision",
+          };
       h.setRow(next);
       if (coverage) {
         h.event("sessions.changed", {
@@ -160,11 +245,19 @@ describe("session descriptor reads", () => {
         await h.sessions.refresh({ agentId: "main" });
       } else if (cause === "sessions.changed") {
         h.event(cause, { key, agentId: "main", reason: "patch", session: next });
+      } else if (cause === "compact row" || cause === "replacement") {
+        h.event("sessions.changed", {
+          agentId: "main",
+          reason: "patch",
+          session: { ...next, ...(cause === "compact row" ? { rowMode: "compact" } : {}) },
+          ancestorSessions: [],
+        });
       } else if (metadata) {
         h.event(cause, {});
       }
       const fresh = h.sessions.describe({ key: parentKey }, { refresh: cause === "refresh" });
-      const calls = coverage === "unrelated" ? 1 : 2;
+      const calls =
+        coverage === "unrelated" || (coverage === "parent" && phase === "completed") ? 1 : 2;
       const expected = { session: coverage === "unrelated" ? parent : next };
       expect(h.read).toHaveBeenCalledTimes(calls);
       // Unrelated pending reads still wait for their original response.
@@ -227,7 +320,7 @@ describe("session descriptor reads", () => {
       expect(h.read).toHaveBeenCalledTimes(1);
       emit(19, true);
       await h.sessions.describe({ key });
-      expect(h.read).toHaveBeenCalledTimes(2);
+      expect(h.read).toHaveBeenCalledTimes(1);
     },
   );
 

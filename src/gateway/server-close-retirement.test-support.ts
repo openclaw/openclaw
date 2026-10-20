@@ -5,7 +5,8 @@ import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js";
 import { createCliLiveSessionCapability } from "../agents/cli-runner/cli-live-session-registry.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
+import { enqueueSwarmRun } from "../agents/subagents/swarm/swarm-scheduler.js";
+import { testing } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { CliBackendLiveSessionHandle } from "../plugins/cli-backend.types.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
@@ -152,9 +153,7 @@ export function registerGatewayResourceRetirementTests(
       const resolveGatewayContext = () => undefined;
       const cleanupError = new Error("queued engine disposal failed");
       const failure = retained ? new PluginRuntimeCloseRetainedError(cleanupError) : cleanupError;
-      const onRemoved = vi.fn(async () => {
-        throw failure;
-      });
+      const onRemoved = vi.fn(() => Promise.reject(failure));
       enqueueSwarmRun({
         groupId: `failed-queued-cleanup-${ownership}`,
         runId: `failed-queued-${ownership}`,
@@ -184,9 +183,6 @@ export function registerGatewayResourceRetirementTests(
         expect(retireRegistry).toHaveBeenCalledTimes(retained ? 0 : 1);
         expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledTimes(retained ? 0 : 1);
       } finally {
-        releaseSwarmRun(`failed-queued-blocker-${ownership}`);
-        const { testing } =
-          await import("../agents/subagents/swarm/swarm-scheduler.test-support.js");
         testing.reset();
       }
     },

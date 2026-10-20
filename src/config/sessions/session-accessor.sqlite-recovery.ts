@@ -146,6 +146,8 @@ export async function recoverSessionEntryFromRestartTombstone(
             ([key]) => !planned.unavailableParticipantKeys?.includes(key),
           ),
         ),
+        undefined,
+        planned.fullEntries,
       );
     },
   );

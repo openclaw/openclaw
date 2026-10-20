@@ -450,9 +450,7 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
       if (mode !== "recover") {
         expect(session.getLastAssistantText()).toBeUndefined();
         expect(events.filter((event) => event.type === "auto_retry_end")).toEqual(
-          mode === "exhaust" || mode === "cancel-retry"
-            ? [expect.objectContaining({ success: false, attempt: 1 })]
-            : [],
+          mode === "exhaust" || mode === "cancel-retry" ? [{ type: "auto_retry_end" }] : [],
         );
         return;
       }
@@ -468,8 +466,8 @@ it.each(["recover", "exhaust", "cancel", "cancel-retry", "terminate"])(
       ).toMatchObject([
         { toolCallId: "settled-1|fc_settled", content: [{ type: "text", text: "saved result" }] },
       ]);
-      expect(events.filter((event) => event.type === "auto_retry_end")).toMatchObject([
-        { success: true, attempt: 1 },
+      expect(events.filter((event) => event.type === "auto_retry_end")).toEqual([
+        { type: "auto_retry_end" },
       ]);
       const recordedFailures = sessionManager
         .getBranch()

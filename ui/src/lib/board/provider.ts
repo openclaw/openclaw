@@ -26,7 +26,6 @@ function createNullProvider(sessionKey: string): BoardProvider {
   };
   const widgetAppView = async (): Promise<BoardWidgetAppViewState> => ({
     status: "stale",
-    error: "Session dashboard unavailable",
   });
   return {
     sessionKey,

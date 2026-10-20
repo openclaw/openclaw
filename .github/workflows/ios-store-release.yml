@@ -19,6 +19,10 @@ on:
           - release
           - testflight
           - screenshots
+      resource_diagnostics:
+        description: Collect the temporary resource timeline (screenshots operation only)
+        type: boolean
+        default: true
 
 permissions: {}
 
@@ -90,7 +94,10 @@ jobs:
       - name: Capture iPhone, iPad, and Watch screenshots
         env:
           OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
-        run: pnpm ios:screenshots
+          OPENCLAW_IOS_RESOURCE_DIAGNOSTICS: ${{ inputs.resource_diagnostics && '1' || '0' }}
+        run: |
+          node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
+            pnpm ios:screenshots
 
       - name: Retain screenshots and sanitized diagnostics
         if: always()
@@ -101,6 +108,7 @@ jobs:
             apps/ios/fastlane/screenshots/en-US/*.png
             apps/ios/build/SnapshotTestResults/capture-attempts.json
             apps/ios/build/screenshot-diagnostics.json
+            ${{ runner.temp }}/ios-resource-timeline.jsonl
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -247,10 +255,12 @@ jobs:
           OPENCLAW_TESTFLIGHT_GROUP_ID: ${{ vars.OPENCLAW_TESTFLIGHT_GROUP_ID }}
           SCAN_APP_NAME: OpenClaw
           SCAN_DEPLOYMENT_TARGET_VERSION: "18.0"
+          OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
         run: |
           set -euo pipefail
           gh auth setup-git
-          pnpm ios:release:upload -- \
+          node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
+            pnpm ios:release:upload -- \
             --destination "$IOS_RELEASE_DESTINATION" \
             --recovery-dir "$RUNNER_TEMP/ios-release-recovery"
 
@@ -290,8 +300,11 @@ jobs:
           path: |
             ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/screenshots/*.png
             ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/capture-attempts.json
+            ${{ runner.temp }}/ios-release-recovery/screenshot-diagnostics/screenshot-diagnostics.json
             ${{ runner.temp }}/ios-release-recovery/source/apps/ios/fastlane/screenshots/en-US/*.png
             ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/SnapshotTestResults/capture-attempts.json
+            ${{ runner.temp }}/ios-release-recovery/source/apps/ios/build/screenshot-diagnostics.json
+            ${{ runner.temp }}/ios-resource-timeline.jsonl
           if-no-files-found: ignore
           compression-level: 0
           retention-days: 30

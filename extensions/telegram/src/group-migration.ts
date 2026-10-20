@@ -5,12 +5,9 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 
 type TelegramGroups = Record<string, TelegramGroupConfig>;
 
-type MigrationScope = "account" | "global";
-
 type TelegramGroupMigrationResult = {
   migrated: boolean;
   skippedExisting: boolean;
-  scopes: MigrationScope[];
 };
 
 function resolveAccountGroups(
@@ -41,16 +38,16 @@ export function migrateTelegramGroupConfig(params: {
   oldChatId: string;
   newChatId: string;
 }): TelegramGroupMigrationResult {
-  const scopes: MigrationScope[] = [];
+  let migrated = false;
   let skippedExisting = false;
 
   const migrationTargets = [
-    { scope: "account", groups: resolveAccountGroups(params.cfg, params.accountId) },
-    { scope: "global", groups: params.cfg.channels?.telegram?.groups },
-  ] as const;
+    resolveAccountGroups(params.cfg, params.accountId),
+    params.cfg.channels?.telegram?.groups,
+  ];
 
   const { oldChatId, newChatId } = params;
-  for (const { scope, groups } of migrationTargets) {
+  for (const groups of migrationTargets) {
     if (!groups || oldChatId === newChatId || !Object.hasOwn(groups, oldChatId)) {
       continue;
     }
@@ -60,8 +57,8 @@ export function migrateTelegramGroupConfig(params: {
     }
     groups[newChatId] = expectDefined(groups[oldChatId], "owned Telegram group config key");
     delete groups[oldChatId];
-    scopes.push(scope);
+    migrated = true;
   }
 
-  return { migrated: scopes.length > 0, skippedExisting, scopes };
+  return { migrated, skippedExisting };
 }

@@ -93,6 +93,16 @@ function run(
   });
 }
 
+async function expectCursorRowid(lastSeenRowid: number) {
+  const cursor = await getIMessageRuntime()
+    .state.openKeyedStoreV2<IMessageCatchupCursor>({
+      namespace: IMESSAGE_CATCHUP_CURSOR_NAMESPACE,
+      maxEntries: IMESSAGE_CATCHUP_CURSOR_MAX_ENTRIES,
+    })
+    .lookup(resolveIMessageCatchupCursorKey("default"));
+  expect(cursor?.lastSeenRowid).toBe(lastSeenRowid);
+}
+
 function collectGuids(dispatched: string[]) {
   return async (msg: IMessagePayload) => {
     if (msg.guid) {
@@ -208,7 +218,7 @@ describe("runIMessageCatchup", () => {
     expect(summary).toMatchObject({ fetchedCount: 5, fullyCaughtUp: false, replayed: 5 });
     expect(dispatched).toEqual(["g-100", "g-101", "g-102", "g-103", "g-200"]);
     // #79387: the raw watermark must not skip rows excluded by perRunLimit.
-    expect(summary.cursorAfter.lastSeenRowid).toBe(200);
+    await expectCursorRowid(200);
   });
 
   it("treats a dispatch throw as a failure and holds the cursor", async () => {
@@ -227,7 +237,7 @@ describe("runIMessageCatchup", () => {
     });
 
     expect(summary).toMatchObject({ failed: 1, replayed: 0 });
-    expect(summary.cursorAfter.lastSeenRowid).toBe(499);
+    await expectCursorRowid(499);
   });
 
   it("emits a high-watermark even when every row fails payload validation", async () => {
@@ -247,7 +257,7 @@ describe("runIMessageCatchup", () => {
     const summary = await run(client);
 
     expect(summary).toMatchObject({ querySucceeded: true, replayed: 0, fetchedCount: 0 });
-    expect(summary.cursorAfter.lastSeenRowid).toBe(999);
+    await expectCursorRowid(999);
   });
 
   it("filters rows that fail payload validation", async () => {

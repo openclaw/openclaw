@@ -86,19 +86,17 @@ describe("cron tool creator cap", () => {
     expect(patch.payload).toMatchObject({ kind: "script", toolsAllow: ["read", "notes__read"] });
   });
 
-  it("caps explicit updates without loading the current job", () => {
+  it("rejects unavailable explicit updates without changing the caller's patch", () => {
     const input = {
       payload: { kind: "agentTurn", toolsAllow: ["read", "exec"] },
     };
 
-    const patch = readyPatch({
-      patch: input,
-      creatorToolAllowlist: ["read", "cron"],
-    });
-
-    expect(patch).toEqual({
-      payload: { kind: "agentTurn", toolsAllow: ["read"] },
-    });
+    expect(() =>
+      planCronJobUpdatePatch({
+        patch: input,
+        creatorToolAllowlist: ["read", "cron"],
+      }),
+    ).toThrow('Requested automation tool "exec" cannot be carried');
     expect(input).toEqual({
       payload: { kind: "agentTurn", toolsAllow: ["read", "exec"] },
     });
@@ -312,8 +310,9 @@ describe("cron tool creator cap", () => {
       trigger: { script: "return { fire: false }" },
       payload: { kind: "systemEvent", text: "wake", toolsAllow: ["write"] },
     };
-    capCronJobToolsAllowOnCreate(unrelated, creator);
-    expect(unrelated.payload.toolsAllow).toEqual([]);
+    expect(() => capCronJobToolsAllowOnCreate(unrelated, creator)).toThrow(
+      'Requested automation tool "write" cannot be carried',
+    );
   });
 
   it("treats an alias-name finite request as already covered by creator authority", () => {

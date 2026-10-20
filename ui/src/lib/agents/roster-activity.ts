@@ -59,7 +59,6 @@ export function agentRosterCards(
       mainKey,
       activeNow: sessions.some(isSessionRunStateActive),
       sessionCount: sessions.length,
-      unreadCount: sessions.filter((row) => row.unread && !row.archived).length,
       lastActiveAt: recent?.updatedAt ?? 0,
       preview: (main ?? recent)?.lastMessagePreview,
       assistantPreview: lastAssistantMessage?.text,

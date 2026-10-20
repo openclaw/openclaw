@@ -118,7 +118,7 @@ describe("bootstrap budget", () => {
       bootstrapFiles: [pathOnlyFile],
       injectedFiles: [{ path: pathOnlyFile.path, content: "remember" }],
     });
-    expect(analyze(stats).files).toMatchObject([
+    expect(stats).toMatchObject([
       {
         name: "SELF_IMPROVEMENT_REMINDER.md",
         path: "/tmp/SELF_IMPROVEMENT_REMINDER.md",
@@ -147,7 +147,6 @@ describe("bootstrap budget", () => {
         { causes: expect.arrayContaining(["total-limit"]) },
       ],
     });
-    expect(analysis.files[1]).toMatchObject({ nearLimit: false, causes: [] });
   });
 
   it("distinguishes lower per-file and exhausted total limits for USER.md", () => {

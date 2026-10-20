@@ -38,7 +38,7 @@ export type SignalInboundEntry = {
   replyToIsQuote?: boolean;
   turnAdoptionLifecycle?: SignalIngressLifecycle;
   channelIngress?: readonly ResolvedChannelMessageIngress[];
-  resolveChannelIngress?: (
+  resolveChannelIngress: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
 };

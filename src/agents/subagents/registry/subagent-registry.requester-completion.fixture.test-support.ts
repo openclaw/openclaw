@@ -157,6 +157,7 @@ export async function prepareNestedRequesterReplay(params: {
         request: { message: delivery.triggerMessage },
         isOneShotModelRun: false,
         runId,
+        lifecycleStorePath: expectDefined(cfg.session?.store, "requester session store"),
         getAdmittedSessionId: () => sessionId,
         assertResumeAdmissionCurrent: () => ({ sessionId, lifecycleRevision, updatedAt: 1 }),
         context: {

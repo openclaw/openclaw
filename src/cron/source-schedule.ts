@@ -59,7 +59,11 @@ export function ownsCronSource(job: CronJob, scheduleKey: string, identity: stri
 }
 
 /** Configuration commits, not adapters, own source generation changes (including A→B→A). */
-export function reconcileCronSourceIdentity(previous: CronJob, next: CronJob): void {
+export function reconcileCronSourceIdentity(
+  previous: CronJob,
+  next: CronJob,
+  streamRestartExhaustedRequested = false,
+): void {
   const key = cronSourceScheduleKey(next.schedule);
   if (key === undefined) {
     setCronSourceIdentity(next, undefined);
@@ -69,6 +73,10 @@ export function reconcileCronSourceIdentity(previous: CronJob, next: CronJob): v
   const changed =
     cronSourceScheduleKey(previous.schedule) !== key ||
     (previous.enabled ?? true) !== (next.enabled ?? true) ||
-    Boolean(previous.state.autoDisabled) !== Boolean(next.state.autoDisabled);
+    Boolean(previous.state.autoDisabled) !== Boolean(next.state.autoDisabled) ||
+    (next.schedule.kind === "stream" &&
+      ((previous.state.streamRestartExhausted === true &&
+        next.state.streamRestartExhausted !== true) ||
+        (streamRestartExhaustedRequested && next.state.streamRestartExhausted === true)));
   setCronSourceIdentity(next, changed || !identity ? createCronSourceIdentity() : identity);
 }

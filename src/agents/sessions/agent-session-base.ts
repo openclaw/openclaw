@@ -269,11 +269,7 @@ export abstract class AgentSessionBase {
   }
 
   protected emitQueueUpdate(): void {
-    this.emit({
-      type: "queue_update",
-      steering: this.steeringMessages.map((entry) => entry.text),
-      followUp: this.followUpMessages.map((entry) => entry.text),
-    });
+    this.emit({ type: "queue_update" });
   }
 
   protected trackQueuedUserMessage(
@@ -434,14 +430,7 @@ export abstract class AgentSessionBase {
         this.overflowRecoveryAttempts = 0;
       }
       if (assistantMsg.stopReason !== "error" && this.retryCount > 0) {
-        this.emit({
-          type: "auto_retry_end",
-          success: assistantMsg.stopReason !== "aborted",
-          attempt: this.retryCount,
-          ...(assistantMsg.stopReason === "aborted"
-            ? { finalError: assistantMsg.errorMessage }
-            : {}),
-        });
+        this.emit({ type: "auto_retry_end" });
         this.retryCount = 0;
       }
     }
@@ -590,11 +579,6 @@ export abstract class AgentSessionBase {
   /** Current effective system prompt (includes any per-turn extension modifications) */
   get systemPrompt(): string {
     return this.agent.state.systemPrompt;
-  }
-
-  /** Current retry attempt (0 if not retrying) */
-  get retryAttempt(): number {
-    return this.retryCount;
   }
 
   getActiveToolNames(): string[] {

@@ -22,6 +22,7 @@ export function finalizeUpdatedJob(params: {
   schedulingInputsRequested: boolean;
   scheduleChanged: boolean;
   explicitTriggerState?: CronJobPatch["state"];
+  streamRestartExhaustedRequested?: boolean;
   isJobActive?: (id: string) => boolean;
 }) {
   const { job, nextJob, now } = params;
@@ -51,7 +52,7 @@ export function finalizeUpdatedJob(params: {
   // Source identity belongs to the durable job mutation, not the process
   // watcher. Equivalent resaves preserve it; disable/enable and source changes
   // rotate it in the same write that changes the public job definition.
-  reconcileCronSourceIdentity(job, nextJob);
+  reconcileCronSourceIdentity(job, nextJob, params.streamRestartExhaustedRequested);
 
   const previousScript = job.payload.kind === "script" ? job.payload.script : undefined;
   const nextScript = nextJob.payload.kind === "script" ? nextJob.payload.script : undefined;

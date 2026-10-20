@@ -44,6 +44,57 @@ function lookup(accountId: string, runtime?: RuntimeEnv) {
 }
 
 describe("nextcloud talk room info", () => {
+  it.each([
+    { dimension: "server", baseUrl: "https://other.example.com" },
+    { dimension: "user", config: { apiUser: "other-bot", apiPassword: "secret" } },
+    { dimension: "password", config: { apiUser: "bot", apiPassword: "other-secret" } },
+  ])("isolates cached room kinds by current $dimension", async ({ dimension, ...overrides }) => {
+    const first = lookupAccount(`scope-${dimension}`);
+    const second = { ...first, ...overrides };
+    const roomToken = "shared-room";
+    const firstUrl = `${first.baseUrl}/ocs/v2.php/apps/spreed/api/v4/room/${roomToken}`;
+    const firstAuth = "Basic Ym90OnNlY3JldA==";
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuard.mockImplementation(async ({ url, init }) => ({
+      response: roomResponse(
+        url === firstUrl && new Headers(init.headers).get("Authorization") === firstAuth ? 1 : 2,
+      ),
+      release,
+    }));
+    const lookupRoom = (account: ResolvedNextcloudTalkAccount) =>
+      resolveNextcloudTalkRoomKind({ account, roomToken });
+
+    await expect(lookupRoom(first)).resolves.toBe("direct");
+    await expect(lookupRoom(second)).resolves.toBe("group");
+    await expect(lookupRoom(first)).resolves.toBe("direct");
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledTimes(2);
+
+    await expect(lookupRoom({ ...first, config: {} })).resolves.toBeUndefined();
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse a rejected room lookup under a different network policy", async () => {
+    const account = lookupAccount("policy-scope");
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuard
+      .mockRejectedValueOnce(new SsrFBlockedError("blocked private network"))
+      .mockResolvedValueOnce({ response: roomResponse(1), release });
+    const lookupRoom = (current: ResolvedNextcloudTalkAccount) =>
+      resolveNextcloudTalkRoomKind({ account: current, roomToken: "shared-room" });
+
+    await expect(lookupRoom(account)).resolves.toBeUndefined();
+    await expect(
+      lookupRoom({
+        ...account,
+        config: { ...account.config, network: { dangerouslyAllowPrivateNetwork: true } },
+      }),
+    ).resolves.toBe("direct");
+    await expect(lookupRoom(account)).resolves.toBeUndefined();
+    expect(fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("does not accept a partially numeric room type", async () => {
     mockResponse(roomResponse("1direct"));
     await expect(lookup("type-1direct")).resolves.toBeUndefined();

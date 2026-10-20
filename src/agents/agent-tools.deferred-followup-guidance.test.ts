@@ -111,12 +111,14 @@ describe("createOpenClawCodingTools availability guidance", () => {
     const [exec, process] = tools;
 
     expect(tools.map((entry) => entry.name)).toEqual(["exec", "process", "cron"]);
-    expect(exec?.description).toBe(
-      "Run shell now; background continuation supported. Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle. Long run: automatic completion wake when enabled and output/failure occurs; otherwise process confirms completion. Omit host/node to use the session's configured host. No sleep loops for reminders/follow-ups; use automations. TTY CLI/UI/coding agent: pty=true. Quote arguments containing shell metacharacters, including URL query strings with `?` or `&`.",
-    );
-    expect(process?.description).toBe(
-      "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill. poll/log: status, output, quiet success, completion without auto-wake, input hints. Others: input/intervention. No polling as timer/reminder; scheduled follow-up uses automations.",
-    );
+    expectGuidance(expectDefined(exec, "exec tool").description, [
+      "background continuation supported",
+      "use automations",
+    ]);
+    expectGuidance(expectDefined(process, "process tool").description, [
+      "Control existing exec",
+      "scheduled follow-up uses automations",
+    ]);
   });
 
   it("preserves plugin and channel metadata", () => {

@@ -17,7 +17,7 @@ const localPluginId = "security-review@company-tools";
 function command(
   args: string[],
   io = inMemoryIO(),
-  runtime?: CodexPluginsManagementRuntime,
+  runtime: CodexPluginsManagementRuntime = pluginRuntime(),
   ctx = fakeCtx,
 ) {
   return handleCodexPluginsSubcommand(ctx, args, io, runtime);

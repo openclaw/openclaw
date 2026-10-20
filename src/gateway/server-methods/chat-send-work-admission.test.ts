@@ -70,6 +70,7 @@ it.each([
   new Error("Unclassified admission failure"),
   Object.assign(new Error("Validation failed"), { retryable: false }),
   Object.assign(new Error("Not a canonical worker outcome"), { code: "outcome-unknown" }),
+  Object.assign(new Error("Workspace access denied"), { code: "EACCES" }),
 ])("keeps non-storage admission failures RPC-only: %s", (error) => {
   const respond = vi.fn();
   const terminal = vi.fn();

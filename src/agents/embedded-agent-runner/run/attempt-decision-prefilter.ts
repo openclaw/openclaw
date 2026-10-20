@@ -9,7 +9,7 @@ import { getPluginRegistryForContext } from "../../../plugins/runtime/gateway-re
 import { isDecisionAssistanceEligible } from "../../decision-assistance.js";
 import { resolveDecisionModelSetting } from "../../decision-model-setting.js";
 import type { AgentMessage } from "../../runtime/index.js";
-import { prepareDecisionContext, type DecisionContextFacts } from "./attempt-decision-context.js";
+import { prepareDecisionContext } from "./attempt-decision-context.js";
 
 // UTF-16 code units of conversation text plus verbatim ordinary hook fields.
 // The conversation projection has its own 6k bound; this combined 8k text bound
@@ -38,10 +38,7 @@ type EvaluateAttemptDecisionToolPrefilterParams = {
 
 export type DecisionPrefilterResult = {
   shouldPruneTools: boolean;
-  restrictionApplied?: boolean;
   status: "proposed" | "retained" | "skipped" | "unavailable";
-  reason: string;
-  context?: DecisionContextFacts;
 };
 
 function isStrongNo(answer: DecisionAnswerV2 | undefined): boolean {
@@ -57,11 +54,9 @@ function isStrongNo(answer: DecisionAnswerV2 | undefined): boolean {
 export async function evaluateAttemptDecisionToolPrefilter(
   params: EvaluateAttemptDecisionToolPrefilterParams,
 ): Promise<DecisionPrefilterResult> {
-  const skip = (reason: string, context?: DecisionContextFacts): DecisionPrefilterResult => ({
+  const skip = (): DecisionPrefilterResult => ({
     shouldPruneTools: false,
     status: "skipped",
-    reason,
-    ...(context ? { context } : {}),
   });
   params.signal.throwIfAborted();
   params.assertActive();
@@ -72,12 +67,12 @@ export async function evaluateAttemptDecisionToolPrefilter(
     params.supportsTurnScopedToolRestrictions !== true ||
     !isDecisionAssistanceEligible(config, params.agentId)
   ) {
-    return skip("ineligible");
+    return skip();
   }
   const userMessage = params.userMessage?.trim();
   // A named explicit evaluation is an action even if its supplied evidence is a greeting.
   if (!userMessage || /\bdecision_evaluate\b/i.test(userMessage)) {
-    return skip(userMessage ? "explicit-evaluation" : "empty-request");
+    return skip();
   }
   const context = prepareDecisionContext({
     latestRequest: userMessage,
@@ -85,14 +80,14 @@ export async function evaluateAttemptDecisionToolPrefilter(
     currentInputExcluded: params.currentInputExcluded,
   });
   if (context.status === "skipped") {
-    return skip(context.reason, context.facts);
+    return skip();
   }
   const promptBuildFields = params.promptBuildFields;
   const promptBuildChars = promptBuildFields
     ? Object.values(promptBuildFields).reduce((total, value) => total + (value?.length ?? 0), 0)
     : 0;
   if (context.facts.contextChars + promptBuildChars > MAX_DECISION_TEXT_CHARS) {
-    return skip("prompt-build-context-too-large", context.facts);
+    return skip();
   }
   const selection = resolveDecisionModelSetting(config, params.agentId);
   const isCurrent = () => {
@@ -158,20 +153,14 @@ export async function evaluateAttemptDecisionToolPrefilter(
   );
   params.signal.throwIfAborted();
   params.assertActive();
-  const result = projectPrefilterResult(evaluation.outcome, context.facts);
+  const result = projectPrefilterResult(evaluation.outcome);
   completeDecisionEvaluation(evaluation);
   return result;
 }
 
-function projectPrefilterResult(
-  outcome: DecisionOutcomeV2,
-  context: DecisionContextFacts,
-): DecisionPrefilterResult {
-  const facts = {
-    context,
-  };
+function projectPrefilterResult(outcome: DecisionOutcomeV2): DecisionPrefilterResult {
   if (outcome.status === "unavailable") {
-    return { shouldPruneTools: false, status: "unavailable", reason: outcome.reason, ...facts };
+    return { shouldPruneTools: false, status: "unavailable" };
   }
   const answers = outcome.status === "ok" ? outcome.result.answers : undefined;
   const missingContext = answers?.missing_request_context;
@@ -182,11 +171,9 @@ function projectPrefilterResult(
     return {
       shouldPruneTools: false,
       status: "retained",
-      reason: "missing-context-or-uncertain",
-      ...facts,
     };
   }
   return isStrongNo(needsTools)
-    ? { shouldPruneTools: true, status: "proposed", reason: "conversational", ...facts }
-    : { shouldPruneTools: false, status: "retained", reason: "action-or-uncertain", ...facts };
+    ? { shouldPruneTools: true, status: "proposed" }
+    : { shouldPruneTools: false, status: "retained" };
 }

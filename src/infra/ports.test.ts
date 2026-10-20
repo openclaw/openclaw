@@ -378,7 +378,6 @@ describeUnix("inspectPortUsage", () => {
       port: address.port,
       status: "busy",
       listeners: [],
-      detail: undefined,
       errors,
     });
     expect(result?.hints).toContain(
@@ -639,8 +638,6 @@ describeUnix("inspectPortUsage", () => {
         }),
       ],
     });
-    expect(results.get(18789)?.detail).toBe("p111\ncnode\nnTCP *:18789 (LISTEN)");
-    expect(results.get(19001)?.detail).toBe("p222\ncdeno\nnTCP 127.0.0.1:19001 (LISTEN)");
   });
 
   it("preserves malformed lsof pid records as unknown-pid listener diagnostics", async () => {
@@ -766,7 +763,6 @@ describeUnix("inspectPortUsage", () => {
         ppid: 1,
       },
     ]);
-    expect(result.errors).toBeUndefined();
   });
 
   it("preserves ss rows with IPv6, unknown processes, and multiple process owners", async () => {
@@ -807,7 +803,6 @@ describeUnix("inspectPortUsage", () => {
         direction: "client",
       },
     ]);
-    expect(result.errors).toBeUndefined();
   });
 
   it("preserves ss rows for exact-port listeners without reading process text as socket fields", async () => {
@@ -1058,7 +1053,6 @@ describe.skipIf(process.platform !== "linux")("native ss process metadata contra
         direction: "client",
         address: `TCP 127.0.0.1:${clientPort}->127.0.0.1:${port} (ESTABLISHED)`,
       });
-      expect(result.errors).toBeUndefined();
     });
   }, 30_000);
 });

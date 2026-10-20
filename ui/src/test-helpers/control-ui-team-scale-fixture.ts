@@ -1,4 +1,5 @@
 import type { Buffer } from "node:buffer";
+import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/ext-apps/app-bridge";
 import type {
   SessionCatalog,
   SessionsCatalogHostEvent,
@@ -56,6 +57,7 @@ type FixtureAsset = {
   contentType: string;
   status?: number;
   delayMs?: number;
+  headers?: Record<string, string>;
 };
 type FixtureOptions = {
   baseUrl?: string;
@@ -73,7 +75,35 @@ type FixtureOptions = {
   closedMenuMembers?: boolean;
   largeSnapshot?: boolean;
   transcriptMessages?: number;
+  dashboardMcpApp?: { font: Buffer };
 };
+
+function dashboardMcpAppHtml(stylesheetUrl: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>Team dashboard</title>
+<link rel="stylesheet" href="${stylesheetUrl}"></head><body>
+<h2>Team metric 1</h2><p>Synthetic dashboard activity</p><main aria-label="Metric charts"></main>
+<script>
+const send = (message) => parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
+addEventListener("message", ({ source, data }) => {
+  if (source !== parent) return;
+  if (data.id === 1 && data.result) send({ method: "ui/notifications/initialized" });
+  if (data.method === "ui/resource-teardown") send({ id: data.id, result: {} });
+});
+send({ id: 1, method: "ui/initialize", params: {
+  appInfo: { name: "Synthetic team dashboard", version: "1.0.0" }, appCapabilities: {},
+  protocolVersion: ${JSON.stringify(LATEST_PROTOCOL_VERSION)}
+} });
+const charts = document.querySelector("main");
+for (let index = 0; index < 4; index++) {
+  const chart = document.createElement("section");
+  const values = Array.from({ length: 12 }, (_, point) => 20 + (point * 17 + index * 23) % 75);
+  chart.innerHTML = '<h3>Metric ' + (index + 1) + '</h3><svg role="img" aria-label="Synthetic chart ' +
+    (index + 1) + '" viewBox="0 0 240 100"><polyline fill="none" stroke="currentColor" stroke-width="3" points="' +
+    values.map((value, point) => (point * 20) + ',' + (100 - value)).join(' ') + '"/></svg>';
+  charts.append(chart);
+}
+</script></body></html>`;
+}
 
 function widgetHtml(index: number) {
   return `<!doctype html><html><head><meta charset="utf-8"><title>Team metric ${index + 1}</title>
@@ -279,8 +309,31 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
     };
   });
   const boardPath = `/__openclaw__/board/${encodeURIComponent(selectedSessionKey)}/team-overview/index.html`;
-  assets.set(boardPath, { contentType: "text/html", body: widgetHtml(0) });
+  if (!options.dashboardMcpApp) {
+    assets.set(boardPath, { contentType: "text/html", body: widgetHtml(0) });
+  }
   const sandbox = { sandboxUrl: options.sandboxUrl, sandboxPort: options.sandboxPort };
+  const dashboardAssetPath = "/__openclaw__/fixture-dashboard";
+  const dashboardAssetOrigin = options.sandboxPort
+    ? `http://127.0.0.1:${options.sandboxPort}`
+    : new URL(baseUrl).origin;
+  const dashboardStylesheetUrl = new URL(
+    `${dashboardAssetPath}/dashboard.css`,
+    dashboardAssetOrigin,
+  ).href;
+  if (options.dashboardMcpApp) {
+    assets.set(`${dashboardAssetPath}/dashboard.css`, {
+      contentType: "text/css",
+      headers: { "access-control-allow-origin": "*" },
+      body: `@font-face{font-family:TeamMetric;src:url("${new URL(`${dashboardAssetPath}/metrics.woff2`, dashboardAssetOrigin).href}") format("woff2");font-display:block}
+:root{color-scheme:dark light;font-family:TeamMetric,system-ui}body{margin:0;padding:20px}h2{font-size:22px}main{display:grid;grid-template-columns:1fr 1fr;gap:20px}section{padding:16px;border:1px solid #8993a4;border-radius:8px}h3{margin:0 0 12px;font-size:16px}svg{display:block;width:100%;color:#3b9c8c}`,
+    });
+    assets.set(`${dashboardAssetPath}/metrics.woff2`, {
+      contentType: "font/woff2",
+      headers: { "access-control-allow-origin": "*" },
+      body: options.dashboardMcpApp.font,
+    });
+  }
   const board: BoardSnapshot = {
     sessionKey: selectedSessionKey,
     revision: 1,
@@ -290,17 +343,21 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
         name: "team-overview",
         tabId: "main",
         title: "Team overview",
-        contentKind: "html",
         sizeW: 12,
         sizeH: 8,
         position: 0,
         grantState: "none",
         revision: 1,
-        frameUrl: new URL(`${boardPath}?bt=fixture-ticket`, baseUrl).href,
-        viewTicket: "fixture-ticket",
-        viewTicketTtlMs: 1_200_000,
-        viewGeneration: "0123456789abcdef0123456789abcdef",
-        ...sandbox,
+        ...(options.dashboardMcpApp
+          ? { contentKind: "mcp-app", instanceId: "team-overview-instance" }
+          : {
+              contentKind: "html",
+              frameUrl: new URL(`${boardPath}?bt=fixture-ticket`, baseUrl).href,
+              viewTicket: "fixture-ticket",
+              viewTicketTtlMs: 1_200_000,
+              viewGeneration: "0123456789abcdef0123456789abcdef",
+              ...sandbox,
+            }),
       },
     ],
   };
@@ -355,6 +412,7 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "progressCard.get",
       "cron.list",
       "cron.status",
+      ...(options.dashboardMcpApp ? ["board.widget.appView", "mcp.app.view"] : []),
       ...(duplicateReads?.featureMethods ?? []),
     ],
     methodResponses: {
@@ -402,6 +460,23 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
       "plugins.controlUi.list": { revision: "team-scale-v1", diagnostics: [], plugins },
       "plugins.controlUi.report": { ok: true },
       "board.get": board,
+      ...(options.dashboardMcpApp
+        ? {
+            "board.widget.appView": {
+              viewId: "team-overview-view",
+              expiresAtMs: Date.now() + 3_600_000,
+            },
+            "mcp.app.view": {
+              ...sandbox,
+              html: dashboardMcpAppHtml(dashboardStylesheetUrl),
+              csp: { resourceDomains: [dashboardAssetOrigin] },
+              toolInput: {},
+              toolResult: { content: [{ type: "text", text: "Synthetic dashboard ready" }] },
+              messageSupported: false,
+              updateModelContextSupported: false,
+            },
+          }
+        : {}),
       "canvas.document.view": {
         cases: Array.from({ length: counts.inlineWidgets }, (_, index) => ({
           match: { docId: `team-scale-chart-${index + 1}` },

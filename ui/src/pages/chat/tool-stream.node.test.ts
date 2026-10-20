@@ -489,8 +489,6 @@ describe("app-tool-stream approval lifecycle", () => {
     );
 
     expect(host.waitingApprovalStatuses?.get("approval-1")).toEqual({
-      approvalId: "approval-1",
-      toolCallId: "tool-1",
       runId: "run-1",
     });
   });

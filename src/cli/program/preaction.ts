@@ -149,7 +149,6 @@ export function registerPreActionHooks(program: Command, programVersion: string)
         runtime: defaultRuntime,
         commandPath,
         startupPolicy,
-        skipConfigGuard: true,
       });
       return;
     }

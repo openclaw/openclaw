@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
@@ -5,6 +6,7 @@ import {
   createGatewaySchedulerClock as schedulerClock,
   createTestGatewayScheduler as createScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { CronStreamJobOwner } from "./cron-stream-job-owner.js";
 import * as matcher from "./cron-stream-matcher.js";
 import {
   createCronStreamMatchingJob as matchingJob,
@@ -193,6 +195,7 @@ describe("cron stream output", () => {
   );
   it("ignores obsolete process output during backoff and after replacement", async () => {
     vi.useFakeTimers();
+    const processExited = vi.spyOn(CronStreamJobOwner.prototype, "processExited");
     const { fake, updateState, watchers } = createFixture({
       minIntervalMs: 1,
       retryBackoffMs: [10],
@@ -200,7 +203,8 @@ describe("cron stream output", () => {
     await watchers.start(job());
     const obsoleteOutput = fake.inputs[0]?.onStdout;
     fake.exits[0]?.(exitResult());
-    await settle();
+    await expectDefined(fake.runs[0], "stream run").wait();
+    await expectDefined(processExited.mock.results[0], "exit operation").value;
     expect(watchers.inspect("stream-job")?.state).toBe("backoff");
 
     obsoleteOutput?.("late during backoff\n");
@@ -262,6 +266,7 @@ describe("cron stream output", () => {
   it.each(["exhaustion", "stop"] as const)("counts pending input when %s wins", async (ending) => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
+    const processExited = vi.spyOn(CronStreamJobOwner.prototype, "processExited");
     const { fake, recordFailure, fireBatch, watchers } = createFixture({ minIntervalMs: 100 });
     await watchers.start(
       ending === "exhaustion"
@@ -276,7 +281,8 @@ describe("cron stream output", () => {
     await vi.advanceTimersByTimeAsync(50);
     if (ending === "exhaustion") {
       fake.exits[0]?.(exitResult());
-      await settle();
+      await expectDefined(fake.runs[0], "stream run").wait();
+      await expectDefined(processExited.mock.results[0], "exit operation").value;
       expect(recordFailure).toHaveBeenCalledOnce();
     } else {
       await settle();

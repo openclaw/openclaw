@@ -6,6 +6,7 @@ import {
   enqueueExecutionIdentityContextAtAdmission,
   type ExecutionIdentityAdmissionFacts,
   type ExecutionIdentityAdmissionToken,
+  type ExecutionIdentityRecoveryAdmission,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
 import {
@@ -476,15 +477,6 @@ export function retainAdmittedRunBeforeToolCallRecovery(
     },
   };
 }
-
-type ExecutionIdentityRecoveryAdmission = Readonly<{
-  /** Recovery retries never manufacture replacement identity when exact evidence is absent. */
-  retryOnly: boolean;
-  consume: (runId: string) => Readonly<{
-    accepted: boolean;
-    token?: ExecutionIdentityAdmissionToken;
-  }>;
-}>;
 
 /** Creates a one-shot recovery admission owned by the durable recovery resolver. */
 export function createExecutionIdentityRecoveryAdmission(params: {

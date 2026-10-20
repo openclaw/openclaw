@@ -18,9 +18,6 @@ import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-mod
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
 const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
-const STANDALONE_ENTRY_FILES = new Set(
-  Object.keys(standaloneRuntimeProcessBuildEntries).map((name) => `${name}.js`),
-);
 const STANDALONE_CHUNK_PREFIXES = Object.keys(standaloneRuntimeProcessBuildEntries).flatMap(
   (name) => {
     const { chunkFileNames } = getStandaloneRuntimeProcessOutputOptions(name);
@@ -88,10 +85,27 @@ function portable(value: string): string {
 }
 
 function moduleFiles(root: string): string[] {
+  const standaloneEntries = Object.keys(standaloneRuntimeProcessBuildEntries);
+  const standaloneFiles = new Set(standaloneEntries.map((name) => `${name}.js`));
+  const independentDirectories = new Set([
+    "config-doctor",
+    "state-retention",
+    "native-hook-relay",
+    ...standaloneEntries,
+  ]);
   const files: string[] = [];
   const visit = (directory: string) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const file = path.join(directory, entry.name);
+      const relative = portable(path.relative(root, file));
+      // Independent graphs cannot supply updater bridges or record copied updater imports.
+      if (
+        standaloneFiles.has(relative) ||
+        independentDirectories.has(relative) ||
+        STANDALONE_CHUNK_PREFIXES.some((prefix) => relative.startsWith(prefix))
+      ) {
+        continue;
+      }
       if (entry.isDirectory()) {
         // The UI publishes its independent browser graph by renaming these trees.
         if (
@@ -568,18 +582,6 @@ export function writeUpdateCompatibilityChunks(params: {
   const candidates = new Map<string, Map<string, { file: string; exported: string }>>();
   for (const file of moduleFiles(distDir)) {
     const relative = portable(path.relative(distDir, file));
-    // Independent helpers own copies of shared modules, not updater runtime bindings.
-    if (
-      relative.startsWith("extensions/") ||
-      relative.startsWith("plugin-sdk/") ||
-      relative.startsWith("config-doctor/") ||
-      relative.startsWith("state-retention/") ||
-      relative.startsWith("native-hook-relay/") ||
-      STANDALONE_ENTRY_FILES.has(relative) ||
-      STANDALONE_CHUNK_PREFIXES.some((prefix) => relative.startsWith(prefix))
-    ) {
-      continue;
-    }
     const source = fs.readFileSync(file, "utf8");
     if (
       isUpdateCompatibilityChunk(source) ||

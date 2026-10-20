@@ -8,6 +8,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import type { ExecApprovalManager } from "./exec-approval-manager.js";
 import {
@@ -17,6 +18,7 @@ import {
 } from "./exec-approval-manager.test-support.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
 import * as operatorApprovalStore from "./operator-approval-store.js";
+import { consumeOperatorApprovalAllowOnceInDatabase } from "./operator-approval-store.transitions.worker.js";
 
 const managers: ExecApprovalManager[] = [];
 
@@ -77,6 +79,85 @@ function holdResolutionReply() {
 }
 
 describe("ExecApprovalManager lifetime", () => {
+  it("rolls back prepared consumption with its effect and publishes only committed consumption", async (test) => {
+    const { manager, databaseOptions } = await createPersistentManager(test);
+    const record = manager.create({ command: "tail -F app.log" }, 60_000);
+    await manager.register(record, 60_000);
+    await manager.resolveDetailed(record.id, "allow-once", { kind: "device", id: "control-ui" });
+    const prepared = manager.prepareConsumeAllowOnce(record.id, "cron.add:watcher");
+    if (!prepared) {
+      throw new Error("expected live approval consumption");
+    }
+    const consume = () =>
+      runOpenClawStateWriteTransaction((database) => {
+        prepared.assertCurrent();
+        const result = consumeOperatorApprovalAllowOnceInDatabase({
+          ...prepared.input,
+          databaseOptions: { database },
+        });
+        if (result.outcome !== "consumed") {
+          throw new Error(`expected consumption, got ${result.outcome}`);
+        }
+        prepared.assertCurrent();
+        return result.record;
+      }, databaseOptions);
+
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        consume();
+        throw new Error("effect refused");
+      }, databaseOptions),
+    ).toThrow("effect refused");
+    expect(await getOperatorApprovalDetailed({ id: record.id, databaseOptions })).toMatchObject({
+      outcome: "found",
+      record: { decision: "allow-once", consumedAtMs: null },
+    });
+    expect(manager.getLocalSnapshot(record.id)?.consumedDecision).toBeUndefined();
+
+    const committed = consume();
+    prepared.markCommitted(committed);
+    expect(manager.getLocalSnapshot(record.id)).toMatchObject({
+      decision: "allow-once",
+      consumedDecision: "allow-once",
+      consumedBy: "cron.add:watcher",
+    });
+    expect(await getOperatorApprovalDetailed({ id: record.id, databaseOptions })).toMatchObject({
+      outcome: "found",
+      record: { decision: "allow-once", consumedBy: "cron.add:watcher" },
+    });
+    expect(manager.prepareConsumeAllowOnce(record.id, "cron.add:another-watcher")).toBeNull();
+    expect(() => prepared.assertCurrent()).toThrow("approval authority is no longer active");
+  });
+
+  it.for(["run closes", "grace expires", "manager retires"] as const)(
+    "fences prepared consumption when %s before the effect commits",
+    async (change, test) => {
+      let active = true;
+      const { manager, databaseOptions } = await createPersistentManager(test);
+      const record = manager.create({ command: "tail -F app.log" }, 60_000);
+      record.approvalAuthority = () => active;
+      await manager.register(record, 60_000);
+      await manager.resolveDetailed(record.id, "allow-once", { kind: "device", id: "control-ui" });
+      const prepared = manager.prepareConsumeAllowOnce(record.id, "cron.add:watcher");
+      if (!prepared) {
+        throw new Error("expected live approval consumption");
+      }
+      if (change === "run closes") {
+        active = false;
+      } else if (change === "grace expires") {
+        vi.setSystemTime(Date.now() + 15_000);
+      } else {
+        manager.retire();
+      }
+
+      expect(() => prepared.assertCurrent()).toThrow("approval authority is no longer active");
+      expect(await getOperatorApprovalDetailed({ id: record.id, databaseOptions })).toMatchObject({
+        outcome: "found",
+        record: { decision: "allow-once", consumedAtMs: null },
+      });
+    },
+  );
+
   it.for(["authority", "signal", "retirement"] as const)(
     "refuses insertion when %s closes during audience preparation",
     async (closed, testContext) => {

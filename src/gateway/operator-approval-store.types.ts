@@ -112,6 +112,15 @@ export type ConsumeOperatorApprovalResult =
   | { outcome: "not-found" }
   | { outcome: "corrupt" };
 
+export type OperatorApprovalConsumptionInput = {
+  id: string;
+  consumerId: string;
+  expectedKind?: OperatorApprovalKind;
+  runtimeEpoch?: string;
+  redemptionWindowMs?: number;
+  nowMs?: number;
+};
+
 export type TerminalizeOperatorApprovalsResult = {
   affected: number;
   records: OperatorApprovalRecord[];

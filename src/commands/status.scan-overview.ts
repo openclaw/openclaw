@@ -58,8 +58,6 @@ async function resolveStatusChannelsStatus(params: {
 
 export type StatusScanOverviewResult = {
   env?: NodeJS.ProcessEnv;
-  coldStart: boolean;
-  hasConfiguredChannels: boolean;
   skipColdStartNetworkChecks: boolean;
   cfg: OpenClawConfig;
   sourceConfig: OpenClawConfig;
@@ -337,8 +335,6 @@ export async function collectStatusScanOverview(params: {
 
   return {
     env,
-    coldStart,
-    hasConfiguredChannels,
     skipColdStartNetworkChecks: bootstrap.skipColdStartNetworkChecks,
     cfg,
     sourceConfig,

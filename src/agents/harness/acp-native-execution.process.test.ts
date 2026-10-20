@@ -68,7 +68,8 @@ async function withNativeAttempt(
   peer: Parameters<typeof registerNative>[3] = {},
   agent = "opencode",
 ) {
-  await withOpenClawTestState({ label: "acp-native-execution" }, async (state) => {
+  const env = { OPENCLAW_SKIP_ACPX_RUNTIME_PROBE: "1" };
+  await withOpenClawTestState({ label: "acp-native-execution", env }, async (state) => {
     const config = {
       ...overrides,
       session: { store: path.join(state.sessionsDir(), "sessions.json") },

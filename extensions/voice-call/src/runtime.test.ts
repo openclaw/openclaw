@@ -295,7 +295,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
     const tunnelStop = vi.fn().mockResolvedValue(undefined);
     mocks.startTunnel.mockResolvedValue({
       publicUrl: "https://public.example:8443/voice/webhook",
-      provider: "tailscale-funnel",
       stop: tunnelStop,
     });
     mocks.managerInitialize.mockRejectedValue(new Error("init failed"));
@@ -325,7 +324,6 @@ describe("createVoiceCallRuntime lifecycle", () => {
     mocks.webhookStop.mockReturnValue(webhookStopped.promise);
     mocks.startTunnel.mockResolvedValue({
       publicUrl: "https://public.example/voice/webhook",
-      provider: "ngrok",
       stop: tunnelStop,
     });
 
@@ -483,10 +481,10 @@ describe("createVoiceCallRuntime lifecycle", () => {
       logger,
     });
 
-    expect(runtime).toMatchObject({
-      webhookUrl: "https://voice.example.com/voice/webhook",
-      publicUrl: "https://voice.example.com/voice/webhook",
-    });
+    expect(mocks.managerInitialize).toHaveBeenCalledWith(
+      expect.anything(),
+      "https://voice.example.com/voice/webhook",
+    );
     expect(logger.info).toHaveBeenCalledWith(
       "[voice-call] Webhook URL: https://voice.example.com/voice/webhook",
     );

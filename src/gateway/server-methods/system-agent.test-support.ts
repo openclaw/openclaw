@@ -153,10 +153,9 @@ export function useSystemAgentGatewayTestFixture() {
       recentExternalEdit: false,
       auditSequence: 0,
     });
-    greetingMocks.resolveSystemAgentGreeting.mockResolvedValue({
-      text: "I'm OpenClaw. All systems nominal.",
-      source: "model",
-    });
+    greetingMocks.resolveSystemAgentGreeting.mockResolvedValue(
+      "I'm OpenClaw. All systems nominal.",
+    );
     onboardingWelcomeMocks.buildOnboardingWelcome.mockResolvedValue({
       text: "Inference is ready. Let's finish setup.",
     });

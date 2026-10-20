@@ -563,8 +563,21 @@ describe("worker turn launcher local placement", () => {
       await releaseFirst.promise;
     });
     await firstStarted.promise;
-    const firstClaimId = placements.get(SESSION_ID)?.turnClaim?.claimId;
-    expect(await placements.clearLocalTurnClaimsAfterRestartAsync()).toBe(1);
+    const firstClaim = placements.get(SESSION_ID)?.turnClaim;
+    if (!firstClaim) {
+      throw new Error("Expected the first local turn claim");
+    }
+    const firstClaimId = firstClaim.claimId;
+    // Live local claims belong to the placement owner; startup only clears legacy SQL claims.
+    expect(
+      await placements.releaseTurn({
+        sessionId: SESSION_ID,
+        claimId: firstClaimId,
+        runId: firstClaim.runId,
+        placementGeneration: firstClaim.generation,
+        owner: { kind: "local" },
+      }),
+    ).toMatchObject({ turnClaim: null });
 
     const second = localProvider.executeLocalTurn(claim, async () => {
       secondStarted.resolve();

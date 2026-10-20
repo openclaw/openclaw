@@ -426,8 +426,8 @@ describe("AgentSession queue and next-turn lifecycle correctness", () => {
         if (event.type === "queue_update") {
           queueEvents.push({
             type: "queue_update",
-            steering: event.steering,
-            followUp: event.followUp,
+            steering: [...session.getSteeringMessages()],
+            followUp: [...session.getFollowUpMessages()],
           });
         } else if (
           event.type === "message_start" &&

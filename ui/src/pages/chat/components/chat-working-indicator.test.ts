@@ -42,6 +42,22 @@ function findRenderKey(wantSurprise: boolean): string {
 }
 
 describe("ChatWorkingIndicator", () => {
+  it("pops in for new work but continues a claw that another one just handed off", () => {
+    const now = vi.spyOn(performance, "now").mockReturnValue(10_000);
+    const part = { kind: "reading-indicator", key: "handoff", startedAt: 1 } as const;
+    const isContinued = (container: Element) =>
+      container
+        .querySelector(".chat-working-indicator")
+        ?.classList.contains("chat-working-indicator--continued");
+    const preview = mountSolid(() => createComponent(ChatWorkingIndicator, { part, options: {} }));
+    flush();
+    expect(isContinued(preview.container)).toBe(false);
+    preview.unmount();
+    now.mockReturnValue(10_200);
+    const chat = mountIndicator(part, {});
+    expect(isContinued(chat.container)).toBe(true);
+  });
+
   it("promotes child activity above supporting totals and restores the standalone glyph", async () => {
     const { container, draw } = mountIndicator(
       { kind: "reading-indicator", key: "task-first", startedAt: 1 },

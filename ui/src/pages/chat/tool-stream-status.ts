@@ -146,8 +146,6 @@ export function reconcileWaitingApprovalsFromSnapshot(
       continue;
     }
     waiting.set(approval.id, {
-      approvalId: approval.id,
-      toolCallId: null,
       runId,
     });
     changed = true;
@@ -355,8 +353,6 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
     const waiting = (host.waitingApprovalStatuses ??= new Map());
     host.waitingApprovalResolvedIds?.delete(approvalId);
     waiting.set(approvalId, {
-      approvalId,
-      toolCallId: toTrimmedString(payload.data?.toolCallId),
       runId: payload.runId,
     });
     return true;

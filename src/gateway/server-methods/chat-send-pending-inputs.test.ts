@@ -544,20 +544,37 @@ describe("ordinary chat input admission", () => {
     }
   });
 
-  it.each(["cancellation", "lifecycle rotation", "session replacement"] as const)(
+  it.each(["cancellation", "lifecycle rotation", "session replacement", "session access"] as const)(
     "revalidates %s after message approval before committing custody",
     async (change) => {
       await using fixture = await createBrowserFollowupFixture();
+      if (change === "session access") {
+        setClientProfile(
+          fixture.client,
+          ensureProfileForEmail("pending-input-caller@example.test"),
+        );
+        fixture.client.connect.scopes = ["operator.read", "operator.write"];
+        await patchSessionEntryCore(fixture.scope, () => ({
+          createdActor: { type: "human", source: "profile", id: "another-profile" },
+          visibility: "shared",
+        }));
+      }
       fixture.beforeApprove.mockImplementation(() => {
         if (change === "lifecycle rotation") {
           rotateAgentEventLifecycleGeneration();
           return;
         }
-        if (change === "session replacement") {
-          replaceSessionEntrySync(fixture.scope, {
-            sessionId: "successor-session",
-            updatedAt: Date.now(),
-          });
+        if (change === "session replacement" || change === "session access") {
+          const current = loadSessionEntry(fixture.scope);
+          if (!current) {
+            throw new Error("Expected the session to exist before input approval");
+          }
+          replaceSessionEntrySync(
+            fixture.scope,
+            change === "session replacement"
+              ? { sessionId: "successor-session", updatedAt: Date.now() }
+              : { ...current, visibility: "draft" },
+          );
           return;
         }
         const active = rpcSourceTesting.get(fixture.params.idempotencyKey);
@@ -577,7 +594,7 @@ describe("ordinary chat input admission", () => {
         active.adapter.abortStopReason = "rpc";
         requestRpcSourceCancellation(active);
       });
-      const respond = await fixture.send();
+      const respond = await fixture.send(undefined, change === "session access" ? {} : undefined);
       expect(fixture.beforeApprove).toHaveBeenCalledOnce();
       expectNotStarted(respond);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();

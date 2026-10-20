@@ -653,3 +653,53 @@ describe("allow-always pattern persistence", () => {
     ).toBe(false);
   });
 });
+
+it.runIf(process.platform !== "win32")(
+  "keeps shell-script grants bound to cwd and exact arguments",
+  () => {
+    const base = makeExecApprovalsTempDir();
+    const dirWithSpace = path.join(base, "data ");
+    const dirNoSpace = path.join(base, "data");
+    fs.mkdirSync(dirWithSpace, { recursive: true });
+    fs.mkdirSync(dirNoSpace, { recursive: true });
+    const shell = makeExecutable(base, "bash");
+    const script = path.join(dirWithSpace, "bash");
+    fs.writeFileSync(script, "echo ok\n");
+    const context = { cwd: dirWithSpace, env: makePathEnv(base), platform: process.platform };
+    const approved = analyzeArgvCommand({ argv: [shell, "./bash", "allowed"], ...context });
+    expect(approved.ok).toBe(true);
+    const decision = resolveAllowAlwaysPersistenceDecision({
+      segments: approved.segments,
+      ...context,
+    });
+    expect(decision.kind).toBe("patterns");
+    const entries =
+      decision.kind === "patterns"
+        ? decision.patterns.map((entry) =>
+            Object.assign({}, entry, { source: "allow-always" as const }),
+          )
+        : [];
+    expect(entries).toHaveLength(1);
+
+    for (const [argv, cwd, allowed] of [
+      [[shell, "./bash", "allowed"], dirWithSpace, true],
+      [[shell, script, "./bash", "allowed"], dirWithSpace, false],
+      [[shell, script, "allowed"], dirWithSpace, true],
+      [[shell, script, "allowed"], dirNoSpace, false],
+    ] as const) {
+      const analysis = analyzeArgvCommand({ ...context, argv: [...argv], cwd });
+      expect(analysis.ok).toBe(true);
+      const evaluation = evaluateExecAllowlist({
+        ...context,
+        analysis,
+        allowlist: entries,
+        safeBins: new Set(),
+        cwd,
+      });
+      expect(evaluation.allowlistSatisfied).toBe(allowed);
+      if (!allowed) {
+        expectApprovalRequired({ analysisOk: analysis.ok, ...evaluation });
+      }
+    }
+  },
+);

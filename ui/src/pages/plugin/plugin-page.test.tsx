@@ -39,7 +39,6 @@ function externalPluginConfig(
       agentId: null,
       name: "Assistant",
       avatar: null,
-      avatarSource: null,
       avatarStatus: null,
       avatarReason: null,
     },
