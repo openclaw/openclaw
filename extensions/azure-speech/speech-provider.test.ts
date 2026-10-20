@@ -199,10 +199,9 @@ describe("buildAzureSpeechProvider", () => {
       fetchMock.mockResolvedValueOnce(Response.json([]));
       await provider.listVoices?.({ providerConfig, timeoutMs: 30_000 });
 
-      expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
-        `${expected}/cognitiveservices/v1`,
-        `${expected}/cognitiveservices/voices/list`,
-      ]);
+      expect(
+        fetchMock.mock.calls.map(([url]) => (url instanceof Request ? url.url : url.toString())),
+      ).toEqual([`${expected}/cognitiveservices/v1`, `${expected}/cognitiveservices/voices/list`]);
     },
   );
 
