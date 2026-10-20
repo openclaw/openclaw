@@ -5,8 +5,19 @@ import {
   resolveSystemRunApprovalRuntimeContext,
 } from "./system-run-approval-context.js";
 
+const identity = { cwd: "/tmp", agentId: "main", sessionKey: "agent:main:main" };
+// Shared input/expectation fixtures must not hide mutations by the normalizer.
+const preparedPlan = Object.freeze({
+  argv: Object.freeze(["jq", "--version"]),
+  commandText: "jq --version",
+  cwd: "/tmp",
+});
+const jqPlan = Object.freeze({ ...preparedPlan, ...identity });
+
 describe("resolveSystemRunApprovalRequestContext", () => {
   test("derives preview from fallback command for older node plans", () => {
+    const argv = Object.freeze(["./env", "sh", "-c", "jq --version"]);
+    const commandText = './env sh -c "jq --version"';
     expect(
       resolveSystemRunApprovalRequestContext({
         host: "node",
@@ -14,29 +25,14 @@ describe("resolveSystemRunApprovalRequestContext", () => {
         cwd: "/fallback",
         agentId: "fallback",
         sessionKey: "agent:fallback:main",
-        systemRunPlan: {
-          argv: ["./env", "sh", "-c", "jq --version"],
-          cwd: "/tmp",
-          rawCommand: './env sh -c "jq --version"',
-          agentId: "main",
-          sessionKey: "agent:main:main",
-        },
+        systemRunPlan: { argv, rawCommand: commandText, ...identity },
       }),
     ).toEqual({
-      plan: {
-        argv: ["./env", "sh", "-c", "jq --version"],
-        cwd: "/tmp",
-        commandText: './env sh -c "jq --version"',
-        commandPreview: "jq --version",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-      },
-      commandText: './env sh -c "jq --version"',
+      plan: { argv, commandText, commandPreview: "jq --version", ...identity },
+      commandText,
       commandPreview: "jq --version",
-      commandArgv: ["./env", "sh", "-c", "jq --version"],
-      cwd: "/tmp",
-      agentId: "main",
-      sessionKey: "agent:main:main",
+      commandArgv: argv,
+      ...identity,
     });
   });
 
@@ -45,22 +41,20 @@ describe("resolveSystemRunApprovalRequestContext", () => {
       host: "gateway",
       command: "jq --version",
       commandArgv: ["jq", "--version"],
-      cwd: "/tmp",
-      agentId: "main",
-      sessionKey: "agent:main:main",
+      ...identity,
       systemRunPlan: {
         argv: ["ignored"],
         commandText: "ignored",
       },
     });
 
-    expect(context.plan).toBeNull();
-    expect(context.commandArgv).toEqual(["jq", "--version"]);
-    expect(context.commandText).toBe("jq --version");
-    expect(context.commandPreview).toBeNull();
-    expect(context.cwd).toBe("/tmp");
-    expect(context.agentId).toBe("main");
-    expect(context.sessionKey).toBe("agent:main:main");
+    expect(context).toEqual({
+      plan: null,
+      commandArgv: ["jq", "--version"],
+      commandText: "jq --version",
+      commandPreview: null,
+      ...identity,
+    });
   });
 
   test("preserves whitespace in cwd from a node plan", () => {
@@ -95,22 +89,11 @@ describe("parsePreparedSystemRunPayload", () => {
   test("parses prepared exec policy metadata", () => {
     expect(
       parsePreparedSystemRunPayload({
-        plan: {
-          argv: ["jq", "--version"],
-          cwd: "/tmp",
-          commandText: "jq --version",
-        },
+        plan: preparedPlan,
         execPolicy: { security: "allowlist", ask: "always" },
       }),
     ).toEqual({
-      plan: {
-        argv: ["jq", "--version"],
-        cwd: "/tmp",
-        commandText: "jq --version",
-        commandPreview: null,
-        agentId: null,
-        sessionKey: null,
-      },
+      plan: { ...preparedPlan, commandPreview: null, agentId: null, sessionKey: null },
       execPolicy: { security: "allowlist", ask: "always" },
     });
   });
@@ -128,57 +111,21 @@ describe("parsePreparedSystemRunPayload", () => {
 });
 
 describe("resolveSystemRunApprovalRuntimeContext", () => {
-  test.each([
-    {
-      name: "uses normalized plan runtime metadata when available",
-      params: {
-        plan: {
-          argv: ["jq", "--version"],
-          cwd: "/tmp",
-          commandText: "jq --version",
-          commandPreview: "jq --version",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-        },
-      },
-      expected: {
-        ok: true,
-        plan: {
-          argv: ["jq", "--version"],
-          cwd: "/tmp",
-          commandText: "jq --version",
-          commandPreview: "jq --version",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-        },
-        argv: ["jq", "--version"],
-        cwd: "/tmp",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        commandText: "jq --version",
-      },
-    },
-    {
-      name: "falls back to command/rawCommand validation without a plan",
-      params: {
-        command: ["bash", "-lc", "jq --version"],
-        rawCommand: 'bash -lc "jq --version"',
-        cwd: "/tmp",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-      },
-      expected: {
-        ok: true,
-        plan: null,
-        argv: ["bash", "-lc", "jq --version"],
-        cwd: "/tmp",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        commandText: 'bash -lc "jq --version"',
-      },
-    },
-  ])("$name", ({ params, expected }) => {
-    expect(resolveSystemRunApprovalRuntimeContext(params)).toEqual(expected);
+  test("uses normalized plan runtime metadata when available", () => {
+    const plan = Object.freeze({ ...jqPlan, commandPreview: "jq --version" });
+    expect(resolveSystemRunApprovalRuntimeContext({ plan })).toEqual({ ok: true, plan, ...jqPlan });
+  });
+
+  test("falls back to command/rawCommand validation without a plan", () => {
+    const argv = Object.freeze(["bash", "-lc", "jq --version"]);
+    const commandText = 'bash -lc "jq --version"';
+    expect(
+      resolveSystemRunApprovalRuntimeContext({
+        command: argv,
+        rawCommand: commandText,
+        ...identity,
+      }),
+    ).toEqual({ ok: true, plan: null, argv, commandText, ...identity });
   });
 
   test("returns request validation errors from command fallback", () => {
@@ -195,19 +142,17 @@ describe("resolveSystemRunApprovalRuntimeContext", () => {
 
   test("preserves whitespace in cwd when falling back without a plan", () => {
     const context = resolveSystemRunApprovalRuntimeContext({
+      ...identity,
       command: ["echo", "hi"],
       rawCommand: "echo hi",
       cwd: "/srv/data ",
-      agentId: "main",
-      sessionKey: "agent:main:main",
     });
     expect(context).toEqual({
+      ...identity,
       ok: true,
       plan: null,
       argv: ["echo", "hi"],
       cwd: "/srv/data ",
-      agentId: "main",
-      sessionKey: "agent:main:main",
       commandText: "echo hi",
     });
   });

@@ -20,26 +20,22 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 async function seedLegacySession(stateDir: string, sessionId: string): Promise<string> {
   const sessionDir = path.join(stateDir, "transcripts", "2026-07-01", sessionId);
   await fs.mkdir(sessionDir, { recursive: true });
-  await fs.writeFile(
-    path.join(sessionDir, "metadata.json"),
-    `${JSON.stringify({
-      sessionId,
-      title: "Design review",
-      source: { providerId: "manual-transcript" },
-      startedAt: "2026-07-01T10:00:00.000Z",
-      stoppedAt: "2026-07-01T10:30:00.000Z",
-    })}\n`,
-  );
-  await fs.writeFile(
-    path.join(sessionDir, "transcript.jsonl"),
-    `${JSON.stringify({
-      id: "u-1",
-      sessionId,
-      speaker: { label: "Alex" },
-      text: "First line",
-      final: true,
-    })}\n`,
-  );
+  const writeJson = (name: string, value: unknown) =>
+    fs.writeFile(path.join(sessionDir, name), `${JSON.stringify(value)}\n`);
+  await writeJson("metadata.json", {
+    sessionId,
+    title: "Design review",
+    source: { providerId: "manual-transcript" },
+    startedAt: "2026-07-01T10:00:00.000Z",
+    stoppedAt: "2026-07-01T10:30:00.000Z",
+  });
+  await writeJson("transcript.jsonl", {
+    id: "u-1",
+    sessionId,
+    speaker: { label: "Alex" },
+    text: "First line",
+    final: true,
+  });
   await fs.writeFile(path.join(sessionDir, "summary.md"), "# Design review\n\nFirst line.\n");
   return sessionDir;
 }
@@ -62,9 +58,7 @@ describe("meeting transcript migration stage cleanup", () => {
           env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
           stateDir,
           now: () => Date.parse("2026-07-02T00:00:00.000Z"),
-          // Deny unlinking inside the state directory once the migration is
-          // otherwise finished, the way an indexer or scanner holding the stage
-          // file does on Windows.
+          // Simulate a held stage file by denying unlink after import and archive.
           testHooks: { afterArchive: () => fsSync.chmodSync(stateDir, 0o555) },
         });
       } finally {
@@ -75,14 +69,13 @@ describe("meeting transcript migration stage cleanup", () => {
       expect(result.changes.join("\n")).toContain(
         `Archived legacy meeting transcript files → ${path.join(stateDir, "transcripts.migrated-2026-07-02T00-00-00-000Z")}`,
       );
-      expect(
-        result.warnings.filter((warning) =>
-          warning.includes("Could not remove the disposable meeting transcript migration file"),
+      expect(result.warnings).toContainEqual(
+        expect.stringContaining(
+          "Could not remove the disposable meeting transcript migration file",
         ),
-      ).not.toHaveLength(0);
+      );
       await expect(fs.stat(sourceDir)).rejects.toMatchObject({ code: "ENOENT" });
-      // Doctor refuses the step, and with it every later repair, unless the result
-      // marks its warnings recoverable (state-migrations.messages.ts:66).
+      // Otherwise Doctor refuses this step and every later repair.
       expect(result.warningDisposition).toBe("recoverable");
     },
   );
@@ -92,18 +85,19 @@ describe("meeting transcript migration stage cleanup", () => {
     const databasePath = path.join(stateDir, "stage.sqlite");
     const database = openLegacyMeetingTranscriptStage(databasePath);
     const files = [databasePath, `${databasePath}-shm`, `${databasePath}-wal`];
+    const filesExist = () => files.map((file) => fsSync.existsSync(file));
     const close = vi.spyOn(database, "close").mockImplementationOnce(() => {
       throw new Error("native close failed");
     });
     try {
-      expect(files.map((file) => fsSync.existsSync(file))).toEqual([true, true, true]);
+      expect(filesExist()).toEqual([true, true, true]);
 
       const warnings = disposeLegacyMeetingTranscriptStage({ database, databasePath });
 
       expect(warnings).toEqual([
         expect.stringContaining("Could not close the meeting transcript migration stage database"),
       ]);
-      expect(files.map((file) => fsSync.existsSync(file))).toEqual([true, true, true]);
+      expect(filesExist()).toEqual([true, true, true]);
       expect(warnings[0]).toContain(`Left stage files in place at ${databasePath}`);
       expect(database.prepare("SELECT COUNT(*) AS count FROM staged_utterances").get()).toEqual({
         count: 0,
@@ -112,7 +106,7 @@ describe("meeting transcript migration stage cleanup", () => {
       close.mockRestore();
       expect(disposeLegacyMeetingTranscriptStage({ database, databasePath })).toEqual([]);
       expect(database.isOpen).toBe(false);
-      expect(files.map((file) => fsSync.existsSync(file))).toEqual([false, false, false]);
+      expect(filesExist()).toEqual([false, false, false]);
     } finally {
       close.mockRestore();
       // Do not let test cleanup unlink a database whose native close was skipped.

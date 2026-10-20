@@ -41,17 +41,14 @@ it.each([
         const command = `openclaw${profile ? ` --profile ${profile}` : ""} doctor --session-sqlite recover --session-sqlite-agent ${agentId}`;
         await withAgentDatabaseStartupAdmission(
           async () => {
-            await expect
-              .soft(
-                assertOpenClawDatabasesReady({
-                  env,
-                  operation: "gateway-startup",
-                  config: {
-                    agents: { entries: { [agentId]: {} }, defaults: { systemAgent: { agentId } } },
-                  },
-                }),
-              )
-              .rejects.toThrow(command);
+            const ready = assertOpenClawDatabasesReady({
+              env,
+              operation: "gateway-startup",
+              config: {
+                agents: { entries: { [agentId]: {} }, defaults: { systemAgent: { agentId } } },
+              },
+            });
+            await expect.soft(ready).rejects.toThrow(command);
           },
           { deferInspections: false },
         );

@@ -24,30 +24,26 @@ afterEach(async () => {
 
 describe("Doctor derived artifact cleanup", () => {
   it.each([
-    {
-      pluginId: "memory-core",
-      migrationId: "memory-core-qmd-workspace-retired",
-      label: "retired Memory Core QMD workspace",
-    },
-    {
-      pluginId: "memory-wiki",
-      migrationId: "memory-wiki-compiled-cache-file-cleanup",
-      label: "rebuildable Memory Wiki compiled cache",
-    },
-  ])("continues Doctor when $pluginId cleanup fails", async (fixture) => {
+    ["memory-core", "memory-core-qmd-workspace-retired", "retired Memory Core QMD workspace"],
+    [
+      "memory-wiki",
+      "memory-wiki-compiled-cache-file-cleanup",
+      "rebuildable Memory Wiki compiled cache",
+    ],
+  ])("continues Doctor when %s cleanup fails", async (pluginId, migrationId, label) => {
     const { stateMigrations } = coercePluginDoctorContractModule(
       await vi.importActual<PluginDoctorContractModule>(
-        path.resolve("extensions", fixture.pluginId, "doctor-contract-api.ts"),
+        path.resolve("extensions", pluginId, "doctor-contract-api.ts"),
       ),
     );
     const stateDir = await tempDirs.make("openclaw-derived-cleanup-");
     const vaultRoot = path.join(stateDir, "vault");
     const qmdHome = path.join(stateDir, "agents", "main", "qmd");
     const artifactPath =
-      fixture.pluginId === "memory-core"
+      pluginId === "memory-core"
         ? qmdHome
         : path.join(vaultRoot, ".openclaw-wiki", "cache", "agent-digest.json");
-    if (fixture.pluginId === "memory-core") {
+    if (pluginId === "memory-core") {
       await fs.mkdir(qmdHome, { recursive: true });
     } else {
       await fs.mkdir(path.dirname(artifactPath), { recursive: true });
@@ -62,14 +58,14 @@ describe("Doctor derived artifact cleanup", () => {
       env,
       stateDir,
       oauthDir: path.join(stateDir, "credentials"),
-      context: createPluginDoctorStateMigrationContext({ pluginId: fixture.pluginId, env, config }),
+      context: createPluginDoctorStateMigrationContext({ pluginId, env, config }),
     };
     const migration = expectDefined(
-      stateMigrations?.find((entry) => entry.id === fixture.migrationId),
-      fixture.migrationId,
+      stateMigrations?.find((entry) => entry.id === migrationId),
+      migrationId,
     );
     const removalError = new Error("synthetic cleanup permission denied");
-    if (fixture.pluginId === "memory-core") {
+    if (pluginId === "memory-core") {
       const remove = fs.rmdir;
       vi.spyOn(fs, "rmdir").mockImplementation(async (target) => {
         if (target === qmdHome) {
@@ -91,7 +87,7 @@ describe("Doctor derived artifact cleanup", () => {
     const result = await migration.migrateLegacyState(params);
     const receipt = createLegacyStateMigrationStepReceipt(
       {
-        id: fixture.migrationId,
+        id: migrationId,
         phase: "final",
         source: [{ kind: "path", path: artifactPath }],
         target: [],
@@ -101,16 +97,17 @@ describe("Doctor derived artifact cleanup", () => {
       result,
     );
 
-    if (fixture.pluginId === "memory-core") {
+    if (pluginId === "memory-core") {
       await expect(fs.readdir(qmdHome)).resolves.toEqual([]);
     } else {
       await expect(fs.readFile(artifactPath, "utf8")).resolves.toBe("rebuildable artifact\n");
     }
-    expect(receipt.warnings.join("\n")).toContain(fixture.label);
-    expect(receipt.warnings.join("\n")).toContain(removalError.message);
+    const warnings = receipt.warnings.join("\n");
+    expect(warnings).toContain(label);
+    expect(warnings).toContain(removalError.message);
     expect(() => throwIfDoctorStateMigrationRefused([receipt])).not.toThrow();
     expect(receipt.outcome).toBe("warning");
-    expect(receipt.warnings.join("\n")).toContain("openclaw doctor --fix");
+    expect(warnings).toContain("openclaw doctor --fix");
 
     vi.restoreAllMocks();
     expect((await migration.migrateLegacyState(params)).warnings).toEqual([]);
