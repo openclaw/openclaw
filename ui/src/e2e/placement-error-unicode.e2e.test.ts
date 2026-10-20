@@ -1,4 +1,3 @@
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect } from "playwright/test";
 import { it } from "vitest";
@@ -129,24 +128,6 @@ suite.define(() => {
             )
             .toBe(true);
           await page.screenshot({ path: path.join(suite.artifactDir, "paused-error.png") });
-          await writeFile(
-            path.join(suite.artifactDir, "diagnostic.json"),
-            JSON.stringify(
-              {
-                writeFails,
-                inputLength: diagnostic.length,
-                expectedBoundedLength: (prefix + retained).length,
-                renderedLength: rendered?.length,
-                renderedWellFormed,
-                renderedTailCodeUnits: rendered
-                  ?.slice(-4)
-                  .split("")
-                  .map((unit) => unit.charCodeAt(0)),
-              },
-              null,
-              2,
-            ),
-          );
           if (!renderedWellFormed) {
             throw new Error(
               "PLACEMENT_ERROR_UTF16_SPLIT_137649: rendered pause diagnostic contains a split surrogate",

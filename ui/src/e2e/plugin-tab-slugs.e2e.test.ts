@@ -1,4 +1,3 @@
-import { withTimeout } from "@openclaw/fs-safe/advanced";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { PluginPageElement } from "../pages/plugin/plugin-page.tsx";
@@ -77,21 +76,23 @@ async function expectReports(page: Page, pathname = "/reports") {
   expect(await sidebarEntry.isVisible()).toBe(true);
 }
 
+async function openReports(page: Page) {
+  await page
+    .locator("openclaw-app-sidebar")
+    .getByRole("button", { name: "Pages", exact: true })
+    .click();
+  const entry = page.locator(".sidebar-pages").getByRole("link", { name: "Reports", exact: true });
+  await entry.waitFor();
+  expect(await entry.getAttribute("href")).toBe("/reports");
+  await entry.click();
+}
+
 suite.define(() => {
   it("opens the advertised slug from the sidebar inside the plugin page shell", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installReports(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page
-        .locator("openclaw-app-sidebar")
-        .getByRole("button", { name: "Pages", exact: true })
-        .click();
-      const entry = page
-        .locator(".sidebar-pages")
-        .getByRole("link", { name: "Reports", exact: true });
-      await entry.waitFor();
-      expect(await entry.getAttribute("href")).toBe("/reports");
-      await entry.click();
+      await openReports(page);
       await expectReports(page);
     });
   });
@@ -166,19 +167,13 @@ suite.define(() => {
             evaluateControlUiContext(page, (context) => context.config.current.embedSandboxMode),
           )
           .toBe("scripts");
-        await page
-          .locator("openclaw-app-sidebar")
-          .getByRole("button", { name: "Pages", exact: true })
-          .click();
-        await page
-          .locator(".sidebar-pages")
-          .getByRole("link", { name: "Reports", exact: true })
-          .click();
+        await openReports(page);
         // The first frame must receive the script policy without a corrective reload.
         const sandbox = await page.locator("openclaw-plugin-page iframe").getAttribute("sandbox");
         expect(sandbox?.split(/\s+/u)).toContain("allow-scripts");
         const frame = page.frameLocator("openclaw-plugin-page iframe");
         const receivedTheme = frame.getByLabel("Received OpenClaw theme");
+        const readTheme = async () => JSON.parse((await receivedTheme.textContent()) ?? "{}");
         expect(await page.evaluate(() => matchMedia("(prefers-color-scheme: light)").matches)).toBe(
           true,
         );
@@ -190,67 +185,28 @@ suite.define(() => {
           await sidebar
             .getByRole("menuitem", { name: `Color mode: ${currentMode}`, exact: true })
             .click();
-          try {
-            await sidebar
-              .getByRole("menuitem", {
-                name: `Color mode: ${currentMode === "System" ? "Light" : "Dark"}`,
-                exact: true,
-              })
-              .waitFor();
-          } catch (error) {
-            try {
-              const state = await withTimeout(
-                evaluateControlUiContext(page, (context) => {
-                  const browserSidebar = document.querySelector("openclaw-app-sidebar");
-                  const toggle = browserSidebar?.querySelector("openclaw-theme-mode-toggle");
-                  const button = toggle?.querySelector(".theme-mode-toggle");
-                  const menu = browserSidebar?.querySelector<HTMLElement>(".sidebar-identity-menu");
-                  const trigger = browserSidebar?.querySelector(".sidebar-identity-card");
-                  return {
-                    mode: context.theme.mode,
-                    resolvedMode: context.theme.resolvedMode,
-                    documentMode: document.documentElement.dataset.themeMode ?? null,
-                    buttonLabel: button?.getAttribute("aria-label") ?? null,
-                    buttonRole: button?.getAttribute("role") ?? null,
-                    menuPresent: Boolean(menu),
-                    menuOpen: menu?.matches(":popover-open") ?? null,
-                    menuVisible: menu?.checkVisibility({ checkVisibilityCSS: true }) ?? null,
-                    menuFocusWithin: menu?.matches(":focus-within") ?? null,
-                    triggerExpanded: trigger?.getAttribute("aria-expanded") ?? null,
-                  };
-                }),
-                5_000,
-                "plugin color mode failure diagnostics",
-              );
-              console.error(
-                "[plugin-tab-slugs] color mode label did not advance",
-                JSON.stringify({ currentMode, ...state }),
-              );
-            } catch {
-              console.error("[plugin-tab-slugs] color mode diagnostics unavailable");
-            }
-            throw error;
-          }
+          await sidebar
+            .getByRole("menuitem", {
+              name: `Color mode: ${currentMode === "System" ? "Light" : "Dark"}`,
+              exact: true,
+            })
+            .waitFor();
         }
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
-        await expect
-          .poll(async () => JSON.parse((await receivedTheme.textContent()) ?? "{}"))
-          .toMatchObject({
-            instance: "1",
-            messages: expect.any(Number),
-            mode: "dark",
-            surface: expect.stringMatching(/\S/),
-          });
-        const initialMessageCount = Number(
-          JSON.parse((await receivedTheme.textContent()) ?? "{}").messages,
-        );
+        await expect.poll(readTheme).toMatchObject({
+          instance: "1",
+          messages: expect.any(Number),
+          mode: "dark",
+          surface: expect.stringMatching(/\S/),
+        });
+        const initialMessageCount = Number((await readTheme()).messages);
 
         await sidebar.getByRole("menuitem", { name: "Color mode: Dark", exact: true }).click();
 
         await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
         await expect
           .poll(async () => {
-            const received = JSON.parse((await receivedTheme.textContent()) ?? "{}");
+            const received = await readTheme();
             return {
               instance: received.instance,
               mode: received.mode,

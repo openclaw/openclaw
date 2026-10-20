@@ -1,7 +1,6 @@
 // Source-blind browser proof for bundled plugin lazy-view recovery.
 import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   controlUiE2eBuiltModuleRequest,
@@ -12,11 +11,6 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 
-let artifactDir: string;
-beforeEach(() => {
-  artifactDir = createControlUiE2eArtifactDir("plugin-bundled-view-recovery");
-});
-
 const suite = createControlUiE2eSuite({
   name: "Control UI bundled plugin lazy-view recovery",
   unavailableMessage: (executablePath) =>
@@ -26,6 +20,11 @@ const suite = createControlUiE2eSuite({
 suite.define(() => {
   it("stops automatic reloads after one failed recovery and keeps manual Reload", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const capture = (name: string) =>
+        page.screenshot({
+          fullPage: true,
+          path: path.join(suite.artifactDir, name + ".png"),
+        });
       const gateway = await installMockGateway(page, {
         controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
         methodResponses: {
@@ -54,10 +53,7 @@ suite.define(() => {
       const response = await page.goto(`${suite.server.baseUrl}plugin?plugin=missing&id=missing`);
       expect(response?.status()).toBe(200);
       await page.getByText("Plugin panel unavailable").waitFor();
-      await page.screenshot({
-        fullPage: true,
-        path: path.join(artifactDir, "before.png"),
-      });
+      await capture("before");
 
       let markDocumentReachable!: () => void;
       const documentReachable = new Promise<void>((resolve) => {
@@ -95,10 +91,7 @@ suite.define(() => {
       expect(await alert.textContent()).not.toContain("updated in the background");
       expect(await alert.textContent()).toContain("Failed to fetch dynamically imported module");
       await alert.getByRole("button", { name: "Reload" }).waitFor();
-      await page.screenshot({
-        fullPage: true,
-        path: path.join(artifactDir, "failure.png"),
-      });
+      await capture("failure");
 
       let documentRequestCount = 0;
       page.on("request", (request) => {
@@ -121,10 +114,7 @@ suite.define(() => {
       expect(documentRequestCount).toBe(2);
       expect(documentProbes).toBe(2);
       await gateway.waitForRequest("logbook.status");
-      await page.screenshot({
-        fullPage: true,
-        path: path.join(artifactDir, "recovered.png"),
-      });
+      await capture("recovered");
       expect(new URL(page.url()).pathname).toBe("/plugin");
     });
   });

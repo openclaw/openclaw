@@ -28,22 +28,17 @@ suite.define(() => {
           identity: { type: "profile" as const, id: "alice" },
         };
         const now = Date.now();
+        const session = (key: string, label: string, age: number) => ({
+          key,
+          label,
+          kind: "direct",
+          updatedAt: now - age,
+          owner: { actor },
+        });
         const all = {
           ...chatSessionListResponse([
-            {
-              key: selected,
-              kind: "direct",
-              label: "Shared design review",
-              updatedAt: now - 60_000,
-              owner: { actor },
-            },
-            {
-              key: personal,
-              kind: "direct",
-              label: "Release checklist",
-              updatedAt: now - 120_000,
-              owner: { actor },
-            },
+            session(selected, "Shared design review", 60_000),
+            session(personal, "Release checklist", 120_000),
           ]),
           owners: [actor],
         };
@@ -85,19 +80,14 @@ suite.define(() => {
         await expectBrowser(page.locator(".agent-chat__composer-combobox textarea")).toBeVisible();
         const sidebar = page.locator("openclaw-app-sidebar");
         const sessionList = sidebar.locator(".sidebar-session-content");
+        const personalRow = sessionList.locator(`[data-session-key="${personal}"]`);
         // My sessions belongs to Viewer, not to the people whose cards we inspect.
-        await expectBrowser(
-          sessionList.locator('[data-session-key="' + personal + '"]'),
-        ).toHaveCount(0);
+        await expectBrowser(personalRow).toHaveCount(0);
         await selectAllSidebarSessions(page);
-        await expectBrowser(
-          sessionList.locator('[data-session-key="' + personal + '"]'),
-        ).toBeVisible();
+        await expectBrowser(personalRow).toBeVisible();
         await chooseSidebarOwner(page, "involving-me");
         await closeSidebarMenu(page);
-        await expectBrowser(
-          sessionList.locator('[data-session-key="' + personal + '"]'),
-        ).toHaveCount(0);
+        await expectBrowser(personalRow).toHaveCount(0);
         expect(
           (await gateway.getRequests("sessions.list", { involvingMe: true })).length,
         ).toBeGreaterThan(0);
@@ -113,8 +103,9 @@ suite.define(() => {
             animations: "disabled",
           });
         }
-        await expectBrowser(card.getByRole("link", { name: /Release checklist/ })).toBeVisible();
-        await card.getByRole("link", { name: /Release checklist/ }).click();
+        const releaseLink = card.getByRole("link", { name: /Release checklist/ });
+        await expectBrowser(releaseLink).toBeVisible();
+        await releaseLink.click();
         await expect.poll(() => new URL(page.url()).pathname).toContain("release-checklist");
         // Online is a separate view. Returning to Sessions must restore the
         // involvement filter, rather than proving absence in an unmounted list.
@@ -122,12 +113,8 @@ suite.define(() => {
         await expectBrowser(sidebar.locator("#sidebar-session-owner-title")).toHaveText(
           "Involving me",
         );
-        await expectBrowser(
-          sessionList.locator('[data-session-key="' + selected + '"]'),
-        ).toBeVisible();
-        await expectBrowser(
-          sessionList.locator('[data-session-key="' + personal + '"]'),
-        ).toHaveCount(0);
+        await expectBrowser(sessionList.locator(`[data-session-key="${selected}"]`)).toBeVisible();
+        await expectBrowser(personalRow).toHaveCount(0);
       },
     );
   });
