@@ -569,9 +569,8 @@ export function createGatewayBroadcaster(params: {
       const useDelta = delivery.canSendDelta(state, live, publication);
       const projection = live?.projection;
       const getDeliveryFrameBase = () =>
-        // Internal health producers own this schema; plugins cannot publish reserved events.
         event === "health" && c.connect.caps?.includes(GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY)
-          ? (frames.healthSummary ??= frameBaseFor(projectHealthSummary(payload as HealthSummary)))
+          ? (frames.healthSummary ??= frameBaseFor(projectHealthSummary(payload as HealthSummary))) // SAFETY: Only internal health producers can publish this reserved event.
           : useDelta && projection
             ? (frames.delta ??= frameBaseFor(projection.delta(payload)))
             : (frames.snapshot ??= frameBaseFor(payload));

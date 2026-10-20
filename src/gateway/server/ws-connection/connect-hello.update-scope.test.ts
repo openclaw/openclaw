@@ -2,7 +2,8 @@ import { EventEmitter, once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
-import type { HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import type { ConnectParams, HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as systemPresence from "../../../infra/system-presence.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -111,6 +112,13 @@ function makeContext(
   scopes: string[],
   client?: Pick<GatewayWsClient, "internal" | "preparedSessionProfile">,
 ) {
+  const connectParams: ConnectParams = {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
+    role,
+    scopes,
+  };
   return {
     handler: {
       socket: new EventEmitter(),
@@ -129,11 +137,7 @@ function makeContext(
       logHealth: { error: vi.fn() },
     },
     frame: { id: `hello-${role}` },
-    connectParams: {
-      client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
-      role,
-      scopes,
-    },
+    connectParams,
     configSnapshot: {},
     sendFrame: vi.fn(async () => undefined),
     onHelloDelivered: vi.fn(),
