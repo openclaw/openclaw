@@ -1,4 +1,3 @@
-// Covers plugin config schema validation and diagnostics.
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { z as z3 } from "zod/v3";
@@ -16,13 +15,6 @@ function expectSafeParseCases(
     throw new Error("expected config schema safeParse function");
   }
   expect(cases.map(([value]) => safeParse(value))).toEqual(cases.map(([, expected]) => expected));
-}
-
-function expectJsonSchema(
-  result: ReturnType<typeof buildPluginConfigSchema>,
-  expected: Record<string, unknown>,
-) {
-  expect(result.jsonSchema).toEqual(expected);
 }
 
 describe("buildPluginConfigSchema", () => {
@@ -78,7 +70,7 @@ describe("buildPluginConfigSchema", () => {
     const result = buildPluginConfigSchema(
       legacySchema as unknown as Parameters<typeof buildPluginConfigSchema>[0],
     );
-    expectJsonSchema(result, { type: "object", additionalProperties: true });
+    expect(result.jsonSchema).toEqual({ type: "object", additionalProperties: true });
     expect(result.safeParse?.({})).toEqual({ success: true, data: { enabled: true } });
     expect(result.safeParse?.({ enabled: "yes" })).toMatchObject({
       success: false,
@@ -102,32 +94,25 @@ describe("buildPluginConfigSchema", () => {
 
 describe("buildJsonPluginConfigSchema", () => {
   it("validates direct JSON schemas without zod conversion", () => {
-    const result = buildJsonPluginConfigSchema(
-      {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          enabled: { type: "boolean", default: true },
-        },
-      },
-      { cacheKey: "config-schema.test.json-plugin" },
-    );
-
-    expect(result.jsonSchema).toEqual({
+    const jsonSchema = {
       type: "object",
       additionalProperties: false,
-      properties: {
-        enabled: { type: "boolean", default: true },
-      },
+      properties: { enabled: { type: "boolean", default: true } },
+    };
+    const result = buildJsonPluginConfigSchema(structuredClone(jsonSchema), {
+      cacheKey: "config-schema.test.json-plugin",
     });
-    expect(result.safeParse?.({})).toEqual({
-      success: true,
-      data: { enabled: true },
-    });
-    expect(result.safeParse?.({ enabled: "yes" })).toEqual({
-      success: false,
-      error: { issues: [{ path: ["enabled"], message: "must be boolean" }] },
-    });
+    expect(result.jsonSchema).toEqual(jsonSchema);
+    expectSafeParseCases(result.safeParse, [
+      [{}, { success: true, data: { enabled: true } }],
+      [
+        { enabled: "yes" },
+        {
+          success: false,
+          error: { issues: [{ path: ["enabled"], message: "must be boolean" }] },
+        },
+      ],
+    ]);
   });
 });
 

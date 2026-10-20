@@ -1,4 +1,3 @@
-/** Covers canonical plugin compaction provider registration and runtime lookup. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, onTestFinished } from "vitest";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
@@ -10,19 +9,7 @@ import { createTestPluginRegistry as createTestRegistry } from "./registry-runti
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-});
-
-function createRecord(id: string) {
-  return createPluginRecord({
-    id,
-    source: `/plugins/${id}/index.ts`,
-    origin: "global",
-    enabled: true,
-    configSchema: false,
-  });
-}
+afterEach(resetPluginRuntimeStateForTest);
 
 function makeProvider(id: string, label?: string): CompactionProvider {
   return {
@@ -40,7 +27,13 @@ function registerProvider(
   provider: CompactionProvider,
   initialize?: () => void,
 ) {
-  const record = createRecord(pluginId);
+  const record = createPluginRecord({
+    id: pluginId,
+    source: `/plugins/${pluginId}/index.ts`,
+    origin: "global",
+    enabled: true,
+    configSchema: false,
+  });
   const api = builder.createApi(record, { config: {} });
   runPluginRegisterSyncInRegistry(
     (registeredApi) => {
@@ -114,13 +107,10 @@ describe("compaction provider registry", () => {
         store.setRuntime("second runtime"),
       );
       expect(active.registry.compactionProviders[0]?.provider).toBe(provider);
-      await expect(getCompactionProvider("shared")?.summarize({ messages: [] })).resolves.toBe(
-        "first runtime",
-      );
+      const summarize = () => getCompactionProvider("shared")?.summarize({ messages: [] });
+      await expect(summarize()).resolves.toBe("first runtime");
       await otherOwner.dispose();
-      await expect(getCompactionProvider("shared")?.summarize({ messages: [] })).resolves.toBe(
-        "first runtime",
-      );
+      await expect(summarize()).resolves.toBe("first runtime");
     },
   );
 });

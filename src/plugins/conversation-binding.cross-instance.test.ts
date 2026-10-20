@@ -37,15 +37,12 @@ type StoredTelegramBinding = {
 type TelegramStore = ReturnType<
   typeof createPluginStateKeyedStoreV2ForTests<StoredTelegramBinding>
 >;
-type TelegramThreadBindingManager = {
-  stop: () => Promise<void>;
-};
 type CreateTelegramThreadBindingManager = (params: {
   cfg: { channels: { telegram: { botToken: string } } };
   accountId: string;
   persist: boolean;
   enableSweeper: boolean;
-}) => Promise<TelegramThreadBindingManager>;
+}) => Promise<{ stop: () => Promise<void> }>;
 
 const telegramConfig = {
   channels: { telegram: { botToken: "test-token" } },
@@ -63,9 +60,7 @@ const codexIdentity = {
   pluginRoot: "/plugins/codex-a",
 };
 // The observer store uses this no-op authority; Telegram's runtime store runs production checks.
-const storeAuthority = {
-  assertCurrent() {},
-};
+const storeAuthority = { assertCurrent() {} };
 
 let setTelegramRuntime: (runtime: PluginRuntime) => void;
 let createTelegramThreadBindingManager: CreateTelegramThreadBindingManager;
@@ -134,10 +129,7 @@ async function createRegistryRuntimeFixture() {
     activateGlobalSideEffects: false,
   });
   const record = createPluginRecord({ id: "telegram", origin: "bundled" });
-  const api = builder.createApi(record, {
-    config: telegramConfig,
-    registrationMode: "full",
-  });
+  const api = builder.createApi(record, { config: telegramConfig, registrationMode: "full" });
   const telegram = expectDefined(getPluginInstance(record), "registered Telegram plugin instance");
   onTestFinished(async () => expect((await telegram.dispose()).errors).toEqual([]));
 
@@ -181,13 +173,9 @@ async function createRegistryRuntimeFixture() {
     bindConversationNow({ identity: codexIdentity, conversation, summary: "original" }),
   );
 
-  const storeOptions = expectDefined(
-    openedStore.options,
-    "Telegram registry binding store options",
-  );
   const observer = createPluginStateKeyedStoreV2ForTests<StoredTelegramBinding>(
     "telegram",
-    storeOptions,
+    expectDefined(openedStore.options, "Telegram registry binding store options"),
     storeAuthority,
   );
   const snapshot = expectDefined(
@@ -196,56 +184,48 @@ async function createRegistryRuntimeFixture() {
   );
 
   return {
-    codex,
     gate,
     builder,
     record,
-    observer,
     snapshot,
+    read: () => readStoredTarget(observer),
+    refresh: () =>
+      codex.run(() =>
+        requestPluginConversationBinding({
+          ...codexIdentity,
+          conversation,
+          binding: { summary: "refreshed" },
+        }),
+      ),
+    detach: () =>
+      codex.run(() =>
+        detachPluginConversationBinding({
+          pluginRoot: codexIdentity.pluginRoot,
+          conversation,
+        }),
+      ),
   };
 }
 
 describe("plugin conversation bindings across plugin instances", () => {
   it("lets the owning plugin root refresh a Telegram binding across plugin instances", async () => {
     const fixture = await createRegistryRuntimeFixture();
-    const result = await fixture.codex.run(() =>
-      requestPluginConversationBinding({
-        ...codexIdentity,
-        conversation,
-        binding: { summary: "refreshed" },
-      }),
-    );
-    expect(result).toMatchObject({ status: "bound" });
-    expect(await readStoredTarget(fixture.observer)).toMatchObject({
-      metadata: {
-        pluginRoot: "/plugins/codex-a",
-        summary: "refreshed",
-      },
+    expect(await fixture.refresh()).toMatchObject({ status: "bound" });
+    expect(await fixture.read()).toMatchObject({
+      metadata: { pluginRoot: "/plugins/codex-a", summary: "refreshed" },
     });
   });
 
   it("lets the owning plugin root detach a Telegram binding across plugin instances", async () => {
     const fixture = await createRegistryRuntimeFixture();
-    const result = await fixture.codex.run(() =>
-      detachPluginConversationBinding({
-        pluginRoot: "/plugins/codex-a",
-        conversation,
-      }),
-    );
-    expect(result).toEqual({ removed: true });
-    expect(await readStoredTarget(fixture.observer)).toBeUndefined();
+    expect(await fixture.detach()).toEqual({ removed: true });
+    expect(await fixture.read()).toBeUndefined();
   });
 
   it("rejects a queued Telegram write when its registry owner is retired", async ({ signal }) => {
     const fixture = await createRegistryRuntimeFixture();
     fixture.gate.arm();
-    const request = fixture.codex.run(() =>
-      requestPluginConversationBinding({
-        ...codexIdentity,
-        conversation,
-        binding: { summary: "refreshed" },
-      }),
-    );
+    const request = fixture.refresh();
     onTestFinished(async () => {
       fixture.gate.release.resolve();
       await Promise.allSettled([request]);
@@ -266,6 +246,6 @@ describe("plugin conversation bindings across plugin instances", () => {
     fixture.gate.release.resolve();
 
     await expect(request).rejects.toThrow('Plugin "telegram" runtime is no longer active.');
-    expect(await readStoredTarget(fixture.observer)).toEqual(fixture.snapshot);
+    expect(await fixture.read()).toEqual(fixture.snapshot);
   });
 });

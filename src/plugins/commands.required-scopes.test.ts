@@ -21,9 +21,7 @@ beforeEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
-afterEach(() => {
-  resetPluginRuntimeStateForTest();
-});
+afterEach(resetPluginRuntimeStateForTest);
 
 describe("plugin command required scopes", () => {
   const sparseRequiredScopes: unknown[] = [];
@@ -65,30 +63,12 @@ describe("plugin command required scopes", () => {
   );
 
   it.each([
-    {
-      name: "command owners without gateway scopes",
-      senderIsOwner: true,
-      channel: "telegram",
-      gatewayClientScopes: undefined,
-      allowed: true,
-    },
-    {
-      name: "command owners with insufficient explicit gateway scopes",
-      senderIsOwner: true,
-      channel: "webchat",
-      gatewayClientScopes: ["operator.write"],
-      allowed: false,
-    },
-    {
-      name: "non-owners without gateway scopes",
-      senderIsOwner: false,
-      channel: "telegram",
-      gatewayClientScopes: undefined,
-      allowed: false,
-    },
-  ])(
-    "enforces required scopes for $name",
-    async ({ senderIsOwner, channel, gatewayClientScopes, allowed }) => {
+    [true, "telegram", undefined, true],
+    [true, "webchat", ["operator.write"], false],
+    [false, "telegram", undefined, false],
+  ] satisfies Array<[boolean, string, string[] | undefined, boolean]>)(
+    "enforces required scopes: owner=%s channel=%s scopes=%j allowed=%s",
+    async (senderIsOwner, channel, gatewayClientScopes, allowed) => {
       let observedOwnerStatus: boolean | undefined;
       const handler = vi.fn(async (ctx: { senderIsOwner?: boolean }) => {
         observedOwnerStatus = ctx.senderIsOwner;
