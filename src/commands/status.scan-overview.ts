@@ -46,6 +46,7 @@ export type StatusScanOverviewResult = {
         | "degradedSecretOwners"
         | "degradedPlugins"
         | "startupMigrationWarning"
+        | "modelReasoningWarning"
         | "installationReplacementWarning"
         | "childRuntime"
         | "secretEgressProxy"
@@ -245,6 +246,7 @@ export async function collectStatusScanOverview(params: {
           degradedSecretOwners: status.degradedSecretOwners ?? [],
           degradedPlugins: status.degradedPlugins ?? [],
           startupMigrationWarning: status.startupMigrationWarning,
+          modelReasoningWarning: status.modelReasoningWarning,
           installationReplacementWarning: status.installationReplacementWarning,
           ...(params.opts.deep && status.childRuntime ? { childRuntime: status.childRuntime } : {}),
           secretEgressProxy: status.secretEgressProxy,

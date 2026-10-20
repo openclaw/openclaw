@@ -20,6 +20,7 @@ import {
   type SessionControllerMailbox,
   type SessionControllerMailboxClaim,
 } from "../../../sessions/session-controller.mailbox.js";
+import { runWithSessionControllerCleanup } from "../../../sessions/session-controller.owner-context.js";
 import type { SessionControllerEntry } from "../../../sessions/session-controller.state.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
@@ -308,7 +309,8 @@ export function rememberFollowupDrainCallback(
             entered = true;
             // Consume this request; a kick during execution re-enables dispatch.
             mailbox.dispatchEnabled = false;
-            return executeClaim(claim, runFollowup);
+            // The retiring turn may wake this mailbox from its own async context.
+            return runWithSessionControllerCleanup(() => executeClaim(claim, runFollowup));
           }),
         "session:mailbox-turn",
       );

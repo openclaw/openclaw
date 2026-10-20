@@ -559,11 +559,8 @@ describe("update candidate canary", () => {
       gateway: { bind: "loopback" },
       mcp: { apps: { enabled: false } },
     });
-    expect(result.listenerIsolation).toEqual({
-      gateway: { host: "127.0.0.1", port: expect.any(Number) },
-      mcpAppSandbox: "disabled",
-    });
-    expect(candidateConfig.gateway).toMatchObject({ port: result.listenerIsolation?.gateway.port });
+    expect(candidateConfig.gateway).toMatchObject({ port: expect.any(Number) });
+    expect(candidateConfig.gateway).not.toMatchObject({ port: original.gateway.port });
     expect(original.mcp.apps).toEqual({ enabled: true, sandboxPort: 18790 });
     expect(original.cron.enabled).toBe(true);
     const gatewayPid = [...children.keys()].at(-1)!;

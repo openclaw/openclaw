@@ -102,10 +102,28 @@ grant the recovery caller access to unrelated personal account actions.
 If an input exhausts the existing bounded attempts on a transient failure, later
 inputs in that session remain interrupted too, preserving their replay order.
 This also applies when the earlier input is an inter-session update.
-Other sessions continue recovery. No additional retry loop is started.
+Up to four sessions replay concurrently; each session retains acceptance order,
+including across retries. No additional retry loop is started. Replay and its
+backoff run outside the subagent recovery span, so registry activation does not
+wait for saved-input delivery. Gateway shutdown still joins that delivery work.
+The existing chat-send startup gate and main-session recovery sweep wait until
+replay and registry recovery settle. This prevents new input from overtaking
+saved input and the sweep from racing saved-input predecessor admission; HTTP
+readiness does not wait for replay.
 Before replaying queued inter-session updates, the Gateway resumes any interrupted
 main turn through its existing recovery owner, preserving the predecessor's order.
 The updates remain queued when that owner defers recovery.
+
+Per-input replay diagnostics record the input kind, outcome, wait reason, attempt
+count, and elapsed milliseconds without message content or session/input IDs.
+`sourceLoadMs` measures the saved-input read, `sessionLoadMs` the current session
+reads, `authorityRestoreMs` operator restoration, and `communicationAdmissionMs`
+the peer communication check. `dispatchAckMs` ends at the dispatch acknowledgment;
+it includes preparation before that acknowledgment, not provider execution or
+model completion afterward. `retryWaitMs` separates retry backoff from active
+work. Timings accumulate across attempts and are inclusive: session checks during
+operator restoration also appear in `authorityRestoreMs`, so phase timings must
+not be added together. `totalMs` is the elapsed time for that input's replay.
 
 Automatic chat-input recovery selects inputs accepted in the past 24 hours;
 the existing bounded recovery attempts may finish after that window. Cancelled
@@ -490,9 +508,13 @@ Unfinished disposal still retains its cleanup obligation.
 
 Worker-placement and environment reconciliation stop admitting new candidates
 when suspension or drain begins. Releasing a suspension allows the next scheduled
-sweep to resume. Drain signals cancellation to in-flight provider inspections.
-Device pairing and presence reads stop waiting; their late results cannot resume
-reconciliation afterward.
+sweep to resume. Suspension, drain, and service shutdown also cancel in-flight
+environment reconciliation. Provider inspection has a 15-second budget, while
+runtime installation keeps its transfer-sized bootstrap budget. Late inspection results
+cannot resume reconciliation or hold the shutdown guard. Interrupted maintenance
+retains the lease and provisioning identity for a later sweep; it does not request
+worker destruction. Provider mutations already in progress still settle before
+their owners close.
 Optional session-evidence reads and disk probes are canceled. Node retention stops
 new preparation and cancels supported requests; an in-progress shared bundle
 build remains joined. An accepted retirement, workspace recovery, reclaim, or

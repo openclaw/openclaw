@@ -1,15 +1,12 @@
-/**
- * Tests agent harness runtime helpers and task dispatch behavior.
- */
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, assert, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { log as runnerLog } from "../agents/embedded-agent-runner/logger.js";
 import { registerActiveEmbeddedRunHumanInputWait } from "../agents/embedded-agent-runner/run-state.js";
-import { isEmbeddedAgentRunHandleActive } from "../agents/embedded-agent-runner/runs.js";
+import { isEmbeddedAgentRunHandleActive as isActive } from "../agents/embedded-agent-runner/runs.js";
 import {
-  createEmbeddedRunHandle,
-  registerTestEmbeddedRun,
+  createEmbeddedRunHandle as makeHandle,
+  registerTestEmbeddedRun as admitRun,
   testing as embeddedRunsTesting,
 } from "../agents/embedded-agent-runner/runs.test-support.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
@@ -27,35 +24,139 @@ import {
 } from "../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
-  abortAgentHarnessRun,
-  abortAndDrainAgentHarnessRun,
+  abortAgentHarnessRun as abortRun,
+  abortAndDrainAgentHarnessRun as drainRun,
   AgentHarnessPreflightError,
   agentHarnessStructuredInput,
-  attachModelProviderRequestTransport,
-  buildAgentHarnessUserInputAnswers,
-  classifyAgentHarnessTerminalOutcome,
-  clearActiveEmbeddedRun,
-  deliverAgentHarnessUserInputPrompt,
-  formatAgentHarnessUserInputPrompt,
-  getModelProviderRequestTransport,
-  queueAgentHarnessMessage,
-  setActiveEmbeddedRun,
+  attachModelProviderRequestTransport as attachTransport,
+  buildAgentHarnessUserInputAnswers as buildAnswers,
+  classifyAgentHarnessTerminalOutcome as classifyOutcome,
+  clearActiveEmbeddedRun as clear,
+  deliverAgentHarnessUserInputPrompt as deliverPrompt,
+  formatAgentHarnessUserInputPrompt as formatPrompt,
+  getModelProviderRequestTransport as readTransport,
+  queueAgentHarnessMessage as queue,
+  setActiveEmbeddedRun as register,
   type AgentHarness,
   type AgentHarnessQuestionGatewayCall,
-  type AgentHarnessAttemptParams,
-  type AgentHarnessAttemptParamsV2,
-  type AgentHarnessSideQuestionParams,
-  type AgentHarnessSideQuestionParamsV2,
+  type AgentHarnessAttemptParams as Attempt,
+  type AgentHarnessAttemptParamsV2 as AttemptV2,
+  type AgentHarnessSideQuestionParams as SideQuestion,
+  type AgentHarnessSideQuestionParamsV2 as SideQuestionV2,
   type AgentHarnessSessionForkParams,
   type AgentHarnessV2,
-  type EmbeddedRunAttemptParams,
-  type EmbeddedRunAttemptParamsV2,
+  type EmbeddedRunAttemptParams as EmbeddedAttempt,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedAttemptV2,
   type HarnessContextEngine,
 } from "./agent-harness-runtime.js";
 
-describe("classifyAgentHarnessTerminalOutcome", () => {
-  function classify(overrides: Partial<Parameters<typeof classifyAgentHarnessTerminalOutcome>[0]>) {
-    return classifyAgentHarnessTerminalOutcome({
+type Handle = Parameters<typeof register>[1];
+type Cleanup = ReturnType<typeof register>;
+type QueueOptions = Parameters<typeof queue>[2];
+type ForkV2 = Parameters<NonNullable<AgentHarnessV2["sessionForkV2"]>["fork"]>[0];
+type WithoutHost<T> = Omit<T, "hostCapabilities">;
+type RequiresHost<T> = WithoutHost<T> extends T ? false : true;
+const nativeHandle = (overrides: Partial<Handle> = {}): Handle => ({
+  queueMessage: async () => {},
+  isStreaming: () => true,
+  isCompacting: () => false,
+  abort: () => {},
+  ...overrides,
+});
+function nativeSink(
+  kind: "legacy" | "V1" | "V2",
+  queueMessage: Handle["queueMessage"],
+  available = true,
+  overrides: Partial<Handle> = {},
+): Handle {
+  const injection = { isAvailable: () => available, queueMessage };
+  const handle = nativeHandle({ ...overrides, queueMessage });
+  if (kind === "V1") {
+    handle.messageInjection = injection;
+  } else if (kind === "V2") {
+    handle.messageInjectionV2 = {
+      ...injection,
+      version: 2,
+      queueMessage: (text, options, assertCurrent) => {
+        assertCurrent();
+        return queueMessage(text, options);
+      },
+    };
+  }
+  return handle;
+}
+const aliasEffect = (sessionId: string, scope = "/tmp/sdk-detached-store") =>
+  beginSessionEffect({ scope, identities: [sessionId] });
+const replyOperation = (sessionId: string, sessionKey: string) =>
+  createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
+const admittedRun = (id: string, options: Parameters<typeof makeHandle>[0] = {}) =>
+  admitRun(id, makeHandle(options), `agent:main:${id}`);
+type Question = Parameters<typeof formatPrompt>[0][number];
+const question = (id: string, options: Partial<Question> = {}): Question => ({
+  id,
+  header: id,
+  question: id,
+  ...options,
+});
+const drained = { aborted: true, drained: true, forceCleared: false };
+const revoked = "Message injection authority is no longer current";
+const captureInjection = () => {
+  let retained: (() => void) | undefined;
+  const handle = nativeHandle({
+    messageInjectionV2: {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage: async (_text, _options, assertCurrent) => {
+        retained = assertCurrent;
+      },
+    },
+  });
+  return { handle, authority: () => expectDefined(retained, "detached injection authority") };
+};
+const cancellationModes = ["single", "all", "compacting", "drain"] as const;
+type CancelMode = (typeof cancellationModes)[number];
+const cancel = (sessionId: string, mode: CancelMode) =>
+  mode === "drain"
+    ? drainRun({ sessionId })
+    : mode === "single"
+      ? abortRun(sessionId)
+      : abortRun(undefined, { mode });
+async function cancellingRun(
+  id: string,
+  scope?: string,
+  overrides: Partial<Handle> = {},
+  timers = false,
+) {
+  if (timers) {
+    vi.useFakeTimers();
+  }
+  const effect = scope ? await aliasEffect(id, scope) : undefined;
+  const abort = vi.fn();
+  const cleanup = register(id, { ...makeHandle({ abort, isCompacting: true }), ...overrides });
+  const successors: Cleanup[] = [];
+  return {
+    abort,
+    cleanup,
+    replace(nextAbort = vi.fn()) {
+      successors.push(register(id, makeHandle({ abort: nextAbort })));
+      return nextAbort;
+    },
+    [Symbol.dispose]() {
+      cleanup?.();
+      for (const successor of successors) {
+        successor?.();
+      }
+      effect?.release();
+      if (timers) {
+        vi.useRealTimers();
+      }
+    },
+  };
+}
+
+describe("classifyOutcome", () => {
+  function classify(overrides: Partial<Parameters<typeof classifyOutcome>[0]>) {
+    return classifyOutcome({
       assistantTexts: [],
       reasoningText: "",
       planText: "",
@@ -65,37 +166,26 @@ describe("classifyAgentHarnessTerminalOutcome", () => {
     });
   }
 
-  it("accepts prepared literal NO_REPLY text as visible output", () => {
-    expect(classify({ assistantTexts: ["NO_REPLY"] })).toBeUndefined();
-  });
-
-  it("treats whitespace-only assistant text as not visible", () => {
-    expect(classify({ assistantTexts: ["  ", "\n\t"] })).toBe("empty");
-  });
-
-  it("prefers planning-only when both plan and reasoning text are present", () => {
-    expect(
-      classify({
-        reasoningText: "I need to inspect the files.",
-        planText: "I will inspect, patch, and test.",
-      }),
-    ).toBe("planning-only");
-  });
-
-  it("classifies a completed turn with reasoning text only as reasoning-only", () => {
-    expect(classify({ reasoningText: "The answer depends on the current repository state." })).toBe(
-      "reasoning-only",
-    );
-  });
+  it.each([
+    [{ assistantTexts: ["NO_REPLY"] }, undefined],
+    [{ assistantTexts: ["  ", "\n\t"] }, "empty"],
+    [{ reasoningText: "reasoning", planText: "plan" }, "planning-only"],
+    [{ reasoningText: "reasoning" }, "reasoning-only"],
+  ] satisfies Array<[Parameters<typeof classify>[0], ReturnType<typeof classify>]>)(
+    "classifies %j as %s",
+    (input, expected) => {
+      expect(classify(input)).toBe(expected);
+    },
+  );
 });
 
 describe("agent harness runtime SDK facade", () => {
   it("preserves the published failure-retention opt-in on attempt operations", () => {
     expectTypeOf<
-      NonNullable<AgentHarnessAttemptParams["replyOperation"]>["retainFailureUntilComplete"]
+      NonNullable<Attempt["replyOperation"]>["retainFailureUntilComplete"]
     >().toEqualTypeOf<() => void>();
     expectTypeOf<
-      NonNullable<EmbeddedRunAttemptParamsV2["replyOperation"]>["retainFailureUntilComplete"]
+      NonNullable<EmbeddedAttemptV2["replyOperation"]>["retainFailureUntilComplete"]
     >().toEqualTypeOf<() => void>();
   });
 
@@ -106,108 +196,63 @@ describe("agent harness runtime SDK facade", () => {
   });
 
   it("exposes structured input through one frozen named runtime surface", () => {
+    const keys = ["compileForm", "compileQuestions", "compileUrl", "isRecord", "run", "snapshot"];
     expect(Object.isFrozen(agentHarnessStructuredInput)).toBe(true);
-    expect(Object.keys(agentHarnessStructuredInput).toSorted()).toEqual([
-      "compileForm",
-      "compileQuestions",
-      "compileUrl",
-      "isRecord",
-      "run",
-      "snapshot",
-    ]);
+    expect(Object.keys(agentHarnessStructuredInput).toSorted()).toEqual(keys);
   });
 
   it("keeps legacy harness implementations source-compatible while requiring capabilities in V2", () => {
-    type SessionForkParamsV2 = Parameters<NonNullable<AgentHarnessV2["sessionForkV2"]>["fork"]>[0];
     const legacyHarness = {
       id: "legacy-test",
       label: "Legacy test harness",
       supports: () => ({ supported: true as const, priority: 1 }),
-      runAttempt: async (_params: AgentHarnessAttemptParams) => {
+      runAttempt: async (_params: Attempt) => {
         throw new Error("type-only legacy harness");
       },
-      runSideQuestion: async (_params: AgentHarnessSideQuestionParams) => ({ text: "legacy" }),
+      runSideQuestion: async (_params: SideQuestion) => ({ text: "legacy" }),
     } satisfies AgentHarness;
 
     expectTypeOf(legacyHarness).toMatchTypeOf<AgentHarness>();
     expectTypeOf<AgentHarnessV2>().toMatchTypeOf<AgentHarness>();
-    expectTypeOf<
-      Omit<AgentHarnessAttemptParamsV2, "onSettledTurn">
-    >().toMatchTypeOf<AgentHarnessAttemptParamsV2>();
-    expectTypeOf<Omit<AgentHarnessAttemptParams, "hostCapabilities">>().toMatchTypeOf<
+    expectTypeOf<Omit<AttemptV2, "onSettledTurn">>().toMatchTypeOf<AttemptV2>();
+    expectTypeOf<WithoutHost<Attempt>>().toMatchTypeOf<
       Parameters<NonNullable<AgentHarness["finalizeSettledTurn"]>>[0]["attempt"]
     >();
-    expectTypeOf<Omit<AgentHarnessAttemptParamsV2, "hostCapabilities">>().toMatchTypeOf<
+    expectTypeOf<WithoutHost<AttemptV2>>().toMatchTypeOf<
       Parameters<NonNullable<AgentHarnessV2["finalizeSettledTurn"]>>[0]["attempt"]
     >();
+    expectTypeOf<Parameters<NonNullable<AttemptV2["onSettledTurn"]>>[0]>().not.toHaveProperty(
+      "contextEngineTerminalAnchor",
+    );
+    expectTypeOf<WithoutHost<SideQuestion>>().toMatchTypeOf<SideQuestion>();
+    expectTypeOf<WithoutHost<Attempt>>().toMatchTypeOf<Attempt>();
+    expectTypeOf<WithoutHost<EmbeddedAttempt>>().toMatchTypeOf<EmbeddedAttempt>();
+    expectTypeOf<Attempt["replyOperation"]>().toEqualTypeOf<EmbeddedAttempt["replyOperation"]>();
+    expectTypeOf<RequiresHost<AttemptV2>>().toEqualTypeOf<true>();
+    expectTypeOf<RequiresHost<EmbeddedAttemptV2>>().toEqualTypeOf<true>();
+    expectTypeOf<RequiresHost<SideQuestionV2>>().toEqualTypeOf<true>();
+    expectTypeOf<Omit<ForkV2, "assertCurrent">>().toEqualTypeOf<AgentHarnessSessionForkParams>();
     expectTypeOf<
-      Parameters<NonNullable<AgentHarnessAttemptParamsV2["onSettledTurn"]>>[0]
-    >().not.toHaveProperty("contextEngineTerminalAnchor");
-    expectTypeOf<
-      Omit<AgentHarnessSideQuestionParams, "hostCapabilities">
-    >().toMatchTypeOf<AgentHarnessSideQuestionParams>();
-    expectTypeOf<
-      Omit<AgentHarnessAttemptParams, "hostCapabilities">
-    >().toMatchTypeOf<AgentHarnessAttemptParams>();
-    expectTypeOf<
-      Omit<EmbeddedRunAttemptParams, "hostCapabilities">
-    >().toMatchTypeOf<EmbeddedRunAttemptParams>();
-    expectTypeOf<AgentHarnessAttemptParams["replyOperation"]>().toEqualTypeOf<
-      EmbeddedRunAttemptParams["replyOperation"]
-    >();
-    expectTypeOf<
-      Omit<AgentHarnessAttemptParamsV2, "hostCapabilities"> extends AgentHarnessAttemptParamsV2
-        ? true
-        : false
-    >().toEqualTypeOf<false>();
-    expectTypeOf<
-      Omit<EmbeddedRunAttemptParamsV2, "hostCapabilities"> extends EmbeddedRunAttemptParamsV2
-        ? true
-        : false
-    >().toEqualTypeOf<false>();
-    expectTypeOf<
-      Omit<
-        AgentHarnessSideQuestionParamsV2,
-        "hostCapabilities"
-      > extends AgentHarnessSideQuestionParamsV2
-        ? true
-        : false
-    >().toEqualTypeOf<false>();
-
-    expectTypeOf<
-      Omit<SessionForkParamsV2, "assertCurrent">
-    >().toEqualTypeOf<AgentHarnessSessionForkParams>();
-    expectTypeOf<
-      Omit<SessionForkParamsV2, "assertCurrent"> extends SessionForkParamsV2 ? true : false
+      Omit<ForkV2, "assertCurrent"> extends ForkV2 ? true : false
     >().toEqualTypeOf<false>();
 
     // V1 injection remains supported inside a host-admitted harness attempt.
-    type QueueOptions = Parameters<typeof queueAgentHarnessMessage>[2];
-    const legacyInjection = {
-      isAvailable: () => true,
-      queueMessage: async (_text: string, _options?: QueueOptions) => {},
-    };
+    const queueMessage = async (_text: string, _options?: QueueOptions) => {};
     const legacyHandle = {
-      queueMessage: legacyInjection.queueMessage,
-      messageInjection: legacyInjection,
+      queueMessage,
+      messageInjection: { isAvailable: () => true, queueMessage },
       isStreaming: () => true,
       isCompacting: () => false,
       abort: () => {},
-    } satisfies Parameters<typeof setActiveEmbeddedRun>[1];
-    expectTypeOf(legacyHandle).toMatchTypeOf<Parameters<typeof setActiveEmbeddedRun>[1]>();
-    expectTypeOf<
-      Extract<keyof Parameters<typeof setActiveEmbeddedRun>[1], symbol>
-    >().toEqualTypeOf<never>();
-    expectTypeOf<Parameters<typeof setActiveEmbeddedRun>["length"]>().toEqualTypeOf<
-      2 | 3 | 4 | 5
-    >();
-    expectTypeOf<ReturnType<typeof setActiveEmbeddedRun>>().toEqualTypeOf<
+    } satisfies Handle;
+    expectTypeOf(legacyHandle).toMatchTypeOf<Handle>();
+    expectTypeOf<Extract<keyof Handle, symbol>>().toEqualTypeOf<never>();
+    expectTypeOf<Parameters<typeof register>["length"]>().toEqualTypeOf<2 | 3 | 4 | 5>();
+    expectTypeOf<ReturnType<typeof register>>().toEqualTypeOf<
       ((reason?: string) => void) | undefined
     >();
-    expectTypeOf(queueAgentHarnessMessage).returns.toEqualTypeOf<boolean>();
-    type GuardedInjection = NonNullable<
-      Parameters<typeof setActiveEmbeddedRun>[1]["messageInjectionV2"]
-    >;
+    expectTypeOf(queue).returns.toEqualTypeOf<boolean>();
+    type GuardedInjection = NonNullable<Handle["messageInjectionV2"]>;
     expectTypeOf<Parameters<GuardedInjection["queueMessage"]>[2]>().toEqualTypeOf<() => void>();
     expectTypeOf<Parameters<GuardedInjection["queueMessage"]>[3]>().toEqualTypeOf<
       "run" | "source-bound"
@@ -235,14 +280,11 @@ describe("agent harness runtime SDK facade", () => {
   });
 
   it("exposes attached model request transport metadata helpers", () => {
-    const model = attachModelProviderRequestTransport(
-      { id: "gpt-test", provider: "custom-openai" },
-      { auth: { mode: "header", headerName: "x-api-key", value: "secret" } },
-    );
-
-    expect(getModelProviderRequestTransport(model)).toEqual({
+    const transport = {
       auth: { mode: "header", headerName: "x-api-key", value: "secret" },
-    });
+    } satisfies NonNullable<Parameters<typeof attachTransport>[1]>;
+    const model = attachTransport({ id: "test", provider: "custom" }, transport);
+    expect(readTransport(model)).toEqual(transport);
   });
 });
 
@@ -251,32 +293,25 @@ describe("agent harness active-run SDK controls", () => {
 
   it("retires ownerless diagnostics without letting prior cleanup erase a successor", () => {
     const ref = { sessionId: "sdk-diagnostic-cleanup" };
-    const priorCleanup = setActiveEmbeddedRun(
-      ref.sessionId,
-      createEmbeddedRunHandle({ runId: "prior-diagnostic-run" }),
-    );
-    const successorCleanup = setActiveEmbeddedRun(
-      ref.sessionId,
-      createEmbeddedRunHandle({ runId: "successor-diagnostic-run" }),
-    );
+    const attach = (runId: string) => register(ref.sessionId, makeHandle({ runId }));
+    const priorCleanup = attach("prior-diagnostic-run");
+    const successorCleanup = attach("successor-diagnostic-run");
+    const snapshot = () => diagnosticActivity.getDiagnosticSessionActivitySnapshot(ref);
+    const active = { activeWorkKind: "embedded_run", hasActiveEmbeddedRun: true };
     try {
       expect(priorCleanup).toBeTypeOf("function");
       expect(successorCleanup).toBeTypeOf("function");
-      expect(diagnosticActivity.getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-        activeWorkKind: "embedded_run",
-        hasActiveEmbeddedRun: true,
-      });
+      expect(snapshot()).toMatchObject(active);
 
       priorCleanup?.();
-      expect(diagnosticActivity.getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
-        activeWorkKind: "embedded_run",
-        hasActiveEmbeddedRun: true,
-      });
+      expect(snapshot()).toMatchObject(active);
 
       successorCleanup?.();
-      const settled = diagnosticActivity.getDiagnosticSessionActivitySnapshot(ref);
-      expect(settled.activeWorkKind).toBeUndefined();
-      expect(settled.hasActiveEmbeddedRun).toBeUndefined();
+      const settled = snapshot();
+      expect([settled.activeWorkKind, settled.hasActiveEmbeddedRun]).toEqual([
+        undefined,
+        undefined,
+      ]);
     } finally {
       priorCleanup?.();
       successorCleanup?.();
@@ -285,10 +320,10 @@ describe("agent harness active-run SDK controls", () => {
   });
 
   it("rejects a session-keyed registration without host admission", () => {
-    const handle = createEmbeddedRunHandle();
+    const handle = makeHandle();
     let failure: unknown;
     try {
-      setActiveEmbeddedRun("unadmitted", handle, "agent:main:unadmitted");
+      register("unadmitted", handle, "agent:main:unadmitted");
     } catch (error) {
       failure = error;
     }
@@ -301,18 +336,14 @@ describe("agent harness active-run SDK controls", () => {
 
   it("steers and interrupts the admitted turn while keeping waiting input", async () => {
     const queueMessage = vi.fn(async () => {});
-    const operation = registerTestEmbeddedRun(
-      "sdk-turn",
-      createEmbeddedRunHandle({ queueMessage }),
-      "agent:main:sdk-turn",
-    );
-    expect(queueAgentHarnessMessage("sdk-turn", "steer")).toBe(true);
+    const operation = admittedRun("sdk-turn", { queueMessage });
+    expect(queue("sdk-turn", "steer")).toBe(true);
     await vi.waitFor(() => expect(queueMessage).toHaveBeenCalledOnce());
     const waiting = reserveSessionControllerSource("agent:main:sdk-turn", {
       policy: { mode: "followup" },
     });
     try {
-      expect(abortAgentHarnessRun("sdk-turn")).toBe(true);
+      expect(abortRun("sdk-turn")).toBe(true);
       expect(operation.result).toMatchObject({ kind: "aborted", code: "aborted_by_user" });
       expect(waiting.retirementRequested).toBeUndefined();
     } finally {
@@ -329,13 +360,9 @@ describe("agent harness active-run SDK controls", () => {
         cause: new Error("synthetic receipt loss"),
       });
     });
-    const operation = registerTestEmbeddedRun(
-      "sdk-unconfirmed",
-      createEmbeddedRunHandle({ queueMessage, guarded: true }),
-      "agent:main:sdk-unconfirmed",
-    );
+    const operation = admittedRun("sdk-unconfirmed", { queueMessage, guarded: true });
     try {
-      expect(queueAgentHarnessMessage("sdk-unconfirmed", "synthetic private input")).toBe(true);
+      expect(queue("sdk-unconfirmed", "synthetic private input")).toBe(true);
       expect(warn).not.toHaveBeenCalled();
       finish.resolve();
       await vi.waitFor(() =>
@@ -352,248 +379,121 @@ describe("agent harness active-run SDK controls", () => {
     }
   });
 
-  it.each(["legacy handle", "V1 sink", "V2 sink"] as const)(
-    "queues sessionless native work through its available %s behind an alias-only effect",
-    async (kind) => {
-      const queueMessage = vi.fn(
-        async (_text: string, _options?: Parameters<typeof queueAgentHarnessMessage>[2]) => {},
-      );
-      const abort = vi.fn();
-      const handle: Parameters<typeof setActiveEmbeddedRun>[1] = {
-        queueMessage,
-        isStreaming: () => true,
-        isCompacting: () => false,
-        abort,
-        ...(kind === "V1 sink"
-          ? { messageInjection: { isAvailable: () => true, queueMessage } }
-          : {}),
-        ...(kind === "V2 sink"
-          ? {
-              messageInjectionV2: {
-                version: 2 as const,
-                isAvailable: () => true,
-                queueMessage: async (text, options, assertCurrent) => {
-                  assertCurrent();
-                  await queueMessage(text, options);
-                },
-              },
-            }
-          : {}),
-      };
-      const effect = await beginSessionEffect({
-        scope: "/tmp/sdk-detached-store",
-        identities: ["sdk-detached"],
+  it.each(["legacy", "V1", "V2"] as const)("queues detached %s input", async (kind) => {
+    const queueMessage = vi.fn(async (_text: string, _options?: QueueOptions) => {});
+    const abort = vi.fn();
+    const handle = nativeSink(kind, queueMessage, true, { abort });
+    const effect = await aliasEffect("sdk-detached");
+    try {
+      register("sdk-detached", handle);
+      expect(queue("sdk-detached", "steer")).toBe(true);
+      await vi.waitFor(() => expect(queueMessage).toHaveBeenCalledOnce());
+      expect(queueMessage.mock.calls[0]?.[0]).toBe("steer");
+    } finally {
+      effect.release();
+    }
+    expect(abortRun("sdk-detached")).toBe(true);
+    expect(abort).toHaveBeenCalledOnce();
+  });
+
+  it.each(cancellationModes)("cancels detached %s work", async (mode) => {
+    const sessionId = "sdk-detached-cancel";
+    using run = await cancellingRun(sessionId, "/tmp/sdk-detached-cancel-store", {}, true);
+    const { abort, cleanup } = run;
+    expect(isActive(sessionId)).toBe(false);
+    if (mode === "drain") {
+      let returned = false;
+      const draining = drainRun({ sessionId, settleMs: 100 }).then((result) => {
+        returned = true;
+        return result;
       });
-      try {
-        setActiveEmbeddedRun("sdk-detached", handle);
-        expect(queueAgentHarnessMessage("sdk-detached", "steer")).toBe(true);
-        await vi.waitFor(() => expect(queueMessage).toHaveBeenCalledOnce());
-        expect(queueMessage.mock.calls[0]?.[0]).toBe("steer");
-      } finally {
-        effect.release();
-      }
-      expect(abortAgentHarnessRun("sdk-detached")).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
       expect(abort).toHaveBeenCalledOnce();
-    },
-  );
+      expect(returned).toBe(false);
+      const successorAbort = run.replace();
+      cleanup?.();
+      await expect(draining).resolves.toEqual(drained);
+      expect(successorAbort).not.toHaveBeenCalled();
+    } else {
+      expect(cancel(sessionId, mode)).toBe(true);
+      expect(abort).toHaveBeenCalledOnce();
+    }
+  });
 
-  it.each(["single", "all", "compacting", "drain"] as const)(
-    "cancels exact detached native work behind an alias-only effect through %s",
-    async (mode) => {
-      vi.useFakeTimers();
-      const sessionId = "sdk-detached-cancel";
-      const effect = await beginSessionEffect({
-        scope: "/tmp/sdk-detached-cancel-store",
-        identities: [sessionId],
+  it.each(cancellationModes)("rejects %s probe replacement", async (mode) => {
+    const sessionId = "sdk-detached-cancel-replaced";
+    const successorAbort = vi.fn();
+    const isAbortable = vi.fn(() => {
+      run.replace(successorAbort);
+      run.cleanup?.();
+      return true;
+    });
+    using run = await cancellingRun(sessionId, "/tmp/sdk-detached-cancel-replaced-store", {
+      isAbortable,
+    });
+    if (mode === "drain") {
+      await expect(drainRun({ sessionId })).resolves.toEqual({
+        aborted: false,
+        drained: true,
+        forceCleared: false,
       });
-      const abort = vi.fn();
-      const handle = createEmbeddedRunHandle({ abort, isCompacting: true });
-      const cleanup = setActiveEmbeddedRun(sessionId, handle);
-      let successorCleanup: ReturnType<typeof setActiveEmbeddedRun>;
-      try {
-        expect(isEmbeddedAgentRunHandleActive(sessionId)).toBe(false);
-        if (mode === "drain") {
-          let returned = false;
-          const draining = abortAndDrainAgentHarnessRun({ sessionId, settleMs: 100 }).then(
-            (result) => {
-              returned = true;
-              return result;
-            },
-          );
-          await vi.advanceTimersByTimeAsync(0);
-          expect(abort).toHaveBeenCalledOnce();
-          expect(returned).toBe(false);
-          const successorAbort = vi.fn();
-          successorCleanup = setActiveEmbeddedRun(
-            sessionId,
-            createEmbeddedRunHandle({ abort: successorAbort }),
-          );
-          cleanup?.();
-          await expect(draining).resolves.toEqual({
-            aborted: true,
-            drained: true,
-            forceCleared: false,
-          });
-          expect(successorAbort).not.toHaveBeenCalled();
-        } else {
-          expect(
-            mode === "single"
-              ? abortAgentHarnessRun(sessionId)
-              : abortAgentHarnessRun(undefined, { mode }),
-          ).toBe(true);
-          expect(abort).toHaveBeenCalledOnce();
-        }
-      } finally {
-        cleanup?.();
-        successorCleanup?.();
-        effect.release();
-        vi.useRealTimers();
-      }
-    },
-  );
+    } else {
+      expect(cancel(sessionId, mode)).toBe(false);
+    }
+    expect(isAbortable).toHaveBeenCalledOnce();
+    expect(run.abort).not.toHaveBeenCalled();
+    expect(successorAbort).not.toHaveBeenCalled();
+  });
 
-  it.each(["single", "all", "compacting", "drain"] as const)(
-    "refuses a detached %s cancellation replaced during its abortability probe",
-    async (mode) => {
-      const sessionId = "sdk-detached-cancel-replaced";
-      const effect = await beginSessionEffect({
-        scope: "/tmp/sdk-detached-cancel-replaced-store",
-        identities: [sessionId],
-      });
-      const abort = vi.fn();
-      const successorAbort = vi.fn();
-      let successorCleanup: ReturnType<typeof setActiveEmbeddedRun>;
-      const isAbortable = vi.fn(() => {
-        successorCleanup = setActiveEmbeddedRun(
-          sessionId,
-          createEmbeddedRunHandle({ abort: successorAbort }),
-        );
-        cleanup?.();
-        return true;
-      });
-      const cleanup = setActiveEmbeddedRun(sessionId, {
-        ...createEmbeddedRunHandle({ abort, isCompacting: true }),
-        isAbortable,
-      });
-      try {
-        if (mode === "drain") {
-          await expect(abortAndDrainAgentHarnessRun({ sessionId })).resolves.toEqual({
-            aborted: false,
-            drained: true,
-            forceCleared: false,
-          });
-        } else {
-          expect(
-            mode === "single"
-              ? abortAgentHarnessRun(sessionId)
-              : abortAgentHarnessRun(undefined, { mode }),
-          ).toBe(false);
-        }
-        expect(isAbortable).toHaveBeenCalledOnce();
-        expect(abort).not.toHaveBeenCalled();
-        expect(successorAbort).not.toHaveBeenCalled();
-      } finally {
-        cleanup?.();
-        successorCleanup?.();
-        effect.release();
+  it.each(cancellationModes)("prioritizes the %s controller", async (mode) => {
+    const sessionId = "sdk-detached-cancel-controller";
+    using run = await cancellingRun(sessionId);
+    const operation = replyOperation(sessionId, "agent:main:sdk-cancel-controller");
+    try {
+      const result = cancel(sessionId, mode);
+      expect(run.abort).not.toHaveBeenCalled();
+      expect(operation.abortSignal.aborted).toBe(mode !== "compacting");
+      operation.complete();
+      if (mode === "drain") {
+        await expect(result).resolves.toEqual(drained);
+      } else {
+        expect(result).toBe(mode !== "compacting");
       }
-    },
-  );
+    } finally {
+      operation.complete();
+    }
+  });
 
-  it.each(["single", "all", "compacting", "drain"] as const)(
-    "keeps active controller ownership ahead of detached work during %s cancellation",
-    async (mode) => {
-      const sessionId = "sdk-detached-cancel-controller";
-      const abort = vi.fn();
-      const cleanup = setActiveEmbeddedRun(
-        sessionId,
-        createEmbeddedRunHandle({ abort, isCompacting: true }),
-      );
-      const operation = createReplyOperation({
-        sessionKey: "agent:main:sdk-cancel-controller",
-        sessionId,
-        resetTriggered: false,
-      });
-      try {
-        const result =
-          mode === "drain"
-            ? abortAndDrainAgentHarnessRun({ sessionId })
-            : mode === "single"
-              ? abortAgentHarnessRun(sessionId)
-              : abortAgentHarnessRun(undefined, { mode });
-        expect(abort).not.toHaveBeenCalled();
-        expect(operation.abortSignal.aborted).toBe(mode !== "compacting");
-        operation.complete();
-        if (mode === "drain") {
-          await expect(result).resolves.toEqual({
-            aborted: true,
-            drained: true,
-            forceCleared: false,
-          });
-        } else {
-          expect(result).toBe(mode !== "compacting");
-        }
-      } finally {
-        operation.complete();
-        cleanup?.();
+  it.each(["single", "drain"] as const)("rejects ambiguous %s owners", async (mode) => {
+    const sessionId = "sdk-detached-cancel-ambiguous";
+    using run = await cancellingRun(sessionId, undefined, { isCompacting: () => false });
+    const first = replyOperation(sessionId, "agent:main:sdk-cancel-first");
+    const second = replyOperation(sessionId, "agent:main:sdk-cancel-second");
+    try {
+      if (mode === "drain") {
+        await expect(drainRun({ sessionId })).rejects.toThrow();
+      } else {
+        expect(() => abortRun(sessionId)).toThrow();
       }
-    },
-  );
-
-  it.each(["single", "drain"] as const)(
-    "rejects ambiguous controllers before selecting detached work for %s cancellation",
-    async (mode) => {
-      const sessionId = "sdk-detached-cancel-ambiguous";
-      const abort = vi.fn();
-      const cleanup = setActiveEmbeddedRun(sessionId, createEmbeddedRunHandle({ abort }));
-      const first = createReplyOperation({
-        sessionKey: "agent:main:sdk-cancel-first",
-        sessionId,
-        resetTriggered: false,
-      });
-      const second = createReplyOperation({
-        sessionKey: "agent:main:sdk-cancel-second",
-        sessionId,
-        resetTriggered: false,
-      });
-      try {
-        if (mode === "drain") {
-          await expect(abortAndDrainAgentHarnessRun({ sessionId })).rejects.toThrow();
-        } else {
-          expect(() => abortAgentHarnessRun(sessionId)).toThrow();
-        }
-        expect(abort).not.toHaveBeenCalled();
-        expect(first.abortSignal.aborted).toBe(false);
-        expect(second.abortSignal.aborted).toBe(false);
-      } finally {
-        first.complete();
-        second.complete();
-        cleanup?.();
-      }
-    },
-  );
+      expect(run.abort).not.toHaveBeenCalled();
+      expect(first.abortSignal.aborted).toBe(false);
+      expect(second.abortSignal.aborted).toBe(false);
+    } finally {
+      first.complete();
+      second.complete();
+    }
+  });
 
   it.each(["not streaming", "stopped", "V1 unavailable", "V2 unavailable", "stale"] as const)(
     "refuses a sessionless native sink that is %s",
     async (state) => {
       const queueMessage = vi.fn(async () => {});
-      const handle: Parameters<typeof setActiveEmbeddedRun>[1] = {
-        queueMessage,
+      const kind = state === "V1 unavailable" ? "V1" : state === "V2 unavailable" ? "V2" : "legacy";
+      const handle = nativeSink(kind, queueMessage, false, {
         isStreaming: () => state !== "not streaming",
-        isCompacting: () => false,
-        abort: () => {},
         ...(state === "stopped" ? { isStopped: () => true } : {}),
-        ...(state === "V1 unavailable"
-          ? { messageInjection: { isAvailable: () => false, queueMessage } }
-          : {}),
-        ...(state === "V2 unavailable"
-          ? { messageInjectionV2: { version: 2 as const, isAvailable: () => false, queueMessage } }
-          : {}),
-      };
-      const effect = await beginSessionEffect({
-        scope: "/tmp/sdk-unavailable-store",
-        identities: ["sdk-unavailable"],
       });
+      const effect = await aliasEffect("sdk-unavailable", "/tmp/sdk-unavailable-store");
       const activity =
         state === "stale"
           ? vi.spyOn(diagnosticActivity, "getDiagnosticSessionActivitySnapshot").mockReturnValue({
@@ -601,8 +501,8 @@ describe("agent harness active-run SDK controls", () => {
             })
           : undefined;
       try {
-        setActiveEmbeddedRun("sdk-unavailable", handle);
-        expect(queueAgentHarnessMessage("sdk-unavailable", "steer")).toBe(false);
+        register("sdk-unavailable", handle);
+        expect(queue("sdk-unavailable", "steer")).toBe(false);
         expect(queueMessage).not.toHaveBeenCalled();
       } finally {
         activity?.mockRestore();
@@ -611,285 +511,183 @@ describe("agent harness active-run SDK controls", () => {
     },
   );
 
-  it.each(["V1", "V2"] as const)(
-    "checks caller authority before dispatching to a sessionless %s sink",
-    (kind) => {
-      const queueMessage = vi.fn(async () => {});
-      const guardedQueueMessage: NonNullable<
-        Parameters<typeof setActiveEmbeddedRun>[1]["messageInjectionV2"]
-      >["queueMessage"] = (_text, _options, assertCurrent) => {
-        assertCurrent();
-        return queueMessage();
-      };
-      const handle: Parameters<typeof setActiveEmbeddedRun>[1] = {
-        queueMessage,
-        isStreaming: () => true,
-        isCompacting: () => false,
-        abort: () => {},
-        ...(kind === "V1"
-          ? { messageInjection: { isAvailable: () => true, queueMessage } }
-          : {
-              messageInjectionV2: {
-                version: 2 as const,
-                isAvailable: () => true,
-                queueMessage: guardedQueueMessage,
-              },
-            }),
-      };
-      setActiveEmbeddedRun("sdk-revoked-caller", handle);
-      const options = {
-        steeringMode: "all" as const,
-        assertCurrent: () => {
-          throw new Error("caller authority revoked");
-        },
-      };
-      expect(() => queueAgentHarnessMessage("sdk-revoked-caller", "steer", options)).toThrow(
-        kind === "V1"
-          ? "caller authority revoked"
-          : "Message injection authority is no longer current",
-      );
-      expect(queueMessage).not.toHaveBeenCalled();
-    },
-  );
+  it.each(["V1", "V2"] as const)("checks detached %s authority", (kind) => {
+    const queueMessage = vi.fn(async () => {});
+    const handle = nativeSink(kind, queueMessage);
+    register("sdk-revoked-caller", handle);
+    const options = {
+      steeringMode: "all" as const,
+      assertCurrent: () => {
+        throw new Error("caller authority revoked");
+      },
+    };
+    expect(() => queue("sdk-revoked-caller", "steer", options)).toThrow(
+      kind === "V1" ? "caller authority revoked" : revoked,
+    );
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
 
   it("does not substitute a raw fingerprint for sessionless overlay projection authority", () => {
     const queueMessage = vi.fn(async () => {});
-    setActiveEmbeddedRun("sdk-overlay", {
-      queueMessage,
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: () => {},
-      toolAuthorityFingerprint: "current-authority",
-    });
+    register(
+      "sdk-overlay",
+      nativeHandle({
+        queueMessage,
+        toolAuthorityFingerprint: "current-authority",
+      }),
+    );
     const options = {
       isInboundUserMessage: true,
       toolAuthorityFingerprint: "current-authority",
       toolAuthorityOverlay: { senderIsOwner: false, disableTools: false, traceAuthorized: false },
     };
-    expect(queueAgentHarnessMessage("sdk-overlay", "steer", options)).toBe(false);
+    expect(queue("sdk-overlay", "steer", options)).toBe(false);
     expect(queueMessage).not.toHaveBeenCalled();
   });
 
   it("revokes sessionless V2 injection when its exact native registration is replaced", () => {
-    let retained: (() => void) | undefined;
-    const handle: Parameters<typeof setActiveEmbeddedRun>[1] = {
-      queueMessage: async () => {},
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: () => {},
-      messageInjectionV2: {
-        version: 2,
-        isAvailable: () => true,
-        queueMessage: async (_text, _options, assertCurrent) => {
-          retained = assertCurrent;
-        },
-      },
-    };
+    const { handle, authority } = captureInjection();
     const firstCleanup = expectDefined(
-      setActiveEmbeddedRun("sdk-replaced", handle),
+      register("sdk-replaced", handle),
       "first native registration",
     );
-    expect(queueAgentHarnessMessage("sdk-replaced", "first")).toBe(true);
-    const firstAssertion = expectDefined(retained, "first injection authority");
+    expect(queue("sdk-replaced", "first")).toBe(true);
+    const firstAssertion = authority();
     expect(firstAssertion).not.toThrow();
 
     const secondCleanup = expectDefined(
-      setActiveEmbeddedRun("sdk-replaced", handle),
+      register("sdk-replaced", handle),
       "second native registration",
     );
     firstCleanup();
-    expect(firstAssertion).toThrow("Message injection authority is no longer current");
-    expect(queueAgentHarnessMessage("sdk-replaced", "second")).toBe(true);
-    const secondAssertion = expectDefined(retained, "second injection authority");
+    expect(firstAssertion).toThrow(revoked);
+    expect(queue("sdk-replaced", "second")).toBe(true);
+    const secondAssertion = authority();
     expect(secondAssertion).not.toThrow();
     secondCleanup();
-    expect(secondAssertion).toThrow("Message injection authority is no longer current");
+    expect(secondAssertion).toThrow(revoked);
   });
 
-  it.each(["human", "runtime"] as const)(
-    "preserves an exact detached %s wait behind an alias-only effect",
-    async (kind) => {
-      const sessionId = `sdk-protected-${kind}`;
-      const instance = createOperationalRunInstanceRef(`${sessionId}-run`);
-      const authority = claimAgentRunDelegatedAuthority(instance);
-      const effect = await beginSessionEffect({
-        scope: "/tmp/sdk-protected-store",
-        identities: [sessionId],
-      });
-      const activity = vi
-        .spyOn(diagnosticActivity, "getDiagnosticSessionActivitySnapshot")
-        .mockReturnValue({ lastProgressAgeMs: 11 * 60_000 });
-      const queueMessage = vi.fn(async () => {});
-      let runtimeWaiting = kind === "runtime";
-      let cleanup: ReturnType<typeof setActiveEmbeddedRun> = undefined;
-      let releaseWait: ((resolved: boolean) => void) | undefined;
-      try {
-        cleanup = await withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: `agent:main:${sessionId}`,
-            operationalRunInstance: instance,
-          },
-          () =>
-            setActiveEmbeddedRun(sessionId, {
-              runId: instance.runId,
-              queueMessage,
-              isStreaming: () => true,
-              isCompacting: () => false,
-              ownsLiveness: () => runtimeWaiting,
-              abort: () => {},
-            }),
+  it.each(["human", "runtime"] as const)("preserves a detached %s wait", async (kind) => {
+    const sessionId = `sdk-protected-${kind}`;
+    const instance = createOperationalRunInstanceRef(`${sessionId}-run`);
+    const authority = claimAgentRunDelegatedAuthority(instance);
+    const effect = await aliasEffect(sessionId, "/tmp/sdk-protected-store");
+    const activity = vi
+      .spyOn(diagnosticActivity, "getDiagnosticSessionActivitySnapshot")
+      .mockReturnValue({ lastProgressAgeMs: 11 * 60_000 });
+    const queueMessage = vi.fn(async () => {});
+    let runtimeWaiting = kind === "runtime";
+    let cleanup: Cleanup;
+    let releaseWait: ((resolved: boolean) => void) | undefined;
+    const caller = {
+      agentId: "main",
+      sessionKey: `agent:main:${sessionId}`,
+      operationalRunInstance: instance,
+    };
+    const handle = nativeHandle({
+      runId: instance.runId,
+      queueMessage,
+      ownsLiveness: () => runtimeWaiting,
+    });
+    try {
+      cleanup = await withGatewayToolCallerIdentity(caller, () => register(sessionId, handle));
+      if (kind === "human") {
+        releaseWait = expectDefined(
+          registerActiveEmbeddedRunHumanInputWait(authority, () => true),
+          "exact detached human-input wait",
         );
-        if (kind === "human") {
-          releaseWait = expectDefined(
-            registerActiveEmbeddedRunHumanInputWait(authority, () => true),
-            "exact detached human-input wait",
-          );
-        }
-        expect(queueAgentHarnessMessage(sessionId, "answer")).toBe(true);
-        await vi.waitFor(() => expect(queueMessage).toHaveBeenCalledOnce());
-        releaseWait?.(false);
-        runtimeWaiting = false;
-        expect(queueAgentHarnessMessage(sessionId, "stale followup")).toBe(false);
-        expect(queueMessage).toHaveBeenCalledOnce();
-      } finally {
-        releaseWait?.(false);
-        cleanup?.();
-        releaseAgentRunDelegatedAuthority(authority);
-        effect.release();
-        activity.mockRestore();
       }
-    },
-  );
+      expect(queue(sessionId, "answer")).toBe(true);
+      await vi.waitFor(() => expect(queueMessage).toHaveBeenCalledOnce());
+      releaseWait?.(false);
+      runtimeWaiting = false;
+      expect(queue(sessionId, "stale followup")).toBe(false);
+      expect(queueMessage).toHaveBeenCalledOnce();
+    } finally {
+      releaseWait?.(false);
+      cleanup?.();
+      releaseAgentRunDelegatedAuthority(authority);
+      effect.release();
+      activity.mockRestore();
+    }
+  });
 
   it("revokes retained detached injection when a controller takes the same ID", () => {
-    let retained: (() => void) | undefined;
-    const handle: Parameters<typeof setActiveEmbeddedRun>[1] = {
-      queueMessage: async () => {},
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: () => {},
-      messageInjectionV2: {
-        version: 2,
-        isAvailable: () => true,
-        queueMessage: async (_text, _options, assertCurrent) => {
-          retained = assertCurrent;
-        },
-      },
-    };
-    setActiveEmbeddedRun("sdk-controller-takeover", handle);
-    expect(queueAgentHarnessMessage("sdk-controller-takeover", "first")).toBe(true);
-    const assertion = expectDefined(retained, "detached injection authority");
+    const { handle, authority } = captureInjection();
+    register("sdk-controller-takeover", handle);
+    expect(queue("sdk-controller-takeover", "first")).toBe(true);
+    const assertion = authority();
     expect(assertion).not.toThrow();
-    const operation = registerTestEmbeddedRun(
-      "sdk-controller-takeover",
-      createEmbeddedRunHandle(),
-      "agent:main:sdk-controller-takeover",
-    );
+    const operation = admittedRun("sdk-controller-takeover");
     try {
-      expect(assertion).toThrow("Message injection authority is no longer current");
+      expect(assertion).toThrow(revoked);
     } finally {
       operation.complete();
     }
   });
 
   it("keeps retained cleanup bound to its exact registration", () => {
-    const handle = createEmbeddedRunHandle();
-    const priorCleanup = setActiveEmbeddedRun("sdk-cleanup", handle);
+    const handle = makeHandle();
+    const priorCleanup = register("sdk-cleanup", handle);
     const currentCleanup = expectDefined(
-      setActiveEmbeddedRun("sdk-cleanup", handle),
+      register("sdk-cleanup", handle),
       "current registration cleanup",
     );
     assert.isFunction(priorCleanup);
     assert.isFunction(currentCleanup);
-    clearActiveEmbeddedRun(
-      "sdk-cleanup",
-      handle,
-      undefined,
-      undefined,
-      "old_cleanup",
-      priorCleanup,
-    );
-    expect(isEmbeddedAgentRunHandleActive("sdk-cleanup")).toBe(true);
+    clear("sdk-cleanup", handle, undefined, undefined, "old_cleanup", priorCleanup);
+    expect(isActive("sdk-cleanup")).toBe(true);
     currentCleanup("current_cleanup");
-    expect(isEmbeddedAgentRunHandleActive("sdk-cleanup")).toBe(false);
+    expect(isActive("sdk-cleanup")).toBe(false);
   });
 });
 
 describe("agent harness user input helpers", () => {
   it("formats prompts and delivers through blocking replies first", async () => {
     const onBlockReply = vi.fn();
-
-    await deliverAgentHarnessUserInputPrompt(
-      { onBlockReply },
-      [
-        {
-          id: "mode",
-          header: "Mode",
-          question: "Pick a mode",
-          isOther: true,
-          options: [{ label: "Deep", description: "Use more context" }],
-        },
-      ],
-      { intro: "Runtime needs input:" },
-    );
-
+    const questions = [
+      question("mode", {
+        header: "Mode",
+        question: "Pick a mode",
+        isOther: true,
+        options: [{ label: "Deep", description: "Use more context" }],
+      }),
+    ];
+    await deliverPrompt({ onBlockReply }, questions, { intro: "Runtime needs input:" });
     expect(onBlockReply).toHaveBeenCalledWith({
-      text: [
-        "Runtime needs input:",
-        "",
-        "Mode",
-        "Pick a mode",
-        "1. Deep - Use more context",
-        "Other: reply with your own answer.",
-      ].join("\n"),
+      text: `Runtime needs input:
+
+Mode
+Pick a mode
+1. Deep - Use more context
+Other: reply with your own answer.`,
     });
   });
 
   it("keeps a comma-containing option label as one multi-select answer", () => {
-    expect(
-      buildAgentHarnessUserInputAnswers(
-        [
-          {
-            id: "region",
-            header: "Region",
-            question: "Which region should deploy?",
-            multiSelect: true,
-            isOther: true,
-            options: [{ label: "Frankfurt, Germany" }, { label: "Dublin, Ireland" }],
-          },
-        ],
-        "Frankfurt, Germany",
-      ),
-    ).toEqual({ answers: { region: { answers: ["Frankfurt, Germany"] } } });
+    const questions = [
+      question("region", {
+        multiSelect: true,
+        isOther: true,
+        options: [{ label: "Frankfurt, Germany" }, { label: "Dublin, Ireland" }],
+      }),
+    ];
+    expect(buildAnswers(questions, "Frankfurt, Germany")).toEqual({
+      answers: { region: { answers: ["Frankfurt, Germany"] } },
+    });
   });
 
   it("supports runtime-specific text formatting", () => {
     expect(
-      formatAgentHarnessUserInputPrompt(
-        [
-          {
-            id: "answer",
-            header: "Header",
-            question: "a < b",
-          },
-        ],
-        { formatText: (text) => text.replaceAll("<", "&lt;") },
-      ),
+      formatPrompt([question("answer", { question: "a < b" })], {
+        formatText: (text) => text.replaceAll("<", "&lt;"),
+      }),
     ).toContain("a &lt; b");
   });
 
   it("preserves blank fallback lines so skipped answers stay aligned", () => {
-    expect(
-      buildAgentHarnessUserInputAnswers(
-        [
-          { id: "q1", header: "Q1", question: "First?" },
-          { id: "q2", header: "Q2", question: "Second?" },
-          { id: "q3", header: "Q3", question: "Third?" },
-        ],
-        "\nyes\nno",
-      ),
-    ).toEqual({
+    expect(buildAnswers([question("q1"), question("q2"), question("q3")], "\nyes\nno")).toEqual({
       answers: {
         q1: { answers: [] },
         q2: { answers: ["yes"] },

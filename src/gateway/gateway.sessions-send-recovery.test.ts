@@ -34,10 +34,18 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
   async (shutdownSignal, test) => {
     await runQaGatewayTestFixture(test, async ({ signal, verifyCleanup }) => {
       const observed: string[] = [];
+      const benchmarkPort = Number(process.env.OPENCLAW_RECOVERY_BENCH_PORT) || undefined;
       const providerRequests: unknown[] = [];
       const accepted = new Map<string, string>();
       const target = "agent:main:dashboard:peer-target";
       const steerTarget = "agent:main:dashboard:steer-target";
+      const parallelTargets = Array.from(
+        { length: 3 },
+        (_, index) => `agent:main:dashboard:parallel-${index}`,
+      );
+      const parallelHeld = new Set<number>();
+      const parallelResponses = new Map<number, ServerResponse>();
+      const parallelObserved: string[][] = parallelTargets.map(() => []);
       let hold = true;
       let held = false;
       let recoveredThemeCalls = 0;
@@ -71,6 +79,20 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           );
           const text = JSON.stringify(input[userIndex]?.content ?? "");
           const outputIndex = input.findLastIndex((item) => item.type === "function_call_output");
+          const parallelHold = text.match(/HOLD_PARALLEL_([0-9]+)/u);
+          if (hold && parallelHold) {
+            parallelHeld.add(Number(parallelHold[1]));
+            return;
+          }
+          const parallelInput = text.match(/PARALLEL_INPUT_([0-9]+)_([0-9]+)/u);
+          if (parallelInput) {
+            const index = Number(parallelInput[1]);
+            parallelObserved[index]!.push(parallelInput[0]);
+            if (parallelInput[2] === "1") {
+              parallelResponses.set(index, response);
+              return;
+            }
+          }
           providerRequests.push({
             hold,
             userIndex,
@@ -177,10 +199,17 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           }
         });
       });
-      const baseUrl = await listenProvider(providerServer);
+      const baseUrl = benchmarkPort
+        ? await (async () => {
+            providerServer.listen(benchmarkPort + 1, "127.0.0.1");
+            await once(providerServer, "listening", { signal });
+            return `http://127.0.0.1:${benchmarkPort + 1}/v1`;
+          })()
+        : await listenProvider(providerServer);
       const profile = `peer-recovery-${randomUUID()}`;
       const gateway = await createOpenClawTestInstance({
         name: "peer-input-recovery",
+        port: benchmarkPort,
         cwd: process.cwd(),
         signal,
         verifyCleanup,
@@ -192,6 +221,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           NODE_ENV: "production",
           OPENCLAW_PROFILE: profile,
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+          OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
         },
       });
       let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
@@ -296,6 +326,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           agents: {
             ownership: "explicit",
             defaults: {
+              maxConcurrent: 8,
               workspace: gateway.state.workspaceDir,
               skipBootstrap: true,
               utilityModel: "",
@@ -354,6 +385,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           resetSource,
           revokedSource,
           archivedSource,
+          ...parallelTargets,
         ]) {
           const created = await client.request<{ sessionId: string }>(
             "sessions.create",
@@ -388,6 +420,24 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         continueSteer(steerResponse!);
         await steering;
         await expectPersistedSteer();
+        for (const [index, key] of parallelTargets.entries()) {
+          await start(key, `HOLD_PARALLEL_${index}`);
+          await vi.waitFor(() => expect(parallelHeld.has(index)).toBe(true), {
+            timeout: 30_000,
+          });
+          for (const ordinal of [1, 2]) {
+            await client.request(
+              "chat.send",
+              {
+                sessionKey: key,
+                message: `PARALLEL_INPUT_${index}_${ordinal}`,
+                idempotencyKey: randomUUID(),
+                queueMode: "followup",
+              },
+              { signal },
+            );
+          }
+        }
         for (const message of expectedUpdates) {
           await send(source, message);
           const request = {
@@ -461,6 +511,14 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           expect(oldProcess?.signalCode).not.toBe("SIGKILL");
         }
         hold = false;
+        const beforeRestartLogs = gateway.logs().length;
+        const startAt = Number(process.env.OPENCLAW_RECOVERY_BENCH_START_AT);
+        if (startAt) {
+          expect(startAt).toBeGreaterThan(Date.now());
+          await new Promise((resolve) => {
+            setTimeout(resolve, startAt - Date.now());
+          });
+        }
         await gateway.startGateway();
         expect(gateway.child?.pid).not.toBe(firstPid);
         client = await connect();
@@ -472,6 +530,27 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
             `Recovery did not reach the first chat input: ${JSON.stringify({ observed, providerRequests })}\n${gateway.logs()}`,
             { cause: error },
           );
+        }
+        // A held turn in one session must not keep other sessions from replaying.
+        await vi.waitFor(() => expect(parallelResponses.size).toBe(parallelTargets.length), {
+          timeout: 60_000,
+        });
+        expect(parallelObserved).toEqual(
+          parallelTargets.map((_, index) => [`PARALLEL_INPUT_${index}_1`]),
+        );
+        const recoveryTrace = () =>
+          gateway
+            .logs()
+            .slice(beforeRestartLogs)
+            .match(/startup (?:trace|phase): sidecars\.subagent-recovery ([0-9.]+)ms/u);
+        await vi.waitFor(() => expect(recoveryTrace()).not.toBeNull(), { timeout: 10_000 });
+        const recoveryMs = Number(recoveryTrace()![1]);
+        for (const response of parallelResponses.values()) {
+          writeOpenAiResponsesText(response, {
+            text: "RECEIVED",
+            messageId: randomUUID(),
+            responseId: randomUUID(),
+          });
         }
         // Stored text is trimmed; the original request identity must still dedupe
         // an original-payload retry while recovery owns an active reservation.
@@ -492,10 +571,75 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           },
         );
         await vi.waitFor(
+          () =>
+            expect(parallelObserved).toEqual(
+              parallelTargets.map((_, index) => [
+                `PARALLEL_INPUT_${index}_1`,
+                `PARALLEL_INPUT_${index}_2`,
+              ]),
+            ),
+          { timeout: 60_000 },
+        );
+        for (const [index, key] of parallelTargets.entries()) {
+          const parallelHistory = await client.request<{
+            messages: Array<{ role?: string; content?: unknown }>;
+            pendingInputs: ChatPendingInputsPage;
+          }>("chat.history", { sessionKey: key }, { signal });
+          expect(parallelHistory.pendingInputs.items).toEqual([]);
+          for (const ordinal of [1, 2]) {
+            expect(
+              parallelHistory.messages.filter(
+                (message) =>
+                  message.role === "user" &&
+                  JSON.stringify(message.content).includes(`PARALLEL_INPUT_${index}_${ordinal}`),
+              ),
+            ).toHaveLength(1);
+          }
+        }
+        await vi.waitFor(
           () => expect(gateway.logs()).toContain("Session delivery recovery blocked for "),
           { timeout: 30_000 },
         );
         expect(recoveredThemeCalls).toBe(1);
+        const replayTimings = Object.fromEntries(
+          [
+            "sourceLoadMs",
+            "sessionLoadMs",
+            "authorityRestoreMs",
+            "communicationAdmissionMs",
+            "dispatchAckMs",
+            "retryWaitMs",
+          ].map((phase) => [phase, { count: 0, maxMs: 0 }]),
+        );
+        let replayInputs = 0;
+        for (const match of gateway
+          .logs()
+          .slice(beforeRestartLogs)
+          .matchAll(/Pending input replay: (\{[^\n]+\})/gu)) {
+          const sample = asOptionalRecord(JSON.parse(match[1]!));
+          if (!sample) {
+            continue;
+          }
+          replayInputs++;
+          for (const [phase, timing] of Object.entries(replayTimings)) {
+            const value = sample[phase];
+            if (typeof value === "number" && value > 0) {
+              timing.count++;
+              timing.maxMs = Math.max(timing.maxMs, value);
+            }
+          }
+        }
+        console.log(
+          `[pending-input-recovery] ${JSON.stringify({
+            shutdownSignal,
+            sessions: parallelTargets.length + 1,
+            inputs: expectedDelivery.length + parallelTargets.length * 2,
+            recoveryMs,
+            heldSessions: parallelResponses.size + 1,
+            replayInputs,
+            replayTimings,
+          })}`,
+        );
         expect(await client.request("users.self", {}, { signal })).toMatchObject({
           profile: { id: requester.profile.id },
         });
@@ -557,6 +701,12 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         expect(finalHistory).not.toContain(`From ${archivedSource}`);
         expect(gateway.logs()).not.toContain('"archived":true');
         expect(observed, JSON.stringify(providerRequests)).toEqual(expectedDelivery);
+        expect(parallelObserved).toEqual(
+          parallelTargets.map((_, index) => [
+            `PARALLEL_INPUT_${index}_1`,
+            `PARALLEL_INPUT_${index}_2`,
+          ]),
+        );
       } catch (error) {
         await printRecoveryFailureDiagnostics({
           client,

@@ -39,7 +39,6 @@ import {
 import { root as safeRoot } from "./fs-safe.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "./sqlite-files.js";
 import { createPrivateSqliteDirectory } from "./sqlite-private-directory.js";
-import { readUpdateDatabaseGenerationsIsolated } from "./update-candidate-state.js";
 import { isUpdateCapturePath, resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import {
   UPDATE_CAPTURE_PRIVACY_MARKER,
@@ -363,6 +362,13 @@ export function captureUpdateRecoveryBaseline(params: {
         ...databases.databases.map((file) => file.path),
         ...databases.missingPaths,
       ]);
+      for (const pathname of databases.missingPaths) {
+        for (const suffix of ["-wal", "-journal"]) {
+          if (await statOrMissing(pathname + suffix)) {
+            throw new Error(`Database is absent but retained journal data exists: ${pathname}`);
+          }
+        }
+      }
       const databaseSpellings = new Set([
         ...databasePaths,
         ...databases.sourcePaths.map(canonicalEntryPath),
@@ -473,39 +479,6 @@ export function captureUpdateRecoveryBaseline(params: {
       }
       await configCapture.revalidate();
       assertCurrent();
-      const originalCaptureSources = new Set(databases.originalCaptureSourcePaths);
-      const generationPaths = [...databasePaths].filter(
-        (pathname) => !originalCaptureSources.has(pathname),
-      );
-      const generations =
-        generationPaths.length === 0
-          ? {}
-          : await readUpdateDatabaseGenerationsIsolated(generationPaths, {
-              env,
-              pluginOwners: databases.pluginOwners,
-              signal: params.signal,
-              timeoutMs: params.timeoutMs,
-              acquisition: params.acquisition,
-              retryAdvice: false,
-            });
-      const unverified = generationPaths.flatMap((pathname): [string, string][] =>
-        !Object.hasOwn(databases.sourceGenerations, pathname)
-          ? [[pathname, "no stable generation was recorded during its snapshot."]]
-          : databases.sourceGenerations[pathname] !== generations[pathname]
-            ? [[pathname, "generation changed after its snapshot."]]
-            : [],
-      );
-      if (unverified.length) {
-        throw new Error(
-          [
-            "Original database generation changed or could not be verified; capture is unsealed.",
-            ...unverified.map(([pathname, reason]) => `${pathname}: ${reason}`),
-            ...databases.warnings.filter((warning) =>
-              unverified.some(([pathname]) => warning.includes(pathname)),
-            ),
-          ].join("\n"),
-        );
-      }
       const boundedWarnings = warnings.slice(0, 32).map((warning) => ({
         kind: warning.kind,
         pluginId: warning.pluginId,

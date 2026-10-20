@@ -1,17 +1,41 @@
 import { describe, expect, it } from "vitest";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import { model as createModelFixture } from "../../agents/model-catalog-fixtures.test-support.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
 
-function makeTestModel(id: string, contextTokens: number): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+function makeTestModel(id: string, contextTokens: number) {
+  return createModelFixture(id, id, {
     contextWindow: contextTokens,
     contextTokens,
     maxTokens: 4096,
+  });
+}
+
+const primary = { primaryProvider: "openrouter", primaryModel: "qwen3.6-plus" };
+function heartbeatFixture(model = "qwen3.5-9b-32k:latest", cataloged = true) {
+  return {
+    ...primary,
+    agentId: "agent",
+    cfg: {
+      models: {
+        providers: {
+          openrouter: {
+            baseUrl: "https://openrouter.test",
+            models: [makeTestModel(primary.primaryModel, 1_000_000)],
+          },
+          ...(cataloged && {
+            ollama: { baseUrl: "http://ollama.test", models: [makeTestModel(model, 32_768)] },
+          }),
+        },
+      },
+      agents: { defaults: { heartbeat: { model: `ollama/${model}` } } },
+    },
+    activeSessionEntry: {
+      sessionId: "session",
+      updatedAt: 1,
+      modelProvider: "ollama",
+      model,
+      contextTokens: 32_768,
+    },
   };
 }
 
@@ -19,8 +43,7 @@ describe("buildContextOverflowRecoveryText", () => {
   it("preserves the session with the built-in recovery hint without heartbeat model evidence", () => {
     const text = buildContextOverflowRecoveryText({
       cfg: {},
-      primaryProvider: "openrouter",
-      primaryModel: "qwen3.6-plus",
+      ...primary,
     });
 
     expect(text).toContain("fresh session or using a model with a larger context window");
@@ -32,24 +55,10 @@ describe("buildContextOverflowRecoveryText", () => {
 
   it("does not use stale heartbeat hints for a different explicit runtime model", () => {
     const text = buildContextOverflowRecoveryText({
-      cfg: {
-        agents: {
-          defaults: {
-            heartbeat: { model: "ollama/qwen3.5-9b-32k:latest" },
-          },
-        },
-      },
-      primaryProvider: "openrouter",
-      primaryModel: "qwen3.6-plus",
+      ...heartbeatFixture(),
+      cfg: { agents: { defaults: { heartbeat: { model: "ollama/qwen3.5-9b-32k:latest" } } } },
       runtimeProvider: "custom",
       runtimeModel: "uncataloged-32k",
-      activeSessionEntry: {
-        sessionId: "session",
-        updatedAt: 1,
-        modelProvider: "ollama",
-        model: "qwen3.5-9b-32k:latest",
-        contextTokens: 32_768,
-      },
     });
 
     expect(text).toContain("fresh session or using a model with a larger context window");
@@ -57,37 +66,7 @@ describe("buildContextOverflowRecoveryText", () => {
   });
 
   it("points to heartbeat model bleed when the session model matches heartbeat.model", () => {
-    const text = buildContextOverflowRecoveryText({
-      cfg: {
-        models: {
-          providers: {
-            openrouter: {
-              baseUrl: "https://openrouter.test",
-              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
-            },
-            ollama: {
-              baseUrl: "http://ollama.test",
-              models: [makeTestModel("qwen3.5-9b-32k:latest", 32_768)],
-            },
-          },
-        },
-        agents: {
-          defaults: {
-            heartbeat: { model: "ollama/qwen3.5-9b-32k:latest" },
-          },
-        },
-      },
-      agentId: "agent",
-      primaryProvider: "openrouter",
-      primaryModel: "qwen3.6-plus",
-      activeSessionEntry: {
-        sessionId: "session",
-        updatedAt: 1,
-        modelProvider: "ollama",
-        model: "qwen3.5-9b-32k:latest",
-        contextTokens: 32_768,
-      },
-    });
+    const text = buildContextOverflowRecoveryText(heartbeatFixture());
 
     expect(text).toContain("ollama/qwen3.5-9b-32k:latest (32k context)");
     expect(text).toContain("openrouter/qwen3.6-plus");
@@ -96,33 +75,7 @@ describe("buildContextOverflowRecoveryText", () => {
   });
 
   it("uses the stored context window for an uncataloged heartbeat model", () => {
-    const text = buildContextOverflowRecoveryText({
-      cfg: {
-        models: {
-          providers: {
-            openrouter: {
-              baseUrl: "https://openrouter.test",
-              models: [makeTestModel("qwen3.6-plus", 1_000_000)],
-            },
-          },
-        },
-        agents: {
-          defaults: {
-            heartbeat: { model: "ollama/custom-32k" },
-          },
-        },
-      },
-      agentId: "agent",
-      primaryProvider: "openrouter",
-      primaryModel: "qwen3.6-plus",
-      activeSessionEntry: {
-        sessionId: "session",
-        updatedAt: 1,
-        modelProvider: "ollama",
-        model: "custom-32k",
-        contextTokens: 32_768,
-      },
-    });
+    const text = buildContextOverflowRecoveryText(heartbeatFixture("custom-32k", false));
 
     expect(text).toContain("ollama/custom-32k (32k context)");
     expect(text).not.toContain("ollama/custom-32k (98k context)");

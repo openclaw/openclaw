@@ -39,6 +39,7 @@ type SearchDatabase = {
 type VectorRow = MemorySearchRow & { dist: number };
 type KeywordRow = MemorySearchRow & { rank: number };
 type PathRow = KeywordRow & { specificity: ExactPathSpecificity };
+type KeywordBranchRow = PathRow & { branch: number };
 type BodyResult = SearchRowResult & { textScore: number; hasBodyMatch: true };
 type PathResult = SearchRowResult & {
   textScore: 0;
@@ -141,14 +142,14 @@ export async function searchPostgresMemoryVector(
   return result.rows.map((row) => projectMemorySearchRow(row, query.snippetMaxChars, 1 - row.dist));
 }
 
-function searchBody(
+function bodyStatement(
   database: EngineConnection,
   query: MemoryKeywordWorkerQuery["body"],
   matchAny = false,
-): BodyResult[] {
+) {
   const intent = textIntent(query.query, query.ftsTokenizer, matchAny);
   if (query.limit <= 0 || !intent) {
-    return [];
+    return undefined;
   }
   const { fullText, indexes } = textCapability(database, query.ftsTokenizer);
   const index = indexes.body!;
@@ -158,11 +159,13 @@ function searchBody(
     .select([
       "id",
       "path",
+      "source",
       "start_line",
       "end_line",
-      "source",
       sql<string>`left(text, ${query.snippetMaxChars})`.as("text"),
       rank.as("rank"),
+      sql<ExactPathSpecificity>`0`.as("specificity"),
+      sql<number>`0`.as("branch"),
     ])
     .where(textMatch(fullText, index, intent));
   if (query.sourceFilter.params.length) {
@@ -171,16 +174,31 @@ function searchBody(
   if (query.sourceFilter.excludedSessionPaths?.length) {
     selected = selected.where(sessionExclusion(query.sourceFilter.excludedSessionPaths));
   }
-  const rows = executeSqliteQuerySync<KeywordRow>(
-    database,
-    selected.orderBy(rank, "desc").orderBy("id").limit(query.limit),
-  ).rows;
+  return selected.orderBy(rank, "desc").orderBy("id").limit(query.limit);
+}
+
+function projectBodyRows(
+  rows: KeywordRow[],
+  query: MemoryKeywordWorkerQuery["body"],
+): BodyResult[] {
   // Native ranking stays engine-local; the manager keeps its shared hybrid weights.
   return rows.map((row) =>
     Object.assign(projectMemorySearchRow(row, query.snippetMaxChars, row.rank), {
       textScore: row.rank,
       hasBodyMatch: true as const,
     }),
+  );
+}
+
+function searchBody(
+  database: EngineConnection,
+  query: MemoryKeywordWorkerQuery["body"],
+  matchAny = false,
+): BodyResult[] {
+  const statement = bodyStatement(database, query, matchAny);
+  return projectBodyRows(
+    statement ? executeSqliteQuerySync<KeywordRow>(database, statement).rows : [],
+    query,
   );
 }
 
@@ -232,10 +250,7 @@ function pathSpecificity(query: string): RawBuilder<ExactPathSpecificity> {
   return sql<ExactPathSpecificity>`CASE WHEN ${path} = ${normalized} THEN 3 WHEN ${basename} = ${normalized} THEN 2 WHEN ${stem} = ${normalized} THEN 1 ELSE 0 END`;
 }
 
-function searchPaths(
-  database: EngineConnection,
-  query: MemoryKeywordWorkerQuery["path"],
-): PathResult[] {
+function pathStatements(database: EngineConnection, query: MemoryKeywordWorkerQuery["path"]) {
   const exactLimit = Math.max(0, Math.floor(query.exactPathLimit ?? query.limit));
   if (query.limit <= 0 && exactLimit <= 0) {
     return [];
@@ -246,9 +261,9 @@ function searchPaths(
   const rank = intent ? textRank(fullText, index, intent, query.ftsTokenizer) : sql<number>`0`;
   const k = getNodeSqliteKysely<SearchDatabase>(database);
   const specificity = pathSpecificity(query.query);
-  const load = (exact: boolean, limit: number): PathRow[] => {
+  const select = (exact: boolean, limit: number) => {
     if (limit <= 0 || (!exact && !intent)) {
-      return [];
+      return undefined;
     }
     let paths = k
       .selectFrom("memory_index_sources as s")
@@ -277,7 +292,7 @@ function searchPaths(
       .orderBy("s.path")
       .orderBy("s.source")
       .limit(limit);
-    const statement = k
+    return k
       .with(
         (cte) => cte("retained").materialized(),
         () => retained,
@@ -311,13 +326,20 @@ function searchPaths(
         "c.text",
         "p.rank",
         "p.specificity",
+        sql<number>`${sql.lit(exact ? 1 : 2)}`.as("branch"),
       ])
       .orderBy(exact ? "p.specificity" : "p.rank", "desc")
       .orderBy("p.path")
       .orderBy("p.source");
-    return executeSqliteQuerySync<PathRow>(database, statement).rows;
   };
-  return [...load(true, exactLimit), ...load(false, query.limit)]
+  return [select(true, exactLimit), select(false, query.limit)].filter(
+    (statement) => statement !== undefined,
+  );
+}
+
+function projectPathRows(rows: PathRow[], query: MemoryKeywordWorkerQuery["path"]): PathResult[] {
+  const exactLimit = Math.max(0, Math.floor(query.exactPathLimit ?? query.limit));
+  return rows
     .map((row): PathResult =>
       Object.assign(projectMemorySearchRow(row, query.snippetMaxChars, row.rank), {
         textScore: 0 as const,
@@ -327,6 +349,57 @@ function searchPaths(
       }),
     )
     .slice(0, query.exactPathLimit === undefined ? query.limit : exactLimit + query.limit);
+}
+
+function searchPaths(
+  database: EngineConnection,
+  query: MemoryKeywordWorkerQuery["path"],
+): PathResult[] {
+  return projectPathRows(
+    pathStatements(database, query).flatMap(
+      (statement) => executeSqliteQuerySync<PathRow>(database, statement).rows,
+    ),
+    query,
+  );
+}
+
+function searchIndependentBranches(database: EngineConnection, query: MemoryKeywordWorkerQuery) {
+  const statements = [
+    bodyStatement(database, query.body),
+    ...pathStatements(database, query.path),
+  ].filter((statement) => statement !== undefined);
+  // Each branch retains its own ORDER BY/LIMIT; UNION ALL must not deduplicate
+  // a chunk that independently matches both its body and path.
+  const union = sql<KeywordBranchRow>`(${sql.join(
+    statements.map((statement) => sql`(${statement})`),
+    sql` UNION ALL `,
+  )})`;
+  const rows = statements.length
+    ? executeSqliteQuerySync<KeywordBranchRow>(
+        database,
+        getNodeSqliteKysely<SearchDatabase>(database)
+          .selectFrom(union.as("matches"))
+          .selectAll()
+          .orderBy("branch")
+          .orderBy(sql`CASE WHEN branch = 1 THEN specificity ELSE rank END`, "desc")
+          .orderBy(sql`CASE WHEN branch = 0 THEN id ELSE path END`)
+          .orderBy("source"),
+      ).rows
+    : [];
+  return {
+    body: {
+      rows: projectBodyRows(
+        rows.filter((row) => row.branch === 0),
+        query.body,
+      ),
+    },
+    path: {
+      rows: projectPathRows(
+        rows.filter((row) => row.branch !== 0),
+        query.path,
+      ),
+    },
+  };
 }
 
 export async function searchPostgresMemoryKeyword(
@@ -340,8 +413,21 @@ export async function searchPostgresMemoryKeyword(
       return { rows: [], error: formatErrorMessage(error) };
     }
   };
-  let body = run(() => searchBody(database, query.body));
-  const path = run(() => searchPaths(database, query.path));
+  let result: {
+    body: { rows: BodyResult[]; error?: string };
+    path: { rows: PathResult[]; error?: string };
+  };
+  try {
+    result = searchIndependentBranches(database, query);
+  } catch {
+    // Recover independent results and errors if only one branch is unavailable.
+    result = {
+      body: run(() => searchBody(database, query.body)),
+      path: run(() => searchPaths(database, query.path)),
+    };
+  }
+  let { body } = result;
+  const { path } = result;
   if (!body.rows.length && !path.rows.length && !body.error && !path.error) {
     body = run(() => searchBody(database, query.body, true));
   }

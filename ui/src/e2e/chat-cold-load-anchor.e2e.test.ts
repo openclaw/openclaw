@@ -318,7 +318,26 @@ suite.define(() => {
             };
             requestAnimationFrame(sample);
           });
+          await page.addInitScript(() => window.coldLoadTitleTrace?.holdCacheRead());
           await page.reload();
+          await page.waitForFunction(() => window.coldLoadTitleTrace?.cacheReadPending);
+          await page.screenshot({
+            path: path.join(suite.artifactDir, "cold-load-cache-pending.png"),
+          });
+          const pendingTitles = await page.evaluate(async () => {
+            const titles: string[] = [];
+            for (let index = 0; index < 3; index++) {
+              await new Promise<void>((resolve) => {
+                requestAnimationFrame(() => resolve());
+              });
+              titles.push(
+                document.querySelector(".chat-pane__session-title-text")?.textContent?.trim() ?? "",
+              );
+            }
+            return titles;
+          });
+          expect(pendingTitles).toEqual(["", "", ""]);
+          await page.evaluate(() => window.coldLoadTitleTrace?.releaseCacheRead());
           await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 20);
           const samples = await page.evaluate(() => {
             if (!window.coldLoadSamples) {
@@ -336,6 +355,13 @@ suite.define(() => {
           await page.screenshot({ path: path.join(suite.artifactDir, "cold-load-cached.png") });
           expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
           expect(samples).toHaveLength(20);
+          const titleWrites = await page.evaluate(() =>
+            window.coldLoadTitleTrace
+              ?.read()
+              .events.filter((event) => event.kind === "title-write" && event.title !== "absent"),
+          );
+          expect(titleWrites?.[0]?.title).toBe("expected-title");
+          expect(titleWrites?.some((event) => event.title === "New session")).toBe(false);
           for (const frame of samples) {
             expect(frame.title).toBe(session.label);
             expect(Math.abs(frame.max - frame.top), JSON.stringify(samples)).toBeLessThanOrEqual(1);
