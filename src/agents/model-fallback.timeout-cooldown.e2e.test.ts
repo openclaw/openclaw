@@ -47,15 +47,11 @@ beforeEach(() => {
 
 type Workspace = { agentDir: string; workspaceDir: string };
 
-async function runEmbeddedEntryFallback(
-  workspace: Workspace,
-  name: string,
-  options: { config: OpenClawConfig },
-) {
-  const cfg = options.config;
+async function runEmbeddedEntryFallback(workspace: Workspace, name: string, cfg: OpenClawConfig) {
   const runId = `run:${name}`;
   const sessionKey = `agent:test:${name}`;
   const sessionId = `session:${runId}`;
+  const identity = { runId, sessionId, sessionKey };
   setRuntimeConfigSnapshot(cfg, cfg);
   const preparedRunAdmission = createModelRoutingTestAdmission({
     cfg: { ...cfg, logging: { audit: { executionIdentity: true } } },
@@ -71,7 +67,7 @@ async function runEmbeddedEntryFallback(
         agentDir: workspace.agentDir,
         manifestPlugins: [],
       },
-      identity: { runId, agentId: "test", sessionId, sessionKey },
+      identity: { ...identity, agentId: "test" },
       harness: {
         workspaceDir: workspace.workspaceDir,
         sessionKey,
@@ -88,9 +84,7 @@ async function runEmbeddedEntryFallback(
       runCandidate: (provider, model, attemptOptions) =>
         runEmbeddedAgent({
           ...workspace,
-          runId,
-          sessionKey,
-          sessionId,
+          ...identity,
           config: cfg,
           prompt: "hello",
           authProfileIdSource: "auto",
@@ -117,10 +111,6 @@ function expectAttemptOrder(expected: Array<{ provider: string; authProfileId: s
       return { provider, authProfileId };
     }),
   ).toEqual(expected);
-}
-
-function profileAttempts(provider: string, count: number) {
-  return Array.from({ length: count }, () => ({ provider, authProfileId: `${provider}:p1` }));
 }
 
 describe("timeout cooldown availability", () => {
@@ -162,7 +152,7 @@ describe("timeout cooldown availability", () => {
         const run = async (name: string) => {
           const work = new AsyncWorkScope();
           try {
-            return await work.run(() => runEmbeddedEntryFallback(workspace, name, { config: cfg }));
+            return await work.run(() => runEmbeddedEntryFallback(workspace, name, cfg));
           } finally {
             await work.drain();
           }
@@ -187,7 +177,9 @@ describe("timeout cooldown availability", () => {
             const result = await run(`${name}-${scenario}`);
             expect(result.result.payloads?.[0]?.text).toBe("recovered");
           }
-          expectAttemptOrder(profileAttempts("openai", 3));
+          expectAttemptOrder(
+            Array.from({ length: 3 }, () => ({ provider: "openai", authProfileId: "openai:p1" })),
+          );
         }
       });
     },

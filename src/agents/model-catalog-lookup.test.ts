@@ -22,13 +22,8 @@ describe("catalog model identity", () => {
 
   it("prefers a literal catalog row over provider equivalence", () => {
     const rows = [
-      {
-        provider: "arcee",
-        id: "arcee-ai/trinity-large-thinking",
-        name: "Wire",
-        contextWindow: 32_000,
-      },
-      { provider: "arcee", id: "trinity-large-thinking", name: "Logical", contextWindow: 64_000 },
+      { provider: "arcee", id: "arcee-ai/trinity-large-thinking" },
+      { provider: "arcee", id: "trinity-large-thinking" },
     ];
     for (const row of rows) {
       expect(findModelInCatalog(rows, row.provider, row.id)).toBe(row);
@@ -69,32 +64,11 @@ describe("catalog model identity", () => {
 
 describe("prepared thinking disablement ownership", () => {
   it.each([
-    {
-      name: "does not grant disablement from nullable route metadata",
-      selected: null,
-      prepared: ["none", "max"],
-      expected: ["max"],
-    },
-    {
-      name: "retains route disablement when enabled tiers are unknown",
-      selected: ["none", "low"],
-      prepared: null,
-      expected: ["none"],
-    },
-    {
-      name: "leaves an absent effort overlay absent",
-      selected: ["none", "high"],
-      prepared: undefined,
-      expected: undefined,
-    },
-    {
-      name: "accepts disablement from the exact physical route",
-      selected: undefined,
-      prepared: ["none", "high"],
-      expected: ["none", "high"],
-      routeBound: true,
-    },
-  ])("$name", ({ selected, prepared, expected, routeBound }) => {
+    ["nullable route", null, ["none", "max"], ["max"], false],
+    ["unknown enabled tiers", ["none", "low"], null, ["none"], false],
+    ["absent overlay", ["none", "high"], undefined, undefined, false],
+    ["exact physical route", undefined, ["none", "high"], ["none", "high"], true],
+  ] as const)("resolves disablement for %s", (_name, selected, prepared, expected, routeBound) => {
     const route = { api: "openai-responses", baseUrl: "https://reasoning.example/v1" } as const;
     const model = {
       provider: "reasoning-provider",

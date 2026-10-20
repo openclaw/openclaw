@@ -30,6 +30,8 @@ const source = (assertCurrent = () => {}) =>
     }),
   });
 
+const fallbackOptions = { cfg, provider: "fixture", model: "primary", manifestPlugins: [] };
+
 describe("operator model execution ceiling", () => {
   it.each(["rate_limit", "context_overflow"] as const)(
     "never prepares or executes denied fallbacks after %s",
@@ -42,10 +44,7 @@ describe("operator model execution ceiling", () => {
         return "answer";
       });
       const result = await runWithModelFallback({
-        cfg,
-        provider: "fixture",
-        model: "primary",
-        manifestPlugins: [],
+        ...fallbackOptions,
         skipAuthProfileRuntime: true,
         operatorAuthority: source(),
         prepareCandidateChain: prepared,
@@ -64,11 +63,9 @@ describe("operator model execution ceiling", () => {
     const run = vi.fn();
     await expect(
       runWithModelFallback({
-        cfg,
-        provider: "fixture",
+        ...fallbackOptions,
         model: "special",
         fallbacksOverride: [],
-        manifestPlugins: [],
         operatorAuthority: source(),
         prepareCandidateChain: prepare,
         run,
@@ -84,10 +81,7 @@ describe("operator model execution ceiling", () => {
     let active = true;
     const run = vi.fn();
     const pending = runWithModelFallback({
-      cfg,
-      provider: "fixture",
-      model: "primary",
-      manifestPlugins: [],
+      ...fallbackOptions,
       skipAuthProfileRuntime: true,
       operatorAuthority: source(() => {
         if (!active) {

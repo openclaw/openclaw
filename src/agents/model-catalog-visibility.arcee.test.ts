@@ -12,14 +12,13 @@ import {
 } from "./openai-model-routes.js";
 
 describe("provider-owned catalog identity", () => {
+  const metadata = { name: "Authored default", contextWindow: 32768, reasoning: false };
   const authored: ModelCatalogEntry = {
     provider: "arcee",
     id: "arcee-ai/trinity-large-thinking",
-    name: "Authored default",
+    ...metadata,
     api: "openai-completions",
     baseUrl: "https://openrouter.ai/api/v1",
-    contextWindow: 32768,
-    reasoning: false,
   };
   const cfg: OpenClawConfig = {
     plugins: { allow: ["arcee"] },
@@ -38,9 +37,7 @@ describe("provider-owned catalog identity", () => {
           models: [
             {
               id: authored.id,
-              name: "Authored default",
-              contextWindow: 32768,
-              reasoning: false,
+              ...metadata,
               input: ["text"],
               maxTokens: 2048,
               cost: { input: 7, output: 9, cacheRead: 1, cacheWrite: 2 },
@@ -82,55 +79,28 @@ describe("provider-owned catalog identity", () => {
         contextWindow: 32768,
       });
     }
-    expect(authored.id).toBe("arcee-ai/trinity-large-thinking");
-    expect(authored.name).toBe("Authored default");
+    expect(authored).toMatchObject({ id: "arcee-ai/trinity-large-thinking", ...metadata });
   });
 
-  it("joins equivalent provider-owned spellings before authored metadata projection", async () => {
-    const rows = await project([
-      authored,
-      {
-        ...authored,
+  it.each(["trinity-large-thinking", "arcee-ai/trinity-large-thinking"])(
+    "deduplicates %s before authored metadata projection",
+    async (id) => {
+      const rows = await project([
+        authored,
+        { ...authored, id, name: "Static sibling", contextWindow: 262144, reasoning: true },
+      ]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        provider: "arcee",
         id: "trinity-large-thinking",
-        name: "Trinity Large Thinking",
-        contextWindow: 262144,
-        reasoning: true,
-      },
-    ]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      provider: "arcee",
-      id: "trinity-large-thinking",
-      name: "Authored default",
-      contextWindow: 32768,
-      reasoning: false,
-    });
-  });
-
-  it("retains the existing same-spelling deduplication control", async () => {
-    const rows = await project([
-      authored,
-      { ...authored, name: "Static sibling", contextWindow: 262144, reasoning: true },
-    ]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      provider: "arcee",
-      name: "Authored default",
-      contextWindow: 32768,
-      reasoning: false,
-    });
-  });
+        ...metadata,
+      });
+    },
+  );
   it("keeps unknown model case and separate credential providers distinct", () => {
-    expect(resolveModelCatalogIdentityKey({ provider: "custom", id: "Reader" })).not.toBe(
-      resolveModelCatalogIdentityKey({ provider: "custom", id: "reader" }),
-    );
-    expect(
-      resolveModelCatalogIdentityKey({ provider: "arcee", id: "arcee-ai/trinity-large-thinking" }),
-    ).not.toBe(
-      resolveModelCatalogIdentityKey({
-        provider: "openrouter",
-        id: "arcee-ai/trinity-large-thinking",
-      }),
-    );
+    const key = (provider: string, id: string) => resolveModelCatalogIdentityKey({ provider, id });
+    expect(key("custom", "Reader")).not.toBe(key("custom", "reader"));
+    const wireId = "arcee-ai/trinity-large-thinking";
+    expect(key("arcee", wireId)).not.toBe(key("openrouter", wireId));
   });
 });
