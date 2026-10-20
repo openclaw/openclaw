@@ -1,4 +1,3 @@
-// TTS provider registry tests cover registration and provider resolution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
@@ -27,11 +26,10 @@ vi.mock("./provider-registry.js", async (importOriginal) => ({
   listSpeechProviders: mocks.listSpeechProviders,
 }));
 
-function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlugin {
+function provider(id: string, options: Partial<SpeechProviderPlugin> = {}): SpeechProviderPlugin {
   return {
     id,
     label: id,
-    ...(aliases ? { aliases } : {}),
     isConfigured: () => true,
     synthesize: async () => ({
       audioBuffer: Buffer.from("audio"),
@@ -39,10 +37,22 @@ function createSpeechProvider(id: string, aliases?: string[]): SpeechProviderPlu
       voiceCompatible: false,
       fileExtension: ".mp3",
     }),
+    ...options,
   };
 }
 
 describe("speech provider registry", () => {
+  const select = (
+    preference: Parameters<typeof resolvePreparedTtsProvider>[0]["preference"],
+    providers: readonly SpeechProviderPlugin[],
+    configuredByProvider = new Map<string, boolean>(),
+  ) =>
+    resolvePreparedTtsProvider({
+      config: resolveTtsConfig({}),
+      preference,
+      providers,
+      configuredByProvider,
+    });
   beforeEach(() => {
     mocks.canonicalizeSpeechProviderId.mockClear();
     mocks.getSpeechProvider.mockReset();
@@ -51,10 +61,10 @@ describe("speech provider registry", () => {
 
   it("resolves deterministic fallback order and aliases from a supplied provider inventory", () => {
     const inventory = [
-      { ...createSpeechProvider("openai", ["oai"]), autoSelectOrder: 5 },
-      { ...createSpeechProvider("google"), autoSelectOrder: 1 },
-      { ...createSpeechProvider("azure"), autoSelectOrder: 1 },
-      { ...createSpeechProvider("elevenlabs"), autoSelectOrder: 3 },
+      provider("openai", { aliases: ["oai"], autoSelectOrder: 5 }),
+      provider("google", { autoSelectOrder: 1 }),
+      provider("azure", { autoSelectOrder: 1 }),
+      provider("elevenlabs", { autoSelectOrder: 3 }),
     ];
 
     expect(
@@ -67,64 +77,30 @@ describe("speech provider registry", () => {
   });
 
   it.each([
-    {
-      name: "persisted aliases",
-      preference: { provider: "oai", source: "prefs" } as const,
-      inventory: [createSpeechProvider("openai", ["oai"])],
-      expected: "openai",
-    },
-    {
-      name: "configured providers",
-      preference: { provider: "custom", source: "config" } as const,
-      inventory: [],
-      expected: "custom",
-    },
-  ])("preserves $name in prepared selection", ({ preference, inventory, expected }) => {
-    expect(
-      resolvePreparedTtsProvider({
-        config: resolveTtsConfig({}),
-        preference,
-        providers: inventory,
-        configuredByProvider: new Map(),
-      }),
-    ).toBe(expected);
+    [{ provider: "oai", source: "prefs" }, [provider("openai", { aliases: ["oai"] })], "openai"],
+    [{ provider: "custom", source: "config" }, [], "custom"],
+  ] as const)("preserves explicit selection: %j", (preference, inventory, expected) => {
+    expect(select(preference, inventory)).toBe(expected);
   });
 
   it("keeps persona selection conditional on provider availability", () => {
-    const availablePersonaProvider = createSpeechProvider("persona-provider");
+    const availablePersonaProvider = provider("persona-provider");
     mocks.getSpeechProvider.mockReturnValueOnce(availablePersonaProvider);
-    const config = resolveTtsConfig({});
     const preference = { provider: "persona-provider", source: "persona" } as const;
 
-    expect(
-      resolvePreparedTtsProvider({
-        config,
-        preference,
-        providers: [],
-        configuredByProvider: new Map(),
-      }),
-    ).toBe("persona-provider");
-    expect(
-      resolvePreparedTtsProvider({
-        config,
-        preference,
-        providers: [createSpeechProvider("fallback")],
-        configuredByProvider: new Map([["fallback", true]]),
-      }),
-    ).toBe("fallback");
+    expect(select(preference, [])).toBe("persona-provider");
+    expect(select(preference, [provider("fallback")], new Map([["fallback", true]]))).toBe(
+      "fallback",
+    );
   });
 
   it("uses prepared provider objects for configuration without registry rediscovery", async () => {
     const resolveConfig = vi.fn(() => ({}));
     const isConfigured = vi.fn(() => true);
-    const provider = {
-      ...createSpeechProvider("openai"),
-      resolveConfig,
-      isConfigured,
-    };
+    const prepared = provider("openai", { resolveConfig, isConfigured });
     const cfg = {} as OpenClawConfig;
 
-    expect(await isTtsProviderConfiguredAsync(resolveTtsConfig(cfg), provider, cfg)).toBe(true);
+    expect(await isTtsProviderConfiguredAsync(resolveTtsConfig(cfg), prepared, cfg)).toBe(true);
     expect(resolveConfig).toHaveBeenCalledOnce();
     expect(isConfigured).toHaveBeenCalledOnce();
     expect(mocks.canonicalizeSpeechProviderId).not.toHaveBeenCalled();
@@ -136,17 +112,16 @@ describe("speech provider registry", () => {
     const isConfigured = vi.fn(() => {
       throw new Error("sync availability must not run");
     });
-    const first = {
-      ...createSpeechProvider("first"),
+    const first = provider("first", {
       autoSelectOrder: 1,
       isConfigured,
       isConfiguredAsync: async () => configured,
-    };
-    const fallback = { ...createSpeechProvider("fallback"), autoSelectOrder: 2 };
+    });
+    const fallback = provider("fallback", { autoSelectOrder: 2 });
     const availableProviders = [first, fallback];
     const config = resolveTtsConfig({});
     const selectionRegistry = createSpeechProviderRegistry({
-      getProvider: (id) => availableProviders.find((provider) => provider.id === id),
+      getProvider: (id) => availableProviders.find((entry) => entry.id === id),
       listProviders: () => availableProviders,
     });
 
@@ -159,7 +134,7 @@ describe("speech provider registry", () => {
   });
 
   it("canonicalizes a voice-model alias omitted from the supplied inventory", () => {
-    const inventory = [createSpeechProvider("openai")];
+    const inventory = [provider("openai")];
     const cfg = {
       agents: { defaults: { voiceModel: { primary: "edge/edge-tts" } } },
     } as OpenClawConfig;

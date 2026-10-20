@@ -1,37 +1,10 @@
-// TTS core tests cover provider selection, synthesis, and error handling.
 import { readFileSync } from "node:fs";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage, Model, Usage } from "../llm/types.js";
-import type { SpeechModelOverridePolicy } from "./provider-types.js";
+import { createZeroUsage } from "../../packages/ai/src/usage.test-support.js";
+import type { AssistantMessage, Model } from "../llm/types.js";
 import { resolveSpeechProviderApiKey, summarizeText } from "./tts-core.js";
-import type { ResolvedTtsConfig } from "./tts-types.js";
-
-const modelOverridePolicy: SpeechModelOverridePolicy = {
-  enabled: false,
-  allowText: false,
-  allowProvider: false,
-  allowVoice: false,
-  allowModelId: false,
-  allowVoiceSettings: false,
-  allowNormalization: false,
-  allowSeed: false,
-};
-
-const usage: Usage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    total: 0,
-  },
-};
+import { resolveTtsConfig } from "./tts-settings.js";
 
 describe("TTS core", () => {
   it("keeps summarization-only LLM modules lazy", () => {
@@ -65,18 +38,7 @@ describe("TTS core", () => {
         contextWindow: 4096,
         maxTokens: 1024,
       } satisfies Model;
-      const config = {
-        auto: "off",
-        mode: "final",
-        provider: "test-provider",
-        providerSource: "config",
-        personas: {},
-        summaryModel: "test-provider/test-model",
-        modelOverrides: modelOverridePolicy,
-        providerConfigs: {},
-        maxTextLength: 10_000,
-        timeoutMs: 10_000,
-      } satisfies ResolvedTtsConfig;
+      const config = resolveTtsConfig({ tts: { summaryModel: "test-provider/test-model" } });
       const auth = {
         apiKey: "key",
         source: "test",
@@ -89,7 +51,7 @@ describe("TTS core", () => {
         provider: model.provider,
         model: model.id,
         stopReason: "stop",
-        usage,
+        usage: createZeroUsage(),
         timestamp: Date.now(),
       } satisfies AssistantMessage;
 

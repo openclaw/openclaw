@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { processCompletionsStream } from "../../packages/ai/src/transports/openai-completions-stream.js";
+import { createZeroUsage } from "../../packages/ai/src/usage.test-support.js";
 import * as globals from "../globals.js";
 import type { AssistantMessage, Model } from "../llm/types.js";
 import { summarizeText } from "./tts-core.js";
@@ -49,14 +50,7 @@ function assistant(content: AssistantMessage["content"]): AssistantMessage {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: createZeroUsage(),
     stopReason: "stop",
     timestamp: 0,
   };
@@ -100,12 +94,17 @@ function summarize() {
   });
 }
 
-function applySummaryToSpeech() {
+function applySummaryToSpeech(text = originalText) {
   return maybeApplyTtsToPayloadCore(
-    { payload: { text: originalText }, cfg, channel: "telegram", kind: "final" },
+    { payload: { text }, cfg, channel: "telegram", kind: "final" },
     persistAudio,
   );
 }
+
+const completeText = (text: string) =>
+  completion.complete.mockResolvedValue(assistant([{ type: "text", text }]));
+const expectSpoken = (text: string) =>
+  expect(synthesizeMock).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ text }));
 
 describe("TTS summary visible text", () => {
   it.each([
@@ -116,7 +115,6 @@ describe("TTS summary visible text", () => {
         { type: "text", text: "<think>Hidden reasoning" },
         { type: "text", text: "continues</think>Spoken summary." },
       ],
-      expected: "Spoken summary.",
     },
     {
       name: "tool scaffolding and model control tokens",
@@ -126,16 +124,17 @@ describe("TTS summary visible text", () => {
           text: '<tool_call>{"name":"private_tool"}</tool_call><|im_end|>Spoken summary.',
         },
       ],
-      expected: "Spoken summary.",
     },
-  ] satisfies Array<{ name: string; content: AssistantMessage["content"]; expected: string }>)(
+  ] satisfies Array<{ name: string; content: AssistantMessage["content"] }>)(
     "returns only visible summary text: $name",
-    async ({ content, expected }) => {
+    async ({ content }) => {
       completion.complete.mockResolvedValue(assistant(content));
       const result = await summarize();
-      expect(result.summary).toBe(expected);
-      expect(result.outputLength).toBe(expected.length);
-      expect(result.inputLength).toBe(originalText.length);
+      expect(result).toMatchObject({
+        summary: "Spoken summary.",
+        outputLength: 15,
+        inputLength: originalText.length,
+      });
     },
   );
 
@@ -173,13 +172,9 @@ describe("TTS summary visible text", () => {
   });
 
   it("hands the sanitized summary to synthesis while preserving the visible original reply", async () => {
-    completion.complete.mockResolvedValue(
-      assistant([{ type: "text", text: "<think>Private reasoning</think>Spoken summary." }]),
-    );
+    completeText("<think>Private reasoning</think>Spoken summary.");
     const result = await applySummaryToSpeech();
-    expect(synthesizeMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ text: "Spoken summary." }),
-    );
+    expectSpoken("Spoken summary.");
     expect(result).toMatchObject({
       text: originalText,
       spokenText: "Spoken summary.",
@@ -197,14 +192,10 @@ describe("TTS summary visible text", () => {
             throw new Error(JSON.stringify(context.messages));
           });
         } else {
-          completion.complete.mockResolvedValue(
-            assistant([{ type: "text", text: "<think>Private only</think>" }]),
-          );
+          completeText("<think>Private only</think>");
         }
         const result = await applySummaryToSpeech();
-        expect(synthesizeMock).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ text: `${originalText.slice(0, 1497)}...` }),
-        );
+        expectSpoken(`${originalText.slice(0, 1497)}...`);
         expect(result.text).toBe(originalText);
         expect(log).toHaveBeenCalledWith("TTS: summarization failed, truncating instead.");
         expect(JSON.stringify(log.mock.calls)).not.toContain("The original reply remains visible.");
@@ -218,16 +209,9 @@ describe("TTS summary visible text", () => {
   it("fits auto speech under tts.maxTextLength when it is below the preference limit", async () => {
     cfg = { ...cfg, tts: { ...cfg.tts, maxTextLength: 1000 } };
     const text = "x".repeat(1200);
-    completion.complete.mockResolvedValue(
-      assistant([{ type: "text", text: "<think>Private only</think>" }]),
-    );
-    const result = await maybeApplyTtsToPayloadCore(
-      { payload: { text }, cfg, channel: "telegram", kind: "final" },
-      persistAudio,
-    );
-    expect(synthesizeMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ text: `${text.slice(0, 997)}...` }),
-    );
+    completeText("<think>Private only</think>");
+    const result = await applySummaryToSpeech(text);
+    expectSpoken(`${text.slice(0, 997)}...`);
     expect(result).toMatchObject({ text, mediaUrl: "/tmp/synthetic-summary.ogg" });
   });
 });
