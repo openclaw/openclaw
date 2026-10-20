@@ -9,6 +9,33 @@ import { resolvePluginSetupRegistry } from "./setup-registry.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
 
+function setupManifest(
+  id: string,
+  rootDir: string,
+  source: string,
+  options: Partial<PluginManifestRegistry["plugins"][number]>,
+): PluginManifestRegistry {
+  return {
+    plugins: [
+      {
+        id,
+        rootDir,
+        source,
+        origin: "global",
+        manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+        channels: [],
+        providers: [id],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+        setup: { requiresRuntime: true, providers: [{ id }] },
+        ...options,
+      },
+    ],
+    diagnostics: [],
+  };
+}
+
 describe("bundled setup code identity", () => {
   it.each(["cjs", "mjs"])(
     "reuses bundled %s setup code while retiring each inventory's callbacks",
@@ -18,20 +45,10 @@ describe("bundled setup code identity", () => {
       process.on(event, evaluated);
       const rootDir = temp.make("bundled-setup-identity-");
       const source = path.join(rootDir, `setup-api.${extension}`);
-      const record = {
-        id: "bundled-owner",
+      const manifestRegistry = setupManifest("bundled-owner", rootDir, source, {
         origin: "bundled",
-        rootDir,
-        source,
         setupSource: source,
-        manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-        channels: [],
-        providers: ["bundled-owner"],
-        cliBackends: [],
-        skills: [],
-        hooks: [],
-        setup: { requiresRuntime: true, providers: [{ id: "bundled-owner" }] },
-      } satisfies PluginManifestRegistry["plugins"][number];
+      });
       const definition = `{
         register(api) {
           const registration = ++registrations;
@@ -45,10 +62,6 @@ describe("bundled setup code identity", () => {
         `process.emit(${JSON.stringify(event)}); let registrations = 0;
         ${extension === "mjs" ? "export default" : "module.exports ="} ${definition};`,
       );
-      const manifestRegistry: PluginManifestRegistry = {
-        plugins: [record],
-        diagnostics: [],
-      };
       const caches = Array.from({ length: 3 }, () => createPluginCache());
       try {
         let previous:
@@ -61,16 +74,16 @@ describe("bundled setup code identity", () => {
           expect(result.diagnostics).toEqual([]);
           expect(result.providers).toHaveLength(1);
           const current = result.providers[0]!.provider;
-          expect(current.resolveConfigApiKey?.({ provider: record.id, env: {} })).toBe(
+          expect(current.resolveConfigApiKey?.({ provider: "bundled-owner", env: {} })).toBe(
             String(index + 1),
           );
           if (index > 0) {
             await retirePluginCache(caches[index - 1]!);
             expect(previous).toBeDefined();
-            expect(() => previous!.resolveConfigApiKey?.({ provider: record.id, env: {} })).toThrow(
-              /reloaded|disabled|retir/,
-            );
-            expect(current.resolveConfigApiKey?.({ provider: record.id, env: {} })).toBe(
+            expect(() =>
+              previous!.resolveConfigApiKey?.({ provider: "bundled-owner", env: {} }),
+            ).toThrow(/reloaded|disabled|retir/);
+            expect(current.resolveConfigApiKey?.({ provider: "bundled-owner", env: {} })).toBe(
               String(index + 1),
             );
           }
@@ -96,18 +109,8 @@ describe("installed setup artifacts", () => {
   }>([
     { artifactDir: ".", declared: true, extension: "cjs" },
     { artifactDir: "dist", declared: false, extension: "cjs" },
-    {
-      artifactDir: ".",
-      declared: false,
-      competingDist: "setup-api.ts",
-      extension: "mjs",
-    },
-    {
-      artifactDir: ".",
-      declared: false,
-      competingDist: "setup-api.js",
-      extension: "ts",
-    },
+    { artifactDir: ".", declared: false, competingDist: "setup-api.ts", extension: "mjs" },
+    { artifactDir: ".", declared: false, competingDist: "setup-api.js", extension: "ts" },
   ])(
     "reloads installed $extension $artifactDir setup artifacts (declared: $declared, dist conflict: $competingDist)",
     ({ artifactDir, declared, competingDist, extension }) => {
@@ -133,25 +136,12 @@ describe("installed setup artifacts", () => {
           "utf8",
         );
       };
-      const manifestRegistry = {
-        plugins: [
-          {
-            id: "setup-lifecycle",
-            rootDir,
-            source: setupSource,
-            ...(declared ? { setupSource } : {}),
-            manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-            origin: "global",
-            channels: [],
-            providers: ["setup-lifecycle"],
-            cliBackends: [],
-            skills: [],
-            hooks: [],
-            setup: { requiresRuntime: true, providers: [{ id: "setup-lifecycle" }] },
-          },
-        ],
-        diagnostics: [],
-      } satisfies PluginManifestRegistry;
+      const manifestRegistry = setupManifest(
+        "setup-lifecycle",
+        rootDir,
+        setupSource,
+        declared ? { setupSource } : {},
+      );
 
       writeSetupArtifact("before");
       expect(resolvePluginSetupRegistry({ manifestRegistry }).providers[0]?.provider.label).toBe(

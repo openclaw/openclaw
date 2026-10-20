@@ -1,4 +1,3 @@
-// Verifies plugin source display formatting.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withPathResolutionEnv } from "../test-utils/env.js";
@@ -60,29 +59,15 @@ describe("formatPluginSourceForTable", () => {
   );
 
   it("middle-truncates long out-of-root source paths for table rows", () => {
-    const longSource = path.join(
-      path.sep,
-      "Users",
-      "x",
-      "some",
-      "deeply",
-      "nested",
-      "project",
-      "checkout",
-      "extensions",
+    const source = path.join(
+      PLUGIN_SOURCE_ROOTS.workspace,
       "very-long-plugin-directory-name",
       "index.ts",
     );
-    const out = formatPluginSourceForTable(
-      { origin: "config", source: longSource },
-      {
-        global: PLUGIN_SOURCE_ROOTS.global,
-      },
-    );
+    const out = formatPluginSourceForTable({ origin: "config", source }, PLUGIN_SOURCE_ROOTS);
     expect(out.rootKey).toBeUndefined();
     expect(out.value.length).toBeLessThanOrEqual(48);
     expect(out.value).toContain("...");
-    // Both path ends stay visible so rows remain identifiable.
     expect(out.value.startsWith(path.join(path.sep, "Users", "x"))).toBe(true);
     expect(out.value.endsWith("index.ts")).toBe(true);
   });
@@ -92,7 +77,7 @@ describe("formatPluginSourceForTable", () => {
     const rawEnv = {
       OPENCLAW_BUNDLED_PLUGINS_DIR: "~/bundled",
       OPENCLAW_STATE_DIR: "~/state",
-    } as NodeJS.ProcessEnv;
+    };
     const stock = withPathResolutionEnv(homeDir, rawEnv, (env) => resolveBundledPluginsDir(env));
     if (!stock) {
       throw new Error("expected bundled plugin source root");

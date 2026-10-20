@@ -9,6 +9,10 @@ import {
 import { createEmptyPluginRegistry } from "./registry.js";
 import type { PluginServiceSchedulerV1 } from "./service-scheduler.types.js";
 import { getPluginServiceCleanupSettlement, startPluginServices } from "./services.js";
+import { createServiceRegistration } from "./services.test-support.js";
+
+const registration = (service: Parameters<typeof createServiceRegistration>[0]) =>
+  createServiceRegistration(service, { pluginId: service.id, source: "synthetic" });
 
 it("starts service stop before joining scheduled work and preserves sibling scheduling", async ({
   signal,
@@ -33,55 +37,43 @@ it("starts service stop before joining scheduled work and preserves sibling sche
   let siblingTicks = 0;
   const registry = createEmptyPluginRegistry();
   registry.services.push(
-    {
-      pluginId: "first",
+    registration({
+      apiVersion: 2,
       id: "first",
-      source: "synthetic",
-      origin: "workspace",
-      service: {
-        apiVersion: 2,
-        id: "first",
-        start(context) {
-          admitted.resolve(context.scheduler);
-          context.scheduler.scope().schedule({
-            id: "tick",
-            delayMs: 1,
-            everyMs: 1,
-            run: () => {
-              void trackAsyncWork(async () => {
-                entered.resolve();
-                await stopCalled.promise;
-                await physicalWork.promise;
-              });
-            },
-          });
-        },
-        async stop() {
-          stopCalled.resolve();
-          await stopFlush.promise;
-        },
+      start(context) {
+        admitted.resolve(context.scheduler);
+        context.scheduler.scope().schedule({
+          id: "tick",
+          delayMs: 1,
+          everyMs: 1,
+          run: () => {
+            void trackAsyncWork(async () => {
+              entered.resolve();
+              await stopCalled.promise;
+              await physicalWork.promise;
+            });
+          },
+        });
       },
-    },
-    {
-      pluginId: "second",
+      async stop() {
+        stopCalled.resolve();
+        await stopFlush.promise;
+      },
+    }),
+    registration({
+      apiVersion: 2,
       id: "second",
-      source: "synthetic",
-      origin: "workspace",
-      service: {
-        apiVersion: 2,
-        id: "second",
-        start(context) {
-          context.scheduler.schedule({
-            id: "tick",
-            delayMs: 1,
-            everyMs: 1,
-            run: () => {
-              siblingTicks += 1;
-            },
-          });
-        },
+      start(context) {
+        context.scheduler.schedule({
+          id: "tick",
+          delayMs: 1,
+          everyMs: 1,
+          run: () => {
+            siblingTicks += 1;
+          },
+        });
       },
-    },
+    }),
   );
   const services = await startPluginServices({ registry, config: {}, scheduler });
   const retained = await admitted.promise;
@@ -126,12 +118,8 @@ it.for([false, true])(
     let completed = false;
     let stopCalls = 0;
     const registry = createEmptyPluginRegistry();
-    registry.services.push({
-      pluginId: "tracked-child",
-      id: "tracked-child",
-      source: "synthetic",
-      origin: "workspace",
-      service: {
+    registry.services.push(
+      registration({
         apiVersion: 2,
         id: "tracked-child",
         start({ scheduler }) {
@@ -153,8 +141,8 @@ it.for([false, true])(
             throw failure;
           }
         },
-      },
-    });
+      }),
+    );
     const services = await startPluginServices({
       registry,
       config: {},
