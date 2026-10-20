@@ -85,15 +85,15 @@ it("keeps callback values and existing accessor ownership when selecting all fie
 
 it("publishes error changes without letting recovery clear another writer's identical error", () => {
   const frames: Array<{ lastError: string | null; chatError: string | null }> = [];
-  const { state, dispose } = createRoot((dispose) => {
-    const state = createTestPageState(makeChatHost());
+  const { state, dispose } = createRoot((stop) => {
+    const createdState = createTestPageState(makeChatHost());
     createEffect(
-      () => ({ lastError: state.lastError, chatError: state.chatError }),
+      () => ({ lastError: createdState.lastError, chatError: createdState.chatError }),
       (value) => {
         frames.push(value);
       },
     );
-    return { state, dispose };
+    return { state: createdState, dispose: stop };
   });
   try {
     flush();

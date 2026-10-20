@@ -106,15 +106,15 @@ afterEach(() => {
 describe("server-owned pending input display", () => {
   it("publishes custody changes through the run projection while retaining the pending view", () => {
     const rendered: (readonly string[])[] = [];
-    const { host, dispose } = createRoot((dispose) => {
-      const host = createTestPageState(makeChatHost(pendingScope));
+    const { host, dispose } = createRoot((stop) => {
+      const createdHost = createTestPageState(makeChatHost(pendingScope));
       createEffect(
-        () => getChatPendingInputs(host)?.page.items.map((item) => item.id) ?? [],
+        () => getChatPendingInputs(createdHost)?.page.items.map((item) => item.id) ?? [],
         (items) => {
           rendered.push(items);
         },
       );
-      return { host, dispose };
+      return { host: createdHost, dispose: stop };
     });
     onTestFinished(dispose);
     flush();

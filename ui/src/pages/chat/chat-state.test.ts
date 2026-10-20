@@ -2194,20 +2194,20 @@ describe("chat state render lifecycle", () => {
     });
     vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => frames.delete(id));
     const rendered: Array<{ stream: string | null; run: string | null }> = [];
-    const { state, dispose } = createRoot((dispose) => {
-      const state = createPageState(
+    const { state, dispose } = createRoot((stop) => {
+      const createdState = createPageState(
         createChatPageStateContext(),
         { afterCommit: () => () => {} },
         { dispatchEvent: () => true },
       );
-      state.chatRunId = "run";
+      createdState.chatRunId = "run";
       createEffect(
-        () => ({ stream: state.chatStream, run: state.chatRunId }),
+        () => ({ stream: createdState.chatStream, run: createdState.chatRunId }),
         (value) => {
           rendered.push(value);
         },
       );
-      return { state, dispose };
+      return { state: createdState, dispose: stop };
     });
     onTestFinished(dispose);
     flush();
