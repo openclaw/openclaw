@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import type { SessionParticipantIdentity } from "../../config/sessions/session-participant-identity.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import {
@@ -122,32 +123,28 @@ it.each([
       recordAcceptedSessionParticipantInput({ ...context }, target);
       recordAcceptedSessionParticipantInput(context, target);
       if (scenario === "qualified" || scenario === "mixed") {
-        expect(recordParticipant).toHaveBeenCalledTimes(sources.length);
-        expect(recordParticipant).toHaveBeenNthCalledWith(1, {
-          ...target,
-          identity: {
+        const identities: SessionParticipantIdentity[] = [
+          {
             type: "remote",
             pluginId: "test",
             domain: "workspace-one",
             idKind: "user-id",
             id: "profile-collision",
           },
-          promptedAt: expect.any(Number),
-        });
-        expect(recordParticipant.mock.calls[0]?.[0].promptedAt).toBeGreaterThanOrEqual(startedAt);
+        ];
         if (scenario === "mixed") {
-          expect(recordParticipant).toHaveBeenNthCalledWith(2, {
-            ...target,
-            identity: {
-              type: "observation",
-              pluginId: "test",
-              accountId: "local",
-              senderKind: "unknown",
-              id: "unknown",
-            },
-            promptedAt: expect.any(Number),
+          identities.push({
+            type: "observation",
+            pluginId: "test",
+            accountId: "local",
+            senderKind: "unknown",
+            id: "unknown",
           });
         }
+        expect(recordParticipant.mock.calls).toEqual(
+          identities.map((identity) => [{ ...target, identity, promptedAt: expect.any(Number) }]),
+        );
+        expect(recordParticipant.mock.calls[0]?.[0].promptedAt).toBeGreaterThanOrEqual(startedAt);
       } else {
         expect(recordParticipant).not.toHaveBeenCalled();
       }

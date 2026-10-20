@@ -31,7 +31,10 @@ import {
 } from "../inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
 import type { ChannelPlugin } from "../plugins/types.public.js";
-import { createCommandOwnerTestGateway } from "./operator-authority.test-support.js";
+import {
+  createCommandOwnerTestGateway,
+  createCommandOwnerTestRoles,
+} from "./operator-authority.test-support.js";
 import { createHostChannelIngressRuntime } from "./runtime.js";
 
 type TelegramNativeCommandTestDriver = {
@@ -95,19 +98,7 @@ async function createFixture(asserted: boolean, state: OpenClawTestState) {
   const cfg: OpenClawConfig = {
     commands: { ownerAllowFrom: ["telegram:999999"] },
     channels: { telegram: { dmPolicy: "pairing", allowFrom: [] } },
-    gateway: {
-      roles: {
-        default: "member",
-        definitions: {
-          admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
-          member: {
-            scopes: ["operator.read", "operator.write"],
-            agents: "*",
-            sessions: { others: "view" },
-          },
-        },
-      },
-    },
+    gateway: { roles: createCommandOwnerTestRoles() },
   };
   const admins = [100, 200].map((senderId) => {
     const profile = ensureProfileForEmail(`admin-${senderId}@example.test`);

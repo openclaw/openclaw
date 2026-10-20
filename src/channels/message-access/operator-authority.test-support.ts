@@ -28,6 +28,18 @@ export function createCommandOwnerTestGateway(cfg: OpenClawConfig) {
   return { getRuntimeConfig: () => cfg } as GatewayRequestContext;
 }
 
+export const createCommandOwnerTestRoles = (): NonNullable<OpenClawConfig["gateway"]>["roles"] => ({
+  default: "member",
+  definitions: {
+    admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
+    member: {
+      scopes: ["operator.read", "operator.write"],
+      agents: "*",
+      sessions: { others: "view" },
+    },
+  },
+});
+
 export async function withAdminIngress(
   run: (fixture: Awaited<ReturnType<typeof createAdminIngressFixture>>) => Promise<void>,
   authority: "role" | "identity-grant" = "role",
@@ -74,19 +86,7 @@ export async function createAdminIngressFixture(
   const cfg: OpenClawConfig = {
     channels: { [channelId]: { accounts: { team: { allowFrom: ["*"] } } } },
     commands: { ownerAllowFrom: ["whatsapp:15550000000"] },
-    gateway: {
-      roles: {
-        default: "member",
-        definitions: {
-          admin: { scopes: ["operator.admin"], agents: "*", sessions: { others: "write" } },
-          member: {
-            scopes: ["operator.read", "operator.write"],
-            agents: "*",
-            sessions: { others: "view" },
-          },
-        },
-      },
-    },
+    gateway: { roles: createCommandOwnerTestRoles() },
   };
   if (authority === "identity-grant") {
     cfg.gateway = {
@@ -127,6 +127,10 @@ export async function createAdminIngressFixture(
     live = false;
   };
   const ingressRuntime = createHostChannelIngressRuntime(owner);
+  const buildContext = createHostChannelInboundEventContextBuilder(
+    buildChannelInboundEventContext,
+    owner,
+  );
   const key = `agent:main:${channelId}:channel:maintainers`;
   const context = async (senderId: string, verified = true, accountId = "team") => {
     const ingress = await ingressRuntime.resolveStable({
@@ -149,10 +153,7 @@ export async function createAdminIngressFixture(
       allowFrom: ["*"],
       useDefaultPairingStore: false,
     });
-    return await createHostChannelInboundEventContextBuilder(
-      buildChannelInboundEventContext,
-      owner,
-    )({
+    return await buildContext({
       channel: channelId,
       accountId,
       messageId: senderId,
@@ -176,8 +177,6 @@ export async function createAdminIngressFixture(
       gateway = replacement ?? createCommandOwnerTestGateway(cfg);
     },
     unregister,
-    retire: () => {
-      live = false;
-    },
+    retire: unregister,
   };
 }

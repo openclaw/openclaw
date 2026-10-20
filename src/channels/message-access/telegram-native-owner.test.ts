@@ -1,25 +1,16 @@
 import { expect, it, vi } from "vitest";
-import type {
-  ModelsAuthLoginFlowOptions,
-  ModelsAuthLoginFlowResult,
-} from "../../commands/models/auth.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { withTelegramNativeOwners } from "./telegram-native-owner.test-support.js";
 
 it.each([
-  { name: "enabled", groupPolicy: "open", topicPolicy: undefined, allowed: true },
-  { name: "group disabled", groupPolicy: "disabled", topicPolicy: undefined, allowed: false },
-  { name: "topic disabled", groupPolicy: "open", topicPolicy: "disabled", allowed: false },
-  {
-    name: "topic overrides disabled group",
-    groupPolicy: "disabled",
-    topicPolicy: "open",
-    allowed: true,
-  },
+  ["enabled", "open", undefined, true],
+  ["group disabled", "disabled", undefined, false],
+  ["topic disabled", "open", "disabled", false],
+  ["topic overrides disabled group", "disabled", "open", true],
 ] as const)(
-  "preserves real topic routing and room admission for linked native owners: $name",
-  async ({ groupPolicy, topicPolicy, allowed }) => {
+  "preserves real topic routing and room admission for linked native owners: %s",
+  async (_name, groupPolicy, topicPolicy, allowed) => {
     await withTelegramNativeOwners(async ({ cfg, invokeTopic, handler, driver }) => {
       cfg.channels!.telegram!.groups = {
         "-10012345": {
@@ -114,14 +105,13 @@ it("rejects stale native plugin owner authority after demotion", async () => {
       finish.resolve();
       await pending;
       expect(effects).toBe(0);
-      expect(driver.deliveries()).toHaveLength(1);
-      expect(driver.deliveries()).toContainEqual(
+      expect(driver.deliveries()).toEqual([
         expect.objectContaining({
           replies: [
             expect.objectContaining({ text: "⚠️ Command failed. Please try again later." }),
           ],
         }),
-      );
+      ]);
     } finally {
       finish.resolve();
       await pending;
@@ -137,20 +127,20 @@ it.each([false, true])(
       const finish = createDeferredCore();
       const notified = createDeferredCore();
       let writes = 0;
-      const loginFlow = vi.fn<
-        (options: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>
-      >(async (options) => {
-        await options.prompter.deviceCode?.({ title: "Sign in", code: "OWNER-TEST-CODE" });
-        await finish.promise;
-        options.assertCurrent?.();
-        writes += 1;
-        return {
-          providerId: "openai",
-          methodId: "device-code",
-          authRefresh: "refreshed",
-          profiles: [],
-        };
-      });
+      const loginFlow = vi.fn<Parameters<typeof driver.configureLogin>[0]["run"]>(
+        async (options) => {
+          await options.prompter.deviceCode?.({ title: "Sign in", code: "OWNER-TEST-CODE" });
+          await finish.promise;
+          options.assertCurrent?.();
+          writes += 1;
+          return {
+            providerId: "openai",
+            methodId: "device-code",
+            authRefresh: "refreshed",
+            profiles: [],
+          };
+        },
+      );
       driver.configureLogin({
         run: loginFlow,
         onResult: () => notified.resolve(),

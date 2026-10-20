@@ -12,6 +12,23 @@ import {
 import { createHostChannelIngressRuntime } from "./runtime.js";
 
 const parentKey = "agent:main:test:group:thread";
+const childClaim = {
+  sessionKey: "agent:main:dashboard:child",
+  entry: { sessionId: "child", updatedAt: 1 },
+  parentSessionKey: parentKey,
+  parent: { sessionId: "parent", updatedAt: 1 },
+  isNew: true,
+};
+const prepareAdmission = (sourceContext: object, runId = "publication-admission") =>
+  prepareChannelRunAdmission({
+    cfg: {},
+    runId,
+    agentId: "main",
+    ingressKind: "channel",
+    boundary: "publication-test",
+    sourceContext,
+  });
+
 async function fixture(kind = "public") {
   let active = true;
   const gateway = { getRuntimeConfig: () => ({}) } as GatewayRequestContext;
@@ -30,10 +47,10 @@ async function fixture(kind = "public") {
     dmPolicy: "disabled" as const,
     groupPolicy: "open" as const,
     useDefaultPairingStore: false,
-    ...(kind === "absent"
-      ? {}
-      : {
-          childSessionPublication: {
+    childSessionPublication:
+      kind === "absent"
+        ? undefined
+        : {
             audience: "public" as const,
             assertCurrent: () => {
               if (!active) {
@@ -41,7 +58,6 @@ async function fixture(kind = "public") {
               }
             },
           },
-        }),
   };
   const ingress = await createHostChannelIngressRuntime(owner).resolveStable(input);
   const context = await createHostChannelInboundEventContextBuilder(
@@ -71,7 +87,6 @@ async function fixture(kind = "public") {
     }
   });
   return {
-    run,
     context,
     publication: readChildSessionPublication(run),
     close: () => {
@@ -97,14 +112,7 @@ describe("trusted ingress child publication", () => {
       },
       prepare,
     );
-    const admission = prepareChannelRunAdmission({
-      cfg: {},
-      runId: "renewed-publication",
-      agentId: "main",
-      ingressKind: "channel",
-      boundary: "publication-test",
-      sourceContext: context,
-    });
+    const admission = prepareAdmission(context, "renewed-publication");
     try {
       const admitted = await admission.admit("embedded");
       const publication = readChildSessionPublication(admitted.operationalRunInstance);
@@ -122,14 +130,7 @@ describe("trusted ingress child publication", () => {
   it("binds through actual channel-run admission and rejects use after it closes", async () => {
     const context = {};
     bindChildSessionPublication(context, parentKey, () => {});
-    const preparation = prepareChannelRunAdmission({
-      cfg: {},
-      runId: "publication-admission",
-      agentId: "main",
-      ingressKind: "channel",
-      boundary: "publication-test",
-      sourceContext: context,
-    });
+    const preparation = prepareAdmission(context);
     try {
       const admitted = await preparation.admit("embedded");
       const publication = readChildSessionPublication(admitted.operationalRunInstance);
@@ -154,17 +155,10 @@ describe("trusted ingress child publication", () => {
     const later = { runId: "later", instanceId: "later" };
     admitChildSessionPublication(f.context, later, () => {});
     expect(readChildSessionPublication(later)).toBeUndefined();
-    const claim = {
-      sessionKey: "agent:main:dashboard:child",
-      entry: { sessionId: "child", updatedAt: 1 },
-      parentSessionKey: parentKey,
-      parent: { sessionId: "parent", updatedAt: 1 },
-      isNew: true,
-    };
-    expect(() => f.publication!.claim(claim)).not.toThrow();
+    expect(() => f.publication!.claim(childClaim)).not.toThrow();
     expect(() =>
       f.publication!.claim({
-        ...claim,
+        ...childClaim,
         sessionKey: "agent:main:dashboard:second",
         entry: { sessionId: "second", updatedAt: 1 },
       }),
@@ -178,15 +172,13 @@ describe("trusted ingress child publication", () => {
       const f = await fixture();
       expect(() =>
         f.publication!.claim({
-          sessionKey: "agent:main:dashboard:child",
+          ...childClaim,
           entry: {
-            sessionId: "child",
-            updatedAt: 1,
+            ...childClaim.entry,
             ...(kind === "private" ? { visibility: "draft" as const } : {}),
             incognito: kind === "incognito" ? true : undefined,
           },
           parentSessionKey: kind === "other-parent" ? "agent:main:other" : parentKey,
-          parent: { sessionId: "parent", updatedAt: 1 },
           isNew: kind !== "existing",
           fork: kind === "fork",
         }),
