@@ -11,8 +11,8 @@ import {
 import { recordAdmittedModelRoutingDecision } from "../agents/model-routing-decision.js";
 import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { runAgentExecWithMock } from "./agent-exec.test-helpers.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -45,17 +45,24 @@ describe("agent local audit writer", () => {
         occurredAt: admittedAt + 1,
       });
     };
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const recordModelRouting = (
+      details: { credentialProfileId?: string; occurredAt?: number } = {},
+    ) =>
+      recordAdmittedModelRoutingDecision({
+        admittedRunContext,
+        requestedProvider: "openai",
+        requestedModel: "gpt-5.6",
+        selectedProvider: "openai",
+        selectedModel: "gpt-5.6-sol",
+        selectionMode: "automatic",
+        ...details,
+      });
     setRuntimeConfigSnapshot({ logging: { audit: { executionIdentity: true } } });
     try {
       const result = await runAgentExecWithMock(
         "inspect",
         { stateDir: root },
-        runtime,
+        createTestRuntime(),
         vi.fn(async () => {
           modelAdmission = prepareAgentRunAdmission({
             cfg: { logging: { audit: { executionIdentity: true } } },
@@ -72,13 +79,7 @@ describe("agent local audit writer", () => {
           });
           admittedRunContext = await modelAdmission.admit("embedded", "agent-exec-runtime");
           expect(
-            recordAdmittedModelRoutingDecision({
-              admittedRunContext,
-              requestedProvider: "openai",
-              requestedModel: "gpt-5.6",
-              selectedProvider: "openai",
-              selectedModel: "gpt-5.6-sol",
-              selectionMode: "automatic",
+            recordModelRouting({
               credentialProfileId: "openai:direct-local-profile",
               occurredAt: admittedAt + 1,
             }),
@@ -100,48 +101,35 @@ describe("agent local audit writer", () => {
 
       expect(result.exitCode).toBe(0);
       expect(recordRuntimeReceipt()).toBe(false);
-      expect(
-        recordAdmittedModelRoutingDecision({
-          admittedRunContext,
-          requestedProvider: "openai",
-          requestedModel: "gpt-5.6",
-          selectedProvider: "openai",
-          selectedModel: "gpt-5.6-sol",
-          selectionMode: "automatic",
-        }),
-      ).toBe(false);
+      expect(recordModelRouting()).toBe(false);
       const token = requireToken();
       const database = new DatabaseSync(path.join(root, "state", "openclaw.sqlite"), {
         readOnly: true,
       });
       try {
+        const identity = {
+          contextId: token.contextId,
+          executionId: token.executionId,
+          runId: token.runId,
+        };
         const context = database
           .prepare("SELECT context_json FROM execution_identity_contexts WHERE execution_id = ?")
-          .get(token.executionId) as { context_json: string };
-        expect(JSON.parse(context.context_json)).toMatchObject({
-          contextId: token.contextId,
-          executionId: token.executionId,
-          runId: token.runId,
+          .get(token.executionId)!;
+        expect(JSON.parse(String(context.context_json))).toMatchObject({
+          ...identity,
           ingress: { kind: "local-cli", state: "present" },
         });
-        const receipt = database
-          .prepare(
-            "SELECT receipt_json FROM execution_decision_facts WHERE execution_id = ? AND action_family = 'plugin'",
-          )
-          .get(token.executionId) as { receipt_json: string };
-        expect(JSON.parse(receipt.receipt_json)).toMatchObject({
-          contextId: token.contextId,
-          executionId: token.executionId,
-          runId: token.runId,
+        const receiptSql =
+          "SELECT receipt_json FROM execution_decision_facts WHERE execution_id = ? AND action_family = ?";
+        const readReceipt = (family: string) =>
+          String(database.prepare(receiptSql).get(token.executionId, family)!.receipt_json);
+        expect(JSON.parse(readReceipt("plugin"))).toMatchObject({
+          ...identity,
           action: { family: "plugin", operation: "runtime" },
           decision: { outcome: "allowed", reasonCode: "agent_exec_runtime_recorded" },
         });
-        const modelReceipt = database
-          .prepare(
-            "SELECT receipt_json FROM execution_decision_facts WHERE execution_id = ? AND action_family = 'model-routing'",
-          )
-          .get(token.executionId) as { receipt_json: string };
-        expect(JSON.parse(modelReceipt.receipt_json)).toMatchObject({
+        const modelReceipt = readReceipt("model-routing");
+        expect(JSON.parse(modelReceipt)).toMatchObject({
           action: {
             family: "model-routing",
             operation: "automatic-selection",
@@ -149,7 +137,7 @@ describe("agent local audit writer", () => {
             targetRef: expect.stringMatching(/^hmac-sha256:v1:/u),
           },
         });
-        expect(modelReceipt.receipt_json).not.toContain("openai:direct-local-profile");
+        expect(modelReceipt).not.toContain("openai:direct-local-profile");
       } finally {
         database.close();
       }

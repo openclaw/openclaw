@@ -54,17 +54,32 @@ async function fixture(bootstrap = true) {
 
 async function receive(params: Record<string, unknown>, authority = true) {
   const respond = vi.fn<RespondFn>();
-  const config = {};
   await backupHandlers["backup.recordOutcome"]!({
     req: { type: "req", id: "outcome", method: "backup.recordOutcome" },
     params,
-    context: createDirectChatContext({ getRuntimeConfig: () => config }),
+    context: createDirectChatContext({ getRuntimeConfig: () => ({}) }),
     client: null,
     isWebchatConnect: () => false,
     hasCurrentClientAuthority: () => authority,
     respond,
   });
   return respond;
+}
+
+async function receiveDispatch(options: CallGatewayOptions, authority = true) {
+  await options.prepareDispatchCurrent?.();
+  options.assertDispatchCurrent?.();
+  return receive(options.params as Record<string, unknown>, authority);
+}
+
+function expectOwnerChanged(response: Awaited<ReturnType<typeof receive>>) {
+  expect(response).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
+    }),
+  );
 }
 
 describe("backup outcome ownership", () => {
@@ -93,9 +108,7 @@ describe("backup outcome ownership", () => {
       transport.call.mockImplementation(async (options: CallGatewayOptions) => {
         expect(options.method).toBe("backup.recordOutcome");
         expect(options.params).toMatchObject({ expectedOwnerId: owner.ownerId });
-        await options.prepareDispatchCurrent?.();
-        options.assertDispatchCurrent?.();
-        const response = await receive(options.params as Record<string, unknown>);
+        const response = await receiveDispatch(options);
         expect(response).toHaveBeenCalledWith(true, { recorded: true }, undefined);
         if (loseReply) {
           throw new Error("reply lost after commit");
@@ -105,10 +118,9 @@ describe("backup outcome ownership", () => {
       const runtime = createTestRuntime();
       await backupRecordCommand(runtime, { status: "ok", target: "host-restic", bytes: 42 });
       expect(transport.call).toHaveBeenCalledTimes(1);
-      expect(await readBackupRuns(process.env)).toMatchObject([
-        { target: "host-restic", status: "ok", bytes: 42 },
+      expect(await readBackupRuns(process.env)).toEqual([
+        expect.objectContaining({ target: "host-restic", status: "ok", bytes: 42 }),
       ]);
-      expect(await readBackupRuns(process.env)).toHaveLength(1);
       if (loseReply) {
         expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("No local fallback"));
       } else {
@@ -126,13 +138,7 @@ describe("backup outcome ownership", () => {
       [{ expectedOwnerId: "replaced-owner", outcome }, true],
       [{ expectedOwnerId, outcome }, false],
     ] as const) {
-      expect(await receive(params, authority)).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
-        }),
-      );
+      expectOwnerChanged(await receive(params, authority));
     }
     expect(
       await receive({ expectedOwnerId, outcome: { ...outcome, env: {} } }),
@@ -152,16 +158,7 @@ describe("backup outcome ownership", () => {
     const before = await fs.readFile(databasePath);
     vi.spyOn(stateOwner, "captureGatewayStateOwner").mockReturnValueOnce(undefined);
     transport.call.mockImplementation(async (options: CallGatewayOptions) => {
-      await options.prepareDispatchCurrent?.();
-      options.assertDispatchCurrent?.();
-      const response = await receive(options.params as Record<string, unknown>, false);
-      expect(response).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
-        }),
-      );
+      expectOwnerChanged(await receiveDispatch(options, false));
       throw Object.assign(new Error("Owner refused the outcome"), {
         name: "GatewayClientRequestError",
         gatewayCode: "INVALID_REQUEST",

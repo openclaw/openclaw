@@ -1,4 +1,3 @@
-// Channels status error-surface tests cover Signal runtime errors in channel status output.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectStatusIssuesFromLastError } from "../plugin-sdk/status-helpers.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -15,6 +14,13 @@ const signalPlugin = {
   },
 };
 
+function accountStatus(channel: string, label: string, account: Record<string, unknown>) {
+  return formatGatewayChannelsStatusLines({
+    channelLabels: { [channel]: label },
+    channelAccounts: { [channel]: [account] },
+  });
+}
+
 describe("channels command", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -30,25 +36,16 @@ describe("channels command", () => {
   });
 
   it("surfaces Signal runtime errors in channels status output", () => {
-    const lines = formatGatewayChannelsStatusLines({
-      channelLabels: {
-        signal: "Signal",
-      },
-      channelAccounts: {
-        signal: [
-          {
-            accountId: "default",
-            enabled: true,
-            configured: true,
-            running: false,
-            lastError: "signal-cli unreachable",
-          },
-        ],
-      },
-    });
-    expect(lines.join("\n")).toMatch(/Warnings:/);
-    expect(lines.join("\n")).toMatch(/signal/i);
-    expect(lines.join("\n")).toMatch(/Channel error/i);
+    const output = accountStatus("signal", "Signal", {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: false,
+      lastError: "signal-cli unreachable",
+    }).join("\n");
+    expect(output).toMatch(/Warnings:/);
+    expect(output).toMatch(/signal/i);
+    expect(output).toMatch(/Channel error/i);
   });
 
   it("surfaces degraded gateway event-loop health in channels status output", () => {
@@ -104,40 +101,23 @@ describe("channels command", () => {
   });
 
   it("surfaces transport liveness timestamps in channels status output", () => {
-    const lines = formatGatewayChannelsStatusLines({
-      channelLabels: {
-        signal: "Signal",
-      },
-      channelAccounts: {
-        signal: [
-          {
-            accountId: "default",
-            enabled: true,
-            configured: true,
-            running: true,
-            connected: true,
-            lastTransportActivityAt: now - 2 * 60_000,
-          },
-        ],
-      },
-    });
-
-    expect(lines.join("\n")).toContain("transport:");
+    const output = accountStatus("signal", "Signal", {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      running: true,
+      connected: true,
+      lastTransportActivityAt: now - 2 * 60_000,
+    }).join("\n");
+    expect(output).toContain("transport:");
   });
 
   it("formats phone allowlists without interpreting arbitrary account names", () => {
-    const lines = formatGatewayChannelsStatusLines({
-      channelLabels: { signal: "Signal" },
-      channelAccounts: {
-        signal: [
-          {
-            accountId: "work",
-            name: "+12133734253",
-            configured: true,
-            allowFrom: ["+442079460018", "uuid:123e4567-e89b-12d3-a456-426614174000"],
-          },
-        ],
-      },
+    const lines = accountStatus("signal", "Signal", {
+      accountId: "work",
+      name: "+12133734253",
+      configured: true,
+      allowFrom: ["+442079460018", "uuid:123e4567-e89b-12d3-a456-426614174000"],
     });
 
     expect(lines).toContain(
@@ -145,50 +125,31 @@ describe("channels command", () => {
     );
   });
   it("includes Telegram bot username from probe data", () => {
-    const joined = formatGatewayChannelsStatusLines({
-      channelLabels: { telegram: "Telegram" },
-      channelAccounts: {
-        telegram: [
-          {
-            accountId: "default",
-            enabled: true,
-            configured: true,
-            probe: { ok: true, bot: { username: "openclaw_bot" } },
-          },
-        ],
-      },
+    const joined = accountStatus("telegram", "Telegram", {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      probe: { ok: true, bot: { username: "openclaw_bot" } },
     });
     expect(joined.join("\n")).toMatch(/bot:@openclaw_bot/);
   });
   it("surfaces WhatsApp auth/runtime hints when unlinked or disconnected", () => {
-    const unlinked = formatGatewayChannelsStatusLines({
-      channelLabels: {
-        whatsapp: "WhatsApp",
-      },
-      channelAccounts: {
-        whatsapp: [{ accountId: "default", enabled: true, linked: false }],
-      },
+    const unlinked = accountStatus("whatsapp", "WhatsApp", {
+      accountId: "default",
+      enabled: true,
+      linked: false,
     });
     expect(unlinked.join("\n")).toMatch(/WhatsApp/i);
     expect(unlinked.join("\n")).toMatch(/Not linked/i);
 
-    const disconnected = formatGatewayChannelsStatusLines({
-      channelLabels: {
-        whatsapp: "WhatsApp",
-      },
-      channelAccounts: {
-        whatsapp: [
-          {
-            accountId: "default",
-            enabled: true,
-            linked: true,
-            running: true,
-            connected: false,
-            reconnectAttempts: 5,
-            lastError: "connection closed",
-          },
-        ],
-      },
+    const disconnected = accountStatus("whatsapp", "WhatsApp", {
+      accountId: "default",
+      enabled: true,
+      linked: true,
+      running: true,
+      connected: false,
+      reconnectAttempts: 5,
+      lastError: "connection closed",
     });
     expect(disconnected.join("\n")).toMatch(/disconnected/i);
   });

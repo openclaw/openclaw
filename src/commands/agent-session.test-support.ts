@@ -7,14 +7,11 @@ import {
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import { withTempHomeCore } from "../plugin-sdk/test-helpers/temp-home.js";
 
 export async function withAgentCommandTestHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  return withTempHomeCore(fn, {
-    prefix: "openclaw-agent-",
-  });
+  return withTempHomeCore(fn, { prefix: "openclaw-agent-" });
 }
 
 export function createDefaultAgentResult(params?: {
@@ -70,34 +67,26 @@ export function expectOwnedCommandSession(params: {
   sessionId: string;
   storePath: string;
 }): void {
-  const entry = loadSessionEntryReadOnly({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    readConsistency: "latest",
-  });
-  expect(entry).toMatchObject({ sessionId: params.sessionId, model: "m", modelProvider: "p" });
-  expect(entry?.restartRecoveryDeliveryRunId).toBeUndefined();
-  expect(
+  const load = (agentId: string) =>
     loadSessionEntryReadOnly({
-      agentId: params.excludedAgentId,
+      agentId,
       sessionKey: params.sessionKey,
       storePath: params.storePath,
       readConsistency: "latest",
-    }),
-  ).toBeUndefined();
+    });
+  const entry = load(params.agentId);
+  expect(entry).toMatchObject({ sessionId: params.sessionId, model: "m", modelProvider: "p" });
+  expect(entry?.restartRecoveryDeliveryRunId).toBeUndefined();
+  expect(load(params.excludedAgentId)).toBeUndefined();
 }
 
-export function createOutboundSessionRouteFixture(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  channel: string;
-  accountId?: string | null;
-  peer: { kind: "direct" | "group" | "channel"; id: string };
-  chatType: "direct" | "group" | "channel";
-  from: string;
-  to: string;
-}) {
+export function createOutboundSessionRouteFixture(
+  params: Parameters<typeof buildOutboundBaseSessionKey>[0] & {
+    chatType: "direct" | "group" | "channel";
+    from: string;
+    to: string;
+  },
+) {
   const baseSessionKey = buildOutboundBaseSessionKey(params);
   return {
     sessionKey: baseSessionKey,
