@@ -2,6 +2,7 @@ import type { Model } from "@openclaw/llm-core";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
 import { configureAiTransportHost, type AiTransportHost } from "../host.js";
+import { anthropicModel } from "../provider-transport-parity.test-support.js";
 
 export type AnthropicMessagesModel = Model<"anthropic-messages">;
 
@@ -32,15 +33,11 @@ export function serializeSseEvents(events: Record<string, unknown>[]): string {
   return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
 }
 
-function createRawSseResponse(body: string): Response {
-  return new Response(body, {
+export function createSseResponse(events: Record<string, unknown>[] = []): Response {
+  return new Response(serializeSseEvents(events), {
     status: 200,
     headers: { "content-type": "text/event-stream" },
   });
-}
-
-export function createSseResponse(events: Record<string, unknown>[] = []): Response {
-  return createRawSseResponse(serializeSseEvents(events));
 }
 
 export function anthropicMessageStart(message: Record<string, unknown>) {
@@ -51,8 +48,7 @@ export function anthropicMessageDelta(
   delta: Record<string, unknown>,
   usage?: Record<string, unknown>,
 ) {
-  // An absent usage object serializes the event without the key, matching proxies that
-  // close a turn with stop_reason alone.
+  // Undefined usage is omitted on the wire, as in stop-reason-only proxy events.
   return { type: "message_delta", delta, usage };
 }
 
@@ -68,15 +64,9 @@ export function makeAnthropicTransportModel(
   overrides: Partial<AnthropicMessagesModel> = {},
 ): AnthropicMessagesModel {
   return {
-    id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6",
-    api: "anthropic-messages",
-    provider: "anthropic",
-    baseUrl: "https://api.anthropic.com",
-    reasoning: true,
+    ...anthropicModel,
     input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200000,
+    cost: { ...anthropicModel.cost },
     maxTokens: 8192,
     ...overrides,
   };

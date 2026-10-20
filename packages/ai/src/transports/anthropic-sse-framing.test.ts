@@ -4,13 +4,23 @@ import {
   anthropicModel,
   context,
   anthropicEvents,
-  createAnthropicResponse,
   registerParityHostLifecycle,
 } from "../provider-transport-parity.test-support.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 
 registerParityHostLifecycle();
+const encoder = new TextEncoder();
+const sseResponse = (body: BodyInit) =>
+  new Response(body, { headers: { "content-type": "text/event-stream" } });
+function frame(events = anthropicEvents, newline = "\n", blankLine = newline) {
+  return events
+    .map(
+      (event) =>
+        `event: ${event.type}${newline}data: ${JSON.stringify(event)}${newline}${blankLine}`,
+    )
+    .join("");
+}
 
 async function runResponse(response: Response, signal?: AbortSignal) {
   configureAiTransportHost({
@@ -26,30 +36,22 @@ async function runResponse(response: Response, signal?: AbortSignal) {
 
 describe("Anthropic SSE framing", () => {
   it.each([
-    { name: "LF", newline: "\n", blankLine: "\n" },
-    { name: "CRLF", newline: "\r\n", blankLine: "\r\n" },
-    { name: "CR", newline: "\r", blankLine: "\r" },
-    { name: "LF/CRLF", newline: "\n", blankLine: "\r\n" },
-    { name: "CRLF/LF", newline: "\r\n", blankLine: "\n" },
-  ])("parses fragmented $name framing", async ({ newline, blankLine }) => {
-    const body = anthropicEvents
-      .map(
-        (event) =>
-          `event: ${event.type}${newline}data: ${JSON.stringify(event)}${newline}${blankLine}`,
-      )
-      .join("");
-    const encoder = new TextEncoder();
+    ["\n", "\n"],
+    ["\r\n", "\r\n"],
+    ["\r", "\r"],
+    ["\n", "\r\n"],
+    ["\r\n", "\n"],
+  ])("parses fragmented %j/%j framing", async (newline, blankLine) => {
     const result = await runResponse(
-      new Response(
+      sseResponse(
         new ReadableStream<Uint8Array>({
           start(controller) {
-            for (const chunk of body) {
+            for (const chunk of frame(anthropicEvents, newline, blankLine)) {
               controller.enqueue(encoder.encode(chunk));
             }
             controller.close();
           },
         }),
-        { headers: { "content-type": "text/event-stream" } },
       ),
     );
     expect(result.stopReason).toBe("stop");
@@ -59,12 +61,8 @@ describe("Anthropic SSE framing", () => {
   });
 
   it.each([false, true])("handles an undelimited EOF event (malformed=%s)", async (malformed) => {
-    const body = (await createAnthropicResponse(anthropicEvents).text()).trimEnd();
-    const result = await runResponse(
-      new Response(malformed ? body.slice(0, -1) : body, {
-        headers: { "content-type": "text/event-stream" },
-      }),
-    );
+    const body = frame().trimEnd();
+    const result = await runResponse(sseResponse(malformed ? body.slice(0, -1) : body));
     expect(result.stopReason).toBe(malformed ? "error" : "stop");
     if (malformed) {
       expect(result.errorMessage).toContain("malformed_streaming_fragment");
@@ -72,15 +70,8 @@ describe("Anthropic SSE framing", () => {
   });
 
   it("consumes complete CR frames before requesting more input", async () => {
-    const prefix = (await createAnthropicResponse(anthropicEvents.slice(0, -2)).text()).replaceAll(
-      "\n",
-      "\r",
-    );
-    const terminal = (await createAnthropicResponse(anthropicEvents.slice(-2)).text()).replaceAll(
-      "\n",
-      "\r",
-    );
-    const encoder = new TextEncoder();
+    const prefix = frame(anthropicEvents.slice(0, -2), "\r");
+    const terminal = frame(anthropicEvents.slice(-2), "\r");
     const controller = new AbortController();
     const activity = vi.fn();
     const unsubscribe = onLlmRequestActivity(controller.signal, activity);
@@ -88,7 +79,7 @@ describe("Anthropic SSE framing", () => {
     let consumedBeforeNextRead = 0;
     try {
       const result = await runResponse(
-        new Response(
+        sseResponse(
           new ReadableStream<Uint8Array>(
             {
               pull(source) {
@@ -103,7 +94,6 @@ describe("Anthropic SSE framing", () => {
             },
             { highWaterMark: 0 },
           ),
-          { headers: { "content-type": "text/event-stream" } },
         ),
         controller.signal,
       );

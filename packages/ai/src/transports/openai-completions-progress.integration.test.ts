@@ -6,6 +6,15 @@ import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
 
+const sse = (chunk: ReturnType<typeof makeCompletionsChunk>) =>
+  `data: ${JSON.stringify(chunk)}\n\n`;
+const baselineUsage = {
+  prompt_tokens: 10,
+  completion_tokens: 1,
+  total_tokens: 11,
+  completion_tokens_details: { reasoning_tokens: 1 },
+};
+
 describe("compatible HTTP stream progress deadline", () => {
   let fixture: Awaited<ReturnType<typeof reserveTestPortListener<ReturnType<typeof createServer>>>>;
   let receiveRequest: (response: ServerResponse) => void;
@@ -84,48 +93,35 @@ describe("compatible HTTP stream progress deadline", () => {
       return undefined;
     })();
     const response = await request.promise;
-    const send = async (elapsed: number, stage: "initial" | "decrease" | "advance") => {
+    const send = async (elapsed: number, usage: Partial<typeof baselineUsage> = {}) => {
       await vi.advanceTimersByTimeAsync(elapsed);
       received = Promise.withResolvers<void>();
-      const usage = {
-        prompt_tokens: 10,
-        completion_tokens: 1,
-        total_tokens: 11,
-        completion_tokens_details: { reasoning_tokens: 1 },
-        cost: Date.now(),
-        ...(stage === "decrease"
-          ? {
-              completion_tokens: 0,
-              total_tokens: 10,
-              completion_tokens_details: { reasoning_tokens: 0 },
-            }
-          : {}),
-        ...(stage === "advance" ? increase : {}),
-      };
       response.write(
-        `data: ${JSON.stringify(
+        sse(
           makeCompletionsChunk({}, null, {
             choices: [],
-            usage,
+            usage: { ...baselineUsage, cost: Date.now(), ...usage },
           }),
-        )}\n\n`,
+        ),
       );
       await received.promise;
       await vi.advanceTimersByTimeAsync(0);
     };
     try {
-      await send(0, "initial");
-      await send(40, "decrease");
-      await send(40, "initial");
-      await send(40, "advance");
-      await send(40, "advance");
-      await send(39, "advance");
+      await send(0);
+      await send(40, {
+        completion_tokens: 0,
+        total_tokens: 10,
+        completion_tokens_details: { reasoning_tokens: 0 },
+      });
+      await send(40);
+      await send(40, increase);
+      await send(40, increase);
+      await send(39, increase);
       expect(onTimeout).not.toHaveBeenCalled();
       if (advance) {
-        await send(41, "advance");
-        response.end(
-          `data: ${JSON.stringify(makeCompletionsChunk({ content: "OK" }, "stop"))}\n\ndata: [DONE]\n\n`,
-        );
+        await send(41, increase);
+        response.end(`${sse(makeCompletionsChunk({ content: "OK" }, "stop"))}data: [DONE]\n\n`);
         expect(await completion).toBeUndefined();
         expect(text).toBe("OK");
         expect(onTimeout).not.toHaveBeenCalled();

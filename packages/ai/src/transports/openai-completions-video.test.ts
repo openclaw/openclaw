@@ -16,8 +16,19 @@ import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-t
 import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
 
 type EntryPoint = "direct" | "simple" | "managed";
-const entryPoints: EntryPoint[] = ["direct", "simple", "managed"];
+const entryPoints = {
+  direct: streamOpenAICompletions,
+  simple: streamSimpleOpenAICompletions,
+  managed: createOpenAICompletionsTransportStreamFn(),
+};
 const videoData = "A".repeat(1_050_000);
+const prompt = { type: "text" as const, text: "Inspect the clip." };
+const video = { type: "video" as const, data: videoData, mimeType: "video/mp4" };
+const videoUrl = { type: "video_url", video_url: { url: `data:video/mp4;base64,${videoData}` } };
+const omittedVideo = {
+  type: "text",
+  text: "(video omitted: provider does not support video input)",
+};
 
 async function captureVideoRequest(entryPoint: EntryPoint, input?: ProviderModel["input"]) {
   const previousHost = getAiTransportHost();
@@ -44,16 +55,7 @@ async function captureVideoRequest(entryPoint: EntryPoint, input?: ProviderModel
     messages: [{ role: "user", content: "canonical turn", timestamp: 1 }],
   };
   const providerContext: ProviderContext = {
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "Inspect the clip." },
-          { type: "video", data: videoData, mimeType: "video/mp4" },
-        ],
-        timestamp: 1,
-      },
-    ],
+    messages: [{ role: "user", content: [{ ...prompt }, { ...video }], timestamp: 1 }],
   };
   const handoff = vi.fn(async () => providerContext);
   const options = {
@@ -63,12 +65,7 @@ async function captureVideoRequest(entryPoint: EntryPoint, input?: ProviderModel
     [PROVIDER_MODEL_INPUT]: input,
   } satisfies ProviderStreamOptions;
   try {
-    const stream =
-      entryPoint === "direct"
-        ? streamOpenAICompletions(model, context, options)
-        : entryPoint === "simple"
-          ? streamSimpleOpenAICompletions(model, context, options)
-          : createOpenAICompletionsTransportStreamFn()(model, context, options);
+    const stream = entryPoints[entryPoint](model, context, options);
     if (stream instanceof Promise) {
       throw new Error("Completions streams must be returned synchronously");
     }
@@ -88,30 +85,22 @@ async function captureVideoRequest(entryPoint: EntryPoint, input?: ProviderModel
 }
 
 describe("native video at the completions boundary", () => {
-  it.each(entryPoints)("sends provider video through the %s entry point", async (entryPoint) => {
-    const body = await captureVideoRequest(entryPoint, ["text", "image", "video"]);
-    expect(body.messages).toEqual([
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "Inspect the clip." },
-          { type: "video_url", video_url: { url: `data:video/mp4;base64,${videoData}` } },
-        ],
-      },
-    ]);
-    expect(body.max_completion_tokens).toBe(8_192);
-  });
-
-  it("keeps the omission when the provider does not declare video input", async () => {
-    const body = await captureVideoRequest("managed");
-    expect(body.messages).toEqual([
-      {
-        role: "user",
-        content: [
-          { type: "text", text: "Inspect the clip." },
-          { type: "text", text: "(video omitted: provider does not support video input)" },
-        ],
-      },
-    ]);
-  });
+  it.each([
+    ["direct", true],
+    ["simple", true],
+    ["managed", true],
+    ["managed", false],
+  ] satisfies [EntryPoint, boolean][])(
+    "sends %s video (supported=%s)",
+    async (entryPoint, supported) => {
+      const body = await captureVideoRequest(
+        entryPoint,
+        supported ? ["text", "image", "video"] : undefined,
+      );
+      expect(body.messages).toEqual([
+        { role: "user", content: [prompt, supported ? videoUrl : omittedVideo] },
+      ]);
+      expect(body.max_completion_tokens).toBe(8_192);
+    },
+  );
 });
