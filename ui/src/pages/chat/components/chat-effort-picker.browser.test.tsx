@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { installTitleTooltips } from "../../../components/tooltip-title.ts";
 import {
@@ -105,250 +105,202 @@ function appearance(input: HTMLInputElement) {
   };
 }
 
-describe("effort bar colour and flow", () => {
-  it("returns Escape to its trigger after pointer and keyboard reopening with title tooltips", async () => {
-    await fixture(["low", "medium", "high"], "high", false, undefined, false);
-    const composer = host!;
-    composer.classList.add("agent-chat__input");
-    const details = composer.querySelector("details")!;
-    const trigger = details.querySelector("summary")!;
-    const surface = details.querySelector<HTMLElement>("[data-anchored-overlay]")!;
-    const inputWrapper = document.createElement("div");
-    inputWrapper.className = "agent-chat__composer-combobox";
-    const textarea = document.createElement("textarea");
-    inputWrapper.append(textarea);
-    composer.prepend(inputWrapper);
-    onTestFinished(installChatComposerPickerDismissal(document));
-    onTestFinished(installTitleTooltips(document));
-    const focusComposer = (event: MouseEvent | PointerEvent) =>
-      focusComposerFromChrome(event, true, textarea);
-    composer.addEventListener("pointerdown", focusComposer);
-    composer.addEventListener("click", focusComposer);
-    onTestFinished(() => {
-      composer.removeEventListener("pointerdown", focusComposer);
-      composer.removeEventListener("click", focusComposer);
-    });
-    textarea.focus();
-    await page.elementLocator(trigger).click();
-    await expect.poll(() => surface.matches(":popover-open")).toBe(true);
-    expect(document.activeElement).toBe(textarea);
-    try {
-      await expect
-        .poll(() =>
-          surface.getAnimations().every((animation) => animation.playState === "finished"),
-        )
-        .toBe(true);
-    } catch (error) {
-      console.error(
-        "Unfinished effort picker animations",
-        surface.getAnimations().map((animation) => {
-          const effect = animation.effect;
-          const target = effect instanceof KeyframeEffect ? effect.target : null;
-          return {
-            name: animation instanceof CSSAnimation ? animation.animationName : null,
-            target: target instanceof Element ? `${target.tagName}.${target.className}` : null,
-            playState: animation.playState,
-            pending: animation.pending,
-            currentTime: animation.currentTime,
-            playbackRate: animation.playbackRate,
-            timing: effect?.getComputedTiming(),
-          };
-        }),
-      );
-      throw error;
-    }
-    await userEvent.keyboard("{Escape}");
-    await expect.poll(() => details.open).toBe(false);
-    await userEvent.keyboard("{Enter}");
-    await expect.poll(() => surface.matches(":popover-open")).toBe(true);
-    await userEvent.keyboard("{Tab}");
-    await expect
-      .poll(() => document.activeElement)
-      .toBe(composer.querySelector<HTMLInputElement>("input[type=range]")!);
-    await userEvent.keyboard("{Escape}");
-    await expect.poll(() => details.open).toBe(false);
-    await expect.poll(() => surface.matches(":popover-open")).toBe(false);
-    await expect.poll(() => document.activeElement).toBe(trigger);
-  });
-
-  it("keeps inherited speed selectable", async () => {
-    document.documentElement.dataset.themeMode = "dark";
-    const fastMode = resolveChatFastModeSelectState({
-      connected: true,
-      gatewayAvailable: true,
-      loading: false,
-      sessionsResult: null,
-      currentModelOverride: "openai/speed-fixture",
-      fastModeTarget: {
-        model: "speed-fixture",
-        modelProvider: "openai",
-        effectiveFastMode: "ultrafast",
+const speedOption = (value: string) =>
+  host!.querySelector<HTMLButtonElement>(`[data-chat-speed-option="${value}"]`)!;
+const summary = () => host!.querySelector("summary")!;
+function speedState(mode: boolean | "ultrafast", tiers?: string[], supportsFastMode = true) {
+  return resolveChatFastModeSelectState({
+    connected: true,
+    gatewayAvailable: true,
+    loading: false,
+    sessionsResult: null,
+    currentModelOverride: "openai/model",
+    fastModeTarget: { model: "model", modelProvider: "openai", fastMode: mode },
+    catalog: [
+      {
+        id: "model",
+        name: "Model",
+        provider: "openai",
+        available: true,
+        supportsFastMode,
+        supportsServiceTierRecovery: true,
+        serviceTiers: tiers,
       },
-      catalog: [
-        {
-          id: "speed-fixture",
-          name: "Speed fixture",
-          provider: "openai",
-          available: true,
-          supportsFastMode: true,
-          serviceTiers: ["default", "priority", "ultrafast"],
-        },
-      ],
-    });
-    const { onFastModeSelect } = await fixture(["low", "medium", "high"], "high", false, fastMode);
-    for (const value of ["off", "on", "ultrafast"]) {
-      const option = host!.querySelector<HTMLButtonElement>(
-        '[data-chat-speed-option="' + value + '"]',
-      )!;
-      expect(option.disabled).toBe(false);
-      option.click();
-      expect(onFastModeSelect).toHaveBeenLastCalledWith(value, "effort-preview");
-    }
+    ],
   });
-  it("keeps speed names accessible without chip labels and only exposes entitled choices", async () => {
-    const state = (mode: boolean | "ultrafast", tiers?: string[], supportsFastMode = true) =>
-      resolveChatFastModeSelectState({
-        connected: true,
-        gatewayAvailable: true,
-        loading: false,
-        sessionsResult: null,
-        currentModelOverride: "openai/model",
-        fastModeTarget: { model: "model", modelProvider: "openai", fastMode: mode },
-        catalog: [
-          {
-            id: "model",
-            name: "Model",
-            provider: "openai",
-            available: true,
-            supportsFastMode,
-            supportsServiceTierRecovery: true,
-            serviceTiers: tiers,
-          },
-        ],
-      });
-    await fixture(["low", "medium", "high"], "high", false, state(false));
-    expect(host!.querySelector("summary")!.textContent?.trim()).toBe("High");
-    expect(host!.querySelectorAll("[data-chat-speed-option]")).toHaveLength(2);
-    expect(host!.textContent).not.toContain("higher usage");
-    const { onFastModeSelect } = await fixture(
-      ["low", "medium", "high"],
-      "high",
-      false,
-      state("ultrafast", ["priority", "ultrafast"]),
-    );
-    expect(host!.querySelector("summary")!.textContent?.trim()).toBe("High");
-    expect(host!.querySelector("summary")!.getAttribute("aria-label")).toContain(
-      "High · Ultrafast",
-    );
-    expect(host!.querySelector("summary")!.title).toBe("High · Ultrafast");
-    expect(
-      [...host!.querySelectorAll("[data-chat-speed-option]")].map((option) =>
-        option.textContent?.trim(),
-      ),
-    ).toEqual(["Standard", "Fast", "Ultrafast"]);
-    const ultra = host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!;
-    expect(ultra.getAttribute("aria-checked")).toBe("true");
-    ultra.focus();
-    ultra.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
-    expect(onFastModeSelect).toHaveBeenLastCalledWith("on", "effort-preview");
-    const standard = host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="off"]')!;
-    standard.click();
-    expect(onFastModeSelect).toHaveBeenLastCalledWith("off", "effort-preview");
-    await fixture(
-      ["low", "medium", "high"],
-      "high",
-      false,
-      state("ultrafast", ["priority", "ultrafast"], false),
-    );
-    expect(
-      host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!.disabled,
-    ).toBe(true);
-    expect(host!.querySelector('[data-chat-speed-option="on"]')).toBeNull();
-    const standardOnly = await fixture(
-      ["low", "medium", "high"],
-      "high",
-      false,
-      state("ultrafast", ["default"], false),
-    );
-    expect(
-      host!.querySelector('[data-chat-speed-option="off"]')?.getAttribute("aria-checked"),
-    ).toBe("true");
-    for (const option of host!.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]")) {
-      expect(option.disabled).toBe(true);
-      option.click();
-    }
-    expect(standardOnly.onFastModeSelect).not.toHaveBeenCalled();
-    expect(standardOnly.input.disabled).toBe(false);
-    expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
-    await fixture(["low", "medium", "high"], "high", false, state("ultrafast"));
-    expect(
-      host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!.disabled,
-    ).toBe(true);
-    expect(host!.querySelector("summary")!.getAttribute("aria-label")).toContain("Ultrafast");
-    expect(
-      host!.querySelector('[data-chat-speed-option="ultrafast"]')?.getAttribute("aria-checked"),
-    ).toBe("true");
-    expect(host!.querySelector('[data-chat-speed-option="off"]')?.getAttribute("tabindex")).toBe(
-      "0",
-    );
-    expect(
-      host!.querySelector('[data-chat-speed-option="ultrafast"]')?.getAttribute("tabindex"),
-    ).toBe("-1");
-  });
+}
 
-  it.each(["dark", "light"])("highlights the highest discrete effort in %s mode", async (theme) => {
-    document.documentElement.dataset.themeMode = theme;
-    for (const maximum of ["high", "xhigh", "max"]) {
-      const levels = ["off", "low", maximum, "adaptive", "ultra"];
-      const { input } = await fixture(levels, maximum);
-      const maximumStyle = appearance(input);
-      expect(maximumStyle.fill).toContain("linear-gradient");
-      expect(maximumStyle.glow).not.toBe("none");
-      expect(appearance((await fixture(levels, maximum, true)).input)).toEqual(maximumStyle);
-      const ultraStyle = appearance((await fixture(levels, "ultra")).input);
-      expect(ultraStyle.fill).toContain("linear-gradient");
-      expect(ultraStyle.fill).not.toBe(maximumStyle.fill);
-      expect(ultraStyle.glow).not.toBe(maximumStyle.glow);
-      for (const value of ["off", "low", "adaptive", "unsupported"]) {
-        expect(appearance((await fixture(levels, value)).input)).toEqual({
-          fill: "none",
-          glow: "none",
-        });
-      }
-    }
-    expect(appearance((await fixture(["off", "on"], "on")).input)).toEqual({
-      fill: "none",
-      glow: "none",
-    });
-    for (const id of ["low", "high"]) {
-      const { input } = await fixture(["off", { id, label: "on" }, "ultra"], id);
-      expect(appearance(input)).toEqual({ fill: "none", glow: "none" });
-    }
+it("returns Escape to its trigger after pointer and keyboard reopening with title tooltips", async () => {
+  await fixture(["low", "medium", "high"], "high", false, undefined, false);
+  const composer = host!;
+  composer.classList.add("agent-chat__input");
+  const details = composer.querySelector("details")!;
+  const trigger = details.querySelector("summary")!;
+  const surface = details.querySelector<HTMLElement>("[data-anchored-overlay]")!;
+  const inputWrapper = document.createElement("div");
+  inputWrapper.className = "agent-chat__composer-combobox";
+  const textarea = document.createElement("textarea");
+  inputWrapper.append(textarea);
+  composer.prepend(inputWrapper);
+  onTestFinished(installChatComposerPickerDismissal(document));
+  onTestFinished(installTitleTooltips(document));
+  const focusComposer = (event: MouseEvent | PointerEvent) =>
+    focusComposerFromChrome(event, true, textarea);
+  composer.addEventListener("pointerdown", focusComposer);
+  composer.addEventListener("click", focusComposer);
+  onTestFinished(() => {
+    composer.removeEventListener("pointerdown", focusComposer);
+    composer.removeEventListener("click", focusComposer);
   });
+  textarea.focus();
+  await page.elementLocator(trigger).click();
+  await expect.poll(() => surface.matches(":popover-open")).toBe(true);
+  expect(document.activeElement).toBe(textarea);
+  await expect
+    .poll(() => surface.getAnimations().every((a) => a.playState === "finished"))
+    .toBe(true);
+  await userEvent.keyboard("{Escape}");
+  await expect.poll(() => details.open).toBe(false);
+  await userEvent.keyboard("{Enter}");
+  await expect.poll(() => surface.matches(":popover-open")).toBe(true);
+  await userEvent.keyboard("{Tab}");
+  await expect
+    .poll(() => document.activeElement)
+    .toBe(composer.querySelector<HTMLInputElement>("input[type=range]")!);
+  await userEvent.keyboard("{Escape}");
+  await expect.poll(() => details.open).toBe(false);
+  await expect.poll(() => surface.matches(":popover-open")).toBe(false);
+  await expect.poll(() => document.activeElement).toBe(trigger);
+});
 
-  it("previews colour without committing and restores the committed level on cancel or blur", async () => {
-    const { input, onThinkingSelect } = await fixture(["low", "max", "ultra"], "max", true);
+it("keeps inherited speed selectable", async () => {
+  document.documentElement.dataset.themeMode = "dark";
+  const fastMode = resolveChatFastModeSelectState({
+    connected: true,
+    gatewayAvailable: true,
+    loading: false,
+    sessionsResult: null,
+    currentModelOverride: "openai/speed-fixture",
+    fastModeTarget: {
+      model: "speed-fixture",
+      modelProvider: "openai",
+      effectiveFastMode: "ultrafast",
+    },
+    catalog: [
+      {
+        id: "speed-fixture",
+        name: "Speed fixture",
+        provider: "openai",
+        available: true,
+        supportsFastMode: true,
+        serviceTiers: ["default", "priority", "ultrafast"],
+      },
+    ],
+  });
+  const { onFastModeSelect } = await fixture(["low", "medium", "high"], "high", false, fastMode);
+  for (const value of ["off", "on", "ultrafast"]) {
+    const option = speedOption(value);
+    expect(option.disabled).toBe(false);
+    option.click();
+    expect(onFastModeSelect).toHaveBeenLastCalledWith(value, "effort-preview");
+  }
+});
+it("keeps speed names accessible without chip labels and only exposes entitled choices", async () => {
+  const showSpeed = (mode: boolean | "ultrafast", tiers?: string[], supported = true) =>
+    fixture(["low", "medium", "high"], "high", false, speedState(mode, tiers, supported));
+  await showSpeed(false);
+  expect(summary().textContent?.trim()).toBe("High");
+  expect(host!.querySelectorAll("[data-chat-speed-option]")).toHaveLength(2);
+  expect(host!.textContent).not.toContain("higher usage");
+  const { onFastModeSelect } = await showSpeed("ultrafast", ["priority", "ultrafast"]);
+  expect(summary().textContent?.trim()).toBe("High");
+  expect(summary().getAttribute("aria-label")).toContain("High · Ultrafast");
+  expect(summary().title).toBe("High · Ultrafast");
+  expect(
+    [...host!.querySelectorAll("[data-chat-speed-option]")].map((option) =>
+      option.textContent?.trim(),
+    ),
+  ).toEqual(["Standard", "Fast", "Ultrafast"]);
+  const ultra = speedOption("ultrafast");
+  expect(ultra.getAttribute("aria-checked")).toBe("true");
+  ultra.focus();
+  ultra.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+  expect(onFastModeSelect).toHaveBeenLastCalledWith("on", "effort-preview");
+  const standard = speedOption("off");
+  standard.click();
+  expect(onFastModeSelect).toHaveBeenLastCalledWith("off", "effort-preview");
+  await showSpeed("ultrafast", ["priority", "ultrafast"], false);
+  expect(speedOption("ultrafast").disabled).toBe(true);
+  expect(host!.querySelector('[data-chat-speed-option="on"]')).toBeNull();
+  const standardOnly = await showSpeed("ultrafast", ["default"], false);
+  expect(speedOption("off").getAttribute("aria-checked")).toBe("true");
+  for (const option of host!.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]")) {
+    expect(option.disabled).toBe(true);
+    option.click();
+  }
+  expect(standardOnly.onFastModeSelect).not.toHaveBeenCalled();
+  expect(standardOnly.input.disabled).toBe(false);
+  expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
+  await showSpeed("ultrafast");
+  expect(speedOption("ultrafast").disabled).toBe(true);
+  expect(summary().getAttribute("aria-label")).toContain("Ultrafast");
+  expect(speedOption("ultrafast").getAttribute("aria-checked")).toBe("true");
+  expect(speedOption("off").getAttribute("tabindex")).toBe("0");
+  expect(speedOption("ultrafast").getAttribute("tabindex")).toBe("-1");
+});
+
+it.each(["dark", "light"])("highlights the highest discrete effort in %s mode", async (theme) => {
+  document.documentElement.dataset.themeMode = theme;
+  for (const maximum of ["high", "xhigh", "max"]) {
+    const levels = ["off", "low", maximum, "adaptive", "ultra"];
+    const { input } = await fixture(levels, maximum);
     const maximumStyle = appearance(input);
-    for (const resetEvent of ["pointercancel", "blur"]) {
-      input.value = "2";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      flush();
-      expect(input.getAttribute("aria-valuetext")).toBe("Ultra");
-      expect(appearance(input)).not.toEqual(maximumStyle);
-      expect(onThinkingSelect).not.toHaveBeenCalled();
-      input.dispatchEvent(new Event(resetEvent));
-      flush();
-      expect(input.value).toBe("1");
-      expect(input.getAttribute("aria-valuetext")).toContain("Maximum");
-      expect(appearance(input)).toEqual(maximumStyle);
+    expect(maximumStyle.fill).toContain("linear-gradient");
+    expect(maximumStyle.glow).not.toBe("none");
+    expect(appearance((await fixture(levels, maximum, true)).input)).toEqual(maximumStyle);
+    const ultraStyle = appearance((await fixture(levels, "ultra")).input);
+    expect(ultraStyle.fill).toContain("linear-gradient");
+    expect(ultraStyle.fill).not.toBe(maximumStyle.fill);
+    expect(ultraStyle.glow).not.toBe(maximumStyle.glow);
+    for (const value of ["off", "low", "adaptive", "unsupported"]) {
+      expect(appearance((await fixture(levels, value)).input)).toEqual({
+        fill: "none",
+        glow: "none",
+      });
     }
-    input.value = "0";
+  }
+  expect(appearance((await fixture(["off", "on"], "on")).input)).toEqual({
+    fill: "none",
+    glow: "none",
+  });
+  for (const id of ["low", "high"]) {
+    const { input } = await fixture(["off", { id, label: "on" }, "ultra"], id);
+    expect(appearance(input)).toEqual({ fill: "none", glow: "none" });
+  }
+});
+
+it("previews colour without committing and restores the committed level on cancel or blur", async () => {
+  const { input, onThinkingSelect } = await fixture(["low", "max", "ultra"], "max", true);
+  const maximumStyle = appearance(input);
+  for (const resetEvent of ["pointercancel", "blur"]) {
+    input.value = "2";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
-    expect(appearance(input)).toEqual({ fill: "none", glow: "none" });
-    input.dispatchEvent(new Event("change"));
+    expect(input.getAttribute("aria-valuetext")).toBe("Ultra");
+    expect(appearance(input)).not.toEqual(maximumStyle);
+    expect(onThinkingSelect).not.toHaveBeenCalled();
+    input.dispatchEvent(new Event(resetEvent));
     flush();
-    expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith("low", "effort-preview");
+    expect(input.value).toBe("1");
+    expect(input.getAttribute("aria-valuetext")).toContain("Maximum");
     expect(appearance(input)).toEqual(maximumStyle);
-  });
+  }
+  input.value = "0";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  expect(appearance(input)).toEqual({ fill: "none", glow: "none" });
+  input.dispatchEvent(new Event("change"));
+  flush();
+  expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith("low", "effort-preview");
+  expect(appearance(input)).toEqual(maximumStyle);
 });

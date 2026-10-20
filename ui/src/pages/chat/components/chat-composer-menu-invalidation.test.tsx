@@ -3,7 +3,12 @@ import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
+import {
+  docsServer,
+  docsTools,
+  makeCapabilities,
+  makeMenu,
+} from "./chat-composer-menu.test-support.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type { ChatComposerPlusMenuProps } from "./chat-composer-plus-menu.types.ts";
 
@@ -11,20 +16,13 @@ it.each(["root", "skills", "connectors", "tools:docs", "library:missing"] as con
   "retains %s menu content on unrelated publications and admits in-place display changes",
   async (view) => {
     const skillName = vi.fn(() => "Focused skill");
-    const menu: ChatComposerPlusMenuProps = {
-      attachments: {},
-      inputHandle: createChatAttachmentInputHandle(),
-      disabled: false,
-      open: false,
+    const menu: ChatComposerPlusMenuProps = makeMenu({
       view,
-      toolOverrides: null,
       onOpenChange: (open) => {
         menu.open = open;
         setProps(snapshot());
       },
-      onViewChange: vi.fn(),
-      capabilityMenu: {
-        basePath: "/control",
+      capabilityMenu: makeCapabilities({
         skills: [
           {
             key: "focused",
@@ -38,53 +36,8 @@ it.each(["root", "skills", "connectors", "tools:docs", "library:missing"] as con
             baseEnabled: true,
           },
         ],
-        skillsLoading: false,
-        skillsError: false,
-        mcpServers: [
-          {
-            name: "docs",
-            enabled: true,
-            transport: "stdio",
-            target: "docs-server",
-            auth: null,
-            signIn: null,
-            toolFilter: false,
-            parallel: false,
-            tls: null,
-          },
-        ],
-        toolsEffectiveResult: {
-          agentId: "main",
-          profile: "full",
-          groups: [
-            {
-              id: "mcp",
-              label: "MCP",
-              source: "mcp",
-              tools: [
-                {
-                  id: "docs_search",
-                  label: "Search documents",
-                  description: "Search",
-                  rawDescription: "Search",
-                  source: "mcp",
-                  mcpServer: "docs",
-                  mcpToolName: "search",
-                },
-              ],
-            },
-          ],
-        },
-        toolsEffectiveLoading: false,
-        toolsEffectiveError: false,
-        toolAccessMutationBlockedReason: null,
-        webSearchBaseEnabled: true,
-        mutationBlockedReason: null,
-        canAdmin: true,
-        adminBlockedReason: null,
-        onLoadSkills: vi.fn(),
-        onPatchToolOverrides: vi.fn(),
-        onNavigate: vi.fn(),
+        mcpServers: [docsServer(true)],
+        toolsEffectiveResult: docsTools(),
         onOpenToolAccess: vi.fn(),
         library: {
           result: null,
@@ -97,8 +50,8 @@ it.each(["root", "skills", "connectors", "tools:docs", "library:missing"] as con
           onRead: vi.fn(),
           onActivate: vi.fn(),
         },
-      },
-    };
+      }),
+    });
     const snapshot = () => ({ ...menu, capabilityMenu: { ...menu.capabilityMenu! } });
     const [props, setProps] = createSignal(snapshot());
     const mounted = mountSolid(() => <ChatComposerPlusMenu menu={props()} />);

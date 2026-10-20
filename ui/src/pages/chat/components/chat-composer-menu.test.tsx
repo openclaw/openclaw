@@ -2,8 +2,14 @@ import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
+import {
+  docsServer,
+  docsTools,
+  makeCapabilities,
+  makeMenu,
+} from "./chat-composer-menu.test-support.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
+import type { ChatComposerPlusMenuProps as Menu } from "./chat-composer-plus-menu.types.ts";
 import { createSlashMenu, SlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
 
 it("retains the slash viewport during selection changes and resets it when switching mode", () => {
@@ -46,41 +52,21 @@ it("retains the slash viewport during selection changes and resets it when switc
 });
 
 it("retains the focused capability row and management link through catalog refreshes", async () => {
-  type Menu = Parameters<typeof ChatComposerPlusMenu>[0]["menu"];
   const onNavigate = vi.fn();
-  const inputHandle = createChatAttachmentInputHandle();
-  const [menu, setMenu] = createSignal<Menu>({
-    attachments: {},
-    inputHandle,
-    disabled: false,
-    open: true,
-    view: "skills",
-    toolOverrides: null,
-    onOpenChange: vi.fn(),
-    onViewChange: vi.fn(),
-    capabilityMenu: {
-      basePath: "/control",
-      skills: [
-        { key: "focused", name: "Focused skill", enabled: true, baseEnabled: true },
-        { key: "broken", name: "Broken", enabled: false, baseEnabled: false, missingDeps: true },
-        { key: "private", name: "Private", enabled: false, baseEnabled: false, blocked: true },
-      ],
-      skillsLoading: false,
-      skillsError: false,
-      mcpServers: [],
-      toolsEffectiveResult: null,
-      toolsEffectiveLoading: false,
-      toolsEffectiveError: false,
-      toolAccessMutationBlockedReason: null,
-      webSearchBaseEnabled: true,
-      mutationBlockedReason: null,
-      canAdmin: true,
-      adminBlockedReason: null,
-      onLoadSkills: vi.fn(),
-      onPatchToolOverrides: vi.fn(),
-      onNavigate,
-    },
-  });
+  const [menu, setMenu] = createSignal<Menu>(
+    makeMenu({
+      open: true,
+      view: "skills",
+      capabilityMenu: makeCapabilities({
+        skills: [
+          { key: "focused", name: "Focused skill", enabled: true, baseEnabled: true },
+          { key: "broken", name: "Broken", enabled: false, baseEnabled: false, missingDeps: true },
+          { key: "private", name: "Private", enabled: false, baseEnabled: false, blocked: true },
+        ],
+        onNavigate,
+      }),
+    }),
+  );
   const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
   await waitForSolid(() =>
     expect(
@@ -92,7 +78,6 @@ it("retains the focused capability row and management link through catalog refre
       view.getByRole("menuitemcheckbox", { name, hidden: true }).hasAttribute("disabled"),
     ).toBe(true);
   }
-  expect(view.getByRole("menuitemcheckbox", { name: "Focused skill", hidden: true })).toBeTruthy();
   const row = view.container.querySelector<HTMLButtonElement>('[data-value="skill:focused"]')!;
   await waitForSolid(() =>
     expect(row.closest("[data-menu-content]")?.getAttribute("data-phase")).toBe("open"),
@@ -151,19 +136,7 @@ it("retains the focused capability row and management link through catalog refre
     toolOverrides: { mcpServers: { docs: true } },
     capabilityMenu: {
       ...previous.capabilityMenu!,
-      mcpServers: [
-        {
-          name: "docs",
-          enabled: false,
-          transport: "stdio",
-          target: "docs-server",
-          auth: null,
-          signIn: null,
-          toolFilter: false,
-          parallel: false,
-          tls: null,
-        },
-      ],
+      mcpServers: [docsServer(false)],
     },
   }));
   await waitForSolid(() =>
@@ -187,37 +160,7 @@ it("retains the focused capability row and management link through catalog refre
     view: "tools:docs",
     capabilityMenu: {
       ...previous.capabilityMenu!,
-      toolsEffectiveResult: {
-        agentId: "main",
-        profile: "full",
-        groups: [
-          {
-            id: "mcp",
-            label: "MCP",
-            source: "mcp",
-            tools: [
-              {
-                id: "docs_search",
-                label: "Search documents",
-                description: "Search",
-                rawDescription: "Search",
-                source: "mcp",
-                mcpServer: "docs",
-                mcpToolName: "search",
-              },
-              {
-                id: "docs_list",
-                label: "list",
-                description: "List",
-                rawDescription: "List",
-                source: "mcp",
-                mcpServer: "docs",
-                mcpToolName: "list",
-              },
-            ],
-          },
-        ],
-      },
+      toolsEffectiveResult: docsTools(true),
     },
   }));
   await waitForSolid(() => {
@@ -229,7 +172,7 @@ it("retains the focused capability row and management link through catalog refre
 });
 
 it("retains attachment choices while the native menu closes and reopens", async () => {
-  const inputHandle = createChatAttachmentInputHandle();
+  const base = makeMenu();
   const [open, setOpen] = createSignal(false);
   const toggle = {
     value: "test-toggle",
@@ -241,12 +184,8 @@ it("retains attachment choices while the native menu closes and reopens", async 
   const view = mountSolid(() => (
     <ChatComposerPlusMenu
       menu={{
-        attachments: {},
-        inputHandle,
-        disabled: false,
+        ...base,
         open: open(),
-        view: "root",
-        toolOverrides: null,
         rootToggles: [{ ...toggle, icon: "pencil" }],
         onOpenChange: setOpen,
         onViewChange: vi.fn(),
@@ -273,8 +212,7 @@ it("retains attachment choices while the native menu closes and reopens", async 
 it.each(["item", "external", "closed"] as const)(
   "preserves newer %s focus after changing capability views",
   async (target) => {
-    const inputHandle = createChatAttachmentInputHandle();
-    type Menu = Parameters<typeof ChatComposerPlusMenu>[0]["menu"];
+    const base = makeMenu();
     const [currentView, setView] = createSignal<Menu["view"]>(
       target === "closed" ? "connectors" : "tools:docs",
     );
@@ -284,44 +222,12 @@ it.each(["item", "external", "closed"] as const)(
         <input aria-label="Newer focus" />
         <ChatComposerPlusMenu
           menu={{
-            attachments: {},
-            inputHandle,
-            disabled: false,
+            ...base,
             open: open(),
             view: currentView(),
-            toolOverrides: null,
             onOpenChange: setOpen,
             onViewChange: setView,
-            capabilityMenu: {
-              basePath: "/control",
-              skills: [],
-              skillsLoading: false,
-              skillsError: false,
-              mcpServers: [
-                {
-                  name: "docs",
-                  enabled: true,
-                  transport: "stdio",
-                  target: "docs-server",
-                  auth: null,
-                  signIn: null,
-                  toolFilter: false,
-                  parallel: false,
-                  tls: null,
-                },
-              ],
-              toolsEffectiveResult: null,
-              toolsEffectiveLoading: false,
-              toolsEffectiveError: false,
-              toolAccessMutationBlockedReason: null,
-              webSearchBaseEnabled: true,
-              mutationBlockedReason: null,
-              canAdmin: true,
-              adminBlockedReason: null,
-              onLoadSkills: vi.fn(),
-              onPatchToolOverrides: vi.fn(),
-              onNavigate: vi.fn(),
-            },
+            capabilityMenu: makeCapabilities({ mcpServers: [docsServer(true)] }),
           }}
         />
       </>

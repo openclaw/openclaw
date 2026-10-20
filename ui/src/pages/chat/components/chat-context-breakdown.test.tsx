@@ -52,10 +52,8 @@ it("subtracts embedded prompt sections once, and leaves unmeasured and inconsist
     ...report,
     injectedWorkspaceFiles: [
       {
-        name: "AGENTS.md",
+        ...report.injectedWorkspaceFiles[0]!,
         path: "/private/AGENTS.md",
-        missing: false,
-        rawChars: 16000,
         injectionStatus: "native_unverified",
         injectedChars: null,
         truncated: null,
@@ -91,9 +89,9 @@ it("retires a pending report on session replacement and rejects a report from an
       sessions: [{ key: "agent:main:second", sessionId: "retired", contextWeight: report }],
     };
   });
-  const application = createApplicationGateway();
-  application.publish({
-    ...application.gateway.snapshot,
+  const { gateway, publish } = createApplicationGateway();
+  publish({
+    ...gateway.snapshot,
     phase: "connected",
     client: createTestGatewayClient(request),
   });
@@ -103,12 +101,7 @@ it("retires a pending report on session replacement and rejects a report from an
     sessionId: "first",
   });
   const view = mountSolid(() => (
-    <ChatContextBreakdown
-      gateway={application.gateway}
-      session={session()}
-      used={50000}
-      limit={100000}
-    />
+    <ChatContextBreakdown gateway={gateway} session={session()} used={50000} limit={100000} />
   ));
   await expect.poll(() => request.mock.calls.length).toBe(1);
   setSession({ key: "agent:main:second", kind: "direct", sessionId: "current" });
@@ -134,9 +127,7 @@ it("groups duplicate filenames by producer origin and keeps deferred schemas out
         origin: { kind: "agent-workspace", rootPath: "/private/workspace" },
       },
       {
-        name: "AGENTS.md",
-        missing: false,
-        truncated: false,
+        ...report.injectedWorkspaceFiles[0]!,
         path: "/project/AGENTS.md",
         rawChars: 4000,
         injectedChars: 4000,
@@ -159,19 +150,14 @@ it("groups duplicate filenames by producer origin and keeps deferred schemas out
     },
   };
   const categories = buildChatContextCategories(grouped, 50000);
+  const groups = (id: string) => categories.find((category) => category.id === id)?.groups;
   expect(
-    categories
-      .find((category) => category.id === "files")
-      ?.groups?.map((group) => [group.kind, group.tokens, group.entries[0]?.key]),
+    groups("files")?.map((group) => [group.kind, group.tokens, group.entries[0]?.key]),
   ).toEqual([
     ["agent-workspace", 4000, "/private/workspace/AGENTS.md"],
     ["execution-project", 1000, "/project/AGENTS.md"],
   ]);
-  expect(
-    categories
-      .find((category) => category.id === "tools")
-      ?.groups?.map((group) => [group.kind, group.name, group.tokens]),
-  ).toEqual([
+  expect(groups("tools")?.map((group) => [group.kind, group.name, group.tokens])).toEqual([
     ["openclaw", undefined, 2000],
     ["mcp", "Docs", 1000],
   ]);
