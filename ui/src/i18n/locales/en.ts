@@ -2153,12 +2153,9 @@ export const en: TranslationMap & {
       online: "Online",
       offline: "Offline",
       unavailable: "Could not load people. Try again.",
-      accessDenied:
-        "You cannot mention people here. Sign in with a verified profile or ask an administrator to check your access.",
-      profileUnavailable:
-        "Your profile could not be verified. Reconnect, or ask an administrator for help.",
-      rejected:
-        "Mention search was rejected for this conversation. Check your access or choose another conversation.",
+      accessDenied: "Mention access denied. Sign in or contact an admin.",
+      profileUnavailable: "Profile unverified. Reconnect or contact an admin.",
+      rejected: "Mention search rejected. Check access or use another chat.",
       limit: "You can mention up to 10 people per message.",
       selectedLabel: "Will notify",
       selected: "Will notify: {names}",
