@@ -27,12 +27,9 @@ import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { createTabFocus } from "../../../lib/tabs.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
-import type {
-  SessionWorkspacePreview,
-  SessionWorkspaceProps,
-  SidebarContent,
-} from "./chat-sidebar-content-types.ts";
+import type { SessionWorkspacePreview, SidebarContent } from "./chat-sidebar-content-types.ts";
 import { SidebarFileMobileRail } from "./chat-sidebar-file-mobile.tsx";
+import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 
 type Props = {
   sessionKey: string;
