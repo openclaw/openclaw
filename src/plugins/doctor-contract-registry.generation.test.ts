@@ -3,19 +3,16 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  listPluginDoctorStateMigrationEntries,
-  type PluginDoctorStateMigrationInventory,
-} from "./doctor-contract-registry.js";
+import { listPluginDoctorStateMigrationEntries } from "./doctor-contract-registry.js";
+import { createDoctorGenerationFixture } from "./doctor-generation.test-support.js";
 import { loadPluginManifest } from "./manifest.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
-import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("binds replaced Codex declarations and callbacks to their own package generation", async () => {
   const rootDir = dirs.make("doctor-generation-");
-  const source = path.join(rootDir, "doctor-contract-api.mjs");
+  const fixture = createDoctorGenerationFixture(rootDir, "codex");
   const sidecars = { id: "codex-app-server-sidecars-to-plugin-state" };
   const assignments = { id: "codex-native-task-assignments" };
   const orphans = {
@@ -53,21 +50,7 @@ it("binds replaced Codex declarations and callbacks to their own package generat
     if (!loaded.ok) {
       throw new Error(loaded.error);
     }
-    return {
-      records: [
-        createPluginManifestRecordFixture({
-          id: "codex",
-          rootDir,
-          source,
-          origin: "global",
-          doctorContract: loaded.manifest.doctorContract,
-        }),
-      ],
-      knownPluginIds: ["codex"],
-      sessionStoreOwnerPluginIds: [],
-      descriptors: [],
-      unresolvedPluginIds: [],
-    } satisfies PluginDoctorStateMigrationInventory;
+    return fixture.inventory(loaded.manifest.doctorContract);
   }
   await using previousCache = createPluginCache();
   const previousInventory = withPluginCache(previousCache, () => install("2026.9.6", before));
@@ -80,22 +63,13 @@ it("binds replaced Codex declarations and callbacks to their own package generat
     listPluginDoctorStateMigrationEntries({ inventory: nextInventory }),
   );
   expect(next.map(({ migration }) => migration.id)).toEqual(after.map((action) => action.id));
-  const input = {
-    config: {},
-    env: {},
-    stateDir: rootDir,
-    oauthDir: rootDir,
-    context: {
-      openPluginStateKeyedStore() {
-        throw new Error("fixture must not open state");
-      },
-    },
-  };
   for (const [entries, version] of [
     [previous, "2026.9.6"],
     [next, "2026.9.7"],
   ] as const) {
-    expect(await expectDefined(entries[0], version).migration.migrateLegacyState(input)).toEqual({
+    expect(
+      await expectDefined(entries[0], version).migration.migrateLegacyState(fixture.input),
+    ).toEqual({
       changes: [version],
       warnings: [],
     });

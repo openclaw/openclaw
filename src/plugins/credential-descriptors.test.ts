@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { resolvePluginCredentialDescriptors } from "./credential-descriptors.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 
@@ -22,9 +22,7 @@ const provider = {
   credentialPath: "plugins.entries.example.config.key",
   credentialLabel: "Example key",
   envVars: ["EXAMPLE_KEY"],
-  getConfiguredCredentialValue: vi.fn(() => {
-    throw new Error("must not execute");
-  }),
+  getConfiguredCredentialValue: vi.fn(),
 };
 const manifest = {
   id: "example",
@@ -42,60 +40,44 @@ beforeEach(() => {
   mocks.official.mockReturnValue([{ pluginId: "example", provider }]);
 });
 
-describe("nonactivating credential descriptor discovery", () => {
-  it("promotes only owned declared credential paths once, preserving provider metadata", () => {
-    const declared = {
-      ...provider,
-      placeholder: "example-…",
-      signupUrl: "https://example.com/keys",
-    };
-    mocks.registry.mockReturnValue({
-      webSearchProviders: [
-        declared,
-        declared,
-        ...[
-          "gateway.auth.token",
-          "plugins.entries.other.config.key",
-          "plugins.entries.example.config.__proto__.key",
-          "",
-        ].map((credentialPath) => Object.assign({}, declared, { credentialPath })),
-      ].map((entry) => ({ pluginId: "example", provider: entry })),
-    });
-    expect(resolvePluginCredentialDescriptors(manifest)).toEqual([
-      {
-        ...descriptor,
-        placeholder: "example-…",
-        signupUrl: "https://example.com/keys",
-      },
-    ]);
-    expect(provider.getConfiguredCredentialValue).not.toHaveBeenCalled();
+it("promotes only owned declared credential paths once, preserving provider metadata", () => {
+  const metadata = { placeholder: "example-…", signupUrl: "https://example.com/keys" };
+  const declared = { ...provider, ...metadata };
+  mocks.registry.mockReturnValue({
+    webSearchProviders: [
+      declared,
+      declared,
+      ...[
+        "gateway.auth.token",
+        "plugins.entries.other.config.key",
+        "plugins.entries.example.config.__proto__.key",
+        "",
+      ].map((credentialPath) => Object.assign({}, declared, { credentialPath })),
+    ].map((entry) => ({ pluginId: "example", provider: entry })),
   });
+  expect(resolvePluginCredentialDescriptors(manifest)).toEqual([{ ...descriptor, ...metadata }]);
+  expect(provider.getConfiguredCredentialValue).not.toHaveBeenCalled();
+});
 
-  it("does not assign official credentials to an untrusted id collision or load a disabled external plugin", () => {
-    expect(resolvePluginCredentialDescriptors(manifest)).toEqual([]);
-    expect(mocks.official).not.toHaveBeenCalled();
-    expect(mocks.bundledSearch).not.toHaveBeenCalled();
-    expect(mocks.bundledFetch).not.toHaveBeenCalled();
-  });
-  it("uses trusted official metadata without plugin activation, even when disabled", () => {
-    expect(
-      resolvePluginCredentialDescriptors({ ...manifest, trustedOfficialInstall: true }),
-    ).toHaveLength(1);
-    expect(provider.getConfiguredCredentialValue).not.toHaveBeenCalled();
-  });
-  it("exposes bundled credential metadata independently of runtime activation", () => {
-    mocks.bundledSearch.mockReturnValue([{ ...provider, pluginId: "example" }]);
-    expect(resolvePluginCredentialDescriptors({ ...manifest, origin: "bundled" })).toEqual([
-      descriptor,
-    ]);
-    expect(provider.getConfiguredCredentialValue).not.toHaveBeenCalled();
-  });
-  it("uses only the named bundled public artifact and does not fall through when absent", () => {
-    mocks.bundledSearch.mockReturnValue(null);
-    expect(resolvePluginCredentialDescriptors({ ...manifest, origin: "bundled" })).toEqual([]);
+it.each([
+  ["untrusted ID collision", "global", false, false],
+  ["trusted official metadata", "global", true, true],
+  ["bundled metadata", "bundled", false, true],
+  ["missing bundled artifact", "bundled", false, false],
+] as const)("discovers %s without activation", (_name, origin, trusted, available) => {
+  mocks.bundledSearch.mockReturnValue(available ? [{ ...provider, pluginId: "example" }] : null);
+  const selected = { ...manifest, origin, trustedOfficialInstall: trusted };
+  expect(resolvePluginCredentialDescriptors(selected)).toEqual(available ? [descriptor] : []);
+  expect(provider.getConfiguredCredentialValue).not.toHaveBeenCalled();
+  if (origin === "bundled") {
     expect(mocks.bundledSearch).toHaveBeenCalledWith(
       expect.objectContaining({ onlyPluginIds: ["example"] }),
     );
+  } else {
+    expect(mocks.bundledSearch).not.toHaveBeenCalled();
+    expect(mocks.bundledFetch).not.toHaveBeenCalled();
+  }
+  if (!trusted) {
     expect(mocks.official).not.toHaveBeenCalled();
-  });
+  }
 });

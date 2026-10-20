@@ -4,9 +4,9 @@ import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listPluginDoctorStateMigrationEntries } from "./doctor-contract-registry.js";
+import { createDoctorGenerationFixture } from "./doctor-generation.test-support.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { withPluginGenerationSourceCustody } from "./plugin-generation-source-lookup.js";
-import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import * as sourceFiles from "./plugin-source-file.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -16,7 +16,7 @@ const write = (root: string, name: string, content: string) =>
 
 function fixture() {
   const rootDir = dirs.make("doctor-source-custody-");
-  const source = path.join(rootDir, "doctor-contract-api.mjs");
+  const { source, input, inventory } = createDoctorGenerationFixture(rootDir, "custody");
   const actions = path.join(rootDir, "actions.mjs");
   write(rootDir, "package.json", '{"type":"module"}');
   write(rootDir, "asset.txt", "original resource");
@@ -34,39 +34,12 @@ function fixture() {
          const asset = new URL("./asset.txt", import.meta.url);
          const resource = fs.readFileSync(asset, "utf8");
          fs.writeFileSync(asset, "changed by callback");
-         const companion = new URL("./z-helper.dat", import.meta.url);
-         return { changes: [version, String(++calls), resource, import.meta.url,
-           fs.existsSync(companion) ? fs.readFileSync(companion, "utf8") : "none"], warnings: [] };
+         return { changes: [version, String(++calls), resource, import.meta.url], warnings: [] };
        }
      }];`,
   );
-  const inventory = {
-    records: [
-      createPluginManifestRecordFixture({
-        id: "custody",
-        rootDir,
-        source,
-        origin: "global",
-        doctorContract: { stateMigrations: [{ id: "repair" }] },
-      }),
-    ],
-    knownPluginIds: ["custody"],
-    sessionStoreOwnerPluginIds: [],
-    descriptors: [],
-    unresolvedPluginIds: [],
-  };
-  const input = {
-    config: {},
-    env: {},
-    stateDir: rootDir,
-    oauthDir: rootDir,
-    context: {
-      openPluginStateKeyedStore() {
-        throw new Error("fixture must not open state");
-      },
-    },
-  };
-  const load = () => listPluginDoctorStateMigrationEntries({ inventory })[0]!.migration;
+  const declared = inventory({ stateMigrations: [{ id: "repair" }] });
+  const load = () => listPluginDoctorStateMigrationEntries({ inventory: declared })[0]!.migration;
   return { rootDir, source, actions, input, load };
 }
 

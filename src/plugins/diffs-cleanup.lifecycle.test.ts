@@ -1,7 +1,10 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { registerTestPlugin } from "../plugin-sdk/plugin-test-contracts.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/plugin-test-runtime.js";
 import {
@@ -50,9 +53,7 @@ it.each([false, true])(
       const { default: diffsPlugin } = await loadBundledPluginFacade<{
         default: OpenClawPluginDefinition;
       }>({ pluginId: "diffs", artifactBasename: "index.js" });
-      if (!diffsPlugin.register) {
-        throw new Error("Diffs has no plugin registration entry point");
-      }
+      assert(diffsPlugin.register, "Diffs has no plugin registration entry point");
       const config = {};
       const builder = createPluginRegistry({
         logger: { info() {}, warn() {}, error() {}, debug() {} },
@@ -66,9 +67,7 @@ it.each([false, true])(
       instance = new PluginInstance("diffs", { record, registry: builder.registry });
       registerTestPlugin({ registry: builder, config, record, register: diffsPlugin.register });
       const opened = vi.mocked(createPluginBlobStore).mock.results.at(-1);
-      if (opened?.type !== "return") {
-        throw new Error("Diffs did not open its registered Blob store");
-      }
+      assert(opened?.type === "return", "Diffs did not open its registered Blob store");
       const store = opened.value;
       services = await startPluginServices({ registry: builder.registry, config });
       // Establish the real store workers before testing the host's fixed drain deadline.
@@ -76,9 +75,7 @@ it.each([false, true])(
       expect(await store.lookup("fixture-startup")).not.toBeNull();
       await store.delete("fixture-startup");
       const tool = builder.registry.tools[0]?.factory({ config });
-      if (!tool || Array.isArray(tool)) {
-        throw new Error("Diffs did not register its tool");
-      }
+      assert(tool && !Array.isArray(tool), "Diffs did not register its tool");
       const heldId = "a".repeat(20);
       const failedId = "b".repeat(20);
       const filesRoot = path.join(root, "openclaw-diffs");
@@ -132,24 +129,21 @@ it.each([false, true])(
         after: "two\n",
         mode: "view",
       });
+      const settle = <T>(value: T, error?: unknown) => {
+        finished = true;
+        return { value, error };
+      };
       const result = invocation.then(
-        (value) => {
-          finished = true;
-          return { value, error: undefined };
-        },
-        (error: unknown) => {
-          finished = true;
-          return { value: undefined, error };
-        },
+        (value) => settle(value),
+        (error: unknown) => settle(undefined, error),
       );
       invocationSettlement = result;
       const beforeInvocationSettles = (milestone: Promise<void>) =>
-        Promise.race([
+        awaitGateBeforeSettlement(
           milestone,
-          result.then(() => {
-            throw new Error("Diffs invocation settled before the fixture milestone");
-          }),
-        ]);
+          result,
+          "Diffs invocation settled before the fixture milestone",
+        );
       await beforeInvocationSettles(writeEntered.promise);
       // The service stops background sweeps; the accepted tool still owns its late work.
       await services.stop();
@@ -159,11 +153,8 @@ it.each([false, true])(
       });
       releaseQuota.resolve();
       await beforeInvocationSettles(siblingFinished.promise);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(finished).toBe(false);
-      expect(drained).toBe(false);
+      await setImmediate();
+      expect({ finished, drained }).toEqual({ finished: false, drained: false });
       expect(await fs.readFile(path.join(heldDirectory, "preview.png"), "utf8")).toBe(heldId);
       releaseRemoval.resolve();
       const outcome = await result;
