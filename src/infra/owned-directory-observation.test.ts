@@ -40,7 +40,7 @@ class SilentWatch extends EventEmitter implements fs.FSWatcher {
 // a missing recursive root with a watch that never reports. Stub recursive handles
 // that way on every runtime so the spy counts only the observer's registrations.
 function spyOnNativeWatch() {
-  const { watch } = nativeWatchFs;
+  const watch = fs.watch;
   return vi
     .spyOn(nativeWatchFs, "watch")
     .mockImplementation((filename, options, listener) =>
