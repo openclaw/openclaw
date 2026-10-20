@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
