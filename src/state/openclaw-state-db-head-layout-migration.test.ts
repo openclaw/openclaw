@@ -1,14 +1,17 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureFreshDoctorMigrationTables } from "../commands/doctor-migration-backup.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
+import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-attribution.js";
-import { recordSessionStateEventInDatabase } from "../sessions/session-state-events.kernel.js";
+import { recordSessionStateEventsInDatabase } from "../sessions/session-state-events.kernel.js";
 import { readSessionStateSequence } from "../sessions/session-state-events.read.worker.js";
+import { sessionStateOperations } from "../sessions/session-state-events.worker.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
@@ -52,18 +55,19 @@ async function withMigrationCustody(pathname: string, run: () => void | Promise<
 }
 
 function record(db: EngineConnection, agentId: string, dedupeKey: string, now: number) {
-  return recordSessionStateEventInDatabase(
-    db,
+  return recordSessionStateEventsInDatabase(db, [
     {
-      sessionKey: "global",
-      agentId,
-      kind: "human_direct_message",
-      actorType: "human",
-      summary: "synthetic event",
-      dedupeKey,
+      event: {
+        sessionKey: "global",
+        agentId,
+        kind: "human_direct_message",
+        actorType: "human",
+        summary: "synthetic event",
+        dedupeKey,
+      },
+      now,
     },
-    now,
-  );
+  ]).rows[0];
 }
 
 function heads(db: EngineConnection) {
@@ -176,7 +180,7 @@ it.each(["runtime", "doctor"] as const)(
         ({ db: writer }) => record(writer, "main", "main-after", 200),
         options,
       );
-      expect(readSessionStateSequence(db, "global", "main")).toBe(inserted.row?.sequence);
+      expect(readSessionStateSequence(db, "global", "main")).toBe(inserted?.sequence);
       expect(readSessionStateSequence(db, "global", "other")).toBe(2);
       expect(
         db
@@ -243,4 +247,90 @@ it("preserves local constraints, generated values, indexes, and triggers during 
   db.exec("UPDATE session_state_heads SET last_sequence = 4");
   expect(db.prepare("SELECT * FROM head_changes").all()).toEqual([{ sequence: 4 }]);
   expect(() => db.exec("UPDATE session_state_heads SET last_sequence = 0")).toThrow(/CHECK/);
+});
+
+it("batches creation heads without rewinding replayed or shared-key agent heads", () => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("head-batch-") };
+  const options = { env, path: resolveOpenClawStateSqlitePath(env) };
+  const database = openOpenClawStateDatabase(options);
+  const grant = admission.createSqliteWorkerOperationAdmission((_request, allow) => allow());
+  const postMessage = grant.port.postMessage.bind(grant.port);
+  // Service the real admission owner synchronously while both ends share this thread.
+  const dispatch = vi.spyOn(grant.port, "postMessage").mockImplementation((message, transfers) => {
+    postMessage(message, transfers);
+    grant.service();
+  });
+  const write = <T>(operation: (db: typeof database) => T) =>
+    admission.withSqliteWorkerOperationAdmission({ port: grant.port }, () =>
+      runOpenClawStateWriteTransaction(operation, options),
+    );
+  const context = {
+    open: () => database,
+    stateOptions: () => options,
+    write,
+    writeAdmitted: write,
+  };
+  const created = (agentId: string, dedupeKey: string) => ({
+    sessionKey: "global",
+    agentId,
+    dedupeKey,
+    kind: "created" as const,
+    actorType: "system" as const,
+    summary: "created",
+  });
+  const events = [
+    created("main", "one"),
+    created("other", "two"),
+    created("main", "three"),
+    created("main", "one"),
+  ];
+  if (!(database.db instanceof DatabaseSync)) {
+    throw new Error("SQLite fixture required");
+  }
+  const counter = trackSqliteStatementExecutions(database.db, ["heads"], (sql) =>
+    /^insert into "session_state_heads"/i.test(sql) ? "heads" : null,
+  );
+  try {
+    const first = sessionStateOperations["sessionState.record"]({ events, now: 100 }, context);
+    expect(first.rows.map((row) => row.sequence)).toEqual([1, 2, 3, 1]);
+    expect(counter.counts.heads).toBe(1);
+    database.db.exec(
+      "UPDATE session_state_heads SET pruned_max_sequence = 1 WHERE agent_id = 'main'",
+    );
+    sessionStateOperations["sessionState.record"](
+      { events: [created("main", "four"), events[0]!], now: 200 },
+      context,
+    );
+    const stored = heads(database.db);
+    expect(stored).toEqual([
+      {
+        session_key: "global",
+        agent_id: "main",
+        last_sequence: 5,
+        pruned_max_sequence: 1,
+        updated_at: 200,
+      },
+      {
+        session_key: "global",
+        agent_id: "other",
+        last_sequence: 2,
+        pruned_max_sequence: 0,
+        updated_at: 100,
+      },
+    ]);
+    expect(() =>
+      write(() => {
+        sessionStateOperations["sessionState.record"](
+          { events: [created("main", "rolled-back")], now: 300 },
+          context,
+        );
+        throw new Error("rollback batch");
+      }),
+    ).toThrow("rollback batch");
+    expect(heads(database.db)).toEqual(stored);
+  } finally {
+    counter.restore();
+    dispatch.mockRestore();
+    grant.finish();
+  }
 });

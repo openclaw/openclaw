@@ -11,6 +11,7 @@ import {
   type ProviderOperationDeadline,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   parseSageBatchResponse,
   parseSageResponse,
@@ -76,29 +77,20 @@ export async function executeSageRequest(
     operation: "Sage input validation",
   });
   const signal = validation.signal;
-  let onAbort: (() => void) | undefined;
   try {
-    if (!signal) {
-      throw new Error("Sage validation requires a deadline signal");
-    }
-    signal.throwIfAborted();
-    const aborted = new Promise<never>((_resolve, reject) => {
-      onAbort = () => reject(new Error("Sage validation aborted"));
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
     // The normal media owner retains its read-only probe; cancellation must not
     // leave this request waiting for it or allow a later HTTP effect.
-    await Promise.race([validateSageRequest(request, transport.probeImage), aborted]);
-    signal.throwIfAborted();
+    await racePromiseWithAbortSignal(
+      () => validateSageRequest(request, transport.probeImage),
+      signal,
+    );
+    signal?.throwIfAborted();
   } catch {
     transport.signal?.throwIfAborted();
     signal?.throwIfAborted();
     remaining();
     throw new SageRequestError();
   } finally {
-    if (onAbort) {
-      signal?.removeEventListener("abort", onAbort);
-    }
     validation.cleanup();
   }
   transport.signal?.throwIfAborted();

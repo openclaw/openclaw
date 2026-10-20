@@ -236,6 +236,8 @@ suite.define(() => {
       await captureStatus(page, "collapsed-avatar-flag", flag, [retainedStatus, flag]);
       await page.mouse.move(600, 400);
       await flag.waitFor({ state: "hidden" });
+      await pauseVirtualClock(page);
+      await gateway.closeLatest(1006, "synthetic failed attempt");
       await retainedStatus.focus();
       await retry.waitFor({ state: "visible" });
       await page.keyboard.press("Tab");
@@ -397,6 +399,7 @@ suite.define(() => {
         expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(390);
         expect(await footer.textContent()).not.toContain("in outbox");
         const socketCount = await gateway.getSocketCount();
+        await gateway.closeLatest(1006, "synthetic failed attempt");
         await retry.click();
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
         await gateway.setOnline(true);

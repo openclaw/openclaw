@@ -11,7 +11,7 @@ import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
-import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
+import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const repoRoot = process.cwd();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -77,7 +77,8 @@ describe("scripts/pr prepare mode preflight", () => {
     "rejects invalid gate modes before prepare observations, locks, or evidence retirement",
     () => {
       const root = tempDirs.make("openclaw-pr-gate-preflight-");
-      copyPrWrapperSources(root);
+      const components = copyPrWrapperSources(root);
+      linkPrWrapperDependencies(root);
       const bin = join(root, "bin");
       mkdirSync(bin);
       const env = {
@@ -93,7 +94,23 @@ describe("scripts/pr prepare mode preflight", () => {
         expect(result.status, result.stderr).toBe(0);
         return result.stdout.trim();
       };
-      git("init", "-q");
+      git("init", "-q", "-b", "main");
+      git("add", "--", ...components);
+      git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-qm",
+        "Wrapper",
+      );
+      git("remote", "add", "origin", root);
+      git("update-ref", "refs/remotes/origin/main", "HEAD");
       const reviewRoot = join(root, ".worktrees/pr-123");
       const head = "a".repeat(40);
       const review = validReview(head);

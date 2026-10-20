@@ -148,6 +148,7 @@ openclaw_e2e_maybe_timeout() { shift; "$@"; }
 openclaw_e2e_probe_tcp() { [ "$FAULT" = listener ]; }
 openclaw_e2e_print_log() { cat "$1"; }
 prepare_restart_inference() { printf 'inference\n'; }
+prepare_restart_plugin_release_selectors() { printf 'selectors\n'; }
 prepare_restart_fixture() { printf 'fixture\n'; }
 install_update_restart_systemctl_shim() { printf 'manager\n'; }
 run_update_restart_probe_gateway() {
@@ -171,7 +172,7 @@ repair_update_restart_auth
   expect(result.status, result.stderr).toBe(code);
   expect(result.stdout.trim().split("\n")).toEqual(
     code === 0
-      ? ["stop", "inference", "fixture", "manager", "prepared", "auth", "update"]
+      ? ["stop", "inference", "selectors", "fixture", "manager", "prepared", "auth", "update"]
       : ["stop"],
   );
   if (code !== 0) {

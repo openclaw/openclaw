@@ -13,6 +13,7 @@ import type {
   SessionEntryArchiveReason,
   SessionRow,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { projectCronRunHistoryPage } from "../../../src/cron/run-history.js";
 import type { CronListPageResult } from "../../../src/cron/service/list-page-types.js";
 import type { CronStatusSummary } from "../../../src/cron/service/state.js";
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
@@ -192,14 +193,7 @@ export type CronJobsListResult<Row = ProtocolCronJob> = Omit<CronListPageResult,
   jobs: Row[];
 };
 
-export type CronRunsResult = {
-  entries: ProtocolCronRunLogEntry[];
-  total?: number;
-  limit?: number;
-  offset?: number;
-  nextOffset?: number | null;
-  hasMore?: boolean;
-};
+export type CronRunsResult = ReturnType<typeof projectCronRunHistoryPage>;
 
 export type {
   SkillStatusEntry,

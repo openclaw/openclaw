@@ -4,7 +4,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resolveCheckoutChip } from "./checkout-chip.ts";
 import { CheckoutChip } from "./checkout-chip.tsx";
-import type { DraftBranches } from "./discovery.ts";
+import type { DraftRepositoryState } from "./discovery.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
@@ -17,7 +17,7 @@ type CheckoutFixture = {
   worktree: boolean;
   worktreeAvailable: boolean;
   repositoryUnavailable?: boolean;
-  branches: DraftBranches | null;
+  branches: Omit<Extract<DraftRepositoryState, { kind: "git" }>, "kind"> | null;
   branchesLoading: boolean;
   baseRef: string;
   worktreeName: string;

@@ -509,11 +509,10 @@ export async function waitForPendingChatSettings(
   host: ChatHost,
   sessionKey: string,
   initialPending: Promise<boolean>,
-  agentId?: string,
 ): Promise<boolean> {
   let pending = initialPending;
   while (await pending) {
-    const nextPending = getPendingChatPickerPatch(host, sessionKey, agentId);
+    const nextPending = getPendingChatPickerPatch(host, sessionKey);
     if (!nextPending || nextPending === pending) {
       return true;
     }

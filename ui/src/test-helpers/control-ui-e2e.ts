@@ -620,7 +620,7 @@ export async function startControlUiE2eServer(
     define: controlUiRuntimeDefines("serve", resolvedBuildInfo),
     logLevel: "error",
     optimizeDeps: {
-      include: ["ipaddr.js", ...commonJsOptimizeDeps],
+      include: ["ipaddr.js", "@solidjs/testing-library", ...commonJsOptimizeDeps],
     },
     publicDir: path.join(uiRoot, "public"),
     plugins: [

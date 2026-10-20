@@ -231,7 +231,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/channels/inbound-event/envelope.worker.test.ts",
   "src/model-catalog/remote-refresh.test.ts",
   "src/model-catalog/remote-store.test.ts",
-  "src/agents/subagents/spawn/acp-parent-stream-store.sqlite.test.ts",
   "src/infra/exec-approval-session-target.incognito.test.ts",
   "src/config/sessions/session-sharing-store.incognito.test.ts",
   "src/gateway/session-incognito-lifetime.actor.test.ts",

@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as manifestRegistry from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { runIsolatedAgentRuntimeCompletion } from "../plugins/runtime/runtime-llm-isolated.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -40,6 +41,24 @@ afterEach(async () => {
 
 function assistantResult() {
   return { assistant: isolatedAssistant([{ type: "text", text: "done" }]) };
+}
+
+function runCompletion(entry: "core" | "plugin", abortSignal?: AbortSignal) {
+  const request = isolatedRequest();
+  return entry === "core"
+    ? runIsolatedCompletion({ ...request, abortSignal })
+    : runIsolatedAgentRuntimeCompletion({
+        request: {
+          messages: [{ role: "user", content: request.prompt }],
+          systemPrompt: request.systemPrompt,
+          execution: { mode: "isolated-agent-runtime", timeoutMs: request.timeoutMs },
+          signal: abortSignal,
+        },
+        cfg: request.config,
+        agentId: "main",
+        provider: request.provider,
+        model: request.model,
+      });
 }
 
 it.each(["cli", "v1", "v2"] as const)(
@@ -81,9 +100,13 @@ it.each(["cli", "v1", "v2"] as const)(
   },
 );
 
-it.each(["lease", "error"] as const)(
-  "retains blocked acquisition until its late %s settles after timeout",
-  async (settlement) => {
+it.each([
+  { entry: "core", settlement: "lease" },
+  { entry: "core", settlement: "error" },
+  { entry: "plugin", settlement: "lease" },
+] as const)(
+  "retains blocked $entry acquisition until its late $settlement settles after timeout",
+  async ({ entry, settlement }) => {
     const started = createDeferredCore<AbortSignal>();
     const finish = createDeferredCore();
     let finished = false;
@@ -96,15 +119,28 @@ it.each(["lease", "error"] as const)(
       }
       return { snapshot: preparedModelRuntime, [Symbol.asyncDispose]: releaseRuntimeLease };
     });
-    const pending = work.run(() => runIsolatedCompletion(isolatedRequest()));
-    const outcome = expect(pending).rejects.toMatchObject(timedOut);
+    const reason =
+      entry === "core"
+        ? timedOut
+        : { name: "Error", message: "Isolated completion timed out after 1000ms." };
+    const pending = work.run(() => runCompletion(entry));
+    const outcome = expect(pending).rejects.toMatchObject(
+      entry === "core"
+        ? timedOut
+        : {
+            name: "LlmCompleteError",
+            code: "LLM_COMPLETION_TIMEOUT",
+            message: "Plugin LLM completion timed out after 1000ms.",
+            cause: reason,
+          },
+    );
     try {
       const signal = await started.promise;
       clock = 1_000;
       await vi.advanceTimersByTimeAsync(1_000);
       await outcome;
       expect(signal.aborted).toBe(true);
-      expect(signal.reason).toMatchObject(timedOut);
+      expect(signal.reason).toMatchObject(reason);
       expect(finished).toBe(false);
       expect(work.hasPendingWork).toBe(true);
       expect(releaseRuntimeLease).not.toHaveBeenCalled();
@@ -306,36 +342,46 @@ it("charges native auth preparation before rotating profiles within the remainin
   expect(dispatch.mock.calls.map(([params]) => params.timeoutMs)).toEqual([800, 400]);
 });
 
-it("preserves caller cancellation while blocked preparation drains", async () => {
-  const started = createDeferredCore();
-  const finish = createDeferredCore();
-  const controller = new AbortController();
-  const reason = new Error("caller canceled");
-  const prepare = mocks.prepareSimpleCompletionModel.getMockImplementation()!;
-  mocks.prepareSimpleCompletionModel.mockImplementation(async () => {
-    started.resolve();
-    await finish.promise;
-    return await prepare();
-  });
-  const dispatch = vi.fn(async () => assistantResult());
-  registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
-  const pending = work.run(() =>
-    runIsolatedCompletion({ ...isolatedRequest(), abortSignal: controller.signal }),
-  );
-  const outcome = expect(pending).rejects.toBe(reason);
-  try {
-    await started.promise;
-    controller.abort(reason);
-    await outcome;
-    expect(vi.getTimerCount()).toBe(0);
-    expect(releaseRuntimeLease).not.toHaveBeenCalled();
-  } finally {
-    finish.resolve();
-    await work.drain();
-  }
-  expect(dispatch).not.toHaveBeenCalled();
-  expect(releaseRuntimeLease).toHaveBeenCalledOnce();
-});
+it.each(["core", "plugin"] as const)(
+  "preserves %s caller cancellation while blocked preparation drains",
+  async (entry) => {
+    const started = createDeferredCore();
+    const finish = createDeferredCore();
+    const controller = new AbortController();
+    const reason = new Error("caller canceled");
+    const prepare = mocks.prepareSimpleCompletionModel.getMockImplementation()!;
+    mocks.prepareSimpleCompletionModel.mockImplementation(async () => {
+      started.resolve();
+      await finish.promise;
+      return await prepare();
+    });
+    const dispatch = vi.fn(async () => assistantResult());
+    registerIsolatedHarness({ runIsolatedCompletionV2: dispatch });
+    const pending = work.run(() => runCompletion(entry, controller.signal));
+    const rejection = expect(pending).rejects;
+    const outcome =
+      entry === "core"
+        ? rejection.toBe(reason)
+        : rejection.toMatchObject({
+            name: "LlmCompleteError",
+            code: "LLM_COMPLETION_ABORTED",
+            message: "Plugin LLM completion was aborted.",
+            cause: reason,
+          });
+    try {
+      await started.promise;
+      controller.abort(reason);
+      await outcome;
+      expect(vi.getTimerCount()).toBe(0);
+      expect(releaseRuntimeLease).not.toHaveBeenCalled();
+    } finally {
+      finish.resolve();
+      await work.drain();
+    }
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+  },
+);
 
 it("does not acquire a runtime after an already-expired deadline", async () => {
   await expect(
