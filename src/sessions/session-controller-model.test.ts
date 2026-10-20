@@ -50,6 +50,16 @@ function release(claim: SessionControllerMailboxClaim) {
   return claim.settlement.promise;
 }
 
+function operationFor(sessionKey: string, sessionId = "pilot-session") {
+  return createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+}
+
+function recordClaim(source: SessionControllerInput, turns: string[], id = source.sourceTurnId!) {
+  return claimSessionControllerTask(source, () => {
+    turns.push(id);
+  });
+}
+
 /** Calls public owner operations, never the runtime reducer under test. */
 async function replay(events: readonly PilotEvent[], label: string) {
   let model = initialPilotState();
@@ -69,11 +79,7 @@ async function replay(events: readonly PilotEvent[], label: string) {
   const deliveries: ReturnType<typeof createDeferredCore<void>>[] = [];
   const operations: ReturnType<typeof createReplyOperation>[] = [];
   const create = () => {
-    const operation = createReplyOperation({
-      sessionKey: key,
-      sessionId: "pilot-session",
-      resetTriggered: false,
-    });
+    const operation = operationFor(key);
     const delivery = createDeferredCore();
     deliveries.push(delivery);
     operations.push(operation);
@@ -181,11 +187,10 @@ async function replay(events: readonly PilotEvent[], label: string) {
             break;
           }
           attempts.set(event.input.id, attempt);
-          if (gates.has(event.input.id)) {
-            custody.set(event.input.id, "offered");
-          } else {
-            custody.set(event.input.id, (await attempt.outcome).status);
-          }
+          custody.set(
+            event.input.id,
+            gates.has(event.input.id) ? "offered" : (await attempt.outcome).status,
+          );
           break;
         }
         case "receipt": {
@@ -282,11 +287,7 @@ function startForegroundBeforeResend(
 describe("session controller executable pilot", () => {
   it("gives each owed completion and settle identity exactly one FIFO parent turn", async () => {
     const key = "agent:main:completion-mailbox-model";
-    const active = createReplyOperation({
-      sessionKey: key,
-      sessionId: "active",
-      resetTriggered: false,
-    });
+    const active = operationFor(key, "active");
     active.setPhase("running");
     const offered: PilotParentInput[] = [
       { id: "user-before", kind: "user", owedAt: 1 },
@@ -304,25 +305,18 @@ describe("session controller executable pilot", () => {
     );
     expect(sources[1]).toBe(sources[2]);
     const unique = sources.filter((source, index) => sources.indexOf(source) === index);
-    const sourceIds = new Map(
-      unique.map((source) => [source, offered[sources.indexOf(source)]!.id]),
-    );
     const turns: string[] = [];
     const pending = unique.map((source) =>
-      claimSessionControllerTask(source, () => {
-        turns.push(sourceIds.get(source)!);
-      }),
+      recordClaim(source, turns, offered[sources.indexOf(source)]!.id),
     );
     active.abortByUser();
     active.complete();
     try {
       for (const claim of pending) {
-        const admitted = await claim;
-        await release(admitted);
+        await release(await claim);
       }
       expect(turns).toEqual(expected.map((input) => input.id));
-      expect(turns.filter((id) => id === "completion:a:1")).toHaveLength(1);
-      expect(turns.filter((id) => id === "settle:batch:1:0")).toHaveLength(1);
+      expect(turns).toEqual(["user-before", "completion:a:1", "settle:batch:1:0", "user-after"]);
     } finally {
       for (const source of unique) {
         retireSessionControllerInput(source);
@@ -345,10 +339,7 @@ describe("session controller executable pilot", () => {
     const turns: string[] = [];
     try {
       for (const source of rebuilt) {
-        const claim = await claimSessionControllerTask(source, () => {
-          turns.push(source.sourceTurnId!);
-        });
-        await release(claim);
+        await release(await recordClaim(source, turns));
       }
       expect(turns).toEqual(["completion:earlier", "settle:later"]);
     } finally {
@@ -362,14 +353,11 @@ describe("session controller executable pilot", () => {
     const key = "agent:main:recovery-join-model";
     const turns: string[] = [];
     let resendTurn: Promise<SessionControllerMailboxClaim> | undefined;
-    // The startup RPC already waits behind the foreground claim when the foreground joins.
     const { foreground, foregroundClaim, joined } = startForegroundBeforeResend(
       key,
       "main-session-recovery:recovery-session:cycle:1",
       (resend) => {
-        resendTurn = claimSessionControllerTask(resend, () => {
-          turns.push("resend");
-        });
+        resendTurn = recordClaim(resend, turns, "resend");
       },
     );
     try {
@@ -398,10 +386,7 @@ describe("session controller executable pilot", () => {
     await release(foregroundClaim);
 
     const turns: string[] = [];
-    const resendClaim = await claimSessionControllerTask(resend, () => {
-      turns.push("resend");
-    });
-    releaseSessionControllerClaim(resendClaim);
+    releaseSessionControllerClaim(await recordClaim(resend, turns, "resend"));
     await resend.settlement.promise;
     expect(turns).toEqual(["resend"]);
   });
@@ -417,9 +402,10 @@ describe("session controller executable pilot", () => {
     }
   });
 
-  it("keeps finishing cancellation separate from the backend injection capability", async () => {
-    await replay(
-      [
+  it.each<{ name: string; events: PilotEvent[] }>([
+    {
+      name: "keeps finishing cancellation separate from the backend injection capability",
+      events: [
         { type: "run" },
         { type: "finish" },
         { type: "offer", input: { id: "still-available", authority: "alice-policy" } },
@@ -430,13 +416,10 @@ describe("session controller executable pilot", () => {
         { type: "complete" },
         { type: "delivery-settled" },
       ],
-      "finishing capability",
-    );
-  });
-
-  it("retains uncertain input custody while refusing another sender during compaction", async () => {
-    await replay(
-      [
+    },
+    {
+      name: "retains uncertain input custody while refusing another sender during compaction",
+      events: [
         { type: "run" },
         { type: "compact", active: true },
         { type: "offer", input: { id: "other-sender", authority: "bob-policy" } },
@@ -447,13 +430,10 @@ describe("session controller executable pilot", () => {
         { type: "complete" },
         { type: "delivery-settled" },
       ],
-      "indeterminate custody",
-    );
-  });
-
-  it("rejects a delayed receipt from a same-ID replaced operation", async () => {
-    await replay(
-      [
+    },
+    {
+      name: "rejects a delayed receipt from a same-ID replaced operation",
+      events: [
         { type: "run" },
         { type: "offer", input: { id: "old-input", authority: "alice-policy" } },
         { type: "complete" },
@@ -464,16 +444,11 @@ describe("session controller executable pilot", () => {
         { type: "complete" },
         { type: "delivery-settled" },
       ],
-      "exact-instance replacement",
-    );
-  });
+    },
+  ])("$name", async ({ name, events }) => replay(events, name));
 
   it("keeps a restart-interrupted lifecycle lease until the actual owner and delivery settle", async () => {
-    const operation = createReplyOperation({
-      sessionKey: "agent:main:pilot-lease",
-      sessionId: "pilot-lease",
-      resetTriggered: false,
-    });
+    const operation = operationFor("agent:main:pilot-lease", "pilot-lease");
     operation.setPhase("running");
     const delivery = createDeferredCore();
     const lease = await beginSessionEffect({

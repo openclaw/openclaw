@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withSessionTurn } from "./session-controller.admission.js";
 import { ReplyRunAlreadyActiveError } from "./session-controller.contracts.js";
@@ -19,6 +19,7 @@ import {
   type SessionControllerEntry,
 } from "./session-controller.state.js";
 
+const turnKinds = ["visible", "heartbeat", "queued_followup", "direct"] as const;
 afterEach(() => {
   sessionControllers.clear();
 });
@@ -42,6 +43,14 @@ function reserve(
   });
 }
 
+function turnParams(target: ReturnType<typeof targetFor>, materialize = true) {
+  return {
+    target,
+    sessionKey: target.sessionKey,
+    ...(materialize ? { sessionId: target.incarnation } : {}),
+  };
+}
+
 async function releaseInput(
   input: ReturnType<typeof reserve>,
   pending: ReturnType<typeof claimSessionControllerTask>,
@@ -55,8 +64,7 @@ async function releaseInput(
 }
 
 it("runs a turn its own mutation requests ahead of the inputs that mutation keeps waiting", async () => {
-  // sessions.compact owns no turn: it fences an idle session with a compaction
-  // mutation, then manual compaction requests its controller turn from inside it.
+  // Manual compaction requests its turn from inside the idle session's mutation fence.
   const target = targetFor("mutation-owned-turn");
   const order: string[] = [];
   const cancel = new AbortController();
@@ -69,9 +77,7 @@ it("runs a turn its own mutation requests ahead of the inputs that mutation keep
     run: async () => {
       const turn = withSessionTurn(
         {
-          sessionKey: target.sessionKey,
-          sessionId: target.incarnation,
-          target,
+          ...turnParams(target),
           abortSignal: cancel.signal,
         },
         async (operation) => {
@@ -138,12 +144,10 @@ it.each([false, true])(
       incarnation: "borrowed-claim-session",
     });
     const caller = new AbortController();
-    await withSessionTurn({ target, sessionKey: target.sessionKey }, async (_, outerSignal) => {
+    await withSessionTurn(turnParams(target, false), async (_, outerSignal) => {
       await withSessionTurn(
         {
-          target,
-          sessionKey: target.sessionKey,
-          ...(materialize ? { sessionId: target.incarnation } : {}),
+          ...turnParams(target, materialize),
           abortSignal: caller.signal,
         },
         async (operation, signal) => {
@@ -165,11 +169,7 @@ it.each([false, true])(
       sessionKey: `agent:main:ambient-input-${materialize}`,
       incarnation: "incarnation",
     });
-    const params = {
-      target,
-      sessionKey: target.sessionKey,
-      ...(materialize ? { sessionId: target.incarnation } : {}),
-    };
+    const params = turnParams(target, materialize);
     let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
     let nested: Promise<void> | undefined;
     let nestedStarted = false;
@@ -199,7 +199,7 @@ it.each([false, true])(
   },
 );
 
-it.each(["visible", "heartbeat", "queued_followup", "direct"] as const)(
+it.each(turnKinds)(
   "keeps direct %s admission behind an unclaimed source's cleanup receipt",
   async (kind) => {
     const sessionId = "cleanup-session";
@@ -217,9 +217,8 @@ it.each(["visible", "heartbeat", "queued_followup", "direct"] as const)(
     let operation: ReturnType<typeof createReplyOperation> | undefined;
     const create = () => {
       operation = createReplyOperation({
-        sessionKey: target.sessionKey,
+        ...turnParams(target),
         sessionId,
-        target,
         resetTriggered: false,
         turnKind: kind,
       });
@@ -267,50 +266,48 @@ it("keeps interrupt execution behind a cancelled unclaimed source's raw cleanup"
   }
 });
 
-describe("turn admission parity", () => {
-  it.each(
-    (["visible", "heartbeat", "queued_followup", "direct"] as const).flatMap((kind) => [
-      { kind, deliveryPending: false },
-      { kind, deliveryPending: true },
-    ]),
-  )(
-    "makes mailbox and direct creation agree for $kind (delivery pending=$deliveryPending)",
-    async ({ kind, deliveryPending }) => {
-      const blocked = deliveryPending && (kind === "heartbeat" || kind === "queued_followup");
-      const sessionKey = `agent:main:admission-parity:${kind}:${deliveryPending}`;
-      const entry = getSessionControllerEntry(sessionKey);
-      const input = reserveSessionControllerSource(sessionKey, { policy: { mode: "followup" } });
-      if (deliveryPending) {
-        entry.followupBarrier = {} as NonNullable<SessionControllerEntry["followupBarrier"]>;
-      }
+it.each(
+  turnKinds.flatMap((kind) => [
+    { kind, deliveryPending: false },
+    { kind, deliveryPending: true },
+  ]),
+)(
+  "makes mailbox and direct creation agree for $kind (delivery pending=$deliveryPending)",
+  async ({ kind, deliveryPending }) => {
+    const blocked = deliveryPending && (kind === "heartbeat" || kind === "queued_followup");
+    const sessionKey = `agent:main:admission-parity:${kind}:${deliveryPending}`;
+    const entry = getSessionControllerEntry(sessionKey);
+    const input = reserveSessionControllerSource(sessionKey, { policy: { mode: "followup" } });
+    if (deliveryPending) {
+      entry.followupBarrier = {} as NonNullable<SessionControllerEntry["followupBarrier"]>;
+    }
 
-      const claim = tryClaimSessionControllerTask(input, kind);
-      expect(Boolean(claim)).toBe(!blocked);
-      let operation: ReturnType<typeof createReplyOperation> | undefined;
-      const create = () => {
-        operation = createReplyOperation({
-          sessionKey,
-          sessionId: `session-${kind}`,
-          resetTriggered: false,
-          turnKind: kind,
-          mailboxClaim: claim,
-        });
-      };
-      if (blocked) {
-        expect(create).toThrow("Reply follow-up admission is blocked");
-      } else {
-        expect(create).not.toThrow();
-      }
+    const claim = tryClaimSessionControllerTask(input, kind);
+    expect(Boolean(claim)).toBe(!blocked);
+    let operation: ReturnType<typeof createReplyOperation> | undefined;
+    const create = () => {
+      operation = createReplyOperation({
+        sessionKey,
+        sessionId: `session-${kind}`,
+        resetTriggered: false,
+        turnKind: kind,
+        mailboxClaim: claim,
+      });
+    };
+    if (blocked) {
+      expect(create).toThrow("Reply follow-up admission is blocked");
+    } else {
+      expect(create).not.toThrow();
+    }
 
-      operation?.complete();
-      if (claim) {
-        releaseSessionControllerClaim(claim);
-        await claim.settlement.promise;
-      } else {
-        entry.followupBarrier = undefined;
-        retireSessionControllerInput(input);
-        await input.settlement.promise;
-      }
-    },
-  );
-});
+    operation?.complete();
+    if (claim) {
+      releaseSessionControllerClaim(claim);
+      await claim.settlement.promise;
+    } else {
+      entry.followupBarrier = undefined;
+      retireSessionControllerInput(input);
+      await input.settlement.promise;
+    }
+  },
+);
