@@ -7,6 +7,7 @@ import {
   mockSubagentSweeperChildLookup,
   createSubagentSweeperRun as run,
 } from "./subagent-registry-sweeper.test-support.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 export function createSubagentKillFixture() {
   const killIntent: NonNullable<ReturnType<typeof run>["killIntent"]> = {
@@ -17,7 +18,7 @@ export function createSubagentKillFixture() {
     sessionLifecycleRevision: "session-revision",
   };
   const entry = { ...run(), killIntent };
-  const runs = new Map([[entry.runId, entry]]);
+  const runs = new Map<string, SubagentRunRecord>([[entry.runId, entry]]);
   const childLookup = mockSubagentSweeperChildLookup(runs);
   const options = {
     runId: entry.runId,

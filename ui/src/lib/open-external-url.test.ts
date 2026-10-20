@@ -6,7 +6,10 @@ import {
   resolveSafeExternalUrl,
 } from "./open-external-url.ts";
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
 
 describe("resolveSafeExternalUrl", () => {
   const baseHref = "https://openclaw.ai/chat";
