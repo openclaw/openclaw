@@ -1,4 +1,3 @@
-// Codex tests cover attempt timeouts plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -8,38 +7,22 @@ import {
   withCodexStartupTimeout,
 } from "./attempt-timeouts.js";
 
-const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
-
 describe("Codex app-server attempt timeouts", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
 
   it("resolves startup timeout with a configurable floor", () => {
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 5 })).toBe(
-      CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
-    );
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 500 })).toBe(500);
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 5, timeoutFloorMs: 250 })).toBe(250);
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: Number.NaN })).toBe(
-      CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
-    );
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: 500, timeoutFloorMs: Number.NaN })).toBe(500);
-    expect(resolveCodexStartupTimeoutMs({ timeoutMs: Number.MAX_SAFE_INTEGER })).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
-    expect(
-      resolveCodexStartupTimeoutMs({
-        timeoutMs: Number.MAX_SAFE_INTEGER,
-        timeoutFloorMs: Number.MAX_SAFE_INTEGER,
-      }),
-    ).toBe(MAX_TIMER_TIMEOUT_MS);
-    expect(
-      resolveCodexStartupTimeoutMs({
-        timeoutMs: Number.NaN,
-        timeoutFloorMs: Number.NaN,
-      }),
-    ).toBe(CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS);
+    const resolve = (timeoutMs: number, timeoutFloorMs?: number) =>
+      resolveCodexStartupTimeoutMs({ timeoutMs, timeoutFloorMs });
+    expect(resolve(5)).toBe(100);
+    expect(resolve(500)).toBe(500);
+    expect(resolve(5, 250)).toBe(250);
+    expect(resolve(Number.NaN)).toBe(100);
+    expect(resolve(500, Number.NaN)).toBe(500);
+    expect(resolve(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolve(Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(resolve(Number.NaN, Number.NaN)).toBe(100);
   });
 
   it("bounds startup by request timeouts when the turn budget is longer", () => {

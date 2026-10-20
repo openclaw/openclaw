@@ -1,4 +1,3 @@
-// Codex tests cover attempt startup plugin behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,6 +62,22 @@ const tempRoots = new Set<string>();
 const pluginConfig: CodexPluginConfig = { appServer: { command: "codex" } };
 
 const startThreadWithHarness = createAttemptThreadStarter(tempRoots, pluginConfig);
+type StartupOptions = NonNullable<Parameters<typeof startThreadWithHarness>[2]>;
+const runStartup = (options: StartupOptions) => startThreadWithHarness(5_000, undefined, options);
+const outcome = <T>(run: Promise<T>) =>
+  run.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+function releaseAttempt(result: Awaited<ReturnType<typeof runStartup>["run"]>) {
+  result.turnRoute.release();
+  result.releaseSharedClientLease();
+}
+function expectStartupError(error: unknown, reason: "aborted" | "timed_out", message: string) {
+  expect(error).toBeInstanceOf(Error);
+  expect(isCodexAppServerStartupError(error, reason)).toBe(true);
+  expect(error).toHaveProperty("message", message);
+}
 
 async function startIsolatedPairedAttempt(params: {
   harness: ClientHarness;
@@ -83,7 +98,7 @@ async function startIsolatedPairedAttempt(params: {
     placementSessionId: params.sessionId,
     placementOwnerEpoch: 1,
   };
-  const run = startThreadWithHarness(5_000, new AbortController().signal, {
+  const run = runStartup({
     harness: params.harness,
     paths,
     skipStartSpy: true,
@@ -160,8 +175,7 @@ async function bindToRetiredLeasedOwner() {
     }),
   ).toMatchObject({ threadId: bound.thread.threadId });
   await owner.endTurn(bound.thread.threadId);
-  bound.turnRoute.release();
-  bound.releaseSharedClientLease();
+  releaseAttempt(bound);
   const releaseOwnerPeer = retainSharedCodexAppServerClientIfCurrent(owner.client);
   expect(releaseOwnerPeer).toBeTypeOf("function");
   retireSharedCodexAppServerClientIfCurrent(owner.client);
@@ -215,7 +229,7 @@ describe("startCodexAttemptThread", () => {
     const command = path.join(paths.workspaceDir, "codex-runtime");
     await fs.writeFile(command, "native-v1");
     const harness = createAttemptClientHarness();
-    const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
+    const { run } = runStartup({
       harness,
       paths,
       pluginConfig: { appServer: { command } },
@@ -240,7 +254,7 @@ describe("startCodexAttemptThread", () => {
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: configuredPlugin });
     const expected = await captureExpectedRuntimeArtifact(appServer);
     const harness = createAttemptClientHarness();
-    const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
+    const { run } = runStartup({
       harness,
       paths,
       pluginConfig: configuredPlugin,
@@ -253,8 +267,7 @@ describe("startCodexAttemptThread", () => {
     const result = await run;
 
     expect(result.runtimeArtifact).toEqual(expected);
-    result.turnRoute.release();
-    result.releaseSharedClientLease();
+    releaseAttempt(result);
   });
 
   it("retires a failed startup client after another active lease releases", async () => {
@@ -274,7 +287,7 @@ describe("startCodexAttemptThread", () => {
     await answerInitialize(retained);
     await expect(retainedLease).resolves.toBe(retained.client);
 
-    const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
+    const { run } = runStartup({
       harness: retained,
       paths,
       skipStartSpy: true,
@@ -328,8 +341,7 @@ describe("startCodexAttemptThread", () => {
     };
     const ordinary = await startThreadWithHarness(5_000, undefined, common).run;
     await harness.endTurn(ordinary.thread.threadId);
-    ordinary.turnRoute.release();
-    ordinary.releaseSharedClientLease();
+    releaseAttempt(ordinary);
     const incognito = {
       ...common,
       buildAttemptParams: () => ({
@@ -343,8 +355,7 @@ describe("startCodexAttemptThread", () => {
       configFingerprint: previous.thread.liveThreadConfigFingerprint,
       ephemeralPolicy: previous.thread.liveThreadEphemeralPolicy,
     });
-    previous.turnRoute.release();
-    previous.releaseSharedClientLease();
+    releaseAttempt(previous);
 
     const sibling = retainSharedCodexAppServerClientIfCurrent(harness.client);
     expect(sibling).toBeTypeOf("function");
@@ -369,17 +380,13 @@ describe("startCodexAttemptThread", () => {
       "configRequirements/read",
     ]);
     expect(start).toHaveBeenCalledTimes(1);
-    continued.turnRoute.release();
-    continued.releaseSharedClientLease();
+    releaseAttempt(continued);
   });
 
   it("keeps the healthy startup client when a stop ends its wait for a retired owner's exit", async () => {
     const fixture = await bindToRetiredLeasedOwner();
     const stop = new AbortController();
-    const stopped = fixture.startOn(fixture.healthy, stop.signal).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const stopped = outcome(fixture.startOn(fixture.healthy, stop.signal));
     await fixture.exitWaitStarted;
     stop.abort();
 
@@ -398,17 +405,13 @@ describe("startCodexAttemptThread", () => {
     expect(fixture.ownerExitCodesAtResume).toEqual([0]);
     expect(fixture.start).toHaveBeenCalledTimes(2);
     expect(fixture.healthy.stdinDestroyed).toBe(false);
-    resumed.turnRoute.release();
-    resumed.releaseSharedClientLease();
+    releaseAttempt(resumed);
   });
 
   it("retires the startup client when its deadline ends a wait for a retired owner's exit", async () => {
     const fixture = await bindToRetiredLeasedOwner();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const timedOut = fixture.startOn(fixture.healthy, undefined, 1_000).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const timedOut = outcome(fixture.startOn(fixture.healthy, undefined, 1_000));
     await fixture.exitWaitStarted;
     await vi.advanceTimersByTimeAsync(1_000);
 
@@ -452,10 +455,7 @@ describe("startCodexAttemptThread", () => {
         paths,
         buildAttemptParams: () => attemptParams,
       });
-      const runError = run.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      const runError = outcome(run);
       if (blocked.method !== "initialize") {
         await answerInitialize(harness);
       }
@@ -474,9 +474,7 @@ describe("startCodexAttemptThread", () => {
           timeout: 1_000,
         });
       }
-      expect(error).toBeInstanceOf(Error);
-      expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
-      expect((error as Error).message).toBe("codex app-server startup timed out");
+      expectStartupError(error, "timed_out", "codex app-server startup timed out");
       expect(harness.stdinDestroyed).toBe(blocked.method !== "initialize");
       expect(timeoutWarnings).toEqual([
         {
@@ -512,15 +510,12 @@ describe("startCodexAttemptThread", () => {
         ...pluginConfig,
         appServer: { command: "codex", requestTimeoutMs },
       } satisfies CodexPluginConfig;
-      const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
+      const { run } = runStartup({
         harness,
         pluginConfig: initializeTimeoutPluginConfig,
         attemptClientFactory: () => createIsolatedCodexAppServerClient,
       });
-      const runError = run.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      const runError = outcome(run);
 
       const initialize = JSON.parse(await harness.waitForWrite(0)) as {
         id?: number;
@@ -568,17 +563,14 @@ describe("startCodexAttemptThread", () => {
       paths,
     });
     await waitForRequest(harness, "initialize");
-    let markPeerStarted: () => void = () => undefined;
-    const peerStarted = new Promise<void>((resolve) => {
-      markPeerStarted = resolve;
-    });
+    const peerStarted = createDeferred<void>();
     const peerAcquire = getLeasedSharedCodexAppServerClient({
       startOptions: appServer.start,
       agentDir: paths.agentDir,
       timeoutMs: 3_000,
-      onStartedClient: markPeerStarted,
+      onStartedClient: () => peerStarted.resolve(),
     });
-    await peerStarted;
+    await peerStarted.promise;
 
     const rejected = expect(run).rejects.toThrow("codex app-server initialize timed out");
     await vi.advanceTimersByTimeAsync(1_000);
@@ -640,7 +632,7 @@ describe("startCodexAttemptThread", () => {
   );
 
   it("cleans up a client surfaced by a factory that later rejects", async () => {
-    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+    const { harness, run } = runStartup({
       attemptClientFactory: (factoryHarness) => async (options) => {
         options?.onStartedClient?.(factoryHarness.client);
         throw new Error("custom initialize failed");
@@ -712,7 +704,7 @@ describe("startCodexAttemptThread", () => {
       ...createSandboxContext({}),
       placementExecutionMode: "remote-exec" as const,
     };
-    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+    const { harness, run } = runStartup({
       sandbox,
     });
     await answerInitialize(harness);
@@ -739,14 +731,8 @@ describe("startCodexAttemptThread", () => {
         }
       | undefined;
     let factoryCalls = 0;
-    let resolveFactoryDone: () => void = () => undefined;
-    const factoryDone = new Promise<void>((resolve) => {
-      resolveFactoryDone = resolve;
-    });
-    let releaseFactory: () => void = () => {};
-    const factoryRelease = new Promise<void>((resolve) => {
-      releaseFactory = resolve;
-    });
+    const factoryDone = createDeferred<void>();
+    const factoryRelease = createDeferred<void>();
     const delayedFactoryPluginConfig = {
       ...pluginConfig,
       appServer: { command: "codex", requestTimeoutMs: 2_500 },
@@ -757,11 +743,11 @@ describe("startCodexAttemptThread", () => {
         try {
           factoryCalls += 1;
           observedFactoryOptions = options;
-          await factoryRelease;
+          await factoryRelease.promise;
           options?.onStartedClient?.(factoryHarness.client);
           return factoryHarness.client;
         } finally {
-          resolveFactoryDone();
+          factoryDone.resolve();
         }
       },
     });
@@ -772,8 +758,8 @@ describe("startCodexAttemptThread", () => {
     try {
       await rejected;
     } finally {
-      releaseFactory();
-      await factoryDone;
+      factoryRelease.resolve();
+      await factoryDone.promise;
     }
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
@@ -791,19 +777,14 @@ describe("startCodexAttemptThread", () => {
   it("clears the shared app-server when cancellation abandons an in-flight thread request", async () => {
     const abortController = new AbortController();
     const { harness, run } = startThreadWithHarness(30_000, abortController.signal);
-    const runError = run.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const runError = outcome(run);
     await answerInitialize(harness);
     await waitForThreadStart(harness);
 
     abortController.abort();
 
     const error = await runError;
-    expect(error).toBeInstanceOf(Error);
-    expect(isCodexAppServerStartupError(error, "aborted")).toBe(true);
-    expect((error as Error).message).toBe("codex app-server startup aborted");
+    expectStartupError(error, "aborted", "codex app-server startup aborted");
     expect(harness.process.stdin.destroyed).toBe(true);
   });
 
@@ -821,7 +802,7 @@ describe("startCodexAttemptThread", () => {
         },
       },
     } satisfies CodexPluginConfig;
-    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+    const { harness, run } = runStartup({
       pluginConfig: deadlinePluginConfig,
     });
     await answerInitialize(harness);
@@ -842,8 +823,7 @@ describe("startCodexAttemptThread", () => {
     harness.send({ id: threadStart.id, result: threadStartResult() });
 
     const result = await run;
-    result.turnRoute.release();
-    result.releaseSharedClientLease();
+    releaseAttempt(result);
   });
 
   it("clears the shared app-server when a startup RPC times out", async () => {
@@ -853,13 +833,10 @@ describe("startCodexAttemptThread", () => {
       appServer: { command: "codex", requestTimeoutMs: 1_000 },
       computerUse: { enabled: true, marketplaceDiscoveryTimeoutMs: 1 },
     } satisfies CodexPluginConfig;
-    const { harness, run } = startThreadWithHarness(5_000, new AbortController().signal, {
+    const { harness, run } = runStartup({
       pluginConfig: perRpcTimeoutPluginConfig,
     });
-    const runError = run.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const runError = outcome(run);
     await answerInitialize(harness);
     await waitForRequest(harness, "plugin/list");
     await vi.advanceTimersByTimeAsync(1_000);

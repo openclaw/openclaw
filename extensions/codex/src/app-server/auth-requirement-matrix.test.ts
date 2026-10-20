@@ -15,65 +15,66 @@ type StoredProfileKind = "oauth" | "api_key" | "unusable" | "none";
 type AuthRequirement = "subscription" | "api-key" | undefined;
 
 function buildStore(kind: StoredProfileKind): AuthProfileStore {
-  if (kind === "none") {
-    return { version: 1, profiles: {} };
-  }
-  if (kind === "oauth") {
-    return {
-      version: 1,
-      profiles: {
-        "openai:default": {
-          type: "oauth",
+  const credential =
+    kind === "oauth"
+      ? {
+          type: "oauth" as const,
           provider: "openai",
           access: "matrix-access-token",
           refresh: "matrix-refresh-token",
           expires: Date.now() + 60 * 60_000,
           accountId: "matrix-account",
-        },
-      },
-      order: { openai: ["openai:default"] },
-    };
-  }
-  const key = kind === "unusable" ? "" : "matrix-api-key";
+        }
+      : {
+          type: "api_key" as const,
+          provider: "openai",
+          key: kind === "unusable" ? "" : "matrix-api-key",
+        };
   return {
     version: 1,
-    profiles: {
-      "openai:default": { type: "api_key", provider: "openai", key },
-    },
-    order: { openai: ["openai:default"] },
+    profiles: kind === "none" ? {} : { "openai:default": credential },
+    ...(kind === "none" ? {} : { order: { openai: ["openai:default"] } }),
   };
 }
 
-/**
- * Expected handoff per cell. `prepared` names the auth material OpenClaw hands to the
- * app-server; `native` means the connection keeps whatever account its Codex home owns.
- */
-type ExpectedHandoff =
-  | { outcome: "prepared-api-key" }
-  | { outcome: "prepared-profile" }
-  | { outcome: "native"; nativeAuthProfile: boolean }
-  | { outcome: "throws"; message: string };
+const handoffDefaults = {
+  agentDir: AGENT_DIR,
+  subscriptionProfileRequiredError: SUBSCRIPTION_REQUIRED_ERROR,
+  subscriptionProfileUnusableError: SUBSCRIPTION_UNUSABLE_ERROR,
+};
 
+const preparedKey = {
+  nativeAuthProfile: false,
+  preparedAuth: { kind: "api-key", apiKey: "prepared-platform-key" },
+};
+const preparedProfile = expect.objectContaining({
+  authProfileId: "openai:default",
+  nativeAuthProfile: true,
+  preparedAuth: expect.objectContaining({ kind: "profile", profileId: "openai:default" }),
+});
+const nativeProfile = (nativeAuthProfile: boolean) => ({
+  authProfileId: "openai:default",
+  nativeAuthProfile,
+});
+const nativeHome = { nativeAuthProfile: true };
 const HANDOFF_MATRIX: [
-  homeScope: CodexAppServerHomeScope,
-  authRequirement: AuthRequirement,
-  storedProfile: StoredProfileKind,
-  expected: ExpectedHandoff,
+  CodexAppServerHomeScope,
+  AuthRequirement,
+  StoredProfileKind,
+  Record<string, unknown> | string,
 ][] = [
-  // Isolated homes use the prepared Platform key even with a stored subscription.
-  ["agent", "api-key", "oauth", { outcome: "prepared-api-key" }],
-  ["agent", "api-key", "none", { outcome: "prepared-api-key" }],
-  ["agent", "subscription", "oauth", { outcome: "prepared-profile" }],
-  // A subscription selection cannot quietly downgrade to Platform billing.
-  ["agent", "subscription", "api_key", { outcome: "throws", message: SUBSCRIPTION_REQUIRED_ERROR }],
-  ["agent", "subscription", "none", { outcome: "throws", message: SUBSCRIPTION_REQUIRED_ERROR }],
-  ["agent", undefined, "oauth", { outcome: "native", nativeAuthProfile: true }],
-  ["agent", undefined, "api_key", { outcome: "native", nativeAuthProfile: false }],
-  ["agent", undefined, "none", { outcome: "native", nativeAuthProfile: false }],
-  // Native homes retain their own account, including unusable or absent stored credentials.
-  ["user", "api-key", "oauth", { outcome: "native", nativeAuthProfile: true }],
-  ["user", "subscription", "unusable", { outcome: "native", nativeAuthProfile: true }],
-  ["user", undefined, "none", { outcome: "native", nativeAuthProfile: true }],
+  ["agent", "api-key", "oauth", preparedKey],
+  ["agent", "api-key", "none", preparedKey],
+  ["agent", "subscription", "oauth", preparedProfile],
+  ["agent", "subscription", "api_key", SUBSCRIPTION_REQUIRED_ERROR],
+  ["agent", "subscription", "none", SUBSCRIPTION_REQUIRED_ERROR],
+  ["agent", undefined, "oauth", nativeProfile(true)],
+  ["agent", undefined, "api_key", nativeProfile(false)],
+  ["agent", undefined, "none", { authProfileId: undefined, nativeAuthProfile: false }],
+  // Native homes retain their account even with unusable or absent stored credentials.
+  ["user", "api-key", "oauth", nativeHome],
+  ["user", "subscription", "unusable", nativeHome],
+  ["user", undefined, "none", nativeHome],
 ];
 
 describe("Codex app-server auth requirement matrix", () => {
@@ -87,38 +88,19 @@ describe("Codex app-server auth requirement matrix", () => {
         resolvedApiKey: "prepared-platform-key",
         ...(authProfileId ? { authProfileId } : {}),
         authProfileStore,
-        agentDir: AGENT_DIR,
+        ...handoffDefaults,
         homeScope,
-        subscriptionProfileRequiredError: SUBSCRIPTION_REQUIRED_ERROR,
-        subscriptionProfileUnusableError: SUBSCRIPTION_UNUSABLE_ERROR,
       });
 
-      if (expected.outcome === "throws") {
-        await expect(handoff).rejects.toThrow(expected.message);
-        return;
+      if (typeof expected === "string") {
+        await expect(handoff).rejects.toThrow(expected);
+      } else {
+        const resolved = await handoff;
+        expect(resolved).toEqual(expected);
+        if (homeScope === "user" || authRequirement === undefined) {
+          expect(resolved).not.toHaveProperty("preparedAuth");
+        }
       }
-      const resolved = await handoff;
-      if (expected.outcome === "prepared-api-key") {
-        expect(resolved).toEqual({
-          nativeAuthProfile: false,
-          preparedAuth: { kind: "api-key", apiKey: "prepared-platform-key" },
-        });
-        return;
-      }
-      if (expected.outcome === "prepared-profile") {
-        expect(resolved).toMatchObject({
-          authProfileId,
-          nativeAuthProfile: true,
-          preparedAuth: { kind: "profile", profileId: authProfileId },
-        });
-        return;
-      }
-      expect(resolved).toEqual(
-        homeScope === "user"
-          ? { nativeAuthProfile: true }
-          : { authProfileId, nativeAuthProfile: expected.nativeAuthProfile },
-      );
-      expect(resolved).not.toHaveProperty("preparedAuth");
     },
   );
 
@@ -127,42 +109,32 @@ describe("Codex app-server auth requirement matrix", () => {
       resolveCodexAppServerPreparedAuthHandoff({
         authRequirement: "api-key",
         authProfileStore: buildStore("none"),
-        agentDir: AGENT_DIR,
+        ...handoffDefaults,
         homeScope: "agent",
-        subscriptionProfileRequiredError: SUBSCRIPTION_REQUIRED_ERROR,
-        subscriptionProfileUnusableError: SUBSCRIPTION_UNUSABLE_ERROR,
       }),
     ).rejects.toThrow("Prepared Codex API-key route is missing its resolved API key.");
   });
 });
 
-/**
- * A native-home connection reaches `applyCodexAppServerAuthProfile` with a null profile:
- * OpenClaw verifies the account it found instead of logging in over it.
- */
+// Native homes verify their existing account without logging in over it.
 describe("native Codex account verification", () => {
-  const NATIVE_ACCOUNT_MATRIX: {
-    authRequirement: AuthRequirement;
-    account: Record<string, unknown> | null;
-    expected: "accepts" | "rejects";
-  }[] = [
-    { authRequirement: "subscription", account: { type: "chatgpt" }, expected: "accepts" },
-    { authRequirement: "subscription", account: { type: "apiKey" }, expected: "rejects" },
-    { authRequirement: "subscription", account: { type: "amazonBedrock" }, expected: "rejects" },
-    { authRequirement: "subscription", account: null, expected: "rejects" },
-    { authRequirement: "api-key", account: { type: "apiKey" }, expected: "accepts" },
-    { authRequirement: "api-key", account: { type: "chatgpt" }, expected: "rejects" },
-    // A native home can serve a custom model provider that reports no OpenAI account.
-    // Only a positively identified ChatGPT plan is refused for a Platform route.
-    { authRequirement: "api-key", account: { type: "amazonBedrock" }, expected: "accepts" },
-    { authRequirement: "api-key", account: null, expected: "accepts" },
-    // No prepared route means no billing class to protect; the account is not read.
-    { authRequirement: undefined, account: { type: "chatgpt" }, expected: "accepts" },
+  const NATIVE_ACCOUNT_MATRIX: [AuthRequirement, string | null, "accepts" | "rejects"][] = [
+    ["subscription", "chatgpt", "accepts"],
+    ["subscription", "apiKey", "rejects"],
+    ["subscription", "amazonBedrock", "rejects"],
+    ["subscription", null, "rejects"],
+    ["api-key", "apiKey", "accepts"],
+    ["api-key", "chatgpt", "rejects"],
+    // Custom providers need not report an OpenAI account.
+    ["api-key", "amazonBedrock", "accepts"],
+    ["api-key", null, "accepts"],
+    [undefined, "chatgpt", "accepts"],
   ];
 
   it.each(NATIVE_ACCOUNT_MATRIX)(
-    "$expected authRequirement=$authRequirement against native account $account",
-    async ({ authRequirement, account, expected }) => {
+    "authRequirement=%s native account=%s %s",
+    async (authRequirement, accountType, expected) => {
+      const account = accountType === null ? null : { type: accountType };
       const request = vi.fn(async (_method: string, _params?: unknown) => ({ account }));
       const apply = applyCodexAppServerAuthProfile({
         client: { request } as never,

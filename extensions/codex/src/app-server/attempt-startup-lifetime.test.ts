@@ -57,6 +57,17 @@ const tempRoots = new Set<string>();
 const pluginConfig: CodexPluginConfig = { appServer: { command: "codex" } };
 const startThreadWithHarness = createAttemptThreadStarter(tempRoots, pluginConfig);
 const threadStartResult = (threadId = "thread-1") => createThreadStartResult(threadId, "/repo");
+const bindingKey = {
+  kind: "session" as const,
+  agentId: "agent-1",
+  sessionId: "session-1",
+  sessionKey: "agent:agent-1:session-1",
+};
+function sendLateThread(harness: ReturnType<typeof createAttemptClientHarness>, id: number) {
+  const result = threadStartResult("replacement-thread");
+  harness.send({ id, result });
+  harness.send({ method: "thread/started", params: { thread: result.thread } });
+}
 
 describe("startup cancellation with a healthy peer and replacement attempt", () => {
   beforeEach(async () => {
@@ -113,12 +124,14 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
     // Hold the startup clock while real worker admission runs, then expire the
     // same 100-ms budget only after the request has actually crossed the wire.
     vi.useFakeTimers();
-    const { run } = startThreadWithHarness(100, new AbortController().signal, {
-      harness: retained,
-      paths,
-      skipStartSpy: true,
-      buildAttemptParams: () => ({ ...createAttemptParams(paths), disableTools: false }),
-    });
+    const startOn = (harness: ReturnType<typeof createAttemptClientHarness>, timeoutMs: number) =>
+      startThreadWithHarness(timeoutMs, undefined, {
+        harness,
+        paths,
+        skipStartSpy: true,
+        buildAttemptParams: () => ({ ...createAttemptParams(paths), disableTools: false }),
+      }).run;
+    const run = startOn(retained, 100);
     const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
     const threadStart = await threadWritten.promise;
     await vi.advanceTimersByTimeAsync(100);
@@ -127,29 +140,15 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
     vi.useRealTimers();
     expect(threadStart.id).toBeDefined();
     expect(retained.process.stdin.destroyed).toBe(false);
-    const replacementRun = startThreadWithHarness(5_000, new AbortController().signal, {
-      harness: replacement,
-      paths,
-      skipStartSpy: true,
-      buildAttemptParams: () => ({ ...createAttemptParams(paths), disableTools: false }),
-    }).run;
+    const replacementRun = startOn(replacement, 5_000);
     await answerInitialize(replacement);
     const mutate = vi.spyOn(testCodexAppServerBindingStore, "mutate");
-    retained.send({ id: threadStart.id, result: threadStartResult("replacement-thread") });
-    retained.send({
-      method: "thread/started",
-      params: { thread: threadStartResult("replacement-thread").thread },
-    });
+    sendLateThread(retained, threadStart.id);
     const replacementStart = await waitForThreadStart(replacement);
     expect(mutate).not.toHaveBeenCalled();
     replacement.send({ id: replacementStart.id, result: threadStartResult("replacement-thread") });
     const replacementAttempt = await replacementRun;
-    const binding = testCodexAppServerBindingStore.read({
-      kind: "session",
-      agentId: "agent-1",
-      sessionId: "session-1",
-      sessionKey: "agent:agent-1:session-1",
-    });
+    const binding = testCodexAppServerBindingStore.read(bindingKey);
     expect(binding?.threadId).toBe("replacement-thread");
     const writesAfterReplacement = mutate.mock.calls.length;
     const tool = vi.fn(() => ({ success: true }));
@@ -158,11 +157,7 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
       method: "item/tool/call",
       params: { threadId: "replacement-thread", turnId: "replacement-turn", tool: "message" },
     };
-    retained.send({ id: threadStart.id, result: threadStartResult("replacement-thread") });
-    retained.send({
-      method: "thread/started",
-      params: { thread: threadStartResult("replacement-thread").thread },
-    });
+    sendLateThread(retained, threadStart.id);
     retained.send({ id: "stale-tool", ...toolRequest });
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
@@ -170,14 +165,7 @@ describe("startup cancellation with a healthy peer and replacement attempt", () 
     await replacementAttempt.turnRoute.drain();
     expect(tool).not.toHaveBeenCalled();
     expect(mutate).toHaveBeenCalledTimes(writesAfterReplacement);
-    expect(
-      testCodexAppServerBindingStore.read({
-        kind: "session",
-        agentId: "agent-1",
-        sessionId: "session-1",
-        sessionKey: "agent:agent-1:session-1",
-      }),
-    ).toEqual(binding);
+    expect(testCodexAppServerBindingStore.read(bindingKey)).toEqual(binding);
     expect(readHarnessRequestMethods(replacement)).not.toContain("thread/unsubscribe");
     expect(readHarnessRequestMethods(replacement)).not.toContain("turn/start");
     // Positive route control: only the authoritative client's tool request runs.
