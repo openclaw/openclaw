@@ -13,6 +13,7 @@ import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { ChannelOnboardingPostWriteHook } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { defaultRuntime } from "../runtime.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -140,7 +141,7 @@ const runtime = createTestRuntime();
 const apiKey = (key: string) => createApiKeyCredential("openai", key);
 const keyProfile = (profileId: string, key: string) => ({ profileId, credential: apiKey(key) });
 const add = (options: Parameters<typeof agentsAddCommand>[0] = {}, hasAutomationFlags?: boolean) =>
-  agentsAddCommand(options, runtime, { hasAutomationFlags });
+  agentsAddCommand(options, { hasAutomationFlags });
 function expectUnused(...mocks: Array<{ mock: { calls: unknown[] } }>) {
   for (const mock of mocks) {
     expect(mock).not.toHaveBeenCalled();
@@ -167,11 +168,18 @@ describe("agents add command", () => {
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await suiteTempDirs.cleanup();
+    vi.restoreAllMocks();
   });
 
   beforeEach(() => {
     configFiles.clear();
     vi.clearAllMocks();
+    vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
+    vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error);
+    vi.spyOn(defaultRuntime, "exit").mockImplementation(runtime.exit);
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) =>
+      runtime.log(JSON.stringify(value, null, 2)),
+    );
     creationGate.mockReset().mockResolvedValue(undefined);
     createAgent.mockReset();
     createAgent.mockImplementation(createAgentForAddCommandTest);
@@ -409,7 +417,7 @@ describe("agents add command", () => {
     expect(copied?.profiles["openai:portable"]).toBeDefined();
     expect(setupChannels).toHaveBeenCalledWith(
       expect.any(Object),
-      runtime,
+      defaultRuntime,
       wizard.prompter,
       expect.objectContaining({ workspaceDir, deferStatusUntilSelection: true }),
     );
