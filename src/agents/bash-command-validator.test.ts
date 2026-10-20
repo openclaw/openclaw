@@ -1,8 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { validateShellCommand as validateBashCommand } from "./bash-command-validator.js";
+import { validateShellCommand } from "./bash-command-validator.js";
 
-// EDP shell-command validator. Moved from sessions/tools/bash.test.ts when 10.5 removed the
-// session bash tool; the validator now guards the exec tool (bash-tools.exec-run.ts).
+describe("validateShellCommand unquoted path metacharacters", () => {
+  it.each([
+    ["command substitution", `aid=$(jq -r '[.. | objects]' private/x/message.json)`],
+    ["nested substitution", `x=$(basename $(dirname /tmp/a/b))`],
+    ["subshell", `(cd /tmp && cat /tmp/a)`],
+    ["process substitution", `diff <(sort /tmp/a) <(sort /tmp/b)`],
+    ["parameter expansion", "cat ${HOME}/notes.txt"],
+    ["arithmetic", `echo $((10/2))`],
+    ["array assignment", `arr=(/tmp/a /tmp/b)`],
+    ["quoted path", `cat "/tmp/foo(1).txt"`],
+  ])("allows shell grouping syntax: %s", (_name, command) => {
+    expect(validateShellCommand(command)).toBeUndefined();
+  });
+
+  it.each([
+    ["paren in path", `cat /tmp/foo(1).txt`],
+    ["bracket in path", `ls /tmp/report[final].pdf`],
+    ["brace in path", `cat /tmp/{weird}/x`],
+  ])("rejects unquoted metacharacters inside a path: %s", (_name, command) => {
+    expect(validateShellCommand(command)).toMatch(/unquoted path/u);
+  });
+});
+
+// EDP shell-command validator prose/pseudo-command cases. Moved from sessions/tools/bash.test.ts
+// when 10.5 removed the session bash tool; the validator now guards the exec tool.
+const validateBashCommand = validateShellCommand;
+
 describe("validateBashCommand", () => {
   it("rejects unsupported pseudo-search commands before execution", () => {
     expect(validateBashCommand('search "faith-task-loop" in ~/.openclaw')).toBe(

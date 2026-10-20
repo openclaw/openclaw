@@ -70,6 +70,9 @@ function tokenizeCommandForValidation(command: string): ValidationToken[] | null
   let quote: '"' | "'" | undefined;
   let escaped = false;
   let quotedOrEscaped = false;
+  // Open shell grouping parens: `$(`, `<(`, `>(`, `(subshell)`, `$((`, `arr=(`.
+  // Their parens are syntax, not part of a neighbouring path token.
+  let groupDepth = 0;
 
   const pushToken = () => {
     if (!raw) {
@@ -82,6 +85,18 @@ function tokenizeCommandForValidation(command: string): ValidationToken[] | null
   };
 
   for (const char of command) {
+    if (!escaped && !quote) {
+      if (char === "(" && (raw === "" || /[$<>=;|&]$/u.test(raw))) {
+        pushToken();
+        groupDepth += 1;
+        continue;
+      }
+      if (char === ")" && groupDepth > 0) {
+        pushToken();
+        groupDepth -= 1;
+        continue;
+      }
+    }
     if (escaped) {
       raw += `\\${char}`;
       text += char;
@@ -143,8 +158,23 @@ function isPathLikeToken(token: string): boolean {
 function hasUnquotedPathMetachar(raw: string): boolean {
   let quote: '"' | "'" | undefined;
   let escaped = false;
+  let inParamExpansion = false;
+  let previous = "";
 
   for (const char of raw) {
+    const prior = previous;
+    previous = char;
+    // `${VAR}` braces are parameter expansion, not literal path characters.
+    if (inParamExpansion) {
+      if (char === "}") {
+        inParamExpansion = false;
+      }
+      continue;
+    }
+    if (!escaped && !quote && char === "{" && prior === "$") {
+      inParamExpansion = true;
+      continue;
+    }
     if (escaped) {
       escaped = false;
       continue;
