@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as devicePairing from "../infra/device-pairing.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
@@ -13,22 +13,32 @@ vi.mock("../infra/device-pairing.js", () => ({
   getPairedDevice: async () => null,
 }));
 
+const owner = { deviceId: "device", publicKey: "public-key" };
+beforeEach(() => {
+  pairing.pending = true;
+});
 afterEach(() => vi.useRealTimers());
+
+function registeredCoordinator(
+  scheduler: ReturnType<typeof createTestGatewayScheduler>,
+  expiresAtMs = Date.now() + 60_000,
+) {
+  const coordinator = new ScopeUpgradeCoordinator(scheduler);
+  coordinator.register({
+    requestId: "upgrade",
+    expiresAtMs,
+    requestedScopes: ["operator.write"],
+    owner,
+  });
+  return coordinator;
+}
 
 describe("scope upgrade observations", () => {
   it("cancels one observer without losing the shared upgrade result", async () => {
     vi.useFakeTimers();
-    pairing.pending = true;
     const scheduler = createTestGatewayScheduler();
-    const coordinator = new ScopeUpgradeCoordinator(scheduler);
+    const coordinator = registeredCoordinator(scheduler);
     const observer = new AsyncWorkScope();
-    const owner = { deviceId: "device", publicKey: "public-key" };
-    coordinator.register({
-      requestId: "upgrade",
-      expiresAtMs: Date.now() + 60_000,
-      requestedScopes: ["operator.write"],
-      owner,
-    });
     let firstSettled = false;
     const first = observer
       .run(() => coordinator.wait("upgrade", owner))
@@ -67,18 +77,10 @@ describe("scope upgrade observations", () => {
 
   it("retires queued observations at the scheduler fence before received work closes", async () => {
     vi.useFakeTimers();
-    pairing.pending = true;
     const scheduler = createTestGatewayScheduler();
-    const coordinator = new ScopeUpgradeCoordinator(scheduler);
+    const coordinator = registeredCoordinator(scheduler);
     const observer = new AsyncWorkScope();
-    const owner = { deviceId: "device", publicKey: "public-key" };
     const pendingRead = vi.spyOn(devicePairing, "getPendingDevicePairing");
-    coordinator.register({
-      requestId: "upgrade",
-      expiresAtMs: Date.now() + 60_000,
-      requestedScopes: ["operator.write"],
-      owner,
-    });
     const observation = observer
       .run(() => coordinator.wait("upgrade", owner))
       .then(
@@ -113,15 +115,8 @@ describe("scope upgrade observations", () => {
     async (state) => {
       const time = createGatewaySchedulerClock(1_000);
       const scheduler = createTestGatewayScheduler(time.clock);
-      const coordinator = new ScopeUpgradeCoordinator(scheduler);
-      const owner = { deviceId: "device", publicKey: "public-key" };
       pairing.pending = state === "pending";
-      coordinator.register({
-        requestId: "upgrade",
-        expiresAtMs: 61_000,
-        requestedScopes: ["operator.write"],
-        owner,
-      });
+      const coordinator = registeredCoordinator(scheduler, 61_000);
       try {
         if (state === "terminal") {
           expect(await coordinator.wait("upgrade", owner)).toEqual({

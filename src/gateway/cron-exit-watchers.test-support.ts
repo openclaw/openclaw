@@ -3,34 +3,26 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
 import type { ProcessScopeCleanupPolicy } from "../process/supervisor/types.js";
 
-type Deferred = {
-  resolve: (exit: { exitCode: number | null; reason: string }) => void;
-  reject: (err: unknown) => void;
-};
+type Exit = { exitCode: number | null; reason: string };
 
-/**
- * Minimal fake ProcessSupervisor: each spawn returns a run whose wait() is
- * controlled by the test, so we can deterministically drive "command exited".
- */
+/** Each run's deferred controls command exit independently of spawn admission. */
 export function makeFakeSupervisor(
   opts: { deferSpawn?: boolean; cleanup?: () => Promise<void> } = {},
 ) {
   const runs: {
     scopeKey?: string;
     runId: string;
-    deferred: Deferred;
+    deferred: ReturnType<typeof createDeferred<Exit>>;
     waitPromise: Promise<unknown>;
     cancelled: boolean;
   }[] = [];
   const cancelledScopes: string[] = [];
   const runCancels: string[] = [];
   let counter = 0;
-  let releaseSpawn: (() => void) | undefined;
-  const spawnGate = opts.deferSpawn
-    ? new Promise<void>((res) => {
-        releaseSpawn = res;
-      })
-    : Promise.resolve();
+  const spawnGate = createDeferred<void>();
+  if (!opts.deferSpawn) {
+    spawnGate.resolve();
+  }
   const supervisor = {
     acquireScopeCleanup: vi.fn(
       (scopeKey: string, _options: { processTree: ProcessScopeCleanupPolicy }) => {
@@ -48,21 +40,16 @@ export function makeFakeSupervisor(
       },
     ),
     spawn: vi.fn(async (input: { scopeKey?: string }) => {
-      await spawnGate;
-      counter += 1;
-      const runId = `run-${counter}`;
-      const {
-        promise: waitPromise,
-        resolve: resolveWait,
-        reject: rejectWait,
-      } = createDeferred<{ exitCode: number | null; reason: string }>();
-      // Pre-attach a no-op catch so a test-driven rejection never escapes as an
-      // unhandled rejection if the run loses ownership before it awaits wait().
+      await spawnGate.promise;
+      const runId = `run-${++counter}`;
+      const deferred = createDeferred<Exit>();
+      const waitPromise = deferred.promise;
+      // Ownership may be lost before wait(); keep controlled rejection handled.
       waitPromise.catch(() => {});
       const entry = {
         scopeKey: input.scopeKey,
         runId,
-        deferred: { resolve: resolveWait, reject: rejectWait },
+        deferred,
         waitPromise,
         cancelled: false,
       };
@@ -96,7 +83,7 @@ export function makeFakeSupervisor(
     cancelled: cancelledScopes,
     cancelledScopes,
     runCancels,
-    releaseSpawn: () => releaseSpawn?.(),
+    releaseSpawn: () => spawnGate.resolve(),
   };
 }
 

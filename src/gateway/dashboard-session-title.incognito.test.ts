@@ -50,8 +50,8 @@ async function fixture() {
   }
   const scope = { agentId: "main", sessionKey, storePath: owner.path };
   return {
-    owner,
     scope,
+    title: () => owner.readSession(sessionKey, authority)?.entry?.displayName,
     generate: () =>
       withPluginMetadataSnapshotScope(
         createPluginMetadataSnapshotFixture(),
@@ -73,9 +73,7 @@ it("titles an unbound memory session and commits without session SQL", async () 
   const sql = observeHostDataSql();
   try {
     expect(await target.generate()).toBe(true);
-    expect(target.owner.readSession(target.scope.sessionKey, authority)?.entry?.displayName).toBe(
-      "Workspace planning",
-    );
+    expect(target.title()).toBe("Workspace planning");
     // Metadata snapshot preparation may read global plugin policy, never session storage.
     expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
   } finally {
@@ -92,18 +90,13 @@ it("keeps a user title saved while automatic title inference is running", async 
     return resume.promise;
   });
   const pending = target.generate();
-  const settled = pending.then(
-    () => undefined,
-    () => undefined,
-  );
+  const settled = pending.catch(() => {});
   try {
     await awaitGateBeforeSettlement(entered.promise, pending, "title inference was skipped");
     await patchSessionEntryCore(target.scope, () => ({ displayName: "My chosen title" }));
     resume.resolve("Generated title");
     expect(await pending).toBe(false);
-    expect(target.owner.readSession(target.scope.sessionKey, authority)?.entry?.displayName).toBe(
-      "My chosen title",
-    );
+    expect(target.title()).toBe("My chosen title");
   } finally {
     resume.resolve("Generated title");
     await settled;

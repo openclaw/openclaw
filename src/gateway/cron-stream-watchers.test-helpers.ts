@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
 import type {
   ManagedRun,
@@ -67,13 +68,11 @@ export function fakeSupervisor() {
   const spawn = vi.fn(async (input: SpawnInput) => {
     inputs.push(input);
     const activity = { resultSettled: false, lastOutputAtMs: Date.now() };
-    let resolveWait!: (result: RunExit) => void;
-    const wait = new Promise<RunExit>((resolve) => {
-      resolveWait = (result) => {
-        activity.resultSettled = true;
-        resolve(result);
-      };
-    });
+    const wait = createDeferred<RunExit>();
+    const resolveWait = (result: RunExit) => {
+      activity.resultSettled = true;
+      wait.resolve(result);
+    };
     const run: ManagedRun = {
       activity,
       runId: `run-${runs.length + 1}`,
@@ -81,7 +80,7 @@ export function fakeSupervisor() {
       stdin: undefined,
       cancel: vi.fn(() => resolveWait(exitResult({ reason: "manual-cancel" }))),
       detachOutput: vi.fn(),
-      wait: () => wait,
+      wait: () => wait.promise,
     };
     runs.push(run);
     exits.push(resolveWait);
