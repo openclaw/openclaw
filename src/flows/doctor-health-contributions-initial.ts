@@ -97,7 +97,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:database-engine", "Database engines", {
       healthChecks: {
-        description: "Selected database engines and experimental PostgreSQL limitations.",
+        description: "Selected database engines, physical store health, and recovery guidance.",
         async detect(ctx) {
           const { collectDoctorDatabaseEngineHealthFindings } =
             await import("../commands/doctor-database-engine.js");

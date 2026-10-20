@@ -69,7 +69,7 @@ it("keeps default status concise and reports configured family choices without s
   expect(value).toContain("workboard: default=sqlite, override=postgres, effective=postgres");
   expect(value).toContain("quarantine: default=sqlite, override=fixed local, effective=sqlite");
   expect(value).not.toContain("secret");
-  expect(value).toContain("PostgreSQL is experimental");
+  expect(value).not.toContain("experimental");
 });
 
 it("shows the latest offsite attempt beside a newer local backup", () => {
