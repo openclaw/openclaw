@@ -476,10 +476,7 @@ function resolveSharedAuthStoreMigrationSources(
     resolveLegacyInheritedAuthAgentDir(config, env),
     "openclaw-agent.sqlite",
   );
-  // An owner whose agentDir is main's directory, directly or through a link, reads the same store.
-  return isSameOpenClawAgentDatabasePath(sourcePath, mainPath)
-    ? { mainPath }
-    : { mainPath, owner: { ownerId, sourcePath } };
+  return { mainPath, owner: { ownerId, sourcePath } };
 }
 
 /** Every legacy store a relocation may read, for copied-planning boundary checks. */
@@ -512,7 +509,9 @@ function selectSharedAuthStoreMigrationSource(
 ): Omit<SharedAuthStoreMigrationDetection, "hasLegacy"> {
   const main = { sourcePath: sources.mainPath };
   const owner = sources.owner;
-  if (!owner) {
+  // Only the repair path touches source files; an owner whose agentDir is main's directory,
+  // directly or through a link, reads the same store.
+  if (!owner || isSameOpenClawAgentDatabasePath(owner.sourcePath, main.sourcePath)) {
     return main;
   }
   if (hasPendingSharedAuthCleanup(env, owner.sourcePath, behavior)) {

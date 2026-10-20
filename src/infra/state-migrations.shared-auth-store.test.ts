@@ -473,6 +473,33 @@ it.each(["direct", "symlinked"] as const)(
   },
 );
 
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "returns before touching an unreadable inheritance owner outside Doctor repair",
+  async () => {
+    const fixture = await createEmptyFixture(false);
+    const locked = tempDirs.make("openclaw-shared-auth-locked-");
+    const cfg = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { authInheritance: { agentId: "ops" } },
+        entries: { ops: { agentDir: path.join(locked, "ops") } },
+      },
+    };
+    fs.chmodSync(locked, 0o000);
+    try {
+      expect(
+        migration.detectSharedAuthStoreMigration({
+          stateDir: fixture.stateDir,
+          config: cfg,
+          doctorOnlyStateMigrations: false,
+        }),
+      ).toEqual({ sourcePath: fixture.sourcePath, hasLegacy: false });
+    } finally {
+      fs.chmodSync(locked, 0o700);
+    }
+  },
+);
+
 it("relocates main's credentials when a non-main inheritance owner holds none", async () => {
   const fixture = await createInheritanceOwnerFixture();
   const mainStore = makeStore("openai:main", "main-key");
