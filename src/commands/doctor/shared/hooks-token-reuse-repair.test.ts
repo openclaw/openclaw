@@ -1,9 +1,11 @@
-// Hooks token reuse repair tests cover doctor repairs for reused gateway hook tokens.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { repairHooksTokenReuseGatewayAuth } from "./hooks-token-reuse-repair.js";
 
 const ROTATED_HOOKS_TOKEN = "rotated-hooks-token-1234567890";
+const SHARED_TOKEN = "shared-gateway-token-1234567890";
+const hooks = (token = SHARED_TOKEN, enabled = true) => ({ enabled, token });
+const envProvider = { default: { source: "env" as const } };
 
 function repair(cfg: OpenClawConfig, env: NodeJS.ProcessEnv = {}) {
   return repairHooksTokenReuseGatewayAuth(cfg, env, () => ROTATED_HOOKS_TOKEN);
@@ -13,14 +15,11 @@ describe("repairHooksTokenReuseGatewayAuth", () => {
   it("rotates hooks.token when it reuses active gateway token auth from env", async () => {
     const result = await repair(
       {
-        hooks: {
-          enabled: true,
-          token: "shared-gateway-token-1234567890",
-        },
+        hooks: hooks(),
       },
       {
-        OPENCLAW_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
-      } as NodeJS.ProcessEnv,
+        OPENCLAW_GATEWAY_TOKEN: SHARED_TOKEN,
+      },
     );
 
     expect(result.config.hooks?.token).toBe(ROTATED_HOOKS_TOKEN);
@@ -31,27 +30,17 @@ describe("repairHooksTokenReuseGatewayAuth", () => {
 
   it("does not abort when active gateway auth SecretRef is unavailable", async () => {
     const cfg = {
-      secrets: {
-        providers: {
-          default: { source: "env" },
-        },
-      },
+      secrets: { providers: envProvider },
       gateway: {
         auth: {
           mode: "password",
           password: { source: "env", provider: "default", id: "MISSING_GW_PASSWORD" },
         },
       },
-      hooks: {
-        enabled: true,
-        token: "shared-gateway-password-1234567890",
-      },
+      hooks: hooks(),
     } satisfies OpenClawConfig;
 
-    await expect(repair(cfg, {} as NodeJS.ProcessEnv)).resolves.toEqual({
-      config: cfg,
-      changes: [],
-    });
+    await expect(repair(cfg)).resolves.toEqual({ config: cfg, changes: [] });
   });
 
   it("does not execute gateway auth SecretRefs during repair", async () => {
@@ -61,7 +50,7 @@ describe("repairHooksTokenReuseGatewayAuth", () => {
           vault: {
             source: "exec",
             command: "node",
-            args: ["-e", "process.stdout.write('shared-gateway-password-1234567890')"],
+            args: ["-e", `process.stdout.write('${SHARED_TOKEN}')`],
           },
         },
       },
@@ -71,26 +60,16 @@ describe("repairHooksTokenReuseGatewayAuth", () => {
           password: { source: "exec", provider: "vault", id: "GW_PASSWORD" },
         },
       },
-      hooks: {
-        enabled: true,
-        token: "shared-gateway-password-1234567890",
-      },
+      hooks: hooks(),
     } satisfies OpenClawConfig;
 
-    await expect(repair(cfg, {} as NodeJS.ProcessEnv)).resolves.toEqual({
-      config: cfg,
-      changes: [],
-    });
+    await expect(repair(cfg)).resolves.toEqual({ config: cfg, changes: [] });
   });
 
   it("rotates hooks.token when it reuses trusted-proxy password auth from a SecretRef", async () => {
     const result = await repair(
       {
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
+        secrets: { providers: envProvider },
         gateway: {
           auth: {
             mode: "trusted-proxy",
@@ -98,43 +77,22 @@ describe("repairHooksTokenReuseGatewayAuth", () => {
             password: { source: "env", provider: "default", id: "GW_PASSWORD" },
           },
         },
-        hooks: {
-          enabled: true,
-          token: "trusted-proxy-local-password-1234567890",
-        },
+        hooks: hooks(),
       },
       {
-        GW_PASSWORD: "trusted-proxy-local-password-1234567890", // pragma: allowlist secret
-      } as NodeJS.ProcessEnv,
+        GW_PASSWORD: SHARED_TOKEN, // pragma: allowlist secret
+      },
     );
 
     expect(result.config.hooks?.token).toBe(ROTATED_HOOKS_TOKEN);
   });
 
   it("does not rotate disabled hooks or distinct hook tokens", async () => {
-    const disabled = {
-      gateway: {
-        auth: {
-          mode: "token",
-          token: "shared-gateway-token-1234567890",
-        },
-      },
-      hooks: {
-        enabled: false,
-        token: "shared-gateway-token-1234567890",
-      },
-    } satisfies OpenClawConfig;
+    const gateway = { auth: { mode: "token" as const, token: SHARED_TOKEN } };
+    const disabled = { gateway, hooks: hooks(SHARED_TOKEN, false) } satisfies OpenClawConfig;
     const distinct = {
-      gateway: {
-        auth: {
-          mode: "token",
-          token: "shared-gateway-token-1234567890",
-        },
-      },
-      hooks: {
-        enabled: true,
-        token: "distinct-hooks-token-1234567890",
-      },
+      gateway,
+      hooks: hooks("distinct-hooks-token-1234567890"),
     } satisfies OpenClawConfig;
 
     await expect(repair(disabled)).resolves.toEqual({ config: disabled, changes: [] });
