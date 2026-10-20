@@ -1,5 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { commitMemory } from "../config/sessions/session-actor-memory-publication.test-support.js";
 import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as sessionHistoryState from "./session-history-state.js";
@@ -80,58 +81,39 @@ export function registerMemorySessionHistoryTests(
         await expectMissing();
 
         const authority = { assertCurrent() {}, authorize() {} };
-        const created = await withSessionActorStorage(
+        const lifetime = { assertCurrent() {}, assertReadable() {} };
+        const input = {
+          entry: { sessionId, updatedAt: Date.now(), incognito: true },
+          transcriptEvents: [
+            { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
+            {
+              type: "message",
+              id: "memory-http-reply",
+              parentId: null,
+              message: makeTranscriptAssistantMessage({ text }),
+            },
+          ],
+        };
+        await withSessionActorStorage(
           { agentId: AGENT_ID, sessionKey, storePath: location.path },
-          {
-            create: true,
-            authority,
-            lifetime: { assertCurrent() {}, assertReadable() {} },
-          },
-          ({ actor }) =>
-            actor.storage.mutate(
-              {
-                type: "session.entry.create",
-                input: {
-                  entry: {
-                    sessionId,
-                    updatedAt: Date.now(),
-                    incognito: true,
-                    lifecycleRevision: "memory-http-lifecycle",
-                  },
-                  transcriptEvents: [
-                    { type: "session", id: sessionId, version: 3, cwd: "/synthetic" },
-                    {
-                      type: "message",
-                      id: "memory-http-reply",
-                      parentId: null,
-                      message: makeTranscriptAssistantMessage({ text }),
-                    },
-                  ],
-                },
-              },
-              authority,
-            ),
+          { create: true, authority, lifetime },
+          ({ actor }) => commitMemory(actor.storage, "session.entry.create", input, authority),
         );
-        expect(created?.kind).toBe("committed");
 
         const history = await readSessionHistoryBody(harness.port, sessionKey);
         expect(history.sessionKey).toBe(sessionKey);
         expect(history.messages?.map((message) => message.content?.[0]?.text)).toEqual([text]);
 
         const readSnapshot = sessionHistoryState.readSessionHistorySnapshotAsync;
-        const snapshotSpy = vi
+        using snapshotSpy = vi
           .spyOn(sessionHistoryState, "readSessionHistorySnapshotAsync")
           .mockImplementationOnce(async (params) => {
             const snapshot = await readSnapshot(params);
             memorySessionActorOwners.closeDatabase(location);
             return snapshot;
           });
-        try {
-          await expectMissing();
-          expect(snapshotSpy).toHaveBeenCalledOnce();
-        } finally {
-          snapshotSpy.mockRestore();
-        }
+        await expectMissing();
+        expect(snapshotSpy).toHaveBeenCalledOnce();
       } finally {
         memorySessionActorOwners.closeDatabase(location);
       }

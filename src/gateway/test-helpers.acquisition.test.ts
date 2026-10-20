@@ -81,26 +81,9 @@ type PeerBehavior =
   | "hello then transport error"
   | "reply";
 
-type AcquisitionPeer = {
-  port: number;
-  clients: WebSocket[];
-  closed: Set<WebSocket>;
-  errors: Error[];
-  unownedErrors: Error[];
-  requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[];
-  receivedUpgrade: () => boolean;
-  waitForUpgrade: (signal: AbortSignal) => Promise<unknown>;
-  waitForOpen: (signal: AbortSignal) => Promise<void>;
-  waitForConnect: (signal: AbortSignal) => Promise<void>;
-  isListening: () => boolean;
-  failTransport: () => Promise<Error>;
-  close: () => Promise<void>;
-};
+type AcquisitionPeer = Awaited<ReturnType<typeof createAcquisitionPeer>>;
 
-async function withAcquisitionPeer(
-  behavior: PeerBehavior,
-  body: (peer: AcquisitionPeer) => Promise<void>,
-) {
+async function createAcquisitionPeer(behavior: PeerBehavior) {
   const clients: WebSocket[] = [];
   const closed = new Set<WebSocket>();
   const errors: Error[] = [];
@@ -196,45 +179,8 @@ async function withAcquisitionPeer(
       });
     }
   };
-  try {
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("acquisition peer did not bind");
-    }
-    await body({
-      port: address.port,
-      clients,
-      closed,
-      errors,
-      unownedErrors,
-      requests,
-      receivedUpgrade: () => receivedUpgrade,
-      waitForUpgrade: (signal) => once(server, "upgrade", { signal }),
-      waitForOpen: async (signal) => {
-        await once(server, "upgrade", { signal });
-        const client = clients.at(-1);
-        if (!client) {
-          throw new Error("acquisition peer has no opening client");
-        }
-        if (client.readyState !== WebSocket.OPEN) {
-          await once(client, "open", { signal });
-        }
-      },
-      waitForConnect: (signal) => racePromiseWithAbortSignal(connectReceived.promise, signal),
-      isListening: () => server.listening,
-      failTransport: () => {
-        for (const socket of sockets) {
-          socket.write(Buffer.from([0x83, 0x00]));
-        }
-        return transportFailure.promise;
-      },
-      close,
-    });
-  } finally {
-    // Assertions run before this safety net: the broken helper must not leak into
-    // another case, including when it rejects with a still-CONNECTING socket.
+  const dispose = async () => {
+    // Assertions precede this safety net, including for still-CONNECTING sockets.
     const clientClosures = clients.map(async (client) => {
       if (client.readyState !== WebSocket.CLOSED) {
         const closure = new Promise<void>((resolve) => {
@@ -250,6 +196,48 @@ async function withAcquisitionPeer(
     await Promise.all(clientClosures);
     await closeMinimalGatewayServer(wss);
     await close();
+  };
+  try {
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("acquisition peer did not bind");
+    }
+    return {
+      port: address.port,
+      clients,
+      closed,
+      errors,
+      unownedErrors,
+      requests,
+      receivedUpgrade: () => receivedUpgrade,
+      waitForUpgrade: (signal: AbortSignal) => once(server, "upgrade", { signal }),
+      waitForOpen: async (signal: AbortSignal) => {
+        await once(server, "upgrade", { signal });
+        const client = clients.at(-1);
+        if (!client) {
+          throw new Error("acquisition peer has no opening client");
+        }
+        if (client.readyState !== WebSocket.OPEN) {
+          await once(client, "open", { signal });
+        }
+      },
+      waitForConnect: (signal: AbortSignal) =>
+        racePromiseWithAbortSignal(connectReceived.promise, signal),
+      isListening: () => server.listening,
+      failTransport: () => {
+        for (const socket of sockets) {
+          socket.write(Buffer.from([0x83, 0x00]));
+        }
+        return transportFailure.promise;
+      },
+      close,
+      [Symbol.asyncDispose]: dispose,
+    };
+  } catch (error) {
+    await dispose();
+    throw error;
   }
 }
 
@@ -260,9 +248,10 @@ async function withPeerState(
   env?: Record<string, string>,
 ) {
   const { withOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
-  await withOpenClawTestState({ label, env }, (state) =>
-    withAcquisitionPeer(behavior, (peer) => body(peer, state)),
-  );
+  await withOpenClawTestState({ label, env }, async (state) => {
+    await using peer = await createAcquisitionPeer(behavior);
+    await body(peer, state);
+  });
 }
 
 function expectClosedClient(peer: AcquisitionPeer) {
@@ -287,12 +276,11 @@ function mockPeerGateway(peer: AcquisitionPeer, close = peer.close) {
     start: async (run: () => Promise<unknown>) => run(),
     closeUnadopted: async () => {},
   });
-  const start = acquisitionFixture.start.mockImplementation(async () => {
+  return acquisitionFixture.start.mockImplementation(async () => {
     // Mirror the real startup-owned selector for close-order assertions.
     process.env.OPENCLAW_GATEWAY_PORT = String(peer.port);
     return server;
   });
-  return start;
 }
 
 async function verifyAcquisitionTimeout(
@@ -349,19 +337,17 @@ async function verifyAcquisitionTimeout(
 
 type CompositeAcquisitionCase = {
   helper: "raw" | "GatewayClient";
-  failure: "authentication" | "authentication without close";
   shutdown: "joined" | "rejected";
 };
 
 // The disposable fork imports the same assertions without registering sibling cases.
 export async function verifyCompositeAcquisition({
   helper,
-  failure,
   shutdown,
 }: CompositeAcquisitionCase): Promise<void> {
   await withPeerState(
     "composite-acquisition",
-    failure === "authentication without close" ? "reject auth without close" : "reject auth",
+    helper === "raw" ? "reject auth" : "reject auth without close",
     async (peer, state) => {
       const closing = createDeferred();
       const release = createDeferred();
@@ -380,12 +366,14 @@ export async function verifyCompositeAcquisition({
       // oxlint-disable-next-line typescript/unbound-method -- The observer calls the original on its acquired client.
       const stopAndWait = GatewayClient.prototype.stopAndWait;
       let clientStopSettled = false;
-      const stopSpy = vi
-        .spyOn(GatewayClient.prototype, "stopAndWait")
-        .mockImplementation(async function (this: InstanceType<typeof GatewayClient>, options) {
-          await stopAndWait.call(this, options);
-          clientStopSettled = true;
-        });
+      using stopSpy = vi.spyOn(GatewayClient.prototype, "stopAndWait");
+      stopSpy.mockImplementation(async function (
+        this: InstanceType<typeof GatewayClient>,
+        options,
+      ) {
+        await stopAndWait.call(this, options);
+        clientStopSettled = true;
+      });
       const selector = helper === "raw" ? "OPENCLAW_GATEWAY_TOKEN" : "OPENCLAW_GATEWAY_PORT";
       const ownedSelector = helper === "raw" ? "synthetic-owned-token" : String(peer.port);
       const previousSelector = process.env[selector];
@@ -433,7 +421,6 @@ export async function verifyCompositeAcquisition({
       } finally {
         release.resolve();
         await acquisition;
-        stopSpy.mockRestore();
       }
     },
     { OPENCLAW_GATEWAY_TOKEN: "synthetic-prior-token" },
@@ -598,12 +585,12 @@ describe("raw Gateway helper acquisition ownership", async () => {
   });
 
   it.for([
-    { helper: "raw", failure: "authentication", shutdown: "joined" },
-    { helper: "raw", failure: "authentication", shutdown: "rejected" },
-    { helper: "GatewayClient", failure: "authentication without close", shutdown: "joined" },
-    { helper: "GatewayClient", failure: "authentication without close", shutdown: "rejected" },
+    { helper: "raw", shutdown: "joined" },
+    { helper: "raw", shutdown: "rejected" },
+    { helper: "GatewayClient", shutdown: "joined" },
+    { helper: "GatewayClient", shutdown: "rejected" },
   ] as const)(
-    "$helper retains server ownership after $failure failure and $shutdown shutdown",
+    "$helper retains server ownership after authentication failure and $shutdown shutdown",
     async (scenario, context) => {
       if (scenario.helper === "raw" && scenario.shutdown === "rejected") {
         // Rejected close retains its owner; each case still needs a fresh native worker.

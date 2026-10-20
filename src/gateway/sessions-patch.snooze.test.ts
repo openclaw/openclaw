@@ -14,6 +14,27 @@ const wakeAt = now + 3_600_000;
 const snoozed = { pinnedAt: 10, snoozedUntil: wakeAt, snoozedAt: now - 1 };
 const archivedError = "cannot snooze an archived session; restore it first";
 const childError = "cannot snooze a child session; snooze its parent session instead";
+const requiredId = "expectedSessionId required for session lifecycle patch";
+type Patch = Partial<SessionsPatchParams>;
+type Entry = Partial<SessionEntry>;
+const visibility = (entry: Entry) => [
+  entry.snoozedUntil,
+  entry.snoozedAt,
+  entry.pinnedAt,
+  entry.archivedAt,
+];
+
+function fixture(entry: Entry = {}, storeKey = key) {
+  const original = { sessionId: "work", updatedAt: 1, ...entry };
+  const store = { [storeKey]: original };
+  const patch = (changes: Patch) =>
+    runPatch({
+      store,
+      storeKey,
+      patch: { key: storeKey, expectedSessionId: "work", ...changes },
+    });
+  return { original, store, patch };
+}
 
 describe("snooze", () => {
   beforeEach(() => {
@@ -22,17 +43,14 @@ describe("snooze", () => {
   });
 
   test("preserves the pin and original stamp until a different wake time is chosen", async () => {
-    const store = {
-      [key]: { sessionId: "work", updatedAt: 1, pinnedAt: 10, parentSessionKey: MAIN_SESSION_KEY },
-    };
-    const patch = (snoozedUntil: number) =>
-      runPatch({ store, storeKey: key, patch: { key, snoozedUntil, expectedSessionId: "work" } });
+    const value = fixture({ pinnedAt: 10, parentSessionKey: MAIN_SESSION_KEY });
+    const patch = (snoozedUntil: number) => value.patch({ snoozedUntil });
     expect(expectPatchOk(await patch(wakeAt))).toMatchObject({
       snoozedUntil: wakeAt,
       snoozedAt: now,
       pinnedAt: 10,
     });
-    expect(store[key]).not.toHaveProperty("archivedAt");
+    expect(value.store[key]).not.toHaveProperty("archivedAt");
     vi.mocked(Date.now).mockReturnValue(now + 100);
     expect(expectPatchOk(await patch(wakeAt)).snoozedAt).toBe(now);
     expect(expectPatchOk(await patch(wakeAt + 100))).toMatchObject({
@@ -42,77 +60,38 @@ describe("snooze", () => {
     });
   });
 
-  test.each([
-    { patch: { snoozedUntil: now }, error: "snooze wake time must be in the future" },
-    { entry: { archivedAt: 10 }, error: archivedError },
-    { patch: { archived: true }, error: archivedError },
-    { entry: { spawnedBy: MAIN_SESSION_KEY }, error: childError },
-    { storeKey: "unknown", error: "Cannot snooze the unknown session sentinel." },
-    { storeKey: "global", error: "Cannot snooze an agent's main session." },
-    { storeKey: MAIN_SESSION_KEY, error: "Cannot snooze an agent's main session." },
-    { entry: { sessionId: "" }, error: `session not found: ${key}` },
-    { entry: { sessionId: "" }, patch: { snoozedUntil: null }, error: `session not found: ${key}` },
-    {
-      patch: { expectedSessionId: undefined },
-      error: "expectedSessionId required for session lifecycle patch",
-    },
-    {
-      patch: { snoozedUntil: null, expectedSessionId: undefined },
-      error: "expectedSessionId required for session lifecycle patch",
-    },
-  ] satisfies {
-    storeKey?: string;
-    entry?: Partial<SessionEntry>;
-    patch?: Partial<SessionsPatchParams>;
-    error: string;
-  }[])(
-    "rejects invalid lifecycle patch %j without mutating the entry",
-    async ({ storeKey = key, entry, patch, error }) => {
-      const original = { sessionId: "work", updatedAt: 1, ...entry };
-      const store = { [storeKey]: original };
-      expectPatchError(
-        await runPatch({
-          store,
-          storeKey,
-          patch: { key: storeKey, snoozedUntil: wakeAt, expectedSessionId: "work", ...patch },
-        }),
-        error,
-      );
-      expect(store[storeKey]).toBe(original);
-    },
-  );
+  test.each<[string, Entry, Patch, string]>([
+    [key, {}, { snoozedUntil: now }, "snooze wake time must be in the future"],
+    [key, { archivedAt: 10 }, {}, archivedError],
+    [key, {}, { archived: true }, archivedError],
+    [key, { spawnedBy: MAIN_SESSION_KEY }, {}, childError],
+    ["unknown", {}, {}, "Cannot snooze the unknown session sentinel."],
+    ["global", {}, {}, "Cannot snooze an agent's main session."],
+    [MAIN_SESSION_KEY, {}, {}, "Cannot snooze an agent's main session."],
+    [key, { sessionId: "" }, {}, `session not found: ${key}`],
+    [key, { sessionId: "" }, { snoozedUntil: null }, `session not found: ${key}`],
+    [key, {}, { expectedSessionId: undefined }, requiredId],
+    [key, {}, { snoozedUntil: null, expectedSessionId: undefined }, requiredId],
+  ])("rejects lifecycle patch for %s: %j / %j (%s)", async (storeKey, entry, patch, error) => {
+    const value = fixture(entry, storeKey);
+    expectPatchError(await value.patch({ snoozedUntil: wakeAt, ...patch }), error);
+    expect(value.store[storeKey]).toBe(value.original);
+  });
 
-  test.each([
-    { patch: { snoozedUntil: null }, entry: snoozed, expected: { pinnedAt: 10 }, repeats: 2 },
-    { patch: { archived: true }, entry: snoozed, expected: { archivedAt: now } },
-    { patch: { pinned: true }, entry: snoozed, expected: { pinnedAt: 10 } },
-    {
-      patch: { archived: false, snoozedUntil: wakeAt },
-      entry: { archivedAt: 10 },
-      expected: { snoozedUntil: wakeAt, snoozedAt: now },
-    },
-    { patch: { pinned: true, snoozedUntil: wakeAt }, entry: {}, expected: { pinnedAt: now } },
-  ] satisfies {
-    patch: Partial<SessionsPatchParams>;
-    entry: Partial<SessionEntry>;
-    expected: Partial<SessionEntry>;
-    repeats?: number;
-  }[])(
-    "applies visibility patch $patch consistently",
-    async ({ patch, entry, expected, repeats = 1 }) => {
-      const store = { [key]: { sessionId: "work", updatedAt: 1, ...entry } };
-      for (let attempt = 0; attempt < repeats; attempt++) {
-        const next = expectPatchOk(
-          await runPatch({
-            store,
-            storeKey: key,
-            patch: { key, ...patch, expectedSessionId: "work" },
-          }),
-        );
-        for (const field of ["snoozedUntil", "snoozedAt", "pinnedAt", "archivedAt"] as const) {
-          expect(next[field], field).toBe(expected[field]);
-        }
-      }
-    },
-  );
+  test.each<[Patch, Entry, Entry, number?]>([
+    [{ snoozedUntil: null }, snoozed, { pinnedAt: 10 }, 2],
+    [{ archived: true }, snoozed, { archivedAt: now }],
+    [{ pinned: true }, snoozed, { pinnedAt: 10 }],
+    [
+      { archived: false, snoozedUntil: wakeAt },
+      { archivedAt: 10 },
+      { snoozedUntil: wakeAt, snoozedAt: now },
+    ],
+    [{ pinned: true, snoozedUntil: wakeAt }, {}, { pinnedAt: now }],
+  ])("applies visibility patch %j consistently", async (patch, entry, expected, repeats = 1) => {
+    const value = fixture(entry);
+    for (let attempt = 0; attempt < repeats; attempt++) {
+      expect(visibility(expectPatchOk(await value.patch(patch)))).toEqual(visibility(expected));
+    }
+  });
 });
