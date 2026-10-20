@@ -9,12 +9,10 @@ import type {
 import "./doctor-health-contributions.js";
 import type { runDoctorLintChecks } from "./doctor-lint-flow.js";
 
-type DoctorHealthContributionTestApi = {
+type RunContributions = (ctx: Context, list: readonly DoctorHealthContribution[]) => Promise<void>;
+type TestApi = {
   resolveDoctorHealthContributions(): DoctorHealthContribution[];
-  runDoctorHealthContributionList(
-    ctx: Context,
-    contributions: readonly DoctorHealthContribution[],
-  ): Promise<void>;
+  runDoctorHealthContributionList: RunContributions;
 };
 
 type ContextFixture = Partial<Omit<Context, "configResult">> & {
@@ -73,24 +71,23 @@ export function createDoctorHealthFlowContext(overrides: ContextFixture = {}): C
   };
 }
 
-function getTestApi(): DoctorHealthContributionTestApi {
+function getTestApi(): TestApi {
   const api = (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.doctorHealthContributionsTestApi")
   ];
   if (!api) {
     throw new Error("doctor health contributions test API is unavailable");
   }
-  return api as DoctorHealthContributionTestApi;
+  return api as TestApi;
 }
 
 export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
   return getTestApi().resolveDoctorHealthContributions();
 }
 
-export const runDoctorHealthContributionList: DoctorHealthContributionTestApi["runDoctorHealthContributionList"] =
-  async (...args) => {
-    await getTestApi().runDoctorHealthContributionList(...args);
-  };
+export const runDoctorHealthContributionList: RunContributions = async (...args) => {
+  await getTestApi().runDoctorHealthContributionList(...args);
+};
 
 /** Keep the token candidate and service-repair writer on the same persistence path. */
 export function createGatewayWriterFixture(token: string) {

@@ -75,16 +75,14 @@ it.each([false, true])(
       });
       const runtime = createDoctorRuntime();
       await doctorCommand(runtime, { nonInteractive: true });
-      if (!updating) {
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
-      } else {
-        expect(runtime.exit).not.toHaveBeenCalled();
-        expect(mocks.writeUpdatePostInstallDoctorResult).toHaveBeenCalledWith({
+      expect(runtime.exit.mock.calls).toEqual(updating ? [] : [[1]]);
+      if (updating) {
+        expect(mocks.writeUpdatePostInstallDoctorResult.mock.lastCall?.[0]).toMatchObject({
           resultPath,
-          result: expect.objectContaining({
+          result: {
             status: "ok",
             warnings: [expect.stringContaining(source)],
-          }),
+          },
         });
       }
       expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
