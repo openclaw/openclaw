@@ -771,7 +771,6 @@ describe("ChatSessionRailElement", () => {
     const onSubmit = vi.fn();
     const element = await mount({ onSubmit });
     const empty = element.querySelector("openclaw-panel-empty-state");
-    await empty?.updateComplete;
 
     expect(empty?.querySelector(".empty-state__title")?.textContent).toBe("Side chat");
     expect(element.textContent).not.toMatch(/What changed\?|Why did it stop\?|What's left\?/);
