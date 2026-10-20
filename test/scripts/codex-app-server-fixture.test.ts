@@ -6,6 +6,26 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function request(fixture: string, requests: unknown[]) {
+  const log = path.join(tempDirs.make("codex-fixture-"), "requests.jsonl");
+  const result = spawnSync(process.execPath, [fixture], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      OPENCLAW_QA_CODEX_APP_SERVER_VERSION: "0.153.0",
+      OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG: log,
+      OPENCLAW_QA_CODEX_NATIVE_APPROVAL_LOG: log,
+      OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG: log,
+    },
+    input: requests.map((value) => JSON.stringify(value)).join("\n") + "\n",
+  });
+  expect(result.status, result.stderr).toBe(0);
+  return result.stdout
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
 describe("createFakeThreadStartResponse", () => {
   it.each([
     { expected: null, params: {} },
@@ -28,30 +48,11 @@ describe("fake Codex configuration preflight", () => {
     ["approval", "test/e2e/qa-lab/runtime/codex-native-approval-app-server.fixture.mjs"],
     ["media", "scripts/e2e/lib/codex-media-path/fake-codex-app-server.mjs"],
   ])("%s exposes empty effective config and no managed requirements", (_name, fixture) => {
-    const requestLog = path.join(tempDirs.make("codex-fixture-config-"), "requests.jsonl");
-    const result = spawnSync(process.execPath, [fixture], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_QA_CODEX_APP_SERVER_VERSION: "0.153.0",
-        OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG: requestLog,
-        OPENCLAW_QA_CODEX_NATIVE_APPROVAL_LOG: requestLog,
-        OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG: requestLog,
-      },
-      input:
-        [
-          { id: 1, method: "config/read", params: { cwd: process.cwd(), includeLayers: true } },
-          { id: 2, method: "configRequirements/read" },
-        ]
-          .map((request) => JSON.stringify(request))
-          .join("\n") + "\n",
-    });
-    expect(result.status, result.stderr).toBe(0);
     expect(
-      result.stdout
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line)),
+      request(fixture, [
+        { id: 1, method: "config/read", params: { cwd: process.cwd(), includeLayers: true } },
+        { id: 2, method: "configRequirements/read" },
+      ]),
     ).toEqual([
       { id: 1, result: { config: {}, origins: {}, layers: [] } },
       { id: 2, result: { requirements: null } },
@@ -63,34 +64,11 @@ it("allocates distinct auth fixture threads across clients and preserves resumed
   const resumedThreadId = "0199be31-cb00-7000-8000-000000000001";
   const startedThreadIds: string[] = [];
   for (let client = 0; client < 2; client++) {
-    const result = spawnSync(
-      process.execPath,
-      ["test/e2e/qa-lab/runtime/codex-auth-app-server.fixture.mjs"],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_QA_CODEX_APP_SERVER_VERSION: "0.153.0",
-          OPENCLAW_QA_CODEX_AUTH_APP_SERVER_LOG: path.join(
-            tempDirs.make("codex-fixture-threads-"),
-            "requests.jsonl",
-          ),
-        },
-        input:
-          [
-            { id: 1, method: "thread/start", params: {} },
-            { id: 2, method: "thread/start", params: {} },
-            { id: 3, method: "thread/resume", params: { threadId: resumedThreadId } },
-          ]
-            .map((request) => JSON.stringify(request))
-            .join("\n") + "\n",
-      },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const responses = result.stdout
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line));
+    const responses = request("test/e2e/qa-lab/runtime/codex-auth-app-server.fixture.mjs", [
+      { id: 1, method: "thread/start", params: {} },
+      { id: 2, method: "thread/start", params: {} },
+      { id: 3, method: "thread/resume", params: { threadId: resumedThreadId } },
+    ]);
     expect(responses).toHaveLength(3);
     expect(responses[2]).toMatchObject({
       id: 3,

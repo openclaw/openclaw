@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parse, stringify } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const compiler = path.resolve("security/opengrep/compile-rules.mjs");
 const rule = (id: string, pattern = "old($VALUE)") => ({
   id,
@@ -23,12 +24,11 @@ const suffix =
 const original = `${prefix}  - id: test-report.target\n    pattern: old(...)\n${suffix}`;
 
 describe("compile-opengrep-rules", () => {
-  let directory: string;
   let rulesDir: string;
   let outDir: string;
   let binDir: string;
   beforeEach(() => {
-    directory = mkdtempSync(path.join(os.tmpdir(), "opengrep-compiler-test-"));
+    const directory = tempDirs.make("opengrep-compiler-test-");
     rulesDir = path.join(directory, "rules");
     outDir = path.join(directory, "out");
     binDir = path.join(directory, "bin");
@@ -36,21 +36,18 @@ describe("compile-opengrep-rules", () => {
       mkdirSync(dir);
     }
     writeFileSync(path.join(outDir, "precise.yml"), original);
-    writeFileSync(
-      path.join(rulesDir, "source.yml"),
-      stringify({ rules: [rule("target", "new($VALUE)")] }),
-    );
+    source([rule("target", "new($VALUE)")]);
     const validator = path.join(binDir, "opengrep");
     writeFileSync(
       validator,
       `#!${process.execPath}\nconst fs = require("node:fs");\nconst args = process.argv.slice(2);\nconst input = fs.readFileSync(args[args.indexOf("--config") + 1], "utf8");\nconst invalid = input.includes("invalid-fixture-pattern");\nconsole.log(JSON.stringify({errors: invalid ? [{rule_id: "test-report.target", type: "PatternParseError"}] : []}));\nprocess.exitCode = invalid ? 2 : 0;\n`,
+      { mode: 0o700 },
     );
-    chmodSync(validator, 0o700);
-  });
-  afterEach(() => {
-    rmSync(directory, { recursive: true, force: true });
   });
 
+  function source(rules: ReturnType<typeof rule>[], file = "source.yml") {
+    writeFileSync(path.join(rulesDir, file), stringify({ rules }));
+  }
   function compile(...args: string[]) {
     return spawnSync(
       process.execPath,
@@ -90,9 +87,9 @@ describe("compile-opengrep-rules", () => {
   ])("rejects %s without publishing any changes", (scenario) => {
     let args = ["--update-existing"];
     if (scenario === "unknown") {
-      writeFileSync(path.join(rulesDir, "source.yml"), stringify({ rules: [rule("unknown")] }));
+      source([rule("unknown")]);
     } else if (scenario === "duplicate-source") {
-      writeFileSync(path.join(rulesDir, "second.yml"), stringify({ rules: [rule("target")] }));
+      source([rule("target")], "second.yml");
     } else if (scenario === "duplicate-existing") {
       writeFileSync(
         path.join(outDir, "precise.yml"),
@@ -106,10 +103,7 @@ describe("compile-opengrep-rules", () => {
         stringify({ rules: [{ ...rule("target"), metadata: {} }] }),
       );
     } else if (scenario === "invalid-pattern") {
-      writeFileSync(
-        path.join(rulesDir, "source.yml"),
-        stringify({ rules: [rule("target", "invalid-fixture-pattern")] }),
-      );
+      source([rule("target", "invalid-fixture-pattern")]);
     } else if (scenario === "empty") {
       writeFileSync(path.join(rulesDir, "source.yml"), "rules: []\n");
     } else {
@@ -121,10 +115,7 @@ describe("compile-opengrep-rules", () => {
   });
 
   it("keeps append as the default and does not replace an existing rule", () => {
-    writeFileSync(
-      path.join(rulesDir, "source.yml"),
-      stringify({ rules: [rule("target", "replacement(...)"), rule("new")] }),
-    );
+    source([rule("target", "replacement(...)"), rule("new")]);
     const result = compile();
     expect(result.status, result.stderr).toBe(0);
     const rules = parse(output()).rules;

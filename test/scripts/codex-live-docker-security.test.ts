@@ -5,12 +5,13 @@ import { expect, it } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const executable = (file: string, source: string) => writeFileSync(file, source, { mode: 0o755 });
 
 it("retires AppArmor only after its owned container, preserving failed cleanup", () => {
   const root = createTempDir("openclaw-codex-docker-security-");
   const bin = path.join(root, "bin");
   mkdirSync(bin);
-  writeFileSync(
+  executable(
     path.join(bin, "apparmor_parser"),
     `#!/bin/bash
 case "$2" in
@@ -22,7 +23,6 @@ case "$2" in
   *) exit 2 ;;
 esac
 `,
-    { mode: 0o755 },
   );
   const result = spawnSync(
     "/bin/bash",
@@ -75,32 +75,15 @@ done
     },
   );
   expect(result.status, result.stderr).toBe(0);
-  expect(readFileSync(path.join(root, "events"), "utf8").trim().split("\n")).toEqual([
-    "success",
-    "load",
-    "stop",
-    "unload",
-    "result=0",
-    "already-removed",
-    "load",
-    "unload",
-    "result=0",
-    "foreign-owner",
-    "load",
-    "result=1",
-    "retained",
-    "stop-failed",
-    "load",
-    "stop",
-    "result=4",
-    "retained",
-    "unload-failed",
-    "load",
-    "stop",
-    "unload",
-    "result=5",
-    "retained",
-  ]);
+  expect(readFileSync(path.join(root, "events"), "utf8").trim().split("\n")).toEqual(
+    [
+      "success load stop unload result=0",
+      "already-removed load unload result=0",
+      "foreign-owner load result=1 retained",
+      "stop-failed load stop result=4 retained",
+      "unload-failed load stop unload result=5 retained",
+    ].flatMap((events) => events.split(" ")),
+  );
 });
 
 it("removes staged API credentials when the real wrapper cannot remove its container", () => {
@@ -112,10 +95,8 @@ it("removes staged API credentials when the real wrapper cannot remove its conta
     mkdirSync(dir, { recursive: true });
   }
   symlinkSync(path.resolve("scripts/lib"), path.join(harness, "scripts/lib"));
-  writeFileSync(path.join(harness, "scripts/test-live-build-docker.sh"), "#!/bin/bash\nexit 0\n", {
-    mode: 0o755,
-  });
-  writeFileSync(
+  executable(path.join(harness, "scripts/test-live-build-docker.sh"), "#!/bin/bash\nexit 0\n");
+  executable(
     path.join(bin, "docker"),
     `#!/bin/bash
 set -eu
@@ -143,7 +124,6 @@ case "$1" in
   *) exit 2 ;;
 esac
 `,
-    { mode: 0o755 },
   );
   const result = spawnSync(
     "/bin/bash",

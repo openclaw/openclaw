@@ -1,4 +1,3 @@
-// Codex Media Path Client tests cover codex media path client script behavior.
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { appendFileSync, writeFileSync } from "node:fs";
@@ -73,22 +72,14 @@ async function stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
 }
 
 describe("codex media path limits", () => {
-  it("rejects loose write-config timeout env values", () => {
+  it.each([
+    ["OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS", "1e3"],
+    ["PORT", "65536"],
+  ])("rejects invalid write-config %s=%s", (key, value) => {
     const root = tempRoots.make("openclaw-codex-media-path-");
-    const result = runWriteConfig(root, {
-      OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: "1e3",
-    });
-
+    const result = runWriteConfig(root, { [key]: value });
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid OPENCLAW_CODEX_MEDIA_PATH_TIMEOUT_SECONDS: 1e3");
-  });
-
-  it("rejects out-of-range write-config gateway ports", () => {
-    const root = tempRoots.make("openclaw-codex-media-path-");
-    const result = runWriteConfig(root, { PORT: "65536" });
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("invalid PORT: 65536");
+    expect(result.stderr).toContain(`invalid ${key}: ${value}`);
   });
 });
 
@@ -134,43 +125,39 @@ describe("codex media path fake app-server", () => {
 });
 
 describe("codex media path JSONL tailer", () => {
-  it("keeps parsed app-server requests and reads only appended lines", () => {
+  function fixture(maxReadBytes = 1024) {
     const logPath = path.join(tempRoots.make("openclaw-codex-media-path-"), "app-server.jsonl");
-    const tailer = createJsonlRequestTailer(logPath, { maxReadBytes: 1024, historyLimit: 10 });
-
+    return {
+      logPath,
+      tailer: createJsonlRequestTailer(logPath, { maxReadBytes, historyLimit: 10 }),
+    };
+  }
+  const initialize = { method: "initialize" };
+  const turn = { method: "turn/start" };
+  it("keeps parsed app-server requests and reads only appended lines", () => {
+    const { logPath, tailer } = fixture();
     expect(tailer.read()).toEqual([]);
-
-    writeFileSync(logPath, jsonl({ method: "initialize" }));
-    expect(tailer.read()).toEqual([{ method: "initialize" }]);
-
-    appendFileSync(logPath, JSON.stringify({ method: "turn/start" }));
-    expect(tailer.read()).toEqual([{ method: "initialize" }]);
-
+    writeFileSync(logPath, jsonl(initialize));
+    expect(tailer.read()).toEqual([initialize]);
+    appendFileSync(logPath, JSON.stringify(turn));
+    expect(tailer.read()).toEqual([initialize]);
     appendFileSync(logPath, "\n");
-    expect(tailer.read()).toEqual([{ method: "initialize" }, { method: "turn/start" }]);
+    expect(tailer.read()).toEqual([initialize, turn]);
   });
 
   it("starts from a bounded tail of oversized logs", () => {
-    const logPath = path.join(tempRoots.make("openclaw-codex-media-path-"), "app-server.jsonl");
-    const lastLine = jsonl({ method: "turn/start" });
+    const lastLine = jsonl(turn);
+    const { logPath, tailer } = fixture(lastLine.length + 2);
     writeFileSync(logPath, `${"x".repeat(256)}\n${jsonl({ method: "old" })}${lastLine}`);
-
-    const tailer = createJsonlRequestTailer(logPath, {
-      maxReadBytes: lastLine.length + 2,
-      historyLimit: 10,
-    });
-
-    expect(tailer.read()).toEqual([{ method: "turn/start" }]);
+    expect(tailer.read()).toEqual([turn]);
   });
 
   it("resets request history when the app-server log is truncated", () => {
-    const logPath = path.join(tempRoots.make("openclaw-codex-media-path-"), "app-server.jsonl");
-    const tailer = createJsonlRequestTailer(logPath, { maxReadBytes: 1024, historyLimit: 10 });
-
-    writeFileSync(logPath, jsonl({ method: "initialize", payload: "long enough to rotate" }));
-    expect(tailer.read()).toEqual([{ method: "initialize", payload: "long enough to rotate" }]);
-
-    writeFileSync(logPath, jsonl({ method: "turn/start" }));
-    expect(tailer.read()).toEqual([{ method: "turn/start" }]);
+    const { logPath, tailer } = fixture();
+    const longRequest = { ...initialize, payload: "long enough to rotate" };
+    writeFileSync(logPath, jsonl(longRequest));
+    expect(tailer.read()).toEqual([longRequest]);
+    writeFileSync(logPath, jsonl(turn));
+    expect(tailer.read()).toEqual([turn]);
   });
 });

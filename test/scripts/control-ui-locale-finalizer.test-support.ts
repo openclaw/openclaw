@@ -45,6 +45,14 @@ function put(root: string, file: string, text: string) {
   fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
   fs.writeFileSync(path.join(root, file), text);
 }
+const read = (file: string) => fs.readFileSync(file, "utf8");
+const lines = (text: string) => text.trim().split("\n");
+const memoryPath = (locale: string) => path.join(assets, locale + ".tm.jsonl");
+type Memory = { segment_id: string; translated: string; text: string };
+const parseMemory = (text: string): Memory[] => lines(text).map((line) => JSON.parse(line));
+function mapValues(values: Record<string, unknown>, map: (value: unknown) => string) {
+  return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, map(value)]));
+}
 function providerEnv(root: string, log: string, phase: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -62,12 +70,9 @@ function providerEnv(root: string, log: string, phase: string): NodeJS.ProcessEn
 }
 function requests(file: string): ProviderRequest[] {
   return fs.existsSync(file)
-    ? fs
-        .readFileSync(file, "utf8")
-        .trim()
-        .split("\n")
+    ? lines(read(file))
         .filter(Boolean)
-        .map((line) => JSON.parse(line) as ProviderRequest)
+        .map((line) => JSON.parse(line))
     : [];
 }
 function commit(root: string, message: string) {
@@ -191,7 +196,7 @@ export function createLocaleFinalizerHarness() {
           runGit(updater, ["config", "user.email", "main@example.invalid"]);
         }
         const file = path.join(updater, sourceFile);
-        const source = fs.readFileSync(file, "utf8");
+        const source = read(file);
         expect(source).toContain(previous);
         fs.writeFileSync(file, source.replace(previous, next));
         const revision = commit(updater, "canonical source advances");
@@ -276,9 +281,7 @@ export function createLocaleFinalizerHarness() {
         const env = {
           ...baseEnv,
           ...extra,
-          ...Object.fromEntries(
-            Object.entries(step.env ?? {}).map(([key, value]) => [key, interpolate(value)]),
-          ),
+          ...mapValues(step.env ?? {}, interpolate),
           GITHUB_OUTPUT: output,
         };
         const result = runWorkflowShellScript(step.run, { cwd: root, env, linuxWorkflow: true });
@@ -305,7 +308,7 @@ export function createLocaleFinalizerHarness() {
         providerRequests: requests(providerLog),
         workerRequests: requests(workerLog),
         publicationCalls: fs.existsSync(fixture.env.FAKE_GH_CALLS)
-          ? fs.readFileSync(fixture.env.FAKE_GH_CALLS, "utf8").trim().split("\n")
+          ? lines(read(fixture.env.FAKE_GH_CALLS))
           : [],
         publication: fixture.inspect(""),
         publishedMemory(locale: string) {
@@ -315,25 +318,15 @@ export function createLocaleFinalizerHarness() {
               "--git-dir",
               fixture.env.FAKE_ORIGIN,
               "show",
-              "refs/heads/" + fixture.env.HEAD_BRANCH + ":" + assets + "/" + locale + ".tm.jsonl",
+              "refs/heads/" + fixture.env.HEAD_BRANCH + ":" + memoryPath(locale),
             ],
             { cwd: root, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 },
           );
           expect(readback.status, readback.stderr).toBe(0);
-          return readback.stdout
-            .trim()
-            .split("\n")
-            .map((line) => JSON.parse(line) as { segment_id: string; translated: string });
+          return parseMemory(readback.stdout);
         },
         memory(locale: string) {
-          return fs
-            .readFileSync(path.join(root, assets, locale + ".tm.jsonl"), "utf8")
-            .trim()
-            .split("\n")
-            .map(
-              (line) =>
-                JSON.parse(line) as { segment_id: string; translated: string; text: string },
-            );
+          return parseMemory(read(path.join(root, memoryPath(locale))));
         },
       });
       if (!gate("resolve-base")) {
@@ -344,15 +337,11 @@ export function createLocaleFinalizerHarness() {
         mode: fs.constants.COPYFILE_FICLONE,
         verbatimSymlinks: true,
       });
-      const svFile = path.join(root, assets, "sv.tm.jsonl");
-      const canonicalSv = fs
-        .readFileSync(svFile, "utf8")
-        .trim()
-        .split("\n")
-        .filter(
-          (line) =>
-            scenario.fullRefresh || !JSON.parse(line).segment_id.startsWith("localeWorkflowProof."),
-        );
+      const svFile = path.join(root, memoryPath("sv"));
+      const canonicalSv = lines(read(svFile)).filter(
+        (line) =>
+          scenario.fullRefresh || !JSON.parse(line).segment_id.startsWith("localeWorkflowProof."),
+      );
       fs.writeFileSync(svFile, canonicalSv.join("\n") + "\n");
       commit(root, "canonical source before workers");
       runGit(root, ["push", "--quiet", "origin", "main"]);
@@ -399,19 +388,17 @@ export function createLocaleFinalizerHarness() {
       }
       states.refresh = { result: "success", outputs: {} };
       runGit(root, ["restore", "--worktree", "--", assets]);
-      const english = fs.readFileSync(path.join(root, sourceFile), "utf8");
+      const english = read(path.join(root, sourceFile));
       expect(english).toContain(before);
       fs.writeFileSync(path.join(root, sourceFile), english.replace(before, after));
       if (scenario.change === "glossary") {
         put(root, assets + "/glossary.sv.json", '[{"source":"locale","target":"språk"}]\n');
       }
       if (scenario.change === "canonical") {
-        const packed = JSON.parse(fs.readFileSync(path.join(artifacts, "sv.json"), "utf8"));
-        const kept = packed.memories[0].content
-          .trim()
-          .split("\n")
-          .map((line: string) => JSON.parse(line))
-          .find((entry: { segment_id: string }) => entry.segment_id === "localeWorkflowProof.keep");
+        const packed = JSON.parse(read(path.join(artifacts, "sv.json")));
+        const kept = parseMemory(packed.memories[0].content).find(
+          (entry) => entry.segment_id === "localeWorkflowProof.keep",
+        );
         fs.appendFileSync(
           svFile,
           JSON.stringify({ ...kept, translated: "Canonical correction" }) + "\n",
@@ -422,7 +409,7 @@ export function createLocaleFinalizerHarness() {
       runGit(root, ["checkout", "--quiet", "--detach", sourceCommit]);
       if (scenario.artifactFault) {
         const file = path.join(artifacts, "sv.json");
-        const artifact = JSON.parse(fs.readFileSync(file, "utf8"));
+        const artifact = JSON.parse(read(file));
         if (scenario.artifactFault === "foreign-run") {
           artifact.runId = "999";
         }
@@ -476,45 +463,41 @@ export function createLocaleFinalizerHarness() {
           if (scenario.advanceAfterCatchup) {
             later = advanceMain("Latest locale proof", "Later locale proof");
           }
-          const inputs = Object.fromEntries(
-            Object.entries(step.with ?? {}).map(([key, value]) => [key, interpolate(value)]),
-          );
+          const inputs = mapValues(step.with ?? {}, interpolate);
           const action = readWorkflow(".github/actions/publish-generated-pr/action.yml");
           const publication: WorkflowStep = action.runs.steps.find(
             (candidate: WorkflowStep) => candidate.name === "Publish generated pull request",
+          );
+          const publicationContext: Context = {
+            ...context,
+            inputs: {
+              ...Object.fromEntries(
+                Object.entries<{ default?: unknown }>(action.inputs).map(([name, input]) => [
+                  name,
+                  input.default,
+                ]),
+              ),
+              ...inputs,
+            },
+            steps: {
+              tokens: {
+                outputs: {
+                  "contents-token": "contents-token",
+                  "pull-request-token": "test-token",
+                },
+              },
+            },
+          };
+          const publicationEnv = Object.fromEntries(
+            Object.entries(publication.env ?? {}).filter(([key]) => key !== "PUBLISH_ACTION_PATH"),
           );
           const run = runWorkflowShellScript(publication.run!, {
             cwd: root,
             linuxWorkflow: true,
             env: {
               ...baseEnv,
-              ...Object.fromEntries(
-                Object.entries(publication.env ?? {})
-                  .filter(([key]) => key !== "PUBLISH_ACTION_PATH")
-                  .map(([key, value]) => [
-                    key,
-                    String(
-                      evaluateWorkflowExpression(value, {
-                        ...context,
-                        inputs: {
-                          ...Object.fromEntries(
-                            Object.entries<{ default?: unknown }>(action.inputs).map(
-                              ([name, input]) => [name, input.default],
-                            ),
-                          ),
-                          ...inputs,
-                        },
-                        steps: {
-                          tokens: {
-                            outputs: {
-                              "contents-token": "contents-token",
-                              "pull-request-token": "test-token",
-                            },
-                          },
-                        },
-                      }),
-                    ),
-                  ]),
+              ...mapValues(publicationEnv, (value) =>
+                String(evaluateWorkflowExpression(value, publicationContext)),
               ),
               CI_GIT_OWNER: path.join(root, ".github/actions/git-owner/owner.py"),
               PUBLISH_ACTION_PATH: path.join(root, ".github/actions/publish-generated-pr"),

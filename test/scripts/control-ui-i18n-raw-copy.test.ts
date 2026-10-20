@@ -18,6 +18,10 @@ function collect(source: string) {
   }));
 }
 
+const texts = (...values: string[]) =>
+  values.map((text) => ({ kind: "html-text", name: "text", text }));
+const attribute = (name: string, text: string) => ({ kind: "html-attribute", name, text });
+
 describe("Control UI i18n source scope", () => {
   it.each([
     ["ui/src/pages/model-providers/model-providers-page.login.test-support.ts", true],
@@ -41,12 +45,7 @@ describe("Control UI JSX raw copy", () => {
         <>Nested copy</>
         <span>123 …</span>
       </>;`),
-    ).toEqual([
-      { kind: "html-text", name: "text", text: "Archive" },
-      { kind: "html-text", name: "text", text: "now" },
-      { kind: "html-text", name: "text", text: "First second · third" },
-      { kind: "html-text", name: "text", text: "Nested copy" },
-    ]);
+    ).toEqual(texts("Archive", "now", "First second · third", "Nested copy"));
   });
 
   it("collects each allowed string attribute once regardless of quoting", () => {
@@ -56,11 +55,11 @@ describe("Control UI JSX raw copy", () => {
         <span prop:title={"Details"} />
       </>;`),
     ).toEqual([
-      { kind: "html-attribute", name: "alt", text: "Preview" },
-      { kind: "html-attribute", name: "aria-label", text: "Search" },
-      { kind: "html-attribute", name: "placeholder", text: "Find files" },
-      { kind: "html-attribute", name: "title", text: "Open file" },
-      { kind: "html-attribute", name: "title", text: "Details" },
+      attribute("alt", "Preview"),
+      attribute("aria-label", "Search"),
+      attribute("placeholder", "Find files"),
+      attribute("title", "Open file"),
+      attribute("title", "Details"),
     ]);
   });
 
@@ -75,13 +74,8 @@ describe("Control UI JSX raw copy", () => {
         {t("common.save")}
       </section>;`),
     ).toEqual([
-      { kind: "html-attribute", name: "title", text: "Delete" },
-      { kind: "html-text", name: "text", text: "Open" },
-      { kind: "html-text", name: "text", text: "Ready" },
-      { kind: "html-text", name: "text", text: "Waiting for" },
-      { kind: "html-text", name: "text", text: "Enabled" },
-      { kind: "html-text", name: "text", text: "Fallback label" },
-      { kind: "html-text", name: "text", text: "No description" },
+      attribute("title", "Delete"),
+      ...texts("Open", "Ready", "Waiting for", "Enabled", "Fallback label", "No description"),
     ]);
   });
 

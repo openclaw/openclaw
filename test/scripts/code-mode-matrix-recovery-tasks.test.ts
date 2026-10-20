@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import type { GatewayMatrixTrace } from "../../scripts/lib/code-mode-matrix-gateway.js";
 import {
   createRecoveryMatrixFixture,
   RECOVERY_MATRIX_TASKS,
@@ -65,16 +64,6 @@ type Run = {
   receipts: Record<string, unknown>[];
 };
 
-function emptyTrace(): GatewayMatrixTrace {
-  return {
-    calls: [],
-    outcomes: [],
-    activities: [],
-    assistantTurns: 1,
-    models: [],
-  };
-}
-
 it("injects operation-bound failures in either order and rejects missing reconciliation or duplicate effects", async () => {
   const fixture = createRecoveryMatrixFixture(RECOVERY_MATRIX_TASKS[0], 2);
   const root = tempDirs.make("matrix-recovery-");
@@ -104,7 +93,10 @@ it("injects operation-bound failures in either order and rejects missing reconci
     expect(run.report.settled).toHaveLength(10);
     expect(run.report.blocked).toHaveLength(2);
     expect(run.report.preserved).toHaveLength(3);
-    const evaluation = { ...run, trace: emptyTrace() };
+    const evaluation = {
+      ...run,
+      trace: { calls: [], outcomes: [], activities: [], assistantTurns: 1, models: [] },
+    };
     const checks = await fixture.evaluate(evaluation);
     expect(Object.values(checks).every(Boolean), JSON.stringify(checks)).toBe(true);
 
