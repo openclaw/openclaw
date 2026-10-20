@@ -7,9 +7,16 @@ const AUDIO_DELTA_EVENTS = new Set([
   "response.audio.delta",
   "response.output_audio.delta",
 ]);
-const OUTPUT_MAX_PENDING_MS = 2_000;
+// Providers stream long replies faster than real time, so unplayed audio legitimately
+// runs far ahead of playback. These caps only bound memory; a stall is what ends output.
+const OUTPUT_MAX_PENDING_MS = 120_000;
+const OUTPUT_MAX_PENDING_FRAMES = 6_000;
 const OUTPUT_MAX_WRITE_MS = 500;
-const OUTPUT_MAX_PENDING_FRAMES = 256;
+// Playback is stuck when one write has not finished after this long while more than
+// OUTPUT_STALL_PENDING_MS waits behind it. A healthy pipe into a full pacat buffer can
+// hold one write for about 2 s before draining, so the threshold sits well above that.
+const OUTPUT_STALL_MS = 5_000;
+const OUTPUT_STALL_PENDING_MS = 2_000;
 
 /** Serializes native playback writes and fences queued audio across interruption. */
 export function createMeetingRealtimeOutputQueue(params: {
@@ -20,6 +27,7 @@ export function createMeetingRealtimeOutputQueue(params: {
   let stopped = false;
   let generation = 0;
   let writePhase: "idle" | "scheduled" | "writing" = "idle";
+  let writeStartedAt = 0;
   let clearPending = 0;
   let clearAfterActive = false;
   let pendingBytes = 0;
@@ -37,6 +45,7 @@ export function createMeetingRealtimeOutputQueue(params: {
     generation: number;
   }> = [];
   const maxPendingBytes = params.bytesPerMs * OUTPUT_MAX_PENDING_MS;
+  const stallPendingBytes = params.bytesPerMs * OUTPUT_STALL_PENDING_MS;
   const maxWriteBytes = params.bytesPerMs * OUTPUT_MAX_WRITE_MS;
 
   const reset = () => {
@@ -107,6 +116,7 @@ export function createMeetingRealtimeOutputQueue(params: {
           params.transport.beginOutput?.();
         }
         writePhase = "writing";
+        writeStartedAt = Date.now();
         await params.transport.writeOutput(audio);
         if (!stopped && next.generation === generation) {
           // Native write completion admits audio to playback; it does not mean it was heard.
@@ -142,8 +152,13 @@ export function createMeetingRealtimeOutputQueue(params: {
 
   return {
     enqueue(audio: Buffer, audible: boolean, beginsOutput: boolean): boolean {
+      const stalled =
+        writePhase === "writing" &&
+        Date.now() - writeStartedAt >= OUTPUT_STALL_MS &&
+        pendingBytes + audio.byteLength > stallPendingBytes;
       if (
         stopped ||
+        stalled ||
         audio.byteLength > maxPendingBytes - pendingBytes ||
         pendingFrames >= OUTPUT_MAX_PENDING_FRAMES
       ) {

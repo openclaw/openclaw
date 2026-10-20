@@ -160,6 +160,8 @@ describe("meeting native continuous voice", () => {
     fixture.transport.writeOutput.mockImplementationOnce(() => pending.promise);
     fixture.callbacks.onAudio(Buffer.alloc(48_000, 1));
     await vi.advanceTimersByTimeAsync(0);
+    // The first write has now been stuck past the stall threshold.
+    vi.setSystemTime(Date.now() + 5_000);
     fixture.callbacks.onAudio(Buffer.alloc(48_000, 2));
     fixture.callbacks.onAudio(Buffer.alloc(960, 3));
     await vi.advanceTimersByTimeAsync(0);
