@@ -108,29 +108,25 @@ export default defineConfig({
     );
     for (const file of report.testResults) {
       // Scheduled-close fixtures prove ordering, including after a runtime skip.
+      const name = path.basename(file.name);
       const scheduledCloseStatuses = {
         "10-a-scheduled-close.test.ts": ["passed", "passed", "skipped", "passed"],
         "10-b-around-each-close.test.ts": ["passed", "passed"],
-      }[path.basename(file.name)];
-      if (scheduledCloseStatuses) {
-        expect(file.status, file.name).toBe("passed");
-        expect(file.message, file.name).toBe("");
-        expect(file.assertionResults.map((assertion) => assertion.status)).toEqual(
-          scheduledCloseStatuses,
-        );
-        continue;
-      }
-      const failedTeardown = path.basename(file.name) === "13-a-retained-lease.test.ts";
-      expect(file.status, file.name).toBe(failedTeardown ? "failed" : "passed");
+      }[name];
+      const failedTeardown = name === "13-a-retained-lease.test.ts";
+      expect(file, file.name).toMatchObject({
+        status: failedTeardown ? "failed" : "passed",
+        message: failedTeardown
+          ? expect.stringContaining("Synthetic retired lease cleanup refused")
+          : "",
+        assertionResults: scheduledCloseStatuses
+          ? scheduledCloseStatuses.map((status) => ({ status }))
+          : [{ status: "passed", failureMessages: [] }],
+      });
       if (failedTeardown) {
-        expect(file.message).toContain("Synthetic retired lease cleanup refused");
         expect(file.message).toContain(`leaseId=${identity.leaseId}`);
         expect(file.message).toContain(`path=${identity.path}`);
-      } else {
-        expect(file.message, file.name).toBe("");
       }
-      expect(file.assertionResults).toHaveLength(1);
-      expect(file.assertionResults[0]).toMatchObject({ status: "passed", failureMessages: [] });
     }
     const capture: VitestReportCapture = JSON.parse(
       await fs.readFile(`${reportPath}.capture.json`, "utf8"),

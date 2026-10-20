@@ -11,39 +11,25 @@ const tempDirs: string[] = [];
 type OfficialChannelCatalogEntry = ReturnType<
   typeof buildOfficialChannelCatalog
 >["entries"][number];
-type OfficialChannelInstall = NonNullable<
-  NonNullable<OfficialChannelCatalogEntry["openclaw"]>["install"]
->;
-
-function makeRepoRoot(prefix: string): string {
-  return makeTempRepoRoot(tempDirs, prefix);
-}
-
-function writeJson(filePath: string, value: unknown): void {
-  writeJsonFile(filePath, value);
-}
+type OfficialChannelInstall = OfficialChannelCatalogEntry["openclaw"]["install"];
 
 function writeChannelPackage(
   repoRoot: string,
   directory: string,
   channel: OfficialChannelCatalogEntry["openclaw"]["channel"],
-  options: {
-    install?: OfficialChannelInstall;
-    publishToNpm?: boolean;
-    version?: string;
-    description?: string;
-  } = {},
-): void {
-  const { install, publishToNpm, ...packageFields } = options;
-  writeJson(path.join(repoRoot, "extensions", directory, "package.json"), {
+  install: OfficialChannelInstall,
+) {
+  writeJsonFile(path.join(repoRoot, "extensions", directory, "package.json"), {
     name: `@openclaw/${directory}`,
-    ...packageFields,
     openclaw: {
       channel: { id: directory, ...channel },
-      ...(install ? { install } : {}),
-      ...(publishToNpm === undefined ? {} : { release: { publishToNpm } }),
+      install,
+      release: { publishToNpm: true },
     },
   });
+  return buildOfficialChannelCatalog({ repoRoot }).entries.find(
+    (entry) => entry.openclaw.channel.id === directory,
+  );
 }
 
 function requireInstall(entry: OfficialChannelCatalogEntry | undefined): OfficialChannelInstall {
@@ -54,20 +40,11 @@ function requireInstall(entry: OfficialChannelCatalogEntry | undefined): Officia
   return install;
 }
 
-function requireNpmInstallSource(source: ReturnType<typeof describePluginInstallSource>) {
-  if (!source.npm) {
-    throw new Error("expected npm install source");
-  }
-  return source.npm;
-}
-
-afterEach(() => {
-  cleanupTempDirs(tempDirs);
-});
+afterEach(() => cleanupTempDirs(tempDirs));
 
 describe("buildOfficialChannelCatalog", () => {
   it("keeps third-party official external catalog install sources pinned", () => {
-    const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-policy-");
+    const repoRoot = makeTempRepoRoot(tempDirs, "openclaw-official-channel-catalog-policy-");
     const entries = buildOfficialChannelCatalog({ repoRoot }).entries.filter(
       (entry) => entry.source === "external" && !entry.name?.startsWith("@openclaw/"),
     );
@@ -78,7 +55,7 @@ describe("buildOfficialChannelCatalog", () => {
       const installSource = describePluginInstallSource(install);
       expect(installSource.warnings).toStrictEqual([]);
       if (install.npmSpec) {
-        expect(requireNpmInstallSource(installSource).pinState).toBe("exact-with-integrity");
+        expect(installSource.npm?.pinState).toBe("exact-with-integrity");
       } else {
         expect(installSource.npm).toBeUndefined();
         expect(installSource.clawhub?.exactVersion).toBe(true);
@@ -88,43 +65,32 @@ describe("buildOfficialChannelCatalog", () => {
   });
 
   it("allows official OpenClaw channel npm specs without integrity during launch", () => {
-    const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-openclaw-policy-");
-    writeChannelPackage(
+    const repoRoot = makeTempRepoRoot(tempDirs, "openclaw-official-policy-");
+    const twitch = writeChannelPackage(
       repoRoot,
       "twitch",
       { label: "Twitch", docsPath: "/channels/twitch" },
       {
-        install: {
-          npmSpec: "@openclaw/twitch",
-          defaultChoice: "npm",
-          minHostVersion: ">=2026.4.10",
-        },
-        publishToNpm: true,
-      },
-    );
-    const twitch = buildOfficialChannelCatalog({ repoRoot }).entries.find(
-      (entry) => entry.openclaw?.channel?.id === "twitch",
-    );
-
-    expect({
-      name: twitch?.name,
-      install: twitch?.openclaw?.install,
-    }).toEqual({
-      name: "@openclaw/twitch",
-      install: {
         npmSpec: "@openclaw/twitch",
         defaultChoice: "npm",
         minHostVersion: ">=2026.4.10",
       },
+    );
+
+    expect(twitch?.name).toBe("@openclaw/twitch");
+    expect(twitch?.openclaw.install).toEqual({
+      npmSpec: "@openclaw/twitch",
+      defaultChoice: "npm",
+      minHostVersion: ">=2026.4.10",
     });
     const installSource = describePluginInstallSource(requireInstall(twitch));
-    expect(requireNpmInstallSource(installSource).pinState).toBe("floating-without-integrity");
+    expect(installSource.npm?.pinState).toBe("floating-without-integrity");
     expect(installSource.warnings).toEqual(["npm-spec-floating", "npm-spec-missing-integrity"]);
   });
 
   it("preserves ClawHub specs when generating publishable channel catalog entries", () => {
-    const repoRoot = makeRepoRoot("openclaw-official-channel-catalog-clawhub-");
-    writeChannelPackage(
+    const repoRoot = makeTempRepoRoot(tempDirs, "openclaw-official-channel-catalog-clawhub-");
+    const entry = writeChannelPackage(
       repoRoot,
       "storepack-chat",
       {
@@ -134,17 +100,10 @@ describe("buildOfficialChannelCatalog", () => {
         blurb: "storepack-first channel",
       },
       {
-        install: {
-          clawhubSpec: "clawhub:@openclaw/storepack-chat",
-          npmSpec: "@openclaw/storepack-chat",
-          defaultChoice: "clawhub",
-        },
-        publishToNpm: true,
+        clawhubSpec: "clawhub:@openclaw/storepack-chat",
+        npmSpec: "@openclaw/storepack-chat",
+        defaultChoice: "clawhub",
       },
-    );
-
-    const entry = buildOfficialChannelCatalog({ repoRoot }).entries.find(
-      (candidate) => candidate.openclaw?.channel?.id === "storepack-chat",
     );
 
     expect(requireInstall(entry)).toEqual({

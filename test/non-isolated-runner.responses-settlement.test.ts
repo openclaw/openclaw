@@ -12,8 +12,8 @@ import { responsesProducerFixtureFiles } from "./non-isolated-runner.responses-f
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 
-function childEnv(): NodeJS.ProcessEnv {
-  return Object.fromEntries(
+async function verifyResponsesProducerSettlement(signal: AbortSignal): Promise<void> {
+  const env = Object.fromEntries(
     Object.entries(process.env).filter(
       ([key, value]) =>
         value !== undefined &&
@@ -22,9 +22,6 @@ function childEnv(): NodeJS.ProcessEnv {
         key !== "GITHUB_ACTIONS",
     ),
   );
-}
-
-async function verifyResponsesProducerSettlement(signal: AbortSignal): Promise<void> {
   const fixtureRoots = path.join(repoRoot, ".artifacts", "non-isolated-runner-responses");
   await fs.mkdir(fixtureRoots, { recursive: true });
   // openclaw-temp-dir: allow retains failed child-runner fixtures for diagnosis.
@@ -60,7 +57,7 @@ export default defineConfig({
       await fs.writeFile(path.join(root, name), contents, "utf8");
     }
     let child!: ChildProcess;
-    const workers = createVitestWorkerRun(childEnv());
+    const workers = createVitestWorkerRun(env);
     let result: Awaited<ReturnType<typeof runVitestShutdownCommand>>;
     try {
       result = await runVitestShutdownCommand({
@@ -77,7 +74,7 @@ export default defineConfig({
           "--reporter=verbose",
         ],
         cwd: repoRoot,
-        env: childEnv(),
+        env,
         workerRun: workers,
         maxBytes: 4 * 1024 * 1024,
         signal,
@@ -90,8 +87,7 @@ export default defineConfig({
     }
     const output = `${result.stdout}\n${result.stderr}`;
     expect(result.code, output).toBe(0);
-    expect(child.exitCode, output).toBe(0);
-    expect(child.signalCode, output).toBeNull();
+    expect(child, output).toMatchObject({ exitCode: 0, signalCode: null });
     expect(output).toContain("5 passed");
     await fs.rm(root, { recursive: true, force: true });
   } catch (error) {
