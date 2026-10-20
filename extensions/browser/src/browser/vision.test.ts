@@ -1,4 +1,3 @@
-// Browser tests cover vision plugin behavior.
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -49,49 +48,36 @@ async function withTempImage<T>(fn: (filePath: string) => Promise<T>): Promise<T
 
 describe("describeBrowserScreenshot", () => {
   it("uses existing image understanding config with a browser screenshot prompt", async () => {
-    const describeEntry = mocks.describeImageFile.mockResolvedValue({
+    const described = {
       text: "A login screen.",
       provider: "openai",
       model: "gpt-vision",
       decision: { outcome: "success" },
-    });
+    };
+    const describeEntry = mocks.describeImageFile.mockResolvedValue(described);
+    const context = {
+      cfg: {
+        tools: {
+          media: {
+            models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image" as const] }],
+          },
+        },
+      },
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      activeModel: { provider: "anthropic", model: "claude-sonnet-4.6" },
+    };
+    const mediaScope = { sessionKey: "agent:main:telegram:dm:123", channel: "telegram" };
 
     await withTempImage(async (filePath) => {
-      const result = await describeBrowserScreenshot({
-        cfg: {
-          tools: {
-            media: {
-              models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
-            },
-          },
-        },
-        filePath,
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-        activeModel: { provider: "anthropic", model: "claude-sonnet-4.6" },
-        mediaScope: { sessionKey: "agent:main:telegram:dm:123", channel: "telegram" },
-      });
-
-      expect(result).toEqual({
-        text: "A login screen.",
-        provider: "openai",
-        model: "gpt-vision",
-        decision: { outcome: "success" },
-      });
+      expect(await describeBrowserScreenshot({ ...context, filePath, mediaScope })).toEqual(
+        described,
+      );
       expect(describeEntry).toHaveBeenCalledWith({
+        ...context,
         filePath,
-        cfg: {
-          tools: {
-            media: {
-              models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
-            },
-          },
-        },
         prompt: DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT,
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-        activeModel: { provider: "anthropic", model: "claude-sonnet-4.6" },
-        scopeContext: { sessionKey: "agent:main:telegram:dm:123", channel: "telegram" },
+        scopeContext: mediaScope,
       });
     });
   });
@@ -134,11 +120,10 @@ describe("describeBrowserScreenshot", () => {
 
   it("resizes screenshots before image understanding when image sanitization is configured", async () => {
     const describeResult = mocks.describeImageFile.mockResolvedValue({ text: "Small screenshot." });
-    const normalizeBrowserScreenshot = mocks.normalizeBrowserScreenshot.mockResolvedValue({
+    mocks.normalizeBrowserScreenshot.mockResolvedValue({
       buffer: Buffer.from("small"),
       contentType: "image/jpeg" as const,
     });
-    const saveMediaBuffer = mocks.saveMediaBuffer;
 
     await withTempImage(async (filePath) => {
       await describeBrowserScreenshot({
@@ -148,10 +133,14 @@ describe("describeBrowserScreenshot", () => {
       });
     });
 
-    expect(normalizeBrowserScreenshot).toHaveBeenCalledWith(Buffer.from("image"), {
+    expect(mocks.normalizeBrowserScreenshot).toHaveBeenCalledWith(Buffer.from("image"), {
       maxSide: 800,
     });
-    expect(saveMediaBuffer).toHaveBeenCalledWith(Buffer.from("small"), "image/jpeg", "browser");
+    expect(mocks.saveMediaBuffer).toHaveBeenCalledWith(
+      Buffer.from("small"),
+      "image/jpeg",
+      "browser",
+    );
     expect(
       expectDefined(describeResult.mock.calls[0]?.[0], "browser vision request").filePath,
     ).toBe("/tmp/resized.jpg");

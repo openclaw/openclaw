@@ -4,11 +4,6 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const browserUtilsMock = vi.hoisted(() => ({ configDir: "/tmp/openclaw-state" }));
-const realMkdirSync = fs.mkdirSync.bind(fs);
-const realMkdtempSync = fs.mkdtempSync.bind(fs);
-const realRmSync = fs.rmSync.bind(fs);
-const realWriteFileSync = fs.writeFileSync.bind(fs);
-const realRealpathSyncNative = fs.realpathSync.native.bind(fs.realpathSync);
 
 vi.mock("openclaw/plugin-sdk/text-utility-runtime", () => ({
   get CONFIG_DIR() {
@@ -32,35 +27,50 @@ describe("browser trash", () => {
   let testRoot = "";
   let configDir = "";
   let homeDir = "";
+  let trashDir = "";
+
+  function write(target: string, contents: string) {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, contents);
+    return target;
+  }
+  function profile(dir: string, contents = "outside profile") {
+    write(path.join(dir, "Preferences"), contents);
+    return dir;
+  }
+  function expectOutsideProfile(dir: string) {
+    expect(fs.lstatSync(dir).isDirectory()).toBe(true);
+    expect(fs.readFileSync(path.join(dir, "Preferences"), "utf8")).toBe("outside profile");
+  }
+  function expectForbidden(target: string) {
+    return expect(movePathToTrash(target)).rejects.toThrow(
+      "Refusing to trash path outside allowed roots",
+    );
+  }
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    testRoot = realRealpathSyncNative(realMkdtempSync(path.join(os.tmpdir(), "openclaw-browser-")));
+    testRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-browser-")));
     configDir = path.join(testRoot, "state");
     homeDir = path.join(testRoot, "home", "test");
+    trashDir = path.join(homeDir, ".Trash");
     browserUtilsMock.configDir = configDir;
-    realMkdirSync(configDir, { recursive: true, mode: 0o700 });
-    realMkdirSync(path.join(homeDir, ".Trash"), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(trashDir, { recursive: true, mode: 0o700 });
     vi.spyOn(os, "homedir").mockReturnValue(homeDir);
-    vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) =>
-      realRealpathSyncNative(candidate),
-    );
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
     if (testRoot) {
-      realRmSync(testRoot, { recursive: true, force: true });
+      fs.rmSync(testRoot, { recursive: true, force: true });
     }
   });
 
   it("allows managed browser data under a configured state directory outside home", async () => {
-    const target = path.join(configDir, "browser", "constructor");
-    realMkdirSync(target, { recursive: true });
-    realWriteFileSync(path.join(target, "Preferences"), "profile data");
+    const target = profile(path.join(configDir, "browser", "constructor"), "profile data");
 
     const moved = await movePathToTrash(target);
-    const trashDir = path.join(homeDir, ".Trash");
     const reservation = path.dirname(moved);
     expect(moved.startsWith(`${trashDir}${path.sep}`)).toBe(true);
     expect(reservation).not.toBe(trashDir);
@@ -76,31 +86,18 @@ describe("browser trash", () => {
   });
 
   it("does not authorize other configured-state paths", async () => {
-    const target = path.join(configDir, "credentials", "token.json");
-    realMkdirSync(path.dirname(target), { recursive: true });
-    realWriteFileSync(target, "secret");
-
-    await expect(movePathToTrash(target)).rejects.toThrow(
-      "Refusing to trash path outside allowed roots",
-    );
+    await expectForbidden(write(path.join(configDir, "credentials", "token.json"), "secret"));
   });
 
   it("does not grant arbitrary filesystem authority for a root config directory", async () => {
     browserUtilsMock.configDir = path.parse(testRoot).root;
-    const target = path.join(testRoot, "outside-root-browser");
-    realWriteFileSync(target, "outside");
-
-    await expect(movePathToTrash(target)).rejects.toThrow(
-      "Refusing to trash path outside allowed roots",
-    );
+    await expectForbidden(write(path.join(testRoot, "outside-root-browser"), "outside"));
   });
 
   it("trashes an in-root symlink entry without moving its outside profile", async () => {
     const browserDir = path.join(configDir, "browser");
-    const outsideDir = path.join(testRoot, "outside-profile");
-    realMkdirSync(browserDir, { recursive: true });
-    realMkdirSync(outsideDir, { recursive: true });
-    realWriteFileSync(path.join(outsideDir, "Preferences"), "outside profile");
+    const outsideDir = profile(path.join(testRoot, "outside-profile"));
+    fs.mkdirSync(browserDir, { recursive: true });
     const target = path.join(browserDir, "constructor");
     fs.symlinkSync(outsideDir, target, "dir");
 
@@ -109,10 +106,8 @@ describe("browser trash", () => {
     expect(fs.lstatSync(moved).isSymbolicLink()).toBe(true);
     expect(fs.readlinkSync(moved)).toBe(outsideDir);
     expect(fs.lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
-    expect(fs.lstatSync(outsideDir).isDirectory()).toBe(true);
+    expectOutsideProfile(outsideDir);
     expect(fs.readdirSync(outsideDir)).toEqual(["Preferences"]);
-    expect(fs.readFileSync(path.join(outsideDir, "Preferences"), "utf8")).toBe("outside profile");
-    const trashDir = path.join(homeDir, ".Trash");
     const reservation = path.dirname(moved);
     expect(path.dirname(reservation)).toBe(trashDir);
     expect(fs.readdirSync(trashDir)).toEqual([path.basename(reservation)]);
@@ -122,22 +117,15 @@ describe("browser trash", () => {
   it("rejects entries whose symlinked parent resolves outside the Browser root", async () => {
     const browserDir = path.join(configDir, "browser");
     const outsideDir = path.join(testRoot, "outside-profile");
-    const outsideTarget = path.join(outsideDir, "nested", "profile");
-    realMkdirSync(browserDir, { recursive: true });
-    realMkdirSync(outsideTarget, { recursive: true });
-    realWriteFileSync(path.join(outsideTarget, "Preferences"), "outside profile");
+    const outsideTarget = profile(path.join(outsideDir, "nested", "profile"));
+    fs.mkdirSync(browserDir, { recursive: true });
     const parentAlias = path.join(browserDir, "escaped-parent");
     fs.symlinkSync(outsideDir, parentAlias, "dir");
     const target = path.join(parentAlias, "nested", "profile");
 
-    await expect(movePathToTrash(target)).rejects.toThrow(
-      "Refusing to trash path outside allowed roots",
-    );
+    await expectForbidden(target);
     expect(fs.readlinkSync(parentAlias)).toBe(outsideDir);
-    expect(fs.lstatSync(outsideTarget).isDirectory()).toBe(true);
-    expect(fs.readFileSync(path.join(outsideTarget, "Preferences"), "utf8")).toBe(
-      "outside profile",
-    );
-    expect(fs.readdirSync(path.join(homeDir, ".Trash"))).toEqual([]);
+    expectOutsideProfile(outsideTarget);
+    expect(fs.readdirSync(trashDir)).toEqual([]);
   });
 });
