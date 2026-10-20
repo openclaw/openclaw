@@ -42,6 +42,24 @@ function run(runId: string, overrides: Partial<SubagentRunRecord> = {}): Subagen
     ...overrides,
   };
 }
+const controller = "agent:main:controller";
+const childLinks = {
+  childSessions: ["agent:main:subagent:child"],
+  swarm: { groups: [{ groupId: "retained-group", done: 1, failed: 0 }] },
+};
+const controllerRow = { key: controller, ...childLinks };
+
+function linkedRuns() {
+  return [
+    run("child", { requesterSessionKey: "agent:main:requester", controllerSessionKey: controller }),
+    run("deleted", {
+      collect: true,
+      groupId: "retained-group",
+      swarmRequesterSessionKey: controller,
+      collectorCompletion: { status: "done" },
+    }),
+  ] as const;
+}
 it.each(["replaced", "made private"])(
   "describes current session metadata without waiting for catalog readiness when the session is %s",
   async (change) => {
@@ -60,7 +78,6 @@ it.each(["replaced", "made private"])(
           },
         };
         setRuntimeConfigSnapshot(cfg);
-        const controller = "agent:main:controller";
         const ownerId = ensureProfileForEmail("owner@example.com").id;
         const viewerId = ensureProfileForEmail("viewer@example.com").id;
         await upsertSessionEntryCore(
@@ -72,20 +89,11 @@ it.each(["replaced", "made private"])(
             createdActor: { type: "human", source: "profile", id: ownerId },
           },
         );
-        const child = run("child", {
-          requesterSessionKey: "agent:main:requester",
-          controllerSessionKey: controller,
-        });
+        const [child, collector] = linkedRuns();
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: child.childSessionKey },
           { sessionId: "child-session", updatedAt: Date.now(), visibility: "shared" },
         );
-        const collector = run("deleted", {
-          collect: true,
-          groupId: "retained-group",
-          swarmRequesterSessionKey: controller,
-          collectorCompletion: { status: "done" },
-        });
         persistRegistryFixture(new Map([child, collector].map((entry) => [entry.runId, entry])));
         clearSubagentRunsReadCacheForTest();
         const context = requestContext(cfg);
@@ -130,8 +138,7 @@ it.each(["replaced", "made private"])(
               session: {
                 sessionId: "replacement-session",
                 displayName: "Current conversation",
-                childSessions: [child.childSessionKey],
-                swarm: { groups: [{ groupId: "retained-group", done: 1, failed: 0 }] },
+                ...childLinks,
               },
             });
             expect(JSON.stringify(result)).not.toContain("retained synthetic");
@@ -159,18 +166,8 @@ it("lists off-page controller links and deleted-collector totals while a sibling
         plugins: { enabled: false },
       };
       setRuntimeConfigSnapshot(cfg);
-      const controller = "agent:main:controller";
       const requester = "agent:main:requester";
-      const child = run("child", {
-        requesterSessionKey: requester,
-        controllerSessionKey: controller,
-      });
-      const collector = run("deleted", {
-        collect: true,
-        groupId: "retained-group",
-        swarmRequesterSessionKey: controller,
-        collectorCompletion: { status: "done" },
-      });
+      const [child, collector] = linkedRuns();
       for (const [key, updatedAt, spawnedBy] of [
         [requester, 100, undefined],
         [child.childSessionKey, 200, requester],
@@ -218,13 +215,7 @@ it("lists off-page controller links and deleted-collector totals while a sibling
           count: 1,
           totalCount: 3,
           nextOffset: 1,
-          sessions: [
-            {
-              key: controller,
-              childSessions: [child.childSessionKey],
-              swarm: { groups: [{ groupId: "retained-group", done: 1, failed: 0 }] },
-            },
-          ],
+          sessions: [controllerRow],
         });
         expect(JSON.stringify(result)).not.toContain("retained synthetic");
         const backend = new EmbeddedTuiBackend();

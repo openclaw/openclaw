@@ -45,73 +45,14 @@ describe("placement session authorization", () => {
 
   it("rejects queued placement mutations after session participation is revoked", async () => {
     const scenarios = [
-      ...(
-        [
-          ["profile dispatch", { profileId: "test" }],
-          ["device dispatch", { deviceId: "device-1" }],
-        ] as const
-      ).map(([name, target]) => ({
-        name,
-        placement: undefined,
-        invoke: (
-          context: ReturnType<typeof makeDispatchTestContext>,
-          authorization: SessionMutationAuthorization,
-        ) => invokeSessionDispatch(context, target, authorization),
-        service: (afterWait: (authorize?: () => void) => Promise<void>) => ({
-          dispatch: vi.fn(async (_request, _onTransition, authorize?: () => void) => {
-            await afterWait(authorize);
-            return activePlacement();
-          }),
-        }),
-      })),
-      ...(
-        [
-          ["gateway move", { kind: "gateway" }],
-          ["profile move", { kind: "profile", profileId: "test" }],
-          ["device move", { kind: "device", deviceId: "device-1" }],
-        ] as const
-      ).map(([name, target]) => ({
-        name,
-        placement: activePlacement(),
-        invoke: (
-          context: ReturnType<typeof makeDispatchTestContext>,
-          authorization: SessionMutationAuthorization,
-        ) =>
-          invokeSessionMove(
-            context,
-            {
-              expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
-              target,
-            },
-            authorization,
-          ),
-        service: (afterWait: (authorize?: () => void) => Promise<void>) => ({
-          dispatch: vi.fn(),
-          move: vi.fn(async (_request, _onTransition, authorize?: () => void) => {
-            await afterWait(authorize);
-            return { state: "local" as const, generation: 5 };
-          }),
-        }),
-      })),
-      ...(["active", "failed"] as const).map((state) => ({
-        name: `${state} reclaim`,
-        placement:
-          state === "active"
-            ? activePlacement()
-            : { ...makeFailedPlacement(), environmentId: null },
-        invoke: (
-          context: ReturnType<typeof makeDispatchTestContext>,
-          authorization: SessionMutationAuthorization,
-        ) => invokeSessionReclaim(context, authorization),
-        service: (afterWait: (authorize?: () => void) => Promise<void>) => ({
-          dispatch: vi.fn(),
-          reclaim: vi.fn(async (_request, authorize?: () => void) => {
-            await afterWait(authorize);
-            return makeReclaimedPlacement();
-          }),
-        }),
-      })),
-    ];
+      { method: "dispatch", target: { profileId: "test" } },
+      { method: "dispatch", target: { deviceId: "device-1" } },
+      { method: "move", target: { kind: "gateway" } },
+      { method: "move", target: { kind: "profile", profileId: "test" } },
+      { method: "move", target: { kind: "device", deviceId: "device-1" } },
+      { method: "reclaim", failed: false },
+      { method: "reclaim", failed: true },
+    ] as const;
 
     for (const scenario of scenarios) {
       let participating = true;
@@ -135,20 +76,59 @@ describe("placement session authorization", () => {
         authorize?.();
         durableTransition();
       };
+      const service =
+        scenario.method === "dispatch"
+          ? {
+              dispatch: vi.fn((_request, _onTransition, authorize?: () => void) =>
+                afterWait(authorize).then(activePlacement),
+              ),
+            }
+          : scenario.method === "move"
+            ? {
+                dispatch: vi.fn(),
+                move: vi.fn((_request, _onTransition, authorize?: () => void) =>
+                  afterWait(authorize).then(() => ({ state: "local" as const, generation: 5 })),
+                ),
+              }
+            : {
+                dispatch: vi.fn(),
+                reclaim: vi.fn((_request, authorize?: () => void) =>
+                  afterWait(authorize).then(makeReclaimedPlacement),
+                ),
+              };
+      const placement =
+        scenario.method === "dispatch"
+          ? undefined
+          : scenario.method === "reclaim" && scenario.failed
+            ? { ...makeFailedPlacement(), environmentId: null }
+            : activePlacement();
       const context = makeDispatchTestContext({
-        workerPlacementDispatchService: scenario.service(afterWait) as never,
+        workerPlacementDispatchService: service as never,
         workerSessionPlacementService: {
-          getMany: () => new Map(scenario.placement ? [[sessionId, scenario.placement]] : []),
+          getMany: () => new Map(placement ? [[sessionId, placement]] : []),
         },
       });
 
-      const operation = scenario.invoke(context, authorization);
+      const operation =
+        scenario.method === "dispatch"
+          ? invokeSessionDispatch(context, scenario.target, authorization)
+          : scenario.method === "move"
+            ? invokeSessionMove(
+                context,
+                {
+                  expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
+                  target: scenario.target,
+                },
+                authorization,
+              )
+            : invokeSessionReclaim(context, authorization);
       await operationStarted.promise;
       participating = false;
       releaseOperation.resolve();
 
-      await expect(operation, scenario.name).rejects.toBe(authorizationError);
-      expect(durableTransition, scenario.name).not.toHaveBeenCalled();
+      const name = JSON.stringify(scenario);
+      await expect(operation, name).rejects.toBe(authorizationError);
+      expect(durableTransition, name).not.toHaveBeenCalled();
     }
   });
 });
