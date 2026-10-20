@@ -121,14 +121,10 @@ class RejectInboundReplayProvider extends FakeProvider {
       statusCode: 200,
       events: [
         {
-          id: "evt-reject-once",
+          ...eventFacts("evt-reject-once"),
           dedupeKey: options?.verifiedRequestKey,
-          type: "call.initiated" as const,
           callId: "provider-inbound-1",
           providerCallId: "provider-inbound-1",
-          timestamp: Date.now(),
-          direction: "inbound" as const,
-          from: "+15552222222",
           to: "+15550000000",
         },
       ],
@@ -157,11 +153,11 @@ afterEach(async () => {
 function eventFacts(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
-    type: "call.initiated",
+    type: "call.initiated" as const,
     callId: id,
     providerCallId: `provider-${id}`,
     timestamp: Date.now(),
-    direction: "inbound",
+    direction: "inbound" as const,
     from: "+15552222222",
     to: "+15553333333",
     ...overrides,

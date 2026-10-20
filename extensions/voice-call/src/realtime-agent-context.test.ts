@@ -1,33 +1,23 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { resolveRealtimeVoiceAgentContextInstructions } from "openclaw/plugin-sdk/realtime-bootstrap-context";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallConfig } from "./config.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const host = vi.hoisted<{ rejection?: Error }>(() => ({}));
-
 vi.mock("openclaw/plugin-sdk/realtime-bootstrap-context", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/realtime-bootstrap-context")>();
   return {
     ...actual,
-    async resolveRealtimeVoiceAgentContextInstructions(
-      ...args: Parameters<typeof actual.resolveRealtimeVoiceAgentContextInstructions>
-    ) {
-      if (host.rejection) {
-        throw host.rejection;
-      }
-      return actual.resolveRealtimeVoiceAgentContextInstructions(...args);
-    },
+    resolveRealtimeVoiceAgentContextInstructions: vi.fn(
+      actual.resolveRealtimeVoiceAgentContextInstructions,
+    ),
   };
-});
-
-beforeEach(() => {
-  host.rejection = undefined;
 });
 
 const identity = { name: "Claw Voice", emoji: ":claw:", theme: "bright" };
@@ -56,10 +46,9 @@ function buildInstructions(
 describe("buildRealtimeVoiceInstructions", () => {
   it("propagates the host composer's rejection", async () => {
     const rejection = new Error("modern context rejected");
-    host.rejection = rejection;
-    await expect(buildInstructions(tempDirs.make("openclaw-voice-context-"))).rejects.toBe(
-      rejection,
-    );
+    vi.mocked(resolveRealtimeVoiceAgentContextInstructions).mockRejectedValueOnce(rejection);
+    const workspace = tempDirs.make("openclaw-voice-context-");
+    await expect(buildInstructions(workspace)).rejects.toBe(rejection);
   });
 
   it("preserves identity, selected files and workspace containment", async () => {
@@ -74,8 +63,6 @@ describe("buildRealtimeVoiceInstructions", () => {
       workspace,
       {
         enabled: true,
-        includeIdentity: true,
-        includeWorkspaceFiles: true,
         files: ["VOICE.md", "SOUL.md", "IDENTITY.md", "../OUTSIDE.md", "missing.md"],
       },
       "substantive",

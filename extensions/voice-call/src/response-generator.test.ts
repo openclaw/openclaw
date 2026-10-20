@@ -36,16 +36,12 @@ function createAgentRuntime(
   );
   const prepareSessionEntryPatch = vi.fn(
     async (params: Parameters<AgentRuntime["session"]["prepareSessionEntryPatch"]>[0]) => {
-      const existing = sessionStore[params.sessionKey] ?? params.fallbackEntry;
+      const stored = sessionStore[params.sessionKey];
+      const existing = stored ?? params.fallbackEntry;
       if (!existing) {
         return null;
       }
-      const patch = await params.prepare(
-        { ...existing },
-        {
-          existingEntry: sessionStore[params.sessionKey],
-        },
-      );
+      const patch = await params.prepare({ ...existing }, { existingEntry: stored });
       if (!patch) {
         return existing;
       }
@@ -238,13 +234,15 @@ describe("generateVoiceResponse", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
     const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
     expect(args.extraSystemPrompt).toContain('{"spoken":"..."}');
-    expect(args.provider).toBe("together");
-    expect(args.model).toBe("Qwen/Qwen2.5-7B-Instruct-Turbo");
-    expect(args.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(args).toMatchObject({
+      provider: "together",
+      model: "Qwen/Qwen2.5-7B-Instruct-Turbo",
+      abortSignal: expect.any(AbortSignal),
+      blockReplyBreak: "text_end",
+      onBlockReply: expect.any(Function),
+      onBlockReplyFlush: expect.any(Function),
+    });
     expect(args.senderIsOwner).toBeUndefined();
-    expect(args.blockReplyBreak).toBe("text_end");
-    expect(args.onBlockReply).toEqual(expect.any(Function));
-    expect(args.onBlockReplyFlush).toEqual(expect.any(Function));
     expect(runWithWorkAdmission).toHaveBeenCalledWith(
       {
         storePath: "/tmp/openclaw/main/sessions.json",

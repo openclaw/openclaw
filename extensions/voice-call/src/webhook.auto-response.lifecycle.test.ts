@@ -58,15 +58,9 @@ class SpeechProvider extends FakeProvider {
   isValidStreamToken() {
     return true;
   }
-  registerCallStream(callId: string, streamId: string) {
-    this.streamOwner.registerCallStream(callId, streamId);
-  }
-  hasRegisteredStream(callId: string, streamId?: string) {
-    return this.streamOwner.hasRegisteredStream(callId, streamId);
-  }
-  unregisterCallStream(callId: string, streamId: string) {
-    this.streamOwner.unregisterCallStream(callId, streamId);
-  }
+  registerCallStream = this.streamOwner.registerCallStream.bind(this.streamOwner);
+  hasRegisteredStream = this.streamOwner.hasRegisteredStream.bind(this.streamOwner);
+  unregisterCallStream = this.streamOwner.unregisterCallStream.bind(this.streamOwner);
 }
 
 const state = createEventManagerHarness();
