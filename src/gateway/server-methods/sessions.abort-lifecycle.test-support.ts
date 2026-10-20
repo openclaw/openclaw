@@ -145,7 +145,6 @@ export async function registerYieldedChild(params: {
     abortedLastRun: false,
   });
   expect(entry?.status).toBeUndefined();
-  expect((await getSubagentRunByChildSessionKey(childKey))?.requesterSettleWake).toMatchObject({
-    requesterYieldBatch: true,
-  });
+  const childRun = await getSubagentRunByChildSessionKey(childKey);
+  expect(childRun?.requesterSettleWake).toMatchObject({ requesterYieldBatch: true });
 }

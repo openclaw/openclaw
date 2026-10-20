@@ -6,7 +6,6 @@ import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { setupSessionCreateHandlerTestHarness } from "../server.sessions.create.test-support.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
-import { loadGatewayTestConfig } from "../test-helpers.config-runtime.js";
 import { directSessionReq } from "../test/server-sessions.test-helpers.js";
 import type { GatewayClient } from "./types.js";
 
@@ -14,7 +13,6 @@ const { createSessionStoreDir } = setupSessionCreateHandlerTestHarness();
 
 test("dock creation retains human access and sandboxing through discovery and exact reads", async () => {
   const { storePath } = await createSessionStoreDir();
-  setRuntimeConfigSnapshot(loadGatewayTestConfig());
   const profile = ensureProfileForEmail("dock-creator@example.test");
   setUserProfileRole(profile.id, "guest");
   const cfg = {
@@ -101,7 +99,6 @@ test("dock creation retains human access and sandboxing through discovery and ex
 
 test("dock presentation cannot replace a trusted spawn creation contract", async () => {
   await createSessionStoreDir();
-  setRuntimeConfigSnapshot(loadGatewayTestConfig());
   const client = {
     connect: { scopes: ["operator.write"] },
     internal: { sessionCreation: { via: "spawn", actor: { type: "agent", id: "main" } } },

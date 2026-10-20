@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { resolveActiveEmbeddedRunOwnerByRunId } from "../../agents/embedded-agent-runner/runs.js";
 import {
@@ -14,11 +14,9 @@ import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   listOpenClawRegisteredAgentDatabases,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import * as lifecyclePersistence from "../session-lifecycle-state.js";
 import { testState } from "../test-helpers.js";
 import {
@@ -43,17 +41,8 @@ async function configureStore(storePath?: string) {
   return config;
 }
 
-beforeEach(async () => {
-  testState.sessionConfig = undefined;
+beforeEach(() => {
   testState.agentsConfig = { entries: { main: {}, work: {} } };
-  await configureStore();
-});
-
-afterEach(() => {
-  testState.sessionStorePath = undefined;
-  testState.sessionConfig = undefined;
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
 });
 
 async function configureFixedSessionStore(): Promise<string> {
