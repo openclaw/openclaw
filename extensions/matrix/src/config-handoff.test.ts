@@ -57,7 +57,6 @@ async function expectReply(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.bootstrap.mockResolvedValue({ success: true });
   mocks.runtime.mockReturnValue({
     config: { current: () => cfg, replaceConfigFile: mocks.replaceConfigFile },
   });
@@ -104,20 +103,17 @@ it.each([false, true])("updates the profile with explicit config=%s", async (exp
 it.each([
   ["recovery key", handleVerifyRecoveryKey, { key: "synthetic-recovery-key" }, { success: true }],
   ["bootstrap", handleVerificationBootstrap, {}, { success: true }],
+  ["bootstrap failure", handleVerificationBootstrap, {}, { success: false }],
   ["status", handleVerificationStatus, {}, status],
 ] as const)("runs %s verification with Gateway config", async (_label, handle, params, result) => {
+  const success = !("success" in result) || result.success;
+  mocks.bootstrap.mockResolvedValue({ success });
+  const request = success ? { accountId: "ops", ...params } : params;
   for (const routed of [false, true]) {
-    await expectReply(handle, { accountId: "ops", ...params }, result, routed);
+    await expectReply(handle, request, result, routed, success);
   }
   expect(mocks.acquire).toHaveBeenCalledWith(expect.objectContaining({ cfg, accountId: "ops" }));
   expect(mocks.release).toHaveBeenCalledTimes(2);
-});
-
-it("preserves structured verification failure for CLI rendering and legacy RPCs", async () => {
-  mocks.bootstrap.mockResolvedValue({ success: false });
-  for (const routed of [false, true]) {
-    await expectReply(handleVerificationBootstrap, {}, { success: false }, routed, false);
-  }
 });
 
 it.each([false, true])(
