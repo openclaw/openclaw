@@ -21,7 +21,7 @@ import {
   withAgentRunId,
   withoutIncognitoLlmContent,
 } from "./hook-agent-observations.js";
-import { readClaimingHookAdmission, type ClaimingHookAdmission } from "./hook-claim-admission.js";
+import { readClaimingHookAdmission } from "./hook-claim-admission.js";
 import {
   type GateHookResult,
   type InputGateDecision,
@@ -599,10 +599,9 @@ export function createHookRunner(
     (event: HookEvent<K>, ctx: HookContext<K>) =>
       runModifyingHook(hookName, event, ctx, policy);
 
-  const bindClaimingHook =
-    <K extends ClaimingHookName>(hookName: K) =>
-    (event: HookEvent<K>, ctx: HookContext<K>) =>
-      runClaimingHook<K, HookResult<K>>(hookName, event, ctx);
+  // Keep the optional handler scope in host arguments, never in the plugin context.
+  const bindClaimingHook = <K extends ClaimingHookName>(hookName: K) =>
+    (runClaimingHook<K, HookResult<K>>).bind(undefined, hookName);
 
   /**
    * Handlers are executed sequentially in priority order, and results are merged.
@@ -716,7 +715,7 @@ export function createHookRunner(
   async function runClaimingHook<K extends PluginHookName, TResult extends { handled: boolean }>(
     hookName: K,
     event: HookEvent<K>,
-    ctx: HookContext<K> & ClaimingHookAdmission,
+    ctx: HookContext<K>,
     runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
   ): Promise<TResult | undefined> {
     const hooks = getHooksForName(registry, hookName, ctx);
@@ -737,7 +736,7 @@ export function createHookRunner(
     hooks: PluginHookRegistration<K>[],
     hookName: K,
     event: HookEvent<K>,
-    ctx: HookContext<K> & ClaimingHookAdmission,
+    ctx: HookContext<K>,
     runHandler?: (run: () => Promise<TResult | void>) => Promise<TResult | void>,
   ): Promise<
     | { status: "handled"; result: TResult }

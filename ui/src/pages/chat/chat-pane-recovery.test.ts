@@ -126,24 +126,21 @@ describe("chat pane session recovery", () => {
     state.chatRunId = "run-missed-terminal";
     state.chatStream = "answer already rendered";
 
-    pane.applySessionsState({
-      result: {
-        sessions: [
-          {
-            key: state.sessionKey,
-            kind: "direct",
-            updatedAt: 20,
-            status: "done",
-            hasActiveRun: false,
-            lastRunId: "run-missed-terminal",
-          },
-        ],
-      },
+    Object.assign(pane.context.sessions.state, {
+      result: sessionsResult({
+        key: state.sessionKey,
+        kind: "direct",
+        updatedAt: 20,
+        status: "done",
+        hasActiveRun: false,
+        lastRunId: "run-missed-terminal",
+      }),
       agentId: "main",
       loading: false,
       error: null,
       deletedSessions: [],
-    } as unknown as Parameters<typeof pane.applySessionsState>[0]);
+    });
+    pane.applySessionsState(pane.context.sessions.state);
 
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();

@@ -123,7 +123,6 @@ async function readWorkspaceFile(
         metrics.memoHitCount += 1;
       }
     } else {
-      const hashStartedAt = performance.now();
       if (params.contents) {
         buffer = Buffer.allocUnsafe(Number(before.size) + 1);
         size = await readFileWindowFully(handle, buffer, 0, { signal });
@@ -152,7 +151,6 @@ async function readWorkspaceFile(
       }
       if (metrics) {
         metrics.contentHashCount += 1;
-        metrics.contentHashDurationMs += performance.now() - hashStartedAt;
       }
     }
     const after = await handle.stat({ bigint: true });

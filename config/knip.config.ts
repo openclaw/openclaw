@@ -78,6 +78,8 @@ const repositoryScriptEntries = [
   "scripts/build-decision-transport-bench.mts!",
   // scripts/perf/README.md invokes this shared-writer benchmark by path.
   "scripts/bench-channel-ingress-writer.ts!",
+  // scripts/perf/README.md invokes this cold usage-cache measurement CLI by path.
+  "scripts/perf/chat-metadata-burst-measure.ts!",
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.
@@ -355,6 +357,8 @@ const repositoryScriptEntries = [
   "scripts/write-unified-entry-dts.ts!",
   "security/opengrep/check-rule-metadata.mjs!",
   "security/opengrep/compile-rules.mjs!",
+  // create-claw/SKILL.md invokes this CLI bridge for skills and plugin inventory.
+  "skills/create-claw/scripts/cli.mjs!",
   "skills/meme-maker/scripts/meme.mjs!",
 ] as const;
 
@@ -1033,6 +1037,8 @@ const config = {
         "src/test-helpers/proof-video.ts!",
         "index.html!",
         "src/main.{ts,tsx}!",
+        // The generated foreign-locale modules import this factory by absolute path.
+        "src/i18n/lib/lazy-catalog.ts!",
         "src/lib/browser-redact.{ts,tsx}!",
         "vite.config.ts!",
         "vitest*.ts!",

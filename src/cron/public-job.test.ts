@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { makeCronJob } from "./delivery.test-helpers.js";
+import { cronJobDefinitionFromReadView, cronJobReadView } from "./job-read-view.js";
 import { toPublicCronJob } from "./public-job.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -104,7 +105,7 @@ describe("toPublicCronJob", () => {
 
   it("strips private creator provenance without mutating the stored job", () => {
     const job: CronStoredJob = {
-      ...makeCronJob({}),
+      ...makeCronJob({ schedule: { kind: "stream", command: ["watch-source"] } }),
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
       sourceConversation: {
         sessionKey: "agent:main:conversation",
@@ -115,6 +116,12 @@ describe("toPublicCronJob", () => {
 
     expect(toPublicCronJob(job)).not.toHaveProperty("createdActor");
     expect(toPublicCronJob(job)).not.toHaveProperty("sourceConversation");
+    expect(toPublicCronJob(job).schedule.kind).toBe("stream");
+    expect(toPublicCronJob(job).streamExecutionHost).toBe("gateway");
+    expect(toPublicCronJob(makeCronJob({}))).not.toHaveProperty("streamExecutionHost");
+    const definition = cronJobDefinitionFromReadView(cronJobReadView(job));
+    expect(definition).not.toHaveProperty("streamExecutionHost");
+    expect(definition.schedule).toEqual(job.schedule);
     expect(job.createdActor).toEqual({ type: "human", source: "profile", id: "profile-ada" });
     expect(job.sourceConversation?.lifecycleRevision).toBe("generation-1");
   });

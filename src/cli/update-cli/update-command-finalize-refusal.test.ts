@@ -11,6 +11,7 @@ import {
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
 } from "../../infra/deferred-plugin-migrations.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as ports from "../../infra/ports-inspect.js";
@@ -266,6 +267,7 @@ it("keeps repair pending with a real state owner and unavailable systemd inspect
     databasePath: path.join(process.env.OPENCLAW_STATE_DIR!, "state", "openclaw.sqlite"),
     payload: {
       pid: process.pid,
+      processNamespace: readGatewayLockProcessNamespace(),
       role: "gateway",
       createdAt,
       configPath: process.env.OPENCLAW_CONFIG_PATH!,

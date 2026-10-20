@@ -1,7 +1,6 @@
 import { createMatrixQaClient } from "../substrate/client.js";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
-  advanceMatrixQaActorCursor,
   assertNoSutReplyWindow,
   type MatrixQaActorId,
   type MatrixQaScenarioContext,
@@ -121,12 +120,10 @@ export async function runReactionNotificationScenario(context: MatrixQaScenarioC
 export async function runReactionNotAReplyScenario(context: MatrixQaScenarioContext) {
   const reaction = await observeCanaryReaction(context, "Matrix reaction no-reply scenario");
   const { noReplyWindowMs } = await assertNoSutReplyWindow({
-    actorId: reaction.actorId,
     client: reaction.client,
     context,
     roomId: context.roomId,
     since: reaction.since,
-    startSince: reaction.startSince,
     unexpectedLines: [
       `reaction target: ${reaction.reactionTargetEventId}`,
       `reaction event: ${reaction.reactionEventId}`,
@@ -153,7 +150,7 @@ export async function runReactionRedactionObservedScenario(context: MatrixQaScen
     reason: "matrix qa reaction removal",
     roomId: context.roomId,
   });
-  const redaction = await reaction.client.waitForRoomEvent({
+  await reaction.client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
       event.roomId === context.roomId &&
@@ -163,12 +160,6 @@ export async function runReactionRedactionObservedScenario(context: MatrixQaScen
     roomId: context.roomId,
     since: reaction.since,
     timeoutMs: context.timeoutMs,
-  });
-  advanceMatrixQaActorCursor({
-    actorId: reaction.actorId,
-    syncState: context.syncState,
-    nextSince: redaction.since,
-    startSince: reaction.startSince,
   });
   return {
     artifacts: {

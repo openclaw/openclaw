@@ -96,20 +96,6 @@ function formatDiscordUserUnresolved(entry: DiscordUserResolution): string {
   ]);
 }
 
-function toGuildEntries(value: unknown): GuildEntries {
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-  const out: GuildEntries = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    out[key] = entry as DiscordGuildEntry;
-  }
-  return out;
-}
-
 function toAllowlistEntries(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
@@ -291,13 +277,13 @@ function collectGuildUserEntries(guildEntries: GuildEntries): Set<string> {
 export async function resolveDiscordAllowlistConfig(params: {
   accountId: string;
   token: string;
-  guildEntries: unknown;
+  guildEntries: GuildEntries | undefined;
   allowFrom: unknown;
   discordConfig: DiscordAccountConfig;
   fetcher: typeof fetch;
   runtime: RuntimeEnv;
 }): Promise<{ guildEntries: GuildEntries | undefined; allowFrom: string[] | undefined }> {
-  let guildEntries = toGuildEntries(params.guildEntries);
+  let guildEntries = params.guildEntries ?? {};
   let allowFrom = toAllowlistEntries(params.allowFrom);
   const channelPolicyBindings: DiscordChannelPolicyBinding[] = [];
   const guildPolicyBindings = new Map<string, string>();
@@ -336,13 +322,11 @@ export async function resolveDiscordAllowlistConfig(params: {
           for (const [guildKey, guildConfig] of Object.entries(nextGuilds)) {
             const nextGuild = { ...guildConfig };
             const channels = guildConfig.channels ?? {};
-            if (channels && typeof channels === "object") {
-              nextGuild.channels = patchAllowlistUsersInConfigEntries({
-                entries: channels,
-                resolvedMap,
-                strategy: "canonicalize",
-              });
-            }
+            nextGuild.channels = patchAllowlistUsersInConfigEntries({
+              entries: channels,
+              resolvedMap,
+              strategy: "canonicalize",
+            });
             nextGuilds[guildKey] = nextGuild;
           }
           return nextGuilds;

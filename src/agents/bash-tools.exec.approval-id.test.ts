@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRequireRecord } from "../../test/helpers/record.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
@@ -664,3 +664,51 @@ it.each(["gateway", "node"] as const)(
     }
   },
 );
+
+describe.each(["gateway", "node"] as const)("inline %s denial", (host) => {
+  it.each([
+    { decision: "deny", reason: "operator", explanation: "an operator declined" },
+    { decision: null, reason: "timeout", explanation: "approval timed out" },
+    { decision: undefined, reason: "request failure", explanation: "approval request failed" },
+  ] as const)(
+    "reports $reason without dispatching the command",
+    async ({ decision, explanation }) => {
+      saveExecApprovals(policy({ security: "full", ask: "always", askFallback: "deny" }));
+      const node = nodeFixture();
+      mockApproval(decision ?? null, {
+        "node.invoke": node.handle,
+        "exec.approval.waitDecision": () => {
+          if (decision === undefined) {
+            throw new Error("approval transport unavailable");
+          }
+          return { decision };
+        },
+      });
+      const tool = createExecTool({ host, ask: "always", security: "full" });
+      const execution = tool.execute("inline-denial", { command: "echo ok" });
+      let text: string;
+      if (host === "gateway") {
+        const result = await execution;
+        expect(result.details).toMatchObject({ status: "failed", exitCode: null, durationMs: 0 });
+        text = getResultText(result);
+        expect(text).toMatch(/^Exec denied \(gateway id=/);
+      } else {
+        const error = await execution.catch((cause: unknown) => cause);
+        expect(error).toBeInstanceOf(Error);
+        if (!(error instanceof Error)) {
+          throw new Error("expected node execution denial");
+        }
+        text = error.message;
+        expect(text).toMatch(/^exec denied:/);
+      }
+      expect(gatewayParams("exec.approval.request")).toHaveLength(1);
+      expect(gatewayParams("exec.approval.waitDecision")).toHaveLength(1);
+      expect(localSpawn).not.toHaveBeenCalled();
+      expect(node.runs).toHaveLength(0);
+      expect(gatewayParams("agent")).toHaveLength(0);
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(text).toContain("Command did not run:");
+      expect(text).toContain(explanation);
+    },
+  );
+});

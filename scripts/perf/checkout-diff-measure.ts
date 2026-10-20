@@ -11,6 +11,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
+const operationChannel = channel("openclaw.git.operation");
+
 const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
@@ -32,6 +34,8 @@ const { values } = parseArgs({
     mutate: { type: "boolean" },
     samples: { type: "string", default: "40" },
     "poll-ms": { type: "string", default: "0" },
+    "churn-ms": { type: "string", default: "0" },
+    "nested-cwd": { type: "boolean" },
     "start-at": { type: "string" },
     output: { type: "string" },
     revision: { type: "string" },
@@ -47,17 +51,22 @@ Use --boundary read for loadCheckoutDiff, omit --summary for full patches, and
 omit --mutate for unchanged polls. Set --poll-ms 10050 to cross the old summary
 cache TTL. --start-at <epoch-ms> synchronizes concurrent baseline/candidate pairs.
 Git trace2 counts real subprocesses; its small write cost is included on both sides.
-Use --boundary rpc for real sessions.diff WebSocket requests with --tabs 3,
+Use --boundary rpc for real sessions.diff WebSocket requests; add --summary for
+summary polls. Combine --tabs 3 with
 --background 8 full-diff readers, --maintenance 2 bounded Git readers, and
 --agents 2 external Git loops. --heavy-files/--heavy-lines size the seeded load
 checkout. The RPC boundary starts an isolated loopback Gateway on --port >=40000.
 Use --tracked 267000 at seed time for an unchanged large tracked inventory. Files
 are empty and written sequentially; Linux Dirty memory is checked every 1,000 files.
+Use --nested-cwd to launch sessions from the existing new/ subdirectory.
 Add --poll-state-dir <other seeded fixture> to poll multiple checkouts concurrently
 through separate sessions. Extra fixtures are read-only and prohibit --mutate.
 Use --observe-git-queues to collect queue timings through benchmark-only loader
 instrumentation applied identically to both revisions. No production state or model
-is involved.`);
+is involved. --churn-ms 1000 periodically saves identical tracked content, runs
+git status on the polling checkout, and rotates an ignored build file. Unchanged
+responses must match warmup. A real post-run edit must reach every tab within
+12 seconds; first-poll visibility and eventual visibility timing are recorded.`);
   process.exit(0);
 }
 const integer = (raw: string, label: string, min = 0) =>
@@ -84,6 +93,9 @@ const samples = integer(values.samples, "--samples", 1);
 const tracked = integer(values.tracked, "--tracked");
 assert(tracked <= 500_000, "--tracked must not exceed 500000 files");
 const pollMs = integer(values["poll-ms"], "--poll-ms");
+const churnMs = integer(values["churn-ms"], "--churn-ms");
+assert(!churnMs || values.boundary === "rpc", "--churn-ms requires --boundary rpc");
+assert(!churnMs || !values["poll-state-dir"]?.length, "--churn-ms requires one owned checkout");
 const gitEnv = {
   ...process.env,
   HOME: path.join(root, "home"),
@@ -128,7 +140,7 @@ async function seed() {
     await git("init", "--template=", "--initial-branch=main");
   }
   await fs.writeFile(path.join(repo, ".gitignore"), "ignored/\n");
-  for (const file of ["modified.txt", "staged.txt", "deleted.txt"]) {
+  for (const file of ["modified.txt", "staged.txt", "deleted.txt", "unchanged.txt"]) {
     await fs.writeFile(path.join(repo, file), "Synthetic tracked content\n");
   }
   for (let index = 0; index < tracked; index++) {
@@ -198,7 +210,7 @@ async function seed() {
     head,
     untracked,
     tracked: 3,
-    unchangedTracked: tracked,
+    unchangedTracked: tracked + 1,
   };
   await fs.writeFile(marker, `${JSON.stringify(fixture, null, 2)}\n`);
   console.log(JSON.stringify(fixture));
@@ -445,7 +457,6 @@ async function measureRpc(fixture: object) {
   const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
   const peers: InstanceType<typeof GatewayClient>[] = [];
   const operationSamples: Record<string, unknown>[] = [];
-  const operationChannel = channel("openclaw.git.operation");
   let measured = false;
   const phaseSamples: {
     name: string;
@@ -495,11 +506,11 @@ async function measureRpc(fixture: object) {
       await ready.promise;
     }
     const targets = checkoutRoots.map((cwd, checkout) => ({
-      cwd,
+      cwd: values["nested-cwd"] ? path.join(cwd, "new") : cwd,
       params: {
         sessionKey: `agent:main:synthetic-diff-contention${checkout ? `-${checkout}` : ""}`,
         scope: "all",
-        summaryOnly: true,
+        summaryOnly: values.summary === true,
       },
     }));
     for (const target of targets) {
@@ -510,7 +521,20 @@ async function measureRpc(fixture: object) {
       });
     }
     const warmupStarted = performance.now();
-    await Promise.all(targets.map((target) => peers[0]!.request("sessions.diff", target.params)));
+    const responseHash = (
+      result: import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult,
+    ) => {
+      const { root: _root, ...portable } = result;
+      return createHash("sha256").update(JSON.stringify(portable)).digest("hex");
+    };
+    const warmupResults = await Promise.all(
+      targets.map((target) =>
+        peers[0]!.request<
+          import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult
+        >("sessions.diff", target.params),
+      ),
+    );
+    const warmupHashes = warmupResults.map(responseHash);
     const warmupRpcMs = performance.now() - warmupStarted;
     await Promise.all(
       Array.from({ length: Math.max(1, background) }, () =>
@@ -536,6 +560,13 @@ async function measureRpc(fixture: object) {
     const heavyMs: number[] = [];
     const agentMs: number[] = [];
     const maintenanceMs: number[] = [];
+    const churnTimings: number[] = [];
+    const savedFile = path.join(repo, "unchanged.txt");
+    const savedContent = churnMs ? await fs.readFile(savedFile) : undefined;
+    const buildDirectory = path.join(repo, "ignored", "build");
+    if (churnMs) {
+      await fs.mkdir(buildDirectory, { recursive: true });
+    }
     let deadline = 0;
     const repeat = async (observations: number[], run: () => Promise<unknown>) => {
       while (performance.now() < deadline) {
@@ -548,6 +579,24 @@ async function measureRpc(fixture: object) {
     const started = performance.now();
     deadline = started + durationMs;
     await Promise.all([
+      ...(savedContent
+        ? [
+            (async () => {
+              for (let round = 0; performance.now() < deadline; round++) {
+                const churnStarted = performance.now();
+                const saveTemporary = path.join(buildDirectory, "save.tmp");
+                await fs.writeFile(saveTemporary, savedContent);
+                await fs.rename(saveTemporary, savedFile);
+                const buildFile = path.join(buildDirectory, `output-${round % 2}.txt`);
+                await fs.writeFile(buildFile, `Synthetic ignored build ${round}\n`);
+                await git("status", "--porcelain=v1");
+                await fs.unlink(buildFile);
+                churnTimings.push(performance.now() - churnStarted);
+                await delay(Math.max(0, Math.min(churnMs, deadline - performance.now())));
+              }
+            })(),
+          ]
+        : []),
       ...Array.from({ length: background }, () =>
         repeat(heavyMs, () =>
           runGitWorkerOperation({ type: "checkout.diff", input: { cwd: heavyRepo, scope: "all" } }),
@@ -614,16 +663,21 @@ async function measureRpc(fixture: object) {
                   );
                   assert.equal(modified.deletions, 0);
                 }
-                const { root: _root, ...portable } = result;
+                const hash = responseHash(result);
+                if (churnMs && !values.mutate) {
+                  assert.equal(
+                    hash,
+                    warmupHashes[checkout],
+                    "irrelevant churn must preserve the diff",
+                  );
+                }
                 rpcSamples.push({
                   round,
                   tab,
                   checkout,
                   elapsedMs: performance.now() - pollStarted,
                   files: result.files.length,
-                  responseSha256: createHash("sha256")
-                    .update(JSON.stringify(portable))
-                    .digest("hex"),
+                  responseSha256: hash,
                 });
               }),
             ),
@@ -631,8 +685,66 @@ async function measureRpc(fixture: object) {
         }
       })(),
     ]);
+    const elapsedMs = performance.now() - started;
     await waitForDiagnosticEventsDrained();
     measured = false;
+    let editControlVerified = false;
+    let editFirstPollVisible: boolean[] = [];
+    let editVisibilityMs: number[] = [];
+    if (churnMs) {
+      const changedFile = savedFile;
+      const originalContent = await fs.readFile(changedFile);
+      try {
+        await fs.writeFile(
+          changedFile,
+          "Synthetic tracked content\nReal edit one\nReal edit two\n",
+        );
+        const editStarted = performance.now();
+        const editDeadline = editStarted + 12_000;
+        const visibility = await Promise.all(
+          peers.map(async (peer) => {
+            let firstPollVisible = false;
+            for (let poll = 0; ; poll++) {
+              const remainingMs = editDeadline - performance.now();
+              if (remainingMs <= 0) {
+                return {
+                  firstPollVisible,
+                  visible: false,
+                  elapsedMs: performance.now() - editStarted,
+                };
+              }
+              const result = await peer
+                .request<import("../../packages/gateway-protocol/src/index.js").SessionsDiffResult>(
+                  "sessions.diff",
+                  targets[0]!.params,
+                  { timeoutMs: remainingMs },
+                )
+                .catch(() => undefined);
+              const visible =
+                result?.files.find((file) => file.path === "unchanged.txt")?.additions === 2;
+              if (poll === 0) {
+                firstPollVisible = visible;
+              }
+              const receivedAt = performance.now();
+              const timelyVisible = visible && receivedAt <= editDeadline;
+              if (!result || timelyVisible || receivedAt >= editDeadline) {
+                return {
+                  firstPollVisible,
+                  visible: timelyVisible,
+                  elapsedMs: receivedAt - editStarted,
+                };
+              }
+              await delay(Math.min(250, editDeadline - receivedAt));
+            }
+          }),
+        );
+        editFirstPollVisible = visibility.map((result) => result.firstPollVisible);
+        editVisibilityMs = visibility.map((result) => result.elapsedMs);
+        editControlVerified = visibility.every((result) => result.visible);
+      } finally {
+        await fs.writeFile(changedFile, originalContent);
+      }
+    }
     assert(
       rpcSamples.length > 0,
       "No RPC polls completed; reduce --poll-ms or extend --duration-ms",
@@ -667,9 +779,15 @@ async function measureRpc(fixture: object) {
     for (const sample of rpcSamples) {
       roundMaxMs.set(sample.round, Math.max(roundMaxMs.get(sample.round) ?? 0, sample.elapsedMs));
     }
+    const cacheSamples = phaseSamples.filter((sample) => sample.name === "sessions.diff");
+    const cacheHits = cacheSamples.filter(
+      (sample) => sample.details.outcome === "cache-hit",
+    ).length;
+    const cacheMisses = cacheSamples.filter((sample) => sample.details.outcome === "cache-miss");
     const report = {
       revision: values.revision ?? null,
       boundary: "rpc",
+      summaryOnly: values.summary === true,
       fixture,
       extraFixtures,
       checkoutCount: checkoutRoots.length,
@@ -677,6 +795,12 @@ async function measureRpc(fixture: object) {
       background,
       agents,
       maintenance,
+      churnMs,
+      completedChurn: churnTimings.length,
+      churnLatencyMs: churnTimings.length ? summarize(churnTimings) : null,
+      editControlVerified,
+      editFirstPollVisible,
+      editVisibilityMs,
       durationMs,
       warmupRpcMs,
       completedRpc: rpcSamples.length,
@@ -690,7 +814,7 @@ async function measureRpc(fixture: object) {
       mutate: values.mutate === true,
       pollMs,
       node: process.version,
-      elapsedMs: performance.now() - started,
+      elapsedMs,
       rpcLatencyMs: summarize(rpcSamples.map((sample) => sample.elapsedMs)),
       rpcRoundLatencyMs: summarize([...roundMaxMs.values()]),
       heavyContentMs: heavyMs.length ? summarize(heavyMs) : null,
@@ -725,6 +849,23 @@ async function measureRpc(fixture: object) {
           },
         ),
       ),
+      cache: {
+        hits: cacheHits,
+        misses: cacheMisses.length,
+        hitRate: cacheSamples.length ? cacheHits / cacheSamples.length : null,
+        missReasons: Object.fromEntries(
+          [
+            ...new Set(
+              cacheMisses.map((sample) => String(sample.details.missReason ?? "unreported")),
+            ),
+          ].map((reason) => [
+            reason,
+            cacheMisses.filter(
+              (sample) => String(sample.details.missReason ?? "unreported") === reason,
+            ).length,
+          ]),
+        ),
+      },
       rpcSamples,
       operationSamples,
       phaseSamples,
@@ -741,6 +882,9 @@ async function measureRpc(fixture: object) {
         diffPhases: report.diffPhases,
       }),
     );
+    if (churnMs) {
+      assert(editControlVerified, "a real post-churn edit must reach every tab within 12 seconds");
+    }
   } finally {
     stopPhases();
     operationChannel.unsubscribe(observe);

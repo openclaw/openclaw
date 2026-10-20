@@ -6,7 +6,6 @@ import type { JSX } from "@solidjs/web";
 import { createSignal, onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
@@ -43,7 +42,6 @@ type CatalogConnection = {
   gatewayUrl: string;
   client: GatewayClient | null;
   connected: boolean;
-  voiceWake: boolean;
 };
 
 function catalogConnection(gateway: ApplicationContext["gateway"]): CatalogConnection {
@@ -53,9 +51,6 @@ function catalogConnection(gateway: ApplicationContext["gateway"]): CatalogConne
     client: snapshot.client,
     connected:
       snapshot.phase === "connected" && hasOperatorReadAccess(snapshot.hello?.auth ?? null),
-    voiceWake:
-      isGatewayMethodAdvertised(snapshot, "voicewake.get") === true &&
-      isGatewayMethodAdvertised(snapshot, "voicewake.set") === true,
   };
 }
 
@@ -104,7 +99,6 @@ class VoiceWakeSettingsOwner {
     const connection = this.connection;
     if (
       connection?.connected &&
-      connection.voiceWake &&
       this.state.kind !== "loading" &&
       (this.state.kind !== "ready" || this.state.phase === "saved")
     ) {
@@ -133,12 +127,11 @@ class VoiceWakeSettingsOwner {
 
   private sync() {
     const connection = catalogConnection(this.gateway);
-    const { gatewayUrl, client, connected, voiceWake } = connection;
+    const { gatewayUrl, client, connected } = connection;
     if (
       this.connection?.gatewayUrl === gatewayUrl &&
       this.connection.client === client &&
-      this.connection.connected === connected &&
-      this.connection.voiceWake === voiceWake
+      this.connection.connected === connected
     ) {
       return;
     }
@@ -162,13 +155,13 @@ class VoiceWakeSettingsOwner {
         ? { ...draft, phase: "pending", error: t("configPage.deviceTalk.triggerWordsDisconnected") }
         : { kind: "unavailable" },
     );
-    if (client && connected && voiceWake && !draft && this.render) {
+    if (client && connected && !draft && this.render) {
       void this.loadVoiceWake(connection);
     }
   }
 
   private async loadVoiceWake(connection: CatalogConnection) {
-    if (!connection.client || !connection.voiceWake) {
+    if (!connection.client || !connection.connected) {
       return;
     }
     this.update({ kind: "loading" });
@@ -214,7 +207,7 @@ class VoiceWakeSettingsOwner {
     if (currentState.kind !== "ready" || currentState.phase === "saved") {
       return;
     }
-    if (!connection?.client || !connection.connected || !connection.voiceWake) {
+    if (!connection?.client || !connection.connected) {
       this.update({
         ...currentState,
         phase: "pending",
@@ -309,7 +302,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
   };
 
   function syncCatalog(connection: CatalogConnection) {
-    const { gatewayUrl, client, connected, voiceWake } = connection;
+    const { gatewayUrl, client, connected } = connection;
     const intent = modelDefaultResetIntent();
     if (intent && intent.gatewayUrl !== gatewayUrl) {
       setModelDefaultResetIntent(null);
@@ -319,8 +312,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
     if (
       connectionValue?.gatewayUrl === gatewayUrl &&
       connectionValue.client === client &&
-      connectionValue.connected === connected &&
-      connectionValue.voiceWake === voiceWake
+      connectionValue.connected === connected
     ) {
       return;
     }

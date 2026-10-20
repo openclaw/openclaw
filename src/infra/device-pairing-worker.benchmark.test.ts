@@ -1,12 +1,15 @@
 import { afterEach, expect, test } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { toPairedRow } from "./device-pairing-row-mapping.js";
 import { getPairedDevice, listDevicePairing, listDevicePairingReadOnly } from "./device-pairing.js";
 import type { PairedDevice } from "./device-pairing.types.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -14,9 +17,8 @@ test.skipIf(process.env.OPENCLAW_DEVICE_PAIRING_BENCH !== "1")(
   "measures pairing list and lookup main-thread CPU with 5,000 devices and 50 callers",
   async () => {
     const baseDir = tempDirs.make("pairing-worker-bench-");
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
-    });
+    const env = { ...process.env, OPENCLAW_STATE_DIR: baseDir };
+    const database = openOpenClawStateDatabase({ env });
     const devices: PairedDevice[] = Array.from({ length: 5_000 }, (_, index) => ({
       deviceId: `device-${index}`,
       publicKey: `synthetic-key-${index}`,
@@ -40,26 +42,15 @@ test.skipIf(process.env.OPENCLAW_DEVICE_PAIRING_BENCH !== "1")(
     try {
       runOpenClawStateWriteTransaction(
         ({ db }) => {
-          const insert = db.prepare(
-            "INSERT INTO device_pairing_paired (device_id, public_key, display_name, platform, role, roles_json, scopes_json, tokens_json, node_surface_json, created_at_ms, approved_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-          );
+          const sql = getNodeSqliteKysely<DB>(db);
           for (const device of devices) {
-            insert.run(
-              device.deviceId,
-              device.publicKey,
-              device.displayName!,
-              device.platform!,
-              device.role!,
-              JSON.stringify(device.roles),
-              JSON.stringify(device.scopes),
-              JSON.stringify(device.tokens),
-              JSON.stringify(device.nodeSurface),
-              device.createdAtMs,
-              device.approvedAtMs,
+            executeSqliteQuerySync(
+              db,
+              sql.insertInto("device_pairing_paired").values(toPairedRow(device)),
             );
           }
         },
-        { database, env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } },
+        { database, env },
       );
       const golden = JSON.stringify({ pending: [], paired: devices.toReversed() });
       for (const [name, read, expected] of [

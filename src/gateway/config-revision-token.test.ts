@@ -1,12 +1,17 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
+import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getOpenClawStateRuntimeSchema } from "../state/openclaw-state-schema-compatibility.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { createSqliteWorkerBackend } from "../state/openclaw-state.worker.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { loadGatewayConfigRevisionProjector } from "./config-revision-token.js";
@@ -76,6 +81,37 @@ describe("Gateway config revision tokens", () => {
     expect(
       (await loadGatewayConfigRevisionProjector(options)).hashResponseSessionBearer(bearer),
     ).toBe(subject);
+  });
+
+  it("reuses the persisted key with one statement and no transaction envelope", async () => {
+    const options = stateOptions();
+    const context = captureOpenClawStateWorkerContext(options);
+    const run = <T>(operation: () => T) => runWithSqliteWorkerStateContext(context, operation);
+    const backend = run(() =>
+      createSqliteWorkerBackend(undefined, { databasePath: context.admission.databasePath }),
+    );
+    try {
+      await backend[SQLITE_WORKER_PREPARE_COMMAND]?.("machineState.configRevisionKey");
+      const load = (candidateKey: Uint8Array) =>
+        run(() =>
+          backend.execute({ type: "machineState.configRevisionKey", input: { candidateKey } }),
+        );
+      const key = load(Buffer.alloc(32, 1));
+      const reads = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+      const exec = vi.spyOn(openOpenClawStateDatabase(options).db, "exec");
+      try {
+        expect(load(Buffer.alloc(32, 2))).toEqual(key);
+        expect(reads.queries.filter((sql) => /\bconfig_revision_keys\b/i.test(sql))).toHaveLength(
+          1,
+        );
+        expect(exec.mock.calls.filter(([sql]) => /\b(?:BEGIN|COMMIT)\b/i.test(sql))).toEqual([]);
+      } finally {
+        exec.mockRestore();
+        reads.restore();
+      }
+    } finally {
+      await backend.close();
+    }
   });
 
   it("fails closed instead of replacing corrupt persisted key material", async () => {

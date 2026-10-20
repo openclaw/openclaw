@@ -8,7 +8,6 @@ import type {
   NativeDeviceSettingsSnapshot,
 } from "../../app/native-device-settings.ts";
 import { i18n } from "../../i18n/index.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createChromeExtensionSetupResult } from "../../test-helpers/chrome-extension-setup.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
@@ -21,7 +20,6 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { DevicePage } from "./device-page.tsx";
 import { DevicePermissionsPage } from "./permissions-page.tsx";
 
-type DevicePageElement = HTMLElement & { updateComplete: Promise<boolean> };
 const providers: HTMLElement[] = [];
 const unmounts = new WeakMap<HTMLElement, () => void>();
 
@@ -66,8 +64,7 @@ async function mount(
   nativeDeviceSettings: NativeDeviceSettingsCapability | null,
 ) {
   const context = { nativeDeviceSettings } as ApplicationContext;
-  // The retained Lit Chrome setup child still consumes its DOM context.
-  const provider = createApplicationContextProvider(context);
+  const provider = document.createElement("div");
   document.body.append(provider);
   providers.push(provider);
   const fixture = createSolidApplicationContextProvider(context);
@@ -320,12 +317,11 @@ it("shows native desktop state and reconciles Keep computer awake with the nativ
 
 it("leaves Chrome data untouched on entry and focus until explicit refresh", async () => {
   const { capability, page } = await setup();
-  const chrome = page.querySelector<DevicePageElement>("openclaw-native-chrome-setup")!;
-  await chrome.updateComplete;
+  const chrome = page.querySelector<HTMLElement>("openclaw-native-chrome-setup")!;
+  flush();
   expect(capability.setupChromeExtension).not.toHaveBeenCalled();
   window.dispatchEvent(new Event("focus"));
   flush();
-  await chrome.updateComplete;
   expect(capability.setupChromeExtension).not.toHaveBeenCalled();
   const refresh = [...chrome.querySelectorAll("button")].find(
     (button) => button.textContent?.trim() === "Refresh setup status",

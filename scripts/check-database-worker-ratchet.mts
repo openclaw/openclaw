@@ -1,4 +1,5 @@
 import { inventory } from "./database-worker-inventory.mjs";
+import { baseInventory } from "./lib/database-worker-inventory-cache.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   compareRatchetCounts,
@@ -20,7 +21,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     const counts = (rows: ReturnType<typeof inventory>, tier = "T1") =>
       new Map(rows.filter((row) => row.tier === tier).map((row) => [row.file, row.calls.length]));
     const head = inventory(root, "", args.staged);
-    const baseline = inventory(root, base);
+    const baseline = baseInventory(root, base);
     const before = counts(baseline);
     const after = counts(head);
     const total = (files: ReadonlyMap<string, number>) =>

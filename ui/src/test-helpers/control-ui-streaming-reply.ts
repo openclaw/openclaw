@@ -19,16 +19,18 @@ export function createStreamingReplyProbeInitScript(): string {
 }
 
 function installStreamingReplyProbe() {
-  type Delta = {
+  const emptyCounters = {
+    parseCalls: 0,
+    parseChars: 0,
+    parseMs: 0,
+    geometryReads: 0,
+    styleReads: 0,
+  };
+  type Delta = typeof emptyCounters & {
     index: number;
     chars: number;
     at: number;
     taskAndMicrotasksMs?: number;
-    parseCalls: number;
-    parseChars: number;
-    parseMs: number;
-    geometryReads: number;
-    styleReads: number;
   };
   let active = false;
   let startedAt = 0;
@@ -71,11 +73,7 @@ function installStreamingReplyProbe() {
           index: deltas.length + 1,
           chars: payload.message.content[0].text.length,
           at: performance.now() - startedAt,
-          parseCalls: 0,
-          parseChars: 0,
-          parseMs: 0,
-          geometryReads: 0,
-          styleReads: 0,
+          ...emptyCounters,
         };
         deltas.push(current);
         taskEnds.push({ delta: current, at: performance.now() });
@@ -84,14 +82,10 @@ function installStreamingReplyProbe() {
       return socket;
     },
   });
-  const parserPrototype: {
-    parseFromString: (this: DOMParser, source: string, type: DOMParserSupportedType) => Document;
-  } = DOMParser.prototype;
-  const parse = parserPrototype.parseFromString;
-  DOMParser.prototype.parseFromString = function (this: DOMParser, source: unknown, type) {
+  const measureParse = <T>(source: unknown, parse: () => T): T => {
     const start = performance.now();
     try {
-      return Reflect.apply(parse, this, [source, type]);
+      return parse();
     } finally {
       if (active && current) {
         current.parseCalls++;
@@ -100,19 +94,22 @@ function installStreamingReplyProbe() {
       }
     }
   };
+  const parserPrototype: {
+    parseFromString: (this: DOMParser, source: string, type: DOMParserSupportedType) => Document;
+  } = DOMParser.prototype;
+  const parse = parserPrototype.parseFromString;
+  DOMParser.prototype.parseFromString = function (this: DOMParser, source: unknown, type) {
+    return measureParse(source, () => Reflect.apply(parse, this, [source, type]));
+  };
   const innerHTML = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML")!;
   Object.defineProperty(Element.prototype, "innerHTML", {
     ...innerHTML,
     set(value: unknown) {
-      const start = performance.now();
-      try {
-        innerHTML.set!.call(this, value);
-      } finally {
-        if (active && current && this instanceof HTMLTemplateElement) {
-          current.parseCalls++;
-          current.parseChars += String(value).length;
-          current.parseMs += performance.now() - start;
-        }
+      const set = () => innerHTML.set!.call(this, value);
+      if (this instanceof HTMLTemplateElement) {
+        measureParse(value, set);
+      } else {
+        set();
       }
     },
   });
@@ -198,9 +195,8 @@ function installStreamingReplyProbe() {
       if (deltas.some((delta) => !Number.isFinite(delta.parseChars))) {
         throw new Error("Streaming HTML probe produced a non-finite character count");
       }
-      const sorted = (values: number[]) => values.toSorted((a, b) => a - b);
       const distribution = (values: number[]) => {
-        const xs = sorted(values);
+        const xs = values.toSorted((a, b) => a - b);
         const quantile = (q: number) => {
           const at = (xs.length - 1) * q;
           const lo = Math.floor(at);
@@ -213,6 +209,8 @@ function installStreamingReplyProbe() {
           max: xs.at(-1) ?? 0,
         };
       };
+      const optionalDistribution = (values: Array<number | undefined>) =>
+        distribution(values.filter((value): value is number => value !== undefined));
       const gaps = frames.slice(1).map((at, index) => at - frames[index]!);
       const buckets = Array.from({ length: 4 }, (_, index) => {
         const samples = deltas.slice(
@@ -223,10 +221,8 @@ function installStreamingReplyProbe() {
           fromChars: samples[0]?.chars,
           toChars: samples.at(-1)?.chars,
           count: samples.length,
-          taskAndMicrotasksMs: distribution(
-            samples.flatMap((sample) =>
-              sample.taskAndMicrotasksMs === undefined ? [] : [sample.taskAndMicrotasksMs],
-            ),
+          taskAndMicrotasksMs: optionalDistribution(
+            samples.map((sample) => sample.taskAndMicrotasksMs),
           ),
           parseCalls: samples.reduce((sum, sample) => sum + sample.parseCalls, 0),
           parseChars: samples.reduce((sum, sample) => sum + sample.parseChars, 0),
@@ -258,11 +254,7 @@ function installStreamingReplyProbe() {
         longFrameBlockingMs: longFrames.reduce((sum, item) => sum + item.blocking, 0),
         inputs,
         inputDelayMs: distribution(inputs.map((sample) => sample.delayMs)),
-        inputToNextFrameMs: distribution(
-          inputs.flatMap((sample) =>
-            sample.nextFrameMs === undefined ? [] : [sample.nextFrameMs],
-          ),
-        ),
+        inputToNextFrameMs: optionalDistribution(inputs.map((sample) => sample.nextFrameMs)),
         finalHtml: document.querySelector(".chat-bubble.streaming .chat-text")?.innerHTML ?? null,
       };
     },

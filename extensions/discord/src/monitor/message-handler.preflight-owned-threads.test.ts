@@ -145,7 +145,7 @@ describe("Discord bot-owned thread mention gating", () => {
       }
       expect(result?.shouldRequireMention).toBe(requireMentionInBotThreads === true);
       expect(result?.messageChannelId).toBe(threadId);
-      expect(result?.wasMentioned).toBe(mentioned === true);
+      expect(result?.effectiveWasMentioned).toBe(mentioned === true);
     },
   );
 });

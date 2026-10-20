@@ -20,7 +20,7 @@ import type {
   SessionListOptions,
   SessionRequestClient,
   SessionResetOptions,
-} from "./session-capability.ts";
+} from "./session-types.ts";
 
 /** Personal list choices share one RPC contract across all session menus. */
 export async function requestSessionInvolvement(

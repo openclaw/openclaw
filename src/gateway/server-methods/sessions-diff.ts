@@ -14,7 +14,11 @@ import { loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
-import { sessionFileWorkspaceMatches } from "./session-file-read-authority.js";
+import {
+  sessionFileWorkspaceMatches,
+  assertSessionFileReadPolicy,
+  type SessionFileReadPolicyTarget,
+} from "./session-file-read-authority.js";
 import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
@@ -27,6 +31,7 @@ export async function loadSessionDiff(
   context?: GatewayRequestContext,
   assertAuthorized: () => void = () => {},
   diffTiming?: DiffReadTiming,
+  assertWorkspaceRead: (target: SessionFileReadPolicyTarget) => void = () => {},
 ): Promise<SessionsDiffResult> {
   const resolveStarted = diffTiming ? performance.now() : 0;
   let worktreeCount = 0;
@@ -50,13 +55,24 @@ export async function loadSessionDiff(
     ...(unavailableReason ? { unavailableReason } : {}),
   });
   return await withSessionFileRoot(
-    { ...params, projection: ["sessionDiffBaseline"] },
+    {
+      ...params,
+      projection: ["sessionDiffBaseline"],
+      getRuntimeConfig: context ? () => context.getRuntimeConfig() : getRuntimeConfig,
+    },
     context?.getRuntimeConfig() ?? getRuntimeConfig(),
     async (loaded, assertSourceCurrent) => {
       const { agentId, entry, storePath } = loaded;
       const assertCurrent = () => {
         assertSourceCurrent();
         assertAuthorized();
+        if (agentId) {
+          assertWorkspaceRead({
+            ...loaded,
+            agentId,
+            unscopedHostRoot: loaded.fileWorkspace?.unscopedHostRoot,
+          });
+        }
       };
       assertCurrent();
       // Same session scoping as sessions.files.*: an unknown session must not fall
@@ -94,7 +110,7 @@ export async function loadSessionDiff(
       const cwd = loaded.diffCwd;
       const checkoutPending = Boolean(entry.pendingWorktree || entry.pendingProjectGitUrl);
       if (!cwd) {
-        return empty(checkoutPending ? undefined : "unknown_session");
+        return empty(checkoutPending ? undefined : loaded.root ? "not_git" : "unknown_session");
       }
       timing?.mark("managedBase");
       const managedBase = entry.worktree?.id
@@ -188,6 +204,7 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
     const read = requestedAgent.agentId
       ? await retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
           requireMaterialized: true,
+          projection: ["skillsSnapshot"],
           entryMatches: (previous, current) =>
             !hasSessionReadAccessChanged(previous, current) &&
             sessionFileWorkspaceMatches(previous, current),
@@ -207,6 +224,7 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
         context,
         () => read?.assertCurrent(),
         diffTiming,
+        (target) => assertSessionFileReadPolicy(options, target),
       );
       read?.assertCurrent();
       timing?.mark("send");

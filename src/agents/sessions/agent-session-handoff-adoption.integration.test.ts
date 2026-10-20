@@ -108,7 +108,7 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
   const lifecycleEvents: string[] = [];
   session.subscribe((event) => {
     lifecycleEvents.push(event.type);
-    if (event.type === "queue_update" && event.steering.includes(steerText)) {
+    if (event.type === "queue_update" && session.getSteeringMessages().includes(steerText)) {
       steerEnqueued.resolve();
     }
   });

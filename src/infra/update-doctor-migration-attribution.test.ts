@@ -1,26 +1,96 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { constants, DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseSchema,
+  prepareOpenClawStateDatabaseSchema,
+  repairOpenClawStateDatabaseIndexesForDoctor,
+  repairOpenClawStateDatabaseReadabilityForDoctor,
 } from "../state/openclaw-state-db.js";
+import { addPreCutoverClientCredentialTablesForTest } from "../state/openclaw-state-schema.test-support.js";
 import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import {
   getDoctorMigrationBackup,
   getUpdateDoctorMigrationSource,
   hasUpdateDoctorMigrationCapture,
-  runUpdateSqliteMigration,
   runWithDoctorMigrationBackup,
   runWithUpdateDoctorMigrationCapture,
 } from "./update-doctor-migration-attribution.js";
 import { createUpdateDoctorDatabaseWriteCapture } from "./update-doctor-result.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+
+it.each(["lease", "outside"] as const)(
+  "settles prior %s writers before acquiring schema repair custody",
+  async (writer) => {
+    const root = fs.realpathSync(directories.make("captured-maintenance-state-"));
+    const pathname = path.join(root, "state", "openclaw.sqlite");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    openOpenClawStateDatabase({ env });
+    await closeOpenClawStateDatabaseAsync();
+    fs.rmSync(path.join(root, "client"), { recursive: true });
+    {
+      using database = new DatabaseSync(pathname);
+      addPreCutoverClientCredentialTablesForTest(database);
+      database.exec(`PRAGMA user_version = 20;
+      UPDATE schema_meta SET schema_version = 20;
+      DELETE FROM config_machine_state WHERE state_key = 'state.schema.contentVersion';`);
+    }
+    const generations = readUpdateDatabaseGenerations([pathname]);
+    const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
+      env,
+      signal: new AbortController().signal,
+      warn() {},
+    })!;
+    const scope = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent() {},
+    });
+    try {
+      await capture.admit();
+      await scope.run(() =>
+        capture.run(async () => {
+          expect(repairOpenClawStateDatabaseIndexesForDoctor({ env }).warnings).toEqual([]);
+          expect(repairOpenClawStateDatabaseReadabilityForDoctor({ env }).warnings).toEqual([]);
+          expect(
+            repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true }).warnings,
+          ).toEqual([]);
+          if (writer === "lease") {
+            await withAgentDatabaseMaintenanceLease({ env, processBound: true }, async () => {});
+          } else {
+            using outside = new DatabaseSync(pathname);
+            outside
+              .prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)")
+              .run("test.outside-write", "99", 1);
+          }
+          if (writer === "lease") {
+            expect((await prepareOpenClawStateDatabaseSchema({ env }, "doctor")).warnings).toEqual(
+              [],
+            );
+          } else {
+            await expect(prepareOpenClawStateDatabaseSchema({ env }, "doctor")).rejects.toThrow(
+              "SQLite migration source changed after update capture.",
+            );
+          }
+          await closeOpenClawStateDatabaseAsync();
+        }),
+      );
+      await capture.settle();
+      // Closing the owned handle attributes its lease writes; outside writes stay unknown.
+      expect(capture.receipt?.unchanged).toBe(writer === "lease");
+      expect(capture.receipt?.fromGenerations).toEqual(generations);
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+      await scope.close();
+    }
+  },
+);
 
 it("attributes a captured absent shared store and its new credential companion during bootstrap", async () => {
   const root = fs.realpathSync(directories.make("captured-fresh-state-"));
@@ -62,80 +132,6 @@ it("attributes a captured absent shared store and its new credential companion d
   }
 });
 
-it.each(["fresh", "foreign", "reversed"] as const)(
-  "refuses a %s payload write while acquiring native migration custody",
-  async (change) => {
-    const pathname = path.join(directories.make("update-migration-custody-"), "state.sqlite");
-    if (change === "fresh") {
-      fs.writeFileSync(pathname, "", { flag: "wx", mode: 0o600 });
-    }
-    using database = new DatabaseSync(pathname);
-    if (change !== "fresh") {
-      database.exec("CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('before')");
-    }
-    const expected =
-      change === "fresh" ? null : readUpdateDatabaseGenerations([pathname])[pathname];
-    const operation = vi.fn();
-    const accept = vi.fn();
-    let injected = false;
-    let foreign: ReturnType<typeof spawnSync> | undefined;
-    // A real native admission callback puts an independent writer between the
-    // verified source and its exclusive migration lock, without timing races.
-    database.setAuthorizer((action, pragma) => {
-      if (!injected && action === constants.SQLITE_PRAGMA && pragma === "schema_version") {
-        injected = true;
-        foreign = spawnSync(
-          process.execPath,
-          [
-            "--input-type=module",
-            "-e",
-            `import { DatabaseSync } from 'node:sqlite';
-             const db = new DatabaseSync(process.argv[1]);
-             db.exec(process.argv[2] === 'fresh'
-               ? "CREATE TABLE evidence(value TEXT); INSERT INTO evidence VALUES ('foreign')"
-               : "UPDATE evidence SET value = 'foreign'");
-             if (process.argv[2] === 'reversed') db.exec("UPDATE evidence SET value = 'before'");
-             db.close();`,
-            pathname,
-            change,
-          ],
-          { encoding: "utf8", timeout: 10_000 },
-        );
-      }
-      return constants.SQLITE_OK;
-    });
-    const scope = createOpenClawDatabaseMaintenanceScope({
-      schemaMaintenance: true,
-      assertOwnerCurrent() {},
-      assertDatabaseAccess: (requested) => expect(requested).toBe(pathname),
-    });
-    try {
-      scope.run(() =>
-        runWithUpdateDoctorMigrationCapture(
-          { expected: () => expected, assertCurrent() {}, accept, refuse() {} },
-          () => {
-            expect(() =>
-              runUpdateSqliteMigration(database, pathname, operation, {
-                created: change === "fresh",
-              }),
-            ).toThrow("SQLite migration source changed after update capture");
-          },
-        ),
-      );
-      expect(injected).toBe(true);
-      expect(foreign?.status, String(foreign?.stderr)).toBe(0);
-      expect(operation).not.toHaveBeenCalled();
-      expect(accept).not.toHaveBeenCalled();
-      expect(database.prepare("SELECT value FROM evidence").get()).toEqual({
-        value: change === "reversed" ? "before" : "foreign",
-      });
-    } finally {
-      database.setAuthorizer(null);
-      await scope.close();
-    }
-  },
-);
-
 it.each(["captured-generation", null])(
   "refuses fresh fallback for a captured source (%s)",
   (generation) => {
@@ -144,7 +140,12 @@ it.each(["captured-generation", null])(
     const refuse = vi.fn();
     runWithDoctorMigrationBackup(backup, () =>
       runWithUpdateDoctorMigrationCapture(
-        { expected: () => generation, assertCurrent() {}, accept() {}, refuse },
+        {
+          expected: () => generation,
+          assertCurrent() {},
+          accept() {},
+          refuse,
+        },
         () => {
           expect(() =>
             getDoctorMigrationBackup(database, {
@@ -176,7 +177,12 @@ it("preserves an uncaptured relocated source without certifying updater rollback
   });
   runWithDoctorMigrationBackup(backup, () =>
     runWithUpdateDoctorMigrationCapture(
-      { expected: () => undefined, assertCurrent() {}, accept() {}, refuse },
+      {
+        expected: () => undefined,
+        assertCurrent() {},
+        accept() {},
+        refuse,
+      },
       () => {
         expect(
           getDoctorMigrationBackup(database, { path: pathname, env: {}, tables: ["retained"] }),

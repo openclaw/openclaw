@@ -241,6 +241,12 @@ export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
     name: "formatErrorMessage",
     reason: "Dependency-light scripts retain a deliberately smaller formatting policy.",
   },
+  {
+    file: "scripts/lib/error-format.mts",
+    name: "formatErrorMessageWithCauses",
+    reason:
+      "Dependency-light release diagnostics need bounded cause-chain rendering before install.",
+  },
 ] as const satisfies readonly { file: string; name: string; reason: string }[];
 
 const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [

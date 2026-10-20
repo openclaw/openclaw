@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -21,7 +20,6 @@ import type {
   ExecApprovalStandingGrant,
   ExecApprovalsNodeSetParams,
 } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
-import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import {
   getTerminalTableWidth,
   renderTerminalSafeTable,
@@ -45,8 +43,14 @@ import {
 import { classifyExecAllowlistScope } from "../infra/exec-command-resolution.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
+import {
+  EXEC_APPROVALS_STDIN_MAX_BYTES,
+  formatCliError,
+  readStdin,
+  runApprovalsAction,
+} from "./exec-approvals-cli.shared.js";
 import { loadSnapshotLocal, saveSnapshotLocal } from "./exec-approvals-local.js";
-import { rethrowExpectedCliError } from "./failure-output.js";
+import { registerNativeExecApprovalsCli } from "./exec-approvals-native-cli.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { formatDocsHelp, formatHelpExamples } from "./help-format.js";
 import { nodesCallOpts, resolveCliNodeId } from "./nodes-cli/rpc.js";
@@ -79,7 +83,6 @@ type ConfigLoadResult = Awaited<ReturnType<typeof loadConfigForApprovalsTarget>>
 type ApprovalsTargetSource = "gateway" | "node" | "local";
 type EffectivePolicyReport = ReturnType<typeof buildEffectivePolicyReport>;
 const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
-const EXEC_APPROVALS_STDIN_MAX_BYTES = 1024 * 1024;
 
 type ExecApprovalsCliOpts = NodesRpcOpts & {
   node?: string;
@@ -98,14 +101,6 @@ const PENDING_APPROVAL_SUMMARY_MAX_LENGTH = 96;
 const APPROVAL_ID_TOKEN_PREFIX = "id64_";
 const APPROVAL_TERMINAL_UNSAFE_CHAR =
   /^[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]$/u;
-
-async function readStdin(): Promise<string> {
-  const bytes = await readByteStreamWithLimit(process.stdin, {
-    maxBytes: EXEC_APPROVALS_STDIN_MAX_BYTES,
-    onOverflow: ({ maxBytes: limit }) => new Error(`Exec approvals stdin exceeds ${limit} bytes.`),
-  });
-  return bytes.toString("utf8");
-}
 
 async function readApprovalsFile(filePath: string): Promise<string> {
   // Explicit CLI file inputs have historically followed symlinks and readable
@@ -320,34 +315,6 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
   }
   defaultRuntime.log(theme.muted(`Target: ${params.targetLabel}`));
   renderApprovalsSnapshot(next, params.targetLabel);
-}
-
-function formatCliError(err: unknown): string {
-  const msg = formatErrorMessage(err);
-  const firstLine = msg.includes("\n") ? msg.split("\n")[0] : msg;
-  const safe = sanitizeForLog(expectDefined(firstLine, "exec approvals cli first line"));
-  return safe.length > 300 ? `${truncateUtf16Safe(safe, 300)}...` : safe;
-}
-
-function failApprovalsCommand(err: unknown, opts: ExecApprovalsCliOpts): void {
-  rethrowExpectedCliError(err);
-  const message = formatCliError(err);
-  if (opts.json) {
-    throw new Error(message);
-  }
-  defaultRuntime.error(message);
-  defaultRuntime.exit(1);
-}
-
-async function runApprovalsAction(
-  opts: ExecApprovalsCliOpts,
-  action: () => Promise<void>,
-): Promise<void> {
-  try {
-    await action();
-  } catch (err) {
-    failApprovalsCommand(err, opts);
-  }
 }
 
 function isApprovalDecision(value: string): value is ApprovalDecision {
@@ -1089,6 +1056,8 @@ export function registerExecApprovalsCli(program: Command) {
     .alias("exec-approvals")
     .description("Manage approval policy and pending requests")
     .addHelpText("after", () => formatDocsHelp("/cli/approvals"));
+
+  registerNativeExecApprovalsCli(approvals);
 
   const pendingCmd = approvals
     .command("pending")

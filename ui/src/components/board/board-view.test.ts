@@ -478,7 +478,6 @@ describe("openclaw-board-view", () => {
   it("shows stale MCP Apps with retry and delete without breaking the board", async () => {
     const widgetAppView = vi.fn(async () => ({
       status: "stale" as const,
-      error: "origin transcript pruned",
     }));
     const refreshWidgetAppView = vi.fn(async () => ({
       status: "ready" as const,

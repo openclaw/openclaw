@@ -13,7 +13,6 @@ vi.mock("./client.js", () => ({ createFeishuClient: mockCreateFeishuClient }));
 function makeAccount(id = "test-account"): ResolvedFeishuAccount {
   return {
     accountId: id,
-    selectionSource: "explicit",
     enabled: true,
     configured: true,
     appId: "cli_test",

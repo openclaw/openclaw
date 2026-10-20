@@ -9,6 +9,7 @@ const PROFILE_DEPENDENT = { profileAccess: "required" } as const;
 const PROFILE_STARTUP = { startup: true, ...PROFILE_DEPENDENT } as const;
 const OBSERVATION = { lifetime: "observation" } as const;
 const SESSION_WRITE = { sessionAccess: { mode: "write" } } as const;
+const OWN_SESSION_WRITE = { sessionAccess: { mode: "write", allowOwnSessionScope: true } } as const;
 const PORTAL_SESSION_WRITE = {
   sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" },
 } as const;
@@ -711,6 +712,11 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["claws.catalog.search", "claws", "operator.read", "2026.10"],
   ["claws.catalog.detail", "claws", "operator.read", "2026.10"],
   ["claws.catalog.preview", "claws", "operator.read", "2026.10"],
+  ["claws.drafts.create", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["claws.drafts.read", "claws-drafts", "operator.admin", "2026.10"],
+  ["claws.drafts.save", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["claws.drafts.review", "claws-drafts", "operator.admin", "2026.10"],
+  ["claws.drafts.publish", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["claws.add.plan", "claws-add", "operator.read", "2026.10"],
   ["claws.add.apply", "claws-add", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["worktrees.recoverRemoval", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
@@ -743,13 +749,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["mcp.events.list", "mcp-events", "operator.read", "2026.10", PROFILE_DEPENDENT],
   ["projects.checkoutOptions", "projects", "operator.read", "2026.10"],
   // Inference spends tokens, even though its result never changes the conversation.
-  [
-    "chat.predict",
-    "chat",
-    "operator.write",
-    "2026.10",
-    { sessionAccess: { mode: "write", allowOwnSessionScope: true } },
-  ],
+  ["chat.predict", "chat", "operator.write", "2026.10", OWN_SESSION_WRITE],
   ["tools.github.read", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
   ["tools.github.search", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
   ["openclaw.setup.runtime.start", "system-agent", "operator.admin", "2026.10"],
@@ -757,4 +757,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["update.handoffSentinel", "update-handoff-sentinel", "operator.admin", "2026.10", UNADVERTISED],
   ["skills.files.get", "skills", "operator.read", "2026.10"],
   ["agents.avatar.generate", "agents", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["exec.approvals.native.commit", "exec-approvals", "operator.admin", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

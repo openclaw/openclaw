@@ -205,6 +205,8 @@ it.each([false, true])(
     const result = await tool.execute("background", { command: "build", background: true });
     const { sessionId, followUp = "" } = runningSession(result.details);
     expect(followUp).toContain("Use process");
+    expect(followUp).toContain("does not automatically start another turn");
+    expect(followUp).toContain("process kill");
     if (!notifyOnExit) {
       expect(followUp).toContain("Automatic completion wake is disabled");
       expect(followUp).toContain("poll with a timeout");

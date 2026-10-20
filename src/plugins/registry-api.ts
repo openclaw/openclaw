@@ -134,7 +134,7 @@ export function createPluginApiFactory(
       runtime:
         registrationMode === "cli-metadata"
           ? createUnavailableRuntime(registrationMode, record.id)
-          : resolvePluginRuntime(record),
+          : resolvePluginRuntime(record, registrationMode),
       logger: {
         info: registryParams.logger.info,
         warn: registryParams.logger.warn,

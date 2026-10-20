@@ -2,7 +2,8 @@ import { EventEmitter, once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
-import type { HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import type { ConnectParams, HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as systemPresence from "../../../infra/system-presence.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -111,6 +112,13 @@ function makeContext(
   scopes: string[],
   client?: Pick<GatewayWsClient, "internal" | "preparedSessionProfile">,
 ) {
+  const connectParams: ConnectParams = {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
+    role,
+    scopes,
+  };
   return {
     handler: {
       socket: new EventEmitter(),
@@ -129,11 +137,7 @@ function makeContext(
       logHealth: { error: vi.fn() },
     },
     frame: { id: `hello-${role}` },
-    connectParams: {
-      client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
-      role,
-      scopes,
-    },
+    connectParams,
     configSnapshot: {},
     sendFrame: vi.fn(async () => undefined),
     onHelloDelivered: vi.fn(),
@@ -193,41 +197,47 @@ describe("sendGatewayHello update detail scope", () => {
     vi.mocked(getHealthCache).mockReturnValue(null);
   });
 
-  it.each([false, true])(
-    "sends cached health unless the client opts out (%s)",
-    async (onDemand) => {
-      const health: HealthSummary = {
-        ok: true,
-        ts: 123,
-        durationMs: 1,
-        channels: {},
-        channelOrder: [],
-        channelLabels: {},
-        heartbeatSeconds: 0,
-        agents: [],
-        sessions: { path: "", count: 5000, recent: [] },
-      };
-      vi.mocked(getHealthCache).mockReturnValue(health);
-      const context = makeContext("operator", ["operator.read"]);
-      context.connectParams = {
-        ...context.connectParams,
-        ...(onDemand ? { caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND] } : {}),
-      };
-
-      await sendGatewayHello(
-        context as never,
-        makeState("operator", ["operator.read"]) as never,
-        {},
-      );
-
-      expect(helloSnapshot(context)).toMatchObject({
-        presence: [],
-        stateVersion: { presence: 1, health: 1 },
-        uptimeMs: 1,
-      });
-      expect(helloSnapshot(context)?.health).toEqual(onDemand ? {} : health);
+  it.each([
+    { caps: [], mode: "full" },
+    { caps: [GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY], mode: "summary" },
+    { caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND], mode: "empty" },
+    {
+      caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND, GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY],
+      mode: "empty",
     },
-  );
+  ])("negotiates $mode cached health in hello", async ({ caps, mode }) => {
+    const summary = {
+      ok: true as const,
+      ts: 123,
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+    };
+    const health: HealthSummary = {
+      ...summary,
+      agents: [],
+      sessions: { path: "", count: 5000, recent: [] },
+    };
+    vi.mocked(getHealthCache).mockReturnValue(health);
+    const context = makeContext("operator", ["operator.read"]);
+    context.connectParams = {
+      ...context.connectParams,
+      caps,
+    };
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloSnapshot(context)).toMatchObject({
+      presence: [],
+      stateVersion: { presence: 1, health: 1 },
+      uptimeMs: 1,
+    });
+    expect(helloSnapshot(context)?.health).toEqual(
+      mode === "empty" ? {} : mode === "summary" ? summary : health,
+    );
+  });
 
   it.each([undefined, []])(
     "sends hello without membership reads for idle presence (%j)",

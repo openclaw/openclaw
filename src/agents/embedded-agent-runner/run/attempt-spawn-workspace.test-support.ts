@@ -18,8 +18,10 @@ import type {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 // Shared harness and mocks for embedded attempt spawn-workspace tests.
-import { makeEmptyPluginMetadataOwners } from "../../../plugins/current-plugin-metadata.test-support.js";
+// Preserve snapshot-reader and lifecycle registration before the attempt graph loads.
+import "../../../plugins/current-plugin-metadata.test-support.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import { createEmptyPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
@@ -250,38 +252,7 @@ export function getHoisted(): AttemptSpawnWorkspaceHoisted {
   return Object.assign(hoisted, getSkillMocks());
 }
 
-const emptyPluginIndex: PluginMetadataSnapshot["index"] = {
-  version: 1,
-  hostContractVersion: "test",
-  compatRegistryVersion: "test",
-  migrationVersion: 1,
-  policyHash: "",
-  generatedAtMs: 1,
-  installRecords: {},
-  plugins: [],
-  diagnostics: [],
-};
-const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
-  policyHash: "",
-  index: emptyPluginIndex,
-  registryIndex: emptyPluginIndex,
-  registryDiagnostics: [],
-  manifestRegistry: { plugins: [], diagnostics: [] },
-  plugins: [],
-  diagnostics: [],
-  byPluginId: new Map(),
-  normalizePluginId: (pluginId: string) => pluginId,
-  declaredProviderOwners: new Map(),
-  owners: makeEmptyPluginMetadataOwners(),
-  metrics: {
-    registrySnapshotMs: 0,
-    manifestRegistryMs: 0,
-    ownerMapsMs: 0,
-    totalMs: 0,
-    indexPluginCount: 0,
-    manifestPluginCount: 0,
-  },
-};
+const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = createEmptyPluginMetadataSnapshot();
 
 vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: () => true,
@@ -471,7 +442,6 @@ vi.mock("../../agent-project-settings.js", () => ({
     getThinkingBudgets: () => undefined,
     getProviderRetrySettings: () => ({ maxRetryDelayMs: undefined }),
     getGlobalSettings: () => ({}),
-    getProjectSettings: () => ({}),
     applyOverrides: () => {},
     setCompactionEnabled: () => {},
   }),

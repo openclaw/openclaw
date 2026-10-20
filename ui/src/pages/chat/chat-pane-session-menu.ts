@@ -654,34 +654,29 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     await Promise.all(loads);
   }
 
-  protected showHeaderCopied(action: ChatPaneHeaderAction): void {
-    this.headerPresentation.copiedAction = action;
-    if (this.headerCopiedTimer !== null) {
-      window.clearTimeout(this.headerCopiedTimer);
-    }
-    this.headerCopiedTimer = window.setTimeout(() => {
-      this.headerPresentation.copiedAction = null;
-      this.headerCopiedTimer = null;
-    }, 1_500);
-  }
-
   protected handleHeaderMenuAction(
     action: ChatPaneHeaderAction,
     row: GatewaySessionRow,
     workspaceRoot: string | null,
     branch: string | null,
-    copy: (value: string) => Promise<boolean> = copyToClipboard,
   ): void {
     const copiedValue =
       action === "copy-path" ? workspaceRoot : action === "copy-branch" ? branch : null;
     if (copiedValue) {
       const owner = this.headerOutcomeOwner;
-      void copy(copiedValue).then((copied) => {
+      void copyToClipboard(copiedValue).then((copied) => {
         if (!this.ownsHeaderOutcome(owner)) {
           return;
         }
         if (copied) {
-          this.showHeaderCopied(action);
+          this.headerPresentation.copiedAction = action;
+          if (this.headerCopiedTimer !== null) {
+            window.clearTimeout(this.headerCopiedTimer);
+          }
+          this.headerCopiedTimer = window.setTimeout(() => {
+            this.headerPresentation.copiedAction = null;
+            this.headerCopiedTimer = null;
+          }, 1_500);
         } else {
           this.publishHeaderError(t("common.copyFailed"), owner);
         }

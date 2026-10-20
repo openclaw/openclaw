@@ -57,6 +57,7 @@ import {
 import { withStateInspectionCleanup } from "./update-candidate-state.process.js";
 import {
   collectRegisteredPaths,
+  collectSupplementalStateDatabasePaths,
   readSharedDatabaseVersion,
   readUpdateStoreSchemaVersion,
   type StateInput,
@@ -183,22 +184,6 @@ export async function collectStateDatabasePaths(
   );
 }
 
-async function collectUpdateCandidateDatabasePaths(input: StateInput) {
-  const files = await collectStateDatabasePaths(input);
-  const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
-  // The private snapshot below owns registry reads, including legacy schemas.
-  // Include declared retained plugin databases on either physical engine here.
-  for (const file of input.additionalPaths ??
-    (await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }))) {
-    // Supplemental realpaths must not add aliases to the legacy versions inventory.
-    // Registry discovery below still preserves every explicitly recorded spelling.
-    if (!files.has(resolveUpdateCandidateStateIdentity(input.stateDir, file))) {
-      queueStateDatabaseSpelling(files, input.stateDir, file);
-    }
-  }
-  return files;
-}
-
 /** Read registrations and plugin ownership from one private shared copy before budgeting. */
 export async function readUpdateCandidateStateInventoryInProcess(
   input: StateInput & {
@@ -220,7 +205,10 @@ export async function readUpdateCandidateStateInventoryInProcess(
     await fs.utimes(planPath, new Date(now), new Date(now));
   };
   const { prepareUpdateCandidatePlugins } = await import("./update-candidate-plugins.js");
-  const files = await collectUpdateCandidateDatabasePaths(input);
+  const files = await collectSupplementalStateDatabasePaths(
+    input,
+    await collectStateDatabasePaths(input),
+  );
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   const measure = async (
     sharedStateDatabasePath?: string,
@@ -279,7 +267,10 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
 ): Promise<UpdateStateSchemaInspectionPlan> {
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   input.onProgress?.({ phase: "shared database discovery", path: shared });
-  const files = await collectUpdateCandidateDatabasePaths(input);
+  const files = await collectSupplementalStateDatabasePaths(
+    input,
+    await collectStateDatabasePaths(input),
+  );
   if (!(await updateStateDatabaseExists(shared))) {
     return { files: [...files], sharedVersion: { path: shared, userVersion: null } };
   }
@@ -313,7 +304,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   const files = input.inspectionPlan
     ? new Map(input.inspectionPlan.files)
-    : await collectUpdateCandidateDatabasePaths(input);
+    : await collectSupplementalStateDatabasePaths(input, await collectStateDatabasePaths(input));
   const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
   // Inspect each identity once, then publish every spelling for released rollback baselines.
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
@@ -594,7 +585,10 @@ export async function snapshotUpdateCandidateState(
   const execApprovals = createUpdateCandidateExecApprovalsProjection(sourceRoot, targetPath);
   // Physical copies dedupe on projection identity; the published versions
   // keep every raw alias so released rollback baselines still match.
-  const files = await collectUpdateCandidateDatabasePaths(input);
+  const files = await collectSupplementalStateDatabasePaths(
+    input,
+    await collectStateDatabasePaths(input),
+  );
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
   if (
     resolveDatabaseFamilyEngines(input.config).state === "postgres" &&

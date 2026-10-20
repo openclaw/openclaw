@@ -371,6 +371,8 @@ export type CronJob = CronJobBase<
 > & {
   declarationKey?: string;
   displayName?: string;
+  /** Read-only execution placement derived from the stored stream target. */
+  streamExecutionHost?: "gateway" | "sandbox";
   owner?: {
     agentId?: string;
     sessionKey?: string;
@@ -408,7 +410,7 @@ export type CronToolsAllowProvenance =
     ));
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
-export type CronStoredJob = CronJob & {
+export type CronStoredJob = Omit<CronJob, "streamExecutionHost"> & {
   /** Original authenticated source for a same-conversation continuation, never a public grant. */
   operatorSource?: {
     source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
@@ -457,7 +459,7 @@ type CronJobStateInput = Partial<
 /** Create input accepted by cron APIs before id/timestamps/state are assigned. */
 export type CronJobCreate = Omit<
   CronJob,
-  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy"
+  "id" | "createdAtMs" | "updatedAtMs" | "state" | "scheduledToolPolicy" | "streamExecutionHost"
 > & {
   /** Internal callers can reserve a durable id before creation; public cron.add omits this. */
   id?: string;
@@ -478,6 +480,7 @@ export type CronJobPatch = Partial<
     | "displayName"
     | "owner"
     | "scheduledToolPolicy"
+    | "streamExecutionHost"
     | "pacing"
     | "trigger"
   >

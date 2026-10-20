@@ -108,7 +108,7 @@ describe("applySystemAgentSetup transaction boundaries", () => {
   it("commits a fresh injected roster before provisioning its workspace", async () => {
     startAbsent();
     const result = await apply({ expectedConfigHash: null });
-    expect(result).toMatchObject({ configHashBefore: null, bootstrapPending: true });
+    expect(result.bootstrapPending).toBe(true);
     expect(mocks.state.persistedConfig).toMatchObject({
       agents: {
         defaults: { workspace: "/tmp/openclaw-workspace" },

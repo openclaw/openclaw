@@ -103,7 +103,7 @@ export function commitSessionLifecycleProjection(
           maintenancePlans: result.maintenancePlans,
         },
         database,
-        { postimages },
+        { captureFullFacts: true, postimages },
       ),
     };
     if (

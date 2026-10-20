@@ -48,7 +48,6 @@ import {
   createChatPaneRunRecoveryActions,
   dismissChatError,
   resolveChatPaneFollowUpMode,
-  projectChatPaneTranscript,
 } from "./chat-pane-state.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
 import { createChatQuestionActions } from "./chat-question-actions.ts";
@@ -69,6 +68,9 @@ import { lockChatScroll, scheduleChatScroll } from "./scroll.ts";
 import { createChatWidgetLayout } from "./session-message-cache.ts";
 import { resolveChatProjectionRunId } from "./tool-stream-status.ts";
 import { workspaceResultConflictFromPlacement } from "./workspace-conflict.ts";
+
+// Catalog panes have no live run; stable empty inputs preserve their transcript cache.
+const emptyTranscriptItems: [] = [];
 
 export class ChatPaneRuntime extends ChatPaneLayoutRender {
   render(readProviderReview?: () => ChatProviderReviewOwner) {
@@ -121,7 +123,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     const currentAgentId = resolveChatAgentId(state);
     const catalogKey = parseCatalogSessionKey(state.sessionKey);
     const catalog = catalogKey !== null;
-    const overlays = this.context?.overlays;
     const selectedAgent = this.context.agents.state.agentsList?.agents.find(
       (agent) => agent.id === currentAgentId,
     );
@@ -358,7 +359,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
     };
     const mentionsUnsupported = !nativeConversation || selectedSession?.incognito || !selfProfileId;
-    const { gatewayQuestionPrompts, inlineApproval } = this.projectConversationAttention(
+    const conversationAttention = this.projectConversationAttention(
       state,
       currentAgentId,
       !catalogKey && !sessionParticipationBlocked,
@@ -425,7 +426,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         this.transcript.cancelScroll();
       },
       onDismissProgressCard: progressPresentation ? this.hideProgressCard.bind(this) : undefined,
-      gatewayQuestionPrompts,
+      ...conversationAttention,
       asyncQuestionStorage: nativeConversation
         ? this.chatState.composerPersistence.durableScope
         : null,
@@ -445,11 +446,15 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
               onShowEarlier: () => void this.loadOlderMessages(),
             }
           : undefined,
-      ...projectChatPaneTranscript(
-        state,
-        catalog ? this.history.catalogMessages : null,
-        projectionRunId,
-      ),
+      messages: catalog ? this.history.catalogMessages : state.chatMessages,
+      toolMessages: catalog ? emptyTranscriptItems : state.chatToolMessages,
+      guardianNotices: catalog ? emptyTranscriptItems : state.guardianNotices,
+      streamSegments: catalog ? emptyTranscriptItems : state.chatStreamSegments,
+      stream: catalog ? null : state.chatStream,
+      reasoning: catalog ? null : state.chatReasoning,
+      streamStartedAt: catalog ? null : state.chatStreamStartedAt,
+      runId: catalog ? null : projectionRunId,
+      runUsageById: catalog ? undefined : state.chatRunUsageById,
       assistantAvatarUrl: resolveChatAvatarUrl(state),
       sendShortcut: state.settings.chatSendShortcut,
       followUpMode: state.chatFollowUpMode,
@@ -512,15 +517,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       workerRuntimeInstall: placementComposer.workerRuntimeInstall,
       runError:
         catalogKey || providerPaused ? null : (state.chatRunError ?? placementComposer.runError),
-      inlineApproval,
-      approvalBusy: overlays?.snapshot?.approvalBusy,
-      approvalCanGrant: overlays?.snapshot?.approvalCanGrant ?? false,
-      approvalErrors: overlays?.snapshot?.approvalErrors,
-      onApprovalDecision:
-        overlays && !sessionParticipationBlocked
-          ? (approvalId, decision) =>
-              overlays.decideApproval(decision, approvalId, inlineApproval ?? undefined)
-          : undefined,
       workspaceConflict: visibleWorkspaceConflict,
       onDismissWorkspaceConflict:
         visibleWorkspaceConflict && selectedSession

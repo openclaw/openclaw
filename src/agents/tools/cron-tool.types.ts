@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronCreatorAuthorityGrant } from "../../gateway/cron-creator-authority-grant.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
+import type { ExecPolicyOverrides, ExecSessionDefaults } from "../exec-defaults.js";
 import type { callGatewayTool } from "./gateway.js";
 
 export type CronCreatorToolAllowlistEntry =
@@ -13,6 +14,8 @@ export type CronCreatorToolAllowlistEntry =
       pluginId?: string;
       /** Runtime-specific alias the creator surface presented for this tool. */
       aliasName?: string;
+      /** Runtime owner that supplied exec; required for process-bearing stream writes. */
+      execOrigin?: "openclaw" | "native";
       /** Restrict-only execution policy carried by a host-created alias projection. */
       execTarget?: { host: "gateway"; ask?: "always" };
     };
@@ -55,6 +58,11 @@ export type CronToolOptions = {
    * config keeps the full surface for config-less callers.
    */
   config?: OpenClawConfig;
+  /** Exact session and run-local exec policy used by this creator turn. */
+  execSession?: ExecSessionDefaults;
+  execOverrides?: ExecPolicyOverrides;
+  /** Whether auto host selection resolves into this turn's sandbox. */
+  sandboxed?: boolean;
   currentDeliveryContext?: DeliveryContext;
   /**
    * Effective tool surface visible to the caller that created or edited a cron job.

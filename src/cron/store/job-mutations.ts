@@ -120,6 +120,7 @@ export function planCronJobMutation(
           "pacing" in mutation.patch,
         scheduleChanged: mutation.patch.schedule !== undefined,
         explicitTriggerState: mutation.patch.state,
+        streamRestartExhaustedRequested: mutation.patch.state?.streamRestartExhausted === true,
         isJobActive: () => previousJob?.state.runningAtMs !== undefined,
       });
     }

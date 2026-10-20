@@ -1,6 +1,9 @@
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
+import { formatErrorMessageWithCode } from "../../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import {
   isSqliteWorkerError,
   type SqliteWorkerOperations,
@@ -256,15 +259,19 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
   );
 
   it.each([
-    ["fences a missing receipt and result", true, false, true],
-    ["repairs a committed recovery after result loss", false, false, true],
-    ["preserves result loss after committed owner retirement", false, true, true],
-    ["preserves recovery success after committed owner retirement", false, true, false],
-  ] as const)("%s", async (_label, missingReceipt, retireOwner, loseResult) => {
+    ["fences a missing receipt and result", true, false, true, false],
+    ["preserves a distinct storage settlement failure after result loss", true, false, true, true],
+    ["repairs a committed recovery after result loss", false, false, true, false],
+    ["preserves result loss after committed owner retirement", false, true, true, false],
+    ["preserves recovery success after committed owner retirement", false, true, false, false],
+  ] as const)("%s", async (_label, missingReceipt, retireOwner, loseResult, storageSettlement) => {
     const fixture = await createFixture();
     await waitForSessionTranscriptIndexReconcilesInStateDir(fixture.root);
     const params = fixture.recoveryParams("settled-successor");
     const deliveryFailure = new Error("Recovery result delivery failed");
+    const settlementFailure = new Error("Recovery settlement failed", {
+      cause: Object.assign(new Error("database or disk is full"), { code: "SQLITE_FULL" }),
+    });
     const databaseOptions = toDatabaseOptions(resolveSqliteReadScope(fixture.scope()));
     let closing: Promise<boolean> | undefined;
     const restoreFaults: Array<() => void> = [];
@@ -334,7 +341,7 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
                       .mockReturnValue(undefined);
                     const settlement = vi
                       .spyOn(nativeAdmission, "settlement", "get")
-                      .mockReturnValue({ kind: "completed" });
+                      .mockReturnValue({ kind: storageSettlement ? "unknown" : "completed" });
                     restoreFaults.push(
                       () => receipt.mockRestore(),
                       () => settlement.mockRestore(),
@@ -350,7 +357,16 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
             assertCurrent,
             createAdmission &&
               ((retained) => {
-                const owned = createAdmission(retained);
+                const owned = createAdmission(
+                  recovering && storageSettlement && dropReceipt
+                    ? {
+                        settled: retained.settled.then(() => ({
+                          kind: "unknown",
+                          error: settlementFailure,
+                        })),
+                      }
+                    : retained,
+                );
                 if (recovering) {
                   nativeAdmission = owned.admission;
                 }
@@ -366,6 +382,15 @@ describe("recoverSessionEntryFromRestartTombstone", () => {
       );
       if (missingReceipt) {
         expect(isSqliteWorkerError(outcome, "outcome-unknown")).toBe(true);
+        if (storageSettlement) {
+          const diagnostic = formatErrorMessageWithCode(outcome);
+          expect(diagnostic).toContain("Recovery result delivery failed");
+          expect(diagnostic).toContain("Recovery settlement failed");
+          expect(diagnostic).toContain("database or disk is full");
+          expect(renderStorageFailureSummary(classifyGatewayStorageFailure(outcome))).toBe(
+            "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+          );
+        }
       } else if (loseResult) {
         expect(outcome).toBe(deliveryFailure);
       } else {

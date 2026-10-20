@@ -110,20 +110,17 @@ export function ScheduleSection(props: CronProps) {
   const isStream = () => form().scheduleKind === "stream";
   // Process-backed schedules stay selectable only while current: jobs can
   // convert to an editable schedule, but never synthesize a command in the UI.
-  const processSchedule = createMemo(() =>
+  const processSchedule = () =>
     isOnExit()
       ? { value: "on-exit" as const, label: t("cron.form.repeatOnExit") }
       : isStream()
         ? { value: "stream" as const, label: t("cron.form.repeatStream") }
-        : null,
-  );
-  const kinds = createMemo<
-    Array<{
-      value: CronFormState["scheduleKind"];
-      label: string;
-      testId: string;
-    }>
-  >(() => {
+        : null;
+  const kinds = (): Array<{
+    value: CronFormState["scheduleKind"];
+    label: string;
+    testId: string;
+  }> => {
     const process = processSchedule();
     return [
       ...(process ? [{ ...process, testId: `cron-schedule-kind-${process.value}` }] : []),
@@ -141,7 +138,7 @@ export function ScheduleSection(props: CronProps) {
           ]
         : []),
     ];
-  });
+  };
   const summary = createMemo(() => describeFormSchedule(form()));
   return (
     <SettingsSection title={t("cron.detail.scheduleSection")}>

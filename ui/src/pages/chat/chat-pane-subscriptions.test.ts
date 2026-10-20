@@ -1,20 +1,147 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { ApplicationContext } from "../../app/context.ts";
+import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { localEditorFilePath } from "../../app/native-editor-locality.runtime.ts";
 import type {
   NativeGatewaysCapability,
   NativeGatewaysSnapshot,
 } from "../../app/native-gateways.runtime.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import {
   connectPaneTestView,
   createGatewayBrowserClientFixture,
+  createInitializationContext,
+  createRenderTestChatPane,
   createTestChatPane,
   getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { currentSessionApprovalReplay } from "./session-approval-projection.ts";
+
+describe("chat pane approval replay subscriptions", () => {
+  it("preserves live approval transitions received while session replay is awaiting publication", async () => {
+    const { state } = createTestChatPane({ client: createTestGatewayClient(vi.fn()) });
+    const started = createDeferred();
+    const replay = createDeferred<Awaited<ReturnType<typeof state.sessions.subscribeMessages>>>();
+    vi.spyOn(state.sessions, "subscribeMessages").mockImplementation(() => {
+      started.resolve();
+      return replay.promise;
+    });
+    const pending = {
+      id: "exec:original",
+      status: "pending" as const,
+      presentation: {
+        kind: "exec" as const,
+        commandText: "echo original",
+        allowedDecisions: ["allow-once", "deny"] as const,
+      },
+      urlPath: "/approve/exec%3Aoriginal",
+      createdAtMs: 1,
+      expiresAtMs: 10_000,
+    };
+    const sync = syncSelectedSessionMessageSubscription(state);
+    await started.promise;
+    for (const payload of [
+      {
+        sessionKey: state.sessionKey,
+        phase: "terminal",
+        updatedAtMs: 2,
+        approval: {
+          ...pending,
+          status: "denied",
+          decision: "deny",
+          reason: "user",
+          resolvedAtMs: 2,
+        },
+      },
+      {
+        sessionKey: state.sessionKey,
+        phase: "pending",
+        updatedAtMs: 3,
+        approval: { ...pending, id: "exec:new-live", urlPath: "/approve/exec%3Anew-live" },
+      },
+    ]) {
+      handlePageGatewayEvent(state, { type: "event", event: "session.approval", payload });
+    }
+    replay.resolve({
+      key: state.sessionKey,
+      agentId: null,
+      includeApprovals: true,
+      approvalReplay: {
+        sessionKey: state.sessionKey,
+        updatedAtMs: 1,
+        approvals: [pending],
+        truncated: false,
+      },
+    });
+    await sync;
+    expect(state.chatSessionApprovalQueue?.map((entry) => entry.id)).toEqual(["exec:new-live"]);
+    expect(currentSessionApprovalReplay(state, "main")?.complete).toBe(true);
+    state.connectionEpoch += 1;
+    expect(currentSessionApprovalReplay(state, "main")).toBeUndefined();
+  });
+
+  it.each([false, true])(
+    "uses the global pending queue only when the session replay is truncated (%s)",
+    async (truncated) => {
+      const key = "agent:main:pending-replay";
+      const client = createTestGatewayClient(async (method) =>
+        method === "sessions.messages.subscribe"
+          ? {
+              key,
+              agentId: "main",
+              approvalReplay: { sessionKey: key, updatedAtMs: 1, approvals: [], truncated },
+            }
+          : {},
+      );
+      const approval: ExecApprovalRequest = {
+        id: "exec:global-pending",
+        kind: "exec",
+        request: { command: "echo pending", agentId: "main", sessionKey: key },
+        createdAtMs: 1,
+        expiresAtMs: Date.now() + 60_000,
+      };
+      const context: ApplicationContext = {
+        ...createInitializationContext(client),
+        overlays: {
+          snapshot: {
+            approvalQueue: [approval],
+            approvalBusy: false,
+            approvalCanGrant: true,
+            approvalErrors: new Map(),
+          },
+          decideApproval: vi.fn(),
+        } as unknown as ApplicationContext["overlays"],
+      };
+      const pane = createRenderTestChatPane();
+      const state = pane.initialize(context);
+      pane.sessionKey = key;
+      state.sessionKey = key;
+      state.client = client;
+      state.connected = true;
+      state.hello = gatewayHelloForMethods(["sessions.messages.subscribe"]);
+      try {
+        expect(await syncSelectedSessionMessageSubscription(state)).toBe(true);
+        pane.render();
+        expect(pane.chatProps?.inlineApproval).toBe(truncated ? approval : null);
+      } finally {
+        if (state.chatSessionMessageSubscription) {
+          await state.sessions.unsubscribeMessages(state.chatSessionMessageSubscription);
+        }
+        chatRunPresentation(state).cancelFrame();
+      }
+    },
+  );
+});
 
 it("projects composer capability changes and catches up a parked pane on reveal", async () => {
   const fixture = createMountedPanes([{ key: "main", kind: "direct", updatedAt: 1 }]);

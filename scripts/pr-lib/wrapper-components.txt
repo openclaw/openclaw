@@ -41,6 +41,7 @@ packages/gateway-protocol/src/schema/user-profile-constants.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
 packages/gateway-protocol/src/schema/worker-computer.ts
 packages/gateway-protocol/src/schema/worker-gateway-tool.ts
+packages/gateway-protocol/src/schema/worker-protocol-constants.ts
 packages/gateway-protocol/src/schema/worker-protocol-primitives.ts
 packages/gateway-protocol/src/schema/worker-session-tools.ts
 packages/gateway-protocol/src/schema/worktrees.ts
@@ -932,6 +933,7 @@ src/infra/diagnostic-tool-execution-liveness.ts
 src/infra/diagnostic-trace-context.ts
 src/infra/diagnostic-trace-propagation.ts
 src/infra/diagnostics-timeline.ts
+src/infra/diff-read-timing.ts
 src/infra/directory-durability.ts
 src/infra/directory-watch-host.ts
 src/infra/disk-space.ts
@@ -2194,6 +2196,7 @@ packages/agent-core/src/harness/session/session.ts
 packages/ai/src/transports/provider-compaction-checkpoint.ts
 src/config/sessions/restart-recovery-state.ts
 src/config/sessions/session-accessor.sqlite-delete-snapshot.ts
+src/config/sessions/session-accessor.sqlite-export-slices.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-projection.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-publication-state.ts
 src/config/sessions/session-accessor.sqlite-entry-cache-publication.ts

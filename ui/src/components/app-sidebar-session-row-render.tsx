@@ -4,11 +4,7 @@ import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/s
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
-import {
-  canArchiveSessionRow,
-  parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
-} from "../lib/sessions/session-key.ts";
+import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import type {
   CatalogBackingSessionDisplay,
@@ -22,7 +18,6 @@ import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
-import "./elapsed-time.tsx";
 import "./tooltip.ts";
 
 /** Compose independently owned session state and context indicators. */
@@ -362,28 +357,16 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   return row;
 }
 /** The unadmitted create renders in the slot its admitted row will take: selected,
- *  actionless, and aligned with real rows. Roster groups pass their agent id. */
+ *  actionless, and aligned with real rows. Only the native session list has that
+ *  slot: the agent-only roster shows no row for a new session, so a handoff row
+ *  there would flash under the agent and vanish on admission. */
 export function renderPendingSessionCreateRow(
-  host: () => Pick<SessionListHost, "pendingSessionCreate" | "sidebarAgentsMode">,
-  agentId?: string,
+  host: () => Pick<SessionListHost, "pendingSessionCreate">,
 ) {
-  const pending = createMemo(() => {
-    const value = host().pendingSessionCreate();
-    return value &&
-      (agentId === undefined ||
-        parseAgentSessionKey(value.creation.sessionKey)?.agentId === agentId)
-      ? value
-      : undefined;
-  });
   return (
-    <Show when={pending()}>
+    <Show when={host().pendingSessionCreate()}>
       {(value) => (
-        <div
-          class={[
-            "sidebar-recent-session session-row-host sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating",
-            { "sidebar-recent-session--team": host().sidebarAgentsMode === "roster" },
-          ]}
-        >
+        <div class="sidebar-recent-session session-row-host sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating">
           <div class="sidebar-recent-session__link" aria-current="page" aria-busy="true">
             <span class="sidebar-session-indicator" aria-hidden="true" />
             <span class="sidebar-recent-session__text">

@@ -6,7 +6,11 @@ import {
   type CaptureQueryPreset,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableObjectRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseQaJson } from "./json.js";
 
 export function createQaCaptureLifecycle() {
   const captureEnv = {
@@ -72,15 +76,7 @@ export function isCaptureQueryPreset(value: string): value is CaptureQueryPreset
 }
 
 function parseCaptureMeta(metaJson: unknown): Record<string, unknown> | null {
-  if (typeof metaJson !== "string" || metaJson.trim().length === 0) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(metaJson) as unknown;
-    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
-  } catch {
-    return null;
-  }
+  return typeof metaJson === "string" ? asNullableObjectRecord(safeParseQaJson(metaJson)) : null;
 }
 
 export function mapCaptureEventForQa(row: Record<string, unknown>) {

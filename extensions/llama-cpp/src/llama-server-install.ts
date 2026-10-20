@@ -1,9 +1,16 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import fs, { type BigIntStats } from "node:fs";
+import fs, { createWriteStream, type BigIntStats, type Stats } from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { sha256File as hashFile } from "@openclaw/fs-safe/durability";
+import {
+  ARCHIVE_LIMIT_ERROR_CODE,
+  ArchiveLimitError,
+  extractArchive,
+  type ArchiveExtractLimits,
+} from "openclaw/plugin-sdk/archive";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,11 +26,91 @@ import {
   type LlamaServerAsset,
   type LlamaServerDependency,
 } from "./llama-server-assets.js";
-import {
-  extractLlamaServerArchive,
-  extractLlamaServerDependencyArchive,
-} from "./llama-server-extract.js";
-import { extractWindowsVcRuntime } from "./llama-server-vc-runtime.js";
+
+const MEBIBYTE = 1024 * 1024;
+const LLAMA_ARCHIVE_LIMITS = {
+  maxArchiveBytes: 256 * MEBIBYTE,
+  maxEntries: 1_000,
+  maxExtractedBytes: 512 * MEBIBYTE,
+  maxEntryBytes: 256 * MEBIBYTE,
+  maxMetaEntryBytes: MEBIBYTE,
+} satisfies ArchiveExtractLimits;
+const MAX_ALIAS_BYTES = 512 * MEBIBYTE;
+const CAB_HEADER_SIZE = 12;
+const EXPAND_TIMEOUT_MS = 60_000;
+
+async function assertRegularFile(
+  filePath: string,
+  label: string,
+  source = "llama-server archive",
+): Promise<Stats> {
+  const stat = await fsp.lstat(filePath).catch(() => undefined);
+  if (!stat?.isFile() || stat.nlink > 1) {
+    throw new Error(`${source} does not contain regular ${label}`);
+  }
+  return stat;
+}
+
+async function extractVerifiedArchive(
+  archivePath: string,
+  destDir: string,
+  asset: LlamaServerArchive,
+  requiredFiles: readonly string[],
+): Promise<string> {
+  const isTar = asset.archive === "tar.gz";
+  const limits = { ...LLAMA_ARCHIVE_LIMITS, ...asset.limits };
+  const aliasCount = asset.regularFileAliases.reduce(
+    (count, [, aliases]) => count + aliases.length,
+    0,
+  );
+  if (aliasCount > limits.maxEntries) {
+    throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.ENTRY_COUNT_EXCEEDS_LIMIT);
+  }
+  await extractArchive({
+    archivePath,
+    destDir,
+    kind: isTar ? "tar" : "zip",
+    // The installer owns destination cleanup, so keep extraction joined instead of racing
+    // fs-safe's internal transaction against a caller-side timeout.
+    timeoutMs: 0,
+    limits: {
+      ...limits,
+      maxEntries: limits.maxEntries - aliasCount,
+    },
+    tarGzip: isTar,
+    entryFilter: (entry) => (entry.kind === "symlink" ? "skip" : "extract"),
+    onFiltered: "skip-entry",
+  });
+  const rootDir = path.join(destDir, asset.archiveRoot);
+  // Paths come from the private pinned asset manifest, not archive entries.
+  for (const file of requiredFiles) {
+    await assertRegularFile(path.join(rootDir, file), `file ${file}`);
+  }
+  let copiedBytes = 0;
+  for (const [source, aliases] of asset.regularFileAliases) {
+    const sourcePath = path.join(rootDir, source);
+    const sourceStat = await assertRegularFile(sourcePath, `alias source ${source}`);
+    for (const alias of aliases) {
+      copiedBytes += sourceStat.size;
+      if (copiedBytes > MAX_ALIAS_BYTES) {
+        throw new ArchiveLimitError(ARCHIVE_LIMIT_ERROR_CODE.EXTRACTED_SIZE_EXCEEDS_LIMIT);
+      }
+      const aliasPath = path.join(rootDir, alias);
+      await fsp.copyFile(sourcePath, aliasPath, fs.constants.COPYFILE_EXCL);
+      await fsp.chmod(aliasPath, sourceStat.mode & 0o777);
+    }
+  }
+  return rootDir;
+}
+
+async function runExpand(command: string, args: string[], signal?: AbortSignal): Promise<void> {
+  await runServerCommand(command, args, signal, EXPAND_TIMEOUT_MS, (error, stderr) => {
+    const detail = stderr.trim();
+    return new Error(`Failed to extract the Visual C++ runtime${detail ? `: ${detail}` : ""}`, {
+      cause: error,
+    });
+  });
+}
 
 const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
 const PROBE_TIMEOUT_MS = 15_000;
@@ -263,6 +350,7 @@ async function runServerCommand(
   args: string[],
   signal?: AbortSignal,
   timeoutMs = PROBE_TIMEOUT_MS,
+  formatError?: (error: Error, stderr: string) => Error,
 ): Promise<string> {
   return await new Promise((resolve, reject) => {
     execFile(
@@ -271,7 +359,9 @@ async function runServerCommand(
       { timeout: timeoutMs, signal, windowsHide: true },
       (error, stdout, stderr) => {
         if (error) {
-          reject(new Error(error.message, { cause: error }));
+          reject(
+            formatError ? formatError(error, stderr) : new Error(error.message, { cause: error }),
+          );
         } else {
           resolve(`${stdout}${stderr}`.trim());
         }
@@ -370,20 +460,90 @@ async function stageLlamaServerDependency(params: {
   });
   const dependencyExtractDir = path.join(extractDir, `dependency-${index}`);
   await fsp.mkdir(dependencyExtractDir);
-  const dependencyRoot =
+  let dependencyRoot: string;
+  if (dependency.archive === "vc-redist") {
+    const { nestedCabinet, files } = dependency;
+    const systemRoot = process.env.SystemRoot;
+    if (!systemRoot || !path.win32.isAbsolute(systemRoot)) {
+      throw new Error("SystemRoot is unavailable; cannot extract the Visual C++ runtime");
+    }
+    const expandCommand = path.win32.join(systemRoot, "System32", "expand.exe");
+    const containerPath = path.join(dependencyExtractDir, "bundle.cab");
+    const nestedDir = path.join(dependencyExtractDir, "nested");
+    const filesDir = path.join(dependencyExtractDir, "files");
+    await Promise.all([
+      fsp.mkdir(nestedDir, { recursive: true }),
+      fsp.mkdir(filesDir, { recursive: true }),
+    ]);
+    const source = await fsp.open(dependencyArchive, "r");
+    try {
+      const stat = await source.stat();
+      if (!stat.isFile() || stat.size !== dependency.size) {
+        throw new Error(
+          `Visual C++ runtime bundle size mismatch: expected ${dependency.size}, got ${stat.size}`,
+        );
+      }
+      if (
+        dependency.containerOffset < 0 ||
+        dependency.containerSize < CAB_HEADER_SIZE ||
+        dependency.containerOffset + dependency.containerSize > stat.size
+      ) {
+        throw new Error("invalid Visual C++ runtime container bounds");
+      }
+      const header = Buffer.alloc(CAB_HEADER_SIZE);
+      const headerRead = await source.read(header, 0, header.length, dependency.containerOffset);
+      if (
+        headerRead.bytesRead !== header.length ||
+        header.subarray(0, 4).toString("ascii") !== "MSCF" ||
+        header.readUInt32LE(8) !== dependency.containerSize
+      ) {
+        throw new Error("Visual C++ runtime bundle does not contain the pinned cabinet");
+      }
+
+      await pipeline(
+        source.createReadStream({
+          start: dependency.containerOffset,
+          end: dependency.containerOffset + dependency.containerSize - 1,
+          autoClose: false,
+        }),
+        createWriteStream(containerPath, { flags: "wx", mode: 0o600 }),
+        { signal: options.signal },
+      );
+    } finally {
+      await source.close();
+    }
+    await runExpand(
+      expandCommand,
+      [`-F:${nestedCabinet}`, containerPath, nestedDir],
+      options.signal,
+    );
+    const nestedPath = path.join(nestedDir, nestedCabinet);
+    await assertRegularFile(nestedPath, `file ${nestedCabinet}`, "Visual C++ runtime");
+    for (const file of files) {
+      options.signal?.throwIfAborted();
+      await runExpand(expandCommand, [`-F:${file.source}`, nestedPath, filesDir], options.signal);
+      const sourcePath = path.join(filesDir, file.source);
+      await assertRegularFile(sourcePath, `file ${file.source}`, "Visual C++ runtime");
+      await fsp.copyFile(
+        sourcePath,
+        path.join(dependencyExtractDir, file.target),
+        fs.constants.COPYFILE_EXCL,
+      );
+    }
+    dependencyRoot = dependencyExtractDir;
+  } else {
+    dependencyRoot = await extractVerifiedArchive(
+      dependencyArchive,
+      dependencyExtractDir,
+      dependency,
+      dependency.files,
+    );
+  }
+  const files =
     dependency.archive === "vc-redist"
-      ? await extractWindowsVcRuntime({
-          bundlePath: dependencyArchive,
-          destDir: dependencyExtractDir,
-          asset: dependency,
-          signal: options.signal,
-        })
-      : await extractLlamaServerDependencyArchive({
-          archivePath: dependencyArchive,
-          destDir: dependencyExtractDir,
-          asset: dependency,
-        });
-  for (const file of dependencyFiles(dependency)) {
+      ? dependency.files.map((file) => file.target)
+      : dependency.files;
+  for (const file of files) {
     await fsp.copyFile(
       path.join(dependencyRoot, file),
       path.join(extractedRoot, file),
@@ -439,11 +599,10 @@ async function installLlamaServer(
     });
     const serverExtractDir = path.join(extractDir, "server");
     await fsp.mkdir(serverExtractDir, { recursive: true });
-    const extractedCommand = await extractLlamaServerArchive({
-      archivePath,
-      destDir: serverExtractDir,
-      asset,
-    });
+    const extractedCommand = path.join(
+      await extractVerifiedArchive(archivePath, serverExtractDir, asset, [asset.executable]),
+      asset.executable,
+    );
     const extractedRoot = path.dirname(extractedCommand);
     const dependencies = asset.dependencies ?? [];
     const windowsRuntimeDependencies: Array<{
@@ -510,15 +669,8 @@ async function installLlamaServer(
   }
 }
 
-function dependencyFiles(dependency: LlamaServerDependency): readonly string[] {
-  return dependency.archive === "vc-redist"
-    ? dependency.files.map((file) => file.target)
-    : dependency.files;
-}
-
 export async function ensureLlamaServerInstalled(options: LlamaServerInstallOptions = {}): Promise<{
   command: string;
-  asset: LlamaServerAsset;
 }> {
   options.signal?.throwIfAborted();
   const asset = options.asset ?? selectLlamaServerAsset();
@@ -540,5 +692,5 @@ export async function ensureLlamaServerInstalled(options: LlamaServerInstallOpti
     previous ? options.signal : undefined,
     (signal) => toErrorObject(signal.reason, "Installation cancelled"),
   );
-  return { command, asset };
+  return { command };
 }

@@ -1,13 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { projectSessionResultRows, reconcileRosterPresentationMetadata } from "./reconcile.ts";
-import type {
-  SessionConnectionOwner,
-  SessionConnectionScope,
-  SessionRowTarget,
-  SessionRowEventListener,
-  SessionRowListener,
-} from "./session-capability.ts";
 import { createSessionDescribeReads } from "./session-describe.ts";
 import {
   createSessionEventDelivery,
@@ -23,6 +16,13 @@ import { createSessionRosterProjection } from "./session-roster-projection.ts";
 import { createSessionRowProvenance } from "./session-row-provenance.ts";
 import { matchesExistingSession, type SessionChangedRowResult } from "./session-row-reconcile.ts";
 import { createSessionRunTerminalStaging } from "./session-run-terminal.ts";
+import type {
+  SessionConnectionOwner,
+  SessionConnectionScope,
+  SessionRowTarget,
+  SessionRowEventListener,
+  SessionRowListener,
+} from "./session-types.ts";
 
 type RegisteredRow = {
   target: SessionRowTarget;

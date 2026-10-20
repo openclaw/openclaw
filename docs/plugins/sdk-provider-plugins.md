@@ -78,6 +78,17 @@ facts without SQL. Reconnects, ownership changes, and unresolved writes invalida
 the retained authority. Keep the asynchronous operation inside the callback and
 retain the caller's current-client and cancellation checks at each external effect.
 
+For an agent or shared auth store, `withAuthProfileStoreAtEffect` on the same
+runtime surface retains the admitted read sources for its callback. It requires
+a live shared-state owner. Each read groups the selected sources into one worker
+request. Await
+`reader.read()` at disclosure to read current worker-owned rows, then compare the
+selected credential or account with the prepared request. This read bypasses
+runtime snapshots and the row cache. Call `reader.assertCurrent()` immediately
+before the effect to reject intervening owner writes without SQL. Keep caller
+authorization and cancellation checks there too; a prepared store alone does not
+authorize disclosure. The reader expires when the callback returns.
+
 ## Loopback OAuth callbacks
 
 Bundled providers use `startProviderOAuthLoopbackCallbackServer` from

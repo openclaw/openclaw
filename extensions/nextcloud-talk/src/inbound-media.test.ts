@@ -439,6 +439,7 @@ describe("Nextcloud Talk inbound media policy", () => {
     { field: "size", file: { size: "2049" } },
     { field: "download restriction", file: { "hide-download": "yes" } },
     { field: "path traversal", file: { path: "Talk/../receipt.pdf" } },
+    { field: "control-bearing folder", file: { path: "Talk/unsafe\u0000/receipt.pdf" } },
     { field: "recipient name/path consistency", file: { path: "Talk/other.pdf" } },
   ])("rejects a mismatched $field independently of other metadata", async ({ message, file }) => {
     const fetchGuarded = mocks.fetchGuarded

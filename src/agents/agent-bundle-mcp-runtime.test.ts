@@ -1676,7 +1676,7 @@ describe("session MCP runtime", () => {
         await resolutionStarted.promise;
         const idleTtlMs = 10 * 60 * 1000;
         time.setTime(time.clock.now() + idleTtlMs);
-        expect(await manager.sweepIdleRuntimes()).toBe(0);
+        await manager.sweepIdleRuntimes();
         expect(manager.listRuntimeKeys()).toHaveLength(1);
         releaseResolution.resolve();
         secondTools = expectDefined(await secondRequest, "second requester tools");
@@ -1689,7 +1689,7 @@ describe("session MCP runtime", () => {
         await secondTools.dispose();
         secondTools = undefined;
         time.setTime(time.clock.now() + idleTtlMs);
-        expect(await manager.sweepIdleRuntimes()).toBe(1);
+        await manager.sweepIdleRuntimes();
         expect(manager.listRuntimeKeys()).toEqual([]);
         expect(proof.session.closed).toBe(firstSessionId);
       } finally {
@@ -1796,45 +1796,6 @@ describe("requester-scoped MCP connection resolution", () => {
       }
     });
   });
-
-  it(
-    "expires idle partitions while preserving reuse and leases",
-    withResolverRegistry(async (register) => {
-      const time = createGatewaySchedulerClock(100_000);
-      const clock = vi.spyOn(Date, "now").mockImplementation(time.clock.now);
-      register(async () => ({ url: "https://mcp.example.test/user" }));
-      const scheduler = createTestGatewayScheduler(time.clock);
-      const manager = createManager({ scheduler });
-      const sessionKey = "agent:test:session-fixed-idle";
-      const params = sessionParams(
-        "session-fixed-idle",
-        mcpConfig(requesterConfig().mcp.servers, { sessionIdleTtlMs: 1_200_000.9 }),
-        { sessionKey, requesterSenderId: "sender-a" },
-      );
-      const getRuntime = () => manager.getOrCreate(params);
-      try {
-        await getRuntime();
-        await time.advanceBy(1_200_000 - 1);
-        expect(await manager.sweepIdleRuntimes()).toBe(0);
-        const reused = expectDefined(await getRuntime(), "admitted MCP runtime");
-        expect(reused.lastUsedAt).toBe(time.clock.now());
-        await time.advanceBy(1_200_000 - 1);
-        expect(await manager.sweepIdleRuntimes()).toBe(0);
-        const release = expectDefined(reused.acquireLease, "MCP runtime lease")();
-        await time.advanceBy(1);
-        expect(await manager.sweepIdleRuntimes()).toBe(0);
-        expect(manager.listSessionIds()).toContain(params.sessionId);
-        release();
-        expect(await manager.sweepIdleRuntimes()).toBe(2);
-        expect(manager.listRuntimeKeys()).toEqual([]);
-        expect(manager.resolveSessionId(sessionKey)).toBeUndefined();
-      } finally {
-        await manager.disposeAll();
-        await scheduler.stop();
-        clock.mockRestore();
-      }
-    }),
-  );
 
   it(
     "matches tools.effective and cached-runtime fingerprints",

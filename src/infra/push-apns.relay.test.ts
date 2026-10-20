@@ -1,53 +1,57 @@
 // Covers APNs relay request signing, config, and response handling.
-import { generateKeyPairSync } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import * as identityRuntime from "./device-identity-async.js";
+import { verifyDeviceSignature } from "./device-identity.js";
+import type { RelayApnsRegistration } from "./push-apns-store.js";
 import {
-  deriveDeviceIdFromPublicKey,
-  publicKeyRawBase64UrlFromPem,
-  verifyDeviceSignature,
-} from "./device-identity.js";
-import { resolveApnsRelayConfigFromEnv, sendApnsRelayPush } from "./push-apns.relay.js";
-
-const relayGatewayIdentity = (() => {
-  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
-  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" });
-  const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
-  const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
-  if (!deviceId) {
-    throw new Error("failed to derive test gateway device id");
-  }
-  return {
-    deviceId,
-    publicKeyPem,
-    publicKey: publicKeyRaw,
-    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
-  };
-})();
+  resolveApnsRelayConfigFromEnv,
+  sendApnsAlert,
+  sendApnsBackgroundWake,
+} from "./push-apns.js";
+import { mockApnsRelayIdentity } from "./push-apns.relay.test-support.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-function sendPush(overrides: Partial<Parameters<typeof sendApnsRelayPush>[0]> = {}) {
-  vi.spyOn(identityRuntime, "loadOrCreateProcessDeviceIdentityAsync").mockResolvedValue(
-    relayGatewayIdentity,
-  );
-  return sendApnsRelayPush({
+function sendPush(
+  overrides: Pick<Parameters<typeof sendApnsBackgroundWake>[0], "signal" | "isCurrent"> & {
+    pushType?: "alert" | "background";
+  } = {},
+) {
+  mockApnsRelayIdentity();
+  const registration: RelayApnsRegistration = {
+    nodeId: "ios-relay",
+    transport: "relay",
+    relayHandle: "relay-handle-12345678",
+    sendGrant: "send-grant-123",
+    installationId: "install-relay",
+    topic: "ai.openclaw.ios",
+    environment: "production",
+    distribution: "official",
+    updatedAtMs: 1,
+  };
+  const params = {
+    registration,
+    nodeId: "ios-relay",
     relayConfig: {
       baseUrl: "https://relay.example.com",
       timeoutMs: 1000,
     },
-    sendGrant: "send-grant-123",
-    relayHandle: "relay-handle-123",
-    payload: { aps: { "content-available": 1 } },
-    pushType: "background" as const,
-    priority: "5" as const,
-    ...overrides,
-  });
+    signal: overrides.signal,
+    isCurrent: overrides.isCurrent,
+  };
+  return overrides.pushType === "alert"
+    ? sendApnsAlert({ ...params, title: "Wake", body: "Ping" })
+    : sendApnsBackgroundWake(params);
 }
+
+const relayResultFields = {
+  topic: "ai.openclaw.ios",
+  environment: "production",
+  transport: "relay",
+};
 
 function expectRelayConfig(
   resolved: ReturnType<typeof resolveApnsRelayConfigFromEnv>,
@@ -167,7 +171,7 @@ describe("push-apns.relay", () => {
     });
   });
 
-  describe("sendApnsRelayPush", () => {
+  describe("public relay push", () => {
     it("revalidates ownership before relay fetch and combines the lifecycle signal", async () => {
       const controller = new AbortController();
       const isCurrent = vi.fn().mockResolvedValue(true);
@@ -211,11 +215,8 @@ describe("push-apns.relay", () => {
         }),
       );
 
-      const result = await sendPush({
-        payload: { aps: { alert: { title: "Wake", body: "Ping" } } },
-        pushType: "alert",
-        priority: "10",
-      });
+      const relayGatewayIdentity = mockApnsRelayIdentity();
+      const result = await sendPush({ pushType: "alert" });
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock.mock.calls[0]?.[0]).toBe("https://relay.example.com/v1/push/send");
@@ -231,10 +232,13 @@ describe("push-apns.relay", () => {
       expect(headers.get("x-openclaw-gateway-signed-at-ms")).toBe("123456789");
       expect(bodyJson).toBe(
         JSON.stringify({
-          relayHandle: "relay-handle-123",
+          relayHandle: "relay-handle-12345678",
           pushType: "alert",
           priority: 10,
-          payload: { aps: { alert: { title: "Wake", body: "Ping" } } },
+          payload: {
+            aps: { alert: { title: "Wake", body: "Ping" }, sound: "default" },
+            openclaw: { kind: "push.test", nodeId: "ios-relay", ts: 123_456_789 },
+          },
         }),
       );
       expect(
@@ -267,7 +271,7 @@ describe("push-apns.relay", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock.mock.calls[0]?.[1]?.redirect).toBe("manual");
       expect(result).toMatchObject({ ok: false, status: 302, reason: "RelayRedirectNotAllowed" });
-      expect(result.environment).toBeUndefined();
+      expect(result.environment).toBe("production");
       expect(cancel).toHaveBeenCalledOnce();
     });
 
@@ -277,11 +281,12 @@ describe("push-apns.relay", () => {
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
       await expect(sendPush()).resolves.toEqual({
+        ...relayResultFields,
         ok: true,
         status: 202,
         apnsId: undefined,
         reason: undefined,
-        tokenSuffix: undefined,
+        tokenSuffix: "12345678",
       });
     });
 
@@ -301,6 +306,7 @@ describe("push-apns.relay", () => {
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
       await expect(sendPush()).resolves.toEqual({
+        ...relayResultFields,
         ok: false,
         status: 410,
         apnsId: "relay-apns-id",
@@ -319,11 +325,12 @@ describe("push-apns.relay", () => {
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
       await expect(sendPush()).resolves.toEqual({
+        ...relayResultFields,
         ok: false,
         status: 410,
         apnsId: undefined,
         reason: undefined,
-        tokenSuffix: undefined,
+        tokenSuffix: "12345678",
       });
     });
 
@@ -338,6 +345,7 @@ describe("push-apns.relay", () => {
       );
 
       await expect(sendPush()).resolves.toEqual({
+        ...relayResultFields,
         ok: true,
         status: 200,
         apnsId: undefined,
@@ -366,11 +374,12 @@ describe("push-apns.relay", () => {
       vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
 
       await expect(sendPush()).resolves.toEqual({
+        ...relayResultFields,
         ok: true,
         status: 200,
         apnsId: "big-but-valid",
         reason: undefined,
-        tokenSuffix: undefined,
+        tokenSuffix: "12345678",
       });
     });
 
@@ -379,9 +388,12 @@ describe("push-apns.relay", () => {
       mockRelayResponse(oversized);
 
       await expect(sendPush()).resolves.toEqual({
+        ...relayResultFields,
         ok: false,
         status: 200,
         reason: "RelayResponseTooLarge",
+        apnsId: undefined,
+        tokenSuffix: "12345678",
       });
     });
 
@@ -397,11 +409,12 @@ describe("push-apns.relay", () => {
       mockRelayResponse(body, 202);
 
       await expect(sendPush()).resolves.toEqual({
+        ...relayResultFields,
         ok: true,
         status: 202,
         apnsId: undefined,
         reason: undefined,
-        tokenSuffix: undefined,
+        tokenSuffix: "12345678",
       });
     });
   });

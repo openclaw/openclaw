@@ -60,6 +60,7 @@ function expectedFailure() {
   return {
     ok: false,
     error: { type: "cli_error", message: `OpenClaw config is invalid: ${configPath}` },
+    repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
     issues: [
       { path: "<root>", message: "Invalid root" },
       {

@@ -6,11 +6,7 @@ import {
   TRUSTED_CLIENT_TOKEN,
   generateSecMsGecToken,
 } from "node-edge-tts/dist/drm.js";
-import type {
-  SpeechProviderConfig,
-  SpeechProviderPlugin,
-  SpeechVoiceOption,
-} from "openclaw/plugin-sdk/speech";
+import type { SpeechProviderConfig, SpeechProviderPlugin } from "openclaw/plugin-sdk/speech";
 import {
   asBoolean,
   asFiniteNumber,
@@ -67,20 +63,6 @@ function readMicrosoftProviderConfig(config: SpeechProviderConfig) {
   };
 }
 
-function buildMicrosoftVoiceHeaders(): Record<string, string> {
-  const major = CHROMIUM_FULL_VERSION.split(".")[0] || "0";
-  return {
-    Authority: "speech.platform.bing.com",
-    Origin: "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
-    Accept: "*/*",
-    "User-Agent":
-      `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ` +
-      `(KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36 Edg/${major}.0.0.0`,
-    "Sec-MS-GEC": generateSecMsGecToken(),
-    "Sec-MS-GEC-Version": `1-${CHROMIUM_FULL_VERSION}`,
-  };
-}
-
 function readMicrosoftVoiceTagStrings(value: unknown): string[] | undefined {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
@@ -109,74 +91,6 @@ function isCjkDominant(text: string): boolean {
 
 const DEFAULT_CHINESE_EDGE_VOICE = "zh-CN-XiaoxiaoNeural";
 const DEFAULT_CHINESE_EDGE_LANG = "zh-CN";
-
-async function listMicrosoftVoices(
-  timeoutMs = DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS,
-): Promise<SpeechVoiceOption[]> {
-  const { assertOkOrThrowProviderError, readProviderJsonResponse } =
-    await import("openclaw/plugin-sdk/provider-http");
-  const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
-  const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
-    await import("openclaw/plugin-sdk/ssrf-runtime");
-  const url =
-    "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list" +
-    `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`;
-  const headers = buildMicrosoftVoiceHeaders();
-  const { response, release } = await fetchWithSsrFGuard({
-    url,
-    init: {
-      headers,
-    },
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname("https://speech.platform.bing.com"),
-    auditContext: "microsoft.speech.voices",
-    timeoutMs,
-  });
-  try {
-    if (!proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled()) {
-      // Finalization retains capture failures; observe the Promise returned by the SDK view.
-      void proxyCaptureSdk
-        .captureHttpExchangeAsync({
-          url,
-          method: "GET",
-          requestHeaders: headers,
-          response,
-          transport: "http",
-          meta: {
-            provider: "microsoft",
-            capability: "speech-voices",
-          },
-        })
-        .catch(() => {});
-    }
-    await assertOkOrThrowProviderError(response, "Microsoft voices API error");
-    const voices = await readProviderJsonResponse<unknown>(response, "microsoft.speech-voices");
-    return Array.isArray(voices)
-      ? voices.flatMap((value) => {
-          const voice = asOptionalRecord(value);
-          const id = trimToUndefined(voice?.ShortName);
-          if (!voice || !id) {
-            return [];
-          }
-          const voiceTag = asOptionalRecord(voice.VoiceTag);
-          const categories = readMicrosoftVoiceTagStrings(voiceTag?.ContentCategories);
-          const personalities = readMicrosoftVoiceTagStrings(voiceTag?.VoicePersonalities);
-          return [
-            {
-              id,
-              name: trimToUndefined(voice.FriendlyName) ?? id,
-              category: categories?.[0],
-              description: personalities?.length ? personalities.join(", ") : undefined,
-              locale: trimToUndefined(voice.Locale),
-              gender: trimToUndefined(voice.Gender),
-              personalities,
-            },
-          ];
-        })
-      : [];
-  } finally {
-    await release();
-  }
-}
 
 export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
   const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
@@ -213,7 +127,81 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       }) ?? {},
     listVoices: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
-      return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);
+      const timeoutMs =
+        config.timeoutMs ?? req.timeoutMs ?? DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS;
+      const { assertOkOrThrowProviderError, readProviderJsonResponse } =
+        await import("openclaw/plugin-sdk/provider-http");
+      const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
+      const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
+        await import("openclaw/plugin-sdk/ssrf-runtime");
+      const url =
+        "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list" +
+        `?trustedclienttoken=${TRUSTED_CLIENT_TOKEN}`;
+      const major = CHROMIUM_FULL_VERSION.split(".")[0] || "0";
+      const headers = {
+        Authority: "speech.platform.bing.com",
+        Origin: "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold",
+        Accept: "*/*",
+        "User-Agent":
+          `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ` +
+          `(KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36 Edg/${major}.0.0.0`,
+        "Sec-MS-GEC": generateSecMsGecToken(),
+        "Sec-MS-GEC-Version": `1-${CHROMIUM_FULL_VERSION}`,
+      };
+      const { response, release } = await fetchWithSsrFGuard({
+        url,
+        init: {
+          headers,
+        },
+        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname("https://speech.platform.bing.com"),
+        auditContext: "microsoft.speech.voices",
+        timeoutMs,
+      });
+      try {
+        if (!proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled()) {
+          // Finalization retains capture failures; observe the Promise returned by the SDK view.
+          void proxyCaptureSdk
+            .captureHttpExchangeAsync({
+              url,
+              method: "GET",
+              requestHeaders: headers,
+              response,
+              transport: "http",
+              meta: {
+                provider: "microsoft",
+                capability: "speech-voices",
+              },
+            })
+            .catch(() => {});
+        }
+        await assertOkOrThrowProviderError(response, "Microsoft voices API error");
+        const voices = await readProviderJsonResponse<unknown>(response, "microsoft.speech-voices");
+        return Array.isArray(voices)
+          ? voices.flatMap((value) => {
+              const voice = asOptionalRecord(value);
+              const id = trimToUndefined(voice?.ShortName);
+              if (!voice || !id) {
+                return [];
+              }
+              const voiceTag = asOptionalRecord(voice.VoiceTag);
+              const categories = readMicrosoftVoiceTagStrings(voiceTag?.ContentCategories);
+              const personalities = readMicrosoftVoiceTagStrings(voiceTag?.VoicePersonalities);
+              return [
+                {
+                  id,
+                  name: trimToUndefined(voice.FriendlyName) ?? id,
+                  category: categories?.[0],
+                  description: personalities?.length ? personalities.join(", ") : undefined,
+                  locale: trimToUndefined(voice.Locale),
+                  gender: trimToUndefined(voice.Gender),
+                  personalities,
+                },
+              ];
+            })
+          : [];
+      } finally {
+        await release();
+      }
     },
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured,

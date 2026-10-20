@@ -6,7 +6,11 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, beforeEach, vi } from "vitest";
 import { readRequestText, respondJson } from "../../test/helpers/gateway-integration-fixtures.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { dispatchInboundMessageWithBufferedDispatcher } from "../auto-reply/dispatch.js";
@@ -31,6 +35,7 @@ import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   lastUserText,
   respond,
+  toolOutput,
   toolResult,
 } from "./gateway.sessions-send-provenance.provider-test-support.js";
 import {
@@ -62,7 +67,7 @@ export type ProofCase = {
 };
 type Outbound = { to: string; text: string; accountId?: string };
 export type RunResult = { runId?: string; status?: string; error?: unknown };
-type ModelRequest = { tools: string[] };
+type ModelRequest = { tools: string[]; output: unknown };
 export type ProofModelRequest = ModelRequest & {
   prompt: string;
   result?: Record<string, unknown>;
@@ -89,7 +94,7 @@ export async function observeProofSteeringAdmission(prompt: string) {
     .mockImplementation(async (...args) => {
       const attempt = await begin(...args);
       if (args[1].includes(prompt)) {
-        // Queue acceptance precedes transcript commitment while Alice's tool is held.
+        // Queue acceptance precedes transcript commitment while the incumbent is held.
         void attempt.acceptance.then((accepted) => {
           if (accepted) {
             admitted.resolve();
@@ -98,7 +103,18 @@ export async function observeProofSteeringAdmission(prompt: string) {
       }
       return attempt;
     });
-  return { admitted: admitted.promise, [Symbol.dispose]: () => observer.mockRestore() };
+  return {
+    waitForAdmission: (source: Promise<unknown>, signal: AbortSignal) =>
+      withinTest(
+        awaitGateBeforeSettlement(
+          admitted.promise,
+          source,
+          "Source settled before steering admission",
+        ),
+        signal,
+      ),
+    [Symbol.dispose]: () => observer.mockRestore(),
+  };
 }
 export type Scenario = {
   spec: ProofCase;
@@ -209,6 +225,7 @@ async function startProviderAndSink() {
         return;
       }
       const modelRequest = {
+        output: toolOutput(body),
         tools: (Array.isArray(body.tools) ? body.tools : []).flatMap((tool) =>
           isRecord(tool) && typeof tool.name === "string" ? [tool.name] : [],
         ),
@@ -621,12 +638,14 @@ export function runHuman(
   prompt: string,
   mode: "steer" | "followup",
   signal: AbortSignal,
+  commandSource?: "text",
 ) {
   return dispatchProofHuman(
     {
       Body: prompt,
       BodyForAgent: prompt,
       CommandBody: prompt,
+      CommandSource: commandSource,
       From: `telegram:group:${scenario.sourceRecipient}`,
       To: scenario.sourceRecipient,
       SessionKey: scenario.sourceKey,

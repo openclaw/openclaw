@@ -99,7 +99,6 @@ export function createFeishuWebhookTestAccount(
 ): ResolvedFeishuAccount {
   return {
     accountId,
-    selectionSource: "explicit",
     enabled: true,
     configured: true,
     domain: "feishu",

@@ -341,7 +341,6 @@ describe("manifest model catalog planner", () => {
 
     expect(plan.entries).toEqual([
       {
-        pluginId: "moonshot",
         provider: "moonshot",
         discovery: "static",
         rows: [
@@ -415,9 +414,7 @@ describe("manifest model catalog planner", () => {
         baseUrl: "https://api.moonshot.ai/v1",
       },
     ];
-    expect(plan.entries).toEqual([
-      { pluginId: "moonshot", provider: "moonshotai", discovery: "static", rows },
-    ]);
+    expect(plan.entries).toEqual([{ provider: "moonshotai", discovery: "static", rows }]);
     expect(plan.rows).toEqual(rows);
   });
 
@@ -442,7 +439,7 @@ describe("manifest model catalog planner", () => {
       status: "available",
     }));
     expect(plan).toStrictEqual({
-      entries: [{ pluginId: "owner", provider: "fixture", discovery: undefined, rows }],
+      entries: [{ provider: "fixture", discovery: undefined, rows }],
       rows,
       conflicts: [],
     });

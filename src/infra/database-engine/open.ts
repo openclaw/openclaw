@@ -6,7 +6,7 @@ import {
   invalidateLocalSqliteSchemaAdmissions,
   publishSqliteDatabaseAdmission,
   publishSqliteDatabaseSchemaChange,
-  type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
 } from "../sqlite-database-admission.js";
 import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
@@ -26,33 +26,8 @@ import type { DatabaseEngineInput } from "./types.js";
 type EngineAdmission =
   | { engine: "sqlite" }
   | { engine: "postgres"; storeId: string; namespace: string; version: number };
-const admissionKey: SqliteDatabaseAdmissionKey<EngineAdmission> = {
+const admissionKey: SqliteDatabaseFactKey<EngineAdmission> = {
   name: "database.engine",
-  read: (value) => {
-    if (!value || typeof value !== "object" || !("engine" in value)) {
-      return undefined;
-    }
-    if (value.engine === "sqlite") {
-      return { engine: "sqlite" };
-    }
-    if (
-      value.engine === "postgres" &&
-      "storeId" in value &&
-      typeof value.storeId === "string" &&
-      "namespace" in value &&
-      typeof value.namespace === "string" &&
-      "version" in value &&
-      typeof value.version === "number"
-    ) {
-      return {
-        engine: "postgres",
-        storeId: value.storeId,
-        namespace: value.namespace,
-        version: value.version,
-      };
-    }
-    return undefined;
-  },
 };
 
 export function readEngineAnchor(
@@ -190,7 +165,6 @@ export function openEngineStore(ref: {
   const db = adapter.openConnection(store);
   const admit = (fresh: boolean) => {
     admitPostgresPhysicalFacts({
-      anchor,
       db,
       namespace: identity.namespace,
       storeId: identity.storeId,

@@ -160,6 +160,14 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
     return prepareAttachment(props, sourceChanged);
   });
   onCleanup(() => releaseChatMediaResourceOwner(sourceChanged));
+  const mediaProps = () => ({
+    "prop:sourceIdentity": props.content.sourceIdentity ?? props.content.src ?? model().src ?? "",
+    "prop:label": props.content.title,
+    "prop:mimeType": props.content.mimeType ?? "",
+    "prop:playback": model().source?.playback ?? props.content.playback ?? "native",
+    "prop:authToken": model().source?.authToken ?? null,
+    "prop:sizeBytes": model().source?.sizeBytes ?? props.content.sizeBytes,
+  });
   return (
     <Switch
       fallback={
@@ -210,14 +218,7 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
         <openclaw-chat-video-player
           prop:src={model().src ?? ""}
           prop:preview={true}
-          prop:sourceIdentity={
-            props.content.sourceIdentity ?? props.content.src ?? model().src ?? ""
-          }
-          prop:label={props.content.title}
-          prop:mimeType={props.content.mimeType ?? ""}
-          prop:playback={model().source?.playback ?? props.content.playback ?? "native"}
-          prop:authToken={model().source?.authToken ?? null}
-          prop:sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+          {...mediaProps()}
           prop:mediaWidth={model().source?.width ?? props.content.width}
           prop:mediaHeight={model().source?.height ?? props.content.height}
         />
@@ -239,14 +240,7 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
       <Match when={model().kind === "audio"}>
         <openclaw-chat-audio-player
           prop:src={model().src ?? ""}
-          prop:sourceIdentity={
-            props.content.sourceIdentity ?? props.content.src ?? model().src ?? ""
-          }
-          prop:label={props.content.title}
-          prop:mimeType={props.content.mimeType ?? ""}
-          prop:playback={model().source?.playback ?? props.content.playback ?? "native"}
-          prop:authToken={model().source?.authToken ?? null}
-          prop:sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+          {...mediaProps()}
           prop:serverDurationMs={model().source?.durationMs ?? props.content.durationMs}
           prop:voiceNote={props.content.voiceNote === true}
         />

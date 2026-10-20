@@ -183,12 +183,14 @@ function runSandboxProcess({
   maxOutput = 1000,
   timeoutSec = 10,
   notifyOnExit = true,
+  stdinMode = "pipe-closed",
   ...options
 }: Pick<
   Parameters<typeof runExecProcess>[0],
-  "command" | "scopeKey" | "notifyOnExitEmptySuccess"
+  "command" | "scopeKey" | "notifyOnExitEmptySuccess" | "onUpdate"
 > & {
   child: string;
+  stdinMode?: "pipe-open" | "pipe-closed";
   containerName?: string;
   finalizeExec?: () => Promise<void>;
   maxOutput?: number;
@@ -208,7 +210,7 @@ function runSandboxProcess({
       buildExecSpec: async () => ({
         argv: [process.execPath, "-e", child],
         env: {},
-        stdinMode: "pipe-closed",
+        stdinMode,
       }),
       finalizeExec,
     },
@@ -359,21 +361,51 @@ test.skipIf(process.platform === "win32").for([false, true])(
   async (finalizerFails, { signal }) => {
     const scopeKey = `agent:main:requested-stop-${finalizerFails}`;
     await seedOrigin(scopeKey);
+    const ready = createDeferredCore();
+    const finalizerEntered = createDeferredCore();
+    const releaseFinalizer = createDeferredCore();
     const run = await runSandboxProcess({
       command: "requested-stop-proof",
-      child: 'process.stdout.write("STOP_PROOF_READY"); setInterval(() => {}, 1000)',
+      child: 'process.stdin.resume(); process.stdout.write("STOP_PROOF_READY");',
+      stdinMode: "pipe-open",
+      onUpdate(update) {
+        if (textContent(update).includes("STOP_PROOF_READY")) {
+          ready.resolve();
+        }
+      },
       async finalizeExec() {
+        finalizerEntered.resolve();
+        await releaseFinalizer.promise;
         if (finalizerFails) {
           throw new Error("requested stop cleanup failed");
         }
       },
       scopeKey,
     });
-    markBackgrounded(run.session);
-    const { tool: processTool, call } = processActions(scopeKey, run.session.id);
+    const { tool: processTool } = processActions(scopeKey, run.session.id);
     try {
-      await expect.poll(() => run.session.aggregated).toContain("STOP_PROOF_READY");
-      await call("kill");
+      await withinTest(ready.promise, signal);
+      markBackgrounded(run.session);
+      const requested = await processTool.execute("requested-stop", {
+        action: "kill",
+        sessionId: run.session.id,
+      });
+      await withinTest(finalizerEntered.promise, signal);
+      expect(requested.details).toMatchObject({
+        status: "completed",
+        sessionId: run.session.id,
+        cancellationRequested: true,
+        terminationConfirmed: false,
+        followUp: { action: "poll", sessionId: run.session.id },
+      });
+      expect(Value.Check(processTool.outputSchema!, requested.details)).toBe(true);
+      const pending = await processTool.execute("stop-pending-cleanup", {
+        action: "poll",
+        sessionId: run.session.id,
+      });
+      expect(pending.details).toMatchObject({ status: "running", sessionId: run.session.id });
+      expect(textContent(pending)).toContain("STOP_PROOF_READY");
+      releaseFinalizer.resolve();
       await run.promise;
       if (finalizerFails) {
         expect(await completionPrompt(scopeKey, signal)).toContain("Exec failed");
@@ -381,16 +413,46 @@ test.skipIf(process.platform === "win32").for([false, true])(
         expect(completions.has(scopeKey)).toBe(false);
         expect(model).not.toHaveBeenCalled();
       }
-      for (const action of ["poll", "log"] as const) {
-        const observed = await call(action);
+      const listed = await processTool.execute("requested-stop-list", { action: "list" });
+      expect.soft(listed.details).toMatchObject({
+        sessions: [
+          {
+            sessionId: run.session.id,
+            status: finalizerFails ? "failed" : "completed",
+            exitReason: "manual-cancel",
+            exitSignal: "SIGTERM",
+            ...(finalizerFails ? { finalizationFailed: true } : {}),
+          },
+        ],
+      });
+      expect(Value.Check(processTool.outputSchema!, listed.details)).toBe(true);
+      expect.soft(textContent(listed).includes("[stopped by request]")).toBe(!finalizerFails);
+      for (const action of ["kill", "poll", "log"] as const) {
+        const observed = await processTool.execute(`requested-stop-${action}`, {
+          action,
+          sessionId: run.session.id,
+        });
         expect(observed.details).toMatchObject({
           status: finalizerFails ? "failed" : "completed",
           exitReason: "manual-cancel",
           exitSignal: "SIGTERM",
+          ...(finalizerFails ? { finalizationFailed: true } : {}),
         });
         expect(isToolResultError(observed)).toBe(finalizerFails);
         expect(Value.Check(processTool.outputSchema!, observed.details)).toBe(true);
-        expect(textContent(observed)).toContain("STOP_PROOF_READY");
+        if (action === "kill") {
+          expect(observed.details).not.toHaveProperty("cancellationRequested");
+          expect(observed.details).not.toHaveProperty("aggregated");
+          acknowledgeInternalToolResult(observed);
+          // The failure notification already settled through completionPrompt.
+          expect(peekSystemEventEntries(scopeKey)).toHaveLength(0);
+          expect(observe).toHaveBeenCalledTimes(finalizerFails ? 1 : 0);
+          expect(textContent(observed)).toContain("already finished");
+        } else if (action === "log") {
+          expect(textContent(observed)).toContain("STOP_PROOF_READY");
+        } else if (finalizerFails) {
+          expect(textContent(observed)).toContain("requested stop cleanup failed");
+        }
         if (finalizerFails) {
           expect(textContent(observed)).not.toContain("Process stopped by request");
         } else {
@@ -399,6 +461,7 @@ test.skipIf(process.platform === "win32").for([false, true])(
       }
       expect(getFinishedSession(run.session.id)?.terminalStatus).toBe("failed");
     } finally {
+      releaseFinalizer.resolve();
       run.kill();
       await run.promise;
     }
@@ -668,7 +731,9 @@ test.skipIf(process.platform === "win32")(
       await waitFor("log", "CONTROL:CTRL-C:2");
 
       const killed = await call("kill");
-      expect(textContent(killed)).toBe(`Termination requested for session ${sessionId}.`);
+      expect(textContent(killed)).toBe(
+        `Termination requested for session ${sessionId}. Use process poll to confirm exit and cleanup before reporting it stopped.`,
+      );
       // A performed kill must not read as a failed tool call.
       expect(killed.details).toMatchObject({ status: "completed" });
       expect(Value.Check(processTool.outputSchema!, killed.details)).toBe(true);
@@ -746,7 +811,8 @@ test.skipIf(process.platform === "win32")(
       ).toMatch(/^exec:./);
       setRuntimeConfigSnapshot({ ...config, tools: { deny: ["write"] } });
       held.resolve();
-      expect(await withinTest(completion.settled, signal)).toMatchObject({
+      const outcome = await withinTest(completion.settled, signal);
+      expect(outcome, JSON.stringify(outcome)).toMatchObject({
         status: "completed",
         executionStarted: true,
       });

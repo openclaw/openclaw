@@ -110,7 +110,6 @@ function renderState(
 it("updates inspection content when the selected run changes", () => {
   const [state, setState] = createSignal<RunInspectorState>({
     status: "loading",
-    waitingForGateway: false,
   });
 
   const container = renderState(state);
@@ -188,7 +187,6 @@ it("labels a generic receipt's selected authority without claiming human intent 
 });
 
 it.each<[RunInspectorState, string]>([
-  [{ status: "loading", waitingForGateway: true }, "Waiting for the Gateway"],
   [{ status: "disconnected" }, "Gateway disconnected"],
   [{ status: "unauthorized" }, "Operator read access required"],
   [{ status: "unsupported" }, "Run inspection unsupported"],

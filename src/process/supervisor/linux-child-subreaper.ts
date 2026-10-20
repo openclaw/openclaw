@@ -6,7 +6,7 @@ import {
   isChildSubreaper,
   reapChild,
 } from "@openclaw/proc-safe/reaper";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../../infra/errno.js";
 
 function childPids(): number[] {
   const children = new Set<number>();
@@ -16,10 +16,8 @@ function childPids(): number[] {
       value = readFileSync("/proc/self/task/" + thread + "/children", "utf8");
     } catch (error) {
       // A thread can retire during enumeration. This is not extinction evidence.
-      if (hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
+      ignoreMissingPath(error);
+      continue;
     }
     for (const pid of value.trim().split(/\s+/u).filter(Boolean)) {
       if (!/^\d+$/u.test(pid) || !Number.isSafeInteger(Number(pid)) || Number(pid) <= 0) {

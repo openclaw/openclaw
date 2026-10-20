@@ -12,7 +12,6 @@ import { raceWithTimeoutAndAbort, waitForAbortableDelay } from "./async.js";
 import { createFeishuClient } from "./client.js";
 import {
   encodeQuery,
-  extractReplyText,
   parseCommentContentElements,
   type FeishuDriveCommentCard,
   type FeishuDriveCommentReply,
@@ -104,16 +103,13 @@ type ResolvedWholeCommentTimelineEntry = {
   content: ParsedCommentContent;
 };
 
-function truncatePromptText(
-  text: string | undefined,
-  maxLength = FEISHU_PROMPT_TEXT_LIMIT,
-): string {
+function truncatePromptText(text: string | undefined): string {
   const normalized = normalizeString(text);
   if (!normalized) {
     return "";
   }
-  return normalized.length > maxLength
-    ? `${sliceUtf16Safe(normalized, 0, maxLength - 1)}…`
+  return normalized.length > FEISHU_PROMPT_TEXT_LIMIT
+    ? `${sliceUtf16Safe(normalized, 0, FEISHU_PROMPT_TEXT_LIMIT - 1)}…`
     : normalized;
 }
 
@@ -173,15 +169,6 @@ function formatLinkedDocumentsInlineSummary(
         `${link.resolvedObjType ?? link.urlKind}:${link.resolvedObjToken ?? link.wikiNodeToken ?? "UNKNOWN"}`,
     )
     .join(",");
-}
-
-function summarizeCommentRepliesForLog(replies: FeishuDriveCommentReply[]): string {
-  return JSON.stringify(
-    replies.map((reply) => ({
-      reply_id: reply.reply_id,
-      text_len: extractReplyText(reply)?.length ?? 0,
-    })),
-  );
 }
 
 type CommentContentContext = {
@@ -292,13 +279,12 @@ type DriveCommentPageItem = {
 
 async function fetchDriveCommentPages<T extends DriveCommentPageTarget>(
   params: DriveCommentPageRequest & T,
-): Promise<{ items: DriveCommentPageItem[T["kind"]][]; logIds: string[] }> {
+): Promise<DriveCommentPageItem[T["kind"]][]> {
   const errorLabel =
     params.kind === "whole-comments"
       ? `feishu[${params.accountId}]: failed to list drive comments for ${params.fileToken}`
       : `feishu[${params.accountId}]: failed to fetch comment replies for ${params.commentId}`;
   const items: DriveCommentPageItem[T["kind"]][] = [];
-  const logIds: string[] = [];
   let pageToken: string | undefined;
   for (let page = 0; page < FEISHU_COMMENT_PAGE_LIMIT; page += 1) {
     const commentsUrl = `/open-apis/drive/v1/files/${encodeURIComponent(params.fileToken)}/comments`;
@@ -328,9 +314,6 @@ async function fetchDriveCommentPages<T extends DriveCommentPageTarget>(
       url: url + encodeQuery(query),
       errorLabel,
     });
-    if (response?.log_id?.trim()) {
-      logIds.push(response.log_id.trim());
-    }
     if (response?.code !== 0) {
       if (response) {
         params.logger?.(
@@ -345,7 +328,7 @@ async function fetchDriveCommentPages<T extends DriveCommentPageTarget>(
     }
     pageToken = response.data.page_token.trim();
   }
-  return { items, logIds };
+  return items;
 }
 
 async function requestFeishuOpenApi<T>(params: {
@@ -571,10 +554,6 @@ async function fetchDriveCommentContext(
         )
       : undefined;
   const embeddedReplies = commentCard?.reply_list?.replies ?? [];
-  params.logger?.(
-    `feishu[${params.accountId}]: embedded comment replies comment=${params.commentId} ` +
-      `count=${embeddedReplies.length} summary=${summarizeCommentRepliesForLog(embeddedReplies)}`,
-  );
   const embeddedTargetReply = params.replyId
     ? embeddedReplies.find((reply) => reply.reply_id?.trim() === params.replyId)
     : embeddedReplies.at(-1);
@@ -583,22 +562,9 @@ async function fetchDriveCommentContext(
   let fetchedMatchedReply = params.replyId ? embeddedTargetReply : undefined;
   const needsExtraReplies = !embeddedTargetReply || commentCard?.has_more === true;
   if (needsExtraReplies) {
-    params.logger?.(
-      `feishu[${params.accountId}]: fetching extra comment replies comment=${params.commentId} ` +
-        `requested_reply=${params.replyId ?? "none"} ` +
-        `embedded_count=${embeddedReplies.length} ` +
-        `embedded_hit=${embeddedTargetReply ? "yes" : "no"} ` +
-        `embedded_has_more=${commentCard?.has_more === true ? "yes" : "no"}`,
-    );
     const fetched = await fetchDriveCommentPages({ ...params, kind: "replies" });
-    if (fetched.items.length > 0) {
-      params.logger?.(
-        `feishu[${params.accountId}]: fetched extra comment replies comment=${params.commentId} ` +
-          `count=${fetched.items.length} ` +
-          `log_ids=${JSON.stringify(fetched.logIds)} ` +
-          `summary=${summarizeCommentRepliesForLog(fetched.items)}`,
-      );
-      replies = fetched.items;
+    if (fetched.length > 0) {
+      replies = fetched;
       fetchedMatchedReply = params.replyId
         ? replies.find((reply) => reply.reply_id?.trim() === params.replyId)
         : undefined;
@@ -621,14 +587,8 @@ async function fetchDriveCommentContext(
           break;
         }
         const retried = await fetchDriveCommentPages({ ...params, kind: "replies" });
-        if (retried.items.length > 0) {
-          params.logger?.(
-            `feishu[${params.accountId}]: fetched retried comment replies comment=${params.commentId} ` +
-              `attempt=${attempt} count=${retried.items.length} ` +
-              `log_ids=${JSON.stringify(retried.logIds)} ` +
-              `summary=${summarizeCommentRepliesForLog(retried.items)}`,
-          );
-          replies = retried.items;
+        if (retried.length > 0) {
+          replies = retried;
         }
         fetchedMatchedReply = replies.find((reply) => reply.reply_id?.trim() === params.replyId);
         if (fetchedMatchedReply) {
@@ -642,23 +602,6 @@ async function fetchDriveCommentContext(
   const targetReply = params.replyId
     ? (embeddedTargetReply ?? fetchedMatchedReply)
     : (replies.at(-1) ?? embeddedTargetReply ?? rootReply);
-  const matchSource = params.replyId
-    ? embeddedTargetReply
-      ? "embedded"
-      : fetchedMatchedReply
-        ? "fetched"
-        : "miss"
-    : targetReply === rootReply
-      ? "fallback_root"
-      : targetReply === embeddedTargetReply
-        ? "embedded_latest"
-        : "fetched_latest";
-  params.logger?.(
-    `feishu[${params.accountId}]: comment reply resolution comment=${params.commentId} ` +
-      `requested_reply=${params.replyId ?? "none"} match_source=${matchSource} ` +
-      `root=${JSON.stringify({ reply_id: rootReply?.reply_id, text_len: extractReplyText(rootReply)?.length ?? 0 })} ` +
-      `target=${JSON.stringify({ reply_id: targetReply?.reply_id, text_len: extractReplyText(targetReply)?.length ?? 0 })}`,
-  );
   const meta = metaResponse?.code === 0 ? metaResponse.data?.metas?.[0] : undefined;
   const currentDocument = {
     fileType: params.fileType,
@@ -706,7 +649,7 @@ async function fetchDriveCommentContext(
       ...params,
       kind: "whole-comments",
     });
-    const wholeComments = allComments.items.filter((comment) => comment.is_whole === true);
+    const wholeComments = allComments.filter((comment) => comment.is_whole === true);
     wholeCommentTimeline = await Promise.all(
       wholeComments.map(async (comment) => {
         const rootWholeReply = comment.reply_list?.replies?.[0];
@@ -749,7 +692,6 @@ async function fetchDriveCommentContext(
     rootCommentText: rootReplyContext?.content.semanticText ?? rootReplyContext?.content.plainText,
     targetReplyText:
       targetReplyContext?.content.semanticText ?? targetReplyContext?.content.plainText,
-    rootCommentContent: rootReplyContext?.content,
     targetReplyContent: targetReplyContext?.content,
     currentCommentThreadReplies: resolvedReplies,
     wholeCommentTimeline,

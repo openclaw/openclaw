@@ -217,10 +217,19 @@ describe("cron model schema regressions", () => {
     expect(disabled.description).not.toContain('kind:"script"');
   });
 
-  it("keeps the full surface when config omits cron.triggers", () => {
-    const defaults = createCronTool({ config: { cron: { enabled: true } } }).parameters;
-    expect(propertyAt(defaults, "job.trigger.script")).toMatchObject({ type: "string" });
-    expect(propertyAt(defaults, "job.schedule.kind")?.enum).toContain("stream");
-    expect(propertyAt(defaults, "job.payload.kind")?.enum).toContain("script");
+  it("keeps the full trigger surface and approval guidance when config omits cron.triggers", () => {
+    const defaults = createCronTool({ config: { cron: { enabled: true } } });
+    expect(propertyAt(defaults.parameters, "job.trigger.script")).toMatchObject({ type: "string" });
+    expect(propertyAt(defaults.parameters, "job.schedule.kind")?.enum).toContain("stream");
+    expect(propertyAt(defaults.parameters, "job.payload.kind")?.enum).toContain("script");
+    expect(defaults.description).toContain(
+      "add/update waits for user approval through the native client",
+    );
+    expect(defaults.description).toContain(
+      "A saved add/update result means any required approval has already completed",
+    );
+    expect(defaults.description).toContain(
+      "Do not ask again or disable the saved stream solely because no user approval reply is visible in chat",
+    );
   });
 });

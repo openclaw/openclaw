@@ -20,7 +20,7 @@ import { Icon } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
 import { createMenuControls, type MenuEntry, type MenuItem } from "./solid/menu.tsx";
 import "./viewer-facepile.ts";
-import "./theme-mode-toggle.ts";
+import { ThemeModeToggle } from "./theme-mode-toggle.tsx";
 
 type SidebarIdentityMenuParams = {
   position: { x: number; bottom: number; width: number };
@@ -283,11 +283,10 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
             closeOnSelect: false,
             render: (menuAttributes) => (
               <span class="sidebar-mode-switch">
-                <openclaw-theme-mode-toggle
-                  prop:mode={params.themeMode}
-                  prop:menuItem={true}
-                  prop:menuAttributes={menuAttributes}
-                  prop:onChange={params.onThemeChange}
+                <ThemeModeToggle
+                  mode={params.themeMode}
+                  menuAttributes={menuAttributes}
+                  onChange={params.onThemeChange}
                 />
               </span>
             ),

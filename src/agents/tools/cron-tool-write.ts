@@ -1,20 +1,222 @@
 // Agent cron-tool write safety and optimistic update orchestration.
+import { isDeepStrictEqual } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  CRON_STREAM_EXEC_AUTHORITY_ERROR,
+  CronStreamExecApprovalRequiredError,
+  cronMutationRequiresStreamExecAuthority,
+  cronUpdateRequiresStreamExecAuthority,
+  type CronStreamExecPolicy,
+} from "../../cron/stream-exec-authority.js";
+import { createExecApprovalPolicySnapshot } from "../../infra/exec-approvals-allow-always.js";
+import { requiresExecApproval } from "../../infra/exec-approvals-policy.js";
+import { loadExecApprovalsReadOnlyAsync } from "../../infra/exec-approvals-store.js";
 import { isRecord } from "../../utils.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "../agent-scope-config.js";
+import { resolveEffectiveToolPolicy } from "../agent-tools.policy.js";
+import {
+  prepareExecDefaults,
+  resolveExecConfigState,
+  resolvePreparedExecDefaultsAsync,
+  type ResolvedExecDefaults,
+} from "../exec-defaults.js";
+import { captureSandboxConfig, resolveSandboxConfigForAgent } from "../sandbox/config.js";
+import { withSandboxRuntimeStatusInWorker } from "../sandbox/runtime-status.js";
 import {
   assertInheritedCronToolCaptureReady,
   CRON_CREATOR_AUTHORITY_RECOVERY_MESSAGE,
+  hasCronCreatorGatewayExecTool,
   INCOMPLETE_CRON_CREATOR_AUTHORITY_MESSAGE,
   isCronCreatorToolCaptureComplete,
   planCronJobUpdatePatch,
+  resolveCronCreatorExecToolTarget,
 } from "./cron-tool-creator-cap.js";
 import type {
   CronCreatorToolAllowlistEntry,
   CronCreatorToolAuthoritySnapshot,
+  CronToolOptions,
   CronToolsAllowCaptureRef,
   GatewayToolCaller,
 } from "./cron-tool.types.js";
 import type { GatewayCallOptions } from "./gateway.js";
+
+/** Retain the config owner when tools are assembled, before a later config publication. */
+export function captureCronStreamPolicyConfigCurrentness(opts: CronToolOptions | undefined) {
+  const readConfig = opts?.config ? createRuntimeConfigReader(opts.config) : () => undefined;
+  const project = (cfg: OpenClawConfig | undefined) => {
+    const { agentId, globalExec, agentExec } = resolveExecConfigState({
+      cfg,
+      agentId: opts?.agentId,
+      sessionKey: opts?.agentSessionKey,
+    });
+    return {
+      globalExec,
+      agentExec,
+      tools: resolveEffectiveToolPolicy({
+        config: cfg,
+        agentId,
+        sessionKey: opts?.agentSessionKey,
+      }),
+      globalProviderTools: cfg?.tools?.byProvider,
+      subagentTools: cfg?.tools?.subagents?.tools,
+      agentProviderTools:
+        cfg && agentId ? resolveAgentConfig(cfg, agentId)?.tools?.byProvider : undefined,
+      sandbox: resolveSandboxConfigForAgent(cfg, agentId),
+      workspaceDir: cfg && agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined,
+    };
+  };
+  const { sandbox, ...policy } = project(opts?.config);
+  const captured = { ...structuredClone(policy), sandbox: captureSandboxConfig(sandbox) };
+  return () => {
+    if (!isDeepStrictEqual(project(readConfig()), captured)) {
+      throw new TypeError(
+        "Creator execution policy changed before saving the stream; retry from the current turn.",
+      );
+    }
+  };
+}
+
+function assertCronStreamExecAuthority(params: {
+  value: unknown;
+  required?: boolean;
+  creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
+  execDefaults: ResolvedExecDefaults | undefined;
+  policyKey?: string;
+  approvedPolicyKey?: string;
+}): void {
+  if (!(params.required ?? cronMutationRequiresStreamExecAuthority(params.value))) {
+    return;
+  }
+  const pinnedTarget = resolveCronCreatorExecToolTarget(params.creatorToolAllowlist);
+  const effectiveAsk = pinnedTarget?.ask ?? params.execDefaults?.ask;
+  if (
+    !params.execDefaults ||
+    !hasCronCreatorGatewayExecTool(params.creatorToolAllowlist) ||
+    params.execDefaults.effectiveHost !== "gateway" ||
+    params.execDefaults.security === "deny" ||
+    (params.execDefaults.security === "allowlist" && effectiveAsk === "off")
+  ) {
+    throw new TypeError(CRON_STREAM_EXEC_AUTHORITY_ERROR);
+  }
+  if (
+    params.policyKey !== undefined &&
+    requiresExecApproval({
+      security: params.execDefaults.security,
+      ask: effectiveAsk ?? params.execDefaults.ask,
+      // A persistent watcher is not an analyzed one-shot allowlist command.
+      analysisOk: false,
+      allowlistSatisfied: false,
+    }) &&
+    params.approvedPolicyKey !== params.policyKey
+  ) {
+    throw new CronStreamExecApprovalRequiredError(
+      params.policyKey,
+      params.execDefaults.security,
+      effectiveAsk ?? params.execDefaults.ask,
+    );
+  }
+}
+
+/** Prepares the caller's policy for revalidation by the cron write owner. */
+export async function prepareCronStreamExecPolicy(input: {
+  opts: CronToolOptions | undefined;
+  creatorTools: readonly CronCreatorToolAllowlistEntry[] | undefined;
+  operationSignal?: AbortSignal;
+  assertConfigCurrent: () => void;
+}): Promise<CronStreamExecPolicy> {
+  const { opts, creatorTools, operationSignal } = input;
+  const assertCurrentSource = () => {
+    operationSignal?.throwIfAborted();
+    input.assertConfigCurrent();
+  };
+  assertCurrentSource();
+  const params = {
+    cfg: opts?.config,
+    sessionEntry: opts?.execSession,
+    execOverrides: opts?.execOverrides,
+    agentId: opts?.agentId,
+    sessionKey: opts?.agentSessionKey,
+    sandboxAvailable: opts?.sandboxed,
+  };
+  const { agentId } = resolveExecConfigState(params);
+  return await withSandboxRuntimeStatusInWorker(
+    { cfg: params.cfg, agentId, sessionKey: params.sessionKey },
+    {
+      env: process.env,
+      cwd: process.cwd(),
+      assertCurrent: assertCurrentSource,
+    },
+    async (sandbox): Promise<CronStreamExecPolicy> => {
+      const preparation = prepareExecDefaults(params, sandbox);
+      const creatorToolAllowlist = creatorTools ? structuredClone(creatorTools) : undefined;
+      const defaults = await resolvePreparedExecDefaultsAsync(
+        preparation,
+        loadExecApprovalsReadOnlyAsync,
+      );
+      assertCurrentSource();
+      assertCronStreamExecAuthority({
+        value: undefined,
+        required: true,
+        creatorToolAllowlist,
+        execDefaults: defaults,
+      });
+      // Keep policy inputs private; the write owner supplies the approval row
+      // from the same transaction that commits the stream mutation.
+      const assertDefaults = (
+        execDefaults: typeof defaults,
+        policyKey: string,
+        approvedPolicyKey?: string,
+      ) => {
+        assertCurrentSource();
+        assertCronStreamExecAuthority({
+          value: undefined,
+          required: true,
+          creatorToolAllowlist,
+          execDefaults,
+          policyKey,
+          approvedPolicyKey,
+        });
+      };
+      return preparation.kind === "resolved"
+        ? {
+            kind: "resolved",
+            assertCurrentSource,
+            assertCurrent: (approvedPolicyKey) =>
+              assertDefaults(
+                preparation.defaults,
+                JSON.stringify(preparation.defaults),
+                approvedPolicyKey,
+              ),
+          }
+        : {
+            kind: "needs-approvals",
+            assertCurrentSource,
+            assertCurrent: (file, approvedPolicyKey) =>
+              assertDefaults(
+                preparation.resolve(file),
+                JSON.stringify([
+                  preparation.resolve(file),
+                  createExecApprovalPolicySnapshot({ file, agentId }),
+                ]),
+                approvedPolicyKey,
+              ),
+          };
+    },
+  );
+}
+
+/** Context-free operator calls cannot silently bypass an agent tool's required question. */
+export async function assertCronStreamExecPolicyWithoutApproval(
+  policy: CronStreamExecPolicy,
+): Promise<void> {
+  if (policy.kind === "resolved") {
+    policy.assertCurrent();
+  } else {
+    policy.assertCurrent(await loadExecApprovalsReadOnlyAsync());
+  }
+}
 
 export function assertNoCronShellExecution(value: unknown): void {
   if (!isRecord(value)) {
@@ -32,8 +234,8 @@ export function assertNoCronShellExecution(value: unknown): void {
       "automation on-exit schedules cannot be created or edited through the agent automations tool; use the CLI or Gateway API.",
     );
   }
-  // Stream argv is authorized by the Gateway's cron.triggers.enabled gate,
-  // matching trigger-script trust rather than ordinary agent exec policy.
+  // Stream argv has a separate Gateway exec and persistent approval check below;
+  // keep it out of this blanket operator-only payload/schedule prohibition.
 }
 
 export function assertCronCreatorAuthorityResolutionAvailable(params: {
@@ -91,6 +293,7 @@ async function prepareCronJobUpdateForGateway(
   patch: Record<string, unknown>;
   expectedConfigRevision?: string;
   resolvedAuthority?: CronCreatorToolAuthoritySnapshot;
+  streamExecAuthorityRequired: boolean;
 }> {
   params.operationSignal?.throwIfAborted();
   const initialPlan = planCronJobUpdatePatch({
@@ -99,16 +302,32 @@ async function prepareCronJobUpdateForGateway(
     creatorAuthorityComplete: params.creatorAuthorityComplete,
   });
   if (initialPlan.kind === "ready" && !readCronScheduleWithoutTimezone(initialPlan.patch)) {
-    return { patch: initialPlan.patch };
+    return {
+      patch: initialPlan.patch,
+      expectedConfigRevision: params.expectedConfigRevision,
+      streamExecAuthorityRequired: false,
+    };
   }
 
   const existing = await params.callGateway("cron.get", params.gatewayOpts, { id: params.id });
   params.operationSignal?.throwIfAborted();
   const existingRecord = isRecord(existing) ? existing : undefined;
   const expectedConfigRevision = existingRecord?.configRevision;
-  if (typeof expectedConfigRevision !== "string" || expectedConfigRevision.length === 0) {
+  if (
+    !existingRecord ||
+    typeof expectedConfigRevision !== "string" ||
+    expectedConfigRevision.length === 0
+  ) {
     throw new Error(
       "cron.get response is missing configRevision; restart the Gateway before retrying this update",
+    );
+  }
+  if (
+    params.expectedConfigRevision !== undefined &&
+    params.expectedConfigRevision !== expectedConfigRevision
+  ) {
+    throw new Error(
+      "The selected automation changed while waiting. Select its current definition again.",
     );
   }
   let resolvedAuthority: CronCreatorToolAuthoritySnapshot | undefined;
@@ -147,6 +366,10 @@ async function prepareCronJobUpdateForGateway(
     patch: inheritCronScheduleTimezone(finalPlan.patch, existingRecord),
     expectedConfigRevision,
     resolvedAuthority,
+    streamExecAuthorityRequired: cronUpdateRequiresStreamExecAuthority(
+      finalPlan.patch,
+      existingRecord,
+    ),
   };
 }
 
@@ -162,6 +385,7 @@ function isCronJobConfigRevisionConflict(error: unknown): boolean {
 
 export async function updateCronJobFromAgentTool(params: {
   id: string;
+  expectedConfigRevision?: string;
   patch: Record<string, unknown>;
   adminManagement?: boolean;
   creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined;
@@ -177,6 +401,9 @@ export async function updateCronJobFromAgentTool(params: {
   callGateway: GatewayToolCaller;
   operationSignal?: AbortSignal;
   creatorAuthorityUnavailableReason?: "queued-local-operator-configured-mcp";
+  prepareStreamExecAuthority: (
+    creatorToolAllowlist: readonly CronCreatorToolAllowlistEntry[] | undefined,
+  ) => Promise<void>;
 }): Promise<unknown> {
   const callerIncludedPayloadPatch = isRecord(params.patch.payload);
   let creatorAuthorityPromise: Promise<CronCreatorToolAuthoritySnapshot> | undefined;
@@ -194,10 +421,15 @@ export async function updateCronJobFromAgentTool(params: {
         params.creatorAuthorityUnavailableReason === undefined,
       resolveCreatorToolAuthority,
     });
-    if (callerIncludedPayloadPatch && !params.adminManagement) {
+    if (!params.adminManagement && callerIncludedPayloadPatch) {
       // Kind-less caller payloads inherit the stored kind above. Recheck those
       // edits, but not a toolsAllow cap synthesized internally.
       assertNoCronShellExecution(prepared.patch);
+    }
+    if (prepared.streamExecAuthorityRequired) {
+      await params.prepareStreamExecAuthority(
+        prepared.resolvedAuthority?.tools ?? params.creatorToolAllowlist,
+      );
     }
     assertInheritedCronToolCaptureReady(
       prepared.patch,
@@ -225,7 +457,11 @@ export async function updateCronJobFromAgentTool(params: {
         ? await params.withCreatorAuthorityProvenance(prepared.resolvedAuthority, write)
         : await write();
     } catch (error) {
-      if (attempt === 0 && isCronJobConfigRevisionConflict(error)) {
+      if (
+        attempt === 0 &&
+        params.expectedConfigRevision === undefined &&
+        isCronJobConfigRevisionConflict(error)
+      ) {
         continue;
       }
       throw error;

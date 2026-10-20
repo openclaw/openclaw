@@ -10,44 +10,13 @@ import {
   createSolidRenderLifecycle,
   type SolidRenderLifecycle,
 } from "../solid-render-lifecycle.ts";
-import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
-import { ChatDivider, ChatNotice } from "./chat-divider.tsx";
 import { ChatHistoryBoundary } from "./chat-history-boundary.tsx";
-import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
-import {
-  StreamGroup,
-  UnplacedSubagentWait,
-  WorkGroupSummary,
-} from "./chat-message-stream-view.tsx";
-import { RealtimeTalkConversation } from "./chat-realtime-controls.tsx";
-import { ChatSystemEvents } from "./chat-system-events.tsx";
-import { TranscriptWorkPreviews } from "./chat-transcript-content.tsx";
 import type { TranscriptContent, TranscriptLayoutProps } from "./chat-transcript-layout.ts";
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
-import {
-  GuardedTranscriptItem,
-  type NativeTranscriptView,
-} from "./chat-transcript-render-guard.ts";
-import { ChatTypingIndicator } from "./chat-typing-indicator.tsx";
-import { TurnRecapRow } from "./chat-working-indicator.tsx";
-
-const nativeRows = {
-  "system-events": ChatSystemEvents,
-  group: MessageGroup,
-  activity: ActivityGroup,
-  stream: StreamGroup,
-  work: WorkGroupSummary,
-  frame: AgentRunFrame,
-  wait: UnplacedSubagentWait,
-  divider: ChatDivider,
-  notice: ChatNotice,
-  "work-previews": TranscriptWorkPreviews,
-  realtime: RealtimeTalkConversation,
-  recap: TurnRecapRow,
-  typing: ChatTypingIndicator,
-};
+import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
+import { nativeRows, type NativeTranscriptView } from "./chat-transcript-rows.ts";
 
 function NativeRow(props: { value: NativeTranscriptView }): JSX.Element {
   const Row = dynamic(() => nativeRows[props.value.kind]);

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { bindHeartbeatReply } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
 
@@ -45,6 +46,7 @@ async function setup(
     lastTo: TELEGRAM_TARGET,
   });
   replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+  bindHeartbeatReply(replySpy);
   return {
     cfg,
     sendTyping,
@@ -53,7 +55,6 @@ async function setup(
     run: () =>
       runHeartbeatWithFakeIntervals({
         cfg,
-        deps: { getReplyFromConfig: replySpy, nowMs: () => 0 },
       }),
   };
 }

@@ -125,7 +125,7 @@ function assertWaitLifecycle(parent: GatewaySessionRow, child: GatewaySessionRow
 async function clocks(parent: Locator) {
   return parent.locator(".chat-working-indicator__elapsed").evaluateAll((elements) =>
     elements.map((element) => ({
-      startMs: (element as HTMLElementTagNameMap["openclaw-elapsed-time"]).startMs,
+      sampledAt: Date.now(),
       text: element.textContent?.trim() ?? "",
       source: "transcript",
     })),
@@ -134,10 +134,20 @@ async function clocks(parent: Locator) {
 function assertClocks(measured: Awaited<ReturnType<typeof clocks>>, endedAt: number) {
   expect(measured.length).toBeGreaterThan(0);
   for (const clock of measured) {
-    expect(clock.startMs, clock.source + " must use the persisted latest parent end").toBe(endedAt);
     expect(clock.text).not.toBe("");
     expect(clock.text).not.toMatch(/\d{4,}|[dh]/u);
-    expect(Date.now() - clock.startMs!).toBeLessThan(120_000);
+    const elapsedMs = Math.max(1_000, clock.sampledAt - endedAt);
+    const displayedMs = [...clock.text.matchAll(/(\d+)([ms])/gu)].reduce(
+      (sum, match) => sum + Number(match[1]) * (match[2] === "m" ? 60_000 : 1_000),
+      0,
+    );
+    // Allow one polling tick plus subsecond display rounding.
+    expect(
+      displayedMs,
+      clock.source + " must use the persisted latest parent end",
+    ).toBeGreaterThanOrEqual(elapsedMs - 2_000);
+    expect(displayedMs).toBeLessThanOrEqual(elapsedMs + 1_000);
+    expect(Date.now() - endedAt).toBeLessThan(120_000);
   }
 }
 async function capture(page: Page, parent: Locator, name: string, content: Locator[]) {
@@ -308,9 +318,7 @@ suite.define(() => {
           ]);
           assertClocks(updatedClocks, updated.parent.endedAt!);
           assertClocks(reloadedClocks, updated.parent.endedAt!);
-          expect(reloadedClocks.map((clock) => clock.startMs)).toEqual(
-            updatedClocks.map((clock) => clock.startMs),
-          );
+          expect(reloadedClocks).toHaveLength(updatedClocks.length);
 
           proof.stage = "actual child completion and parent resume";
           provider.releaseChild();

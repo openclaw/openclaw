@@ -90,7 +90,12 @@ import {
 } from "./scheduled-run-gateway-context.js";
 import { finalizeCronCompletionAnnouncement, pickDefined } from "./server-cron-completion.js";
 import type { GatewayCronServiceContract } from "./server-cron-contract.js";
-import { drainGatewayCron } from "./server-cron-drain.js";
+import {
+  bindCronStreamRemoval,
+  bindCronStreamUpdate,
+  drainGatewayCron,
+  withObservedCronStreamState,
+} from "./server-cron-drain.js";
 import {
   fireOnExitJob,
   fireStreamJob,
@@ -979,22 +984,8 @@ export function buildGatewayCronService(params: {
       cancelDisabledExitWatcher(addedJob);
     }
     await routeStreamWatcherMutation(addedJob.id, addedJob, "added");
-    return result;
-  };
-  const settleStopAfterCommittedUpdate = async (
-    jobId: string,
-    lifecycleStop: Promise<PromiseSettledResult<void>[]> | undefined,
-  ) => {
-    const [settled] = (await lifecycleStop) ?? [];
-    if (settled?.status === "rejected") {
-      // The durable update already committed and the owner persisted its own
-      // terminal stream diagnostic. Failing the caller here would claim a
-      // rollback that never happened; routeLiveStreamJobLogged below retries teardown.
-      cronLogger.warn(
-        { jobId, err: String(settled.reason) },
-        "cron-stream: source teardown failed after committed update",
-      );
-    }
+    const observed = withObservedCronStreamState(cron, addedJob);
+    return "job" in result ? { ...result, ...observed, job: observed } : observed;
   };
   // Watcher routing after a committed mutation is lifecycle repair, not part
   // of the mutation result: a stubborn child failing again must not turn an
@@ -1010,64 +1001,25 @@ export function buildGatewayCronService(params: {
       );
     }
   };
-  const updateCronWithPrecondition = cron.updateWithPrecondition.bind(cron);
-  const updateWithWatchers = async (
-    jobId: string,
-    patch: Parameters<CronService["update"]>[1],
-    opts?: Parameters<CronService["update"]>[2],
-    precondition?: Parameters<CronService["updateWithPrecondition"]>[2],
-  ) => {
-    let lifecycleStop: Promise<PromiseSettledResult<void>[]> | undefined;
-    const routeAfterValidation = (current: CronJob, nowMs: number) => {
-      const stop = streamWatchers.stopBeforeUpdate(current, patch, nowMs, params.cfg.cron);
-      lifecycleStop = stop ? Promise.allSettled([stop]) : undefined;
-    };
-    const beforeUpdate = precondition
-      ? async (current: CronJob, nowMs: number) => {
-          await precondition(current, nowMs);
-          routeAfterValidation(current, nowMs);
-        }
-      : routeAfterValidation;
-    try {
-      const result = await updateCronWithPrecondition(jobId, patch, beforeUpdate, opts);
-      if (
-        patch.enabled === false &&
-        (!precondition || terminalExitCompletionTokens.get(jobId) !== precondition)
-      ) {
-        cancelDisabledExitWatcher(result);
+  const updateWithWatchers = bindCronStreamUpdate({
+    cron,
+    streamWatchers,
+    reconcile: routeLiveStreamJobLogged,
+    cancelDisabledExitWatcher: (job, precondition) => {
+      if (!precondition || terminalExitCompletionTokens.get(job.id) !== precondition) {
+        cancelDisabledExitWatcher(job);
       }
-      await settleStopAfterCommittedUpdate(jobId, lifecycleStop);
-      await routeLiveStreamJobLogged(jobId);
-      return result;
-    } catch (error) {
-      await lifecycleStop;
-      if (lifecycleStop) {
-        await routeLiveStreamJobLogged(jobId);
-      }
-      throw error;
-    }
-  };
+    },
+    logger: cronLogger,
+  });
   cron.update = (jobId, patch, opts) => updateWithWatchers(jobId, patch, opts);
   cron.updateWithPrecondition = (jobId, patch, precondition, opts) =>
     updateWithWatchers(jobId, patch, opts, precondition);
-  const removeCron = cron.remove.bind(cron);
-  cron.remove = async (jobId, opts) => {
-    const previous = cron.getJob(jobId);
-    try {
-      if (previous?.schedule.kind === "stream") {
-        await streamWatchers?.stop(jobId, "removed", previous);
-      }
-      const result = await removeCron(jobId, opts);
-      if (!result.removed) {
-        await routeLiveStreamJobLogged(jobId);
-      }
-      return result;
-    } catch (error) {
-      // Preserve the original stop/removal error; recovery routing is advisory.
-      await routeLiveStreamJobLogged(jobId);
-      throw error;
-    }
-  };
+  cron.remove = bindCronStreamRemoval({
+    cron,
+    streamWatchers,
+    reconcile: routeLiveStreamJobLogged,
+  });
   const getCronSuspensionBlockerCount = cron.getSuspensionBlockerCount.bind(cron);
   cron.getSuspensionBlockerCount = () =>
     getCronSuspensionBlockerCount() +

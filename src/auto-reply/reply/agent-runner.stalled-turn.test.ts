@@ -1,6 +1,6 @@
 // Tests how an admitted interactive run continues a turn the stale watchdog dropped.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
@@ -9,6 +9,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { createChatSendLateFollowupDisposition } from "../../gateway/server-methods/chat-send-late-followup.js";
 import { createChatSendLateReplyFinalizer } from "../../gateway/server-methods/chat-send-source-finalization.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
@@ -20,6 +21,10 @@ import {
   createSqliteTranscriptTarget,
   readTranscriptMessages,
 } from "../../sessions/user-turn-transcript.test-support.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import type { TemplateContext } from "../templating.js";
 import type * as AgentRunnerExecution from "./agent-runner-execution.js";
@@ -36,6 +41,7 @@ import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 afterEach(() => clearRuntimeConfigSnapshot());
@@ -99,7 +105,7 @@ type StalledRun = {
 const queueKey = "agent:main:telegram:direct:stalled";
 const settings: QueueSettings = { mode: "followup", debounceMs: 0 };
 
-function createStalledRun(
+async function createStalledRun(
   options: {
     isHeartbeat?: boolean;
     operatorAuthority?: AdmittedRunOperatorAuthority;
@@ -107,7 +113,7 @@ function createStalledRun(
     originatingChannel?: string;
     skillLibraryAuthoring?: FollowupRun["run"]["skillLibraryAuthoring"];
   } = {},
-): StalledRun {
+): Promise<StalledRun> {
   const followupRun = createTestFollowupRun({
     sessionId: "stalled-session",
     sessionKey: queueKey,
@@ -121,28 +127,39 @@ function createStalledRun(
   followupRun.run.skillLibraryAuthoring = options.skillLibraryAuthoring;
   followupRun.images = [{ type: "image", data: "aW1n", mimeType: "image/png" }];
   followupRun.transcriptPrompt = "what is good at the hotel restaurant?";
-  setRuntimeConfigSnapshot(followupRun.run.config);
   const transcriptTarget = createSqliteTranscriptTarget({
     dir: followupRun.run.workspaceDir,
     sessionId: "stalled-session",
     sessionKey: queueKey,
   });
+  const sessionEntry = { sessionId: transcriptTarget.sessionId, updatedAt: 1 };
+  followupRun.run.config = { session: { store: transcriptTarget.storePath } };
+  setRuntimeConfigSnapshot(followupRun.run.config);
+  await replaceSessionEntry(transcriptTarget, sessionEntry);
   const recorder = createUserTurnTranscriptRecorder({
     input: { text: followupRun.transcriptPrompt },
     target: transcriptTarget,
   });
   followupRun.userTurnTranscriptRecorder = recorder;
-  const operation = createReplyOperation({
-    sessionKey: queueKey,
-    sessionId: "stalled-session",
+  const admitted = await admitReplyTurn({
+    ...transcriptTarget,
+    kind: options.isHeartbeat ? "heartbeat" : "visible",
     resetTriggered: false,
   });
+  if (admitted.status !== "owned") {
+    throw new Error("The stalled-turn fixture could not admit its session");
+  }
+  const operation = admitted.operation;
   operation.setPhase("running");
   const runState: ReplyOperationRunState = {};
   const run = runReplyAgent({
     commandBody: "what is good at the hotel restaurant?",
     followupRun,
     queueKey,
+    sessionKey: queueKey,
+    storePath: transcriptTarget.storePath,
+    sessionEntry,
+    sessionStore: { [queueKey]: sessionEntry },
     resolvedQueue: settings,
     shouldSteer: false,
     shouldFollowup: false,
@@ -172,7 +189,11 @@ function createStalledRun(
 }
 
 async function stallBeforeOutput(stalled: StalledRun) {
-  await executionStarted.promise;
+  await awaitGateBeforeSettlement(
+    executionStarted.promise,
+    stalled.run,
+    "The admitted turn settled before execution",
+  );
   expect(executeAgentTurnMock).toHaveBeenCalledOnce();
   expect(stalled.operation.abortForStall()).toBe(true);
 }
@@ -183,13 +204,17 @@ async function settleStalledOwner(stalled: StalledRun) {
   await stalled.operation.ownerSettlement;
 }
 
-function createQueuedRequest(from: { senderId: string; to: string }): FollowupRun {
+function createQueuedRequest(
+  stalled: StalledRun,
+  from: { senderId: string; to: string },
+): FollowupRun {
   const queued = createTestFollowupRun({
     sessionId: "stalled-session",
     sessionKey: queueKey,
     messageProvider: "telegram",
     terminalReplyExpectation: "required",
     senderId: from.senderId,
+    config: { session: { store: stalled.transcriptTarget.storePath } },
   });
   queued.originatingChannel = "telegram";
   queued.originatingTo = from.to;
@@ -222,13 +247,15 @@ describe("runReplyAgent stalled turn continuation", () => {
       });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearSessionQueues([queueKey]);
     resetSessionControllerStateForTest();
+    await closeOpenClawAgentDatabasesAsync();
+    closeOpenClawAgentDatabasesForTest();
   });
 
   it("queues exactly one transcript-only recovery run when nothing else is queued", async () => {
-    const stalled = createStalledRun();
+    const stalled = await createStalledRun();
     await stallBeforeOutput(stalled);
 
     expect(stalled.runState.continueStalledTurn?.()).toBe(true);
@@ -260,8 +287,8 @@ describe("runReplyAgent stalled turn continuation", () => {
       mocks.executeFollowups = true;
       const settled = createDeferred();
       mocks.followupSettled = settled.resolve;
-      const stalled = createStalledRun();
-      const queued = createQueuedRequest({ senderId: "traveler", to: "12345" });
+      const stalled = await createStalledRun();
+      const queued = createQueuedRequest(stalled, { senderId: "traveler", to: "12345" });
       queued.messageId = "msg-double-stall-" + mode;
       expect(
         enqueueFollowupRun(queueKey, queued, { ...settings, mode }, "message-id", undefined, false),
@@ -297,9 +324,9 @@ describe("runReplyAgent stalled turn continuation", () => {
 
   // Default DM scope shares one main session across senders.
   it("never hands the stalled request past another sender's earlier queued request", async () => {
-    const stalled = createStalledRun();
-    const queued = createQueuedRequest({ senderId: "bystander", to: "67890" });
-    const sameSenderLater = createQueuedRequest({ senderId: "traveler", to: "12345" });
+    const stalled = await createStalledRun();
+    const queued = createQueuedRequest(stalled, { senderId: "bystander", to: "67890" });
+    const sameSenderLater = createQueuedRequest(stalled, { senderId: "traveler", to: "12345" });
     sameSenderLater.messageId = "msg-later";
     for (const run of [queued, sameSenderLater]) {
       expect(enqueueFollowupRun(queueKey, run, settings, "message-id", drainedRuns, false)).toBe(
@@ -341,12 +368,16 @@ describe("runReplyAgent stalled turn continuation", () => {
         drained.resolve();
       }
     });
-    const interrupted = createStalledRun();
-    const queued = createQueuedRequest({ senderId: "traveler", to: "12345" });
+    const interrupted = await createStalledRun();
+    const queued = createQueuedRequest(interrupted, { senderId: "traveler", to: "12345" });
     expect(enqueueFollowupRun(queueKey, queued, settings, "message-id", drainedRuns, false)).toBe(
       true,
     );
-    await executionStarted.promise;
+    await awaitGateBeforeSettlement(
+      executionStarted.promise,
+      interrupted.run,
+      "The admitted turn settled before execution",
+    );
     const guidance = `${new WorkerNodeLostError().message} Continue the interrupted request from the transcript.`;
     const otherIngress = createReplyOperation({
       sessionId: "other-ingress",
@@ -384,14 +415,19 @@ describe("runReplyAgent stalled turn continuation", () => {
       abortSignal.throwIfAborted();
       return undefined;
     });
-    const stalled = createStalledRun();
+    const stalled = await createStalledRun();
     const settled = stalled.run.catch(() => undefined);
-    await preflightStarted.promise;
+    await awaitGateBeforeSettlement(
+      preflightStarted.promise,
+      stalled.run,
+      "The admitted turn settled before preflight",
+    );
     stalled.operation.abortForStall();
 
     const continued = stalled.runState.continueStalledTurn?.();
     await settled;
     stalled.operation.complete();
+    await stalled.operation.ownerSettlement;
     expect(stalled.recorder.hasPersisted()).toBe(false);
     expect(continued).toBe(false);
     expect(getFollowupQueueDepth(queueKey)).toBe(0);
@@ -410,7 +446,7 @@ describe("runReplyAgent stalled turn continuation", () => {
         }
       },
     });
-    const stalled = createStalledRun({ operatorAuthority });
+    const stalled = await createStalledRun({ operatorAuthority });
     await stallBeforeOutput(stalled);
     revoked = true;
 
@@ -444,7 +480,7 @@ describe("runReplyAgent stalled turn continuation", () => {
         },
       }),
     });
-    const stalled = createStalledRun({
+    const stalled = await createStalledRun({
       originatingChannel: "webchat",
       queuedFollowupReplyDisposition: { kind: "deliver", deliver: chatSendOwner.deliver },
     });
@@ -475,7 +511,7 @@ describe("runReplyAgent stalled turn continuation", () => {
   });
 
   it("never lets a workspace-target recovery author skills while keeping its other tools", async () => {
-    const stalled = createStalledRun({
+    const stalled = await createStalledRun({
       skillLibraryAuthoring: {
         target: "personal",
         defaultTarget: "workspace",
@@ -503,7 +539,7 @@ describe("runReplyAgent stalled turn continuation", () => {
   });
 
   it("leaves the notice with a group-thread participant whose source declares no reply owner", async () => {
-    const stalled = createStalledRun({
+    const stalled = await createStalledRun({
       queuedFollowupReplyDisposition: { kind: "drop", reason: "source-unavailable" },
     });
     await stallBeforeOutput(stalled);
@@ -515,7 +551,7 @@ describe("runReplyAgent stalled turn continuation", () => {
   });
 
   it("does not arm a continuation for heartbeat turns", async () => {
-    const stalled = createStalledRun({ isHeartbeat: true });
+    const stalled = await createStalledRun({ isHeartbeat: true });
     await stallBeforeOutput(stalled);
 
     expect(stalled.runState.continueStalledTurn).toBeUndefined();
