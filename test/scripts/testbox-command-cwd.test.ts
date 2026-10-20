@@ -78,28 +78,22 @@ os.execv("/bin/bash", ["bash", "--noprofile", "--norc", *sys.argv[1:]])
   writeFileSync(join(workspace, "marker"), "hydrated\n");
   git(workspace, "add", ".");
   git(workspace, "commit", "-qm", "hydrated base");
+  const script = prepare
+    .replace("/tmp/.testbox/working_directory", quote(state))
+    .replace("/etc/profile.d/blacksmith.sh", quote(profile));
   const run = () =>
-    spawnSync(
-      "/bin/bash",
-      [
-        "--noprofile",
-        "--norc",
-        "-euo",
-        "pipefail",
-        "-c",
-        prepare
-          .replace("/tmp/.testbox/working_directory", quote(state))
-          .replace("/etc/profile.d/blacksmith.sh", quote(profile)),
-      ],
-      { cwd: workspace, env, encoding: "utf8" },
-    );
+    spawnSync("/bin/bash", ["--noprofile", "--norc", "-euo", "pipefail", "-c", script], {
+      cwd: workspace,
+      env,
+      encoding: "utf8",
+    });
   const command = (cwd: string, args: string[]) =>
     spawnSync(join(bin, "bash"), args, {
       cwd,
       env: { ...env, SSH_CONNECTION: "127.0.0.1 1 127.0.0.1 22" },
       encoding: "utf8",
     });
-  return { workspace, profile, state, env, git, run, command };
+  return { workspace, profile, state, git, run, command };
 }
 
 it.each([
@@ -126,17 +120,11 @@ it.each([
       "-lc",
       'pwd -P; git rev-parse HEAD; cat marker task-untracked; printf "%s\\n" "$TESTBOX_FIXTURE_ENV"',
     ]);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(
-      [
-        syncRoot,
-        taskHead,
-        "task patch",
-        "synchronized",
-        name === "legacy" ? "preserved" : "",
-        "",
-      ].join("\n"),
-    );
+    const exported = name === "legacy" ? "preserved" : "";
+    expect(result, result.stderr).toMatchObject({
+      status: 0,
+      stdout: `${syncRoot}\n${taskHead}\ntask patch\nsynchronized\n${exported}\n`,
+    });
     const subdir = join(syncRoot, "task subdir");
     mkdirSync(subdir);
     for (const cwd of [subdir, f.workspace]) {

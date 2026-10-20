@@ -33,14 +33,12 @@ function selectedFiles(plans: ReturnType<typeof buildVitestRunPlans>): string[] 
   return plans.flatMap((plan) => plan.includePatterns ?? plan.forwardedArgs).toSorted();
 }
 function expectedPlan(owner: string, directory: string, watchMode = false) {
-  return [
-    {
-      config: `test/vitest/vitest.${owner}.config.ts`,
-      forwardedArgs: [],
-      includePatterns: [`${directory}/**/*.test.ts`],
-      watchMode,
-    },
-  ];
+  return {
+    config: `test/vitest/vitest.${owner}.config.ts`,
+    forwardedArgs: [],
+    includePatterns: [`${directory}/**/*.test.ts`],
+    watchMode,
+  };
 }
 
 it("routes mixed package owners once beside explicit boundary and E2E leaves", () => {
@@ -94,7 +92,7 @@ it.each(["relative", "absolute", "trailing slash", "watch", "glob"])(
         : [spelling === "glob" ? `${target}/**/*.test.ts` : target];
     const plans = f.plan(...args);
     if (native) {
-      expect(plans).toEqual(expectedPlan("gateway-client", directory, spelling === "watch"));
+      expect(plans).toEqual([expectedPlan("gateway-client", directory, spelling === "watch")]);
     } else {
       expect(selectedFiles(plans)).toEqual(selected.toSorted());
     }
@@ -153,7 +151,7 @@ it.each([
   { target: "packages/missing", reason: "path-does-not-exist" },
 ])("keeps $target bounded and reports its missing tests", ({ target, reason }) => {
   const f = fixture(["packages/empty/README.md"]);
-  expect(f.plan(target)).toEqual(expectedPlan("unit", target));
+  expect(f.plan(target)).toEqual([expectedPlan("unit", target)]);
   expect(findUnmatchedExplicitTestTargets([target], f.cwd)).toEqual([
     expect.objectContaining({ target, reason }),
   ]);

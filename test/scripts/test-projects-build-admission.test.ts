@@ -231,13 +231,12 @@ afterEach(() => {
 
 describe("CLI runtime admission", () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
-  posixIt.for<[name: string, args: string[], implicitRoot?: boolean]>([
-    ["ordinary target", [ordinaryQa]],
-    ["implicit root ordinary directory", ["run", "src/utils"], true],
-    ["implicit root watch", ["watch", "src/config"], true],
-    ["ordinary CLI config", ["--config", configPath("cli")]],
+  posixIt.for<[args: string[], implicitRoot?: boolean]>([
+    [[ordinaryQa]],
+    [["run", "src/utils"], true],
+    [["watch", "src/config"], true],
+    [["--config", configPath("cli")]],
     [
-      "CLI process runtime exclusions",
       [
         "--config",
         configPath("cli-process"),
@@ -248,7 +247,6 @@ describe("CLI runtime admission", () => {
       ],
     ],
     [
-      "Gateway server scoped exclusion",
       [
         "--config",
         configPath("gateway-server"),
@@ -260,22 +258,19 @@ describe("CLI runtime admission", () => {
         "server.config-patch.test.ts",
       ],
     ],
-    [
-      "root scoped exclusion",
-      ["--config", "vitest.config.ts", "suite-process-lifecycle", "--exclude", scoped(lifecycle)],
-    ],
-    ["scoped exclusion", excludeQa(scoped)],
-    ["absolute exclusion", excludeQa((file) => path.resolve(file))],
-    ["alternate root", ["--root", "."]],
-    ["alternate directory", ["--dir=extensions"]],
-    ["project override", ["--project", "extension-qa"]],
-    ["custom config", ["--config", "custom.config.ts"]],
-    ["list command", ["list"]],
-    ["help", ["--help"]],
-    ["version only", ["--version=true"]],
+    [["--config", "vitest.config.ts", "suite-process-lifecycle", "--exclude", scoped(lifecycle)]],
+    [excludeQa(scoped)],
+    [excludeQa((file) => path.resolve(file))],
+    [["--root", "."]],
+    [["--dir=extensions"]],
+    [["--project", "extension-qa"]],
+    [["--config", "custom.config.ts"]],
+    [["list"]],
+    [["--help"]],
+    [["--version=true"]],
   ])(
-    "leaves direct $0 selection without runtime preparation",
-    async ([_name, args, implicitRoot], { signal, onTestFinished }) => {
+    "leaves direct %j selection without runtime preparation",
+    async ([args, implicitRoot], { signal, onTestFinished }) => {
       const lifetime = createFixtureLifetime();
       onTestFinished(() => lifetime.cleanup());
       await lifetime.run(async () => {
@@ -627,19 +622,19 @@ describe("full-suite timing metadata", () => {
 describe("packed config continuation", () => {
   const configs = [configPath("logging"), configPath("process")];
   it.each([
-    { name: "ordinary Linux failure", platform: "linux", code: 1, expected: 2 },
-    { name: "ordinary Windows failure", platform: "win32", code: 1, expected: 2 },
-    { name: "local default failure", ci: "", code: 1, expected: 1 },
-    { name: "local opt-out failure", ci: "", optIn: "0", code: 1, expected: 1 },
-    { name: "local opted-in failure", ci: "", optIn: "1", code: 1, expected: 2 },
-    { name: "CI ignores local opt-out", optIn: "0", code: 1, expected: 2 },
-    { name: "local opted-in infrastructure", ci: "", optIn: "1", code: 2, expected: 1 },
-    { name: "unknown exit", code: null, expected: 1 },
-    { name: "timeout", code: 1, timeout: true, expected: 1 },
-    { name: "signal", code: 1, signaled: true, expected: 1 },
-    { name: "unjoined child", code: 1, unjoined: true, expected: 1 },
-    { name: "rejected child", code: 1, rejected: true, expected: 1 },
-  ])("preserves complete selection and failure status for $name", async (scenario) => {
+    { platform: "linux", code: 1, expected: 2 },
+    { platform: "win32", code: 1, expected: 2 },
+    { ci: "", code: 1, expected: 1 },
+    { ci: "", optIn: "0", code: 1, expected: 1 },
+    { ci: "", optIn: "1", code: 1, expected: 2 },
+    { optIn: "0", code: 1, expected: 2 },
+    { ci: "", optIn: "1", code: 2, expected: 1 },
+    { code: null, expected: 1 },
+    { code: 1, timeout: true, expected: 1 },
+    { code: 1, signaled: true, expected: 1 },
+    { code: 1, unjoined: true, expected: 1 },
+    { code: 1, rejected: true, expected: 1 },
+  ])("preserves complete selection and failure status for %j", async (scenario) => {
     vi.spyOn(process, "platform", "get").mockReturnValue(
       scenario.platform === "win32" ? "win32" : "linux",
     );
@@ -743,37 +738,35 @@ describe("automatic exact-target admission", () => {
   });
 
   it.each([
-    { name: "CI=1", expected: 2 },
-    { name: "changed targets", changed: true, expected: 2 },
-    { name: "changed targets with serial override", changed: true, serial: "1", expected: 1 },
-    { name: "CI=true", ci: "true", expected: 2 },
-    { name: "unresolved config outputs", args: [], expected: 1 },
-    { name: "console reporter without coverage override", args: ["--reporter=dot"], expected: 1 },
-    { name: "coverage override without reporter", args: ["--coverage.enabled=false"], expected: 1 },
+    { expected: 2 },
+    { changed: true, expected: 2 },
+    { changed: true, serial: "1", expected: 1 },
+    { ci: "true", expected: 2 },
+    { args: [], expected: 1 },
+    { args: ["--reporter=dot"], expected: 1 },
+    { args: ["--coverage.enabled=false"], expected: 1 },
     {
-      name: "JSON without owner",
       args: ["--reporter=json", "--coverage.enabled=false"],
       expected: 1,
     },
     {
-      name: "GitHub summary",
       args: ["--reporter=github-actions", "--coverage.enabled=false"],
       expected: 1,
     },
-    { name: "coverage destination", args: ["--coverage"], expected: 1 },
-    { name: "file destination", args: ["--outputFile=report.json"], expected: 1 },
-    { name: "file reporter", args: ["--reporter=html"], expected: 1 },
-    { name: "plural file reporter", args: ["--reporters=html"], expected: 1 },
-    { name: "custom reporter", args: ["--reporter=./custom-reporter.mjs"], expected: 1 },
-    { name: "local", ci: "", expected: 1 },
-    { name: "constrained CPU", cpus: 4, expected: 1 },
-    { name: "unknown memory", gib: Number.NaN, expected: 1 },
-    { name: "explicit parallel", parallel: "3", expected: 3 },
-    { name: "explicit serial", serial: "1", expected: 1 },
-    { name: "portable", portable: true, expected: 1 },
-    { name: "caller cache leaf", callerLeaf: true, expected: 1 },
+    { args: ["--coverage"], expected: 1 },
+    { args: ["--outputFile=report.json"], expected: 1 },
+    { args: ["--reporter=html"], expected: 1 },
+    { args: ["--reporters=html"], expected: 1 },
+    { args: ["--reporter=./custom-reporter.mjs"], expected: 1 },
+    { ci: "", expected: 1 },
+    { cpus: 4, expected: 1 },
+    { gib: Number.NaN, expected: 1 },
+    { parallel: "3", expected: 3 },
+    { serial: "1", expected: 1 },
+    { portable: true, expected: 1 },
+    { callerLeaf: true, expected: 1 },
   ])(
-    "preserves resolved specs and policy for $name",
+    "preserves resolved specs and policy for %j",
     async ({ ci, cpus, gib, parallel, serial, portable, callerLeaf, args, changed, expected }) => {
       vi.stubEnv("CI", ci ?? "1");
       vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", parallel ?? "");
@@ -1423,26 +1416,23 @@ describe("test-projects build admission", () => {
   );
 
   it.each<{
-    name: string;
     args: string[];
     include?: string[];
     flag?: string;
     build: boolean;
   }>([
-    { name: "owned Gateway", args: [avatarTarget], build: true },
-    { name: "inherited Gateway", args: [uiConfig], include: [avatarTarget], build: true },
+    { args: [avatarTarget], build: true },
+    { args: [uiConfig], include: [avatarTarget], build: true },
     {
-      name: "native QA Gateway",
       args: [uiConfig],
       include: ["extensions/qa-lab/src/control-ui-automation-management.real-gateway.e2e.test.ts"],
       build: true,
     },
-    { name: "empty include", args: [uiConfig], include: [], build: false },
-    { name: "inherited mock", args: [uiConfig], include: [mockUiTarget], build: false },
-    { name: "owned mock", args: [mockUiTarget], include: [avatarTarget], build: false },
-    { name: "owned over empty include", args: [avatarTarget], include: [], build: true },
+    { args: [uiConfig], include: [], build: false },
+    { args: [uiConfig], include: [mockUiTarget], build: false },
+    { args: [mockUiTarget], include: [avatarTarget], build: false },
+    { args: [avatarTarget], include: [], build: true },
     {
-      name: "excluded Gateway",
       args: [avatarTarget, "--", "--exclude", avatarTarget],
       build: false,
     },
@@ -1450,8 +1440,8 @@ describe("test-projects build admission", () => {
       "OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY",
       "OPENCLAW_E2E_SKIP_BUILD",
       "OPENCLAW_E2E_USE_PREBUILT_DIST",
-    ].map((flag) => ({ name: flag, args: [avatarTarget], flag, build: false })),
-  ])("prepares only selected Gateway assets: $name", async ({ args, include, build, flag }) => {
+    ].map((flag) => ({ args: [avatarTarget], flag, build: false })),
+  ])("prepares only selected Gateway assets: %j", async ({ args, include, build, flag }) => {
     if (include) {
       vi.stubEnv(
         "OPENCLAW_VITEST_INCLUDE_FILE",
@@ -1470,91 +1460,96 @@ describe("test-projects build admission", () => {
     ).toBe(false);
   });
 
-  it.each<[name: string, target: string, build: boolean, include?: string[]]>([
-    ["borrowed ordinary tooling", toolingConfig, false, [ordinaryTooling]],
-    ["borrowed runtime tooling", toolingConfig, true, [runtimeTooling]],
-    ["borrowed private-QA infra", infraConfig, true, [privateQaInfra]],
-    ["borrowed empty selection", toolingConfig, false, []],
-    ["whole config without an override", toolingConfig, true],
-    ["owned ordinary over borrowed runtime", ordinaryTooling, false, [runtimeTooling]],
-    ["owned runtime over borrowed ordinary", runtimeTooling, true, [ordinaryTooling]],
-    ["owned runtime over borrowed empty", runtimeTooling, true, []],
-  ])("prepares only the effective config selection: %s", async (_name, target, build, include) => {
-    const args = [target];
-    commands.prepare.mockResolvedValue(0);
-    const workerCompiler =
-      args[0] === infraConfig
-        ? createControlledWorkerCompiler(tempDirs.make("private-qa-worker-"), process.env)
+  it.each<[target: string, build: boolean, include?: string[]]>([
+    [toolingConfig, false, [ordinaryTooling]],
+    [toolingConfig, true, [runtimeTooling]],
+    [infraConfig, true, [privateQaInfra]],
+    [toolingConfig, false, []],
+    [toolingConfig, true],
+    [ordinaryTooling, false, [runtimeTooling]],
+    [runtimeTooling, true, [ordinaryTooling]],
+    [runtimeTooling, true, []],
+  ])(
+    "prepares only the effective config selection: %s, build=%s, include=%j",
+    async (target, build, include) => {
+      const args = [target];
+      commands.prepare.mockResolvedValue(0);
+      const workerCompiler =
+        args[0] === infraConfig
+          ? createControlledWorkerCompiler(tempDirs.make("private-qa-worker-"), process.env)
+          : undefined;
+      if (workerCompiler) {
+        commands.prepare.mockImplementation((command) =>
+          path.basename(command.args[0]) === "vitest-worker-compiler.mts"
+            ? runCliCommand({ ...command, args: workerCompiler.args(command.args[1]) })
+            : Promise.resolve(0),
+        );
+      }
+      const borrowed = include
+        ? patternFiles.writePatternFile("borrowed.json", include)
         : undefined;
-    if (workerCompiler) {
-      commands.prepare.mockImplementation((command) =>
-        path.basename(command.args[0]) === "vitest-worker-compiler.mts"
-          ? runCliCommand({ ...command, args: workerCompiler.args(command.args[1]) })
-          : Promise.resolve(0),
-      );
-    }
-    const borrowed = include ? patternFiles.writePatternFile("borrowed.json", include) : undefined;
-    const original = borrowed
-      ? { bytes: fs.readFileSync(borrowed), stat: fs.statSync(borrowed) }
-      : undefined;
-    if (borrowed) {
-      vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", borrowed);
-    }
-    const selected: unknown[] = [];
-    commands.reader.mockImplementation(({ env, pnpmArgs }) => {
-      const wrapperArgv = process.argv;
-      // The config consumes the reader's CLI, not its parent wrapper's targets.
-      process.argv = [
-        process.execPath,
-        ...pnpmArgs.slice(pnpmArgs.indexOf(resolveVitestCliEntry())),
-      ];
-      try {
-        const createConfig =
-          args[0] === infraConfig ? createInfraVitestConfig : createToolingVitestConfig;
-        selected.push(createConfig(env).test?.include);
-      } finally {
-        process.argv = wrapperArgv;
+      const original = borrowed
+        ? { bytes: fs.readFileSync(borrowed), stat: fs.statSync(borrowed) }
+        : undefined;
+      if (borrowed) {
+        vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", borrowed);
       }
-      return {
-        completion: Promise.resolve({ code: 0, signal: null }),
-        getForwardedSignal: () => undefined,
-      };
-    });
-
-    await start(args);
-    const outcome = await terminal.promise;
-    if (outcome instanceof Error) {
-      throw outcome;
-    }
-    expect(outcome).toMatch(/^\[test\] passed 1 Vitest shard/u);
-    expect(commands.prepare).toHaveBeenCalledTimes((build ? 1 : 0) + (workerCompiler ? 1 : 0));
-    if (workerCompiler) {
-      expect(workerCompiler.read()).toHaveLength(1);
-    }
-    expect(commands.prepareE2e).not.toHaveBeenCalled();
-    expect(commands.reader).toHaveBeenCalledOnce();
-    expect(selected).toEqual([
-      args[0] === infraConfig
-        ? include
-        : args[0] === toolingConfig
-          ? (include ?? ["test/**/*.test.ts", "src/scripts/**/*.test.ts"])
-          : args,
-    ]);
-    if (borrowed && original) {
-      expect(fs.readFileSync(borrowed)).toEqual(original.bytes);
-      expect(fs.statSync(borrowed)).toMatchObject({
-        ino: original.stat.ino,
-        mtimeMs: original.stat.mtimeMs,
+      const selected: unknown[] = [];
+      commands.reader.mockImplementation(({ env, pnpmArgs }) => {
+        const wrapperArgv = process.argv;
+        // The config consumes the reader's CLI, not its parent wrapper's targets.
+        process.argv = [
+          process.execPath,
+          ...pnpmArgs.slice(pnpmArgs.indexOf(resolveVitestCliEntry())),
+        ];
+        try {
+          const createConfig =
+            args[0] === infraConfig ? createInfraVitestConfig : createToolingVitestConfig;
+          selected.push(createConfig(env).test?.include);
+        } finally {
+          process.argv = wrapperArgv;
+        }
+        return {
+          completion: Promise.resolve({ code: 0, signal: null }),
+          getForwardedSignal: () => undefined,
+        };
       });
-      const readerInclude = commands.reader.mock.calls[0]![0].env.OPENCLAW_VITEST_INCLUDE_FILE;
-      if (args[0] === toolingConfig || args[0] === infraConfig) {
-        expect(readerInclude).toBe(borrowed);
-      } else {
-        expect(readerInclude).not.toBe(borrowed);
-        expect(fs.existsSync(readerInclude)).toBe(false);
+
+      await start(args);
+      const outcome = await terminal.promise;
+      if (outcome instanceof Error) {
+        throw outcome;
       }
-    }
-  });
+      expect(outcome).toMatch(/^\[test\] passed 1 Vitest shard/u);
+      expect(commands.prepare).toHaveBeenCalledTimes((build ? 1 : 0) + (workerCompiler ? 1 : 0));
+      if (workerCompiler) {
+        expect(workerCompiler.read()).toHaveLength(1);
+      }
+      expect(commands.prepareE2e).not.toHaveBeenCalled();
+      expect(commands.reader).toHaveBeenCalledOnce();
+      expect(selected).toEqual([
+        args[0] === infraConfig
+          ? include
+          : args[0] === toolingConfig
+            ? (include ?? ["test/**/*.test.ts", "src/scripts/**/*.test.ts"])
+            : args,
+      ]);
+      if (borrowed && original) {
+        expect(fs.readFileSync(borrowed)).toEqual(original.bytes);
+        expect(fs.statSync(borrowed)).toMatchObject({
+          ino: original.stat.ino,
+          mtimeMs: original.stat.mtimeMs,
+        });
+        const readerInclude = commands.reader.mock.calls[0]![0].env.OPENCLAW_VITEST_INCLUDE_FILE;
+        if (args[0] === toolingConfig || args[0] === infraConfig) {
+          expect(readerInclude).toBe(borrowed);
+        } else {
+          expect(readerInclude).not.toBe(borrowed);
+          expect(fs.existsSync(readerInclude)).toBe(false);
+        }
+      }
+    },
+  );
 
   it.each([
     { args: ["--help=true"], prepare: false },
@@ -1580,59 +1575,56 @@ describe("test-projects build admission", () => {
   });
 
   it.each([
-    { name: "serial success", parallel: false, outcome: "success", e2e: false },
-    { name: "parallel success", parallel: true, outcome: "success", e2e: false },
-    { name: "runtime exit", parallel: false, outcome: "exit", e2e: false },
-    { name: "runtime rejection", parallel: false, outcome: "throw", e2e: false },
-    { name: "mixed E2E rejection", parallel: false, outcome: "throw", e2e: true },
-  ])(
-    "admits readers only after successful preparation: $name",
-    async ({ parallel, outcome, e2e }) => {
-      vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", parallel ? "2" : "");
-      const preparation = createPreparationGate<number | NodeJS.ProcessEnv>(
-        e2e ? commands.prepareE2e : commands.prepare,
-      );
-      const readers = createDeferred<{ code: number; signal: null }>();
-      const readersStarted = createDeferred();
-      commands.reader.mockImplementation(() => {
-        if (commands.reader.mock.calls.length === (parallel ? 2 : 1)) {
-          readersStarted.resolve();
-        }
-        return { completion: readers.promise, getForwardedSignal: () => undefined };
-      });
-      const entry = start(e2e ? [...targets, e2eTarget] : targets);
-      try {
-        await Promise.race([preparation.started, entry]);
-        expect(commands.reader).not.toHaveBeenCalled();
-        if (!e2e) {
-          expectPrivateQaPreparation();
-        }
-        if (outcome === "throw") {
-          preparation.reject(new Error(e2e ? "E2E build failed" : "build failed"));
-        } else {
-          preparation.resolve(outcome === "exit" ? 7 : 0);
-        }
-        if (outcome === "success") {
-          await Promise.race([readersStarted.promise, entry]);
-          expect(commands.reader).toHaveBeenCalledTimes(parallel ? 2 : 1);
-        }
-      } finally {
-        preparation.resolve(0);
-        readers.resolve({ code: 0, signal: null });
-        await entry;
+    { parallel: false, outcome: "success", e2e: false },
+    { parallel: true, outcome: "success", e2e: false },
+    { parallel: false, outcome: "exit", e2e: false },
+    { parallel: false, outcome: "throw", e2e: false },
+    { parallel: false, outcome: "throw", e2e: true },
+  ])("admits readers only after successful preparation: %j", async ({ parallel, outcome, e2e }) => {
+    vi.stubEnv("OPENCLAW_TEST_PROJECTS_PARALLEL", parallel ? "2" : "");
+    const preparation = createPreparationGate<number | NodeJS.ProcessEnv>(
+      e2e ? commands.prepareE2e : commands.prepare,
+    );
+    const readers = createDeferred<{ code: number; signal: null }>();
+    const readersStarted = createDeferred();
+    commands.reader.mockImplementation(() => {
+      if (commands.reader.mock.calls.length === (parallel ? 2 : 1)) {
+        readersStarted.resolve();
+      }
+      return { completion: readers.promise, getForwardedSignal: () => undefined };
+    });
+    const entry = start(e2e ? [...targets, e2eTarget] : targets);
+    try {
+      await Promise.race([preparation.started, entry]);
+      expect(commands.reader).not.toHaveBeenCalled();
+      if (!e2e) {
+        expectPrivateQaPreparation();
+      }
+      if (outcome === "throw") {
+        preparation.reject(new Error(e2e ? "E2E build failed" : "build failed"));
+      } else {
+        preparation.resolve(outcome === "exit" ? 7 : 0);
       }
       if (outcome === "success") {
-        expect(await terminal.promise).toMatch(/^\[test\] passed 2 Vitest shards/u);
-        expect(commands.reader).toHaveBeenCalledTimes(2);
-      } else {
-        expect(commands.reader).not.toHaveBeenCalled();
+        await Promise.race([readersStarted.promise, entry]);
+        expect(commands.reader).toHaveBeenCalledTimes(parallel ? 2 : 1);
       }
-      if (e2e) {
-        expect(commands.prepare).not.toHaveBeenCalled();
-      }
-      expect(process.exitCode).toBe(outcome === "success" ? 0 : outcome === "exit" ? 7 : 2);
-    },
-  );
+    } finally {
+      preparation.resolve(0);
+      readers.resolve({ code: 0, signal: null });
+      await entry;
+    }
+    if (outcome === "success") {
+      expect(await terminal.promise).toMatch(/^\[test\] passed 2 Vitest shards/u);
+      expect(commands.reader).toHaveBeenCalledTimes(2);
+    } else {
+      expect(commands.reader).not.toHaveBeenCalled();
+    }
+    if (e2e) {
+      expect(commands.prepare).not.toHaveBeenCalled();
+    }
+    expect(process.exitCode).toBe(outcome === "success" ? 0 : outcome === "exit" ? 7 : 2);
+  });
 
   it.each(["", "OPENCLAW_E2E_SKIP_BUILD", "OPENCLAW_E2E_USE_PREBUILT_DIST"])(
     "coalesces mixed E2E preparation and preserves prebuilt ownership (flag=%s)",
@@ -1734,69 +1726,38 @@ describe("plugin batch build admission", () => {
   const combined = [combinedConfig];
   const runtime = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
   type Selection = { ids?: string[]; args?: string[]; include?: string[] };
-  it.each<[string, Selection, boolean, string[]]>([
-    ["full QA", { ids: ["qa-lab"] }, true, qaConfigs],
-    ["shared config, channel only", { ids: ["qa-channel"] }, false, qaConfigs],
-    ["unrelated plugin", { ids: ["firecrawl"] }, false, [configPath("extension-misc")]],
-    ["ordinary QA file", { args: [ordinaryQa] }, false, combined],
-    ["lifecycle file", { args: [lifecycle] }, true, combined],
-    ["absolute lifecycle", { args: [path.resolve(lifecycle)] }, true, combined],
-    ["selective runtime exclusion", { args: ["--exclude", lifecycle] }, true, qaConfigs],
-    ["exact exclusion", { args: excludeQa() }, false, qaConfigs],
+  it.each<[Selection, boolean, string[]]>([
+    [{ ids: ["qa-lab"] }, true, qaConfigs],
+    [{ ids: ["qa-channel"] }, false, qaConfigs],
+    [{ ids: ["firecrawl"] }, false, [configPath("extension-misc")]],
+    [{ args: [ordinaryQa] }, false, combined],
+    [{ args: [lifecycle] }, true, combined],
+    [{ args: [path.resolve(lifecycle)] }, true, combined],
+    [{ args: ["--exclude", lifecycle] }, true, qaConfigs],
+    [{ args: excludeQa() }, false, qaConfigs],
+    [{ args: qaRuntimeConsumers.map((file) => `--exclude=${file}`) }, false, qaConfigs],
+    [{ args: excludeQa(scoped) }, false, qaConfigs],
+    [{ args: excludeQa((file) => path.resolve(file)) }, false, qaConfigs],
+    [{ args: excludeQa((file) => `${path.posix.dirname(file)}/**/*.test.ts`) }, false, combined],
+    [{ args: ["--exclude=extensions/qa-lab/**"] }, false, combined],
+    [{ include: [] }, false, qaConfigs],
+    [{ include: [ordinaryQa] }, false, qaConfigs],
+    [{ include: [lifecycle] }, true, qaConfigs],
+    [{ include: [path.resolve(lifecycle)] }, true, qaConfigs],
+    [{ include: [scoped(lifecycle)] }, true, qaConfigs],
+    [{ include: [runtime], args: [runtime] }, false, combined],
+    [{ ids: ["qa-channel"], include: [lifecycle] }, false, qaConfigs],
+    [{ ids: ["qa-channel"], args: [lifecycle], include: [lifecycle] }, true, combined],
+    [{ args: [ordinaryQa], include: [lifecycle] }, true, combined],
     [
-      "equals exclusion",
-      { args: qaRuntimeConsumers.map((file) => `--exclude=${file}`) },
-      false,
-      qaConfigs,
-    ],
-    ["scoped exclusion", { args: excludeQa(scoped) }, false, qaConfigs],
-    ["absolute exclusion", { args: excludeQa((file) => path.resolve(file)) }, false, qaConfigs],
-    [
-      "glob exclusion",
-      { args: excludeQa((file) => `${path.posix.dirname(file)}/**/*.test.ts`) },
-      false,
-      combined,
-    ],
-    ["all QA excluded", { args: ["--exclude=extensions/qa-lab/**"] }, false, combined],
-    ["empty include", { include: [] }, false, qaConfigs],
-    ["unrelated include", { include: [ordinaryQa] }, false, qaConfigs],
-    ["lifecycle include", { include: [lifecycle] }, true, qaConfigs],
-    ["absolute lifecycle include", { include: [path.resolve(lifecycle)] }, true, qaConfigs],
-    ["scoped lifecycle include", { include: [scoped(lifecycle)] }, true, qaConfigs],
-    [
-      "runtime include outside config directory",
-      { include: [runtime], args: [runtime] },
-      false,
-      combined,
-    ],
-    [
-      "include outside emitted roots",
-      { ids: ["qa-channel"], include: [lifecycle] },
-      false,
-      qaConfigs,
-    ],
-    [
-      "cross-root CLI with include",
-      { ids: ["qa-channel"], args: [lifecycle], include: [lifecycle] },
-      true,
-      combined,
-    ],
-    [
-      "include outside explicit target",
-      { args: [ordinaryQa], include: [lifecycle] },
-      true,
-      combined,
-    ],
-    [
-      "existing exact-exclude expansion",
       { args: [ordinaryQa, "--exclude", "extensions/codex/src/app-server/run-attempt.test.ts"] },
       true,
       combined,
     ],
-    ["no groups", { ids: [] }, false, []],
+    [{ ids: [] }, false, []],
   ])(
-    "prepares the actual invocation selection: %s",
-    async (_name, { ids = ["qa-lab"], args = [], include }, build, configs) => {
+    "prepares the actual invocation selection: %j, build=%s",
+    async ({ ids = ["qa-lab"], args = [], include }, build, configs) => {
       const { resolveExtensionBatchPlan } =
         await import("../../scripts/lib/extension-test-plan.mts");
       const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch-run.mts");

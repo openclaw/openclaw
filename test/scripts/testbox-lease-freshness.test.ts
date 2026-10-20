@@ -105,9 +105,7 @@ describe("Testbox lease freshness", () => {
 
   it("reuses audited install inputs after metadata and non-install scripts change", () => {
     const prepared = fixture.allocate();
-    const manifest = JSON.parse(fixture.read("package.json"));
-    fixture.writeJson("package.json", {
-      ...manifest,
+    fixture.manifest({
       scripts: { test: "node changed-test.mjs" },
       openclaw: { changed: true },
     });
@@ -159,11 +157,7 @@ describe("Testbox lease freshness", () => {
   it("fails closed on unaudited install lifecycle changes", () => {
     fixture.allocate();
     const saved = readFileSync(fixture.statePath, "utf8");
-    fixture.writeJson("package.json", {
-      name: "lease-fixture",
-      private: true,
-      scripts: { postinstall: "node arbitrary.mjs" },
-    });
+    fixture.manifest({ scripts: { postinstall: "node arbitrary.mjs" } });
     expect(() => fixture.reuse()).toThrow("unaudited install lifecycle scripts");
     expect(readFileSync(fixture.statePath, "utf8")).toBe(saved);
   });
@@ -366,7 +360,6 @@ describe("Testbox lease freshness", () => {
 
 function createLeaseFixture() {
   const root = tempDirs.make("openclaw-testbox-freshness-");
-  const read = (file: string) => readFileSync(join(root, file), "utf8");
   const write = (file: string, content: string) => {
     const target = join(root, file);
     mkdirSync(dirname(target), { recursive: true });
@@ -420,9 +413,11 @@ function createLeaseFixture() {
   };
   return {
     root,
-    read,
     write,
-    writeJson: (file: string, value: unknown) => write(file, JSON.stringify(value, null, 2)),
+    manifest(overrides: Record<string, unknown>) {
+      const value = { name: "lease-fixture", private: true, ...overrides };
+      write("package.json", JSON.stringify(value, null, 2));
+    },
     git,
     prepare,
     advanceHead,
