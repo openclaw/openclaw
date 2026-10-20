@@ -37,10 +37,8 @@ it.each([
   },
   {
     name: "collects each allowed string attribute once regardless of quoting",
-    source: `const view = <>
-        <input alt="Preview" aria-label='Search' placeholder={"Find files"} title={\`Open file\`} />
-        <span prop:title={"Details"} />
-      </>;`,
+    source: `<input alt="Preview" aria-label='Search' placeholder={"Find files"}
+        title={\`Open file\`} prop:title={"Details"} />;`,
     expected: [
       attribute("alt", "Preview"),
       attribute("aria-label", "Search"),
@@ -66,11 +64,9 @@ it.each([
   },
   {
     name: "keeps non-copy attributes, callbacks, comments, and translated expressions out",
-    source: `const view = <div
-        class="panel" id='example' data-title="Metadata" prop:id="Property"
+    source: `<div class="panel" id='example' data-title="Metadata" prop:id="Property"
         title={t("common.title")} aria-label={label} placeholder={getPlaceholder("key")}
-        onClick={() => console.log('title="Debug only"')}
-      >
+        onClick={() => console.log('title="Debug only"')}>
         {/* title="Comment only" */}
         {t("common.copy")}{count}{123}{" … "}
       </div>;`,

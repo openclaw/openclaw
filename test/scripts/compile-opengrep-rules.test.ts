@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { parse, stringify } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -23,92 +23,88 @@ const suffix =
   "  # retained separator\n  - id: untouched.after\n    pattern: |\n      after(...)\n";
 const original = `${prefix}  - id: test-report.target\n    pattern: old(...)\n${suffix}`;
 
-describe("compile-opengrep-rules", () => {
-  let rulesDir: string;
-  let outDir: string;
-  let binDir: string;
-  beforeEach(() => {
-    const directory = tempDirs.make("opengrep-compiler-test-");
-    rulesDir = path.join(directory, "rules");
-    outDir = path.join(directory, "out");
-    binDir = path.join(directory, "bin");
-    for (const dir of [rulesDir, outDir, binDir]) {
-      mkdirSync(dir);
-    }
-    writeOutput(original);
-    source([rule("target", "new($VALUE)")]);
-    const validator = path.join(binDir, "opengrep");
-    writeFileSync(
-      validator,
-      `#!${process.execPath}\nconst fs = require("node:fs");\nconst args = process.argv.slice(2);\nconst input = fs.readFileSync(args[args.indexOf("--config") + 1], "utf8");\nconst invalid = input.includes("invalid-fixture-pattern");\nconsole.log(JSON.stringify({errors: invalid ? [{rule_id: "test-report.target", type: "PatternParseError"}] : []}));\nprocess.exitCode = invalid ? 2 : 0;\n`,
-      { mode: 0o700 },
-    );
-  });
-
-  function source(rules: ReturnType<typeof rule>[], file = "source.yml") {
-    writeFileSync(path.join(rulesDir, file), stringify({ rules }));
+let rulesDir: string;
+let outDir: string;
+let binDir: string;
+beforeEach(() => {
+  const directory = tempDirs.make("opengrep-compiler-test-");
+  rulesDir = path.join(directory, "rules");
+  outDir = path.join(directory, "out");
+  binDir = path.join(directory, "bin");
+  for (const dir of [rulesDir, outDir, binDir]) {
+    mkdirSync(dir);
   }
-  const writeSource = (text: string) => writeFileSync(path.join(rulesDir, "source.yml"), text);
-  const writeOutput = (text: string) => writeFileSync(path.join(outDir, "precise.yml"), text);
-  function compile(...args: string[]) {
-    return spawnSync(
-      process.execPath,
-      [compiler, "--rules-dir", rulesDir, "--out-dir", outDir, ...args],
-      {
-        encoding: "utf8",
-        env: { PATH: `${binDir}${path.delimiter}${path.dirname(process.execPath)}` },
-      },
-    );
-  }
-  function output() {
-    return readFileSync(path.join(outDir, "precise.yml"), "utf8");
-  }
+  writeOutput(original);
+  source([rule("target", "new($VALUE)")]);
+  const validator = path.join(binDir, "opengrep");
+  writeFileSync(
+    validator,
+    `#!${process.execPath}\nconst fs = require("node:fs");\nconst args = process.argv.slice(2);\nconst input = fs.readFileSync(args[args.indexOf("--config") + 1], "utf8");\nconst invalid = input.includes("invalid-fixture-pattern");\nconsole.log(JSON.stringify({errors: invalid ? [{rule_id: "test-report.target", type: "PatternParseError"}] : []}));\nprocess.exitCode = invalid ? 2 : 0;\n`,
+    { mode: 0o700 },
+  );
+});
 
-  it("updates the selected rule while preserving all unrelated bytes", () => {
-    const result = compile("--update-existing");
-    expect(result.status, result.stderr).toBe(0);
-    expect(output().startsWith(prefix)).toBe(true);
-    expect(output().endsWith(suffix)).toBe(true);
-    expect(parse(output()).rules).toHaveLength(3);
-    expect(parse(output()).rules[1]).toMatchObject({
-      id: "test-report.target",
-      pattern: "new($VALUE)",
-      metadata: { "source-rule-id": "target", "detector-bucket": "precise" },
-    });
-  });
+function source(rules: ReturnType<typeof rule>[], file = "source.yml") {
+  writeFileSync(path.join(rulesDir, file), stringify({ rules }));
+}
+const writeSource = (text: string) => writeFileSync(path.join(rulesDir, "source.yml"), text);
+const writeOutput = (text: string) => writeFileSync(path.join(outDir, "precise.yml"), text);
+function compile(...args: string[]) {
+  return spawnSync(
+    process.execPath,
+    [compiler, "--rules-dir", rulesDir, "--out-dir", outDir, ...args],
+    {
+      encoding: "utf8",
+      env: { PATH: `${binDir}${path.delimiter}${path.dirname(process.execPath)}` },
+    },
+  );
+}
+const output = () => readFileSync(path.join(outDir, "precise.yml"), "utf8");
 
-  it.each([
-    ["unknown", () => source([rule("unknown")])],
-    ["duplicate-source", () => source([rule("target")], "second.yml")],
-    [
-      "duplicate-existing",
-      () => writeOutput(`${original}  - id: test-report.target\n    pattern: duplicate(...)\n`),
-    ],
-    ["bad-yaml", () => writeSource("rules: [")],
-    [
-      "missing-metadata",
-      () => writeSource(stringify({ rules: [{ ...rule("target"), metadata: {} }] })),
-    ],
-    ["invalid-pattern", () => source([rule("target", "invalid-fixture-pattern")])],
-    ["empty", () => writeSource("rules: []\n")],
-    ["conflicting-flags", () => {}],
-  ] as const)("rejects %s without publishing any changes", (scenario, prepare) => {
-    prepare();
-    const args = scenario === "conflicting-flags" ? ["--replace-precise"] : [];
-    const before = output();
-    expect(compile("--update-existing", ...args).status).toBe(1);
-    expect(output()).toBe(before);
+it("updates the selected rule while preserving all unrelated bytes", () => {
+  const result = compile("--update-existing");
+  expect(result.status, result.stderr).toBe(0);
+  expect(output().startsWith(prefix)).toBe(true);
+  expect(output().endsWith(suffix)).toBe(true);
+  expect(parse(output()).rules).toHaveLength(3);
+  expect(parse(output()).rules[1]).toMatchObject({
+    id: "test-report.target",
+    pattern: "new($VALUE)",
+    metadata: { "source-rule-id": "target", "detector-bucket": "precise" },
   });
+});
 
-  it("keeps append as the default and does not replace an existing rule", () => {
-    source([rule("target", "replacement(...)"), rule("new")]);
-    const result = compile();
-    expect(result.status, result.stderr).toBe(0);
-    const rules = parse(output()).rules;
-    expect(rules).toHaveLength(4);
-    expect(rules.find((entry: { id: string }) => entry.id === "test-report.target").pattern).toBe(
-      "old(...)",
-    );
-    expect(rules.at(-1).id).toBe("test-report.new");
-  });
+it.each([
+  ["unknown", () => source([rule("unknown")])],
+  ["duplicate-source", () => source([rule("target")], "second.yml")],
+  [
+    "duplicate-existing",
+    () => writeOutput(`${original}  - id: test-report.target\n    pattern: duplicate(...)\n`),
+  ],
+  ["bad-yaml", () => writeSource("rules: [")],
+  [
+    "missing-metadata",
+    () => writeSource(stringify({ rules: [{ ...rule("target"), metadata: {} }] })),
+  ],
+  ["invalid-pattern", () => source([rule("target", "invalid-fixture-pattern")])],
+  ["empty", () => writeSource("rules: []\n")],
+  ["conflicting-flags", () => {}],
+] as const)("rejects %s without publishing any changes", (scenario, prepare) => {
+  prepare();
+  const args = scenario === "conflicting-flags" ? ["--replace-precise"] : [];
+  const before = output();
+  expect(compile("--update-existing", ...args).status).toBe(1);
+  expect(output()).toBe(before);
+});
+
+it("keeps append as the default and does not replace an existing rule", () => {
+  source([rule("target", "replacement(...)"), rule("new")]);
+  const result = compile();
+  expect(result.status, result.stderr).toBe(0);
+  const rules = parse(output()).rules;
+  expect(rules).toHaveLength(4);
+  expect(rules.find((entry: { id: string }) => entry.id === "test-report.target").pattern).toBe(
+    "old(...)",
+  );
+  expect(rules.at(-1).id).toBe("test-report.new");
 });

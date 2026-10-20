@@ -53,6 +53,11 @@ const parseMemory = (text: string): Memory[] => lines(text).map((line) => JSON.p
 function mapValues(values: Record<string, unknown>, map: (value: unknown) => string) {
   return Object.fromEntries(Object.entries(values).map(([key, value]) => [key, map(value)]));
 }
+const tokenStep = (outputs: Record<string, string>) => ({ tokens: { outputs } });
+const jobResult = (ok: boolean, outputs: Record<string, string> = {}): JobResult => ({
+  result: ok ? "success" : "failure",
+  outputs,
+});
 function providerEnv(root: string, log: string, phase: string): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -172,6 +177,8 @@ export function createLocaleFinalizerHarness() {
       const root = fixture.worktree;
       const at = (...parts: string[]) => path.join(root, ...parts);
       const bin = (name: string) => path.join(fixture.fakeBin, name);
+      const shell = (script: string, env: NodeJS.ProcessEnv) =>
+        runWorkflowShellScript(script, { cwd: root, env, linuxWorkflow: true });
       // actions/checkout disables GC; detached maintenance would race the Git owner's lock scan.
       runGit(root, ["config", "gc.auto", "0"]);
       runGit(root, ["config", "maintenance.auto", "false"]);
@@ -283,7 +290,7 @@ export function createLocaleFinalizerHarness() {
           ...mapValues(step.env ?? {}, interpolate),
           GITHUB_OUTPUT: output,
         };
-        const result = runWorkflowShellScript(step.run, { cwd: root, env, linuxWorkflow: true });
+        const result = shell(step.run, env);
         trace.push({ step: step.name ?? "unnamed", status: result.status ?? 1 });
         if (result.status !== 0) {
           context.failed = true;
@@ -296,7 +303,6 @@ export function createLocaleFinalizerHarness() {
         return true;
       };
       const result = () => ({
-        root,
         fresh,
         later,
         sourceAtSetup,
@@ -344,22 +350,18 @@ export function createLocaleFinalizerHarness() {
       fs.writeFileSync(svFile, canonicalSv.join("\n") + "\n");
       commit(root, "canonical source before workers");
       runGit(root, ["push", "--quiet", "origin", "main"]);
-      const resolveStep: WorkflowStep = workflow.jobs["resolve-base"].steps[0];
-      const resolved = execute(resolveStep);
-      states["resolve-base"] = {
-        result: resolved ? "success" : "failure",
-        outputs: context.steps!.base?.outputs ?? {},
-      };
+      const resolved = execute(workflow.jobs["resolve-base"].steps[0]);
+      states["resolve-base"] = jobResult(resolved, context.steps!.base?.outputs);
       if (!resolved || !gate("publisher-preflight")) {
         return result();
       }
       // App-token issuance and GitHub repository settings are external services.
-      context.steps = { tokens: { outputs: { "pull-request-token": "test-token" } } };
+      context.steps = tokenStep({ "pull-request-token": "test-token" });
       const preflight: WorkflowStep = workflow.jobs["publisher-preflight"].steps.find(
         (step: WorkflowStep) => step.run,
       );
       const ready = execute(preflight);
-      states["publisher-preflight"] = { result: ready ? "success" : "failure", outputs: {} };
+      states["publisher-preflight"] = jobResult(ready);
       if (!gate("refresh")) {
         gate("finalize");
         return result();
@@ -385,7 +387,7 @@ export function createLocaleFinalizerHarness() {
           identity: { sourceCommit, runId: "123", runAttempt: "1" },
         });
       }
-      states.refresh = { result: "success", outputs: {} };
+      states.refresh = jobResult(true);
       runGit(root, ["restore", "--worktree", "--", assets]);
       const english = read(at(sourceFile));
       expect(english).toContain(before);
@@ -478,29 +480,21 @@ export function createLocaleFinalizerHarness() {
               ),
               ...inputs,
             },
-            steps: {
-              tokens: {
-                outputs: {
-                  "contents-token": "contents-token",
-                  "pull-request-token": "test-token",
-                },
-              },
-            },
+            steps: tokenStep({
+              "contents-token": "contents-token",
+              "pull-request-token": "test-token",
+            }),
           };
           const publicationEnv = Object.fromEntries(
             Object.entries(publication.env ?? {}).filter(([key]) => key !== "PUBLISH_ACTION_PATH"),
           );
-          const run = runWorkflowShellScript(publication.run!, {
-            cwd: root,
-            linuxWorkflow: true,
-            env: {
-              ...baseEnv,
-              ...mapValues(publicationEnv, (value) =>
-                String(evaluateWorkflowExpression(value, publicationContext)),
-              ),
-              CI_GIT_OWNER: at(".github/actions/git-owner/owner.py"),
-              PUBLISH_ACTION_PATH: at(".github/actions/publish-generated-pr"),
-            },
+          const run = shell(publication.run!, {
+            ...baseEnv,
+            ...mapValues(publicationEnv, (value) =>
+              String(evaluateWorkflowExpression(value, publicationContext)),
+            ),
+            CI_GIT_OWNER: at(".github/actions/git-owner/owner.py"),
+            PUBLISH_ACTION_PATH: at(".github/actions/publish-generated-pr"),
           });
           trace.push({ step: step.name!, status: run.status ?? 1 });
           expect(run.status, run.stdout + run.stderr).toBe(0);
