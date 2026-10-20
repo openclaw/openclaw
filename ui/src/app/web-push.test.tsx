@@ -264,11 +264,24 @@ describe("web push Gateway reconciliation", () => {
         "push.web.preferences.get",
         "push.web.preferences.get",
       ]);
+      const changePreferences = vi.fn();
       const { container } = mountSolid(() => (
-        <NotificationsSection connected={true} webPush={capability.snapshot} />
+        <NotificationsSection
+          connected={true}
+          webPush={capability.snapshot}
+          onWebPushSetUserPreferences={changePreferences}
+          onWebPushSetDevicePreferences={changePreferences}
+        />
       ));
       expect(container.textContent).toContain("Browser subscription only");
-      expect(container.querySelector(".settings-stack")?.hasAttribute("inert")).toBe(true);
+      expect(container.querySelector(".settings-stack")?.hasAttribute("inert")).toBe(false);
+      const controls = Array.from(
+        container.querySelectorAll(".settings-stack input, .settings-stack select"),
+      );
+      expect(controls.length).toBeGreaterThan(0);
+      expect(controls.every((control) => control.matches(":disabled"))).toBe(true);
+      container.querySelector<HTMLInputElement>(".settings-stack input")?.click();
+      expect(changePreferences).not.toHaveBeenCalled();
       expect(container.textContent).not.toContain("Send test");
       await capability.run({ kind: "disable" });
       expect(unsubscribe).toHaveBeenCalledOnce();
