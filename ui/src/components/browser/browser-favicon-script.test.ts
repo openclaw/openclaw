@@ -19,6 +19,10 @@ function readFavicon(maxBytes: number, timeoutMs: number): Promise<string | null
   });
 }
 
+function iconResponse(type = "image/png", content = "x") {
+  return { ok: true, blob: async () => new Blob([content], { type }) };
+}
+
 afterEach(() => {
   document.head.replaceChildren();
   vi.unstubAllGlobals();
@@ -33,9 +37,7 @@ describe("browser favicon page script", () => {
       <link rel="icon" href="/first.png">
       <link rel="shortcut icon" sizes="16x16 32x32" href="/preferred.png">
     `;
-    const fetchIcon = vi
-      .fn()
-      .mockResolvedValue({ ok: true, blob: async () => new Blob(["x"], { type: "image/png" }) });
+    const fetchIcon = vi.fn().mockResolvedValue(iconResponse());
     vi.stubGlobal("fetch", fetchIcon);
     expect(await readFavicon(1, 10_000)).toBe("data:image/png;base64,eA==");
     expect(fetchIcon).toHaveBeenCalledExactlyOnceWith(
@@ -52,10 +54,7 @@ describe("browser favicon page script", () => {
     { type: "image/svg+xml; charset=utf-8", expected: "data:image/svg+xml;base64,eA==" },
     { type: "image/invalid type; charset=utf-8", expected: null },
   ])("normalizes and validates the MIME type $type", async ({ type, expected }) => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(["x"], { type }) }),
-    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(iconResponse(type)));
     expect(await readFavicon(1, 10_000)).toBe(expected);
   });
 
@@ -69,16 +68,10 @@ describe("browser favicon page script", () => {
     const fetchIcon = vi
       .fn()
       .mockResolvedValueOnce({ ok: false })
-      .mockResolvedValueOnce({
-        ok: true,
-        blob: async () => new Blob(["xx"], { type: "image/png" }),
-      })
+      .mockResolvedValueOnce(iconResponse("image/png", "xx"))
       .mockRejectedValueOnce(new TypeError("CORS"))
-      .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["x"], { type: "text/html" }) })
-      .mockResolvedValueOnce({
-        ok: true,
-        blob: async () => new Blob(["x"], { type: "image/png" }),
-      });
+      .mockResolvedValueOnce(iconResponse("text/html"))
+      .mockResolvedValueOnce(iconResponse());
     vi.stubGlobal("fetch", fetchIcon);
     expect(await readFavicon(1, 10_000)).toBe("data:image/png;base64,eA==");
     expect(fetchIcon.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([

@@ -11,6 +11,12 @@ import {
 
 setupBrowserPanelTestCleanup();
 
+const dashboardTarget = {
+  sessionKey: "agent:main:dashboard",
+  name: "status",
+  instanceId: "instance",
+};
+
 describe("Browser dashboard panel target ownership", () => {
   it("does not download a document through a session-scoped dashboard", async () => {
     const { client, request } = createBrowserClient(async () => {
@@ -18,9 +24,8 @@ describe("Browser dashboard panel target ownership", () => {
     });
     const host = Object.assign(new TestBrowserPanelHost(client), {
       dashboardTarget: {
-        sessionKey: "agent:main:dashboard",
+        ...dashboardTarget,
         name: "preview",
-        instanceId: "instance",
         sessionScoped: true,
       },
     });
@@ -39,11 +44,7 @@ describe("Browser dashboard panel target ownership", () => {
     }));
     const host = Object.assign(new TestBrowserPanelHost(client), {
       fixedTab: { target: "host" as const, profile: "openclaw", targetId: "kept-tab" },
-      dashboardTarget: {
-        sessionKey: "agent:main:dashboard",
-        name: "status",
-        instanceId: "instance",
-      },
+      dashboardTarget,
     });
     const controller = host.createPanel();
     controller.activeTargetId = "kept-tab";
@@ -51,9 +52,7 @@ describe("Browser dashboard panel target ownership", () => {
 
     await controller.refreshAll();
 
-    expect(controller.tabs).toEqual([]);
-    expect(controller.activeTargetId).toBeNull();
-    expect(controller.view).toBeNull();
+    expect(controller).toMatchObject({ tabs: [], activeTargetId: null, view: null });
     expect(request.mock.calls.map(([, envelope]) => envelope)).toEqual([
       { method: "GET", path: "/tabs", dashboard: host.dashboardTarget },
     ]);
@@ -100,11 +99,7 @@ describe("Browser dashboard panel target ownership", () => {
     });
     const host = Object.assign(new TestBrowserPanelHost(client), {
       fixedTab: { target: "host" as const, profile: "openclaw", targetId },
-      dashboardTarget: {
-        sessionKey: "agent:main:dashboard",
-        name: "status",
-        instanceId: "instance",
-      },
+      dashboardTarget,
     });
     const controller = host.createPanel();
     controller.activeTargetId = targetId;

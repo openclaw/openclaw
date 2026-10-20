@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   createBrowserClient,
@@ -9,18 +9,21 @@ import {
 } from "./browser-panel-controller-test-support.ts";
 
 setupBrowserPanelTestCleanup();
+beforeEach(() => vi.useFakeTimers());
+
+const latestUrl = "https://example.test/latest";
+const latestCapture = { path: "/latest.png", targetId: "raw-a", url: latestUrl };
 
 describe("Browser panel input feedback", () => {
   it("refreshes fallback feedback during continuous input instead of waiting for idle", async () => {
-    vi.useFakeTimers();
     stubScreenshotMedia();
     let captures = 0;
     const { client } = createBrowserClient(async (envelope) => {
       if (envelope.path === "/screenshot") {
         captures += 1;
-        return { path: "/latest.png", targetId: "raw-a", url: "https://example.test/latest" };
+        return { ...latestCapture };
       }
-      return createBrowserPanelTestMetrics("https://example.test/latest", "Latest");
+      return createBrowserPanelTestMetrics(latestUrl, "Latest");
     });
     const controller = createBrowserPanelTestController(client, "tab-a");
 
@@ -38,7 +41,6 @@ describe("Browser panel input feedback", () => {
   });
 
   it("keeps a slow fallback capture and delivers trailing input feedback", async () => {
-    vi.useFakeTimers();
     stubScreenshotMedia();
     const capture = createDeferred<unknown>();
     let captures = 0;
@@ -48,9 +50,9 @@ describe("Browser panel input feedback", () => {
         if (captures === 1) {
           return await capture.promise;
         }
-        return { path: "/latest.png", targetId: "raw-a", url: "https://example.test/latest" };
+        return { ...latestCapture };
       }
-      return createBrowserPanelTestMetrics("https://example.test/latest", "Latest");
+      return createBrowserPanelTestMetrics(latestUrl, "Latest");
     });
     const controller = createBrowserPanelTestController(client, "tab-a");
     controller.input.handleViewportKeydown(new KeyboardEvent("keydown", { key: "a" }));
@@ -73,18 +75,15 @@ describe("Browser panel input feedback", () => {
   });
 
   it.each([true, false])("coalesces wheel bursts at the %s live-stream cadence", async (live) => {
-    vi.useFakeTimers();
     const { client, request } = createBrowserClient(async () => ({ result: true }));
     const controller = createBrowserPanelTestController(client, "tab-a");
     vi.spyOn(controller.stream, "ownsView").mockReturnValue(live);
     const delay = live ? 50 : 150;
 
-    controller.input.handleWheel(
-      new WheelEvent("wheel", { deltaX: 5, deltaY: 60, cancelable: true }),
-    );
-    controller.input.handleWheel(
-      new WheelEvent("wheel", { deltaX: 7, deltaY: 40, cancelable: true }),
-    );
+    const wheel = (deltaX: number, deltaY: number) =>
+      controller.input.handleWheel(new WheelEvent("wheel", { deltaX, deltaY, cancelable: true }));
+    wheel(5, 60);
+    wheel(7, 40);
     await vi.advanceTimersByTimeAsync(delay - 1);
     expect(request).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);

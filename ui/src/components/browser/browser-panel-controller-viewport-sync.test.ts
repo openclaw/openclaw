@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resizeBrowserViewport } from "./browser-client.ts";
 import {
   createBrowserClient,
@@ -11,6 +11,16 @@ import {
 } from "./browser-panel-controller-test-support.ts";
 
 setupBrowserPanelTestCleanup();
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  stubScreenshotMedia();
+});
+
+const url = "https://example.test/t";
+const metrics = (cssWidth: number, cssHeight: number, title: string) => ({
+  result: { cssWidth, cssHeight, title, url },
+});
+const screenshot = (targetId: string) => ({ path: "/fresh.png", targetId, url });
 
 function actionRequests(request: ReturnType<typeof createBrowserClient>["request"], kind: string) {
   return request.mock.calls
@@ -22,23 +32,19 @@ describe("BrowserPanel viewport sync", () => {
   it.each([false, true, undefined])(
     "only auto-fits a browser whose owner allows it (canAutoResizeViewport=%s)",
     async (canAutoResizeViewport) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-      stubScreenshotMedia();
       const { client, request } = createBrowserClient(async (envelope) => {
         if (envelope.path === "/tabs") {
           return {
             running: true,
             canAutoResizeViewport,
-            tabs: [{ targetId: "tab-a", title: "A", url: "https://example.test/a" }],
+            tabs: [{ targetId: "tab-a", title: "A", url }],
           };
         }
         if (envelope.path === "/screenshot") {
-          return { path: "/fresh.png", targetId: "tab-a", url: "https://example.test/a" };
+          return screenshot("tab-a");
         }
         if (envelope.path === "/act" && envelope.body?.kind === "evaluate") {
-          return {
-            result: { cssWidth: 1200, cssHeight: 800, title: "A", url: "https://example.test/a" },
-          };
+          return metrics(1200, 800, "A");
         }
         if (
           envelope.path === "/act" &&
@@ -80,7 +86,6 @@ describe("BrowserPanel viewport sync", () => {
   );
 
   it("drops a debounced resize when the dock closes before it fires", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const { client, request } = createBrowserClient(async () => ({ ok: true }));
     const host = new TestBrowserPanelHost(client);
     const controller = host.createPanel();
@@ -96,25 +101,17 @@ describe("BrowserPanel viewport sync", () => {
   });
 
   it("re-syncs a revisited tab after its document changed size elsewhere", async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    stubScreenshotMedia();
-    // Tab A's viewport is changed remotely (e.g. by an agent) while B is
-    // active; revisiting A must re-request the panel size even though it was
-    // already requested once for A.
     let revisitedA = false;
     const metricsFor = (targetId: string) =>
-      targetId === "tab-a" && revisitedA
-        ? { result: { cssWidth: 900, cssHeight: 600, title: "A", url: "https://example.test/t" } }
-        : { result: { cssWidth: 700, cssHeight: 500, title: "T", url: "https://example.test/t" } };
+      targetId === "tab-a" && revisitedA ? metrics(900, 600, "A") : metrics(700, 500, "T");
     const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/tabs/focus") {
-        return { ok: true };
-      }
       if (envelope.path === "/screenshot") {
-        const targetId = String(envelope.body?.targetId);
-        return { path: "/fresh.png", targetId, url: "https://example.test/t" };
+        return screenshot(String(envelope.body?.targetId));
       }
-      if (envelope.path === "/act" && envelope.body?.kind === "resize") {
+      if (
+        envelope.path === "/tabs/focus" ||
+        (envelope.path === "/act" && envelope.body?.kind === "resize")
+      ) {
         return { ok: true };
       }
       if (envelope.path === "/act") {
@@ -129,16 +126,15 @@ describe("BrowserPanel viewport sync", () => {
     await vi.advanceTimersByTimeAsync(300);
     expect(actionRequests(request, "resize")).toHaveLength(1);
 
-    const toB = controller.selectTab("tab-b");
-    await vi.advanceTimersByTimeAsync(0);
-    await toB;
-    await vi.advanceTimersByTimeAsync(300);
-
+    async function selectTab(targetId: string) {
+      const pending = controller.selectTab(targetId);
+      await vi.advanceTimersByTimeAsync(0);
+      await pending;
+      await vi.advanceTimersByTimeAsync(300);
+    }
+    await selectTab("tab-b");
     revisitedA = true;
-    const backToA = controller.selectTab("tab-a");
-    await vi.advanceTimersByTimeAsync(0);
-    await backToA;
-    await vi.advanceTimersByTimeAsync(300);
+    await selectTab("tab-a");
 
     const resizes = actionRequests(request, "resize").map((envelope) => envelope.body);
     expect(resizes.at(-1)).toEqual({ kind: "resize", targetId: "tab-a", width: 700, height: 500 });

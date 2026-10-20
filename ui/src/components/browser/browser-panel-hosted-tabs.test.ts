@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { NativeBrowserTab } from "../../app/native-browser-bridge.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -13,16 +14,40 @@ import {
 import "./browser-panel.ts";
 
 const favicon = "data:image/png;base64,eA==";
+const nativeDefaults = {
+  loading: false,
+  canGoBack: false,
+  canGoForward: false,
+  openedBy: "web",
+} satisfies Partial<NativeBrowserTab>;
 const nativeTab = {
   id: "native:b",
   title: "",
   url: "https://second.test/b",
   favicon,
-  loading: false,
-  canGoBack: false,
-  canGoForward: false,
-  openedBy: "web",
+  ...nativeDefaults,
 };
+
+function nativeState(tabs: NativeBrowserTab[]) {
+  vi.stubGlobal("webkit", {
+    messageHandlers: { openclawBrowser: { postMessage: vi.fn().mockResolvedValue({ ok: true }) } },
+  });
+  vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 0, tabs });
+}
+
+function publishTabs(revision: number, tabs: NativeBrowserTab[]) {
+  window.dispatchEvent(
+    new CustomEvent("openclaw:native-browser-state", { detail: { revision, tabs } }),
+  );
+}
+
+const query = (panel: HTMLElement, selector: string) => panel.querySelector<HTMLElement>(selector);
+const projectedTab = (id: string, label: string, url: string) => ({
+  id,
+  label,
+  url,
+  icon: expect.any(SVGSVGElement),
+});
 
 describe("Browser panel hosted tabs", () => {
   beforeEach(() => {
@@ -44,12 +69,7 @@ describe("Browser panel hosted tabs", () => {
       );
     }
     stubScreenshotMedia();
-    vi.stubGlobal("webkit", {
-      messageHandlers: {
-        openclawBrowser: { postMessage: vi.fn().mockResolvedValue({ ok: true }) },
-      },
-    });
-    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 0, tabs: [nativeTab] });
+    nativeState([nativeTab]);
     const gateway = createBrowserClient(async (request) => {
       if (request.path === "/tabs") {
         return {
@@ -94,8 +114,8 @@ describe("Browser panel hosted tabs", () => {
       expect(Boolean(panel.querySelector(".bp-header"))).toBe(ownsStrip);
       expect(Boolean(panel.querySelector(".tabstrip"))).toBe(ownsStrip);
       expect(panel.querySelector(".bp-toolbar")).not.toBeNull();
-      const viewport = panel.querySelector<HTMLElement>(".bp-viewport")!;
-      const activeTab = panel.querySelector<HTMLElement>('.tabstrip-tab[aria-selected="true"]');
+      const viewport = query(panel, ".bp-viewport")!;
+      const activeTab = query(panel, '.tabstrip-tab[aria-selected="true"]');
       expect(viewport.getAttribute("aria-labelledby")).toBe(ownsStrip ? activeTab?.id : null);
       if (ownsStrip) {
         expect(activeTab).not.toBeNull();
@@ -116,20 +136,9 @@ describe("Browser panel hosted tabs", () => {
     expect(readPanelHostedTabs(panel)).toBe(panel);
     const hostedTabs = panel.hostedTabs;
     expect(hostedTabs).toEqual([
-      {
-        id: "native:b",
-        label: "second.test",
-        url: "https://second.test/b",
-        icon: expect.any(SVGSVGElement),
-        favicon,
-      },
-      {
-        id: "remote:a",
-        label: "Example",
-        url: "https://example.test/a",
-        icon: expect.any(SVGSVGElement),
-      },
-      { id: "remote:c", label: "New tab", url: "about:blank", icon: expect.any(SVGSVGElement) },
+      { ...projectedTab("native:b", "second.test", "https://second.test/b"), favicon },
+      projectedTab("remote:a", "Example", "https://example.test/a"),
+      projectedTab("remote:c", "New tab", "about:blank"),
     ]);
     expect(hostedTabs[0]!.icon).not.toBe(panel.hostedTabs[0]!.icon);
     expect(panel.activeHostedTabId).toBe("remote:a");
@@ -144,34 +153,26 @@ describe("Browser panel hosted tabs", () => {
 
     const second = await mount(true, false);
     for (const browser of [panel, second.panel]) {
-      const viewport = browser.querySelector<HTMLElement>(".bp-viewport")!;
+      const viewport = query(browser, ".bp-viewport")!;
       expect(document.getElementById(viewport.id)).toBe(viewport);
       for (const tab of browser.querySelectorAll<HTMLElement>(".tabstrip-tab")) {
         expect(document.getElementById(tab.id)).toBe(tab);
         expect(tab.getAttribute("aria-controls")).toBe(viewport.id);
       }
-      const activeTab = browser.querySelector<HTMLElement>('.tabstrip-tab[aria-selected="true"]')!;
+      const activeTab = query(browser, '.tabstrip-tab[aria-selected="true"]')!;
       expect(viewport.getAttribute("aria-labelledby")).toBe(activeTab.id);
     }
   });
 
   it("publishes favicon-only native pushes to hosted tabs and the dock strip", async () => {
     const tab = {
+      ...nativeDefaults,
       id: "mac-icon",
       sessionKey: "session-icon",
       url: "https://example.test/page",
       title: "Example page",
-      loading: false,
-      canGoBack: false,
-      canGoForward: false,
-      openedBy: "web",
     };
-    vi.stubGlobal("webkit", {
-      messageHandlers: {
-        openclawBrowser: { postMessage: vi.fn().mockResolvedValue({ ok: true }) },
-      },
-    });
-    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 0, tabs: [tab] });
+    nativeState([tab]);
     const panel = document.createElement("openclaw-browser-panel");
     panel.sessionKey = tab.sessionKey;
     panel.available = true;
@@ -182,20 +183,12 @@ describe("Browser panel hosted tabs", () => {
     await panel.updateComplete;
     const changed = vi.fn();
     panel.addEventListener(PANEL_HOSTED_TABS_CHANGE_EVENT, changed);
-    window.dispatchEvent(
-      new CustomEvent("openclaw:native-browser-state", {
-        detail: { revision: 1, tabs: [{ ...tab, favicon }] },
-      }),
-    );
+    publishTabs(1, [{ ...tab, favicon }]);
     await panel.updateComplete;
     expect(panel.hostedTabs[0]?.favicon).toBe(favicon);
     expect(panel.querySelector("img.tabstrip-tab__favicon")?.getAttribute("src")).toBe(favicon);
     expect(changed).toHaveBeenCalledOnce();
-    window.dispatchEvent(
-      new CustomEvent("openclaw:native-browser-state", {
-        detail: { revision: 2, tabs: [tab] },
-      }),
-    );
+    publishTabs(2, [tab]);
     await panel.updateComplete;
     expect(panel.hostedTabs[0]?.favicon).toBeUndefined();
     expect(panel.querySelector("img.tabstrip-tab__favicon")).toBeNull();
@@ -217,11 +210,7 @@ describe("Browser panel hosted tabs", () => {
       });
       expect(panel.activeHostedTabId).toBe("native:b");
 
-      window.dispatchEvent(
-        new CustomEvent("openclaw:native-browser-state", {
-          detail: { revision: 1, tabs: [{ ...nativeTab, title: "Changed" }] },
-        }),
-      );
+      publishTabs(1, [{ ...nativeTab, title: "Changed" }]);
       await panel.updateComplete;
       expect(changed).toHaveBeenCalledTimes(2);
       expect(panel.hostedTabs.map((tab) => tab.label)).toEqual(["Changed", "Example", "New tab"]);
