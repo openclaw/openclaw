@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 
-const gatewayMocks = vi.hoisted(() => ({
-  callGatewayTool: vi.fn(),
-}));
+const gatewayMocks = vi.hoisted(() => ({ callGatewayTool: vi.fn() }));
 vi.mock("./gateway.js", () => ({
   callGatewayTool: (...args: unknown[]) => gatewayMocks.callGatewayTool(...args),
 }));
@@ -12,21 +10,14 @@ import type { NodeListNode } from "./nodes-utils.js";
 import { listNodes, resolveNodeIdFromList, selectDefaultNodeFromList } from "./nodes-utils.js";
 
 function node({ nodeId, ...overrides }: Partial<NodeListNode> & { nodeId: string }): NodeListNode {
-  return {
-    nodeId,
-    caps: ["canvas"],
-    connected: true,
-    ...overrides,
-  };
+  return { nodeId, caps: ["canvas"], connected: true, ...overrides };
 }
 
 function offline(nodeId: string, platform: string, connectedAtMs?: number, lastSeenAtMs?: number) {
   return node({ nodeId, platform, connected: false, connectedAtMs, lastSeenAtMs });
 }
 
-beforeEach(() => {
-  gatewayMocks.callGatewayTool.mockReset();
-});
+beforeEach(() => gatewayMocks.callGatewayTool.mockReset());
 
 describe("resolveNodeIdFromList defaults", () => {
   it("selects a default in one comparison per remaining candidate", () => {
@@ -35,17 +26,15 @@ describe("resolveNodeIdFromList defaults", () => {
     );
     const original = nodes.slice();
     const compare = vi.spyOn(String.prototype, "localeCompare");
-    let selected: NodeListNode | null;
-    let comparisons: number;
     try {
-      selected = selectDefaultNodeFromList(nodes, { fallback: "first" });
-      comparisons = compare.mock.calls.length;
+      const selected = selectDefaultNodeFromList(nodes, { fallback: "first" });
+      const comparisons = compare.mock.calls.length;
+      expect(selected).toBe(nodes[0]);
+      expect(nodes).toEqual(original);
+      expect(comparisons).toBeLessThanOrEqual(nodes.length - 1);
     } finally {
       compare.mockRestore();
     }
-    expect(selected).toBe(nodes[0]);
-    expect(nodes).toEqual(original);
-    expect(comparisons).toBeLessThanOrEqual(nodes.length - 1);
   });
 
   it.each([
@@ -53,14 +42,9 @@ describe("resolveNodeIdFromList defaults", () => {
       name: "connected candidates outrank offline recency",
       nodes: [
         offline("offline-phone", "ios", undefined, 5000),
-        node({
-          nodeId: "connected-desktop",
-          platform: "android",
-          connectedAtMs: 1000,
-          lastSeenAtMs: 1000,
-        }),
+        node({ nodeId: "online", platform: "android", connectedAtMs: 1000, lastSeenAtMs: 1000 }),
       ],
-      expected: "connected-desktop",
+      expected: "online",
     },
     {
       name: "one local Mac outranks a more recently seen node",

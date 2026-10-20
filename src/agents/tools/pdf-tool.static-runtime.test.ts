@@ -36,49 +36,35 @@ it.each(["alias", "inline"])(
         const modelId = alias ? "middle" : "gpt-5.6-luna";
         const api = alias ? "openai-completions" : "openai-responses";
         const baseUrl = "http://127.0.0.1:9/v1";
-        const input: "text"[] = ["text"];
-        const makeModel = (id: string) => ({
-          id,
-          name: id,
-          reasoning: !alias,
-          input,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: alias ? 16_000 : 128_000,
-          maxTokens: alias ? 4096 : 8192,
-        });
-        const pluginDir = path.join(state.root, "provider");
+        const makeModel = (id: string) => ({ id, name: id, input: ["text"] });
+        const pluginDir = path.join(state.stateDir, "provider");
         if (alias) {
-          await fs.mkdir(pluginDir);
-          await fs.writeFile(
-            path.join(pluginDir, "openclaw.plugin.json"),
-            JSON.stringify({
-              id: provider,
-              providers: [provider],
-              configSchema: { type: "object", properties: {}, additionalProperties: false },
-              modelIdNormalization: {
-                providers: { [provider]: { aliases: { entry: "middle", middle: "final" } } },
-              },
-              modelCatalog: {
-                discovery: { [provider]: "static" },
-                providers: {
-                  [provider]: {
-                    api,
-                    baseUrl,
-                    models: ["middle", "final"].map((id) => Object.assign(makeModel(id), { api })),
-                  },
+          await state.writeJson("provider/openclaw.plugin.json", {
+            id: provider,
+            providers: [provider],
+            configSchema: { type: "object", properties: {}, additionalProperties: false },
+            modelIdNormalization: {
+              providers: { [provider]: { aliases: { entry: "middle", middle: "final" } } },
+            },
+            modelCatalog: {
+              discovery: { [provider]: "static" },
+              providers: {
+                [provider]: {
+                  api,
+                  baseUrl,
+                  models: ["middle", "final"].map((id) => Object.assign(makeModel(id), { api })),
                 },
               },
-            }),
-          );
-          await fs.writeFile(
-            path.join(pluginDir, "index.cjs"),
+            },
+          });
+          await state.writeText(
+            "provider/index.cjs",
             `module.exports = { id: ${JSON.stringify(provider)}, register(api) { api.registerProvider({ id: ${JSON.stringify(provider)}, label: "PDF alias fixture", auth: [] }); } };`,
           );
         }
         const modelRef = `${provider}/${alias ? "entry" : modelId}`;
         await state.writeConfig({
           agents: {
-            entries: { main: {} },
             defaults: {
               workspace: state.workspaceDir,
               model: { primary: modelRef },
@@ -86,26 +72,24 @@ it.each(["alias", "inline"])(
             },
           },
           models: {
-            ...(!alias ? { mode: "replace" } : {}),
+            mode: alias ? undefined : "replace",
             providers: {
               [provider]: {
                 baseUrl,
                 apiKey: "synthetic-fixture",
                 models: alias ? [] : [makeModel(modelId)],
-                ...(!alias ? { api: "openai-responses" } : {}),
+                api: alias ? undefined : "openai-responses",
               },
             },
           },
-          ...(alias
+          plugins: alias
             ? {
-                plugins: {
-                  allow: [provider],
-                  entries: { [provider]: { enabled: true } },
-                  load: { paths: [path.join(pluginDir, "index.cjs")] },
-                  slots: { memory: "none" },
-                },
+                allow: [provider],
+                entries: { [provider]: { enabled: true } },
+                load: { paths: [path.join(pluginDir, "index.cjs")] },
+                slots: { memory: "none" },
               }
-            : {}),
+            : undefined,
         });
         const config = loadConfig({
           pin: false,
@@ -114,44 +98,38 @@ it.each(["alias", "inline"])(
         });
         const agentDir = state.agentDir();
         await fs.mkdir(agentDir, { recursive: true });
-        const lease = await acquireAgentRunPreparedModelRuntime(
+        await using lease = await acquireAgentRunPreparedModelRuntime(
           { agentDir, config, workspaceDir: state.workspaceDir },
           { catalogMode: "static" },
         );
-        try {
-          vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
-          vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({
-            text: "Captured model fixture",
-            images: [],
-          });
-          completeMock.mockResolvedValue({
-            role: "assistant",
-            stopReason: "stop",
-            content: [{ type: "text", text: "selected model" }],
-          });
-          const tool = createPdfTool({
+        vi.spyOn(webMedia, "loadWebMediaRaw").mockResolvedValue(FAKE_PDF_MEDIA);
+        vi.spyOn(pdfExtract, "extractPdfContent").mockResolvedValue({
+          text: "Captured model fixture",
+          images: [],
+        });
+        completeMock.mockResolvedValue({
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "selected model" }],
+        });
+        const tool =
+          createPdfTool({
             config,
             agentDir,
             workspaceDir: state.workspaceDir,
             preparedModelRuntime: lease.snapshot,
-          });
-          if (!tool) {
-            throw new Error("expected PDF tool");
-          }
-          const result = await tool.execute("pdf-static", {
-            prompt: "Summarize",
-            pdf: path.join(state.workspaceDir, "fixture.pdf"),
-          });
-          expect(completeMock).toHaveBeenCalledExactlyOnceWith(
-            expect.objectContaining({ provider, id: modelId, baseUrl }),
-            expect.any(Object),
-            expect.any(Object),
-            expect.any(Function),
-          );
-          expect(result.details).toMatchObject({ model: `${provider}/${modelId}`, native: false });
-        } finally {
-          await lease[Symbol.asyncDispose]();
-        }
+          }) ?? expect.fail("expected PDF tool");
+        const result = await tool.execute("pdf-static", {
+          prompt: "Summarize",
+          pdf: path.join(state.workspaceDir, "fixture.pdf"),
+        });
+        expect(completeMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ provider, id: modelId, baseUrl }),
+          expect.any(Object),
+          expect.any(Object),
+          expect.any(Function),
+        );
+        expect(result.details).toMatchObject({ model: `${provider}/${modelId}`, native: false });
       },
     );
   },

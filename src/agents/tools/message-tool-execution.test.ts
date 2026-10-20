@@ -9,10 +9,8 @@ import { resolveReactionMessageId } from "../../channels/plugins/actions/reactio
 import type {
   ChannelMessageActionContext,
   ChannelMessageActionName,
-  ChannelPlugin,
 } from "../../channels/plugins/types.public.js";
 import * as commandSecretGateway from "../../cli/command-secret-gateway.js";
-import * as commandSecretTargets from "../../cli/command-secret-targets.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -35,14 +33,11 @@ import {
 import type { PluginHookMessageSendingResult } from "../../plugins/hook-message.types.js";
 import { createHookRunner } from "../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../../plugins/runtime.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import { readEmbeddedMessageDeliveryFact } from "../embedded-agent-message-delivery.js";
 import { isDeliveredMessageToolOnlySourceReplyResult } from "../embedded-agent-message-tool-source-reply.js";
@@ -56,6 +51,11 @@ import { readToolResultDetails } from "../tool-result-error.js";
 import { jsonResult } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import {
+  messageSource,
+  registerMessageChannel as registerChannel,
+  stubMessageSecrets,
+} from "./message-tool-execution.test-support.js";
 
 const EMPTY_CATALOG = {
   version: 0,
@@ -63,27 +63,7 @@ const EMPTY_CATALOG = {
   getChannel: () => undefined,
 } as const;
 
-function registerChannel(plugin: ChannelPlugin, origin?: "bundled") {
-  setActivePluginRegistry(
-    createTestRegistry([
-      { pluginId: plugin.id, source: "test", plugin, ...(origin ? { origin } : {}) },
-    ]),
-  );
-}
-
-beforeEach(() => {
-  vi.spyOn(commandSecretTargets, "getScopedChannelsCommandSecretTargets").mockReturnValue({
-    targetIds: new Set<string>(),
-  });
-  vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
-    async ({ config }) => ({
-      resolvedConfig: config,
-      diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
-    }),
-  );
-});
+beforeEach(stubMessageSecrets);
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -103,9 +83,9 @@ describe("registered message action source completion", () => {
     expected?: true;
   };
   function completion(
-    action: ChannelMessageActionName,
     mode: string,
     details: Omit<CompletionCase, "action" | "mode"> = {},
+    action: ChannelMessageActionName = "upload-file",
   ): CompletionCase {
     return { action, mode, ...details };
   }
@@ -121,15 +101,15 @@ describe("registered message action source completion", () => {
         "sendWithEffect",
       ] as const
     ).map((action) => ({ action, mode: "implicit target", expected: true as const })),
-    completion("send", "explicit target", { target: "channel:C123", expected: true }),
-    completion("upload-file", "different delivered recipient", {
+    completion("explicit target", { target: "channel:C123", expected: true }, "send"),
+    completion("different delivered recipient", {
       target: "C123",
       delivery: { toJid: "C999" },
     }),
-    completion("send", "media", { media: true, expected: true }),
-    completion("send", "redirected media", { media: true, delivery: { channelId: "C999" } }),
-    completion("upload-file", "other destination", { target: "C999" }),
-    completion("upload-file", "other request returning source", {
+    completion("media", { media: true, expected: true }, "send"),
+    completion("redirected media", { media: true, delivery: { channelId: "C999" } }, "send"),
+    completion("other destination", { target: "C999" }),
+    completion("other request returning source", {
       target: "C999",
       delivery: { toJid: "C123" },
     }),
@@ -138,21 +118,22 @@ describe("registered message action source completion", () => {
       mode: `reported ${field}`,
       delivery: { [field]: "C999" },
     })),
-    completion("upload-file", "canonical target", {
+    completion("canonical target", {
       delivery: { target: { kind: "chat", id: "C999" } },
     }),
-    completion("upload-file", "normalized recipient", {
+    completion("normalized recipient", {
       delivery: { toJid: "channel:C123" },
       expected: true,
     }),
-    completion("sendWithEffect", "legacy result without recipient", {
-      delivery: {},
-      expected: true,
-    }),
-    completion("upload-file", "nested result", {
+    completion(
+      "legacy result without recipient",
+      { delivery: {}, expected: true },
+      "sendWithEffect",
+    ),
+    completion("nested result", {
       delivery: { result: { messageId: "native-message-1", roomId: "C999" } },
     }),
-    completion("upload-file", "mixed receipt parts", {
+    completion("mixed receipt parts", {
       delivery: {
         receipt: {
           parts: [
@@ -167,9 +148,9 @@ describe("registered message action source completion", () => {
       mode,
       target: "C123",
     })),
-    completion("react", "non-reply mutation", { target: "C123" }),
+    completion("non-reply mutation", { target: "C123" }, "react"),
     ...(["before", "unbound", "during", "replacement"] as const).map((collision) =>
-      completion("upload-file", `colliding owner: ${collision}`, { collision, expected: true }),
+      completion(`colliding owner: ${collision}`, { collision, expected: true }),
     ),
   ];
 
@@ -202,41 +183,28 @@ describe("registered message action source completion", () => {
         runId: "source-completion-run",
         sessionKey: "agent:main:workspace:group:C123",
       };
-      const source = {
-        currentChannelProvider: "workspace",
-        currentChannelId: "C123",
-        currentMessagingTarget: "C123",
-        currentMessageId: "inbound-message",
-      };
+      const source = messageSource("workspace", "C123", "inbound-message");
       const capability = mintMessageActionTurnCapability({
         ...identity,
         requesterAccountId: "default",
         toolContext: source,
       });
-      // The turn's reply operation keeps this fact so a later stall cannot answer again.
-      const operation = createReplyOperation({
-        sessionKey: identity.sessionKey,
-        sessionId,
-        resetTriggered: false,
-        ...(collision && {
-          target: captureSessionTarget({
-            storeScope: "/stores/message-source.sqlite",
-            sessionKey: identity.sessionKey,
-            incarnation: sessionId,
-          }),
-        }),
-      });
-      const createCollision = (storeScope = "/stores/message-other.sqlite") => {
-        competingOperation = createReplyOperation({
+      const createOperation = (storeScope?: string) =>
+        createReplyOperation({
           sessionKey: identity.sessionKey,
           sessionId,
           resetTriggered: false,
-          target: captureSessionTarget({
-            storeScope,
-            sessionKey: identity.sessionKey,
-            incarnation: sessionId,
+          ...(storeScope && {
+            target: captureSessionTarget({
+              storeScope,
+              sessionKey: identity.sessionKey,
+              incarnation: sessionId,
+            }),
           }),
         });
+      const operation = createOperation(collision ? "/stores/message-source.sqlite" : undefined);
+      const createCollision = (storeScope = "/stores/message-other.sqlite") => {
+        competingOperation = createOperation(storeScope);
       };
       if (collision === "before") {
         operation.attachBackend({ kind: "embedded", runId: identity.runId, cancel() {} });
@@ -337,9 +305,7 @@ function createFailingMessageTool(error: Error) {
     preparedMessageToolCatalog: EMPTY_CATALOG,
     sourceReplyOnly: true,
     sourceReplyDeliveryMode: "message_tool_only",
-    currentChannelProvider: "telegram",
-    currentChannelId: "chat-123",
-    currentMessagingTarget: "chat-123",
+    ...messageSource("telegram", "chat-123"),
   });
   return { tool, runMessageAction };
 }
@@ -348,37 +314,32 @@ function sentIdempotencyKey(
   runMessageAction: MockInstance<typeof messageActionRunner.runMessageAction>,
   call: number,
 ) {
-  const request = runMessageAction.mock.calls[call]?.[0] as
-    | { params?: { idempotencyKey?: string } }
-    | undefined;
-  return request?.params?.idempotencyKey;
+  return runMessageAction.mock.calls[call]?.[0].params.idempotencyKey;
 }
 
-describe("message tool queued gateway delivery", () => {
-  it.each([true, false])("preserves retry ownership for queued=%s", async (queued) => {
-    const error = new GatewayClientRequestError({
-      code: ErrorCodes.UNAVAILABLE,
-      message: "connect ECONNREFUSED",
-      ...(queued ? { details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED } } : {}),
-    });
-    const { tool, runMessageAction } = createFailingMessageTool(error);
-    const pending = tool.execute("send", { action: "send", message: "hello" });
-    if (!queued) {
-      await expect(pending).rejects.toBe(error);
-      return;
-    }
-    expect(await pending).toMatchObject({
-      details: {
-        status: "delivery_queued",
-        delivered: false,
-        message:
-          "Delivery is pending: connect ECONNREFUSED. The gateway owns retry or reconciliation; delivery is not yet confirmed. Do not resend it.",
-      },
-    });
-    await tool.execute("send-again", { action: "send", message: "hello" });
-    expect(sentIdempotencyKey(runMessageAction, 0)).toBeDefined();
-    expect(sentIdempotencyKey(runMessageAction, 1)).toBe(sentIdempotencyKey(runMessageAction, 0));
+it.each([true, false])("preserves retry ownership for queued=%s", async (queued) => {
+  const error = new GatewayClientRequestError({
+    code: ErrorCodes.UNAVAILABLE,
+    message: "connect ECONNREFUSED",
+    ...(queued ? { details: { code: GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED } } : {}),
   });
+  const { tool, runMessageAction } = createFailingMessageTool(error);
+  const pending = tool.execute("send", { action: "send", message: "hello" });
+  if (!queued) {
+    await expect(pending).rejects.toBe(error);
+    return;
+  }
+  expect(await pending).toMatchObject({
+    details: {
+      status: "delivery_queued",
+      delivered: false,
+      message:
+        "Delivery is pending: connect ECONNREFUSED. The gateway owns retry or reconciliation; delivery is not yet confirmed. Do not resend it.",
+    },
+  });
+  await tool.execute("send-again", { action: "send", message: "hello" });
+  expect(sentIdempotencyKey(runMessageAction, 0)).toBeDefined();
+  expect(sentIdempotencyKey(runMessageAction, 1)).toBe(sentIdempotencyKey(runMessageAction, 0));
 });
 
 it.each(["read", "edit", "delete", "pin", "unpin"] as const)(
@@ -446,28 +407,26 @@ it.each(["read", "edit", "delete", "pin", "unpin"] as const)(
   },
 );
 
-describe("message tool prompt-cache contract", () => {
-  it.each([false, true])(
-    "preserves the serialized definition across delivery modes with sourceReplyOnly=%s",
-    (sourceReplyOnly) => {
-      const definitions = (["automatic", "message_tool_only", "automatic"] as const).map(
-        (sourceReplyDeliveryMode) => {
-          const tool = createMessageTool({
-            config: {},
-            preparedMessageToolCatalog: EMPTY_CATALOG,
-            currentChannelProvider: "telegram",
-            sourceReplyOnly,
-            sourceReplyDeliveryMode,
-          });
-          return JSON.stringify({ description: tool.description, parameters: tool.parameters });
-        },
-      );
+it.each([false, true])(
+  "preserves the serialized definition across delivery modes with sourceReplyOnly=%s",
+  (sourceReplyOnly) => {
+    const definitions = (["automatic", "message_tool_only", "automatic"] as const).map(
+      (sourceReplyDeliveryMode) => {
+        const tool = createMessageTool({
+          config: {},
+          preparedMessageToolCatalog: EMPTY_CATALOG,
+          currentChannelProvider: "telegram",
+          sourceReplyOnly,
+          sourceReplyDeliveryMode,
+        });
+        return JSON.stringify({ description: tool.description, parameters: tool.parameters });
+      },
+    );
 
-      expect(definitions[1]).toBe(definitions[0]);
-      expect(definitions[2]).toBe(definitions[0]);
-    },
-  );
-});
+    expect(definitions[1]).toBe(definitions[0]);
+    expect(definitions[2]).toBe(definitions[0]);
+  },
+);
 
 describe("message tool terminal source actions", () => {
   let turnCapability: string;
@@ -476,158 +435,130 @@ describe("message tool terminal source actions", () => {
     resetPluginRuntimeStateForTest();
   });
 
-  it.each<
-    [
-      string,
-      Record<string, unknown>,
-      boolean,
-      { chatType?: "group"; payload?: Record<string, unknown> }?,
-    ]
-  >([
+  it.each<[string, Record<string, unknown>, boolean, Record<string, unknown>?, "group"?]>([
     ["explicit terminal reaction", { messageId: "inbound-1", final: true }, true],
     ["implicit current-message reaction", { final: true }, true],
     ["normalized current conversation", { target: "channel:C12345678", final: true }, true],
     ["normalized other conversation", { target: "channel:C87654321", final: true }, false],
-    ["group terminal reaction", { final: true }, true, { chatType: "group" }],
+    ["group terminal reaction", { final: true }, true, undefined, "group"],
     ["acknowledgment reaction", {}, false],
     ["nonterminal reaction", { final: false }, false],
-    ["added reaction receipt", { final: true }, true, { payload: { ok: true, added: "👍" } }],
-    [
-      "native WhatsApp/Telegram removal receipt",
-      { final: true, remove: true },
-      false,
-      { payload: { ok: true, removed: true } },
-    ],
-    [
-      "native empty-emoji removal receipt",
-      { final: true, emoji: "" },
-      false,
-      { payload: { ok: true, removed: true } },
-    ],
-    [
-      "provider-neutral removal success",
-      { final: true, remove: true },
-      false,
-      { payload: { ok: true } },
-    ],
+    ["added receipt", { final: true }, true, { ok: true, added: "👍" }],
+    ["native removal receipt", { final: true, remove: true }, false, { ok: true, removed: true }],
+    ["empty-emoji removal", { final: true, emoji: "" }, false, { ok: true, removed: true }],
+    ["provider-neutral removal", { final: true, remove: true }, false, { ok: true }],
     ["blank reaction", { final: true, emoji: "  " }, false],
     ["missing reaction", { final: true, emoji: undefined }, false],
     ["another message", { messageId: "other-message", final: true }, false],
     ["another conversation", { target: "C87654321", final: true }, false],
-    ["failed reaction", { final: true }, false, { payload: { ok: false } }],
-    ["partial reaction", { final: true }, false, { payload: { ok: false, sentBeforeError: true } }],
-    ["no-op reaction", { final: true }, false, { payload: { ok: true, applied: false } }],
+    ["failed reaction", { final: true }, false, { ok: false }],
+    ["partial reaction", { final: true }, false, { ok: false, sentBeforeError: true }],
+    ["no-op reaction", { final: true }, false, { ok: true, applied: false }],
     ["dry-run reaction", { final: true, dryRun: true }, false],
     ["terminal send", { action: "send", message: "Done", final: true }, true],
-  ])(
-    "records completion only for %s",
-    async (_name, args, completes, { chatType, payload } = {}) => {
-      const handleAction = vi.fn(
-        async ({ action, params, toolContext }: ChannelMessageActionContext) => {
-          if (action === "react") {
-            expect(resolveReactionMessageId({ args: params, toolContext })).toBe(
-              args.messageId ?? "inbound-1",
-            );
-          }
-          return jsonResult(payload ?? { ok: true });
+  ])("records completion only for %s", async (_name, args, completes, payload, chatType) => {
+    const handleAction = vi.fn(
+      async ({ action, params, toolContext }: ChannelMessageActionContext) => {
+        if (action === "react") {
+          expect(resolveReactionMessageId({ args: params, toolContext })).toBe(
+            args.messageId ?? "inbound-1",
+          );
+        }
+        return jsonResult(payload ?? { ok: true });
+      },
+    );
+    registerChannel(
+      {
+        ...workspaceTestPlugin,
+        actions: {
+          describeMessageTool: () => ({ actions: ["send", "react"] }),
+          providerOwnedReadGates: true,
+          handleAction,
         },
-      );
-      registerChannel(
-        {
-          ...workspaceTestPlugin,
-          actions: {
-            describeMessageTool: () => ({ actions: ["send", "react"] }),
-            providerOwnedReadGates: true,
-            handleAction,
-          },
-        },
-        "bundled",
-      );
-      const source = {
-        currentChannelProvider: "workspace",
-        currentChannelId: "C12345678",
-        currentMessagingTarget: "C12345678",
-        currentMessageId: "inbound-1",
-        currentChatType: chatType ?? ("direct" as const),
-      };
-      const sessionKey = `agent:main:workspace:${source.currentChatType}:C12345678`;
-      turnCapability = mintMessageActionTurnCapability({
-        agentId: "main",
-        runId: "terminal-action",
-        sessionKey,
-        requesterAccountId: "default",
-        toolContext: source,
-      });
-      setRuntimeConfigSnapshot(workspaceConfig);
-      const tool = createMessageTool({
-        config: workspaceConfig,
-        agentSessionKey: sessionKey,
-        agentId: "main",
-        runId: "terminal-action",
-        agentAccountId: "default",
-        messageActionTurnCapability: turnCapability,
-        ...source,
+      },
+      "bundled",
+    );
+    const source = {
+      ...messageSource("workspace", "C12345678", "inbound-1"),
+      currentChatType: chatType ?? ("direct" as const),
+    };
+    const sessionKey = `agent:main:workspace:${source.currentChatType}:C12345678`;
+    turnCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "terminal-action",
+      sessionKey,
+      requesterAccountId: "default",
+      toolContext: source,
+    });
+    setRuntimeConfigSnapshot(workspaceConfig);
+    const tool = createMessageTool({
+      config: workspaceConfig,
+      agentSessionKey: sessionKey,
+      agentId: "main",
+      runId: "terminal-action",
+      agentAccountId: "default",
+      messageActionTurnCapability: turnCapability,
+      ...source,
+      sourceReplyDeliveryMode: "automatic",
+    });
+
+    const result = await tool.execute("terminal-action", {
+      action: "react",
+      emoji: "👍",
+      ...args,
+    });
+
+    expect(handleAction).toHaveBeenCalledTimes(args.dryRun ? 0 : 1);
+    if (completes) {
+      expect(result.details).toHaveProperty("messageDelivery.sourceReplyDelivered", true);
+    } else {
+      expect(result.details).not.toHaveProperty("messageDelivery.sourceReplyDelivered");
+    }
+    expect(
+      isDeliveredMessageToolOnlySourceReplyResult({
         sourceReplyDeliveryMode: "automatic",
+        toolName: "message",
+        args: { action: "react", ...args },
+        result,
+      }),
+    ).toBe(completes);
+    if (!args.dryRun) {
+      const assistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text: "NO_REPLY" }],
       });
-
-      const result = await tool.execute("terminal-action", {
-        action: "react",
-        emoji: "👍",
-        ...args,
+      const delivery = readEmbeddedMessageDeliveryFact(
+        readToolResultDetails(result)?.messageDelivery,
+      );
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        sourceReplyDelivered: delivery?.sourceReplyDelivered,
+        toolMetas: [{ toolName: "message", replaySafe: false }],
+        itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
       });
-
-      expect(handleAction).toHaveBeenCalledTimes(args.dryRun ? 0 : 1);
-      if (completes) {
-        expect(result.details).toHaveProperty("messageDelivery.sourceReplyDelivered", true);
-      } else {
-        expect(result.details).not.toHaveProperty("messageDelivery.sourceReplyDelivered");
-      }
-      expect(
-        isDeliveredMessageToolOnlySourceReplyResult({
-          sourceReplyDeliveryMode: "automatic",
-          toolName: "message",
-          args: { action: "react", ...args },
-          result,
-        }),
-      ).toBe(completes);
-      if (!args.dryRun) {
-        const assistant = buildEmbeddedRunnerAssistant({
-          content: [{ type: "text", text: "NO_REPLY" }],
-        });
-        const delivery = readEmbeddedMessageDeliveryFact(
-          readToolResultDetails(result)?.messageDelivery,
-        );
-        const attempt = makeEmbeddedRunnerAttempt({
-          assistantTexts: ["NO_REPLY"],
-          lastAssistant: assistant,
-          currentAttemptAssistant: assistant,
-          sourceReplyDelivered: delivery?.sourceReplyDelivered,
-          toolMetas: [{ toolName: "message", replaySafe: false }],
-          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
-        });
-        const finalization = resolveSettledTurnFinalizationRequest({
-          runParams: {
-            sessionId: "terminal-action",
-            runId: "terminal-action",
-            workspaceDir: "/tmp/openclaw-test",
-            prompt: "React to this message without a text reply",
-            timeoutMs: 60_000,
-            trigger: "user",
-            terminalReplyExpectation: "required",
-          },
-          attempt,
-          activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
-          modelApi: "openai-responses",
-          executionContract: undefined,
-          payloadsWithToolMedia: [],
-          hasTerminalToolPresentation: false,
-          terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
-          settledTurnFinalizationAvailable: true,
-        });
-        expect(finalization).toBeNull();
-      }
-    },
-  );
+      const finalization = resolveSettledTurnFinalizationRequest({
+        runParams: {
+          sessionId: "terminal-action",
+          runId: "terminal-action",
+          workspaceDir: "/tmp/openclaw-test",
+          prompt: "React to this message without a text reply",
+          timeoutMs: 60_000,
+          trigger: "user",
+          terminalReplyExpectation: "required",
+        },
+        attempt,
+        activeErrorContext: { provider: "openai", model: "gpt-5.6-luna" },
+        modelApi: "openai-responses",
+        executionContract: undefined,
+        payloadsWithToolMedia: [],
+        hasTerminalToolPresentation: false,
+        terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+        settledTurnFinalizationAvailable: true,
+      });
+      expect(finalization).toBeNull();
+    }
+  });
 });
 
 describe("message tool group thread replies", () => {
@@ -669,9 +600,7 @@ describe("message tool group thread replies", () => {
     const tool = createMessageTool({
       config: workspaceConfig,
       agentSessionKey: sessionKey,
-      currentChannelProvider: "workspace",
-      currentChannelId: "C12345678",
-      currentMessagingTarget: "C12345678",
+      ...messageSource("workspace", "C12345678"),
       currentThreadTs: "42",
     });
     const participant = { agentId: "reviewer", name: "Reviewer" };
@@ -778,9 +707,7 @@ describe("message tool group thread replies", () => {
       const tool = createMessageTool({
         config: {},
         agentSessionKey: `agent:reviewer:${channel}:group:123:thread:${sourceThread}`,
-        currentChannelProvider: channel,
-        currentChannelId: "123",
-        currentMessagingTarget: "123",
+        ...messageSource(channel, "123"),
         currentThreadTs: sourceThread,
       });
       const participant = { agentId: "reviewer", name: "Reviewer" };
