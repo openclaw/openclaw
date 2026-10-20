@@ -73,7 +73,6 @@ it("routes a deep memory status probe through the OpenAI-compatible environment 
     process.execPath,
     [path.resolve("openclaw.mjs"), "memory", "status", "--deep", "--agent", "main"],
     {
-      cwd: path.resolve("."),
       encoding: "utf8",
       env: {
         ...process.env,
