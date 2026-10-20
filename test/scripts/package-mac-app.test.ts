@@ -424,15 +424,17 @@ ${scriptBlock("cleanup_package_build() {", "PNPM_CMD=()")}
     },
   );
 
-  it.skipIf(process.platform === "win32").each([
-    "reuse",
-    "dirty",
-    "dirty-ui",
-    "untracked-ui",
-    "missing-runtime",
-    "wrong-identity",
-    "legacy-skip",
-  ])("admits an existing source generation through the package script: %s", (mode) => {
+  it
+    .skipIf(process.platform === "win32")
+    .each([
+      "reuse",
+      "dirty",
+      "dirty-ui",
+      "untracked-ui",
+      "missing-runtime",
+      "wrong-identity",
+      "legacy-skip",
+    ])("admits an existing source generation through the package script: %s", (mode) => {
     const root = tempDirs.make("openclaw-package-source-reuse-");
     const builtAt = "2026-10-18T10:20:30.000Z";
     writeFiles(root, {

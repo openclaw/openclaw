@@ -112,7 +112,6 @@ it.each([false, true])(
   },
 );
 
-
 function fixture() {
   const root = tempDirs.make("openclaw-runtime-manifest-");
   const manifestPath = path.join(root, "package.json");
