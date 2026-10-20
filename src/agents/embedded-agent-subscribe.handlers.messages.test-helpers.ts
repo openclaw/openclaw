@@ -1,9 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { vi, type Mock } from "vitest";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import { handleMessageEnd } from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
 import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
-import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import type { EmbeddedAgentSubscribeContext as Context } from "./embedded-agent-subscribe.handlers.types.js";
 import { createReplyDelivery } from "./embedded-agent-subscribe.reply-delivery.js";
 import { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { createStreamRendering } from "./embedded-agent-subscribe.stream-rendering.js";
@@ -13,16 +14,10 @@ type ContextOptions = {
   sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
   state?: Record<string, unknown>;
 };
-function baseContext(params: ContextOptions) {
+type MessageEvent = Parameters<typeof handleMessageUpdate>[1];
+function baseContext({ onAgentEvent, sourceReplyDeliveryMode }: ContextOptions) {
   return {
-    params: {
-      runId: "run-1",
-      session: { id: "session-1" },
-      ...(params.sourceReplyDeliveryMode
-        ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
-        : {}),
-      ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
-    },
+    params: { runId: "run-1", session: { id: "session-1" }, sourceReplyDeliveryMode, onAgentEvent },
     noteLastAssistant: vi.fn(),
     captureModelEvent: vi.fn(),
     blockChunker: new EmbeddedBlockChunker(),
@@ -30,22 +25,16 @@ function baseContext(params: ContextOptions) {
 }
 
 export function updateMessage(
-  context: EmbeddedAgentSubscribeContext,
+  context: Context,
   event: { message: unknown; assistantMessageEvent?: unknown },
 ) {
   // Stream fixtures intentionally include incomplete and malformed provider payloads.
-  return handleMessageUpdate(context, {
-    type: "message_update",
-    ...event,
-  } as Parameters<typeof handleMessageUpdate>[1]);
+  return handleMessageUpdate(context, { type: "message_update", ...event } as MessageEvent);
 }
 
-export function endMessage(context: EmbeddedAgentSubscribeContext, event: { message: unknown }) {
+export function endMessage(context: Context, event: { message: unknown }) {
   // Message-end coverage includes malformed content and partial provider usage.
-  return handleMessageEnd(context, {
-    type: "message_end",
-    ...event,
-  } as Parameters<typeof handleMessageEnd>[1]);
+  return handleMessageEnd(context, { type: "message_end", ...event } as MessageEvent);
 }
 
 export function createMessageUpdateContext(
@@ -55,7 +44,6 @@ export function createMessageUpdateContext(
     resetAssistantMessageState?: Mock;
     debug?: Mock;
     shouldEmitPartialReplies?: boolean;
-    consumePartialReplyDirectives?: Mock;
     stripBlockTags?: Mock;
     emitReasoningStream?: Mock;
   } = {},
@@ -65,15 +53,12 @@ export function createMessageUpdateContext(
   const base = baseContext(params);
   const ctx = {
     ...base,
-    params: {
-      ...base.params,
-      ...(params.onPartialReply ? { onPartialReply: params.onPartialReply } : {}),
-    },
+    params: { ...base.params, onPartialReply },
     log: { debug: params.debug ?? vi.fn() },
     stripBlockTags: params.stripBlockTags ?? vi.fn((text: string) => text),
-    consumePartialReplyDirectives:
-      params.consumePartialReplyDirectives ??
-      vi.fn((text: string, options?: { final?: boolean }) => directives.consume(text, options)),
+    consumePartialReplyDirectives: vi.fn((text: string, options?: { final?: boolean }) =>
+      directives.consume(text, options),
+    ),
     getPartialReplySourceText: () => directives.sourceText,
     emitReasoningStream: params.emitReasoningStream ?? vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
@@ -85,15 +70,13 @@ export function createMessageUpdateContext(
       ctx.state.lastAssistantAudioDirectiveCount = 0;
       ctx.state.pendingAssistantReplyDirectives = undefined;
     },
-    emitAssistantStreamData: vi.fn<EmbeddedAgentSubscribeContext["emitAssistantStreamData"]>(
-      (data, options) => {
-        onAgentEvent?.({ stream: "assistant", data });
-        if (options?.emitPartialReply === true && (params.shouldEmitPartialReplies ?? true)) {
-          onPartialReply?.(data);
-        }
-      },
-    ),
-  } as unknown as EmbeddedAgentSubscribeContext;
+    emitAssistantStreamData: vi.fn<Context["emitAssistantStreamData"]>((data, options) => {
+      onAgentEvent?.({ stream: "assistant", data });
+      if (options?.emitPartialReply === true && (params.shouldEmitPartialReplies ?? true)) {
+        onPartialReply?.(data);
+      }
+    }),
+  } as unknown as Context;
   ctx.state = Object.assign(new EmbeddedAgentSubscribeState(ctx.params), {
     shouldEmitPartialReplies: params.shouldEmitPartialReplies ?? true,
     ...params.state,
@@ -104,25 +87,24 @@ export function createMessageUpdateContext(
 export function createMessageEndContext(
   params: ContextOptions & {
     onBlockReply?: Mock;
-    finalizeAssistantTexts?: Mock<EmbeddedAgentSubscribeContext["finalizeAssistantTexts"]>;
+    finalizeAssistantTexts?: Mock<Context["finalizeAssistantTexts"]>;
     warn?: Mock;
     builtinToolNames?: ReadonlySet<string>;
     enforceFinalTag?: boolean;
     bufferedText?: string;
   } = {},
 ) {
-  // Buffered cases seed the real source buffer; other cases exercise terminal-only delivery.
   const base = baseContext(params);
   const ctx = {
     ...base,
     params: {
       ...base.params,
-      ...(params.enforceFinalTag !== undefined ? { enforceFinalTag: params.enforceFinalTag } : {}),
+      enforceFinalTag: params.enforceFinalTag,
       onBlockReply: params.onBlockReply ?? vi.fn(),
     },
     log: { debug: vi.fn(), info: vi.fn(), warn: params.warn ?? vi.fn() },
     builtinToolNames: params.builtinToolNames,
-  } as unknown as EmbeddedAgentSubscribeContext;
+  } as unknown as Context;
   ctx.state = Object.assign(new EmbeddedAgentSubscribeState(ctx.params), {
     blockReplyBreak: "message_end",
     ...params.state,
@@ -134,30 +116,18 @@ export function createMessageEndContext(
   ctx.emitBlockReply = vi.fn(delivery.emitBlockReply);
   ctx.finalizeAssistantTexts =
     params.finalizeAssistantTexts ?? vi.fn(delivery.finalizeAssistantTexts);
-  const rendering = createStreamRendering({
-    ...ctx,
-    pendingBlockReplyTasks: delivery.pendingBlockReplyTasks,
-    pushAssistantText: delivery.pushAssistantText,
-    shouldSkipAssistantText: delivery.shouldSkipAssistantText,
-  });
-  Object.assign(ctx, rendering);
+  // Keep the context's spied emitter while delivery supplies the remaining rendering hooks.
+  Object.assign(ctx, createStreamRendering({ ...delivery, ...ctx }));
   return ctx;
 }
 
 export function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`Expected ${label} to be called`);
-  }
-  return call[0];
+  return expectDefined(mock.mock.calls[0], `${label} call`)[0];
 }
 
 export function createMessageToolEnvelope(
   message: string,
   args: Record<string, unknown> = {},
 ): string {
-  return JSON.stringify({
-    name: "message",
-    arguments: { action: "send", message, ...args },
-  });
+  return JSON.stringify({ name: "message", arguments: { action: "send", message, ...args } });
 }

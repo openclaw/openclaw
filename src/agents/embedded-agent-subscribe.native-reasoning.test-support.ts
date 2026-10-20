@@ -1,8 +1,4 @@
-import {
-  AssistantMessageEventStream,
-  type AssistantMessage,
-  type Message,
-} from "openclaw/plugin-sdk/llm";
+import { AssistantMessageEventStream, type Message } from "openclaw/plugin-sdk/llm";
 import { processCompletionsStream } from "../../packages/ai/src/transports/openai-completions-stream.js";
 import { onAgentEventForRun } from "../infra/agent-events.js";
 import { runAgentLoop } from "../plugin-sdk/agent-core.js";
@@ -16,25 +12,19 @@ import { makeZeroUsageSnapshot } from "./usage.js";
 export const NATIVE_REASONING_BENCH_PREFIX = "REASONING_BENCH:";
 
 export async function measureNativeReasoningSubscription(
-  options: {
-    signal?: AbortSignal;
-    runId?: string;
-  } = {},
+  options: { signal?: AbortSignal; runId?: string } = {},
 ) {
   const chunks = Array.from({ length: 4096 }, (_, index) =>
     (index === 0 ? NATIVE_REASONING_BENCH_PREFIX : "").padEnd(64, "x"),
   );
   const model = makeProviderModelFixture({
     id: "reasoning-fixture",
-    name: "Reasoning fixture",
     api: "openai-completions",
     provider: "synthetic",
     baseUrl: "https://example.test/v1",
     reasoning: true,
-    contextWindow: 200_000,
-    maxTokens: 128_000,
   });
-  const output: AssistantMessage = makeAgentAssistantMessage({
+  const output = makeAgentAssistantMessage({
     content: [],
     api: model.api,
     provider: model.provider,
@@ -43,12 +33,10 @@ export async function measureNativeReasoningSubscription(
     timestamp: 1,
   });
   const acknowledgments = chunks.map(() => createDeferredCore());
-  const releaseAcknowledgments = () => {
-    acknowledgments.forEach((acknowledgment) => acknowledgment.resolve());
-  };
-  options.signal?.addEventListener("abort", releaseAcknowledgments, { once: true });
+  const release = () => acknowledgments.forEach((acknowledgment) => acknowledgment.resolve());
+  options.signal?.addEventListener("abort", release, { once: true });
   if (options.signal?.aborted) {
-    releaseAcknowledgments();
+    release();
   }
   const frame = (
     delta: { role?: "assistant"; reasoning_content?: string },
@@ -70,14 +58,12 @@ export async function measureNativeReasoningSubscription(
   const { session, emit } = createStubSessionHarness();
   const runId = options.runId ?? "native-reasoning-work-fixture";
   const subscription = subscribeEmbeddedAgentSession({ session, runId });
-  let lastText = "";
-  let joinedDelta = "";
-  let events = 0;
+  const observed = { text: "", delta: "", events: 0 };
   const unsubscribe = onAgentEventForRun(runId, (event) => {
     if (event.stream === "thinking") {
-      lastText = String(event.data.text);
-      joinedDelta += String(event.data.delta);
-      events++;
+      observed.text = String(event.data.text);
+      observed.delta += String(event.data.delta);
+      observed.events++;
     }
   });
   const stream = new AssistantMessageEventStream();
@@ -91,11 +77,8 @@ export async function measureNativeReasoningSubscription(
       {
         model,
         convertToLlm: (messages) =>
-          messages.filter(
-            (message): message is Message =>
-              message.role === "user" ||
-              message.role === "assistant" ||
-              message.role === "toolResult",
+          messages.filter((message): message is Message =>
+            ["user", "assistant", "toolResult"].includes(message.role),
           ),
       },
       async (event) => {
@@ -132,13 +115,13 @@ export async function measureNativeReasoningSubscription(
     return {
       chunks: chunks.length,
       chars: expected.length,
-      events,
-      textMatches: lastText === expected.trim(),
-      deltaMatches: joinedDelta === expected.trim(),
+      events: observed.events,
+      textMatches: observed.text === expected.trim(),
+      deltaMatches: observed.delta === expected.trim(),
     };
   } finally {
-    options.signal?.removeEventListener("abort", releaseAcknowledgments);
-    releaseAcknowledgments();
+    options.signal?.removeEventListener("abort", release);
+    release();
     unsubscribe();
     subscription.unsubscribe();
     await producing?.catch(() => {});

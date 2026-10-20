@@ -19,6 +19,11 @@ import type { MessageEndEvent } from "./sessions/extensions/types.js";
 registerAgentSessionLoopTestLifecycle();
 
 const originalDetails = { sourceReply: { text: "Unreviewed reply." } };
+const request = () =>
+  ({ type: "toolCall", id: "reply-1", name: "order_status", arguments: {} }) as const;
+const toolInfo = { name: "order_status", label: "Order status", description: "Read order status" };
+const response = (...args: Parameters<typeof createAssistant>) =>
+  createAssistantResultStream(createAssistant(...args));
 const result = (details: Record<string, unknown>) => ({
   content: [{ type: "text" as const, text: "Status read." }],
   details,
@@ -32,28 +37,11 @@ it.each([
   "%s the source reply through a real message_end extension",
   async (_label, initial, final, expected) => {
     streamMocks.streamSimple
-      .mockImplementationOnce((model) =>
-        createAssistantResultStream(
-          createAssistant(
-            model,
-            [{ type: "toolCall", id: "reply-1", name: "order_status", arguments: {} }],
-            "toolUse",
-          ),
-        ),
-      )
-      .mockImplementation((model) =>
-        createAssistantResultStream(createAssistant(model, "Model continued.")),
-      );
+      .mockImplementationOnce((model) => response(model, [request()], "toolUse"))
+      .mockImplementation((model) => response(model, "Model continued."));
+    const parameters = Type.Object({});
     const { session } = await createTestSession({
-      customTools: [
-        {
-          name: "order_status",
-          label: "Order status",
-          description: "Read order status",
-          parameters: Type.Object({}),
-          execute: async () => result(initial),
-        },
-      ],
+      customTools: [{ ...toolInfo, parameters, execute: async () => result(initial) }],
       resourceLoader: await createResourceLoader((api) => {
         api.on("message_end", async (event: unknown) => {
           const { message } = event as MessageEndEvent;
@@ -63,7 +51,7 @@ it.each([
         });
       }),
     });
-    const subscription = subscribeEmbeddedAgentSession({
+    const sub = subscribeEmbeddedAgentSession({
       session,
       runId: "run-finalized",
       sourceReplyCapableToolNames: new Set(["order_status"]),
@@ -71,15 +59,14 @@ it.each([
     try {
       await session.prompt("Check the order.");
       expect(streamMocks.streamSimple).toHaveBeenCalledTimes(expected.length ? 1 : 2);
-      expect(subscription.getMessagingToolSourceReplyPayloads().map((reply) => reply.text)).toEqual(
+      expect(sub.getMessagingToolSourceReplyPayloads().map((reply) => reply.text)).toEqual(
         expected,
       );
-      expect(subscription.getSourceReplyDelivered()).toBeUndefined();
-      expect(session.messages.findLast((message) => message.role === "toolResult")).toMatchObject({
-        details: final,
-      });
+      expect(sub.getSourceReplyDelivered()).toBeUndefined();
+      const toolResult = session.messages.findLast((entry) => entry.role === "toolResult");
+      expect(toolResult).toMatchObject({ details: final });
     } finally {
-      subscription.unsubscribe();
+      sub.unsubscribe();
     }
   },
 );
@@ -97,7 +84,6 @@ it("does not deliver a capable tool's nested Code Mode result", async () => {
   });
   await endTool(ctx, {
     ...tool,
-    isError: false,
     result: result(originalDetails),
   });
   expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([]);
