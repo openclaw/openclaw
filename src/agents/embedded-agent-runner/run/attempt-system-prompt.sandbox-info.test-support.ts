@@ -18,6 +18,8 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type PromptAttempt = Parameters<typeof prepareEmbeddedAttemptSystemPrompt>[0]["attempt"] &
   Pick<EmbeddedRunAttemptParams, "workspaceDir" | "authStorage" | "modelRegistry">;
+const provider = "openai";
+const modelId = "gpt-5.6-luna";
 
 export type ElevationCase = {
   name: string;
@@ -47,11 +49,7 @@ export async function withPromptFixture(
       updatedAt: 1,
       ...(testCase.required ? { sandbox: "required" } : {}),
     });
-    saveExecApprovals({
-      version: 1,
-      defaults: { security: "allowlist", ask: "off" },
-      agents: {},
-    });
+    saveExecApprovals({ version: 1, defaults: { security: "allowlist", ask: "off" }, agents: {} });
     const config = {
       agents: {
         ownership: "explicit",
@@ -68,16 +66,15 @@ export async function withPromptFixture(
       "system-prompt-test",
     );
     const abort = new AbortController();
-    // No implementation overrides: these observations still perform real reporting and SQLite work.
     const policyRead = vi.spyOn(sandboxInfo, "resolveEmbeddedSandboxInfoExecPolicy");
     const approvalRead = vi.spyOn(approvals, "loadExecApprovalsReadOnlyAsync");
     try {
       const attempt = {
-        provider: "openai",
-        modelId: "gpt-5.6-luna",
+        provider,
+        modelId,
         model: makeProviderModelFixture({
-          id: "gpt-5.6-luna",
-          provider: "openai",
+          id: modelId,
+          provider,
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
         }),
@@ -122,11 +119,7 @@ export async function withPromptFixture(
               ...(testCase.required ? { required: true } : {}),
             },
           }),
-          getProviderRuntimeHandle: () => ({
-            provider: attempt.provider,
-            modelId: attempt.modelId,
-            prepared: true,
-          }),
+          getProviderRuntimeHandle: () => ({ provider, modelId, prepared: true }),
         }),
         capabilityToolNames: new Set(["exec"]),
         effectiveTools: tools,
@@ -136,15 +129,8 @@ export async function withPromptFixture(
         toolSearchDirectoryEnabled: false,
         toolSearchRuntimeConfig: config,
       } satisfies Parameters<typeof prepareEmbeddedAttemptSystemPrompt>[0];
-      await consume({
-        prepare: () => prepareEmbeddedAttemptSystemPrompt(params),
-        attempt,
-        admission,
-        abort,
-        tools,
-        policyRead,
-        approvalRead,
-      });
+      const prepare = () => prepareEmbeddedAttemptSystemPrompt(params);
+      await consume({ prepare, attempt, admission, abort, tools, policyRead, approvalRead });
     } finally {
       admission.close();
       policyRead.mockRestore();

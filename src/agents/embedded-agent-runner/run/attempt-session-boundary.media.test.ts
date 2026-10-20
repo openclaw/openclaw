@@ -18,6 +18,10 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const MP4_HEADER = Buffer.from("0000001c6674797069736f6d0000000069736f6d0000000000000000", "hex");
 
+function userMessage(text: string, timestamp: number) {
+  return { role: "user" as const, content: [{ type: "text" as const, text }], timestamp };
+}
+
 function videoBlocks(message: ProviderMessage | undefined) {
   expect(message?.role).toBe("user");
   return message?.role === "user" && Array.isArray(message.content)
@@ -36,21 +40,15 @@ it("keeps historical and runtime video on their own turns across queued text and
     fs.writeFile(currentPath, currentVideo),
   ]);
 
-  const historical = Object.freeze(
-    buildPersistedUserTurnMessage({
-      text: "Historical video",
-      timestamp: 1,
-      media: [{ path: historicalPath, contentType: "video/mp4", kind: "video" }],
-    }),
-  );
-  const current = attachRuntimePromptMediaFacts(
-    {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: "Current video" }],
-      timestamp: 2,
-    },
-    [{ path: currentPath, contentType: "video/mp4", kind: "video" }],
-  );
+  const historical = buildPersistedUserTurnMessage({
+    text: "Historical video",
+    timestamp: 1,
+    media: [{ path: historicalPath, contentType: "video/mp4", kind: "video" }],
+  });
+  Object.freeze(historical);
+  const current = attachRuntimePromptMediaFacts(userMessage("Current video", 2), [
+    { path: currentPath, contentType: "video/mp4", kind: "video" },
+  ]);
   // Prompt/sender projection must preserve media held only by the runtime carrier.
   const currentTranscript: PersistedUserTurnMessage = {
     role: "user",
@@ -62,11 +60,7 @@ it("keeps historical and runtime video on their own turns across queued text and
     },
   };
   const carrier = buildRuntimeContextCustomMessage("Current turn context")!;
-  const queued: AgentMessage = {
-    role: "user",
-    content: [{ type: "text", text: "Queued text without an attachment" }],
-    timestamp: 3,
-  };
+  const queued = userMessage("Queued text without an attachment", 3);
   const original: AgentMessage[] = [historical, current, carrier];
   const inputs = [original, queued, currentTranscript];
   const originalJson = JSON.stringify(inputs);

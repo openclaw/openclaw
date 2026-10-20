@@ -17,6 +17,7 @@ const model = makeProviderModelFixture<"openai-responses">({
   reasoning: true,
 });
 const identity = { sessionId: "compaction-replay-test", authProfileId: "test-profile" };
+const providers = new Set(["openai"]);
 
 function createCheckpointOwner(rawId: string, replayIndex: number) {
   const owner = makeAgentAssistantMessage({
@@ -63,32 +64,19 @@ it.each([
       });
     }
     const sanitized = sanitizeOpenAIResponsesReplayForStream(messages);
-    const replayMessages = sanitized.filter(
+    const replay = sanitized.filter(
       (message) =>
         message.role === "user" || message.role === "assistant" || message.role === "toolResult",
     );
-    expect(replayMessages).toHaveLength(sanitized.length);
-    const input = convertResponsesMessages(
-      model,
-      { messages: replayMessages },
-      new Set(["openai"]),
-      identity,
-    );
+    expect(replay).toHaveLength(sanitized.length);
+    const input = convertResponsesMessages(model, { messages: replay }, providers, identity);
+    const callId = expect.stringMatching(/^call_[A-Za-z0-9_-]+$/);
 
     expect(sanitized[1]).toMatchObject({ providerReplay: owner.providerReplay });
     expect(input).toEqual([
       { type: "compaction", id: "cmp_test", encrypted_content: "synthetic-checkpoint" },
-      {
-        type: "function_call",
-        call_id: expect.stringMatching(/^call_[A-Za-z0-9_-]+$/),
-        name: "lookup",
-        arguments: "{}",
-      },
-      {
-        type: "function_call_output",
-        call_id: expect.stringMatching(/^call_[A-Za-z0-9_-]+$/),
-        output: hasResult ? "ready" : "aborted",
-      },
+      { type: "function_call", call_id: callId, name: "lookup", arguments: "{}" },
+      { type: "function_call_output", call_id: callId, output: hasResult ? "ready" : "aborted" },
     ]);
     expect(input[1]?.type === "function_call" && input[1].call_id).toBe(
       input[2]?.type === "function_call_output" && input[2].call_id,

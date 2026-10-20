@@ -1,17 +1,9 @@
 import { beforeEach, expect, it, vi } from "vitest";
 
-const hoisted = vi.hoisted(() => ({
-  cleanup: vi.fn(),
-  clear: vi.fn(),
-  flush: vi.fn(),
-}));
+const hoisted = vi.hoisted(() => ({ cleanup: vi.fn(), clear: vi.fn(), flush: vi.fn() }));
 
-vi.mock("../../tool-search.js", () => ({
-  clearToolSearchCatalog: hoisted.clear,
-}));
-vi.mock("../logger.js", () => ({
-  log: { warn: vi.fn() },
-}));
+vi.mock("../../tool-search.js", () => ({ clearToolSearchCatalog: hoisted.clear }));
+vi.mock("../logger.js", () => ({ log: { warn: vi.fn() } }));
 vi.mock("./attempt-trajectory-flush.js", () => ({
   flushEmbeddedAttemptTrajectoryRecorder: hoisted.flush,
 }));
