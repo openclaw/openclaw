@@ -8,12 +8,12 @@ import "../../../components/tooltip.ts";
 import { buildCompactionDividerItem } from "../chat-progress.ts";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { ChatDivider } from "./chat-divider.tsx";
-import baseStyles from "../../../styles/base.css?inline";
-import composerStatusStyles from "../../../styles/chat/composer-status.css?inline";
-import chatComposerStyles from "../../../styles/chat/composer.css?inline";
-import groupedStyles from "../../../styles/chat/grouped.css?inline";
-import chatLayoutStyles from "../../../styles/chat/layout.css?inline";
-import componentStyles from "../../../styles/components.css?inline";
+import "../../../styles/base.css";
+import "../../../styles/components.css";
+import "../../../styles/chat/grouped.css";
+import "../../../styles/chat/layout.css";
+import "../../../styles/chat/composer.css";
+import "../../../styles/chat/composer-status.css";
 
 function mountCompaction(container: HTMLElement) {
   const [phase, setPhase] = createSignal<"active" | "complete">("active");
@@ -32,7 +32,6 @@ const expectIdle = (indicator: HTMLElement) =>
     .toBe(false);
 
 let container: HTMLDivElement;
-let styles: HTMLStyleElement;
 let session: CDPSession;
 
 beforeEach(async () => {
@@ -40,24 +39,12 @@ beforeEach(async () => {
   await session.send("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-reduced-motion", value: "no-preference" }],
   });
-  styles = document.createElement("style");
-  styles.textContent = [
-    baseStyles,
-    componentStyles,
-    groupedStyles,
-    chatLayoutStyles,
-    chatComposerStyles,
-    composerStatusStyles,
-  ].join("\n");
-  document.head.append(styles);
   container = document.createElement("div");
   document.body.append(container);
 });
 
 afterEach(async () => {
-  container.replaceChildren();
   container.remove();
-  styles.remove();
   await session.send("Emulation.setEmulatedMedia", { features: [] });
 });
 

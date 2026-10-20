@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { createSignal, type Setter } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -15,24 +15,20 @@ afterEach(() => {
 
 function mountMenu() {
   const onChange = vi.fn();
-  let setMenu!: Setter<ChatComposerPlusMenuProps>;
-  const view = mountSolid(() => {
-    const [menu, update] = createSignal<ChatComposerPlusMenuProps>(
-      makeMenu({
-        rootToggles: [
-          { value: "toggle", label: "Original toggle", checked: false, disabled: false, onChange },
-        ],
-        onOpenChange: (open) => update((current) => ({ ...current, open })),
-      }),
-    );
-    setMenu = update;
-    return (
-      <>
-        <input aria-label="Other field" />
-        <ChatComposerPlusMenu menu={menu()} />
-      </>
-    );
-  });
+  const [menu, setMenu] = createSignal<ChatComposerPlusMenuProps>(
+    makeMenu({
+      rootToggles: [
+        { value: "toggle", label: "Original toggle", checked: false, disabled: false, onChange },
+      ],
+      onOpenChange: (open) => setMenu((current) => ({ ...current, open })),
+    }),
+  );
+  const view = mountSolid(() => (
+    <>
+      <input aria-label="Other field" />
+      <ChatComposerPlusMenu menu={menu()} />
+    </>
+  ));
   const trigger = view.container.querySelector<HTMLButtonElement>(
     ".agent-chat__input-btn--attach",
   )!;
@@ -83,10 +79,9 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
       ...current,
       rootToggles: [
         {
-          value: "toggle",
+          ...current.rootToggles![0],
           label: "Updated toggle",
           checked: true,
-          disabled: false,
           onChange: latestChange,
         },
       ],

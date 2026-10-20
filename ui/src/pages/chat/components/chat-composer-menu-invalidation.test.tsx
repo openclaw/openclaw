@@ -58,13 +58,8 @@ it.each(["root", "skills", "connectors", "tools:docs", "library:missing"] as con
     flush();
     expect(skillName).not.toHaveBeenCalled();
     mounted.container.querySelector<HTMLButtonElement>(".agent-chat__input-btn--attach")!.click();
-    await waitForSolid(() =>
-      expect(
-        mounted.container
-          .querySelector(".agent-chat__capability-menu-panel")
-          ?.matches(":popover-open"),
-      ).toBe(true),
-    );
+    const content = mounted.container.querySelector(".agent-chat__capability-menu-panel")!;
+    await waitForSolid(() => expect(content.matches(":popover-open")).toBe(true));
     const expectedContent = {
       root: "Web search",
       skills: "Focused skill",
@@ -72,11 +67,7 @@ it.each(["root", "skills", "connectors", "tools:docs", "library:missing"] as con
       "tools:docs": "Search documents",
       "library:missing": "Library ready",
     }[view];
-    await waitForSolid(() =>
-      expect(
-        mounted.container.querySelector(".agent-chat__capability-menu-panel")?.textContent,
-      ).toContain(expectedContent),
-    );
+    await waitForSolid(() => expect(content.textContent).toContain(expectedContent));
     const observer = new MutationObserver(() => {});
     observer.observe(mounted.container, { childList: true, subtree: true });
     onTestFinished(() => observer.disconnect());
@@ -84,7 +75,14 @@ it.each(["root", "skills", "connectors", "tools:docs", "library:missing"] as con
       setProps(snapshot());
       flush();
     };
-    const content = mounted.container.querySelector(".agent-chat__capability-menu-panel")!;
+    const item = (value: string) => {
+      const row = content.querySelector(`[data-value="${value}"]`)!;
+      return {
+        checked: row.getAttribute("aria-checked"),
+        disabled: row.matches(":disabled"),
+        text: row.textContent,
+      };
+    };
     const children = [...content.querySelectorAll("*")];
     refresh();
     expect(observer.takeRecords()).toHaveLength(0);
@@ -95,40 +93,29 @@ it.each(["root", "skills", "connectors", "tools:docs", "library:missing"] as con
       case "root":
         capability.webSearchBaseEnabled = false;
         refresh();
-        expect(
-          content.querySelector('[data-value="toggle-web-search"]')?.getAttribute("aria-checked"),
-        ).toBe("false");
-        expect(
-          content.querySelector('[data-value="toggle-web-search"]')?.matches(":disabled"),
-        ).toBe(true);
+        expect(item("toggle-web-search")).toMatchObject({ checked: "false", disabled: true });
         break;
       case "skills":
         capability.skills![0]!.name = "Renamed skill";
         capability.skills![0]!.enabled = false;
         refresh();
-        expect(content.querySelector('[data-value="skill:focused"]')?.textContent).toContain(
-          "Renamed skill",
-        );
-        expect(
-          content.querySelector('[data-value="skill:focused"]')?.getAttribute("aria-checked"),
-        ).toBe("false");
+        expect(item("skill:focused")).toMatchObject({
+          checked: "false",
+          text: expect.stringContaining("Renamed skill"),
+        });
         break;
       case "connectors":
         capability.mcpServers[0]!.enabled = false;
         refresh();
-        expect(content.querySelector('[data-value="connector:docs"]')?.textContent).toContain(
-          "Disabled",
-        );
-        expect(
-          content.querySelector('[data-value="connector:docs"]')?.getAttribute("aria-checked"),
-        ).toBe("false");
+        expect(item("connector:docs")).toMatchObject({
+          checked: "false",
+          text: expect.stringContaining("Disabled"),
+        });
         break;
       case "tools:docs":
         menu.toolOverrides = { mcpToolsDeny: { docs: ["search"] } };
         refresh();
-        expect(
-          content.querySelector('[data-value="mcp-tool:search"]')?.getAttribute("aria-checked"),
-        ).toBe("false");
+        expect(item("mcp-tool:search").checked).toBe("false");
         break;
       case "library:missing":
         capability.library!.notice = "Refreshed library";

@@ -68,15 +68,19 @@ it("retains the focused capability row and management link through catalog refre
     }),
   );
   const view = mountSolid(() => <ChatComposerPlusMenu menu={menu()} />);
-  await waitForSolid(() =>
-    expect(
-      view.getByRole("menuitemcheckbox", { name: "Focused skill", hidden: true }),
-    ).toBeTruthy(),
-  );
+  const checkbox = (name: string) => view.getByRole("menuitemcheckbox", { name, hidden: true });
+  const update = (
+    changes: Partial<Menu>,
+    capability: Partial<NonNullable<Menu["capabilityMenu"]>> = {},
+  ) =>
+    setMenu((previous) => ({
+      ...previous,
+      ...changes,
+      capabilityMenu: { ...previous.capabilityMenu!, ...capability },
+    }));
+  await waitForSolid(() => expect(checkbox("Focused skill")).toBeTruthy());
   for (const name of ["Broken deps missing", "Private not available for this agent"]) {
-    expect(
-      view.getByRole("menuitemcheckbox", { name, hidden: true }).hasAttribute("disabled"),
-    ).toBe(true);
+    expect(checkbox(name).hasAttribute("disabled")).toBe(true);
   }
   const row = view.container.querySelector<HTMLButtonElement>('[data-value="skill:focused"]')!;
   await waitForSolid(() =>
@@ -86,30 +90,28 @@ it("retains the focused capability row and management link through catalog refre
   row.focus();
   expect(document.activeElement).toBe(row);
 
-  setMenu((previous) => ({
-    ...previous,
-    capabilityMenu: {
-      ...previous.capabilityMenu!,
+  update(
+    {},
+    {
       skillsLoading: true,
       skills: [{ key: "focused", name: "Focused skill", enabled: false, baseEnabled: true }],
     },
-  }));
+  );
   flush();
   expect(view.container.querySelector('[data-value="skill:focused"]')).toBe(row);
   expect(document.activeElement).toBe(row);
   await waitForSolid(() => expect(row.getAttribute("aria-checked")).toBe("false"));
 
-  setMenu((previous) => ({
-    ...previous,
-    capabilityMenu: {
-      ...previous.capabilityMenu!,
+  update(
+    {},
+    {
       skillsLoading: false,
       skills: [
         { key: "new", name: "New skill", enabled: true, baseEnabled: true },
         { key: "focused", name: "Refreshed skill", enabled: false, baseEnabled: true },
       ],
     },
-  }));
+  );
   await waitForSolid(() => {
     expect(view.container.querySelector('[data-value="skill:focused"]')).toBe(row);
     expect(row.textContent).toContain("Refreshed skill");
@@ -130,44 +132,22 @@ it("retains the focused capability row and management link through catalog refre
   manage.click();
   await waitForSolid(() => expect(onNavigate).toHaveBeenCalledExactlyOnceWith("skills"));
 
-  setMenu((previous) => ({
-    ...previous,
-    view: "connectors",
-    toolOverrides: { mcpServers: { docs: true } },
-    capabilityMenu: {
-      ...previous.capabilityMenu!,
-      mcpServers: [docsServer(false)],
+  update(
+    {
+      view: "connectors",
+      toolOverrides: { mcpServers: { docs: true } },
     },
-  }));
-  await waitForSolid(() =>
-    expect(
-      view.getByRole("menuitemcheckbox", { name: "docs Enabled session", hidden: true }),
-    ).toBeTruthy(),
+    { mcpServers: [docsServer(false)] },
   );
-  const connector = view.getByRole("menuitemcheckbox", {
-    name: "docs Enabled session",
-    hidden: true,
-  });
+  await waitForSolid(() => expect(checkbox("docs Enabled session")).toBeTruthy());
+  const connector = checkbox("docs Enabled session");
   setMenu((previous) => ({ ...previous, toolOverrides: null }));
-  await waitForSolid(() =>
-    expect(view.getByRole("menuitemcheckbox", { name: "docs Disabled", hidden: true })).toBe(
-      connector,
-    ),
-  );
+  await waitForSolid(() => expect(checkbox("docs Disabled")).toBe(connector));
 
-  setMenu((previous) => ({
-    ...previous,
-    view: "tools:docs",
-    capabilityMenu: {
-      ...previous.capabilityMenu!,
-      toolsEffectiveResult: docsTools(true),
-    },
-  }));
+  update({ view: "tools:docs" }, { toolsEffectiveResult: docsTools(true) });
   await waitForSolid(() => {
-    expect(
-      view.getByRole("menuitemcheckbox", { name: "search Search documents", hidden: true }),
-    ).toBeTruthy();
-    expect(view.getByRole("menuitemcheckbox", { name: "list", hidden: true })).toBeTruthy();
+    expect(checkbox("search Search documents")).toBeTruthy();
+    expect(checkbox("list")).toBeTruthy();
   });
 });
 

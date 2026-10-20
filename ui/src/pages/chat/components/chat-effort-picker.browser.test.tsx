@@ -108,14 +108,23 @@ function appearance(input: HTMLInputElement) {
 const speedOption = (value: string) =>
   host!.querySelector<HTMLButtonElement>(`[data-chat-speed-option="${value}"]`)!;
 const summary = () => host!.querySelector("summary")!;
-function speedState(mode: boolean | "ultrafast", tiers?: string[], supportsFastMode = true) {
+function speedState(
+  mode: boolean | "ultrafast",
+  tiers?: string[],
+  supportsFastMode = true,
+  inherited = false,
+) {
   return resolveChatFastModeSelectState({
     connected: true,
     gatewayAvailable: true,
     loading: false,
     sessionsResult: null,
     currentModelOverride: "openai/model",
-    fastModeTarget: { model: "model", modelProvider: "openai", fastMode: mode },
+    fastModeTarget: {
+      model: "model",
+      modelProvider: "openai",
+      ...(inherited ? { effectiveFastMode: mode } : { fastMode: mode }),
+    },
     catalog: [
       {
         id: "model",
@@ -123,11 +132,17 @@ function speedState(mode: boolean | "ultrafast", tiers?: string[], supportsFastM
         provider: "openai",
         available: true,
         supportsFastMode,
-        supportsServiceTierRecovery: true,
+        supportsServiceTierRecovery: inherited ? undefined : true,
         serviceTiers: tiers,
       },
     ],
   });
+}
+const unboosted = { fill: "none", glow: "none" };
+function preview(input: HTMLInputElement, value: string) {
+  input.value = value;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
 }
 
 it("returns Escape to its trigger after pointer and keyboard reopening with title tooltips", async () => {
@@ -175,28 +190,7 @@ it("returns Escape to its trigger after pointer and keyboard reopening with titl
 
 it("keeps inherited speed selectable", async () => {
   document.documentElement.dataset.themeMode = "dark";
-  const fastMode = resolveChatFastModeSelectState({
-    connected: true,
-    gatewayAvailable: true,
-    loading: false,
-    sessionsResult: null,
-    currentModelOverride: "openai/speed-fixture",
-    fastModeTarget: {
-      model: "speed-fixture",
-      modelProvider: "openai",
-      effectiveFastMode: "ultrafast",
-    },
-    catalog: [
-      {
-        id: "speed-fixture",
-        name: "Speed fixture",
-        provider: "openai",
-        available: true,
-        supportsFastMode: true,
-        serviceTiers: ["default", "priority", "ultrafast"],
-      },
-    ],
-  });
+  const fastMode = speedState("ultrafast", ["default", "priority", "ultrafast"], true, true);
   const { onFastModeSelect } = await fixture(["low", "medium", "high"], "high", false, fastMode);
   for (const value of ["off", "on", "ultrafast"]) {
     const option = speedOption(value);
@@ -263,19 +257,13 @@ it.each(["dark", "light"])("highlights the highest discrete effort in %s mode", 
     expect(ultraStyle.fill).not.toBe(maximumStyle.fill);
     expect(ultraStyle.glow).not.toBe(maximumStyle.glow);
     for (const value of ["off", "low", "adaptive", "unsupported"]) {
-      expect(appearance((await fixture(levels, value)).input)).toEqual({
-        fill: "none",
-        glow: "none",
-      });
+      expect(appearance((await fixture(levels, value)).input)).toEqual(unboosted);
     }
   }
-  expect(appearance((await fixture(["off", "on"], "on")).input)).toEqual({
-    fill: "none",
-    glow: "none",
-  });
+  expect(appearance((await fixture(["off", "on"], "on")).input)).toEqual(unboosted);
   for (const id of ["low", "high"]) {
     const { input } = await fixture(["off", { id, label: "on" }, "ultra"], id);
-    expect(appearance(input)).toEqual({ fill: "none", glow: "none" });
+    expect(appearance(input)).toEqual(unboosted);
   }
 });
 
@@ -283,9 +271,7 @@ it("previews colour without committing and restores the committed level on cance
   const { input, onThinkingSelect } = await fixture(["low", "max", "ultra"], "max", true);
   const maximumStyle = appearance(input);
   for (const resetEvent of ["pointercancel", "blur"]) {
-    input.value = "2";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    preview(input, "2");
     expect(input.getAttribute("aria-valuetext")).toBe("Ultra");
     expect(appearance(input)).not.toEqual(maximumStyle);
     expect(onThinkingSelect).not.toHaveBeenCalled();
@@ -295,10 +281,8 @@ it("previews colour without committing and restores the committed level on cance
     expect(input.getAttribute("aria-valuetext")).toContain("Maximum");
     expect(appearance(input)).toEqual(maximumStyle);
   }
-  input.value = "0";
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  flush();
-  expect(appearance(input)).toEqual({ fill: "none", glow: "none" });
+  preview(input, "0");
+  expect(appearance(input)).toEqual(unboosted);
   input.dispatchEvent(new Event("change"));
   flush();
   expect(onThinkingSelect).toHaveBeenCalledExactlyOnceWith("low", "effort-preview");
