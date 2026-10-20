@@ -20,30 +20,37 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-type NodeRecord = { nodeId: string; displayName?: string; commands: string[] };
-
 const quietLogger = {
   info() {},
   warn() {},
   error() {},
   debug() {},
 };
+const framePayload = {
+  payload: { format: "jpeg", base64: Buffer.from("fake-jpeg").toString("base64") },
+};
+const missingModelWarning = expect.stringContaining("logbook: analysis paused; no vision model");
 
 async function makeService(params: {
-  nodes: NodeRecord[];
-  invoke: (args: { nodeId: string; command: string }) => Promise<unknown>;
+  nodeIds?: string[];
+  invoke?: (args: { nodeId: string; command: string }) => Promise<unknown>;
   config?: Record<string, unknown>;
   fullConfig?: Record<string, unknown>;
-  logger?: typeof quietLogger;
 }) {
   const dataDir = realpathSync(tempDirs.make("logbook-service-test-"));
+  const warn = vi.fn();
   const invoked: Array<{ nodeId: string; command: string }> = [];
   const runtime = {
     nodes: {
-      list: async () => ({ nodes: params.nodes }),
+      list: async () => ({
+        nodes: (params.nodeIds ?? ["capture-node"]).map((nodeId) => ({
+          nodeId,
+          commands: ["logbook.snapshot"],
+        })),
+      }),
       invoke: async (args: { nodeId: string; command: string }) => {
         invoked.push({ nodeId: args.nodeId, command: args.command });
-        return await params.invoke(args);
+        return params.invoke ? await params.invoke(args) : framePayload;
       },
     },
   };
@@ -52,7 +59,7 @@ async function makeService(params: {
     {
       runtime: runtime as never,
       fullConfig: (params.fullConfig ?? {}) as never,
-      logger: (params.logger ?? quietLogger) as never,
+      logger: { ...quietLogger, warn },
       dataDir,
       workerModuleUrl,
       scheduler: createTestPluginServiceScheduler(),
@@ -62,20 +69,15 @@ async function makeService(params: {
   await service.start();
   const tick = () =>
     (service as unknown as { captureTick(): Promise<void> }).captureTick.call(service);
-  return { service, invoked, tick };
+  const analyze = () =>
+    (service as unknown as { analysisTick(): Promise<void> }).analysisTick.call(service);
+  return { service, invoked, tick, analyze, warn };
 }
-
-const framePayload = {
-  payload: { format: "jpeg", base64: Buffer.from("fake-jpeg").toString("base64") },
-};
 
 describe("LogbookService capture node selection", () => {
   it("rotates to the next capture node after a failure instead of re-picking the broken one", async () => {
     const { service, invoked, tick } = await makeService({
-      nodes: [
-        { nodeId: "a-broken", commands: ["logbook.snapshot"] },
-        { nodeId: "b-working", commands: ["logbook.snapshot"] },
-      ],
+      nodeIds: ["a-broken", "b-working"],
       invoke: async ({ nodeId }) => {
         if (nodeId === "a-broken") {
           return { payload: { error: "logbook.snapshot is not supported on linux" } };
@@ -95,7 +97,6 @@ describe("LogbookService capture node selection", () => {
     ["array", ["ZmFrZQ=="]],
   ])("rejects a %s snapshot payload before storing a frame", async (_label, base64) => {
     const { service, tick } = await makeService({
-      nodes: [{ nodeId: "capture-node", commands: ["logbook.snapshot"] }],
       invoke: async () => ({ payload: { format: "jpeg", base64 } }),
     });
 
@@ -110,14 +111,7 @@ describe("LogbookService capture node selection", () => {
 
 describe("LogbookService vision model selection", () => {
   it("warns about a missing model only when analysis work is pending", async () => {
-    const warn = vi.fn();
-    const { service, tick } = await makeService({
-      nodes: [{ nodeId: "capture-node", commands: ["logbook.snapshot"] }],
-      invoke: async () => framePayload,
-      logger: { ...quietLogger, warn },
-    });
-    const analyze = () =>
-      (service as unknown as { analysisTick(): Promise<void> }).analysisTick.call(service);
+    const { tick, analyze, warn } = await makeService({});
 
     await analyze();
     expect(warn).not.toHaveBeenCalled();
@@ -125,18 +119,13 @@ describe("LogbookService vision model selection", () => {
     await tick();
     await analyze();
     await analyze();
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("logbook: analysis paused; no vision model"),
-    );
+    expect(warn).toHaveBeenCalledExactlyOnceWith(missingModelWarning);
   });
 
   it("warns when a pending batch has no unbatched frames", async () => {
-    const warn = vi.fn();
-    const { service } = await makeService({
-      nodes: [],
-      invoke: async () => framePayload,
+    const { service, analyze, warn } = await makeService({
+      nodeIds: [],
       config: { captureEnabled: false },
-      logger: { ...quietLogger, warn },
     });
     const store = (service as unknown as { store: LogbookStore }).store;
     const capturedAtMs = Date.now();
@@ -156,16 +145,13 @@ describe("LogbookService vision model selection", () => {
 
     expect(await store.countUnbatchedActiveFrames()).toBe(0);
     expect(await store.nextPendingBatch()).not.toBeNull();
-    await (service as unknown as { analysisTick(): Promise<void> }).analysisTick();
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("logbook: analysis paused; no vision model"),
-    );
+    await analyze();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(missingModelWarning);
   });
 
   it("borrows only a media provider with structured extraction", async () => {
     const { service } = await makeService({
-      nodes: [],
-      invoke: async () => framePayload,
+      nodeIds: [],
       fullConfig: {
         tools: {
           media: {
