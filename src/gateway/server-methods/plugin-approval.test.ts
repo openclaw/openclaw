@@ -325,7 +325,6 @@ describe("createPluginApprovalHandlers", () => {
       { kind: "untyped", target: "email" },
       { kind: "external-post", target: "github", visibility: "public", extra: true },
     ])("rejects malformed or non-closed owner-declared scope %j", async (scope) => {
-      const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.request", {
         title: "Sensitive action",
         description: "Review the action",
@@ -560,7 +559,6 @@ describe("createPluginApprovalHandlers", () => {
 
   describe("plugin.approval.waitDecision", () => {
     it("rejects missing id", async () => {
-      const handlers = createPluginApprovalHandlers(manager);
       const opts = createMockOptions("plugin.approval.waitDecision", {});
       await invokeHandler(handlers, opts);
       expect(expectResponseRejected(opts.respond).message).toContain("id is required");
@@ -586,7 +584,6 @@ describe("createPluginApprovalHandlers", () => {
     });
 
     it("returns decision when resolved", async () => {
-      const handlers = createPluginApprovalHandlers(manager);
       const record = await registerApproval(manager);
 
       // Resolve before waiting
