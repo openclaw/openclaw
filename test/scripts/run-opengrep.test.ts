@@ -80,11 +80,16 @@ type OpengrepWorkflowStep = {
   uses?: string;
   env?: Record<string, string>;
   with?: Record<string, string>;
+  if?: string;
 };
 
+const workflowSteps = (): OpengrepWorkflowStep[] =>
+  parse(fs.readFileSync(".github/workflows/opengrep-precise.yml", "utf8")).jobs.scan.steps;
+const bash = (repo: string, command: string, env: NodeJS.ProcessEnv = process.env) =>
+  spawnSync("bash", ["-euo", "pipefail", "-c", command], { cwd: repo, encoding: "utf8", env });
+
 function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.ProcessEnv) {
-  const workflow = parse(fs.readFileSync(".github/workflows/opengrep-precise.yml", "utf8"));
-  const steps: OpengrepWorkflowStep[] = workflow.jobs.scan.steps;
+  const steps = workflowSteps();
   const values = new Map([
     ["github.event.pull_request.base.sha", base],
     ["github.event.pull_request.base.ref", "main"],
@@ -118,19 +123,16 @@ function runChangedPathsWorkflow(repo: string, base: string, env: NodeJS.Process
       throw new Error(`Workflow step has no executable command: ${step.name}`);
     }
     fs.writeFileSync(output, "");
-    const result = spawnSync("bash", ["-euo", "pipefail", "-c", interpolate(command)], {
-      cwd: repo,
-      env: { ...env, ...commandEnv, GITHUB_OUTPUT: output },
-      encoding: "utf8",
+    const result = bash(repo, interpolate(command), {
+      ...env,
+      ...commandEnv,
+      GITHUB_OUTPUT: output,
     });
     if (step.id) {
       for (const line of fs.readFileSync(output, "utf8").trim().split("\n")) {
-        const separator = line.indexOf("=");
-        if (separator >= 0) {
-          values.set(
-            `steps.${step.id}.outputs.${line.slice(0, separator)}`,
-            line.slice(separator + 1),
-          );
+        const [key, ...value] = line.split("=");
+        if (value.length) {
+          values.set(`steps.${step.id}.outputs.${key}`, value.join("="));
         }
       }
     }
@@ -166,14 +168,15 @@ describe("run-opengrep.sh", () => {
       encoding: "utf8",
     });
 
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
+    expect(result).toMatchObject({ status: 0, stderr: "" });
     expect(result.stdout).toMatch(/^# scripts\/run-opengrep\.sh\n/u);
-    expect(result.stdout).toContain("# Usage:\n");
-    expect(result.stdout).toContain("# Optional positional path overrides come last:\n");
-    expect(result.stdout).toContain(
+    for (const line of [
+      "# Usage:\n",
+      "# Optional positional path overrides come last:\n",
       "# Exit code: non-zero on scan errors, and on findings when --error is passed.\n",
-    );
+    ]) {
+      expect(result.stdout).toContain(line);
+    }
     expect(result.stdout).not.toContain("BASH_VERSINFO");
     expect(fs.existsSync(path.join(repo, ".opengrep-out"))).toBe(false);
   });
@@ -198,101 +201,85 @@ describe("run-opengrep.sh", () => {
       { cwd: repo, env: { ...process.env, PATH: binDir }, encoding: "utf8" },
     );
 
-    expect(result.status).toBe(127);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toContain("'opengrep' not found on PATH");
+    expect(result).toMatchObject({
+      status: 127,
+      stdout: "",
+      stderr: expect.stringContaining("'opengrep' not found on PATH"),
+    });
     expect(result.stderr).toMatch(
       /curl -fsSL https:\/\/raw\.githubusercontent\.com\/opengrep\/opengrep\/\S+\/install\.sh \| bash -s -- -v \S+/,
     );
     expect(fs.existsSync(path.join(repo, ".opengrep-out"))).toBe(false);
-    expect(result.stderr).not.toContain("pipx");
-    expect(result.stderr).not.toContain("opengrep/tap/opengrep");
+    for (const obsolete of ["pipx", "opengrep/tap/opengrep"]) {
+      expect(result.stderr).not.toContain(obsolete);
+    }
   });
 
-  it("validates the rulepack when only OpenGrep rulepack files changed", () => {
-    const repo = createRepo("rulepack");
-    commit(repo);
-    fs.appendFileSync(path.join(repo, "security/opengrep/precise.yml"), "# changed\n");
-    const { argsPath, binDir } = installOpengrepStub(repo);
-
-    const result = runScan(repo, binDir);
-    expect(result.status, result.stderr).toBe(0);
-
-    const args = fs.readFileSync(argsPath, "utf8");
-    expect(args).toContain("security/opengrep/precise.yml");
-  });
-
-  it("writes empty SARIF when a changed scan has no first-party paths", () => {
-    const repo = createRepo("empty-sarif");
-    writeFile(path.join(repo, ".github/actions/ensure-base-commit/action.yml"), "name: ensure\n");
-    commit(repo);
-
-    fs.appendFileSync(
-      path.join(repo, ".github/actions/ensure-base-commit/action.yml"),
-      "# changed\n",
-    );
-    const { argsPath, binDir } = installOpengrepStub(repo);
-
-    const result = runScan(repo, binDir, ["--changed", "--sarif", "--error"]);
-    expect(result.status, result.stderr).toBe(0);
-
-    const sarif = JSON.parse(
-      fs.readFileSync(path.join(repo, ".opengrep-out/precise.sarif"), "utf8"),
-    );
-    expect(sarif).toMatchObject({
-      version: "2.1.0",
-      runs: [
-        { tool: { driver: { name: "Opengrep OSS", semanticVersion: "1.30.2" } }, results: [] },
-      ],
-    });
-    expect(fs.existsSync(argsPath)).toBe(false);
-  });
-
-  it.each([
-    {
-      failure: "invalid base range",
-      baseRef: "missing-base...HEAD",
-      failedGitCommand: null,
-      errorText: "missing-base...HEAD",
-    },
-    {
-      failure: "git ls-files",
-      baseRef: "HEAD",
-      failedGitCommand: "ls-files",
-      errorText: "forced git ls-files failure",
-    },
-  ])(
-    "fails when changed-path discovery hits $failure",
-    ({ baseRef, failedGitCommand, errorText }) => {
-      const repo = createRepo("discovery-failure");
+  it.each(["rulepack", "empty", "missing-base...HEAD", "ls-files"] as const)(
+    "handles changed-path discovery: %s",
+    (scenario) => {
+      const repo = createRepo(scenario);
+      const changed =
+        scenario === "rulepack"
+          ? "security/opengrep/precise.yml"
+          : scenario === "empty"
+            ? ".github/actions/ensure-base-commit/action.yml"
+            : null;
+      if (scenario === "empty") {
+        writeFile(path.join(repo, changed!), "name: ensure\n");
+      }
       commit(repo);
-
+      if (changed) {
+        fs.appendFileSync(path.join(repo, changed), "# changed\n");
+      }
       const { argsPath, binDir } = installOpengrepStub(repo);
-      if (failedGitCommand) {
+      const sarifPath = path.join(repo, ".opengrep-out/precise.sarif");
+      if (scenario === "ls-files") {
         const realGit = execFileSync("bash", ["-lc", "command -v git"], {
           encoding: "utf8",
         }).trim();
         writeFile(
           path.join(binDir, "git"),
-          [
-            "#!/usr/bin/env bash",
-            `if [[ "\${1:-}" == ${JSON.stringify(failedGitCommand)} ]]; then`,
-            '  echo "forced git ls-files failure" >&2',
-            "  exit 71",
-            "fi",
-            `exec ${JSON.stringify(realGit)} "$@"`,
-            "",
-          ].join("\n"),
+          `#!/usr/bin/env bash
+if [[ "\${1:-}" == "ls-files" ]]; then
+  echo "forced git ls-files failure" >&2
+  exit 71
+fi
+exec ${JSON.stringify(realGit)} "$@"
+`,
         );
         fs.chmodSync(path.join(binDir, "git"), 0o755);
       }
-
-      const result = runScan(repo, binDir, ["--changed", "--sarif", "--error"], baseRef);
-
-      expect.soft(result.status).not.toBe(0);
-      expect.soft(result.stderr).toContain(errorText);
-      expect.soft(fs.existsSync(argsPath)).toBe(false);
-      expect.soft(fs.existsSync(path.join(repo, ".opengrep-out/precise.sarif"))).toBe(false);
+      const result = runScan(
+        repo,
+        binDir,
+        scenario === "rulepack" ? ["--changed"] : ["--changed", "--sarif", "--error"],
+        scenario === "missing-base...HEAD" ? scenario : "HEAD",
+      );
+      if (scenario === "missing-base...HEAD" || scenario === "ls-files") {
+        expect.soft(result.status).not.toBe(0);
+        expect
+          .soft(result.stderr)
+          .toContain(scenario === "ls-files" ? "forced git ls-files failure" : scenario);
+        expect.soft(fs.existsSync(argsPath)).toBe(false);
+        expect.soft(fs.existsSync(sarifPath)).toBe(false);
+      } else {
+        expect(result.status, result.stderr).toBe(0);
+        if (scenario === "rulepack") {
+          expect(fs.readFileSync(argsPath, "utf8")).toContain("security/opengrep/precise.yml");
+        } else {
+          expect(JSON.parse(fs.readFileSync(sarifPath, "utf8"))).toMatchObject({
+            version: "2.1.0",
+            runs: [
+              {
+                tool: { driver: { name: "Opengrep OSS", semanticVersion: "1.30.2" } },
+                results: [],
+              },
+            ],
+          });
+          expect(fs.existsSync(argsPath)).toBe(false);
+        }
+      }
     },
   );
 
@@ -350,9 +337,7 @@ describe("run-opengrep.sh", () => {
           "--batch-all-objects",
           "--batch-check=%(objectname)",
         );
-        expect(localObjects.split("\n").includes(staleBase)).toBe(
-          branch === "feature" && depth === 2,
-        );
+        expect(localObjects.split("\n")).not.toContain(staleBase);
         const { argsPath, binDir } = installOpengrepStub(repo);
         const trace = path.join(createTempDir("openclaw-opengrep-trace-"), "git.jsonl");
         const result = runChangedPathsWorkflow(repo, staleBase, {
@@ -381,6 +366,14 @@ describe("run-opengrep.sh", () => {
           expect(result.status, result.stderr).not.toBe(0);
           expect(result.stdout).toContain("Base commit still unavailable");
           expect(fetches).toHaveLength(6);
+          const fetchArgs = (depthArg: string, ...refs: string[]) => [
+            "fetch",
+            "--filter=blob:none",
+            "--no-tags",
+            depthArg,
+            "origin",
+            ...refs,
+          ];
           expect(
             fetches.map((event) => {
               const start = traceEvents.find(
@@ -390,17 +383,11 @@ describe("run-opengrep.sh", () => {
               return start.argv.slice(start.argv.indexOf("fetch"));
             }),
           ).toEqual([
-            ["fetch", "--filter=blob:none", "--no-tags", "--depth=1", "origin", staleBase],
-            ...[25, 100, 300, 1000].map((deepenBy) => [
-              "fetch",
-              "--filter=blob:none",
-              "--no-tags",
-              `--deepen=${deepenBy}`,
-              "origin",
-              "--",
-              "main",
-            ]),
-            ["fetch", "--filter=blob:none", "--no-tags", "--unshallow", "origin", "--", "main"],
+            fetchArgs("--depth=1", staleBase),
+            ...[25, 100, 300, 1000].map((deepenBy) =>
+              fetchArgs(`--deepen=${deepenBy}`, "--", "main"),
+            ),
+            fetchArgs("--unshallow", "--", "main"),
           ]);
           expect(fs.existsSync(argsPath)).toBe(false);
           return;
@@ -415,85 +402,68 @@ describe("run-opengrep.sh", () => {
   });
 });
 
-describe("OpenGrep GitHub SARIF uploads", () => {
-  it.each(["opengrep-precise.yml"])(
-    "%s preserves raw evidence and uploads only findings without accepted source suppression",
-    (workflowName) => {
-      const repo = createTempDir("openclaw-opengrep-sarif-");
-      const ignored = [
-        { ruleId: "in-source", suppressions: [{ kind: "inSource" }] },
-        { ruleId: "accepted", suppressions: [{ kind: "inSource", status: "accepted" }] },
-      ];
-      const retained = [
-        { ruleId: "active" },
-        { ruleId: "empty", suppressions: [] },
-        { ruleId: "unknown", suppressions: null },
-        { ruleId: "external", suppressions: [{ kind: "external", status: "accepted" }] },
-        { ruleId: "under-review", suppressions: [{ kind: "inSource", status: "underReview" }] },
-        { ruleId: "rejected", suppressions: [{ kind: "inSource", status: "rejected" }] },
-        { ruleId: "future-status", suppressions: [{ kind: "inSource", status: "unknown" }] },
-        { ruleId: "null-status", suppressions: [{ kind: "inSource", status: null }] },
-        { ruleId: "malformed", suppressions: [null] },
-        {
-          ruleId: "mixed",
-          suppressions: [{ kind: "inSource" }, { kind: "inSource", status: "rejected" }],
-        },
-      ];
-      const tool = { driver: { name: "Opengrep OSS", rules: [{ id: "unchanged-rule" }] } };
-      const report = {
-        version: "2.1.0",
-        runs: [
-          {
-            tool,
-            invocations: [{ executionSuccessful: false }],
-            results: [...ignored, ...retained],
-          },
-          { tool, results: [] },
-          { tool },
-        ],
-      };
-      const raw = `${JSON.stringify(report, null, 2)}\n`;
-      const reportPath = ".opengrep-out/precise.sarif";
-      writeFile(path.join(repo, reportPath), raw);
-      const workflow = parse(fs.readFileSync(`.github/workflows/${workflowName}`, "utf8"));
-      const steps: Array<{
-        name: string;
-        id?: string;
-        run?: string;
-        if?: string;
-        with?: Record<string, string>;
-      }> = workflow.jobs.scan.steps;
-      const prepare = steps.find((step) => step.id === "github-sarif");
-      if (prepare) {
-        writeFile(
-          path.join(repo, "scripts/opengrep-github-sarif.mjs"),
-          fs.readFileSync("scripts/opengrep-github-sarif.mjs", "utf8"),
-        );
-        expect(prepare.if).toBe("always() && hashFiles('.opengrep-out/precise.sarif') != ''");
-        const prepared = spawnSync("bash", ["-euo", "pipefail", "-c", prepare.run!], {
-          cwd: repo,
-          encoding: "utf8",
-        });
-        expect(prepared.status).toBe(0);
-        expect(prepared.stderr).toContain(
-          "Omitted 2 accepted in-source suppression(s); raw audit: .opengrep-out/precise.sarif",
-        );
-      }
-      const upload = steps.find((step) => step.name === "Upload SARIF to GitHub Code Scanning")!;
-      const artifact = steps.find((step) => step.name === "Upload SARIF as workflow artifact")!;
-      const uploadPath = upload.with?.sarif_file;
-      if (!uploadPath) {
-        throw new Error("Workflow must name its SARIF upload payload");
-      }
-      const uploaded = JSON.parse(fs.readFileSync(path.join(repo, uploadPath), "utf8"));
-      expect(uploaded).toEqual({
-        ...report,
-        runs: [{ ...report.runs[0], results: retained }, ...report.runs.slice(1)],
-      });
-      expect(upload.if).toBe("always() && steps.github-sarif.outcome == 'success'");
-      expect(artifact.with?.path).toBe(reportPath);
-      expect(artifact.with?.["if-no-files-found"]).toBe("error");
-      expect(fs.readFileSync(path.join(repo, reportPath), "utf8")).toBe(raw);
+it("preserves raw SARIF evidence and uploads only findings without accepted source suppression", () => {
+  const repo = createTempDir("openclaw-opengrep-sarif-");
+  const ignored = [
+    { ruleId: "in-source", suppressions: [{ kind: "inSource" }] },
+    { ruleId: "accepted", suppressions: [{ kind: "inSource", status: "accepted" }] },
+  ];
+  const retained = [
+    { ruleId: "active" },
+    { ruleId: "empty", suppressions: [] },
+    { ruleId: "unknown", suppressions: null },
+    { ruleId: "external", suppressions: [{ kind: "external", status: "accepted" }] },
+    { ruleId: "under-review", suppressions: [{ kind: "inSource", status: "underReview" }] },
+    { ruleId: "rejected", suppressions: [{ kind: "inSource", status: "rejected" }] },
+    { ruleId: "future-status", suppressions: [{ kind: "inSource", status: "unknown" }] },
+    { ruleId: "null-status", suppressions: [{ kind: "inSource", status: null }] },
+    { ruleId: "malformed", suppressions: [null] },
+    {
+      ruleId: "mixed",
+      suppressions: [{ kind: "inSource" }, { kind: "inSource", status: "rejected" }],
     },
+  ];
+  const tool = { driver: { name: "Opengrep OSS", rules: [{ id: "unchanged-rule" }] } };
+  const report = {
+    version: "2.1.0",
+    runs: [
+      {
+        tool,
+        invocations: [{ executionSuccessful: false }],
+        results: [...ignored, ...retained],
+      },
+      { tool, results: [] },
+      { tool },
+    ],
+  };
+  const raw = `${JSON.stringify(report, null, 2)}\n`;
+  const reportPath = ".opengrep-out/precise.sarif";
+  writeFile(path.join(repo, reportPath), raw);
+  const steps = workflowSteps();
+  const prepare = steps.find((step) => step.id === "github-sarif")!;
+  writeFile(
+    path.join(repo, "scripts/opengrep-github-sarif.mjs"),
+    fs.readFileSync("scripts/opengrep-github-sarif.mjs", "utf8"),
   );
+  expect(prepare.if).toBe("always() && hashFiles('.opengrep-out/precise.sarif') != ''");
+  expect(bash(repo, prepare.run!)).toMatchObject({
+    status: 0,
+    stderr: expect.stringContaining(
+      "Omitted 2 accepted in-source suppression(s); raw audit: .opengrep-out/precise.sarif",
+    ),
+  });
+  const upload = steps.find((step) => step.name === "Upload SARIF to GitHub Code Scanning")!;
+  const artifact = steps.find((step) => step.name === "Upload SARIF as workflow artifact")!;
+  const uploadPath = upload.with?.sarif_file;
+  if (!uploadPath) {
+    throw new Error("Workflow must name its SARIF upload payload");
+  }
+  const uploaded = JSON.parse(fs.readFileSync(path.join(repo, uploadPath), "utf8"));
+  expect(uploaded).toEqual({
+    ...report,
+    runs: [{ ...report.runs[0], results: retained }, ...report.runs.slice(1)],
+  });
+  expect(upload.if).toBe("always() && steps.github-sarif.outcome == 'success'");
+  expect(artifact.with).toMatchObject({ path: reportPath, "if-no-files-found": "error" });
+  expect(fs.readFileSync(path.join(repo, reportPath), "utf8")).toBe(raw);
 });

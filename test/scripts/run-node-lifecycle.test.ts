@@ -64,13 +64,21 @@ function runnerEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   };
 }
 
-function runnerPrelude(captureSpawn = false) {
-  return `import childProcess from "node:child_process";
+function writeRunner(file: string, body: string, call = "runNodeMain()", capture = true) {
+  writeFileSync(
+    file,
+    `import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
-${captureSpawn ? "const spawn = childProcess.spawn;" : ""}
+${capture ? "const spawn = childProcess.spawn;" : ""}
 import { registerSourceRunnerServiceFixture } from ${JSON.stringify(sourceRunnerServiceFixtureUrl)};
 registerSourceRunnerServiceFixture(${JSON.stringify(process.cwd())});
-const { runNodeMain } = await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/run-node.mts")).href)});`;
+const { runNodeMain } = await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/run-node.mts")).href)});
+${body}
+syncBuiltinESMExports();
+const outcome = await ${call};
+${finishOutcome}
+`,
+  );
 }
 
 function expectCommand(result: Awaited<ReturnType<typeof runNodeScript>>, status: number) {
@@ -102,19 +110,12 @@ const sourceRunnerServiceFixtureUrl = new URL(
   import.meta.url,
 ).href;
 
-const preparedRunnerModules = [
-  [
-    new URL("../../scripts/run-node.mts", import.meta.url),
-    resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runNode),
-  ],
-  [
-    new URL("../../scripts/watch-node.mts", import.meta.url),
-    resolveRuntimeWorkerUrl(scriptModuleEntrypoints.watchNode),
-  ],
-] as const;
-
 function prepareRunnerEnv(env: NodeJS.ProcessEnv, implementations: string[] = []) {
-  const modules: Array<readonly [URL, URL]> = [...preparedRunnerModules];
+  const source = (name: string) => new URL(`../../scripts/${name}.mts`, import.meta.url);
+  const modules: Array<readonly [URL, URL]> = [
+    [source("run-node"), resolveRuntimeWorkerUrl(toolingMtsEntrypoints.runNode)],
+    [source("watch-node"), resolveRuntimeWorkerUrl(scriptModuleEntrypoints.watchNode)],
+  ];
   for (const implementation of implementations) {
     // These generated fixtures are already JavaScript; prepare their bytes before the guard.
     const prepared = `${implementation}.mjs`;
@@ -160,11 +161,10 @@ process.on("SIGTERM", () => sendReceipt(${JSON.stringify(interruptedReceipt)}, "
       mkdirSync(path.join(checkoutRoot, "dist"));
       writeFileSync(path.join(checkoutRoot, "package.json"), '{"type":"module"}');
       writeFileSync(path.join(checkoutRoot, "dist/entry.js"), "export {};\n");
-      writeFileSync(
-        implementationPath,
-        mode === "runner"
-          ? `${runnerPrelude()}
-import { EventEmitter } from "node:events";
+      if (mode === "runner") {
+        writeRunner(
+          implementationPath,
+          `import { EventEmitter } from "node:events";
 childProcess.spawn = (_command, args) => {
   if (!args.includes("openclaw.mjs")) throw new Error("prebuilt fixture unexpectedly requested a build");
   const child = new EventEmitter();
@@ -174,15 +174,19 @@ childProcess.spawn = (_command, args) => {
   });
   return child;
 };
-syncBuiltinESMExports();
-const outcome = await runNodeMain({ cwd: ${JSON.stringify(checkoutRoot)}, args: ["gateway", "stop"] });
-${finishOutcome}
-`
-          : `import { writeSync } from "node:fs";
+`,
+          `runNodeMain({ cwd: ${JSON.stringify(checkoutRoot)}, args: ["gateway", "stop"] })`,
+          false,
+        );
+      } else {
+        writeFileSync(
+          implementationPath,
+          `import { writeSync } from "node:fs";
 writeSync(1, "fixture implementation signaled\\n");
 process.kill(process.pid, "SIGKILL");
 `,
-      );
+        );
+      }
       const env = runnerEnv({
         OPENCLAW_RUNNER_LOG: "0",
         NODE_OPTIONS: `--import=${pathToFileURL(signalPreload).href}`,
@@ -222,23 +226,17 @@ process.kill(process.pid, "SIGKILL");
           },
         },
       );
+      const waitForGate = (gate: Promise<unknown>, message: string) =>
+        withinTest(awaitGateBeforeSettlement(gate, command, message), signal);
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            releasePending.promise,
-            command,
-            "Source runner exited before releasing cleanup custody",
-          ),
-          signal,
+        await waitForGate(
+          releasePending.promise,
+          "Source runner exited before releasing cleanup custody",
         );
         expect(runner!.kill("SIGTERM")).toBe(true);
-        await withinTest(
-          awaitGateBeforeSettlement(
-            receipts.waitFor(interruptedReceipt, "interrupted"),
-            command,
-            "Source runner exited before observing interruption",
-          ),
-          signal,
+        await waitForGate(
+          receipts.waitFor(interruptedReceipt, "interrupted"),
+          "Source runner exited before observing interruption",
         );
         handoff!.uncork();
         const result = await withinTest(command, signal);
@@ -302,11 +300,10 @@ setInterval(() => {
 }, 20);
 `,
       );
-      writeFileSync(
+      writeRunner(
         implementationPath,
         `import fs from "node:fs";
 ${fixtureReceiptClientSource(receipts.endpoint)}
-${runnerPrelude(true)}
 fs.appendFileSync(${JSON.stringify(invocationsPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 // Let a regressed watcher finish after recording its doctor or restart invocation.
 if (fs.existsSync(${JSON.stringify(childPidPath)})) process.exit(0);
@@ -317,9 +314,6 @@ childProcess.spawn = (command, args, options) => {
     sendReceipt(${JSON.stringify(launcherPidPath)}, "ready");
     return child;
 };
-syncBuiltinESMExports();
-const outcome = await runNodeMain();
-${finishOutcome}
 `,
       );
       const watchWrapper = path.join(checkoutRoot, "scripts/watch-node.mjs");
@@ -376,17 +370,15 @@ ${finishOutcome}
       });
       await runQaGatewayFixture(
         async () => {
-          const childPid = await fixturePidBeforeSettlement(
-            childPidPath,
-            command,
-            signal,
-            "Gateway watch exited before the compile-cache child was ready",
-          );
-          const launcherPid = await fixturePidBeforeSettlement(
-            launcherPidPath,
-            command,
-            signal,
-            "Gateway watch exited before the compile-cache child was ready",
+          const [childPid, launcherPid] = await Promise.all(
+            [childPidPath, launcherPidPath].map((pidPath) =>
+              fixturePidBeforeSettlement(
+                pidPath,
+                command,
+                signal,
+                "Gateway watch exited before the compile-cache child was ready",
+              ),
+            ),
           );
           expect(childPid, "process replacement preserves the supervised Gateway PID").toBe(
             launcherPid,
@@ -539,21 +531,15 @@ sendReceipt(${JSON.stringify(childPidPath)}, "ready");
 setInterval(() => {}, 1000);
 `,
       );
-      writeFileSync(
+      writeRunner(
         implementationPath,
         `import fs from "node:fs";
-${runnerPrelude(true)}
 fs.writeFileSync(${JSON.stringify(wrapperPidPath)}, String(process.ppid));
 childProcess.spawn = (_command, _args, options) => spawn(process.execPath, [${JSON.stringify(childPath)}], {
   ...options, stdio: "ignore",
 });
-syncBuiltinESMExports();
-const outcome = await runNodeMain({
-  cwd: ${JSON.stringify(checkoutRoot)},
-  env: { ...process.env, OPENCLAW_FORCE_BUILD: "1", OPENCLAW_RUNNER_LOG: "0" },
-});
-${finishOutcome}
 `,
+        `runNodeMain({ cwd: ${JSON.stringify(checkoutRoot)}, env: { ...process.env, OPENCLAW_FORCE_BUILD: "1", OPENCLAW_RUNNER_LOG: "0" } })`,
       );
       const env = runnerEnv();
       delete env.NODE_OPTIONS;
@@ -578,15 +564,15 @@ ${finishOutcome}
         expect(result.status).not.toBe(0);
       } finally {
         // Negative controls can orphan a separate process group; the test owns its cleanup.
-        if (existsSync(childPidPath)) {
-          const childPid = Number(readFileSync(childPidPath, "utf8"));
-          if (isProcessAlive(childPid)) {
-            process.kill(-childPid, "SIGKILL");
-          }
-          await command;
+        const childPid = existsSync(childPidPath)
+          ? Number(readFileSync(childPidPath, "utf8"))
+          : undefined;
+        if (childPid !== undefined && isProcessAlive(childPid)) {
+          process.kill(-childPid, "SIGKILL");
+        }
+        await command;
+        if (childPid !== undefined) {
           await waitForDead(childPid, signal);
-        } else {
-          await command;
         }
       }
     });

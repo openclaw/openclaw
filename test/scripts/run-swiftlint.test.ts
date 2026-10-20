@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = process.cwd();
@@ -11,24 +11,24 @@ const limitRules =
     " ",
   );
 
-function violation(rule: string, severity = "Error") {
+function violation(rule: string) {
   return {
     file: path.join(repoRoot, fixtureFile),
     line: 7,
     character: 3,
-    severity,
+    severity: "Error",
     rule_id: rule,
     reason: `Fixture violation of ${rule}`,
   };
 }
 
 describe.skipIf(process.platform === "win32")("SwiftLint limit policy", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterAll);
-  let fixtureDir: string;
-  let invocation = 0;
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  beforeAll(() => {
-    fixtureDir = tempDirs.make("openclaw-swiftlint-");
+  function run(report: unknown, { github = true, exit = 2, raw = false } = {}) {
+    const fixtureDir = tempDirs.make("openclaw-swiftlint-");
+    const summary = path.join(fixtureDir, "summary.md");
+    const args = path.join(fixtureDir, "args.json");
     writeFileSync(
       path.join(fixtureDir, "swiftlint"),
       `#!/usr/bin/env node
@@ -39,12 +39,6 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
 `,
       { mode: 0o755 },
     );
-  });
-
-  function run(report: unknown, { github = true, exit = 2, raw = false } = {}) {
-    invocation += 1;
-    const summary = path.join(fixtureDir, `summary-${invocation}.md`);
-    const args = path.join(fixtureDir, `args-${invocation}.json`);
     const result = spawnSync(
       process.execPath,
       [path.join(repoRoot, "scripts/run-swiftlint.mts"), "--strict", "--config", ".swiftlint.yml"],
@@ -72,9 +66,8 @@ process.exitCode = Number(process.env.SWIFTLINT_TEST_EXIT);
   }
 
   function expectNoWarnings(result: ReturnType<typeof run>, status: number) {
-    expect(result.status).toBe(status);
+    expect(result).toMatchObject({ status, summary: "" });
     expect(result.output).not.toContain("::warning");
-    expect(result.summary).toBe("");
   }
 
   it("keeps local strict lint failures unchanged, even when a local tool sets CI", () => {
