@@ -30,6 +30,14 @@ import { AuthStorage } from "./sessions/auth-storage.js";
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-fleet-batch" });
 const { mocks } = fixture;
 
+function publish(config: OpenClawConfig = {}, startup = false) {
+  return refreshPreparedModelRuntimeSnapshots(config, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+    ...(startup ? { startup: true } : {}),
+  });
+}
+
 describe("prepared fleet batches", () => {
   beforeEach(() => {
     mocks.configuredAgentIds = ["first", "middle", "last"];
@@ -189,14 +197,7 @@ describe("prepared fleet batches", () => {
       }
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const publication = refreshPreparedModelRuntimeSnapshots(
-      {},
-      {
-        gatewayLifecycle: true,
-        startup: true,
-        catalogMode: "static",
-      },
-    );
+    const publication = publish({}, true);
     let admission: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
     let settled = false;
     try {
@@ -245,14 +246,7 @@ describe("prepared fleet batches", () => {
       }
     });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    const publication = refreshPreparedModelRuntimeSnapshots(
-      {},
-      {
-        gatewayLifecycle: true,
-        startup: true,
-        catalogMode: "static",
-      },
-    );
+    const publication = publish({}, true);
     try {
       await acquiring.promise;
       await vi.advanceTimersByTimeAsync(120_000);
@@ -292,13 +286,7 @@ describe("prepared fleet batches", () => {
       return mocks.authStorage;
     });
 
-    await refreshPreparedModelRuntimeSnapshots(
-      {},
-      {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-      },
-    );
+    await publish();
     await queued;
 
     expect(events.indexOf("first")).toBeLessThan(events.indexOf("event-loop"));
@@ -386,10 +374,7 @@ describe("prepared fleet batches", () => {
         }),
       );
     try {
-      await refreshPreparedModelRuntimeSnapshots(config, {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-      });
+      await publish(config);
       expect(captures).toHaveLength(3);
       expect(new Set(captures).size).toBe(1);
       const first = captures[0]!;
@@ -428,10 +413,7 @@ describe("prepared fleet batches", () => {
       config.models!.providers!.fixture!.models[1]!.name = "updated";
       expect(first.agents?.defaults?.model).toBe("fixture/first");
       captures.length = 0;
-      await refreshPreparedModelRuntimeSnapshots(config, {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-      });
+      await publish(config);
       expect(captures).toHaveLength(3);
       expect(new Set(captures).size).toBe(1);
       expect(captures[0]).not.toBe(first);
@@ -465,10 +447,7 @@ describe("prepared fleet batches", () => {
       return previous;
     });
 
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
+    await publish(config);
     const snapshot = getPreparedModelRuntimeSnapshot({
       ...fixture.agentInput("first", config),
       workspaceDir: "/tmp/workspace-first",
@@ -488,10 +467,7 @@ describe("prepared fleet batches", () => {
       return { entries: [] };
     });
     try {
-      await refreshPreparedModelRuntimeSnapshots(config, {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-      });
+      await publish(config);
       const snapshot = getPreparedModelRuntimeSnapshot({
         config,
         agentId: "first",
@@ -525,10 +501,7 @@ describe("prepared catalog source sharing", () => {
           },
         };
         digests.mockClear();
-        await refreshPreparedModelRuntimeSnapshots(config, {
-          gatewayLifecycle: true,
-          catalogMode: "static",
-        });
+        await publish(config);
         counts.push(
           digests.mock.calls.filter(
             ([value]) => typeof value === "string" && value.includes(marker),
