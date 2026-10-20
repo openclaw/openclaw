@@ -16,14 +16,13 @@ vi.mock("openclaw/plugin-sdk/secret-file-runtime", async (importOriginal) => ({
 describe("telegramPlugin reply threading", () => {
   it.each([
     [
-      "uses an account override",
+      "first",
       {
         accounts: { sut: { tokenFile: "/tmp/must-not-read", replyToMode: "first" } },
       },
-      "first",
     ],
     [
-      "inherits the top-level mode",
+      "all",
       {
         replyToMode: "all",
         accounts: {
@@ -32,19 +31,17 @@ describe("telegramPlugin reply threading", () => {
           },
         },
       },
-      "all",
     ],
     [
-      "allows an account to disable replies",
+      "off",
       {
         replyToMode: "all",
         accounts: { sut: { replyToMode: "off" } },
       },
-      "off",
     ],
-  ] satisfies [string, NonNullable<OpenClawConfig["channels"]>["telegram"], string][])(
-    "%s",
-    (_name, telegram, expected) => {
+  ] satisfies [string, NonNullable<OpenClawConfig["channels"]>["telegram"]][])(
+    "resolves reply mode %s without reading credentials",
+    (expected, telegram) => {
       tryReadSecretFileSyncMock.mockClear();
       const cfg: OpenClawConfig = { channels: { telegram } };
       expect(telegramPlugin.threading?.resolveReplyToMode?.({ cfg, accountId: "sut" })).toBe(

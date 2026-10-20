@@ -32,15 +32,7 @@ describe("telegram thread binding startup reconciliation", () => {
   ])("reconciles $target on restart", async ({ target, storeReadFailed, retained }) => {
     await storeBinding(target);
     if (storeReadFailed !== undefined) {
-      acpHost.read.mockResolvedValue({
-        cfg: {},
-        storePath: "/tmp/acp-store.json",
-        sessionKey: target,
-        storeSessionKey: target,
-        entry: undefined,
-        acp: undefined,
-        storeReadFailed,
-      });
+      acpHost.read.mockResolvedValue({ storeReadFailed });
     }
     const reloaded = await createManager(options);
     if (retained) {
@@ -60,9 +52,7 @@ describe("telegram thread binding startup reconciliation", () => {
     const target = "agent:main:acp:refused";
     await storeBinding(target, "refused");
     const error = new IncognitoSessionEndedError();
-    acpHost.read.mockImplementation(async () => {
-      throw error;
-    });
+    acpHost.read.mockRejectedValue(error);
 
     await expect(createManager(options)).rejects.toBe(error);
     await expectStoredBinding("refused", target);
@@ -91,10 +81,7 @@ describe("telegram thread binding startup reconciliation", () => {
           },
           release,
         }),
-      }).then(
-        () => undefined,
-        (caught: unknown) => caught,
-      );
+      }).catch((caught: unknown) => caught);
       expect(() => rethrowIncognitoSessionError(failure)).toThrow();
       await expectStoredBinding("prepared", target);
       expect(release).toHaveBeenCalledOnce();

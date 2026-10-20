@@ -1,14 +1,10 @@
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { getSessionEntryAsync } from "openclaw/plugin-sdk/session-store-runtime";
 import { vi } from "vitest";
-import { telegramDirectDeliveryDepsForTest } from "./bot-delivery-deps.test-support.js";
 import {
   holdTelegramMediaTimeouts,
   resolveFlushTimerForDelay,
 } from "./bot-media-timers.test-support.js";
-import * as telegramSessionRuntime from "./bot-message-context.session.runtime.js";
-import type { TelegramBotFixtureMocks } from "./bot-module-mocks.test-support.js";
 
 export function createBotApiTransport() {
   let getFileCall = 0;
@@ -31,32 +27,12 @@ export function createBotApiTransport() {
   return { fetch: fetchImpl, sourceFetch: fetchImpl, close: async () => {} };
 }
 
-let telegramModuleMocks: TelegramBotFixtureMocks;
+let runtimeConfig: OpenClawConfig;
+let sessionStateDir: string;
 
 export function configureTelegramModuleMocks(stateDir: string, cfg: OpenClawConfig): void {
-  telegramModuleMocks = {
-    ...telegramDirectDeliveryDepsForTest,
-    ...telegramSessionRuntime,
-    getSessionEntryAsync,
-    getRuntimeConfig: () => cfg,
-    resolveStorePath: (storePath?: string) => storePath ?? path.join(stateDir, "sessions.json"),
-    readChannelAllowFromStore: async () => [],
-    upsertChannelPairingRequest: async () => ({ code: "PAIRCODE", created: true }),
-    enqueueRoutedSystemEvent: () => false,
-    dispatchReplyWithBufferedBlockDispatcher: async () => ({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-    }),
-    buildModelsProviderData: async () => ({
-      byProvider: new Map<string, Set<string>>(),
-      providers: [],
-      resolvedDefault: { provider: "openai", model: "gpt-test" },
-      modelNames: new Map<string, string>(),
-      modelCatalog: [],
-    }),
-    prepareSkillCommandsForAgents: async () => [],
-    wasSentByBot: () => false,
-  };
+  runtimeConfig = cfg;
+  sessionStateDir = stateDir;
 }
 
 vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => ({
@@ -70,51 +46,45 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => ({
 
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
-  readRuntimeConfig: (...args: Parameters<TelegramBotFixtureMocks["getRuntimeConfig"]>) =>
-    telegramModuleMocks.getRuntimeConfig(...args),
+  readRuntimeConfig: () => runtimeConfig,
 }));
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/session-store-runtime")>()),
-  resolveStorePath: (...args: Parameters<TelegramBotFixtureMocks["resolveStorePath"]>) =>
-    telegramModuleMocks.resolveStorePath(...args),
+  resolveStorePath: (storePath?: string) =>
+    storePath ?? path.join(sessionStateDir, "sessions.json"),
 }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/conversation-runtime")>()),
-  readChannelAllowFromStore: (
-    ...args: Parameters<TelegramBotFixtureMocks["readChannelAllowFromStore"]>
-  ) => telegramModuleMocks.readChannelAllowFromStore(...args),
-  upsertChannelPairingRequest: (
-    ...args: Parameters<TelegramBotFixtureMocks["upsertChannelPairingRequest"]>
-  ) => telegramModuleMocks.upsertChannelPairingRequest(...args),
+  readChannelAllowFromStore: async () => [],
+  upsertChannelPairingRequest: async () => ({ code: "PAIRCODE", created: true }),
 }));
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>()),
-  enqueueRoutedSystemEvent: (
-    ...args: Parameters<TelegramBotFixtureMocks["enqueueRoutedSystemEvent"]>
-  ) => telegramModuleMocks.enqueueRoutedSystemEvent(...args),
+  enqueueRoutedSystemEvent: () => false,
 }));
 
 vi.mock("openclaw/plugin-sdk/models-provider-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/models-provider-runtime")>()),
-  buildPreparedModelsProviderData: (
-    ...args: Parameters<TelegramBotFixtureMocks["buildModelsProviderData"]>
-  ) => telegramModuleMocks.buildModelsProviderData(...args),
+  buildPreparedModelsProviderData: async () => ({
+    byProvider: new Map<string, Set<string>>(),
+    providers: [],
+    resolvedDefault: { provider: "openai", model: "gpt-test" },
+    modelNames: new Map<string, string>(),
+    modelCatalog: [],
+  }),
 }));
 
 vi.mock("openclaw/plugin-sdk/skill-commands-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/skill-commands-runtime")>()),
-  prepareSkillCommandsForAgents: (
-    ...args: Parameters<TelegramBotFixtureMocks["prepareSkillCommandsForAgents"]>
-  ) => telegramModuleMocks.prepareSkillCommandsForAgents(...args),
+  prepareSkillCommandsForAgents: async () => [],
 }));
 
 vi.mock("./sent-message-cache.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./sent-message-cache.js")>()),
-  wasSentByBot: (...args: Parameters<TelegramBotFixtureMocks["wasSentByBot"]>) =>
-    telegramModuleMocks.wasSentByBot(...args),
+  wasSentByBot: () => false,
 }));
 
 /** Holds the production forward quiet window; a frozen clock keeps its 1 s delay. */
@@ -133,10 +103,9 @@ export function holdForwardWindow() {
   };
 }
 
-function messageUpdate<T extends object>(
-  { updateId, messageId }: { updateId: number; messageId: number },
-  content: T,
-) {
+type MessageIds = { updateId: number; messageId: number };
+
+function messageUpdate<T extends object>({ updateId, messageId }: MessageIds, content: T) {
   return {
     update_id: updateId,
     message: {
@@ -149,7 +118,7 @@ function messageUpdate<T extends object>(
   };
 }
 
-export function photoUpdate(params: { updateId: number; messageId: number; caption?: string }) {
+export function photoUpdate(params: MessageIds & { caption?: string }) {
   return messageUpdate(params, {
     media_group_id: "album-115325",
     ...(params.caption ? { caption: params.caption } : {}),
@@ -172,17 +141,17 @@ const forwardOrigin = {
   sender_user: { id: 555, is_bot: false, first_name: "Origin" },
 };
 
-export function forwardedTextUpdate(params: { updateId: number; messageId: number; text: string }) {
+export function forwardedTextUpdate(params: MessageIds & { text: string }) {
   return messageUpdate(params, { text: params.text, forward_origin: forwardOrigin });
 }
 
-export function forwardedPhotoUpdate(params: { updateId: number; messageId: number }) {
+export function forwardedPhotoUpdate(params: MessageIds) {
   return messageUpdate(params, {
     forward_origin: forwardOrigin,
     photo: photoUpdate(params).message.photo,
   });
 }
 
-export function textUpdate(params: { updateId: number; messageId: number; text: string }) {
+export function textUpdate(params: MessageIds & { text: string }) {
   return messageUpdate(params, { text: params.text });
 }

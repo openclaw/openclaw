@@ -6,7 +6,7 @@ import { telegramSetupContract } from "./setup-core.js";
 import { telegramSetupDmPolicy } from "./setup-surface.helpers.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 
-describe("Telegram environment setup", () => {
+describe("Telegram setup", () => {
   it("enables environment credentials without authoring an inline or file token", () => {
     const input = {
       cfg: {},
@@ -18,22 +18,16 @@ describe("Telegram environment setup", () => {
       enabled: true,
     });
   });
-});
-
-describe("telegramSetupWizard preparation", () => {
   it.each([
     { authored: undefined, expected: true },
     { authored: false, expected: false },
   ])("prepares wildcard mention gating with authored=$authored", async ({ authored, expected }) => {
+    const telegram = {
+      botToken: "tok",
+      ...(authored !== undefined ? { groups: { "*": { requireMention: authored } } } : {}),
+    };
     const result = await telegramSetupWizard.prepare?.({
-      cfg: {
-        channels: {
-          telegram: {
-            botToken: "tok",
-            ...(authored !== undefined ? { groups: { "*": { requireMention: authored } } } : {}),
-          },
-        },
-      },
+      cfg: { channels: { telegram } },
       accountId: DEFAULT_ACCOUNT_ID,
       credentialValues: {},
       runtime: createRuntimeSpies(),
@@ -42,9 +36,6 @@ describe("telegramSetupWizard preparation", () => {
 
     expect(result?.cfg?.channels?.telegram?.groups?.["*"]?.requireMention).toBe(expected);
   });
-});
-
-describe("telegramSetupDmPolicy", () => {
   it.each([
     { name: "explicit named account", dmPolicy: "allowlist", accountId: "alerts" },
     { name: "configured default account", dmPolicy: "pairing", accountId: undefined },
@@ -64,21 +55,15 @@ describe("telegramSetupDmPolicy", () => {
       "open",
       accountId,
     );
-    expect(next.channels?.telegram?.accounts?.alerts).toMatchObject({
-      dmPolicy: "open",
-      allowFrom: ["123", "*"],
+    expect(next.channels?.telegram).toMatchObject({
+      dmPolicy,
+      allowFrom: ["123"],
+      accounts: { alerts: { dmPolicy: "open", allowFrom: ["123", "*"] } },
     });
-    expect(next.channels?.telegram?.dmPolicy).toBe(dmPolicy);
-    expect(next.channels?.telegram?.allowFrom).toEqual(["123"]);
     expect(next.channels?.telegram?.accounts?.work).toEqual(work);
   });
-});
-
-describe("telegramSetupWizard allowFrom", () => {
   it("accepts numeric sender ids only", async () => {
-    const globalFetch = vi.fn(async () => {
-      throw new Error("global fetch should not be called");
-    });
+    const globalFetch = vi.fn().mockRejectedValue(new Error("global fetch should not be called"));
     vi.stubGlobal("fetch", globalFetch);
 
     try {

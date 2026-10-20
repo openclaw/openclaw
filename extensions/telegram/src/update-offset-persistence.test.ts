@@ -28,61 +28,62 @@ function createPersistence(
 }
 
 describe("createTelegramUpdateOffsetPersistence", () => {
-  it("reports a failed checkpoint and catches up on the next update", async () => {
+  it.each([false, true])("handles a failed checkpoint (abort=%s)", async (abort) => {
+    const controller = new AbortController();
     let failFirstWrite = true;
-    const { persistence, writes, onError } = createPersistence(async () => {
+    const writeUpdateId = vi.fn(async () => {
       if (failFirstWrite) {
         failFirstWrite = false;
         throw new Error("offset store unavailable");
       }
     });
+    const { persistence, writes, onError } = createPersistence(
+      writeUpdateId,
+      abort ? controller.signal : undefined,
+    );
 
     persistence.persistUpdateId(101);
     await flushMicrotasks();
     expect(writes).toEqual([101]);
     expect(persistence.getCommittedUpdateId()).toBe(100);
+    if (abort) {
+      controller.abort();
+    }
     persistence.persistUpdateId(103);
     persistence.persistUpdateId(102);
 
     await flushMicrotasks();
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({ updateId: 101 }));
-    expect(writes).toEqual([101, 103]);
-    expect(persistence.getCommittedUpdateId()).toBe(103);
+    expect(writes).toEqual(abort ? [101] : [101, 103]);
+    expect(writeUpdateId).toHaveBeenCalledTimes(abort ? 1 : 2);
+    expect(persistence.getCommittedUpdateId()).toBe(abort ? 100 : 103);
     await persistence.stop();
   });
 
-  it("never regresses when a lower update arrives during a higher write", async () => {
+  it.each([
+    { timing: "during write", first: 103, next: 102, expected: [103] },
+    { timing: "during teardown", first: 101, next: 102, expected: [101, 102] },
+  ])("checkpoints a new offset arriving $timing", async ({ timing, first, next, expected }) => {
     const write = createDeferred<void>();
-    const { persistence, writes } = createPersistence(async () => {
-      await write.promise;
-    });
-
-    persistence.persistUpdateId(103);
-    persistence.persistUpdateId(102);
-    await flushMicrotasks();
-    write.resolve();
-    await flushMicrotasks();
-
-    expect(writes).toEqual([103]);
-    expect(persistence.getCommittedUpdateId()).toBe(103);
-    await persistence.stop();
-  });
-
-  it("restarts the drain when a higher update arrives during teardown", async () => {
-    const firstWrite = createDeferred<void>();
-    const { persistence, writes } = createPersistence(async (updateId) => {
-      if (updateId === 101) {
-        await firstWrite.promise;
+    const { persistence, writes } = createPersistence(async (id) => {
+      if (id === first) {
+        await write.promise;
       }
     });
-
-    persistence.persistUpdateId(101);
+    persistence.persistUpdateId(first);
+    if (timing === "during write") {
+      persistence.persistUpdateId(next);
+    }
     await flushMicrotasks();
-    firstWrite.resolve();
-    queueMicrotask(() => persistence.persistUpdateId(102));
-    await vi.waitFor(() => expect(writes).toEqual([101, 102]));
-
-    expect(persistence.getCommittedUpdateId()).toBe(102);
+    write.resolve();
+    if (timing === "during teardown") {
+      queueMicrotask(() => persistence.persistUpdateId(next));
+      await vi.waitFor(() => expect(writes).toEqual(expected));
+    } else {
+      await flushMicrotasks();
+    }
+    expect(writes).toEqual(expected);
+    expect(persistence.getCommittedUpdateId()).toBe(expected.at(-1));
     await persistence.stop();
   });
 
@@ -103,24 +104,6 @@ describe("createTelegramUpdateOffsetPersistence", () => {
     await stop;
     expect(stopped).toBe(true);
     expect(persistence.getCommittedUpdateId()).toBe(101);
-  });
-
-  it("does not start another checkpoint after the supplied signal aborts", async () => {
-    const abortController = new AbortController();
-    const writeUpdateId = vi.fn(async () => {
-      throw new Error("offset store unavailable");
-    });
-    const { persistence } = createPersistence(writeUpdateId, abortController.signal);
-
-    persistence.persistUpdateId(101);
-    await flushMicrotasks();
-    abortController.abort();
-    persistence.persistUpdateId(102);
-    await flushMicrotasks();
-
-    expect(writeUpdateId).toHaveBeenCalledTimes(1);
-    expect(persistence.getCommittedUpdateId()).toBe(100);
-    await persistence.stop();
   });
 
   it("ignores a malformed update ID without blocking the next valid write", async () => {
