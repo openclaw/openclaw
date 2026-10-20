@@ -450,10 +450,12 @@ it("accounts only the identified main isolate inside the requested heap capture"
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-start","pid":42,"profilePath":"measured"}',
     "[42:0xabc] 15 ms: pause=1.0 gc=s promoted=1024",
     '[42:0xdef:1] 16 ms: GC: {"gc":"s","promoted":65536}',
+    '[42:0xdef:1] 16 ms: GC: {"gc":"s",interleaved worker log',
     "[43:0xabc] 17 ms: pause=1.0 gc=s promoted=65536",
     '[42:0xabc:0] 18 ms: GC: {"gc":"mc","promoted":256}',
     'OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-stop","pid":42,"profilePath":"measured"}',
     "[42:0xabc] 20 ms: pause=1.0 gc=s promoted=4096",
+    '[42:0xabc:0] 25 ms: GC: {"gc":"s",interleaved shutdown log',
   ].join("\n");
   await writeFile(logPath, trace);
   expect(readGatewayGcTrace(logPath, "measured")).toMatchObject({
@@ -461,7 +463,7 @@ it("accounts only the identified main isolate inside the requested heap capture"
     isolate: "0xabc",
     promotedBytes: 1280,
     gcCount: 2,
-    excludedWorkerGcCount: 1,
+    excludedWorkerGcCount: 2,
   });
   expect(() => readGatewayGcTrace(logPath, "missing")).toThrow("complete heap capture window");
   for (const malformed of [

@@ -140,6 +140,13 @@ export function readGatewayGcTrace(logPath: string, profilePath: string) {
     if (!isolate || !fields) {
       continue;
     }
+    if (!identifying && !capturing) {
+      continue;
+    }
+    if (capturing && !isolates.has(isolate)) {
+      excludedWorkerGcCount += 1;
+      continue;
+    }
     // Recent V8 versions retain the flag but emit JSON instead of name=value pairs.
     const collection: { gc?: string; promoted?: number } = fields.startsWith("GC: ")
       ? JSON.parse(fields.slice(4))
@@ -153,10 +160,6 @@ export function readGatewayGcTrace(logPath: string, profilePath: string) {
     if (identifying) {
       isolates.add(isolate);
     } else if (capturing) {
-      if (!isolates.has(isolate)) {
-        excludedWorkerGcCount += 1;
-        continue;
-      }
       const bytes = collection.promoted;
       if (typeof bytes !== "number" || !Number.isSafeInteger(bytes) || bytes < 0) {
         throw new Error("Main-isolate GC trace is missing a valid promoted byte count");

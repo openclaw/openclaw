@@ -1552,11 +1552,10 @@ try {
       const batchCount = Math.min(clientCount, operations - offset);
       const batchStarted = performance.now();
       const reconnectStarted: number[] = [];
-      let nextSlot = 0;
+      const slots = clients.slice(0, batchCount).entries();
       await Promise.all(
-        Array.from({ length: Math.min(rpcConcurrency, batchCount) }, async (_, workerIndex) => {
-          while (nextSlot < batchCount) {
-            const index = nextSlot++;
+        clients.slice(0, Math.min(rpcConcurrency, batchCount)).map(async (workerClient) => {
+          for (const [index, oldClient] of slots) {
             if (connectionScenario) {
               if (scenario === "reconnect") {
                 await delay(
@@ -1564,7 +1563,6 @@ try {
                 );
                 reconnectStarted.push(performance.now() - batchStarted);
               }
-              const oldClient = clients[index];
               expectedClosures.add(oldClient);
               const closed = once(oldClient.ws, "close");
               oldClient.close();
@@ -1598,7 +1596,7 @@ try {
               }
             } else if (scenario === "sessions.list" || scenario === "subscribe") {
               const method = scenario === "subscribe" ? "sessions.subscribe" : "sessions.list";
-              const result = await rpc(clients[workerIndex], method, {
+              const result = await rpc(workerClient, method, {
                 limit,
                 rowMode,
                 archived: "all",
@@ -1612,7 +1610,7 @@ try {
                 method,
               );
             } else if (scenario === "sessions.describe") {
-              const result = await rpc(clients[workerIndex], "sessions.describe", {
+              const result = await rpc(workerClient, "sessions.describe", {
                 key: parentKey,
               });
               const row = isRecord(result) ? result.session : undefined;
@@ -1627,7 +1625,7 @@ try {
                 throw new Error("sessions.describe did not return the parent with seeded children");
               }
             } else {
-              const result = await rpc(clients[workerIndex], "plugins.reload", {
+              const result = await rpc(workerClient, "plugins.reload", {
                 plugins: [{ pluginId: reloadPluginId }],
                 waitForDrain: true,
               });
@@ -1639,7 +1637,7 @@ try {
         }),
       );
       if (scenario === "reconnect") {
-        const startSpreadMs = reconnectStarted.at(-1)! - reconnectStarted[0];
+        const startSpreadMs = Math.max(...reconnectStarted) - Math.min(...reconnectStarted);
         if (startSpreadMs > 5000) {
           throw new Error("reconnect starts exceeded 5000 ms; increase --rpc-concurrency");
         }
