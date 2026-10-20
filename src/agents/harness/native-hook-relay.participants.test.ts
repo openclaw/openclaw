@@ -39,32 +39,27 @@ it("keeps collaborative native spawn under the incumbent and refuses an ended pa
   vi.spyOn(relayRuntime, "registerNativeHookRelayForBundledRuntime").mockImplementation(
     (params) => {
       const admission = params.executionAdmission;
+      if (!admission) {
+        return register(params);
+      }
       return register({
         ...params,
-        ...(admission
-          ? {
-              executionAdmission: {
-                ...admission,
-                admit: async (invocation, assertCurrent, preparation) => {
-                  const assertAdmitted = await admission.admit(
-                    invocation,
-                    assertCurrent,
-                    preparation,
-                  );
-                  expect(getGatewayToolCallerIdentity()?.operatorAuthority).toMatchObject({
-                    profileId: "alice",
-                    scopes: ["operator.read", "operator.write"],
-                  });
-                  admittedCalls.push(invocation.toolUseId ?? "missing-tool-call");
-                  if (invocation.toolUseId === "pending-spawn") {
-                    entered.resolve();
-                    await resume.promise;
-                  }
-                  return assertAdmitted;
-                },
-              },
+        executionAdmission: {
+          ...admission,
+          admit: async (invocation, assertCurrent, preparation) => {
+            const assertAdmitted = await admission.admit(invocation, assertCurrent, preparation);
+            expect(getGatewayToolCallerIdentity()?.operatorAuthority).toMatchObject({
+              profileId: "alice",
+              scopes: ["operator.read", "operator.write"],
+            });
+            admittedCalls.push(invocation.toolUseId ?? "missing-tool-call");
+            if (invocation.toolUseId === "pending-spawn") {
+              entered.resolve();
+              await resume.promise;
             }
-          : {}),
+            return assertAdmitted;
+          },
+        },
       });
     },
   );

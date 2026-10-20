@@ -1,4 +1,3 @@
-// Shared fixtures for the harness lifecycle tests.
 import type { Model } from "openclaw/plugin-sdk/llm";
 import {
   onTrustedInternalDiagnosticEvent,
@@ -14,11 +13,10 @@ import type {
   AgentHarnessSettledTurnFinalizationAttemptParams,
 } from "./types.js";
 
-export function createAttemptParams(): AgentHarnessAttemptParamsV2 {
+export function createBaseAttemptParams() {
   return {
     prompt: "hello",
     sessionId: "session-1",
-    sessionKey: "session-key",
     runId: "run-1",
     sessionFile: "/tmp/session.jsonl",
     workspaceDir: "/tmp/workspace",
@@ -30,6 +28,13 @@ export function createAttemptParams(): AgentHarnessAttemptParamsV2 {
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     thinkLevel: "low",
+  };
+}
+
+export function createAttemptParams(): AgentHarnessAttemptParamsV2 {
+  return {
+    ...createBaseAttemptParams(),
+    sessionKey: "session-key",
     messageChannel: "qa",
     trigger: "manual",
   } as unknown as AgentHarnessAttemptParamsV2;
@@ -93,14 +98,7 @@ export async function flushDiagnosticEvents(): Promise<void> {
 export function captureDiagnosticEvents(
   filter: (event: DiagnosticEventPayload) => boolean = (event) =>
     event.type.startsWith("harness.run."),
-): {
-  events: Array<{
-    event: DiagnosticEventPayload;
-    metadata: DiagnosticEventMetadata;
-    privateData: DiagnosticEventPrivateData;
-  }>;
-  unsubscribe: () => void;
-} {
+) {
   const events: Array<{
     event: DiagnosticEventPayload;
     metadata: DiagnosticEventMetadata;

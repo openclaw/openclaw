@@ -23,11 +23,12 @@ vi.mock("../../infra/openclaw-root.js", () => ({
 import { buildNativeHookRelayCommand } from "./native-hook-relay-command.js";
 import { shellQuoteArgs } from "./native-hook-relay-utils.js";
 
-function buildCommand(): string {
+function buildCommand(overrides: Partial<Parameters<typeof buildNativeHookRelayCommand>[0]> = {}) {
   return buildNativeHookRelayCommand({
     provider: "codex",
     relayId: "relay-1",
     event: "post_tool_use",
+    ...overrides,
   });
 }
 
@@ -58,10 +59,35 @@ describe("native hook relay executable resolution", () => {
     vi.unstubAllGlobals();
   });
 
-  it("invokes the standalone executable without any physical loose entry", () => {
-    vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL("/standalone/runtime/").href);
-
-    expect(buildCommand()).toBe(expectedCommand([process.execPath]));
+  const relayEntry = path.join(mocks.packageRoot, "dist", "native-hook-relay", "entry.js");
+  const generalCli = path.join(mocks.packageRoot, "openclaw.mjs");
+  const override = path.resolve("/custom/openclaw-entry.mjs");
+  it.each([
+    { name: "standalone without a loose entry", standalone: true },
+    { name: "isolated packaged relay", entry: relayEntry, extraEntry: generalCli },
+    { name: "general CLI fallback", entry: generalCli },
+    { name: "explicit CLI override", entry: override, extraEntry: relayEntry, cliOverride: true },
+    {
+      name: "loose override in a standalone process",
+      standalone: true,
+      entry: override,
+      cliOverride: true,
+      nodeExecutable: "/explicit/node",
+    },
+  ])("resolves $name", ({ standalone, entry, extraEntry, cliOverride, nodeExecutable }) => {
+    if (standalone) {
+      vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL("/standalone/runtime/").href);
+    }
+    for (const candidate of [entry, extraEntry]) {
+      if (candidate) {
+        mocks.existingPaths.add(candidate);
+      }
+    }
+    if (cliOverride && entry) {
+      vi.stubEnv("OPENCLAW_CLI_PATH", entry);
+    }
+    const argv = [nodeExecutable ?? process.execPath, ...(entry ? [entry] : [])];
+    expect(buildCommand({ nodeExecutable })).toBe(expectedCommand(argv));
   });
 
   it.each([
@@ -94,57 +120,11 @@ describe("native hook relay executable resolution", () => {
           mocks.existingPaths.add(target);
         }
         expect(
-          buildNativeHookRelayCommand({
-            provider: "codex",
-            relayId: "relay-1",
-            event: "post_tool_use",
-            ...(source === "parameter"
-              ? { executable: target, nodeExecutable: "/unused/node" }
-              : {}),
-          }),
+          buildCommand(
+            source === "parameter" ? { executable: target, nodeExecutable: "/unused/node" } : {},
+          ),
         ).toBe(expectedCommand([executable]));
       });
     },
   );
-
-  it("prefers the isolated packaged relay over the general CLI", () => {
-    const relayEntry = path.join(mocks.packageRoot, "dist", "native-hook-relay", "entry.js");
-    const generalCli = path.join(mocks.packageRoot, "openclaw.mjs");
-    mocks.existingPaths.add(relayEntry);
-    mocks.existingPaths.add(generalCli);
-
-    expect(buildCommand()).toBe(expectedCommand([process.execPath, relayEntry]));
-  });
-
-  it("falls back to the packaged general CLI when the isolated artifact is absent", () => {
-    const generalCli = path.join(mocks.packageRoot, "openclaw.mjs");
-    mocks.existingPaths.add(generalCli);
-
-    expect(buildCommand()).toBe(expectedCommand([process.execPath, generalCli]));
-  });
-
-  it("preserves the explicit CLI path override", () => {
-    const override = path.resolve("/custom/openclaw-entry.mjs");
-    vi.stubEnv("OPENCLAW_CLI_PATH", override);
-    mocks.existingPaths.add(override);
-    mocks.existingPaths.add(path.join(mocks.packageRoot, "dist", "native-hook-relay", "entry.js"));
-
-    expect(buildCommand()).toBe(expectedCommand([process.execPath, override]));
-  });
-
-  it("keeps an explicit loose override and its runtime in a standalone process", () => {
-    const override = path.resolve("/custom/openclaw-entry.mjs");
-    vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL("/standalone/runtime/").href);
-    vi.stubEnv("OPENCLAW_CLI_PATH", override);
-    mocks.existingPaths.add(override);
-
-    expect(
-      buildNativeHookRelayCommand({
-        provider: "codex",
-        relayId: "relay-1",
-        event: "post_tool_use",
-        nodeExecutable: "/explicit/node",
-      }),
-    ).toBe(expectedCommand(["/explicit/node", override]));
-  });
 });
