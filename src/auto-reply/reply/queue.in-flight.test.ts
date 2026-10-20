@@ -49,7 +49,7 @@ function trackedRun(
   });
 }
 
-function blockedDrain(shouldBlock: (run: FollowupRun) => boolean, adopt = true) {
+function blockedDrain(shouldBlock?: (run: FollowupRun) => boolean, adopt = true) {
   const entered = createDeferred();
   const release = createDeferred();
   const calls: FollowupRun[] = [];
@@ -58,7 +58,7 @@ function blockedDrain(shouldBlock: (run: FollowupRun) => boolean, adopt = true) 
     if (adopt) {
       await run.turnAdoptionLifecycle?.onAdopted?.();
     }
-    if (shouldBlock(run)) {
+    if (shouldBlock ? shouldBlock(run) : calls.length === 1) {
       entered.resolve();
       await release.promise;
     }
@@ -77,60 +77,44 @@ describe("followup queue in-flight ownership", () => {
       const rejectNew = dropPolicy === "new";
       const activeComplete = vi.fn();
       const pendingComplete = vi.fn();
-      const rejectedEnqueued = vi.fn();
-      const rejectedComplete = vi.fn();
-      const active = rejectNew
-        ? createRun({ prompt: "active" })
-        : trackedRun("active", activeComplete);
-      const pending = rejectNew
-        ? createRun({ prompt: "pending" })
-        : trackedRun("pending", pendingComplete);
-      const incoming = rejectNew
-        ? trackedRun("rejected", rejectedComplete)
-        : createRun({ prompt: "survivor" });
-      if (rejectNew) {
-        incoming.turnAdoptionLifecycle!.onDeferred = rejectedEnqueued;
-      }
+      const incomingComplete = vi.fn();
+      const onDeferred = vi.fn();
+      const active = trackedRun("active", activeComplete);
+      const pending = trackedRun("pending", pendingComplete);
+      const incoming = trackedRun(rejectNew ? "rejected" : "survivor", incomingComplete);
+      incoming.turnAdoptionLifecycle!.onDeferred = onDeferred;
       const { entered, release, calls, runFollowup } = blockedDrain((run) => run === active);
       const enqueue = (run: FollowupRun, deliver?: typeof runFollowup) =>
         enqueueFollowupRun(key, run, createSettings(dropPolicy), "none", deliver);
-
       try {
         expect(enqueue(active, runFollowup)).toBe(true);
         await entered.promise;
-
         expect(getFollowupQueueDepth(key)).toBe(0);
         expect(enqueue(pending)).toBe(true);
         expect(enqueue(incoming)).toBe(!rejectNew);
         expectPending(["active", rejectNew ? "pending" : "survivor"], 1);
+        const queue = getExistingFollowupQueue(key);
+        expect(queue?.inFlight.has(active)).toBe(true);
+        expect(activeComplete).not.toHaveBeenCalled();
+        if (dropPolicy === "old") {
+          await settleSources(pending);
+        }
+        expect(pendingComplete).toHaveBeenCalledTimes(dropPolicy === "old" ? 1 : 0);
+        expect(queue?.summarySources.map((item) => item.prompt)).toEqual(
+          dropPolicy === "summarize" ? ["pending"] : [],
+        );
         if (rejectNew) {
-          expect(rejectedEnqueued).not.toHaveBeenCalled();
+          expect(onDeferred).not.toHaveBeenCalled();
           await settleSources(incoming);
-          expect(rejectedComplete).toHaveBeenCalledOnce();
-        } else {
-          const queue = getExistingFollowupQueue(key);
-          expect(queue?.inFlight.has(active)).toBe(true);
-          expect(activeComplete).not.toHaveBeenCalled();
-          if (dropPolicy === "old") {
-            await settleSources(pending);
-          }
-          expect(pendingComplete).toHaveBeenCalledTimes(dropPolicy === "old" ? 1 : 0);
-          expect(queue?.summarySources.map((item) => item.prompt)).toEqual(
-            dropPolicy === "summarize" ? ["pending"] : [],
-          );
+          expect(incomingComplete).toHaveBeenCalledOnce();
         }
       } finally {
         release.resolve();
       }
-
       await settleSources(active, pending, incoming);
       expect(getExistingFollowupQueue(key)).toBeUndefined();
-      if (!rejectNew) {
-        expect([activeComplete.mock.calls.length, pendingComplete.mock.calls.length]).toEqual([
-          1, 1,
-        ]);
-        expect(calls.at(-1)?.prompt).toBe("survivor");
-      }
+      expect([activeComplete, pendingComplete].map((fn) => fn.mock.calls.length)).toEqual([1, 1]);
+      expect(calls.at(-1)?.prompt).toBe(rejectNew ? "pending" : "survivor");
     },
   );
 
@@ -138,7 +122,6 @@ describe("followup queue in-flight ownership", () => {
     const groupCompletions = [vi.fn(), vi.fn()];
     const pendingComplete = vi.fn();
     const rejectedComplete = vi.fn();
-    let aggregate: FollowupRun | undefined;
     const initialSettings = createQueueSettings();
     const group = groupCompletions.map((onComplete, index) =>
       trackedRun(`group-${index + 1}`, onComplete, {
@@ -150,13 +133,7 @@ describe("followup queue in-flight ownership", () => {
     const pending = trackedRun("pending-old", pendingComplete);
     const survivor = createRun({ prompt: "survivor" });
     const rejected = trackedRun("rejected-new", rejectedComplete);
-    const { entered, release, runFollowup } = blockedDrain((run) => {
-      if (!aggregate) {
-        aggregate = run;
-        return true;
-      }
-      return false;
-    }, false);
+    const { entered, release, calls, runFollowup } = blockedDrain(undefined, false);
 
     for (const run of group) {
       expect(enqueueFollowupRun(key, run, initialSettings, "none", undefined, false)).toBe(true);
@@ -177,7 +154,7 @@ describe("followup queue in-flight ownership", () => {
       await settleSources(pending);
       expect(pendingComplete).toHaveBeenCalledOnce();
       expect(groupCompletions.map((complete) => complete.mock.calls.length)).toEqual([0, 0]);
-      await aggregate?.turnAdoptionLifecycle?.onAdopted?.();
+      await calls[0]?.turnAdoptionLifecycle?.onAdopted?.();
       expectPending(["survivor"], 1);
       expect(queue?.inFlight.size).toBe(2);
       expect(

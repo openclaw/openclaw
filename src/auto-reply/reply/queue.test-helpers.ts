@@ -5,6 +5,8 @@ import { deferSessionControllerClaimBeforeExecution } from "../../sessions/sessi
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 
+const slackRoute = { originatingChannel: "slack", originatingTo: "channel:A" };
+
 export function createQueueTestRun(
   params: Pick<FollowupRun, "prompt"> & Partial<Omit<FollowupRun, "run">>,
   execution: Partial<FollowupRun["run"]> = {},
@@ -29,7 +31,6 @@ export function createQueueTestRun(
   };
 }
 
-/** Suppresses runtime error logging while queue tests intentionally trigger failures. */
 export function installQueueRuntimeErrorSilencer(): void {
   let previousRuntimeError: typeof defaultRuntime.error;
 
@@ -81,15 +82,10 @@ export function enqueueSlackRun(
   key: string,
   settings: QueueSettings,
   prompt: string,
-  runOverrides: Partial<FollowupRun["run"]>,
-  routeOverrides: Partial<Parameters<typeof createQueueTestRun>[0]> = {},
+  run: Partial<FollowupRun["run"]>,
+  route: Partial<Parameters<typeof createQueueTestRun>[0]> = {},
 ) {
-  return enqueueTestRun(
-    key,
-    { prompt, originatingChannel: "slack", originatingTo: "channel:A", ...routeOverrides },
-    settings,
-    runOverrides,
-  );
+  return enqueueTestRun(key, { prompt, ...slackRoute, ...route }, settings, run);
 }
 
 /** Synthetic preparation owner: the callback has not entered a model/tool effect. */
