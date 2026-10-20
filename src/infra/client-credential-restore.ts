@@ -23,6 +23,43 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import type { UpdateDatabaseBackup } from "./update-database-backup.js";
 
+/** Doctor supplies the original identity only after a verified byte-identical rewrite. */
+export function rebindRewrittenClientCredentials(options: {
+  env: NodeJS.ProcessEnv;
+  previousSharedFile: ClientCredentialFileIdentity;
+  assertCurrent: () => void;
+}): void {
+  using owner = openClientCredentialCustody(options.env, { migration: true });
+  if (!owner) {
+    return;
+  }
+  owner.transaction(() => {
+    const stored = readClientCredentialReceipt(owner.database);
+    const original = stored?.receipt.sharedFile;
+    if (!stored || !original) {
+      return;
+    }
+    const previous = options.previousSharedFile;
+    if (
+      original.path !== previous.path ||
+      original.dev !== previous.dev ||
+      original.ino !== previous.ino
+    ) {
+      throw new Error("Rewritten credential source is not the recorded generation.");
+    }
+    const replacement = readClientCredentialFileIdentity(previous.path);
+    if (!replacement) {
+      throw new Error("Rewritten credential source is missing.");
+    }
+    stored.receipt.sharedFile = replacement;
+    if (stored.receipt.source?.kind === "independent") {
+      stored.receipt.source.identity = `${replacement.dev}:${replacement.ino}`;
+    }
+    options.assertCurrent();
+    writeClientCredentialReceipt(owner.database, stored.receipt, stored.phase);
+  });
+}
+
 function prepareMatchedReceipt(options: {
   localPath: string;
   sharedPath: string;

@@ -49,6 +49,17 @@ The TypeScript adapter refuses existing macOS ACL entries instead of removing
 them. A directory with custom deny or mixed ACLs requires explicit permission
 repair before that adapter can use it.
 
+The TypeScript worker handles each offline operation in one request and closes
+the database before replying. It reuses schema and integrity admission facts for
+the same device, inode, birthtime, and `user_version`. Every open still validates
+private paths and modes, checks DELETE journal policy, and takes immediate
+transaction custody with exclusive locking. A single receipt-and-version query
+inside that transaction guards cross-process migration phases before row work;
+even reads retain this transaction so another process cannot migrate between
+the guard and the operation. Replacement or version changes require admission
+again, and lifecycle drainage discards the worker and its cached facts. Initial
+store creation commits separately so cancellation cannot leave an empty store.
+
 Update and Doctor recovery capture the local file exactly, including its
 absence, alongside the shared database. Ordinary backup archives preserve
 client identity and cached-token records, but remove the local socket token,
@@ -71,6 +82,16 @@ bytes, verifies them, and records `copied`. Only then does it retire the shared
 records and publish `complete`. Interrupted work resumes through the same owner;
 normal clients refuse a pending or stale receipt. Shared records stay authoritative
 until this verified retirement finishes in that custody.
+
+Credential copies use bounded insert batches within the same transaction, so
+large stores do not exceed SQLite's statement parameter limit. If an older
+cutover build reports `too many SQL variables`, the shared credentials remain
+authoritative. Install a build with this fix and rerun `openclaw doctor --fix`;
+do not delete credentials or pair clients again to work around the error.
+
+Doctor’s verified offline NOCOW rewrite transfers a matching credential receipt
+to the replacement shared database file. Existing tokens remain usable after
+the rewrite; an unrelated file replacement remains fenced.
 
 Canonical receipt bindings relative to the local store root survive matched archive activation by directory rename; independent native-source bindings remain absolute.
 

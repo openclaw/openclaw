@@ -104,8 +104,6 @@ export async function resolveSlackMessageContent(params: {
   client?: SlackWebClient;
   mediaMaxBytes: number;
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
-  mediaReadIdleTimeoutMs?: number;
-  mediaTotalTimeoutMs?: number;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   preloadedMedia?: ReadonlyMap<SlackFile, SlackMediaResult>;
@@ -125,8 +123,6 @@ export async function resolveSlackMessageContent(params: {
             client: params.client,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
-            readIdleTimeoutMs: params.mediaReadIdleTimeoutMs,
-            totalTimeoutMs: params.mediaTotalTimeoutMs,
             abortSignal: params.abortSignal,
             assertCurrent: params.assertCurrent,
             preloadedMedia: params.preloadedMedia,

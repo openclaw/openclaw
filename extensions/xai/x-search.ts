@@ -1,4 +1,5 @@
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   jsonResult,
   normalizeToIsoDate,
@@ -87,6 +88,7 @@ function validateXSearchHandleFilters(params: {
 }
 
 function buildXSearchCacheKey(params: {
+  apiKey: string;
   query: string;
   model: string;
   endpoint: string;
@@ -96,6 +98,7 @@ function buildXSearchCacheKey(params: {
 }) {
   return JSON.stringify([
     "x_search",
+    sha256Hex(params.apiKey),
     params.model,
     params.endpoint,
     params.query,
@@ -163,6 +166,7 @@ export function createXSearchTool(options?: {
     const inlineCitations = resolveXaiXSearchInlineCitations(xSearchConfig);
     const maxTurns = resolveXaiXSearchMaxTurns(xSearchConfig);
     const cacheKey = buildXSearchCacheKey({
+      apiKey,
       query,
       model,
       endpoint,

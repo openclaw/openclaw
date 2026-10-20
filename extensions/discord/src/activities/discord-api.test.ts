@@ -1,6 +1,9 @@
-import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchDiscordJson } from "./discord-api.js";
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", { spy: true });
+afterEach(() => vi.mocked(fetchWithSsrFGuard).mockRestore());
 
 describe("Discord Activity API", () => {
   it("cancels non-OK response bodies before releasing the dispatcher", async () => {
@@ -16,25 +19,25 @@ describe("Discord Activity API", () => {
       }),
       { status: 401 },
     );
-    const fetchGuard = vi.fn(async () => ({
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
       response,
+      finalUrl: "https://discord.com/api/v10/users/@me",
       release: async () => {
         lifecycle.push("release");
       },
-    })) as unknown as typeof fetchWithSsrFGuard;
+    });
 
     await expect(
       fetchDiscordJson({
-        fetchGuard,
         url: "https://discord.com/api/v10/users/@me",
         init: { headers: { Authorization: "Bearer test-token" } },
         auditContext: "discord.activities.oauth.user",
       }),
-    ).resolves.toEqual({ ok: false, status: 401 });
+    ).resolves.toEqual({ ok: false });
     expect(lifecycle).toEqual(["cancel", "release"]);
   });
 
-  it("preserves the HTTP status when response cancellation fails", async () => {
+  it("still releases a rejected response when cancellation fails", async () => {
     const response = new Response(
       new ReadableStream({
         cancel() {
@@ -44,19 +47,19 @@ describe("Discord Activity API", () => {
       { status: 429 },
     );
     const release = vi.fn(async () => undefined);
-    const fetchGuard = vi.fn(async () => ({
+    vi.mocked(fetchWithSsrFGuard).mockResolvedValue({
       response,
+      finalUrl: "https://discord.com/api/v10/users/@me",
       release,
-    })) as unknown as typeof fetchWithSsrFGuard;
+    });
 
     await expect(
       fetchDiscordJson({
-        fetchGuard,
         url: "https://discord.com/api/v10/users/@me",
         init: { headers: { Authorization: "Bearer test-token" } },
         auditContext: "discord.activities.oauth.user",
       }),
-    ).resolves.toEqual({ ok: false, status: 429 });
+    ).resolves.toEqual({ ok: false });
     expect(release).toHaveBeenCalledOnce();
   });
 });

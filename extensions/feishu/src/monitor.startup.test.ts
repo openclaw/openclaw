@@ -16,7 +16,6 @@ const providerIdentity = { ok: true, appId: "cli_alpha", botOpenId: "bot_alpha",
 
 const alphaAccount: ResolvedFeishuAccount = {
   accountId: "alpha",
-  selectionSource: "explicit",
   enabled: true,
   configured: true,
   appId: "cli_alpha",

@@ -181,6 +181,85 @@ repair_update_restart_auth
 });
 
 it.skipIf(process.platform === "win32").each([
+  {
+    mode: "auto-auth",
+    expected: [
+      "phase:assert-prepublish-recovery-requests",
+      "npm-assert:whatsapp:2026.10.11-first-hop.0",
+      "fixture-idle",
+    ],
+  },
+  {
+    mode: "manual",
+    expected: [
+      "phase:assert-prepublish-recovery-requests",
+      "npm-assert:whatsapp:2026.10.10-beta.3",
+      "fixture-idle",
+    ],
+  },
+])("asserts the plugin cohort selected by $mode restart recovery", ({ mode, expected }) => {
+  const root = dirs.make("survivor-plugin-recovery-");
+  const assertion = source.slice(
+    source.indexOf("assert_prepublish_plugin_install() {"),
+    source.indexOf("configure_plugin_registry() {"),
+  );
+  const repair = source.slice(
+    source.indexOf("repair_fixture_plugin_consent() {"),
+    source.indexOf("assert_volume_idempotence() {"),
+  );
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `set -euo pipefail
+ARTIFACT_ROOT="$2"
+candidate_version=2026.10.10-beta.3
+baseline_plugin_tarball=""
+baseline_plugin_version=""
+published_plugin_registry_args=()
+SCENARIO=base
+UPDATE_RESTART_MODE="$1"
+OPENCLAW_CLAWHUB_URL=fixture
+restart_fixture_version=2026.10.11-first-hop.0
+restart_plugin_fixture_dir="$2/restart-plugins"
+prepublish_capability_consent_supported=1
+update_repair_required=0
+mkdir -p "$restart_plugin_fixture_dir"
+touch "$restart_plugin_fixture_dir/whatsapp.tgz"
+repair_update_restart_auth() { :; }
+configured_plugin_installs_enabled() { return 1; }
+assert_prepublish_fixture_idle() { printf 'fixture-idle\\n'; }
+phase() { printf 'phase:%s\\n' "$1"; shift; "$@"; }
+node() {
+  [ "$1" = scripts/e2e/lib/upgrade-survivor/assertions.mjs ] || return 90
+  [ "$2" = assert-npm-plugin-install ] || return 91
+  [ "$3" = whatsapp ] || return 92
+  [ "$4" = @openclaw/whatsapp ] || return 93
+  [ "\${11}" = "$candidate_version" ] || return 98
+  if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
+    [ "$5" = "$restart_fixture_version" ] || return 94
+    [ "\${10}" = "$restart_plugin_fixture_dir/whatsapp.tgz" ] || return 95
+  else
+    [ "$5" = "$candidate_version" ] || return 96
+    [ -z "\${10}" ] || return 97
+  fi
+  printf 'npm-assert:%s:%s\\n' "$3" "$5"
+}
+${assertion}
+${repair}
+repair_fixture_plugin_consent
+`,
+      "fixture",
+      mode,
+      root,
+    ],
+    { encoding: "utf8", timeout: 5_000 },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout.trim().split("\n")).toEqual(expected);
+});
+
+it.skipIf(process.platform === "win32").each([
   { fault: "command", code: 17, stage: "command", checks: [] },
   { fault: "command-one", code: 1, stage: "command", checks: [] },
   { fault: "assertion", code: 1, stage: "result-assertion", checks: ["assertion"] },

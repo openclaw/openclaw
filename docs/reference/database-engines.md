@@ -17,8 +17,8 @@ commit notifications; stores keep their existing data and operation contracts.
 For provisioning, first boot, migration, and recovery procedures, see the
 [PostgreSQL operator guide](/gateway/postgresql). It also describes the current
 [support matrix](/gateway/postgresql#support-matrix), including unqualified
-server versions, TLS/exec-secret deployments, published-stable upgrades and native
-clients. Those specific gaps remain experimental; configured engine and search
+server versions, published-stable upgrades and native clients. Those specific
+gaps remain experimental; configured engine and search
 choices are supported.
 
 Daemon runtime pins stay local on every engine, in
@@ -57,15 +57,23 @@ are installed by the engine. Put its connection DSN in a secret, then configure 
 
 Provide `OPENCLAW_DATABASE_DSN` in the Gateway's environment through your secret
 manager. It is the secret referenced by this example, not an engine-selection
-environment variable. [File and exec references](/gateway/secrets/secretref-contract)
-are accepted by the resolver; env/file are qualified, while PostgreSQL-specific
-exec-reference acceptance remains experimental. Store-backed references are
+environment variable. Env, [file, and exec references](/gateway/secrets/secretref-contract)
+are qualified for CLI and Gateway use. Store-backed references are
 rejected because resolving them requires the shared database that this connection
 must open. Use an env, file or
 exec SecretRef instead; `openclaw doctor` reports invalid connection refs.
 The host resolves the secret and passes the connection to
 database workers; workers do not resolve SecretRefs. Treat the DSN as a credential
 and do not put it in logs or diagnostic captures.
+
+The following connection surfaces are qualified on PostgreSQL 17. See the
+[connection qualification and setup](/gateway/postgresql#tls-and-exec-connection-qualification)
+for the server and provider configuration.
+
+| Connection surface | Support   | Verified configuration                                                                                                                                                |
+| ------------------ | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| TLS DSN            | Supported | `sslmode=verify-full` with an absolute `sslrootcert` path; certificate-chain and hostname verification, invalid-certificate refusal, and TLS-only server enforcement. |
+| Exec SecretRef     | Supported | CLI and Gateway host resolution, worker propagation, no DSN persistence in config or diagnostics, and refusal on provider failure or empty output.                    |
 
 Restart the Gateway after changing the engine, then run `openclaw doctor` to see
 the default, override, and effective engine for each family. These are configured

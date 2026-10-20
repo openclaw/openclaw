@@ -417,7 +417,7 @@ export async function awaitActionWithAbort<T>(
   }
 }
 
-export async function awaitNavigationGuardedInteraction<T>(
+async function awaitNavigationGuardedInteraction<T>(
   opts: {
     action: () => Promise<T>;
     cdpUrl: string;
