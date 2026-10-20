@@ -300,7 +300,9 @@ describe("ManagedWorktreeService", () => {
         ownerKind: "session",
         ownerId: "agent:main:dashboard:two",
       }),
-    ).rejects.toThrow(/already in use by session/);
+    ).rejects.toThrow(
+      /already in use by session agent:main:dashboard:one: shared-name; choose an unused name, or omit it to generate one\./,
+    );
     await expect(
       service.create({ repoRoot: repo, name: "shared-name", baseRef: "HEAD" }),
     ).rejects.toThrow(/already in use by session/);
