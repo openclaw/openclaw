@@ -259,7 +259,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       settings: this.settings,
       currentProviderId,
     });
-    const meta = indexState ? indexState.meta : this.readMeta();
+    const meta = indexState ? indexState.meta : this.database.facts.meta;
     if (
       !fallbackRequest ||
       !meta ||
@@ -595,7 +595,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }
 
   protected refreshKeywordFallbackIndexIdentity(indexState?: MemoryRetrievalIndexState) {
-    const meta = indexState ? indexState.meta : this.readMeta();
+    const meta = indexState ? indexState.meta : this.database.facts.meta;
     const state = this.resolveCurrentIndexIdentityState({
       meta,
       provider: meta && meta.provider !== "none" ? { id: meta.provider, model: meta.model } : null,
@@ -625,7 +625,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     this.indexIdentityDirty =
       state.status === "mismatched" ||
       (state.status === "missing" &&
-        (this.sources.has("memory") || (indexState?.hasIndexedChunks ?? this.hasIndexedChunks())));
+        (this.sources.has("memory") || this.database.facts.hasIndexedChunks));
     return state;
   }
 

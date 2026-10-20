@@ -450,7 +450,7 @@ function* createOpenClawToolsSteps(
     : null;
   const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const githubActionsAvailable = hasSessionControlAuthority(options?.sessionControlAuthority);
-  const tools: AnyAgentTool[] = [
+  let tools: AnyAgentTool[] = [
     ...createInstalledSkillTools(options?.installedSkills ?? []),
     createDashboardTool({
       agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
@@ -472,11 +472,13 @@ function* createOpenClawToolsSteps(
               }),
           createCronTool({
             ...options,
+            readOnly: options?.forceRestartSafeTools,
             // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
             agentId: sessionAgentId,
             agentAccountId: gatewayCallerAccountId,
             currentDeliveryContext: deliveryContext,
+            sandboxContext: options?.cronSandboxContext,
             creatorToolAllowlist: options?.cronCreatorToolAllowlist,
             creatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
             resolveCreatorToolAuthority: options?.resolveCronCreatorToolAuthority,
@@ -571,6 +573,7 @@ function* createOpenClawToolsSteps(
           sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
           runId: options?.runId,
           run: options?.skillWorkshop,
+          sandboxed: options?.sandboxed,
         }),
     progressCardTool,
     ...swarmToolGroups.structuredOutput,
@@ -665,10 +668,8 @@ function* createOpenClawToolsSteps(
     pdfTool,
   ].filter((tool): tool is AnyAgentTool => tool !== null && tool !== undefined);
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
-  let allTools = tools;
   if (!options?.disablePluginTools) {
-    allTools = [
-      ...tools,
+    tools.push(
       ...(yield {
         plugins: {
           options: { ...options, activeProjectKeys },
@@ -676,13 +677,13 @@ function* createOpenClawToolsSteps(
           existingToolNames: new Set(tools.map((tool) => tool.name)),
         },
       }),
-    ];
+    );
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
   }
 
-  allTools = finalizeAgentToolAvailability(filterToolsByClientCaps(allTools, options?.clientCaps));
+  tools = finalizeAgentToolAvailability(filterToolsByClientCaps(tools, options?.clientCaps));
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
-  for (const tool of allTools) {
+  for (const tool of tools) {
     bindAssembledAgentToolActionDescriptor(tool);
   }
 
@@ -693,7 +694,7 @@ function* createOpenClawToolsSteps(
   );
 
   if (options?.wrapBeforeToolCallHook === false) {
-    return allTools.map(wrapGatewayCallerIdentity);
+    return tools.map(wrapGatewayCallerIdentity);
   }
   const defaultHookContext: HookContext = {
     ...(hookAgentId ? { agentId: hookAgentId } : {}),
@@ -705,7 +706,7 @@ function* createOpenClawToolsSteps(
   };
   const hookContext = { ...defaultHookContext, ...options?.beforeToolCallHookContext };
   options?.recordToolPrepStage?.("openclaw-tools:tool-hooks");
-  return allTools
+  return tools
     .map((tool) =>
       isToolWrappedWithBeforeToolCallHook(tool)
         ? tool

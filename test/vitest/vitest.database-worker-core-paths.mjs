@@ -1,8 +1,8 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
   "test/scripts/upgrade-survivor-acp-metadata.test.ts",
-  "src/sessions/background-session-result.test.ts",
   "src/gateway/server-methods/chat-send-admission.reads.test.ts",
+  "src/sessions/background-session-result.test.ts",
   "test/discord-live-policy.integration.test.ts",
   "src/commands/startup-config-preflight.fresh-profiles.test.ts",
   "src/channels/message/ingress-drain.handoff.test.ts",
@@ -60,6 +60,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/database-engine/pending-input.conformance.test.ts",
   "src/infra/database-engine/subagent-registry.conformance.test.ts",
   "src/infra/database-engine/gateway-agent-inspection.conformance.test.ts",
+  "src/infra/database-engine/session-group-catalog.conformance.test.ts",
   "src/infra/database-engine/post-ready.conformance.test.ts",
   "src/infra/database-engine/model-catalog.conformance.test.ts",
   "src/infra/database-engine/cli-owner.conformance.test.ts",

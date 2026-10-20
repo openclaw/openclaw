@@ -262,6 +262,8 @@ it("pages only the current automation and hides other jobs, previews, and invent
     hasMore: false,
     nextOffset: null,
     deliveryPreviews: { "job-current": { label: "current", detail: "self" } },
+    includeDisabled: true,
+    inventoryHint: expect.stringContaining("Absence does not prove deletion"),
   });
 });
 
@@ -510,11 +512,18 @@ it("forwards null add ownership separately from authenticated caller identity", 
 });
 
 it("does not forward model-supplied callerScope", async () => {
+  callGatewayMock.mockResolvedValueOnce(storedAgentTurn("sha256:test"));
   await executeCron(
     { action: "remove", jobId: "job-1", callerScope: { kind: "agentTool", agentId: "worker" } },
     channelCaller,
   );
-  expect(readGatewayCall().params).toEqual({ id: "job-1" });
+  expect(callGatewayMock.mock.calls.map(([call]) => call)).toEqual([
+    { method: "cron.get", params: { id: "job-1" } },
+    {
+      method: "cron.remove",
+      params: { id: "job-1", expectedConfigRevision: "sha256:test" },
+    },
+  ]);
 });
 
 it("does not write when the admitted run aborts while lazy authority resolves", async () => {

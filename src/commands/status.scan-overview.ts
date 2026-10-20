@@ -26,36 +26,6 @@ import {
 } from "./status.scan.bootstrap-shared.js";
 import type { GatewayProbeSnapshot } from "./status.scan.shared.js";
 
-async function resolveStatusChannelsStatus(params: {
-  cfg: OpenClawConfig;
-  configPath: string;
-  gatewayReachable: boolean;
-  opts: StatusGatewayProbeBudget & { all?: boolean };
-  gatewayCallOverrides?: GatewayProbeSnapshot["gatewayCallOverrides"];
-  useGatewayCallOverrides?: boolean;
-}) {
-  if (!params.gatewayReachable) {
-    // Avoid a second gateway call after probe failure; channel tables can still summarize local config.
-    return null;
-  }
-  const { callGateway } = await import("../gateway/call.js");
-  const timeoutMs = resolveStatusGatewayProbeTimeoutMs(params.opts);
-  if (timeoutMs === 0) {
-    return null;
-  }
-  return await callGateway({
-    config: params.cfg,
-    configPath: params.configPath,
-    method: "channels.status",
-    params: {
-      probe: false,
-      timeoutMs: Math.min(8000, timeoutMs),
-    },
-    timeoutMs,
-    ...(params.useGatewayCallOverrides === true ? (params.gatewayCallOverrides ?? {}) : {}),
-  }).catch(() => null);
-}
-
 export type StatusScanOverviewResult = {
   env?: NodeJS.ProcessEnv;
   skipColdStartNetworkChecks: boolean;
@@ -302,22 +272,36 @@ export async function collectStatusScanOverview(params: {
         )
       : undefined;
   // Some JSON/fast scans only need gateway/config fields; keep channel output structurally empty.
-  let channelsStatus: Awaited<ReturnType<typeof resolveStatusChannelsStatus>> = null;
+  let channelsStatus: Record<string, unknown> | null = null;
   let channelIssues: StatusScanOverviewResult["channelIssues"] = [];
   let channels: StatusScanOverviewResult["channels"] = { rows: [], details: [] };
   if (params.includeChannelsData !== false) {
     setProgressLabel("queryingChannelStatus");
-    channelsStatus =
-      params.includeLiveChannelStatus !== false
-        ? await resolveStatusChannelsStatus({
-            cfg,
-            configPath: snapshot.path,
-            gatewayReachable: gatewaySnapshot.gatewayReachable,
-            opts: params.opts,
-            gatewayCallOverrides: gatewaySnapshot.gatewayCallOverrides,
-            useGatewayCallOverrides: params.useGatewayCallOverridesForChannelsStatus,
-          })
-        : null;
+    if (params.includeLiveChannelStatus !== false) {
+      const configPath = snapshot.path;
+      const gatewayReachable = gatewaySnapshot.gatewayReachable;
+      const opts = params.opts;
+      const gatewayCallOverrides = gatewaySnapshot.gatewayCallOverrides;
+      const useGatewayCallOverrides = params.useGatewayCallOverridesForChannelsStatus;
+      // Avoid a second gateway call after probe failure; channel tables can still summarize local config.
+      if (gatewayReachable) {
+        const { callGateway } = await import("../gateway/call.js");
+        const timeoutMs = resolveStatusGatewayProbeTimeoutMs(opts);
+        if (timeoutMs !== 0) {
+          channelsStatus = await callGateway({
+            config: cfg,
+            configPath,
+            method: "channels.status",
+            params: {
+              probe: false,
+              timeoutMs: Math.min(8000, timeoutMs),
+            },
+            timeoutMs,
+            ...(useGatewayCallOverrides === true ? (gatewayCallOverrides ?? {}) : {}),
+          }).catch(() => null);
+        }
+      }
+    }
     params.progress?.tick();
     // Runtime channel helpers stay lazy because JSON fast paths can skip channel data entirely.
     const { collectChannelStatusIssues, buildChannelsTable } =

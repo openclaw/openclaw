@@ -81,115 +81,6 @@ async function isClickClackBotOwnedThread(params: {
   }
 }
 
-function resolveClickClackBotLoopConversationId(params: {
-  message: ClickClackMessage;
-  isDirect: boolean;
-}): string {
-  if (params.message.parent_message_id && params.message.thread_root_id) {
-    return params.message.thread_root_id;
-  }
-  return params.isDirect
-    ? (params.message.direct_conversation_id ?? params.message.author_id)
-    : (params.message.channel_id ?? params.message.thread_root_id ?? params.message.author_id);
-}
-
-function resolveAccountAgentRoute(params: {
-  cfg: OpenClawConfig;
-  account: ResolvedClickClackAccount;
-  target: string;
-  isDirect: boolean;
-}): ResolvedAgentRoute {
-  const runtime = getClickClackRuntime();
-  const peer: RoutePeer = {
-    kind: params.isDirect ? "direct" : "channel",
-    id: params.target,
-  };
-  const route = runtime.channel.routing.resolveAgentRoute({
-    cfg: params.cfg,
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-    peer,
-  });
-  const agentId = normalizeAgentId(params.account.agentId ?? route.agentId);
-  if (agentId === route.agentId) {
-    return route;
-  }
-  const dmScope = params.cfg.session?.dmScope ?? "main";
-  // Account-level agent ownership changes only the agent prefix. Preserve the
-  // resolved session policy so outbound recipient routing reaches this key.
-  const sessionKey = runtime.channel.routing.buildAgentSessionKey({
-    agentId,
-    mainKey: params.cfg.session?.mainKey,
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-    peer,
-    dmScope,
-    identityLinks: params.cfg.session?.identityLinks,
-  });
-  const mainSessionKey = runtime.channel.routing.buildAgentSessionKey({
-    agentId,
-    mainKey: params.cfg.session?.mainKey,
-    channel: CHANNEL_ID,
-    accountId: params.account.accountId,
-    dmScope: "main",
-  });
-  return {
-    ...route,
-    agentId,
-    dmScope,
-    sessionKey,
-    mainSessionKey,
-    lastRoutePolicy: sessionKey === mainSessionKey ? "main" : "session",
-  };
-}
-
-async function resolvePreparedInboundRoute(params: {
-  account: ResolvedClickClackAccount;
-  config: CoreConfig;
-  message: ClickClackMessage;
-}) {
-  const runtime = getClickClackRuntime();
-  const isDirect = Boolean(params.message.direct_conversation_id);
-  const target = buildClickClackTarget(
-    isDirect
-      ? { chatType: "direct", kind: "dm", id: params.message.author_id }
-      : { chatType: "group", kind: "channel", id: params.message.channel_id ?? "" },
-  );
-  const accountRoute = resolveAccountAgentRoute({
-    cfg: params.config as OpenClawConfig,
-    account: params.account,
-    target,
-    isDirect,
-  });
-  const discussionResolution =
-    !isDirect && params.message.channel_id
-      ? await resolveClickClackDiscussionRoute({
-          runtime,
-          accountId: params.account.accountId,
-          serverBaseUrl: params.account.baseUrl,
-          workspaceId: params.message.workspace_id,
-          channelId: params.message.channel_id,
-        })
-      : { state: "unbound" as const };
-  const discussionRoute =
-    discussionResolution.state === "active" ? discussionResolution.route : undefined;
-
-  return {
-    isDirect,
-    target,
-    route: discussionRoute
-      ? {
-          ...accountRoute,
-          agentId: discussionRoute.agentId,
-          sessionKey: discussionRoute.sessionKey,
-          lastRoutePolicy: "session" as const,
-        }
-      : accountRoute,
-    discussionRoute,
-    revoked: discussionResolution.state === "revoked",
-  };
-}
-
 export type ClickClackInboundAccess = Awaited<ReturnType<typeof resolveClickClackInboundAccess>>;
 
 export async function resolveClickClackInboundAccess(params: {
@@ -217,11 +108,82 @@ export async function resolveClickClackInboundAccess(params: {
   const routeAccountConfig = rootPolicyConfigured
     ? resolveClickClackAccountConfig(routeConfig, params.account.accountId)
     : params.account;
-  const preparedRoute = await resolvePreparedInboundRoute({
-    ...params,
-    config: routeConfig,
-    account: { ...params.account, agentId: routeAccountConfig.agentId },
+  const routingMessage = params.message;
+  const routingAccount = { ...params.account, agentId: routeAccountConfig.agentId };
+  const routeRuntime = getClickClackRuntime();
+  const isDirect = Boolean(routingMessage.direct_conversation_id);
+  const target = buildClickClackTarget(
+    isDirect
+      ? { chatType: "direct", kind: "dm", id: routingMessage.author_id }
+      : { chatType: "group", kind: "channel", id: routingMessage.channel_id ?? "" },
+  );
+  const routingConfig = routeConfig as OpenClawConfig;
+  const accountRuntime = getClickClackRuntime();
+  const peer: RoutePeer = {
+    kind: isDirect ? "direct" : "channel",
+    id: target,
+  };
+  let accountRoute: ResolvedAgentRoute = accountRuntime.channel.routing.resolveAgentRoute({
+    cfg: routingConfig,
+    channel: CHANNEL_ID,
+    accountId: routingAccount.accountId,
+    peer,
   });
+  const agentId = normalizeAgentId(routingAccount.agentId ?? accountRoute.agentId);
+  if (agentId !== accountRoute.agentId) {
+    const dmScope = routingConfig.session?.dmScope ?? "main";
+    // Account-level agent ownership changes only the agent prefix. Preserve the
+    // resolved session policy so outbound recipient routing reaches this key.
+    const sessionKey = accountRuntime.channel.routing.buildAgentSessionKey({
+      agentId,
+      mainKey: routingConfig.session?.mainKey,
+      channel: CHANNEL_ID,
+      accountId: routingAccount.accountId,
+      peer,
+      dmScope,
+      identityLinks: routingConfig.session?.identityLinks,
+    });
+    const mainSessionKey = accountRuntime.channel.routing.buildAgentSessionKey({
+      agentId,
+      mainKey: routingConfig.session?.mainKey,
+      channel: CHANNEL_ID,
+      accountId: routingAccount.accountId,
+      dmScope: "main",
+    });
+    accountRoute = {
+      ...accountRoute,
+      agentId,
+      dmScope,
+      sessionKey,
+      mainSessionKey,
+      lastRoutePolicy: sessionKey === mainSessionKey ? "main" : "session",
+    };
+  }
+  const discussionResolution = await (!isDirect && routingMessage.channel_id
+    ? resolveClickClackDiscussionRoute({
+        runtime: routeRuntime,
+        accountId: routingAccount.accountId,
+        serverBaseUrl: routingAccount.baseUrl,
+        workspaceId: routingMessage.workspace_id,
+        channelId: routingMessage.channel_id,
+      })
+    : { state: "unbound" as const });
+  const discussionRoute =
+    discussionResolution.state === "active" ? discussionResolution.route : undefined;
+  const preparedRoute = {
+    isDirect,
+    target,
+    route: discussionRoute
+      ? {
+          ...accountRoute,
+          agentId: discussionRoute.agentId,
+          sessionKey: discussionRoute.sessionKey,
+          lastRoutePolicy: "session" as const,
+        }
+      : accountRoute,
+    discussionRoute,
+    revoked: discussionResolution.state === "revoked",
+  };
   // Root lookup can outlive policy changes. Refresh through the config owner without
   // replacing the running transport's identity or rereading its credentials.
   // SAFETY: The host validates ClickClack settings; the downstream readers remain read-only.
@@ -296,10 +258,14 @@ export async function resolveClickClackInboundAccess(params: {
           // The workspace is the shared boundary; account IDs would let the
           // same conversation evade the budget by alternating receivers.
           scopeId: params.account.workspace,
-          conversationId: resolveClickClackBotLoopConversationId({
-            message: params.message,
-            isDirect: preparedRoute.isDirect,
-          }),
+          conversationId:
+            params.message.parent_message_id && params.message.thread_root_id
+              ? params.message.thread_root_id
+              : preparedRoute.isDirect
+                ? (params.message.direct_conversation_id ?? params.message.author_id)
+                : (params.message.channel_id ??
+                  params.message.thread_root_id ??
+                  params.message.author_id),
           senderId: params.message.author_id,
           receiverId: params.account.botUserId,
           eventId: params.message.id,

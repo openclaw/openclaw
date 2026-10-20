@@ -99,7 +99,6 @@ function createFeedbackInvokeContext(params: {
       },
     },
     sendActivity: vi.fn(async () => ({ id: "ignored" })),
-    sendActivities: async () => [],
   } as unknown as MSTeamsTurnContext;
 }
 

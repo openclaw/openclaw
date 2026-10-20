@@ -142,7 +142,7 @@ The mention becomes eligible for an Inbox entry and optional browser push only a
 
 Transport retries preserve the exact submitted text, mention annotations, and original send identity, even when execution gets a different run id. Replaying that committed input does not create another mention or restore a dismissed entry. An intentional new send has a new identity and may notify again, even when its text is identical. Transcript loading, hidden continuations, and attachment enrichment are not new human sends.
 
-The supporting RPCs require `operator.read` and use the authenticated profile, never a caller-selected Inbox owner:
+The supporting RPCs use the authenticated profile, never a caller-selected Inbox owner. `users.mentionable` accepts `operator.sessions.read` (also implied by session write) or broader read access and checks the caller’s current role and session visibility. It returns only eligible recipients for that conversation; it does not grant directory access. The Inbox RPCs require `operator.read`:
 
 | Method or event     | Contract                                                                                                                                                                                                                                   |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |

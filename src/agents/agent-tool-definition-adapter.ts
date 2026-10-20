@@ -42,6 +42,7 @@ import {
 import type { ToolDefinition } from "./sessions/index.js";
 import { readToolOperatorHint } from "./tool-operator-hint.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
+import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { jsonResult, payloadTextResult, ToolInputError } from "./tools/common.js";
 
 function captureSourceInvocationGuard(tool: AnyAgentTool, signal?: AbortSignal): () => void {
@@ -284,6 +285,7 @@ export function toToolDefinitions(
       },
     } satisfies ToolDefinition;
     copyCodeModeControlToolIdentity(tool, definition);
+    copyAgentToolReplaySafety(tool, definition);
     if (!sourcePreparer) {
       return beforeHookWrapped ? definition : attachAdapterExecutionPreparer(definition);
     }

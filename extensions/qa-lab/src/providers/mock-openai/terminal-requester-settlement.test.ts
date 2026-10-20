@@ -77,12 +77,17 @@ describe("terminal requester settlement", () => {
       () => "released",
       (error: unknown) => error,
     );
+    const shared = gate
+      .waitUntilSettled(other.caseName, other.childSessionKey)
+      .catch((error: unknown) => error);
     await gate.settle({ call: async () => ({ sessions: [settledSession] }) });
     await expect(
       gate.waitUntilSettled(requester.caseName, requester.childSessionKey),
     ).resolves.toBeUndefined();
     gate.stop();
-    expect(await closed).toMatchObject({ message: expect.stringContaining("fixture stopped") });
+    const stopped = await closed;
+    expect(stopped).toMatchObject({ message: expect.stringContaining("fixture stopped") });
+    expect(await shared).toBe(stopped);
   });
 
   it.each([false, true])(

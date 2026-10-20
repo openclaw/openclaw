@@ -31,7 +31,6 @@ describe("native media operation lifetime", () => {
         task: "a synthetic lighthouse",
         requestKey: "same-request",
         status: "running",
-        createdAt: Date.now(),
       });
     }
     expect(listMediaGenerationOperations("shared")).toEqual([]);
@@ -77,7 +76,6 @@ describe("native media operation lifetime", () => {
       task: "draw a tree",
       requestKey: "same-request",
       status: "running",
-      createdAt: Date.now(),
     });
     expect(
       await findDuplicateGuardImageGenerationTaskForSession(sessionKey, {
@@ -123,7 +121,6 @@ describe("native media operation lifetime", () => {
       task: "draw a tree",
       requestKey: "same-request",
       status: "succeeded",
-      createdAt: now - 4 * 60_000,
       endedAt: now - age,
     });
     expect(

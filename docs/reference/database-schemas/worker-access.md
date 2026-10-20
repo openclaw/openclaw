@@ -3597,7 +3597,10 @@ Session generation and transcript-index trackers declare their fixed connection-
 tables, indexes, and triggers to the schema owner, which checks existing TEMP names
 and shapes once at installation. That snapshot also skips drops for absent
 triggers on a fresh connection. Installing those declared TEMP tracking objects
-does not cause another validation of the physical database. The migration or repair owner publishes
+does not cause another validation of the physical database. When transcript-index
+maintenance resets its pending queue, it uses the entries it just classified for
+that transaction's result instead of querying the rebuilt queue again.
+The migration or repair owner publishes
 replacement facts for committed local DDL; rollback cannot publish uncommitted
 facts. Host-handle eviction preserves process admission and never falls back to
 schema scans on the Gateway thread. Ordinary execution reuses completed

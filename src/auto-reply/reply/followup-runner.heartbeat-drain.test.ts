@@ -66,7 +66,6 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
   const firstStarted = createDeferred();
   const releaseFirst = createDeferred();
   const settled = createDeferred();
-  let retriedExecution: AgentTurnParams | undefined;
   admissionState.beforeAdmission.mockImplementationOnce(async (queued) => {
     firstStarted.resolve();
     await releaseFirst.promise;
@@ -75,21 +74,18 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
       new AgentDatabaseExecutionAdmissionClosedError("database is still closing"),
     );
   });
-  state.execute.mockImplementation(async (params: AgentTurnParams) => {
-    retriedExecution = params;
-    return { runId: "queued-user-run", outcome: { kind: "aborted", reason: "user" } };
+  state.execute.mockResolvedValue({
+    runId: "queued-user-run",
+    outcome: { kind: "aborted", reason: "user" },
   });
   const typing = createFollowupTurnTestTypingController();
+  const defaults = { typing, typingMode: "never" as const, defaultModel: "gpt-test" };
   const userRunner = createFollowupRunner({
-    typing,
-    typingMode: "never",
-    defaultModel: "gpt-test",
+    ...defaults,
     opts: {},
   });
   const heartbeatRunner = createFollowupRunner({
-    typing,
-    typingMode: "never",
-    defaultModel: "gpt-test",
+    ...defaults,
     opts: {
       isHeartbeat: true,
       useHeartbeatFailureCopy: true,
@@ -148,20 +144,19 @@ it("keeps heartbeat cleanup options out of a deferred queued user turn", async (
     expect(getExistingFollowupQueue(key)).toBeUndefined();
     expect(admissionState.beforeAdmission).toHaveBeenCalledTimes(2);
     expect(state.execute).toHaveBeenCalledOnce();
+    const retriedExecution: AgentTurnParams = state.execute.mock.calls[0]![0];
     expect(retriedExecution).toMatchObject({
       isHeartbeat: false,
       opts: { isHeartbeat: false },
     });
-    for (const option of [
-      "enableHeartbeatTool",
-      "forceHeartbeatTool",
-      "useHeartbeatFailureCopy",
-      "cleanupBundleMcpOnRunEnd",
-      "bootstrapContextMode",
-      "sourceReplyDeliveryMode",
-    ] as const) {
-      expect(retriedExecution?.opts?.[option], option).toBeUndefined();
-    }
+    expect([
+      retriedExecution.opts?.enableHeartbeatTool,
+      retriedExecution.opts?.forceHeartbeatTool,
+      retriedExecution.opts?.useHeartbeatFailureCopy,
+      retriedExecution.opts?.cleanupBundleMcpOnRunEnd,
+      retriedExecution.opts?.bootstrapContextMode,
+      retriedExecution.opts?.sourceReplyDeliveryMode,
+    ]).toEqual(Array(6).fill(undefined));
   } finally {
     releaseFirst.resolve();
     heartbeatOperation.complete();

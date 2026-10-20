@@ -19,14 +19,18 @@
   transform-origin: bottom;
 }
 
-.chat-picker-overlay {
-  /* Try the full panel before shrinking it to the preferred side's remaining space. */
+.oc-overlay.chat-picker-overlay {
+  /* Fit above the composer before flipping into the space below its controls. */
   max-height: min(var(--oc-overlay-max-height, 420px), calc(100dvh - 16px));
   position-try-fallbacks:
-    --chat-picker-fit flip-block,
     --chat-picker-fit,
     --chat-picker-fit flip-inline,
-    --chat-picker-fit flip-block flip-inline;
+    --chat-picker-fit flip-block,
+    --chat-picker-fit flip-block flip-inline,
+    --chat-picker-fill,
+    --chat-picker-fill flip-inline,
+    --chat-picker-fill flip-block,
+    --chat-picker-fill flip-block flip-inline;
   padding: 0;
   border: 0;
   background: transparent;
@@ -34,6 +38,12 @@
 }
 
 @position-try --chat-picker-fit {
+  /* A long catalog must leave room for search and choices before this side wins. */
+  max-height: min(var(--oc-overlay-max-height, 420px), max(200px, calc(100% - 16px)));
+}
+
+/* Only accept a smaller panel when neither side can provide a usable catalog. */
+@position-try --chat-picker-fill {
   max-height: min(var(--oc-overlay-max-height, 420px), calc(100% - 16px));
 }
 

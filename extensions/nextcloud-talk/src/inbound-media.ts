@@ -7,6 +7,7 @@ import {
 import { sanitizeUntrustedFileName } from "openclaw/plugin-sdk/security-runtime";
 import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { containsAsciiControlCharacter as containsControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { fetchWithSsrFGuard, type OpenClawConfig, type PluginRuntime } from "../runtime-api.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
 import { releaseNextcloudTalkGuardedResponse } from "./guarded-response.js";
@@ -167,16 +168,6 @@ function parseHistorySize(value: unknown): number | undefined {
   }
   const parsed = Number(normalized);
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
-}
-
-function containsControlCharacter(value: string): boolean {
-  for (const character of value) {
-    const codePoint = character.codePointAt(0);
-    if (codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function resolveExactHistoryMedia(params: {

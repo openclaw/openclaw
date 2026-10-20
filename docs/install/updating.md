@@ -393,6 +393,13 @@ reports retain these closed reason codes while redacting private diagnostics.
 Other package failures keep the `global-install-failed` reason. These diagnostics
 do not change refusal, backup, or rollback behavior and require an updated driver.
 
+Generated failure reports name recognized candidate startup causes, including
+plugin loading, port conflicts, schema migration, native-module compatibility,
+readiness timeouts, and process signals. Plugin names appear only when they belong
+to the shipped public catalog. Config errors retain schema field names and fixed
+validation kinds; user-defined map keys become `<id>` and unknown keys become
+`<key>`. Arbitrary error text and rejected values stay out of public reports.
+
 Control UI updates use a verified helper to stop and restart the managed Gateway.
 On macOS, the helper carries its live update ownership into LaunchAgent activation;
 ordinary commands inside the Gateway still cannot stop their own service. If an

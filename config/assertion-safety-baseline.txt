@@ -65,7 +65,6 @@ extensions/browser/src/browser/server-context.tab-ops.ts	2
 extensions/browser/src/browser/system-chrome-cookies.ts	1
 extensions/browser/src/browser/system-profiles.ts	1
 extensions/browser/src/browser/test-port.ts	1
-extensions/browser/src/cli/browser-cli-actions-input/register.batch.ts	1
 extensions/browser/src/cli/browser-cli-manage.ts	1
 extensions/browser/src/cli/browser-cli-shared.ts	1
 extensions/browser/src/gateway/browser-request.ts	3
@@ -83,7 +82,6 @@ extensions/canvas/src/config-migration.ts	2
 extensions/canvas/src/tool.ts	1
 extensions/chutes/models.ts	1
 extensions/chutes/oauth.ts	1
-extensions/clawrouter/index.ts	1
 extensions/clawrouter/usage.ts	1
 extensions/clickclack/src/access.ts	2
 extensions/clickclack/src/channel-config.ts	5
@@ -166,11 +164,11 @@ extensions/cua-computer/src/driver-artifact-verification.ts	1
 extensions/cua-computer/src/driver-artifacts.ts	1
 extensions/cua-computer/src/driver-client.ts	9
 extensions/cua-computer/src/driver-result.ts	3
-extensions/cua-computer/src/mcp-driver-client.ts	3
+extensions/cua-computer/src/mcp-driver-client.ts	2
 extensions/cua-computer/src/window-actions.ts	3
 extensions/deepinfra/provider-models.ts	1
 extensions/deepseek/provider-policy-api.ts	2
-extensions/device-pair/index.ts	6
+extensions/device-pair/index.ts	5
 extensions/diagnostics-otel/src/service-exporter.ts	1
 extensions/diagnostics-otel/src/service-logs.ts	8
 extensions/diagnostics-otel/src/service-trace-context.ts	1
@@ -181,7 +179,6 @@ extensions/diffs/src/plugin.ts	4
 extensions/diffs/src/store.ts	3
 extensions/diffs/src/tool.ts	2
 extensions/diffs/src/viewer-client.ts	1
-extensions/diffs/src/viewer-payload.ts	1
 extensions/discord/src/accounts.ts	2
 extensions/discord/src/actions/handle-action.ts	1
 extensions/discord/src/actions/runtime.guild.ts	1
@@ -230,7 +227,7 @@ extensions/discord/src/monitor/gateway-metadata.ts	6
 extensions/discord/src/monitor/gateway-plugin.ts	2
 extensions/discord/src/monitor/ingress.ts	6
 extensions/discord/src/monitor/message-channel-info.ts	1
-extensions/discord/src/monitor/message-forwarded.ts	5
+extensions/discord/src/monitor/message-forwarded.ts	2
 extensions/discord/src/monitor/message-handler.preflight.ts	1
 extensions/discord/src/monitor/message-text.ts	1
 extensions/discord/src/monitor/model-picker-preferences.ts	1
@@ -377,7 +374,6 @@ extensions/line/src/setup-core.ts	1
 extensions/line/src/webhook-spool.ts	2
 extensions/llm-task/doctor-contract-api.ts	1
 extensions/llm-task/src/llm-task-tool.ts	2
-extensions/lmstudio/src/models.ts	2
 extensions/lobster/src/lobster-runner.ts	2
 extensions/logbook/index.ts	5
 extensions/logbook/src/analyze.ts	5
@@ -615,7 +611,6 @@ extensions/qa-lab/src/fixture-utils.ts	1
 extensions/qa-lab/src/gateway-child-artifacts.ts	1
 extensions/qa-lab/src/gateway-process-boundary.ts	1
 extensions/qa-lab/src/harness-runtime.ts	2
-extensions/qa-lab/src/lab-server-capture.ts	1
 extensions/qa-lab/src/lab-server.ts	2
 extensions/qa-lab/src/live-transports/discord/adapter.runtime.ts	2
 extensions/qa-lab/src/live-transports/discord/scenario-environment.ts	3
@@ -626,7 +621,6 @@ extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-gateway.ts	2
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-recovery.ts	2
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-cli-verification.ts	2
-extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-e2ee-state.ts	1
 extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.ts	2
 extensions/qa-lab/src/live-transports/matrix/substrate/client.ts	3
 extensions/qa-lab/src/live-transports/matrix/substrate/config.ts	8
@@ -1151,7 +1145,6 @@ src/agents/embedded-agent-runner/extra-params.ts	4
 src/agents/embedded-agent-runner/google-prompt-cache.ts	5
 src/agents/embedded-agent-runner/history.ts	2
 src/agents/embedded-agent-runner/message-visibility.ts	1
-src/agents/embedded-agent-runner/model.configured-fallback.ts	1
 src/agents/embedded-agent-runner/model.configured-overrides.ts	1
 src/agents/embedded-agent-runner/model.provider-hooks.ts	8
 src/agents/embedded-agent-runner/model.registry-resolution.ts	2
@@ -1343,7 +1336,7 @@ src/agents/tools/conversation-tools.ts	2
 src/agents/tools/cron-tool-context.ts	1
 src/agents/tools/cron-tool-schema.ts	1
 src/agents/tools/cron-tool-write.ts	2
-src/agents/tools/cron-tool.ts	5
+src/agents/tools/cron-tool.ts	4
 src/agents/tools/dashboard-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	2
@@ -1844,7 +1837,7 @@ src/gateway/server-methods/chat-transcript-persistence.ts	4
 src/gateway/server-methods/chat-tts-markers.ts	1
 src/gateway/server-methods/config-write-flow.ts	1
 src/gateway/server-methods/config.ts	1
-src/gateway/server-methods/cron.ts	2
+src/gateway/server-methods/cron.ts	1
 src/gateway/server-methods/doctor.ts	2
 src/gateway/server-methods/exec-approvals.ts	1
 src/gateway/server-methods/memory-search.ts	3
@@ -2228,7 +2221,6 @@ src/plugins/loader-records.ts	1
 src/plugins/loader-runtime-candidate.ts	1
 src/plugins/loader-shared.ts	2
 src/plugins/managed-npm-retention.ts	3
-src/plugins/manifest-install-owner.ts	1
 src/plugins/manifest-setup-normalizers.ts	4
 src/plugins/manifest.ts	2
 src/plugins/marketplace.ts	5

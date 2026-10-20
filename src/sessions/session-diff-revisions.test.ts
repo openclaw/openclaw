@@ -224,12 +224,132 @@ it.skipIf(process.platform === "win32")(
         expect((await read()).files[0]?.patch).toContain("+later");
         expect(timing.missReason).toBe("revision-changed-worktree-mtime");
       }
+      const excludes = path.join(root, "ignore rules");
+      await fs.appendFile(path.join(origin, ".git/config"), "\n# unrelated config\n".repeat(4096));
+      await fs.writeFile(excludes, "external-ignore.txt\n");
+      await fs.writeFile(path.join(checkout, "external-ignore.txt"), "untracked\n");
+      await git("config", "core.excludesFile", "../ignore rules");
+      const configuredTiming: DiffReadTiming = { durations: {} };
+      const readConfigured = () =>
+        loadCheckoutDiff({ cwd: checkout, sessionKey: "fixture" }, configuredTiming);
+      const configured = await readConfigured();
+      expect(configured.files.map((file) => file.path)).not.toContain("external-ignore.txt");
+      expect(await readConfigured()).toEqual(configured);
+      expect(configuredTiming.outcome).toBe("cache-hit");
+      await fs.writeFile(excludes, "");
+      expect((await readConfigured()).files.map((file) => file.path)).toContain(
+        "external-ignore.txt",
+      );
       await git("config", "filter.fixture.clean", "cat");
       const timing: DiffReadTiming = { durations: {} };
       expect(
-        (await loadCheckoutDiff({ cwd: checkout, sessionKey: "fixture" }, timing)).files[0]?.patch,
+        (await loadCheckoutDiff({ cwd: checkout, sessionKey: "fixture" }, timing)).files.find(
+          (file) => file.path === "tracked.txt",
+        )?.patch,
       ).toContain("+later");
       expect(timing.missReason).toBe("no-revision-config");
+    } finally {
+      stopDiagnostics();
+      await drainGlobalSingletonLifecycleState("restart");
+      vi.restoreAllMocks();
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "caches opaque nested repositories and refreshes gitlink dirtiness",
+  async () => {
+    vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+    vi.stubEnv("GIT_CONFIG_GLOBAL", os.devNull);
+    await drainGlobalSingletonLifecycleState("restart");
+    const root = await fs.realpath(tempDirs.make("openclaw-nested-repo-diff-"));
+    const nested = path.join(root, "clone");
+    const execute = promisify(execFile);
+    const git = (cwd: string, ...args: string[]) =>
+      execute("git", [
+        "-C",
+        cwd,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        ...args,
+      ]);
+    const stopDiagnostics = onTrustedInternalDiagnosticEvent(() => undefined, {
+      includeTrusted: ["diagnostic.phase.completed"],
+    });
+    try {
+      await git(root, "init", "-b", "main");
+      await git(root, "commit", "--allow-empty", "-m", "base");
+      await fs.mkdir(nested);
+      await git(nested, "init", "-b", "main");
+      await fs.mkdir(path.join(nested, "content"));
+      const nestedFile = path.join(nested, "content/file.txt");
+      await fs.writeFile(nestedFile, "before\n");
+      await git(nested, "add", ".");
+      await git(nested, "commit", "-m", "nested base");
+      for (const summaryOnly of [false, true]) {
+        const timing: DiffReadTiming = { durations: {} };
+        const read = () =>
+          loadCheckoutDiff({ cwd: root, sessionKey: "fixture", summaryOnly }, timing);
+        const opaque = await read();
+        expect(opaque.files).toEqual([
+          {
+            path: "clone/",
+            status: "added",
+            additions: 0,
+            deletions: 0,
+            untracked: true,
+            truncated: true,
+          },
+        ]);
+        expect(await read()).toEqual(opaque);
+        expect(timing.outcome).toBe("cache-hit");
+        await fs.appendFile(nestedFile, "inside clone\n");
+        expect(await read()).toEqual(opaque);
+        expect(timing.outcome).toBe("cache-hit");
+      }
+      await git(nested, "commit", "-am", "nested changes");
+      await git(root, "add", "clone");
+      await git(root, "commit", "-m", "gitlink");
+      const baseCommit = (await git(root, "rev-parse", "HEAD")).stdout.trim();
+      const nestedBase = (await git(nested, "rev-parse", "HEAD")).stdout.trim();
+      const timing: DiffReadTiming = { durations: {} };
+      const read = () => loadCheckoutDiff({ cwd: root, sessionKey: "fixture" }, timing);
+      expect((await read()).files).toEqual([]);
+      await fs.appendFile(nestedFile, "dirty gitlink\n");
+      const dirty = await read();
+      expect(dirty.files).toEqual([
+        { path: "clone", status: "modified", additions: 0, deletions: 0, truncated: true },
+      ]);
+      expect(await read()).toEqual(dirty);
+      expect(timing.outcome).toBe("cache-hit");
+      await git(nested, "commit", "-am", "new gitlink head");
+      expect((await read()).files).toEqual([
+        { path: "clone", status: "modified", additions: 1, deletions: 1, truncated: true },
+      ]);
+      await git(root, "add", "clone");
+      await git(root, "commit", "-m", "updated gitlink");
+      expect((await read()).files).toEqual([]);
+      await fs.appendFile(nestedFile, "third commit\n");
+      await git(nested, "commit", "-am", "third gitlink head");
+      const nestedThird = (await git(nested, "rev-parse", "HEAD")).stdout.trim();
+      await git(nested, "checkout", "--detach", nestedBase);
+      const readFromBase = () =>
+        loadCheckoutDiff({ cwd: root, sessionKey: "fixture", baseCommit }, timing);
+      const atBase = await readFromBase();
+      expect(atBase.files).toEqual([
+        { path: "clone", status: "modified", additions: 0, deletions: 0, truncated: true },
+      ]);
+      expect(await readFromBase()).toEqual(atBase);
+      expect(timing.outcome).toBe("cache-hit");
+      await git(nested, "checkout", "--detach", nestedThird);
+      expect((await readFromBase()).files).toEqual([
+        { path: "clone", status: "modified", additions: 1, deletions: 1, truncated: true },
+      ]);
     } finally {
       stopDiagnostics();
       await drainGlobalSingletonLifecycleState("restart");

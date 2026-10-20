@@ -177,33 +177,64 @@ describe("ClickClack inbound mention gating", () => {
     expect(runtime.llm.complete).not.toHaveBeenCalled();
   });
 
-  it("dispatches an allowed bot-authored message through the shared loop guard", async () => {
-    const account = makeAccount({ allowFrom: ["usr_sender"], allowBots: true });
-    const config = {
-      channels: { defaults: { botLoopProtection: { maxEventsPerWindow: 7 } } },
-    } satisfies CoreConfig;
-    await dispatchPublished(
-      account,
-      {
-        author_id: "usr_sender",
-        author: author({ id: "usr_sender", kind: "bot", handle: "sender" }),
+  it.each([
+    { name: "channel", message: {}, conversationId: "chn_1" },
+    {
+      name: "first channel thread",
+      message: { parent_message_id: "msg_root_a", thread_root_id: "msg_root_a" },
+      conversationId: "msg_root_a",
+    },
+    {
+      name: "second channel thread",
+      message: { parent_message_id: "msg_root_b", thread_root_id: "msg_root_b" },
+      conversationId: "msg_root_b",
+    },
+    {
+      name: "direct conversation",
+      message: { channel_id: undefined, direct_conversation_id: "dcn_1" },
+      conversationId: "dcn_1",
+    },
+    {
+      name: "direct thread",
+      message: {
+        channel_id: undefined,
+        direct_conversation_id: "dcn_1",
+        parent_message_id: "msg_direct_root",
+        thread_root_id: "msg_direct_root",
       },
-      config,
-    );
+      conversationId: "msg_direct_root",
+    },
+  ])(
+    "dispatches an allowed bot in a $name through its loop scope",
+    async ({ message, conversationId }) => {
+      const account = makeAccount({ allowFrom: ["usr_sender"], allowBots: true });
+      const config = {
+        channels: { defaults: { botLoopProtection: { maxEventsPerWindow: 7 } } },
+      } satisfies CoreConfig;
+      await dispatchPublished(
+        account,
+        {
+          author_id: "usr_sender",
+          author: author({ id: "usr_sender", kind: "bot", handle: "sender" }),
+          ...message,
+        },
+        config,
+      );
 
-    const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatch.mock.calls[0]?.[0].botLoopProtection).toMatchObject({
-      scopeId: "wsp_1",
-      conversationId: "chn_1",
-      senderId: "usr_sender",
-      receiverId: "usr_receiver",
-      eventId: "msg_1",
-      nowMs: Date.parse("2026-05-09T12:00:00.000Z"),
-      defaultsConfig: { maxEventsPerWindow: 7 },
-      defaultEnabled: true,
-    });
-  });
+      const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch.mock.calls[0]?.[0].botLoopProtection).toMatchObject({
+        scopeId: "wsp_1",
+        conversationId,
+        senderId: "usr_sender",
+        receiverId: "usr_receiver",
+        eventId: "msg_1",
+        nowMs: Date.parse("2026-05-09T12:00:00.000Z"),
+        defaultsConfig: { maxEventsPerWindow: 7 },
+        defaultEnabled: true,
+      });
+    },
+  );
 
   it.each<{
     name: string;

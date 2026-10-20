@@ -3403,6 +3403,10 @@ describe("prepareCliRunContext", () => {
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime: vi.fn(createLoopbackRuntime),
         mintMcpLoopbackClientGrant,
+        resolveMcpLoopbackPolicyTools: vi.fn(() => ({
+          agentId: "main",
+          tools: projectedToolNames.map((name) => ({ name })),
+        })),
         resolveMcpLoopbackScopedTools: vi.fn(() => ({
           agentId: "main",
           tools: projectedToolNames.map((name) => ({ name })),

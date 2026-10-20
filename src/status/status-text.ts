@@ -33,7 +33,6 @@ import { resolveFreshSessionTotalTokens } from "../config/sessions.js";
 import { resolveSessionLifecycleTimestampsAsync } from "../config/sessions/lifecycle-read.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
 import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
-import { withTimeout } from "../infra/fs-safe.js";
 import {
   formatUsageWindowSummary,
   loadProviderUsageSummary,
@@ -342,20 +341,16 @@ export async function buildStatusReplyParts(
       // Usage summary is optional operator context. Bound it tightly so a slow
       // provider usage probe cannot delay the status command.
       const usageSummaryTimeoutMs = useCodexSyntheticUsage ? 8000 : 3500;
-      const usageSummary = await withTimeout(
-        loadProviderUsageSummary({
-          timeoutMs: usageSummaryTimeoutMs,
-          providers: [currentUsageProvider],
-          agentDir: statusAgentDir,
-          workspaceDir: statusWorkspaceDir,
-          config: cfg,
-          auth: useCodexSyntheticUsage
-            ? [buildCodexSyntheticUsageAuth({ authProfileId: codexUsageAuthProfileId })]
-            : undefined,
-        }),
-        usageSummaryTimeoutMs,
-        { message: "usage summary timeout" },
-      );
+      const usageSummary = await loadProviderUsageSummary({
+        timeoutMs: usageSummaryTimeoutMs,
+        providers: [currentUsageProvider],
+        agentDir: statusAgentDir,
+        workspaceDir: statusWorkspaceDir,
+        config: cfg,
+        auth: useCodexSyntheticUsage
+          ? [buildCodexSyntheticUsageAuth({ authProfileId: codexUsageAuthProfileId })]
+          : undefined,
+      });
       const usageEntry = usageSummary.providers[0];
       if (
         usageEntry &&

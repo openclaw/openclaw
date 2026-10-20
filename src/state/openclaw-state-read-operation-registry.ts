@@ -9,6 +9,10 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  sandboxPersistentExec: () =>
+    import("../agents/sandbox/persistent-exec-store.kernel.js").then(
+      (m) => m.sandboxPersistentExecReadOperations,
+    ),
   worktrees: async () => {
     const [
       { worktreeReadOperations },

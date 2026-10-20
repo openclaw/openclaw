@@ -65,6 +65,41 @@ const model: ModelCatalogEntry = {
 };
 let projection: SessionRowProjection | undefined;
 
+function baseConfig(): OpenClawConfig {
+  return { agents: { entries: { default: {} }, defaults: { model: "custom/synthetic-model" } } };
+}
+
+function providerConfig(maxTokens: number, api?: "openai-completions") {
+  return {
+    models: {
+      providers: {
+        custom: {
+          ...(api ? { api } : {}),
+          baseUrl: "https://synthetic.example.test/v1",
+          models: [
+            {
+              id: model.id,
+              name: model.name,
+              reasoning: false,
+              input: ["text" as const],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 32_000,
+              maxTokens,
+            },
+          ],
+        },
+      },
+    },
+  };
+}
+
+function publish(config: OpenClawConfig) {
+  return refreshPreparedModelRuntimeSnapshots(config, {
+    gatewayLifecycle: true,
+    catalogMode: "static",
+  });
+}
+
 // Worker replies are fresh objects, as across the real worker serialization boundary.
 function catalog(entry: ModelCatalogEntry | undefined = model): ModelCatalogSnapshot {
   const entries = entry ? [structuredClone(entry)] : [];
@@ -77,12 +112,7 @@ function catalog(entry: ModelCatalogEntry | undefined = model): ModelCatalogSnap
 
 // Real catalog publication, persisted rows, projection, and the registered RPC share one owner.
 async function setup(preparedMap = false, profile?: AuthProfileCredential) {
-  const config: OpenClawConfig = {
-    agents: {
-      entries: { default: {} },
-      defaults: { model: "custom/synthetic-model" },
-    },
-  };
+  const config = baseConfig();
   mocks.configuredAgentIds = ["default"];
   mocks.runPreparedModelCatalogWorker.mockImplementation(async () => catalog());
   const input = { config, agentId: "default", agentDir: fixture.state.agentDir("default") };
@@ -90,10 +120,7 @@ async function setup(preparedMap = false, profile?: AuthProfileCredential) {
     mocks.usePersistedAuthProfiles = true;
     mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
     persistProfile(profile);
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      catalogMode: "static",
-    });
+    await publish(config);
   }
   const owner = profile
     ? await prepareModelRuntimeSnapshot(input)
@@ -193,39 +220,14 @@ describe("catalog publication session rows", () => {
   ])(
     "creates only with current native activation ($selection, superseded=$superseded, stop=$stop)",
     async ({ selection, superseded, stop }) => {
-      const initial: OpenClawConfig = {
-        agents: {
-          entries: { default: {} },
-          defaults: { model: "custom/synthetic-model" },
-        },
-      };
+      const initial = baseConfig();
       mocks.configuredAgentIds = ["default"];
-      await refreshPreparedModelRuntimeSnapshots(initial, {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-      });
+      await publish(initial);
       const previous = getPreparedModelRuntimeSnapshot(fixture.agentInput("default", initial))!;
       const config: OpenClawConfig = {
         ...initial,
         plugins: { entries: { "synthetic-native": { enabled: true } } },
-        models: {
-          providers: {
-            custom: {
-              baseUrl: "https://synthetic.example.test/v1",
-              models: [
-                {
-                  id: model.id,
-                  name: model.name,
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 32_000,
-                  maxTokens: 4_096,
-                },
-              ],
-            },
-          },
-        },
+        ...providerConfig(4_096),
         agents: {
           ...initial.agents,
           defaults: {
@@ -270,10 +272,7 @@ describe("catalog publication session rows", () => {
       mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
       mocks.resolveNativeModelPrimary.mockReturnValue("custom/synthetic-model");
       await fixture.state.writeConfig(config);
-      await refreshPreparedModelRuntimeSnapshots(config, {
-        gatewayLifecycle: true,
-        catalogMode: "static",
-      });
+      await publish(config);
       expect(previous.isCurrent()).toBe(false);
       expect(loadNative).not.toHaveBeenCalled();
       const context = createDirectChatContext({ getRuntimeConfig: () => config });
@@ -384,25 +383,7 @@ describe("catalog publication session rows", () => {
       {
         config: {
           agents: { defaults: { model: "custom/synthetic-model" } },
-          models: {
-            providers: {
-              custom: {
-                api: "openai-completions",
-                baseUrl: "https://synthetic.example.test/v1",
-                models: [
-                  {
-                    id: model.id,
-                    name: model.name,
-                    contextWindow: 32_000,
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    maxTokens: 1_000,
-                  },
-                ],
-              },
-            },
-          },
+          ...providerConfig(1_000, "openai-completions"),
         },
         agentDir: fixture.state.agentDir("default"),
       },
@@ -573,6 +554,15 @@ describe("catalog publication session rows", () => {
 
     const before = rows.materializedCount;
     const catalogReads = readCatalog.mock.calls.length;
+    const expectResident = async () => {
+      expect((await list()).sessions).toEqual(initial.sessions);
+      expect(rows.materializedCount - before).toBe(0);
+    };
+    const expectUnchanged = async () => {
+      await expectResident();
+      expect(rows.dirtyRowCount).toBe(0);
+      expect(readCatalog).toHaveBeenCalledTimes(catalogReads);
+    };
     const started = createDeferred();
     const reply = createDeferred<ModelCatalogSnapshot>();
     const events = vi.fn<Parameters<typeof registerPreparedModelRuntimePublicationListener>[0]>();
@@ -584,26 +574,16 @@ describe("catalog publication session rows", () => {
     const pending = refresh();
     try {
       await started.promise;
-      expect((await list()).sessions).toEqual(initial.sessions);
-      expect(rows.materializedCount - before).toBe(0);
-      expect(rows.dirtyRowCount).toBe(0);
-      expect(readCatalog).toHaveBeenCalledTimes(catalogReads);
+      await expectUnchanged();
       reply.resolve(catalog());
       await pending;
-      expect((await list()).sessions).toEqual(initial.sessions);
-      expect(rows.materializedCount - before).toBe(0);
-      expect(rows.dirtyRowCount).toBe(0);
-      expect(readCatalog).toHaveBeenCalledTimes(catalogReads);
+      await expectUnchanged();
 
       mocks.runPreparedModelCatalogWorker.mockRejectedValueOnce(new Error("synthetic failure"));
       await expect(refresh()).rejects.toThrow("synthetic failure");
-      expect((await list()).sessions).toEqual(initial.sessions);
-      expect(rows.materializedCount - before).toBe(0);
+      await expectResident();
       await refresh();
-      expect((await list()).sessions).toEqual(initial.sessions);
-      expect(rows.materializedCount - before).toBe(0);
-      expect(rows.dirtyRowCount).toBe(0);
-      expect(readCatalog).toHaveBeenCalledTimes(catalogReads);
+      await expectUnchanged();
       expect(events.mock.calls.map(([event]) => event)).toEqual([
         { phase: "catalog-status", modelFactsChanged: false },
         { phase: "catalog-published", modelFactsChanged: false, refreshStatusChanged: true },

@@ -1,3 +1,5 @@
+import { mkdir, readFile, stat } from "node:fs/promises";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { expect, it, vi } from "vitest";
 import type { WorkerTranscriptCommitParams } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -36,6 +38,7 @@ type WorkerGatewayToolFixture = {
       toolSurface: () => WorkerToolSurface;
     };
     launch: WorkerLaunchDescriptor;
+    workspaceDir: string;
   }>;
 };
 
@@ -115,6 +118,56 @@ export function registerWorkerGatewayToolAvailabilityTests({ setup }: WorkerGate
       ]);
     },
   );
+
+  it("allows a contained write after exec refusal and still refuses a later workspace escape", async () => {
+    const { gateway, workspaceDir, launch } = await setup({
+      inferencePlans: [
+        {
+          toolName: "exec",
+          toolCallId: "refused-exec",
+          args: { command: "printf forbidden > exec.txt" },
+        },
+        {
+          toolName: "write",
+          toolCallId: "allowed-write",
+          args: { path: "allowed.txt", content: "authorized" },
+        },
+        {
+          toolName: "write",
+          toolCallId: "outside-write",
+          args: { path: "../outside.txt", content: "forbidden" },
+        },
+        "text",
+      ],
+    });
+    const contained = path.join(workspaceDir, "contained");
+    await mkdir(contained);
+    launch.assignment.workspaceDir = contained;
+    launch.assignment.workerContainmentRoot = contained;
+    launch.assignment.permissionMode = "guarded";
+
+    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    await expect(readFile(path.join(contained, "allowed.txt"), "utf8")).resolves.toBe("authorized");
+    for (const denied of [
+      path.join(contained, "exec.txt"),
+      path.join(workspaceDir, "outside.txt"),
+    ]) {
+      await expect(stat(denied)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    const results = gateway.acceptedTranscriptRequests
+      .flatMap((request) => request.messages)
+      .filter((message) => message.role === "toolResult");
+    expect(
+      JSON.stringify(results.find((message) => message.toolCallId === "refused-exec")),
+    ).toContain("approval_required");
+    expect(results.find((message) => message.toolCallId === "allowed-write")).toMatchObject({
+      isError: false,
+    });
+    expect(results.find((message) => message.toolCallId === "outside-write")).toMatchObject({
+      isError: true,
+    });
+    expect(gateway.inferenceRequests).toHaveLength(4);
+  });
 
   it("rejects a Gateway without the admitted tool-surface capability before inference", async () => {
     const { gateway, launch } = await setup();

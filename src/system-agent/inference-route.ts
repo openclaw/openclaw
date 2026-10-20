@@ -41,14 +41,8 @@ export type SystemAgentConfiguredRoute = {
 export type SystemAgentConfiguredRouteDeps = {
   /** Explicit role selection for verifying a utility candidate alongside a working primary. */
   modelTarget?: "utility";
-  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
   pluginMetadataPlugins?: PluginMetadataSnapshot["plugins"];
 };
-type SystemAgentRouteProjectionDeps = Pick<
-  SystemAgentConfiguredRouteDeps,
-  "pluginMetadataPlugins" | "modelTarget"
->;
-
 /** The canonical source and default-materialized view from one authoritative read. */
 export type SystemAgentConfigSnapshot = Pick<
   ConfigFileSnapshot,
@@ -100,7 +94,7 @@ function projectSystemAgentExecutionConfig(
 export async function resolveSystemAgentConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentRouteProjectionDeps = {},
+  deps: SystemAgentConfiguredRouteDeps = {},
   configSnapshot?: SystemAgentConfigSnapshot,
 ): Promise<SystemAgentConfiguredRoute | null> {
   // Match before adding the reserved execution agent changes the source shape.
@@ -237,7 +231,7 @@ function projectRelevantModelMap(params: {
 export async function projectInferenceRoute(
   config: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentRouteProjectionDeps = {},
+  deps: SystemAgentConfiguredRouteDeps = {},
   sourceConfig: OpenClawConfig = config,
 ): Promise<DefaultInferenceRouteProjection> {
   const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");

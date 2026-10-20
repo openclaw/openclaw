@@ -108,7 +108,7 @@ import {
   sendGatewayCronFailureAlert,
   createGatewayCronFailureRepair,
 } from "./server-cron-notifications.js";
-import { toPluginCronJob } from "./server-cron-plugin-job.js";
+import { toPluginCronChangedEvent } from "./server-cron-plugin-job.js";
 import {
   createGatewayCronSystemJobReconciler,
   type GatewaySystemJobReconciliationResult,
@@ -344,6 +344,24 @@ export function buildGatewayCronService(params: {
   // snapshot against mutations that commit inside the list await.
   let streamWatcherMutationRevision = 0;
   let streamWatchersStopped = false;
+  let sandboxStreams:
+    | Promise<ReturnType<typeof import("./cron-stream-sandbox.js").createCronStreamSandboxExecutor>>
+    | undefined;
+  const getSandboxStreams = () =>
+    (sandboxStreams ??= import("./cron-stream-sandbox.js").then(
+      ({ createCronStreamSandboxExecutor }) =>
+        createCronStreamSandboxExecutor({
+          scheduler: params.scheduler,
+          storePath,
+          getRuntimeConfig,
+          getJob: (id) => cron.getJob(id),
+          assertCurrent: () => {
+            if (streamWatchersStopped || !cronEnabled || !cronTriggersEnabled) {
+              throw new Error("Sandbox stream execution is no longer enabled.");
+            }
+          },
+        }),
+    ));
   const reconcileExitWatchers = async () => {
     const revision = ++exitWatcherMutationRevision;
     exitWatcherReconciliations += 1;
@@ -766,46 +784,7 @@ export function buildGatewayCronService(params: {
             }
           : {}),
       });
-      // Build hook event from CronEvent. The job snapshot is carried on the
-      // internal event so it's available even for "removed" actions where
-      // getJob() would return undefined. `delivery` and `usage` are
-      // intentionally omitted — they contain internal channel/token detail
-      // that is not part of the public plugin SDK surface.
-      // Resolve job snapshot from the event or live service so top-level
-      // convenience fields (sessionTarget, agentId) are always populated
-      // when the job is known.
-      const pluginJob = jobSnapshot ? toPluginCronJob(jobSnapshot) : undefined;
-      const hookSummary =
-        jobSnapshot?.payload?.kind === "command" && typeof evt.summary === "string"
-          ? redactCronCommandSummaryForExternalDelivery(evt.summary)
-          : evt.summary;
-      const hookEvt: PluginHookCronChangedEvent = {
-        action: evt.action,
-        jobId: evt.jobId,
-        ...(pluginJob ? { job: pluginJob } : {}),
-        // Top-level routing fields so plugins don't have to dig into job.
-        sessionTarget: jobSnapshot?.sessionTarget,
-        agentId: jobSnapshot?.agentId,
-        ...pickDefined(evt, [
-          "runAtMs",
-          "durationMs",
-          "status",
-          "completionStatus",
-          "error",
-          "delivered",
-          "deliveryStatus",
-          "deliveryError",
-          "deliverySuppressionReason",
-          "sessionId",
-          "sessionKey",
-          "runId",
-          "nextRunAtMs",
-          "model",
-          "provider",
-        ]),
-        ...(hookSummary !== undefined ? { summary: hookSummary } : {}),
-      };
-      runCronChangedHook(hookEvt);
+      runCronChangedHook(toPluginCronChangedEvent(evt, jobSnapshot));
       // Re-arm / cancel scheduler-owned process watchers when the job set changes.
       if (evt.action === "added" || evt.action === "updated" || evt.action === "removed") {
         broadcastCronBoundSessionChanges(evt);
@@ -935,6 +914,7 @@ export function buildGatewayCronService(params: {
     getDefaultAgentId: () => cron.getDefaultAgentId(),
     scheduler: params.scheduler,
     getProcessSupervisor,
+    spawnSandboxSource: async (input) => (await getSandboxStreams()).spawn(input),
     updateState: async (jobId, patch, streamScheduleKey, streamSourceIdentity) => {
       return await cron.updateExternalState(jobId, streamScheduleKey, streamSourceIdentity, patch);
     },
@@ -1163,6 +1143,17 @@ export function buildGatewayCronService(params: {
       return;
     }
     await startCron();
+    if (stopped) {
+      return;
+    }
+    try {
+      await (await getSandboxStreams()).recover();
+    } catch (error) {
+      cronLogger.warn(
+        { err: formatErrorMessage(error) },
+        "cron-stream: sandbox cleanup requires attention",
+      );
+    }
     if (stopped) {
       return;
     }

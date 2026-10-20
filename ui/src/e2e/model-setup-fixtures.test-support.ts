@@ -62,31 +62,33 @@ export function activationFailure(error: string, status?: "auth" | "timeout" | "
 export function localPrepareOptions(
   llamaHint = "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
 ) {
-  return [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Connect to an Ollama server and select a cloud or local model",
-      actionLabel: "Choose connection",
-    },
-    {
-      id: "llama-cpp",
-      brandId: "llama-cpp",
-      label: "llama.cpp",
-      hint: llamaHint,
-      actionLabel: "Set up model",
-    },
-    {
-      id: "lmstudio",
-      brandId: "lmstudio",
-      label: "LM Studio",
-      hint: "Connect to a running LM Studio server and use an already loaded model",
-      actionLabel: "Connect server",
-      icon: "https://cdn.simpleicons.org/lmstudio",
-      website: "https://lmstudio.ai/download",
-    },
-  ];
+  return (
+    [
+      [
+        "ollama",
+        "Ollama",
+        "Connect to an Ollama server and select a cloud or local model",
+        "Choose connection",
+      ],
+      ["llama-cpp", "llama.cpp", llamaHint, "Set up model"],
+      [
+        "lmstudio",
+        "LM Studio",
+        "Connect to a running LM Studio server and use an already loaded model",
+        "Connect server",
+      ],
+    ] as const
+  ).map(([id, label, hint, actionLabel]) =>
+    Object.assign(
+      { id, brandId: id, label, hint, actionLabel },
+      id === "lmstudio"
+        ? {
+            icon: "https://cdn.simpleicons.org/lmstudio",
+            website: "https://lmstudio.ai/download",
+          }
+        : {},
+    ),
+  );
 }
 
 export function setupContext(options: BrowserContextOptions = {}): BrowserContextOptions {
@@ -172,18 +174,11 @@ export async function returnToLocalModelSettings(
   const modelRef = `${provider}/${model}`;
   const globalModel = "openai/gpt-5";
   // Publish agent defaults and catalog facts; the global default must remain unchanged.
-  await gateway.setMethodResponse(
-    "config.get",
-    configSnapshot(
-      {
-        agents: {
-          defaults: { model: globalModel },
-          entries: { main: { model: { primary: modelRef } } },
-        },
-      },
-      hash,
-    ),
-  );
+  const agents = {
+    defaults: { model: globalModel },
+    entries: { main: { model: { primary: modelRef } } },
+  };
+  await gateway.setMethodResponse("config.get", configSnapshot({ agents }, hash));
   await gateway.setMethodResponse("models.list", {
     models: [
       { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },

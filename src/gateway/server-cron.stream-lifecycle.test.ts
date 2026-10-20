@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import * as cronStore from "../cron/service/store.js";
+import { CronStreamExecApprovalRequiredError } from "../cron/stream-exec-authority.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
   addSystemEventJob,
@@ -177,6 +178,50 @@ describe("buildGatewayCronService stream lifecycle", () => {
       );
       expect(watched.cancel).toHaveBeenCalledWith("manual-cancel");
       expect(state.cron.getJob(current.id)).toBeUndefined();
+    } finally {
+      await state.stopStreamWatchers?.();
+      state.cron.stop();
+    }
+  });
+
+  it("does not interrupt the existing source while its replacement requires consent", async () => {
+    const watched = createWatchedRun();
+    const { spawn } = mockCronSupervisor(watched);
+    const cfg = createCronConfig("server-cron-stream-consent");
+    cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
+    const state = loadCronService(cfg);
+    try {
+      const added = await addSystemEventJob(state, "current source", "event", {
+        schedule: { kind: "stream", command: ["source"] },
+        sessionTarget: "main",
+      });
+      const original = "job" in added ? added.job : added;
+      await expect(
+        state.cron.update(
+          original.id,
+          {
+            schedule: { kind: "stream", command: ["replacement"] },
+          },
+          {
+            execPolicy: {
+              kind: "resolved",
+              assertCurrent: () => {
+                throw new CronStreamExecApprovalRequiredError("policy", "full", "always");
+              },
+            },
+          },
+        ),
+      ).rejects.toThrow(CronStreamExecApprovalRequiredError);
+      expect(watched.cancel).not.toHaveBeenCalled();
+      expect(watched.detachOutput).not.toHaveBeenCalled();
+      expect(spawn).toHaveBeenCalledOnce();
+      expect(await state.cron.readJob(original.id)).toMatchObject({
+        schedule: original.schedule,
+        state: {
+          streamSourceIdentity: original.state.streamSourceIdentity,
+          streamStatus: "running",
+        },
+      });
     } finally {
       await state.stopStreamWatchers?.();
       state.cron.stop();

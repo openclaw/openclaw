@@ -32,7 +32,11 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
-import type { ExtensionEvent, ThinkingLevelSelectEvent } from "./extensions/types.js";
+import type {
+  ExtensionFactory,
+  ExtensionEvent,
+  ThinkingLevelSelectEvent,
+} from "./extensions/types.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import * as metadataRuntime from "./session-manager-metadata-runtime.js";
 import { withSessionManagerWrite } from "./session-manager-write-admission.js";
@@ -113,23 +117,18 @@ describe("model transitions after SQLite write admission", () => {
     };
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     const transitions: Array<{ previous: string | undefined; next: string }> = [];
-    const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-      [
-        "model_select",
-        [
-          async (event) => {
-            const selection = event as ModelSelectEvent;
-            transitions.push({ previous: selection.previousModel?.id, next: selection.model.id });
-            await onSelect?.(selection);
-          },
-        ],
-      ],
-      [
+    const handlers: ExtensionFactory = (api) => {
+      api.on("model_select", async (event) => {
+        const selection = event as ModelSelectEvent;
+        transitions.push({ previous: selection.previousModel?.id, next: selection.model.id });
+        await onSelect?.(selection);
+      });
+      api.on(
         "thinking_level_select",
-        [async (event) => await onThinkingSelect?.(event as ThinkingLevelSelectEvent)],
-      ],
-    ]);
-    const resourceLoader = createResourceLoader(handlers);
+        async (event) => await onThinkingSelect?.(event as ThinkingLevelSelectEvent),
+      );
+    };
+    const resourceLoader = await createResourceLoader(handlers);
     const fixture = await createTestSession({
       model: startModel,
       sessionManager: SessionManager.open(target, root),
