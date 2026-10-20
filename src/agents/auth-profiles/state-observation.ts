@@ -33,7 +33,6 @@ export function logAuthProfileFailureStateChange(params: {
   // this update reused the existing window instead of extending it.
   const windowReused =
     typeof previousUntil === "number" &&
-    Number.isFinite(previousUntil) &&
     previousUntil > params.now &&
     previousUntil === params.next[windowKey];
   const safeProfileId = redactIdentifier(params.profileId, { len: 12 });

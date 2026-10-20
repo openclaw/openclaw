@@ -8,9 +8,9 @@ import { repairCanonicalSqliteIndexes } from "../../src/infra/sqlite-index-schem
 import { assertSqliteIntegrity } from "../../src/infra/sqlite-integrity.js";
 import {
   INDEX_REPAIR_INDEX_NAME,
-  INDEX_REPAIR_SCHEMA_SQL,
   type IndexRepairJournalMode,
 } from "./sqlite-reliability-contract.js";
+import { INDEX_REPAIR_SCHEMA_CATALOG } from "./sqlite-reliability-index-repair-schema.js";
 import { startReliabilityCrashWorker } from "./sqlite-reliability-process.js";
 import { waitForReliabilitySidecars } from "./sqlite-reliability-sidecars.js";
 
@@ -111,7 +111,7 @@ function recoverAndRepair(databasePath: string, expectedState: IndexRepairState)
     const repairedIndexes = repairCanonicalSqliteIndexes(
       database,
       databasePath,
-      INDEX_REPAIR_SCHEMA_SQL,
+      INDEX_REPAIR_SCHEMA_CATALOG,
     );
     if (repairedIndexes.length !== 1 || repairedIndexes[0] !== INDEX_REPAIR_INDEX_NAME) {
       throw new Error(
@@ -119,7 +119,7 @@ function recoverAndRepair(databasePath: string, expectedState: IndexRepairState)
       );
     }
     if (
-      repairCanonicalSqliteIndexes(database, databasePath, INDEX_REPAIR_SCHEMA_SQL).length !== 0
+      repairCanonicalSqliteIndexes(database, databasePath, INDEX_REPAIR_SCHEMA_CATALOG).length !== 0
     ) {
       throw new Error("canonical index repair was not idempotent after crash recovery");
     }

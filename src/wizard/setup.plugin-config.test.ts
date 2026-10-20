@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { PluginConfigUiHint } from "../plugins/types.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import type { WizardMultiSelectParams, WizardPrompter } from "./prompts.js";
+import { WizardSession } from "./session.js";
 import { setupPluginConfig } from "./setup.plugin-config.js";
 
 const loadPluginManifestRegistryCore = vi.fn();
@@ -228,16 +229,39 @@ describe("setupPluginConfig", () => {
         },
       },
     );
-    const answers = ["1.5", "1e2", "3", "0x10", "1.5"];
-    const result = await setupPluginConfig({
-      config: pluginConfig(),
-      prompter: prompter({ text: vi.fn(async () => answers.shift() ?? "") }),
+    let result: OpenClawConfig | undefined;
+    const session = new WizardSession(async (prompts) => {
+      result = await setupPluginConfig({ config: pluginConfig(), prompter: prompts });
     });
-    expect(result.plugins?.entries?.fixture?.config).toEqual({
-      decimal: 1.5,
-      scientific: 100,
-      retries: 3,
-    });
+    try {
+      const selection = (await session.next()).step!;
+      await session.answer(selection.id, ["fixture"]);
+      const note = (await session.next()).step!;
+      await session.answer(note.id, null);
+      for (const [invalid, corrected, error] of [
+        ["not-a-number", "1.5", "Enter a valid JSON number."],
+        ["1e999", "1e2", "Enter a valid JSON number."],
+        ["1.5", "3", "Enter a JSON integer."],
+        ["0x10", "16", "Enter a valid JSON number."],
+        ["2.5", "2", "Enter a JSON integer."],
+      ]) {
+        const step = (await session.next()).step!;
+        await expect(session.answer(step.id, invalid)).resolves.toBe(error);
+        expect((await session.next()).step?.id).toBe(step.id);
+        await session.answer(step.id, corrected);
+      }
+      await session.whenSettled();
+      expect(result?.plugins?.entries?.fixture?.config).toEqual({
+        decimal: 1.5,
+        scientific: 100,
+        retries: 3,
+        hexadecimal: 16,
+        fractionalRetries: 2,
+      });
+    } finally {
+      session.cancel();
+      await session.whenSettled();
+    }
   });
 });
 

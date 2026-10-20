@@ -71,6 +71,24 @@ describe("plugin theme background artwork", () => {
     await vi.waitFor(() => expect(image()).toBe(dimmed("blob:day", "80.5")));
   });
 
+  it("lifts the scrim toward the shared cap above default visibility without refetching", async () => {
+    vi.mocked(fetchPluginThemeArtworkBlobUrl).mockResolvedValue("blob:night");
+    const theme = branding({ dark: { url: DARK } });
+    syncThemeBackgroundArtwork(root, theme, "dark", 0.25);
+    // Below the default, the palette-safe default strength is unchanged.
+    await vi.waitFor(() => expect(image()).toBe(dimmed("blob:night", "70")));
+    // Halfway up: 0.3 + (0.32 − 0.3) × 0.5 = 31% image.
+    syncThemeBackgroundArtwork(root, theme, "dark", 0.75);
+    expect(image()).toBe(dimmed("blob:night", "69"));
+    // Full visibility reaches the cap every upload stops at: 32% image.
+    syncThemeBackgroundArtwork(root, theme, "dark", 1);
+    expect(image()).toBe(dimmed("blob:night", "68"));
+    syncThemeBackgroundArtwork(root, theme, "dark");
+    expect(image()).toBe(painted("blob:night"));
+    expect(fetchPluginThemeArtworkBlobUrl).toHaveBeenCalledOnce();
+    expect(root.dataset.themeBackground).toBe("plugin");
+  });
+
   it("ignores a slower superseded image", async () => {
     const slow = createDeferred<string | null>();
     vi.mocked(fetchPluginThemeArtworkBlobUrl).mockImplementation(async ({ url }) =>

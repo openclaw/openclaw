@@ -38,6 +38,8 @@ export type ModelDefinitionConfig = Omit<
   ModelDefinitionSchemaInput,
   "reasoning" | "input" | "cost" | "maxTokens" | "agentRuntime" | "mediaInput" | "compat"
 > & {
+  /** Internal discovery metadata; not a user config option. */
+  parameterCount?: number;
   /** Whether the model supports reasoning/thinking controls. */
   reasoning: boolean;
   /** Supported input modalities for routing and media-tool selection. */

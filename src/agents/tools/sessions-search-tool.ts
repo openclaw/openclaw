@@ -51,7 +51,7 @@ const SESSIONS_SEARCH_INDEXING_WARNING =
   "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.";
 
 const SessionsSearchToolSchema = Type.Object({
-  user: requesterProfileSchema(),
+  user: requesterProfileSchema({ defaultToTurnOwner: true }),
   query: Type.String({
     minLength: 1,
     maxLength: SESSIONS_SEARCH_MAX_QUERY_CHARS,

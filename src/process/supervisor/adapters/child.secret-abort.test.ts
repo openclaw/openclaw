@@ -4,7 +4,10 @@ import { createChildAdapter } from "./child.js";
 import { createStubChild, readyChildAdapter, setPlatform } from "./child.test-support.js";
 
 const { spawnMock, signalMock } = vi.hoisted(() => ({ spawnMock: vi.fn(), signalMock: vi.fn() }));
-vi.mock("../../spawn-utils.js", () => ({ spawnWithFallback: spawnMock }));
+vi.mock("../../spawn-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../spawn-utils.js")>()),
+  spawnAndWait: spawnMock,
+}));
 vi.mock("../../kill-tree.js", () => ({ signalProcessTree: signalMock }));
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const start = readyChildAdapter(createChildAdapter);
@@ -28,7 +31,7 @@ it("does not signal a retired child when secret delivery fails after close", asy
     value: [child.stdin, child.stdout, child.stderr, secretStream],
     configurable: true,
   });
-  spawnMock.mockResolvedValue({ child, usedFallback: false });
+  spawnMock.mockResolvedValue(child);
 
   await expect(
     start({

@@ -1,4 +1,4 @@
-import { CANVAS_DOCUMENT_PREVIEW_MAX_BYTES } from "../../../../../packages/gateway-protocol/src/schema/canvas.ts";
+import { CANVAS_DOCUMENT_PREVIEW_MAX_BYTES } from "../../../../../packages/gateway-protocol/src/canvas-limits.js";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
 
 const MAX_BYTES = 256 * 1024;

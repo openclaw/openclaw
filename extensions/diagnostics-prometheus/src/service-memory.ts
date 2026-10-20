@@ -18,6 +18,7 @@ type WorkerMemoryTotals = {
   heapUsed?: number;
   external?: number;
   arrayBuffers?: number;
+  heapSpaces?: Map<string, number>;
 };
 
 export function recordMemorySample(
@@ -25,6 +26,18 @@ export function recordMemorySample(
   memory: Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>["memory"],
   byteBuckets: number[],
 ): void {
+  store.clearGauges("openclaw_process_anonymous_memory_bytes");
+  for (const [kind, field] of [
+    ["rss", "anonymousRssBytes"],
+    ["swap", "anonymousSwapBytes"],
+  ] as const) {
+    store.gauge(
+      "openclaw_process_anonymous_memory_bytes",
+      "Latest Linux process anonymous RSS and swap; includes managed heaps and buffers, not allocator totals.",
+      { kind },
+      numericValue(memory[field]),
+    );
+  }
   for (const message of memory.workerMessages ?? []) {
     const labels = { kind: message.kind, direction: message.direction };
     store.counterValue(
@@ -139,6 +152,13 @@ export function recordMemorySample(
         totals[field] = (totals[field] ?? 0) + value;
       }
     }
+    for (const space of worker.heapSpaces ?? []) {
+      totals.heapSpaces ??= new Map();
+      totals.heapSpaces.set(
+        space.space_name,
+        (totals.heapSpaces.get(space.space_name) ?? 0) + space.space_used_size,
+      );
+    }
     workers.set(worker.script, totals);
   }
   for (const worker of memory.workerMemoryMissing ?? []) {
@@ -149,6 +169,7 @@ export function recordMemorySample(
   for (const [, name] of WORKER_MEMORY_METRICS) {
     store.clearGauges(name);
   }
+  store.clearGauges("openclaw_worker_heap_space_used_bytes");
   for (const [script, totals] of workers) {
     store.gauge("openclaw_worker_count", "Worker isolate counts.", { script }, totals.count);
     store.gauge(
@@ -163,6 +184,14 @@ export function recordMemorySample(
         `Latest live Worker ${description} by bounded script basename.`,
         { script },
         totals[field],
+      );
+    }
+    for (const [space, bytes] of totals.heapSpaces ?? []) {
+      store.gauge(
+        "openclaw_worker_heap_space_used_bytes",
+        "Latest live Worker V8 heap space usage by bounded script basename.",
+        { script, space },
+        bytes,
       );
     }
   }

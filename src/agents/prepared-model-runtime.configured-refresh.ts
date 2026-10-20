@@ -49,12 +49,7 @@ export type PreparedModelRuntimeCatalogPublicationHost = {
   getBuildTimeoutMs: () => number;
   /** Same recovery configured publication installs; adopted owners replace those owners. */
   onPluginGenerationRetired: (owner: PreparedModelRuntimeOwner) => void;
-  pending?: {
-    catalog: ActiveRemoteModelCatalog;
-    /** Ends the adoption: a newer catalog or shutdown supersedes it. */
-    controller: AbortController;
-    completion: Promise<RemoteCatalogPublicationResult>;
-  };
+  pending?: Promise<RemoteCatalogPublicationResult>;
 };
 
 /** Binds the prepared runtime's publication host to the catalog adoption operations. */
@@ -62,11 +57,6 @@ export function createRemoteCatalogPublication(host: PreparedModelRuntimeCatalog
   return {
     applyRemoteModelCatalogUpdate: applyRemoteModelCatalogUpdateNow.bind(null, host),
     advancePreparedModelRuntimeConfig: advancePreparedModelRuntimeConfigNow.bind(null, host),
-    /** Runtime close ends a pending adoption, including preparation still awaiting I/O. */
-    cancel: (reason: Error): void => {
-      host.pending?.controller.abort(reason);
-      host.pending = undefined;
-    },
   };
 }
 
@@ -92,6 +82,9 @@ function applyRemoteModelCatalogUpdateNow(
 ): Promise<RemoteCatalogPublicationResult> {
   signal?.throwIfAborted();
   const assertLifetime = host.captureLifetime();
+  if (host.pending) {
+    return racePromiseWithAbortSignal(host.pending, signal);
+  }
   const completion: Promise<RemoteCatalogPublicationResult> = host.publicationQueue.track(
     runOutsideRemoteModelCatalogSnapshot(async (): Promise<RemoteCatalogPublicationResult> => {
       const config = getConfig();
@@ -116,34 +109,10 @@ function applyRemoteModelCatalogUpdateNow(
           return "superseded";
         }
       }
-      const pending = host.pending;
-      if (pending?.catalog.sourceUrl === catalog.sourceUrl) {
-        if (pending.catalog.revision === catalog.revision && !pending.controller.signal.aborted) {
-          return await pending.completion;
-        }
-        if (pending.catalog.generatedAt > catalog.generatedAt) {
-          return "superseded";
-        }
-      }
-      pending?.controller.abort(
-        new PreparedModelRuntimePublicationSupersededError("A newer remote catalog was accepted"),
-      );
-      const controller = new AbortController();
-      const adoption = {
-        catalog,
-        controller,
-        completion,
-      };
-      host.pending = adoption;
       try {
         if (
           !(await withRemoteModelCatalogSnapshot(catalog, () =>
-            publishPreparedModelRuntimeCatalogReplacement(
-              host,
-              catalog,
-              previous,
-              controller.signal,
-            ),
+            publishPreparedModelRuntimeCatalogReplacement(host, catalog, previous),
           ))
         ) {
           return "superseded";
@@ -153,19 +122,17 @@ function applyRemoteModelCatalogUpdateNow(
       } catch (error) {
         if (
           error instanceof PreparedModelRuntimePublicationSupersededError ||
-          controller.signal.aborted ||
           host.getCancellationSignal().aborted
         ) {
           return "superseded";
         }
         throw error;
-      } finally {
-        if (host.pending === adoption) {
-          host.pending = undefined;
-        }
       }
+    }).finally(() => {
+      host.pending = undefined;
     }),
   );
+  host.pending = completion;
   return racePromiseWithAbortSignal(completion, signal);
 }
 
@@ -255,7 +222,6 @@ async function publishPreparedModelRuntimeCatalogReplacement(
   host: PreparedModelRuntimeCatalogPublicationHost,
   catalog: ActiveRemoteModelCatalog,
   previous: ActiveRemoteModelCatalog | null,
-  adoptionSignal: AbortSignal,
 ): Promise<boolean> {
   const claims = [...host.owners.values()]
     .filter((owner) => owner.provenance === "configured")
@@ -266,7 +232,7 @@ async function publishPreparedModelRuntimeCatalogReplacement(
   ) {
     return false;
   }
-  const signal = AbortSignal.any([adoptionSignal, host.getCancellationSignal()]);
+  const signal = host.getCancellationSignal();
   const buildTimeoutMs = host.getBuildTimeoutMs();
   const staged = new Map<string, PreparedModelRuntimeOwner>();
   let committed = false;

@@ -78,7 +78,7 @@ describe("session swarm activity", () => {
         },
       ];
       emitChanged(child("agent:main:subagent:planner", 3));
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(3);
       expect(sessions.state.result?.sessions.some((row) => row.key.endsWith(":planner"))).toBe(
         true,
@@ -112,7 +112,7 @@ describe("session swarm activity", () => {
         },
       ];
       emitChanged(child("agent:main:subagent:builder", 4));
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(5_000);
       expect(request).toHaveBeenCalledTimes(5);
       expect(sessions.state.result?.sessions.some((row) => row.key.endsWith(":builder"))).toBe(
         true,

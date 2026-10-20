@@ -1,44 +1,75 @@
-// Workboard tests cover dispatcher plugin behavior.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
+import type { WorkboardStore } from "./store.js";
+import { createWorktreeRuntime } from "./test/interaction-fixtures.js";
 import { createWorkboardSqliteTestStore } from "./test/sqlite-store.js";
+import type { WorkboardTargetWorkspaceRuntime } from "./workspace-access.js";
+
+type DispatchParams = Parameters<typeof dispatchAndStartWorkboardCards>[0];
+const targetOptions = (runtime: WorkboardTargetWorkspaceRuntime, root = "/workspace") => ({
+  maxStarts: 1,
+  resolveAgentWorkspace: () => root,
+  resolveAgentWorkspaceRuntime: () => runtime,
+});
+
+function expectRejected(
+  result: Awaited<ReturnType<typeof dispatchAndStartWorkboardCards>>,
+  cardId: string,
+  error: unknown,
+  run: DispatchParams["subagent"]["run"],
+) {
+  expect(result.startFailures).toEqual([expect.objectContaining({ cardId, error })]);
+  expect(run).not.toHaveBeenCalled();
+}
+const writable = {
+  unrestricted: false,
+  roots: ["/workspace"],
+  writable: true,
+} satisfies NonNullable<DispatchParams["options"]>["workspaceAccess"];
 
 describe("dispatchAndStartWorkboardCards", () => {
-  it("does not let an implicit target agent workspace widen caller access", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
-      title: "Other agent scratch",
-      status: "ready",
-      agentId: "other",
-    });
+  let store: WorkboardStore;
+  beforeEach(() => {
+    store = createWorkboardSqliteTestStore();
+  });
+  const createCard = (input: Parameters<WorkboardStore["create"]>[0]) =>
+    store.create({ status: "ready", ...input });
+  const dispatch = (
+    run: DispatchParams["subagent"]["run"],
+    options: DispatchParams["options"],
+    worktrees?: DispatchParams["worktrees"],
+  ) => dispatchAndStartWorkboardCards({ store, subagent: { run }, options, worktrees });
+  const rejectCard = async (
+    input: Parameters<WorkboardStore["create"]>[0],
+    error: unknown,
+    options: DispatchParams["options"],
+    worktrees?: DispatchParams["worktrees"],
+  ) => {
+    const card = await createCard(input);
     const run = vi.fn();
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: {
+    expectRejected(await dispatch(run, options, worktrees), card.id, error, run);
+    return card;
+  };
+  it("does not let an implicit target agent workspace widen caller access", async () => {
+    const card = await rejectCard(
+      {
+        title: "Other agent scratch",
+        agentId: "other",
+      },
+      "workspace path must equal one of the caller's allowed workspace roots.",
+      {
         maxStarts: 1,
         resolveAgentWorkspace: (agentId) =>
           agentId === "other" ? "/workspace-other" : "/workspace",
-        workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+        workspaceAccess: writable,
       },
-    });
-
-    expect(result.startFailures).toEqual([
-      expect.objectContaining({
-        cardId: card.id,
-        error: "workspace path must equal one of the caller's allowed workspace roots.",
-      }),
-    ]);
-    expect(run).not.toHaveBeenCalled();
+    );
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
   });
 
   it("persists the resolved subagent runtime on new executions", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
+    const card = await createCard({
       title: "Claude worker",
-      status: "ready",
       workspaceAccess: { unrestricted: true },
     });
     const run = vi.fn().mockResolvedValue({
@@ -50,11 +81,7 @@ describe("dispatchAndStartWorkboardCards", () => {
       },
     });
 
-    await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { now: 10, maxStarts: 1 },
-    });
+    await dispatch(run, { now: 10, maxStarts: 1 });
 
     await expect(store.get(card.id)).resolves.toMatchObject({
       execution: {
@@ -67,35 +94,30 @@ describe("dispatchAndStartWorkboardCards", () => {
   });
 
   it("materializes managed worktrees, supplies cwd, and persists them", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
+    const card = await createCard({
       title: "Isolated worker",
-      status: "ready",
       workspace: { kind: "worktree", path: "/repo", branch: "main" },
       workspaceAccess: { unrestricted: true },
     });
     const run = vi.fn().mockResolvedValue({ runId: "run-worktree" });
-    const worktrees = {
-      resolveCheckoutRoot: vi.fn().mockResolvedValue(undefined),
+    const worktrees = createWorktreeRuntime({
       create: vi.fn().mockResolvedValue({
         id: "managed-id",
         path: "/state/worktrees/fingerprint/wb-card",
         branch: `openclaw/wb-${card.id}`,
       }),
-      release: vi.fn(),
       removeIfLossless: vi.fn().mockResolvedValue(true),
-    };
+    });
 
-    await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      worktrees,
-      options: {
+    await dispatch(
+      run,
+      {
         now: 10,
         maxStarts: 1,
         materializeWorktree: true,
       },
-    });
+      worktrees,
+    );
 
     expect(worktrees.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -126,10 +148,8 @@ describe("dispatchAndStartWorkboardCards", () => {
   });
 
   it("does not claim a card whose workspace authority changed after preflight", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
+    const card = await createCard({
       title: "Racing authority update",
-      status: "ready",
       workspace: { kind: "dir", path: "/workspace" },
       workspaceAccess: { unrestricted: true },
     });
@@ -146,275 +166,142 @@ describe("dispatchAndStartWorkboardCards", () => {
     });
     const run = vi.fn();
 
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { maxStarts: 1, workspaceAccess: { unrestricted: true } },
-    });
+    const result = await dispatch(run, { maxStarts: 1, workspaceAccess: { unrestricted: true } });
 
-    expect(result.startFailures).toEqual([
-      expect.objectContaining({
-        cardId: card.id,
-        error: "card workspace authority changed before claim.",
-      }),
-    ]);
-    expect(run).not.toHaveBeenCalled();
+    expectRejected(result, card.id, "card workspace authority changed before claim.", run);
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
   });
 
   it("rejects a restricted card when the target agent is not sandboxed", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
-      title: "Restricted worker",
-      status: "ready",
-      agentId: "broad",
-      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
-    });
-    const run = vi.fn();
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      worktrees: {
-        resolveCheckoutRoot: vi.fn().mockResolvedValue(undefined),
-        create: vi.fn(),
-        release: vi.fn(),
-        removeIfLossless: vi.fn(),
+    await rejectCard(
+      {
+        title: "Restricted worker",
+        agentId: "broad",
+        workspaceAccess: writable,
       },
-      options: {
-        maxStarts: 1,
-        resolveAgentWorkspace: () => "/workspace",
-        resolveAgentWorkspaceRuntime: () => ({
-          sandboxed: false,
-          workspaceAccess: { unrestricted: true },
-        }),
-      },
-    });
-
-    expect(result.startFailures).toEqual([
-      expect.objectContaining({
-        cardId: card.id,
-        error: "target agent is not sandboxed for this restricted Workboard card.",
+      "target agent is not sandboxed for this restricted Workboard card.",
+      targetOptions({
+        sandboxed: false,
+        workspaceAccess: { unrestricted: true },
       }),
-    ]);
-    expect(run).not.toHaveBeenCalled();
+      createWorktreeRuntime(),
+    );
   });
 
   it("rejects a restricted card when the target workspace is read-only", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
-      title: "Read-only worker",
-      status: "ready",
-      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
-    });
-    const run = vi.fn();
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      worktrees: {
-        resolveCheckoutRoot: vi.fn().mockResolvedValue(undefined),
-        create: vi.fn(),
-        release: vi.fn(),
-        removeIfLossless: vi.fn(),
+    await rejectCard(
+      {
+        title: "Read-only worker",
+        workspaceAccess: writable,
       },
-      options: {
-        maxStarts: 1,
-        resolveAgentWorkspace: () => "/workspace",
-        resolveAgentWorkspaceRuntime: () => ({
-          sandboxed: true,
-          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: false },
-        }),
-      },
-    });
-
-    expect(result.startFailures).toEqual([
-      expect.objectContaining({
-        cardId: card.id,
-        error: "target agent does not have writable workspace-only access.",
+      "target agent does not have writable workspace-only access.",
+      targetOptions({
+        sandboxed: true,
+        workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: false },
       }),
-    ]);
-    expect(run).not.toHaveBeenCalled();
+      createWorktreeRuntime(),
+    );
   });
 
   it("keeps read-only card authority after a later full-host dispatch", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
-      title: "Persisted read-only worker",
-      status: "ready",
-      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: false },
-    });
-    const run = vi.fn();
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { maxStarts: 1, workspaceAccess: { unrestricted: true } },
-    });
-
-    expect(result.startFailures).toEqual([
-      expect.objectContaining({
-        cardId: card.id,
-        error: expect.stringContaining("manual movement is allowed"),
-      }),
-    ]);
-    expect(run).not.toHaveBeenCalled();
+    const card = await rejectCard(
+      {
+        title: "Persisted read-only worker",
+        workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: false },
+      },
+      expect.stringContaining("manual movement is allowed"),
+      { maxStarts: 1, workspaceAccess: { unrestricted: true } },
+    );
     await expect(store.get(card.id)).resolves.toMatchObject({ status: "ready" });
   });
 
   it("rejects a target sandbox root broader than the card authority", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
-      title: "Broader target worker",
-      status: "ready",
-      workspace: { kind: "dir", path: "/workspace/project" },
-      workspaceAccess: {
-        unrestricted: false,
-        roots: ["/workspace/project"],
-        writable: true,
+    await rejectCard(
+      {
+        title: "Broader target worker",
+        workspace: { kind: "dir", path: "/workspace/project" },
+        workspaceAccess: {
+          unrestricted: false,
+          roots: ["/workspace/project"],
+          writable: true,
+        },
       },
-    });
-    const run = vi.fn();
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      worktrees: {
-        resolveCheckoutRoot: vi.fn().mockResolvedValue(undefined),
-        create: vi.fn(),
-        release: vi.fn(),
-        removeIfLossless: vi.fn(),
-      },
-      options: {
+      "workspace path must equal one of the caller's allowed workspace roots.",
+      {
         maxStarts: 1,
         resolveAgentWorkspaceRuntime: () => ({
           sandboxed: true,
-          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+          workspaceAccess: writable,
         }),
       },
-    });
-
-    expect(result.startFailures).toEqual([
-      expect.objectContaining({
-        cardId: card.id,
-        error: "workspace path must equal one of the caller's allowed workspace roots.",
-      }),
-    ]);
-    expect(run).not.toHaveBeenCalled();
+      createWorktreeRuntime(),
+    );
   });
 
   it("rejects a restricted card when the target sandbox has an escape path", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
-      title: "Escaping worker",
-      status: "ready",
-      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
-    });
-    const run = vi.fn();
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      worktrees: {
-        resolveCheckoutRoot: vi.fn().mockResolvedValue(undefined),
-        create: vi.fn(),
-        release: vi.fn(),
-        removeIfLossless: vi.fn(),
+    await rejectCard(
+      {
+        title: "Escaping worker",
+        workspaceAccess: writable,
       },
-      options: {
-        maxStarts: 1,
-        resolveAgentWorkspace: () => "/workspace",
-        resolveAgentWorkspaceRuntime: () => ({
-          sandboxed: true,
-          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
-          confinementError: "target sandbox routes shell execution outside the sandbox.",
-        }),
-      },
-    });
-
-    expect(result.startFailures).toEqual([
-      expect.objectContaining({
-        cardId: card.id,
-        error: "target sandbox routes shell execution outside the sandbox.",
+      "target sandbox routes shell execution outside the sandbox.",
+      targetOptions({
+        sandboxed: true,
+        workspaceAccess: writable,
+        confinementError: "target sandbox routes shell execution outside the sandbox.",
       }),
-    ]);
-    expect(run).not.toHaveBeenCalled();
+      createWorktreeRuntime(),
+    );
   });
 
   it("rejects a restricted workspace nested inside a broader Git checkout", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
-      title: "Nested checkout worker",
-      status: "ready",
-      workspace: { kind: "dir", path: "/repo/workspace" },
-      workspaceAccess: { unrestricted: false, roots: ["/repo/workspace"], writable: true },
-    });
-    const run = vi.fn();
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      worktrees: {
-        resolveCheckoutRoot: vi.fn().mockResolvedValue("/repo"),
-        create: vi.fn(),
-        release: vi.fn(),
-        removeIfLossless: vi.fn(),
+    await rejectCard(
+      {
+        title: "Nested checkout worker",
+        workspace: { kind: "dir", path: "/repo/workspace" },
+        workspaceAccess: { unrestricted: false, roots: ["/repo/workspace"], writable: true },
       },
-      options: {
-        maxStarts: 1,
-        resolveAgentWorkspace: () => "/repo/workspace",
-        resolveAgentWorkspaceRuntime: () => ({
+      "workspace root is nested inside a broader Git checkout.",
+      targetOptions(
+        {
           sandboxed: true,
           workspaceAccess: {
             unrestricted: false,
             roots: ["/repo/workspace"],
             writable: true,
           },
-        }),
-      },
-    });
-
-    expect(result.startFailures).toEqual([
-      expect.objectContaining({
-        cardId: card.id,
-        error: "workspace root is nested inside a broader Git checkout.",
-      }),
-    ]);
-    expect(run).not.toHaveBeenCalled();
+        },
+        "/repo/workspace",
+      ),
+      createWorktreeRuntime({ resolveCheckoutRoot: vi.fn().mockResolvedValue("/repo") }),
+    );
   });
 
   it("keeps a card's persisted workspace ceiling during a later admin dispatch", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
+    const card = await createCard({
       title: "Persisted restricted worker",
-      status: "ready",
       workspace: { kind: "worktree", path: "/workspace" },
-      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+      workspaceAccess: writable,
     });
     const create = vi.fn();
     const run = vi.fn().mockResolvedValue({ runId: "run-persisted" });
 
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      worktrees: {
+    const result = await dispatch(
+      run,
+      {
+        ...targetOptions({
+          sandboxed: true,
+          workspaceAccess: writable,
+        }),
+        materializeWorktree: true,
+        workspaceAccess: { unrestricted: true },
+      },
+      createWorktreeRuntime({
         resolveCheckoutRoot: vi.fn().mockResolvedValue("/workspace"),
         hasSelfContainedCheckoutMetadata: vi.fn().mockResolvedValue(true),
         create,
-        release: vi.fn(),
-        removeIfLossless: vi.fn(),
-      },
-      options: {
-        maxStarts: 1,
-        materializeWorktree: true,
-        resolveAgentWorkspace: () => "/workspace",
-        resolveAgentWorkspaceRuntime: () => ({
-          sandboxed: true,
-          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
-        }),
-        workspaceAccess: { unrestricted: true },
-      },
-    });
+      }),
+    );
 
     expect(result.started).toHaveLength(1);
     expect(create).not.toHaveBeenCalled();
@@ -422,56 +309,34 @@ describe("dispatchAndStartWorkboardCards", () => {
     await expect(store.get(card.id)).resolves.toMatchObject({
       metadata: {
         automation: {
-          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
+          workspaceAccess: writable,
         },
       },
     });
   });
 
   it("rejects linked-worktree metadata outside a restricted workspace mount", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
-      title: "Linked worktree worker",
-      status: "ready",
-      workspace: { kind: "dir", path: "/workspace" },
-      workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
-    });
-    const run = vi.fn();
-
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      worktrees: {
+    await rejectCard(
+      {
+        title: "Linked worktree worker",
+        workspace: { kind: "dir", path: "/workspace" },
+        workspaceAccess: writable,
+      },
+      "restricted workspace Git metadata must be contained inside its root.",
+      targetOptions({
+        sandboxed: true,
+        workspaceAccess: writable,
+      }),
+      createWorktreeRuntime({
         resolveCheckoutRoot: vi.fn().mockResolvedValue("/workspace"),
         hasSelfContainedCheckoutMetadata: vi.fn().mockResolvedValue(false),
-        create: vi.fn(),
-        release: vi.fn(),
-        removeIfLossless: vi.fn(),
-      },
-      options: {
-        maxStarts: 1,
-        resolveAgentWorkspace: () => "/workspace",
-        resolveAgentWorkspaceRuntime: () => ({
-          sandboxed: true,
-          workspaceAccess: { unrestricted: false, roots: ["/workspace"], writable: true },
-        }),
-      },
-    });
-
-    expect(result.startFailures).toEqual([
-      expect.objectContaining({
-        cardId: card.id,
-        error: "restricted workspace Git metadata must be contained inside its root.",
       }),
-    ]);
-    expect(run).not.toHaveBeenCalled();
+    );
   });
 
   it("does not reuse a generated branch as an omitted source base", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const card = await store.create({
+    const card = await createCard({
       title: "Branchless retry",
-      status: "ready",
       workspace: {
         kind: "worktree",
         path: "/state/worktrees/fingerprint/wb-card",
@@ -486,17 +351,11 @@ describe("dispatchAndStartWorkboardCards", () => {
       branch: "openclaw/wb-card",
     });
 
-    await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run: vi.fn().mockResolvedValue({ runId: "run-retry" }) },
-      worktrees: {
-        resolveCheckoutRoot: vi.fn().mockResolvedValue(undefined),
-        create,
-        release: vi.fn(),
-        removeIfLossless: vi.fn(),
-      },
-      options: { maxStarts: 1, materializeWorktree: true },
-    });
+    await dispatch(
+      vi.fn().mockResolvedValue({ runId: "run-retry" }),
+      { maxStarts: 1, materializeWorktree: true },
+      createWorktreeRuntime({ create }),
+    );
 
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({ repoRoot: "/repo", ownerId: card.id }),
@@ -505,13 +364,11 @@ describe("dispatchAndStartWorkboardCards", () => {
   });
 
   it("preserves ready-card history on idle Gateway dispatch passes", async () => {
-    const store = createWorkboardSqliteTestStore();
-    await store.create({ title: "Occupied owner", status: "running", agentId: "main" });
+    await createCard({ title: "Occupied owner", status: "running", agentId: "main" });
     const cards = await Promise.all(
       [undefined, { dispatchCount: 225, lastDispatchAt: 1 }].map((automation) =>
-        store.create({
+        createCard({
           title: "Waiting for owner capacity",
-          status: "ready",
           agentId: "main",
           metadata: { automation },
         }),
@@ -520,11 +377,7 @@ describe("dispatchAndStartWorkboardCards", () => {
     const run = vi.fn();
 
     for (const now of [10, 20, 30]) {
-      const result = await dispatchAndStartWorkboardCards({
-        store,
-        subagent: { run },
-        options: { now, maxStarts: 1 },
-      });
+      const result = await dispatch(run, { now, maxStarts: 1 });
       expect(result.started).toEqual([]);
       expect(result.startFailures).toEqual([]);
       for (const card of cards) {
@@ -535,27 +388,20 @@ describe("dispatchAndStartWorkboardCards", () => {
   });
 
   it("shares one worker slot across cards dispatched with the same explicit owner", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const first = await store.create({
+    const first = await createCard({
       title: "First shared worker",
-      status: "ready",
       priority: "urgent",
       agentId: "alpha",
       workspaceAccess: { unrestricted: true },
     });
-    const second = await store.create({
+    const second = await createCard({
       title: "Second shared worker",
-      status: "ready",
       agentId: "beta",
       workspaceAccess: { unrestricted: true },
     });
     const run = vi.fn().mockResolvedValue({ runId: "run-shared" });
 
-    const result = await dispatchAndStartWorkboardCards({
-      store,
-      subagent: { run },
-      options: { now: 10, maxStarts: 3, ownerId: " shared-worker " },
-    });
+    const result = await dispatch(run, { now: 10, maxStarts: 3, ownerId: " shared-worker " });
 
     expect(result.started).toEqual([
       expect.objectContaining({ cardId: first.id, runId: "run-shared" }),

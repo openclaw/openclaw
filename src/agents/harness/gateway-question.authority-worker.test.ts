@@ -1,8 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import {
+  createQueueTestRun,
+  toolAuthorityOverlay,
+} from "../../auto-reply/reply/reply-tool-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
   replaceSessionEntry,
@@ -11,7 +14,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
-import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
+import {
+  createCoreGatewayMethodDescriptors,
+  createGatewayMethodRegistry,
+} from "../../gateway/methods/registry.js";
 import { QuestionManager } from "../../gateway/question-manager.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { createQuestionHandlers } from "../../gateway/server-methods/question.js";
@@ -68,8 +74,23 @@ it.each([
   ),
 ])("rechecks $change authority for $path at the question effect", async ({ path, change }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const sessionKey = "agent:main:question-execution";
-    const policyKey = "agent:policy:question-policy";
+    const sessionKey = "agent:main:question";
+    const policyKey = "agent:policy:question";
+    const id = "caller-policy-question";
+    const policyTarget = { agentId: "policy", sessionKey: policyKey };
+    const policyEntry = {
+      sessionId: "policy-session",
+      lifecycleRevision: "policy-generation",
+      updatedAt: 1,
+      sandboxMode: "off" as const,
+    };
+    const questionItem = {
+      id: "answer",
+      header: "Answer",
+      question: "Continue?",
+      options: [],
+      isOther: true,
+    };
     const run = createQueueTestRun({ prompt: "question" });
     const config = {
       agents: {
@@ -83,15 +104,7 @@ it.each([
       { agentId: "main", sessionKey },
       { sessionId: run.run.sessionId, updatedAt: 1 },
     );
-    await upsertSessionEntryCore(
-      { agentId: "policy", sessionKey: policyKey },
-      {
-        sessionId: "policy-session",
-        lifecycleRevision: "policy-generation",
-        updatedAt: 1,
-        sandboxMode: "off",
-      },
-    );
+    await upsertSessionEntryCore(policyTarget, policyEntry);
     // Drain seed maintenance before measuring the final authority read.
     for (const agentId of ["main", "policy"]) {
       await closeOpenClawAgentDatabaseByPathAsync(
@@ -110,18 +123,19 @@ it.each([
     const fingerprint = await snapshot.fingerprintAsync(run.run);
     const controller = new AbortController();
     const assertCurrent = () => controller.signal.throwIfAborted();
+    const prepareCaller = (caller: Parameters<typeof prepareReplyToolAuthorityCallerRead>[1]) =>
+      prepareReplyToolAuthorityCallerRead(
+        snapshot.projectAsync,
+        caller,
+        fingerprint,
+        run.run,
+        assertCurrent,
+      );
     const authority = createAgentQuestionAnswerAuthority({
       sessionKey,
       fingerprint,
       project: (caller) => snapshot.project(caller, run.run),
-      prepareCaller: async (caller) =>
-        prepareReplyToolAuthorityCallerRead(
-          snapshot.projectAsync,
-          caller,
-          fingerprint,
-          run.run,
-          assertCurrent,
-        ),
+      prepareCaller,
       assertActive: assertCurrent,
     });
     const scheduler = createTestGatewayScheduler();
@@ -139,36 +153,20 @@ it.each([
     const resolveQuestion = vi.fn(handlers["question.resolve"]!);
     handlers["question.resolve"] = resolveQuestion;
     context.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry(
-        Object.entries(handlers).map(([name, handler]) => ({
-          name,
-          handler,
-          scope: "operator.questions",
-          owner: { kind: "core", area: "questions" },
-        })),
-      );
+      createGatewayMethodRegistry(createCoreGatewayMethodDescriptors(handlers));
+    const { id: questionId, ...wireQuestion } = questionItem;
     manager.request({
-      id: "caller-policy-question",
+      id,
       sessionKey,
       timeoutMs: 60_000,
-      questions: [
-        {
-          questionId: "answer",
-          header: "Answer",
-          question: "Continue?",
-          options: [],
-          isOther: true,
-        },
-      ],
+      questions: [{ ...wireQuestion, questionId }],
     });
     const compatibility = path === "legacy-run" || path === "custom-run";
     const question = withAgentQuestionAnswerAuthority(authority, () =>
       registerPendingAgentQuestion({
-        questionId: "caller-policy-question",
+        questionId: id,
         sessionKey,
-        questions: [
-          { id: "answer", header: "Answer", question: "Continue?", options: [], isOther: true },
-        ],
+        questions: [questionItem],
         gatewayCall:
           path === "legacy-run"
             ? callGatewayTool
@@ -179,7 +177,7 @@ it.each([
                     callGatewayTool(request.method, request.options, request.params),
                 }
               : undefined,
-        answer: manager.waitAnswer("caller-policy-question", undefined, true),
+        answer: manager.waitAnswer(id, undefined, true),
       }),
     );
     question.attachRegistration(Promise.resolve());
@@ -187,9 +185,8 @@ it.each([
     const resume = createDeferredCore();
     const originalRead = sessionReads.withSessionEntriesFromStoresInWorker;
     let hold = true;
-    const readBatches = vi
-      .spyOn(sessionReads, "withSessionEntriesFromStoresInWorker")
-      .mockImplementation(async (inputs, consume, options) => {
+    vi.spyOn(sessionReads, "withSessionEntriesFromStoresInWorker").mockImplementation(
+      async (inputs, consume, options) => {
         if (
           hold &&
           !compatibility &&
@@ -201,23 +198,14 @@ it.each([
           await resume.promise;
         }
         return originalRead(inputs, consume, options);
-      });
-    const caller = {
-      senderIsOwner: run.run.senderIsOwner === true,
-      disableTools: run.disableTools === true,
-      traceAuthorized: run.run.traceAuthorized === true,
-    };
+      },
+    );
+    const caller = toolAuthorityOverlay(run);
     const preparation = bindWorkerToolPreparation({
       assertCurrent,
       compatAssertCurrent: () => authority.assertCaller(caller),
       prepareCurrent: async () => {
-        const read = await prepareReplyToolAuthorityCallerRead(
-          snapshot.projectAsync,
-          caller,
-          fingerprint,
-          run.run,
-          assertCurrent,
-        );
+        const read = await prepareCaller(caller);
         await read!.prepareCurrent();
       },
     });
@@ -226,10 +214,6 @@ it.each([
       assertCurrent,
       toolAuthorityPreparation: preparation,
     };
-    const revokePolicy = () =>
-      updateSessionEntry({ agentId: "policy", sessionKey: policyKey }, () => ({
-        sandboxMode: undefined,
-      }));
     const pending = withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey, gatewayContextResolver: () => context },
       () =>
@@ -247,18 +231,12 @@ it.each([
                 authority: inputAuthority,
                 persist: change.startsWith("persist-")
                   ? async () => {
-                      await replaceSessionEntry(
-                        { agentId: "policy", sessionKey: policyKey },
-                        {
-                          sessionId: "policy-session",
-                          lifecycleRevision:
-                            change === "persist-generation"
-                              ? "replacement-generation"
-                              : "policy-generation",
-                          updatedAt: 1,
-                          sandboxMode: change === "persist-generation" ? "off" : undefined,
-                        },
-                      );
+                      await replaceSessionEntry(policyTarget, {
+                        ...policyEntry,
+                        ...(change === "persist-generation"
+                          ? { lifecycleRevision: "replacement-generation" }
+                          : { sandboxMode: undefined }),
+                      });
                     }
                   : undefined,
               })
@@ -273,16 +251,12 @@ it.each([
       if (!compatibility) {
         await awaitGateBeforeSettlement(
           entered.promise,
-          pending.then((accepted) => {
-            throw new Error(
-              `question claim settled before final read: ${JSON.stringify({ accepted, status: manager.observe("caller-policy-question")?.record.status, handlerCalls: resolveQuestion.mock.calls.length, readKeys: readBatches.mock.calls.map(([inputs]) => inputs.map((input) => input.sessionKeys)) })}`,
-            );
-          }),
-          "question did not reach its final session read",
+          pending,
+          "question claim settled before its final session read",
         );
       }
       if (change === "policy") {
-        await revokePolicy();
+        await updateSessionEntry(policyTarget, () => ({ sandboxMode: undefined }));
       } else if (change === "creator-closed") {
         controller.abort(new Error("question creator closed during final read"));
       }
@@ -290,12 +264,10 @@ it.each([
       try {
         resume.resolve();
         const result = await settled;
-        if (change === "current") {
-          expect(result).toBe(true);
-        } else {
-          expect(result).toBeInstanceOf(QuestionDispatchRefusedError);
-        }
-        expect(manager.get("caller-policy-question")?.status).toBe(
+        expect(result).toEqual(
+          change === "current" ? true : expect.any(QuestionDispatchRefusedError),
+        );
+        expect(manager.get(id)?.status).toBe(
           change === "current"
             ? path === "prepared-cancel"
               ? "cancelled"

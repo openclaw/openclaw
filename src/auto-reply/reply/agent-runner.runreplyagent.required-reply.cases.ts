@@ -46,7 +46,7 @@ export function registerRequiredReplyCompletionCases({
     const { run } = createMinimalRun({
       opts: { isHeartbeat: false, onPartialReply, onBlockReply, onReasoningStream },
       blockStreamingEnabled: true,
-      runOverrides: { silentExpected: true, terminalReplyExpectation: "optional" },
+      runOverrides: { silentExpected: true, terminalReplyExpectation: "required" },
     });
     const res = await run();
 
@@ -202,6 +202,7 @@ export function registerRequiredReplyCompletionCases({
     {
       label: "room event",
       params: { currentInboundEventKind: "room_event" as const, opts: { isHeartbeat: false } },
+      expectedStatus: "ok",
     },
     {
       label: "internal handoff",
@@ -211,21 +212,27 @@ export function registerRequiredReplyCompletionCases({
           inputProvenance: { kind: "internal_system" as const, sourceTool: "restart-sentinel" },
         },
       },
+      expectedStatus: "ok",
     },
-    { label: "heartbeat", params: { opts: { isHeartbeat: true } } },
-  ])("completes optional empty $label turns without a chat notice", async ({ params }) => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    const onAgentRunTerminalOutcome = vi.fn();
-    const runState: ReplyOperationRunState = {};
-    const { run } = createMinimalRun({
-      ...params,
-      opts: { ...params.opts, onAgentRunTerminalOutcome, [REPLY_OPERATION_RUN_STATE]: runState },
-    });
+    { label: "heartbeat", params: { opts: { isHeartbeat: true } }, expectedStatus: "failed" },
+  ])(
+    "settles optional empty $label turns without a chat notice",
+    async ({ params, expectedStatus }) => {
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
+      const onAgentRunTerminalOutcome = vi.fn();
+      const runState: ReplyOperationRunState = {};
+      const { run } = createMinimalRun({
+        ...params,
+        opts: { ...params.opts, onAgentRunTerminalOutcome, [REPLY_OPERATION_RUN_STATE]: runState },
+      });
 
-    await expect(run()).resolves.toBeUndefined();
-    expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("completed");
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("ok");
-  });
+      await expect(run()).resolves.toBeUndefined();
+      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith(
+        expectedStatus === "failed" ? "failed" : "completed",
+      );
+      expect(resolveReplyOperationAgentTurn(runState)).toBe(expectedStatus);
+    },
+  );
 
   it("retains a failed heartbeat result without lifting its missing-answer notice", async () => {
     const onAgentRunTerminalOutcome = vi.fn();

@@ -13,7 +13,7 @@ import {
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
-it("shares checkpoint prefix storage across appended and restored sessions", async ({ signal }) => {
+it("shares checkpoint prefixes and releases prepared transcript history", async ({ signal }) => {
   const result = await runNodeScript(
     [
       "--expose-gc",

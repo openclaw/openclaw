@@ -93,7 +93,6 @@ describe("AgentHarness lifecycle runner", () => {
             emit({ ...preamble, phase: "end" }, "another-run");
             emit({ ...preamble, kind: "analysis", phase: "end" });
             emit({ ...preamble, phase: "end" });
-            emit({ ...preamble, phase: "end" });
           });
           return createAttemptResult();
         },

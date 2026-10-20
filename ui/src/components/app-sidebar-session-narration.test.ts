@@ -6,17 +6,17 @@ import type { GatewayEventFrame } from "../api/gateway.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import {
   browserVisibility,
-  createRunningNarrationController,
+  createRunningNarration,
   runningRow,
 } from "../test-helpers/app-sidebar-session-narration.ts";
 import {
-  SidebarSessionNarrationController,
+  createSidebarNarration,
   type SidebarNarrationSyncInput,
 } from "./app-sidebar-session-narration.ts";
-import type { SidebarRecentSession, SidebarToolActivity } from "./app-sidebar-session-types.ts";
+import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import "../test-helpers/app-sidebar-tool-activity-cases.ts";
 
-// Mirrors the controller-internal throttle; asserting through timers keeps the
+// Mirrors the protocol throttle; asserting through timers keeps the
 // constant unexported (production-only export policy).
 const SIDEBAR_NARRATION_THROTTLE_MS = 2_000;
 
@@ -36,7 +36,7 @@ function chatDelta(text?: string, deltaText?: string, replace?: boolean): Gatewa
 }
 
 function narrationFixture() {
-  return createRunningNarrationController({
+  return createRunningNarration({
     subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
     unsubscribeMessages: vi.fn(() => Promise.resolve()),
   });
@@ -46,7 +46,7 @@ function chatFrame(payload: Record<string, unknown>): GatewayEventFrame {
   return gatewayEvent("chat", { sessionKey: "agent:main:run", runId: "run-1", ...payload });
 }
 
-describe("SidebarSessionNarrationController", () => {
+describe("createSidebarNarration", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
@@ -83,20 +83,20 @@ describe("SidebarSessionNarrationController", () => {
       openSessionKey: "",
       agentId: "main",
     };
-    const controller = new SidebarSessionNarrationController(() => undefined);
-    controller.sync(input);
+    const narration = createSidebarNarration();
+    narration.sync(input);
     rows[0]!.updatedAt = 100;
-    controller.sync({ ...input, rows: rows.toReversed() });
+    narration.sync({ ...input, rows: rows.toReversed() });
     expect(source.subscribeMessages).toHaveBeenCalledTimes(6);
 
-    controller.sync({ ...input, openSessionKey: rows[0]!.key });
+    narration.sync({ ...input, openSessionKey: rows[0]!.key });
     ready.resolve();
     await Promise.all(source.subscribeMessages.mock.results.map(({ value }) => value));
     expect(source.subscribeMessages).toHaveBeenCalledTimes(7);
     expect(source.unsubscribeMessages).not.toHaveBeenCalled();
 
     input.openSessionKey = rows[1]!.key;
-    controller.sync(input);
+    narration.sync(input);
     await source.subscribeMessages.mock.results.at(-1)?.value;
     expect(source.subscribeMessages).toHaveBeenCalledTimes(8);
     expect(source.unsubscribeMessages).toHaveBeenCalledExactlyOnceWith({
@@ -105,16 +105,16 @@ describe("SidebarSessionNarrationController", () => {
     });
 
     rows[2]!.updatedAt = 200;
-    controller.sync(input);
+    narration.sync(input);
     expect(source.subscribeMessages).toHaveBeenCalledTimes(8);
-    controller.sync({ ...input, connectionIdentity: {} });
+    narration.sync({ ...input, connectionIdentity: {} });
     await Promise.all(source.subscribeMessages.mock.results.map(({ value }) => value));
     expect(source.subscribeMessages).toHaveBeenCalledTimes(15);
     expect(source.subscribeMessages.mock.calls.slice(8).map(([key]) => key)).toContain(
       rows[2]!.key,
     );
     expect(source.unsubscribeMessages).toHaveBeenCalledTimes(8);
-    controller.disconnect();
+    narration.disconnect();
     expect(source.unsubscribeMessages).toHaveBeenCalledTimes(15);
   });
 
@@ -140,8 +140,7 @@ describe("SidebarSessionNarrationController", () => {
     };
     const selectedPane = await coordinator.acquire("agent:main:open");
     const outbox = await coordinator.acquire("agent:main:background-0");
-    const updates: Array<ReadonlyMap<string, string>> = [];
-    const controller = new SidebarSessionNarrationController((lines) => updates.push(lines));
+    const narration = createSidebarNarration();
     const input: SidebarNarrationSyncInput = {
       enabled: true,
       connected: true,
@@ -163,25 +162,25 @@ describe("SidebarSessionNarrationController", () => {
         message: { role: "assistant", content: text },
       });
 
-    controller.sync(input);
+    narration.sync(input);
     const handles = await settleSubscriptions();
     expect(wireKeys.size).toBe(7);
-    controller.handleEvent(snapshot("Before hiding."));
-    controller.handleEvent(snapshot("Queued old narration."));
+    narration.handleEvent(snapshot("Before hiding."));
+    narration.handleEvent(snapshot("Queued old narration."));
     expect(vi.getTimerCount()).toBe(1);
 
     visibility("hidden");
     visibility("hidden");
-    controller.sync(input);
+    narration.sync(input);
     expect(source.unsubscribeMessages.mock.calls.map(([handle]) => handle)).toEqual(handles);
     expect([...wireKeys]).toEqual([selectedPane.key, outbox.key]);
     expect(vi.getTimerCount()).toBe(0);
-    controller.handleEvent(snapshot("Hidden update from the selected pane."));
-    expect(updates.at(-1)?.size).toBe(0);
+    narration.handleEvent(snapshot("Hidden update from the selected pane."));
+    expect(narration.read().lines.size).toBe(0);
     expect(source.subscribeMessages).toHaveBeenCalledTimes(7);
 
     // Rows can settle or change while this tab is hidden.
-    controller.sync({
+    narration.sync({
       ...input,
       rows: [runningRow(selectedPane.key), runningRow("agent:main:new")],
     });
@@ -190,10 +189,10 @@ describe("SidebarSessionNarrationController", () => {
     await settleSubscriptions();
     expect(source.subscribeMessages).toHaveBeenCalledTimes(9);
     expect([...wireKeys]).toEqual([selectedPane.key, outbox.key, "agent:main:new"]);
-    controller.handleEvent(snapshot("Current narration after returning."));
-    expect(updates.at(-1)?.get(selectedPane.key)).toBe("Current narration after returning.");
+    narration.handleEvent(snapshot("Current narration after returning."));
+    expect(narration.read().lines.get(selectedPane.key)).toBe("Current narration after returning.");
 
-    controller.disconnect();
+    narration.disconnect();
     visibility("hidden");
     visibility("visible");
     expect(source.subscribeMessages).toHaveBeenCalledTimes(9);
@@ -219,15 +218,15 @@ describe("SidebarSessionNarrationController", () => {
           Promise.resolve(),
         ),
       };
-      const { controller, input } = createRunningNarrationController(source);
+      const { narration, input } = createRunningNarration(source);
       if (boundary === "visibility") {
         visibility("hidden");
         visibility("visible");
       } else if (boundary === "rows") {
-        controller.sync({ ...input, rows: [] });
-        controller.sync(input);
+        narration.sync({ ...input, rows: [] });
+        narration.sync(input);
       } else {
-        controller.sync({
+        narration.sync({
           ...input,
           rows: [],
           source: {
@@ -247,7 +246,7 @@ describe("SidebarSessionNarrationController", () => {
       await first.promise;
       expect(source.unsubscribeMessages).toHaveBeenCalledExactlyOnceWith(stale);
       expect(source.unsubscribeMessages.mock.calls[0]?.[0]).toBe(stale);
-      controller.disconnect();
+      narration.disconnect();
       expect(source.unsubscribeMessages).toHaveBeenCalledTimes(boundary === "source" ? 1 : 2);
       if (boundary !== "source") {
         expect(source.unsubscribeMessages.mock.calls[1]?.[0]).toBe(current);
@@ -261,13 +260,13 @@ describe("SidebarSessionNarrationController", () => {
       subscribeMessages: vi.fn((key: string) => Promise.resolve({ key, agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
     };
-    const { controller } = createRunningNarrationController(source);
+    const { narration } = createRunningNarration(source);
     expect(source.subscribeMessages).not.toHaveBeenCalled();
     visibility("visible");
     await Promise.resolve();
     expect(source.subscribeMessages).toHaveBeenCalledOnce();
     visibility("hidden");
-    controller.sync({
+    narration.sync({
       enabled: false,
       connected: true,
       connectionIdentity: {},
@@ -279,21 +278,21 @@ describe("SidebarSessionNarrationController", () => {
     visibility("visible");
     expect(source.subscribeMessages).toHaveBeenCalledOnce();
     expect(source.unsubscribeMessages).toHaveBeenCalledOnce();
-    controller.disconnect();
+    narration.disconnect();
   });
 
   it("subscribes only to sessions with a projected active run", async () => {
     const subscribeMessages = vi.fn((key: string) => Promise.resolve({ key, agentId: null }));
     const unsubscribeMessages = vi.fn(() => Promise.resolve());
     const source = { subscribeMessages, unsubscribeMessages };
-    const controller = new SidebarSessionNarrationController(() => undefined);
+    const narration = createSidebarNarration();
     const rows: SidebarRecentSession[] = [
       { ...runningRow("agent:main:stale"), hasActiveRun: false, status: "running" },
       { ...runningRow("agent:main:failed"), hasActiveRun: false, status: "failed" },
       runningRow("agent:main:active"),
     ];
 
-    controller.sync({
+    narration.sync({
       enabled: true,
       connected: true,
       connectionIdentity: {},
@@ -310,11 +309,11 @@ describe("SidebarSessionNarrationController", () => {
       mode: "narration",
     });
 
-    controller.disconnect();
+    narration.disconnect();
   });
 
   it("renders paced digests immediately and keeps the final line after queued tool activity", async () => {
-    const { controller, updates } = narrationFixture();
+    const { narration } = narrationFixture();
     const digest = (text: string) =>
       gatewayEvent("session.narration", { sessionKey: "agent:main:run", runId: "run-1", text });
     const tool = () =>
@@ -325,17 +324,19 @@ describe("SidebarSessionNarrationController", () => {
         data: { phase: "start", name: "read" },
       });
 
-    controller.handleEvent(tool());
-    controller.handleEvent(digest("**Reading** the current implementation."));
-    expect(updates.at(-1)?.get("agent:main:run")).toBe("Reading the current implementation.");
+    narration.handleEvent(tool());
+    narration.handleEvent(digest("**Reading** the current implementation."));
+    expect(narration.read().lines.get("agent:main:run")).toBe(
+      "Reading the current implementation.",
+    );
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
-    controller.handleEvent(digest("Earlier paragraph.\n\nChecks are **passing**."));
-    expect(updates.at(-1)?.get("agent:main:run")).toBe("Checks are passing.");
+    narration.handleEvent(digest("Earlier paragraph.\n\nChecks are **passing**."));
+    expect(narration.read().lines.get("agent:main:run")).toBe("Checks are passing.");
 
-    controller.handleEvent(tool());
+    narration.handleEvent(tool());
     await vi.advanceTimersByTimeAsync(100);
-    controller.handleEvent(digest("Final result is correct."));
-    controller.handleEvent(
+    narration.handleEvent(digest("Final result is correct."));
+    narration.handleEvent(
       gatewayEvent("chat", {
         sessionKey: "agent:main:run",
         runId: "run-1",
@@ -343,38 +344,38 @@ describe("SidebarSessionNarrationController", () => {
         message: { role: "assistant", content: "Final result is correct." },
       }),
     );
-    expect(updates.at(-1)?.get("agent:main:run")).toBe("Final result is correct.");
+    expect(narration.read().lines.get("agent:main:run")).toBe("Final result is correct.");
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
-    expect(updates.at(-1)?.get("agent:main:run")).toBe("Final result is correct.");
-    controller.disconnect();
+    expect(narration.read().lines.get("agent:main:run")).toBe("Final result is correct.");
+    narration.disconnect();
   });
 
   it("scopes digest replacements and retracts hidden content across run boundaries", () => {
-    const { controller, updates } = narrationFixture();
+    const { narration } = narrationFixture();
     const digest = (text: string) =>
       gatewayEvent("session.narration", { sessionKey: "agent:main:run", runId: "run-1", text });
 
-    controller.handleEvent(digest("First visible progress."));
-    controller.handleEvent(
+    narration.handleEvent(digest("First visible progress."));
+    narration.handleEvent(
       gatewayEvent("session.narration", {
         sessionKey: "agent:main:other",
         runId: "run-1",
         text: "An unrelated session.",
       }),
     );
-    controller.handleEvent(
+    narration.handleEvent(
       gatewayEvent("session.narration", { sessionKey: "agent:main:run", text: "No run identity." }),
     );
-    expect(updates.at(-1)?.get("agent:main:run")).toBe("First visible progress.");
+    expect(narration.read().lines.get("agent:main:run")).toBe("First visible progress.");
 
     for (const text of ["", "HEARTBEAT_OK"]) {
-      controller.handleEvent(digest("Visible draft."));
-      controller.handleEvent(digest(text));
-      expect(updates.at(-1)?.has("agent:main:run")).toBe(false);
+      narration.handleEvent(digest("Visible draft."));
+      narration.handleEvent(digest(text));
+      expect(narration.read().lines.has("agent:main:run")).toBe(false);
     }
-    controller.handleEvent(digest("Previous run result."));
-    controller.handleEvent(
+    narration.handleEvent(digest("Previous run result."));
+    narration.handleEvent(
       gatewayEvent("agent", {
         sessionKey: "agent:main:run",
         runId: "run-2",
@@ -382,16 +383,16 @@ describe("SidebarSessionNarrationController", () => {
         data: { phase: "start" },
       }),
     );
-    expect(updates.at(-1)?.has("agent:main:run")).toBe(false);
-    controller.handleEvent(
+    expect(narration.read().lines.has("agent:main:run")).toBe(false);
+    narration.handleEvent(
       gatewayEvent("session.narration", {
         sessionKey: "agent:main:run",
         runId: "run-2",
         text: "New run progress.",
       }),
     );
-    expect(updates.at(-1)?.get("agent:main:run")).toBe("New run progress.");
-    controller.disconnect();
+    expect(narration.read().lines.get("agent:main:run")).toBe("New run progress.");
+    narration.disconnect();
   });
 
   it.each(["final", "aborted", "error"])(
@@ -401,12 +402,12 @@ describe("SidebarSessionNarrationController", () => {
         subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
         unsubscribeMessages: vi.fn(() => Promise.resolve()),
       };
-      const { controller, updates } = createRunningNarrationController(source);
-      controller.handleEvent(chatDelta("Initial work."));
-      controller.handleEvent(chatDelta("Last visible result."));
-      expect(updates.at(-1)?.get("agent:main:run")).toBe("Initial work.");
+      const { narration } = createRunningNarration(source);
+      narration.handleEvent(chatDelta("Initial work."));
+      narration.handleEvent(chatDelta("Last visible result."));
+      expect(narration.read().lines.get("agent:main:run")).toBe("Initial work.");
 
-      controller.handleEvent(
+      narration.handleEvent(
         gatewayEvent("chat", {
           sessionKey: "agent:main:run",
           runId: "run-1",
@@ -416,11 +417,11 @@ describe("SidebarSessionNarrationController", () => {
             : {}),
         }),
       );
-      expect(updates.at(-1)?.get("agent:main:run")).toBe(
+      expect(narration.read().lines.get("agent:main:run")).toBe(
         state === "final" ? "Final corrected result." : "Last visible result.",
       );
       expect(vi.getTimerCount()).toBe(0);
-      controller.disconnect();
+      narration.disconnect();
     },
   );
 
@@ -429,15 +430,8 @@ describe("SidebarSessionNarrationController", () => {
       subscribeMessages: vi.fn(() => Promise.resolve({ key: "agent:main:run", agentId: null })),
       unsubscribeMessages: vi.fn(() => Promise.resolve()),
     };
-    const lines: Array<ReadonlyMap<string, string>> = [];
-    const digests: Array<ReadonlyMap<string, { headline: string }>> = [];
-    const tools: Array<ReadonlyMap<string, SidebarToolActivity>> = [];
-    const controller = new SidebarSessionNarrationController(
-      (next) => lines.push(next),
-      (next) => digests.push(next),
-      (next) => tools.push(next),
-    );
-    controller.sync({
+    const narration = createSidebarNarration();
+    narration.sync({
       enabled: true,
       connected: true,
       connectionIdentity: {},
@@ -447,8 +441,8 @@ describe("SidebarSessionNarrationController", () => {
       agentId: "main",
     });
 
-    controller.handleEvent(chatDelta("Reading source"));
-    controller.handleEvent(
+    narration.handleEvent(chatDelta("Reading source"));
+    narration.handleEvent(
       gatewayEvent("agent", {
         sessionKey: "agent:main:run",
         runId: "run-1",
@@ -456,10 +450,10 @@ describe("SidebarSessionNarrationController", () => {
         data: { name: "read" },
       }),
     );
-    expect(tools.at(-1)?.get("agent:main:run")?.name).toBe("read");
-    expect(lines.at(-1)?.get("agent:main:run")).toBe("Reading source");
+    expect(narration.read().tools.get("agent:main:run")?.name).toBe("read");
+    expect(narration.read().lines.get("agent:main:run")).toBe("Reading source");
 
-    controller.handleEvent(
+    narration.handleEvent(
       gatewayEvent("session.observer", {
         sessionKey: "agent:main:run",
         revision: 1,
@@ -468,9 +462,9 @@ describe("SidebarSessionNarrationController", () => {
         health: "on-track",
       }),
     );
-    expect(digests).toHaveLength(0);
+    expect(narration.read().observerDigests.size).toBe(0);
     await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
-    controller.handleEvent(
+    narration.handleEvent(
       gatewayEvent("agent", {
         sessionKey: "agent:main:run",
         runId: "run-1",
@@ -478,10 +472,10 @@ describe("SidebarSessionNarrationController", () => {
         data: { name: "list" },
       }),
     );
-    expect(tools.at(-1)?.get("agent:main:run")?.name).toBe("list");
-    expect(lines.at(-1)?.get("agent:main:run")).toBe("Reading source");
+    expect(narration.read().tools.get("agent:main:run")?.name).toBe("list");
+    expect(narration.read().lines.get("agent:main:run")).toBe("Reading source");
 
-    controller.handleEvent(
+    narration.handleEvent(
       gatewayEvent("session.observer", {
         sessionKey: "agent:main:run",
         runId: "run-1",
@@ -491,13 +485,13 @@ describe("SidebarSessionNarrationController", () => {
         health: "on-track",
       }),
     );
-    expect(lines.at(-1)?.has("agent:main:run")).toBe(false);
-    expect(digests.at(-1)?.get("agent:main:run")?.headline).toBe(
+    expect(narration.read().lines.has("agent:main:run")).toBe(false);
+    expect(narration.read().observerDigests.get("agent:main:run")?.headline).toBe(
       "Reviewing the current implementation",
     );
 
-    const digestUpdateCount = digests.length;
-    controller.handleEvent(
+    const previousDigests = narration.read().observerDigests;
+    narration.handleEvent(
       gatewayEvent("session.observer", {
         sessionKey: "agent:main:run",
         runId: "run-2",
@@ -507,12 +501,12 @@ describe("SidebarSessionNarrationController", () => {
         health: "on-track",
       }),
     );
-    expect(digests).toHaveLength(digestUpdateCount);
-    expect(digests.at(-1)?.get("agent:main:run")?.headline).toBe(
+    expect(narration.read().observerDigests).toBe(previousDigests);
+    expect(narration.read().observerDigests.get("agent:main:run")?.headline).toBe(
       "Reviewing the current implementation",
     );
 
-    controller.handleEvent(
+    narration.handleEvent(
       gatewayEvent("agent", {
         sessionKey: "agent:main:run",
         runId: "run-1",
@@ -520,16 +514,16 @@ describe("SidebarSessionNarrationController", () => {
         data: { name: "test" },
       }),
     );
-    controller.handleEvent(
+    narration.handleEvent(
       gatewayEvent("session.narration", {
         sessionKey: "agent:main:run",
         runId: "run-1",
         text: "Raw narration does not replace an observer headline.",
       }),
     );
-    expect(lines.at(-1)?.has("agent:main:run")).toBe(false);
+    expect(narration.read().lines.has("agent:main:run")).toBe(false);
 
-    controller.handleEvent(
+    narration.handleEvent(
       gatewayEvent("agent", {
         sessionKey: "agent:main:run",
         runId: "run-2",
@@ -537,9 +531,9 @@ describe("SidebarSessionNarrationController", () => {
         data: { name: "test" },
       }),
     );
-    expect(digests.at(-1)?.has("agent:main:run")).toBe(false);
-    expect(tools.at(-1)?.get("agent:main:run")?.name).toBe("test");
-    expect(lines.at(-1)?.get("agent:main:run")).toBeUndefined();
+    expect(narration.read().observerDigests.has("agent:main:run")).toBe(false);
+    expect(narration.read().tools.get("agent:main:run")?.name).toBe("test");
+    expect(narration.read().lines.get("agent:main:run")).toBeUndefined();
   });
 
   it("rebinds an active global session when the selected agent changes", async () => {
@@ -548,8 +542,7 @@ describe("SidebarSessionNarrationController", () => {
     );
     const unsubscribeMessages = vi.fn(() => Promise.resolve());
     const source = { subscribeMessages, unsubscribeMessages };
-    const updates: Array<ReadonlyMap<string, string>> = [];
-    const controller = new SidebarSessionNarrationController((lines) => updates.push(lines));
+    const narration = createSidebarNarration();
     const base = {
       enabled: true,
       connected: true,
@@ -559,9 +552,9 @@ describe("SidebarSessionNarrationController", () => {
       rows: [runningRow("global")],
     };
 
-    controller.sync({ ...base, agentId: "main" });
+    narration.sync({ ...base, agentId: "main" });
     await Promise.resolve();
-    controller.handleEvent(
+    narration.handleEvent(
       gatewayEvent("chat", {
         sessionKey: "global",
         agentId: "main",
@@ -570,9 +563,9 @@ describe("SidebarSessionNarrationController", () => {
         message: { role: "assistant", content: "Old agent work." },
       }),
     );
-    expect(updates.at(-1)?.get("global")).toBe("Old agent work.");
+    expect(narration.read().lines.get("global")).toBe("Old agent work.");
 
-    controller.sync({ ...base, agentId: "research" });
+    narration.sync({ ...base, agentId: "research" });
     await Promise.resolve();
 
     expect(unsubscribeMessages).toHaveBeenCalledWith({ key: "global", agentId: "main" });
@@ -580,7 +573,7 @@ describe("SidebarSessionNarrationController", () => {
       agentId: "research",
       mode: "narration",
     });
-    expect(updates.at(-1)?.has("global")).toBe(false);
+    expect(narration.read().lines.has("global")).toBe(false);
   });
 
   const internal = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
@@ -830,13 +823,13 @@ describe("SidebarSessionNarrationController", () => {
       ],
     ],
   ])("publishes narration for %s", async (_name, steps) => {
-    const { controller, updates } = narrationFixture();
+    const { narration } = narrationFixture();
     for (const [event, expected, advance] of steps) {
-      controller.handleEvent(event);
+      narration.handleEvent(event);
       if (advance) {
         await vi.advanceTimersByTimeAsync(SIDEBAR_NARRATION_THROTTLE_MS);
       }
-      const lines = updates.at(-1);
+      const lines = narration.read().lines;
       if (expected === false) {
         expect(lines?.has("agent:main:run") ?? false).toBe(false);
       } else if (typeof expected === "string") {
@@ -848,6 +841,6 @@ describe("SidebarSessionNarrationController", () => {
         expected(line!);
       }
     }
-    controller.disconnect();
+    narration.disconnect();
   });
 });

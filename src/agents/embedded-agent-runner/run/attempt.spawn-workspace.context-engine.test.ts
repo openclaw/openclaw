@@ -216,6 +216,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(bootstrap).toHaveBeenCalled();
+    expect(mockParams(bootstrap).runtimeSettings).toMatchObject({
+      limits: { promptTokenBudget: 2048 },
+    });
   });
 
   it("enforces code-mode payload surface from active-agent config during an embedded attempt", async () => {

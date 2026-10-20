@@ -7,6 +7,9 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
+import { isAssistantTextContentBlockType as isAssistantTextContentType } from "../shared/chat-message-content.js";
+
+export { isAssistantTextContentType };
 
 export type RoleContentMessage = {
   role: string;
@@ -84,7 +87,6 @@ export function stripAssistantMediaDirectivesForDisplay(
     .join("\n");
 }
 
-/** Resolve the text cap used when projecting chat history for display. */
 export function resolveEffectiveChatHistoryMaxChars(maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
@@ -146,10 +148,6 @@ export function extractAssistantTextForSilentCheck(message: unknown): string | u
     texts.push(typed.text);
   }
   return texts.length > 0 ? texts.join("\n") : undefined;
-}
-
-export function isAssistantTextContentType(type: unknown): boolean {
-  return type === "text" || type === "input_text" || type === "output_text";
 }
 
 export function isAssistantInternalReasoningContentType(type: unknown): boolean {

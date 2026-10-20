@@ -12,7 +12,7 @@ import type {
 import { prepareMediaCapabilityProviders } from "../../../../src/plugins/capability-provider-runtime.js";
 import { withPluginMetadataSnapshotScope } from "../../../../src/plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginRegistryLoadCacheKey } from "../../../../src/plugins/loader.js";
-import type { PluginManifestRecord } from "../../../../src/plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../../../../src/plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -22,17 +22,17 @@ import {
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
-type ToolResult = {
-  content?: Array<{ type: string; text?: string }>;
-  details?: unknown;
-};
-
-type ProviderCall = {
-  provider: string;
-  request: MusicGenerationRequest;
-};
+type ToolResult = { content?: Array<{ type: string; text?: string }>; details?: unknown };
+type ProviderCall = { provider: string; request: MusicGenerationRequest };
 
 const PLUGIN_ID = "qa-music-controls";
+const VOCAL_CONTROLS = {
+  lyrics: "OpenClaw keeps the signal clear",
+  instrumental: false,
+  durationSeconds: 45,
+  format: "wav",
+};
+const INSTRUMENTAL_CONTROLS = { instrumental: true, durationSeconds: 12, format: "mp3" };
 
 function detailsOf(result: ToolResult): Record<string, unknown> {
   if (!result.details || typeof result.details !== "object") {
@@ -69,52 +69,37 @@ function createMusicFixture() {
     },
   };
   const fallback: MusicGenerationProvider = {
+    ...primary,
     id: "qa-fallback",
     label: "QA fallback music",
     defaultModel: "beat-v2",
     models: ["beat-v2"],
     capabilities: {
       generate: {
+        ...primary.capabilities.generate,
         maxDurationSeconds: 30,
         supportsLyrics: false,
-        supportsInstrumental: true,
-        supportsDuration: true,
-        supportsFormat: true,
         supportedFormats: ["mp3"],
       },
     },
-    isConfigured: () => true,
     generateMusic: async (request) => {
       calls.push({ provider: "qa-fallback", request });
       const kind = request.instrumental ? "instrumental" : "vocal-fallback";
+      const fileName = `${kind}.mp3`;
       return {
-        tracks: [
-          {
-            buffer: Buffer.from(`ID3-qa-${kind}-audio`),
-            mimeType: "audio/mpeg",
-            fileName: `${kind}.mp3`,
-          },
-        ],
+        tracks: [{ buffer: Buffer.from(`ID3-qa-${kind}-audio`), mimeType: "audio/mpeg", fileName }],
         model: request.model,
       };
     },
   };
+  const music = { primary: "qa-primary/song-v1", fallbacks: ["qa-fallback/beat-v2"] };
   const config: OpenClawConfig = {
     plugins: {
       allow: [PLUGIN_ID],
       entries: { [PLUGIN_ID]: { enabled: true } },
       slots: { memory: "none" },
     },
-    agents: {
-      defaults: {
-        mediaModels: {
-          music: {
-            primary: "qa-primary/song-v1",
-            fallbacks: ["qa-fallback/beat-v2"],
-          },
-        },
-      },
-    },
+    agents: { defaults: { mediaModels: { music } } },
   };
   const registry = createEmptyPluginRegistry();
   for (const provider of [primary, fallback]) {
@@ -125,37 +110,20 @@ function createMusicFixture() {
       provider,
     });
   }
-  const manifest = {
+  const manifest = createPluginManifestRecordFixture({
     id: PLUGIN_ID,
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
     rootDir: `/fake/${PLUGIN_ID}`,
-    source: `/fake/${PLUGIN_ID}/index.js`,
-    manifestPath: `/fake/${PLUGIN_ID}/openclaw.plugin.json`,
-    contracts: {
-      musicGenerationProviders: [primary.id, fallback.id],
-    },
-  } satisfies PluginManifestRecord;
+    contracts: { musicGenerationProviders: [primary.id, fallback.id] },
+  });
   const pluginMetadataSnapshot = createPluginMetadataSnapshot({
     config,
-    manifestRegistry: {
-      plugins: [manifest],
-      diagnostics: [],
-    },
+    manifestRegistry: { plugins: [manifest], diagnostics: [] },
   });
   const mediaCapabilityProviders = prepareMediaCapabilityProviders({
     cfg: config,
     pluginMetadataSnapshot,
     registry,
   });
-  expect(mediaCapabilityProviders.musicGenerationProviders?.map((provider) => provider.id)).toEqual(
-    ["qa-primary", "qa-fallback"],
-  );
-
   const preparedModelRuntime = {
     metadataSnapshot: pluginMetadataSnapshot,
     mediaCapabilityProviders,
@@ -170,165 +138,134 @@ function createMusicFixture() {
   expect(musicTools).toHaveLength(1);
   const [tool] = musicTools;
   if (!tool) {
-    throw new Error(
-      "expected production tool inventory to include music_generate for the prepared provider runtime",
-    );
+    throw new Error("missing prepared music_generate tool");
   }
-  return { calls, config, fallback, pluginMetadataSnapshot, primary, registry, tool };
+  const execute = (args: Record<string, unknown>) => tool.execute("qa-music-controls", args);
+  const list = async () => {
+    const activeRegistry = captureActivePluginRegistrySnapshot();
+    try {
+      return await withPluginMetadataSnapshotScope(
+        pluginMetadataSnapshot,
+        async () => {
+          const cacheKey = resolvePluginRegistryLoadCacheKey({
+            config,
+            onlyPluginIds: [PLUGIN_ID],
+            activate: false,
+          });
+          setActivePluginRegistry(registry, cacheKey);
+          return execute({ action: "list" });
+        },
+        { config },
+      );
+    } finally {
+      restoreActivePluginRegistrySnapshot(activeRegistry);
+    }
+  };
+  return { calls, primary, fallback, execute, list };
 }
 
 describe("music generation controls QA product proof", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("lists capabilities, falls back in config order, normalizes controls, and persists audio", async () => {
+  it("lists capabilities, normalizes fallback and explicit controls, and persists audio", async () => {
     const fixture = createMusicFixture();
-    const activeRegistry = captureActivePluginRegistrySnapshot();
-    await withPluginMetadataSnapshotScope(
-      fixture.pluginMetadataSnapshot,
-      async () => {
-        try {
-          const pluginIds = [PLUGIN_ID];
-          const cacheKey = resolvePluginRegistryLoadCacheKey({
-            config: fixture.config,
-            onlyPluginIds: pluginIds,
-            activate: false,
-          });
-          setActivePluginRegistry(fixture.registry, cacheKey);
-          const listed = (await fixture.tool.execute("music-list", {
-            action: "list",
-          })) as ToolResult;
-          const listedProviders = detailsOf(listed).providers as Array<Record<string, unknown>>;
-          const primaryListing = listedProviders.find((entry) => entry.id === fixture.primary.id);
-          const fallbackListing = listedProviders.find((entry) => entry.id === fixture.fallback.id);
-
-          expect(primaryListing).toMatchObject({
-            configured: true,
-            defaultModel: "song-v1",
-            models: ["song-v1"],
-            modes: ["generate"],
-          });
-          expect(fallbackListing).toMatchObject({
-            configured: true,
-            defaultModel: "beat-v2",
-            models: ["beat-v2"],
-            modes: ["generate"],
-          });
-          expect(textOf(listed)).toContain(
-            "capabilities: modes=generate, maxDurationSeconds=60, lyrics, instrumental, duration, format, supportedFormats=mp3/wav",
-          );
-        } finally {
-          restoreActivePluginRegistrySnapshot(activeRegistry);
-        }
-      },
-      { config: fixture.config },
+    const listed = await fixture.list();
+    const listedProviders = detailsOf(listed).providers as Array<Record<string, unknown>>;
+    for (const [id, model] of [
+      [fixture.primary.id, "song-v1"],
+      [fixture.fallback.id, "beat-v2"],
+    ]) {
+      expect(listedProviders.find((entry) => entry.id === id)).toMatchObject({
+        configured: true,
+        defaultModel: model,
+        models: [model],
+        modes: ["generate"],
+      });
+    }
+    expect(textOf(listed)).toContain(
+      "capabilities: modes=generate, maxDurationSeconds=60, lyrics, instrumental, duration, format, supportedFormats=mp3/wav",
     );
-
-    const stateDir = tempDirs.make("openclaw-qa-music-controls-");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const vocalResult = (await fixture.tool.execute("music-vocal-fallback", {
-        prompt: "bright QA chorus",
-        lyrics: "OpenClaw keeps the signal clear",
-        instrumental: false,
-        durationSeconds: 45,
-        format: "wav",
-      })) as ToolResult;
-
-      expect(fixture.calls.map((call) => `${call.provider}/${call.request.model}`)).toEqual([
-        "qa-primary/song-v1",
-        "qa-fallback/beat-v2",
-      ]);
-      expect(fixture.calls[0]?.request).toMatchObject({
-        lyrics: "OpenClaw keeps the signal clear",
-        instrumental: false,
-        durationSeconds: 45,
-        format: "wav",
+    for (const { explicit, controls } of [
+      { explicit: false, controls: VOCAL_CONTROLS },
+      { explicit: true, controls: INSTRUMENTAL_CONTROLS },
+    ]) {
+      const stateDir = tempDirs.make("openclaw-qa-music-controls-");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const result = await fixture.execute({
+          prompt: "bright QA chorus",
+          ...controls,
+          ...(explicit ? { model: "qa-fallback/beat-v2" } : {}),
+        });
+        const normalized = explicit ? controls : { instrumental: false, durationSeconds: 30 };
+        const fallbackCall = {
+          provider: "qa-fallback",
+          request: { model: "beat-v2", ...normalized },
+        };
+        expect(fixture.calls.slice(explicit ? 2 : 0)).toMatchObject(
+          explicit
+            ? [fallbackCall]
+            : [
+                {
+                  provider: "qa-primary",
+                  request: { model: "song-v1", ...VOCAL_CONTROLS },
+                },
+                fallbackCall,
+              ],
+        );
+        const details = detailsOf(result);
+        expect(details).toMatchObject({
+          provider: "qa-fallback",
+          model: "beat-v2",
+          ...normalized,
+          ...(explicit
+            ? { attempts: [] }
+            : {
+                count: 1,
+                requestedDurationSeconds: 45,
+                attempts: [
+                  {
+                    provider: "qa-primary",
+                    model: "song-v1",
+                    error: "intentional primary provider outage",
+                  },
+                ],
+                ignoredOverrides: [
+                  { key: "lyrics", value: "OpenClaw keeps the signal clear" },
+                  { key: "format", value: "wav" },
+                ],
+                normalization: { durationSeconds: { requested: 45, applied: 30 } },
+              }),
+        });
+        if (!explicit) {
+          expect([fixture.calls[1]?.request.lyrics, fixture.calls[1]?.request.format]).toEqual([
+            undefined,
+            undefined,
+          ]);
+          expect(details).not.toHaveProperty("requestedLyrics");
+          expect(details).not.toHaveProperty("format");
+          expect(textOf(result)).toContain(
+            "Warning: Ignored unsupported overrides for qa-fallback/beat-v2: lyrics=OpenClaw keeps the signal clear, format=wav.",
+          );
+          expect(textOf(result)).toContain("Duration normalized: requested 45s; used 30s.");
+        }
+        const persisted = details.paths as string[];
+        expect(persisted).toHaveLength(1);
+        for (const filePath of persisted) {
+          const canonicalPath = await fs.realpath(filePath);
+          expect(
+            canonicalPath.startsWith(path.join(stateDir, "media", "tool-music-generation")),
+          ).toBe(true);
+          expect((await fs.readFile(canonicalPath)).byteLength).toBeGreaterThan(0);
+        }
       });
-      expect(fixture.calls[1]?.request).toMatchObject({
-        instrumental: false,
-        durationSeconds: 30,
-      });
-      expect(fixture.calls[1]?.request.lyrics).toBeUndefined();
-      expect(fixture.calls[1]?.request.format).toBeUndefined();
-
-      const vocalDetails = detailsOf(vocalResult);
-      expect(vocalDetails).toMatchObject({
-        provider: "qa-fallback",
-        model: "beat-v2",
-        count: 1,
-        instrumental: false,
-        durationSeconds: 30,
-        requestedDurationSeconds: 45,
-        attempts: [
-          {
-            provider: "qa-primary",
-            model: "song-v1",
-            error: "intentional primary provider outage",
-          },
-        ],
-        ignoredOverrides: [
-          { key: "lyrics", value: "OpenClaw keeps the signal clear" },
-          { key: "format", value: "wav" },
-        ],
-        normalization: {
-          durationSeconds: {
-            requested: 45,
-            applied: 30,
-          },
-        },
-      });
-      expect(vocalDetails).not.toHaveProperty("requestedLyrics");
-      expect(vocalDetails).not.toHaveProperty("format");
-      expect(textOf(vocalResult)).toContain(
-        "Warning: Ignored unsupported overrides for qa-fallback/beat-v2: lyrics=OpenClaw keeps the signal clear, format=wav.",
-      );
-      expect(textOf(vocalResult)).toContain("Duration normalized: requested 45s; used 30s.");
-
-      const instrumentalResult = (await fixture.tool.execute("music-instrumental", {
-        prompt: "tight QA percussion loop",
-        model: "qa-fallback/beat-v2",
-        instrumental: true,
-        durationSeconds: 12,
-        format: "mp3",
-      })) as ToolResult;
-      expect(fixture.calls.map((call) => `${call.provider}/${call.request.model}`)).toEqual([
-        "qa-primary/song-v1",
-        "qa-fallback/beat-v2",
-        "qa-fallback/beat-v2",
-      ]);
-      expect(fixture.calls[2]?.request).toMatchObject({
-        instrumental: true,
-        durationSeconds: 12,
-        format: "mp3",
-      });
-      expect(detailsOf(instrumentalResult)).toMatchObject({
-        provider: "qa-fallback",
-        model: "beat-v2",
-        instrumental: true,
-        durationSeconds: 12,
-        format: "mp3",
-        attempts: [],
-      });
-
-      const persisted = [
-        ...(vocalDetails.paths as string[]),
-        ...(detailsOf(instrumentalResult).paths as string[]),
-      ];
-      expect(persisted).toHaveLength(2);
-      for (const filePath of persisted) {
-        const canonicalPath = await fs.realpath(filePath);
-        expect(
-          canonicalPath.startsWith(path.join(stateDir, "media", "tool-music-generation")),
-        ).toBe(true);
-        expect((await fs.readFile(canonicalPath)).byteLength).toBeGreaterThan(0);
-      }
-    });
+    }
   });
 
   it("rejects invalid output formats before invoking a prepared provider", async () => {
     const fixture = createMusicFixture();
 
     await expect(
-      fixture.tool.execute("music-invalid-format", {
+      fixture.execute({
         prompt: "QA invalid format proof",
         format: "flac",
       }),

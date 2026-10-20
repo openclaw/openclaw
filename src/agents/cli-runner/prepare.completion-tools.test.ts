@@ -10,10 +10,12 @@ import { assertNoRetainedSessionSharingReads } from "../../config/sessions/sessi
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { mintMcpLoopbackClientGrant as MintMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
+import { handleMcpJsonRpc } from "../../gateway/mcp-http.handlers.js";
 import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
+import { buildMcpToolSchema } from "../../gateway/mcp-http.schema.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
@@ -22,6 +24,11 @@ import {
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
 import * as subagentSpawn from "../subagents/spawn/subagent-spawn.js";
+import {
+  expectReadWriteEditTools,
+  getTextContent,
+} from "../test-helpers/agent-tools-fs-helpers.js";
+import { requestNativeTool, runPlugin, SUCCESS_RESULT } from "./execute-plugin.test-support.js";
 import { prepareCliRunContext } from "./prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -116,6 +123,155 @@ describe("restricted CLI tool preparation", () => {
     clearRuntimeConfigSnapshot();
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
+  });
+
+  it.each(["global", "agent", "child"])(
+    "confines %s workspace-only CLI file tools to the workspace",
+    async (scope) => {
+      const stateDir = fixture.session.dir;
+      const workspaceDir = path.join(stateDir, "workspaces", "main");
+      const siblingDir = path.join(stateDir, "workspaces", "other");
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      fs.mkdirSync(siblingDir);
+      const stateFile = path.join(stateDir, "openclaw.json");
+      const siblingFile = path.join(siblingDir, "note.txt");
+      fs.writeFileSync(stateFile, "state fixture");
+      fs.writeFileSync(siblingFile, "sibling fixture");
+      fs.symlinkSync(siblingDir, path.join(workspaceDir, "outside"), "junction");
+      const sessionKey = scope === "child" ? "agent:main:subagent:child" : "agent:main:main";
+      const config: OpenClawConfig = {
+        session: { store: fixture.session.sessionTarget.storePath },
+        tools: {
+          profile: "coding",
+          exec: { security: "full", ask: "off" },
+          fs: { workspaceOnly: scope === "global" },
+        },
+        agents: {
+          entries: {
+            main: {
+              workspace: workspaceDir,
+              ...(scope === "global" ? {} : { tools: { fs: { workspaceOnly: true } } }),
+            },
+          },
+        },
+      };
+      const context = await fixture.prepare({
+        provider: "claude-cli",
+        modelHasVision: false,
+        workspaceDir,
+        sessionKey,
+        sessionTarget: { ...fixture.session.sessionTarget, sessionKey },
+        config,
+      });
+      try {
+        await runPlugin(context, async function* (execution) {
+          await expect(
+            requestNativeTool(execution, "Read", { file_path: stateFile }),
+          ).resolves.toMatchObject({ behavior: "deny" });
+          yield SUCCESS_RESULT;
+        });
+        const grant = mintGrant.mock.calls[0]?.[0]?.context;
+        if (!grant) {
+          throw new Error("expected workspace-only MCP tools");
+        }
+        const scoped = await resolveMcpLoopbackScopedTools({
+          cfg: config,
+          context: grant,
+          admittedRunContext: context.params.admittedRunContext,
+        });
+        const { readTool, writeTool, editTool } = expectReadWriteEditTools(scoped.tools);
+        await writeTool.execute("workspace-write", {
+          path: "note.txt",
+          content: "workspace fixture",
+        });
+        expect(getTextContent(await readTool.execute("workspace-read", { path: "note.txt" }))).toBe(
+          "workspace fixture",
+        );
+        await editTool.execute("workspace-edit", {
+          path: "note.txt",
+          edits: [{ oldText: "workspace fixture", newText: "edited fixture" }],
+        });
+        expect(fs.readFileSync(path.join(workspaceDir, "note.txt"), "utf8")).toBe("edited fixture");
+        for (const filePath of [
+          stateFile,
+          siblingFile,
+          "../../openclaw.json",
+          "../other/note.txt",
+          "outside/note.txt",
+        ]) {
+          await expect(readTool.execute("outside-read", { path: filePath })).rejects.toThrow();
+          await expect(
+            writeTool.execute("outside-write", { path: filePath, content: "changed" }),
+          ).rejects.toThrow();
+          await expect(
+            editTool.execute("outside-edit", {
+              path: filePath,
+              edits: [{ oldText: "fixture", newText: "changed" }],
+            }),
+          ).rejects.toThrow();
+        }
+        expect(fs.readFileSync(stateFile, "utf8")).toBe("state fixture");
+        expect(fs.readFileSync(siblingFile, "utf8")).toBe("sibling fixture");
+        await expect(
+          writeTool.execute("outside-create", { path: "../../new.txt", content: "changed" }),
+        ).rejects.toThrow();
+        expect(fs.existsSync(path.join(stateDir, "new.txt"))).toBe(false);
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
+    },
+  );
+
+  it("retains native file tools when the agent disables global workspace-only policy", async () => {
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      sessionKey: "agent:main:main",
+      config: {
+        session: { store: fixture.session.sessionTarget.storePath },
+        tools: { fs: { workspaceOnly: true }, exec: { security: "full", ask: "off" } },
+        agents: { entries: { main: { tools: { fs: { workspaceOnly: false } } } } },
+      },
+    });
+    try {
+      await runPlugin(context, async function* (execution) {
+        await expect(
+          requestNativeTool(execution, "Read", {
+            file_path: path.join(fixture.session.dir, "openclaw.json"),
+          }),
+        ).resolves.toMatchObject({ behavior: "allow" });
+        yield SUCCESS_RESULT;
+      });
+    } finally {
+      await context.preparedBackend.cleanup?.();
+    }
+  });
+
+  it("retains an exact file-tool selection when applying workspace-only policy", async () => {
+    const config: OpenClawConfig = {
+      session: { store: fixture.session.sessionTarget.storePath },
+      tools: { profile: "coding", fs: { workspaceOnly: true } },
+    };
+    const context = await fixture.prepare({
+      provider: "claude-cli",
+      sessionKey: "agent:main:main",
+      modelHasVision: false,
+      cliToolAvailability: { native: [], openClaw: ["write"] },
+      config,
+    });
+    try {
+      const grant = mintGrant.mock.calls[0]?.[0]?.context;
+      if (!grant) {
+        throw new Error("expected workspace-only MCP tools");
+      }
+      const scoped = await resolveMcpLoopbackScopedTools({
+        cfg: config,
+        context: grant,
+        admittedRunContext: context.params.admittedRunContext,
+      });
+      expect(scoped.tools.map((tool) => tool.name)).toEqual(["write"]);
+    } finally {
+      await context.preparedBackend.cleanup?.();
+    }
   });
 
   it.each(["agent", "side-question", "preparation-error"] as const)(
@@ -359,75 +515,158 @@ describe("restricted CLI tool preparation", () => {
     expect(mintGrant).not.toHaveBeenCalled();
   });
 
-  it("mediates trusted completion tools with persisted requester policy", async () => {
-    const { sessionTarget } = fixture.session;
-    const childSessionKey = "agent:main:subagent:completion-review";
-    const inheritedToolDeny = ["terminal", "gateway", "write", "edit", "apply_patch"];
-    replaceSessionEntrySync(
-      { storePath: sessionTarget.storePath, sessionKey: childSessionKey },
-      {
-        sessionId: "completion-child",
-        updatedAt: 1,
-        spawnedBy: sessionTarget.sessionKey,
-        spawnDepth: 1,
-        subagentRole: "orchestrator",
-        subagentControlScope: "children",
-        inheritedToolPolicyVersion: 1,
-        inheritedToolDeny,
-        inheritedToolAllow: ["read", "exec", "write"],
-      },
-    );
-    const trustedInternalHandoff = {
-      kind: "subagent-completion" as const,
-      sourceSessionKey: childSessionKey,
-      sourceSessionId: "completion-child",
-      targetSessionKey: sessionTarget.sessionKey,
-      targetSessionId: sessionTarget.sessionId,
-      provider: "claude-cli",
-      model: "opus",
-    };
-    const context = await fixture.prepare({
-      sessionKey: sessionTarget.sessionKey,
-      sessionId: sessionTarget.sessionId,
-      provider: "claude-cli",
-      model: "opus",
-      modelHasVision: false,
-      sourceReplyDeliveryMode: "automatic",
-      trustedInternalHandoff,
-      inputProvenance: {
-        kind: "inter_session",
-        sourceTool: "subagent_announce",
-        sourceSessionKey: childSessionKey,
-      },
-      config: {
-        session: { store: sessionTarget.storePath },
-        tools: {
-          toolsBySender: { "*": { deny: ["group:runtime", "group:fs"] } },
+  it.each([false, undefined])(
+    "keeps the CLI catalog stable while gating persisted completion authority with owner=%s",
+    async (senderIsOwner) => {
+      const { sessionTarget } = fixture.session;
+      const childSessionKey = "agent:main:subagent:completion-review";
+      const inheritedToolDeny = ["terminal", "gateway", "write", "edit", "apply_patch"];
+      replaceSessionEntrySync(
+        { storePath: sessionTarget.storePath, sessionKey: childSessionKey },
+        {
+          sessionId: "completion-child",
+          updatedAt: 1,
+          spawnedBy: sessionTarget.sessionKey,
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+          inheritedToolPolicyVersion: 1,
+          inheritedToolDeny,
+          inheritedToolAllow: ["read", "exec", "write", "intent"],
         },
-        mcp: { servers: { userProbe: { command: "node", args: ["user-probe.mjs"] } } },
-      },
-    });
-    try {
-      const grant = mintGrant.mock.calls[0]?.[0]?.context;
-      expect(grant).toBeDefined();
-      expect(context.params.cliToolAvailability?.native).toEqual([]);
-      expect(grant?.toolsAllow).toEqual(expect.arrayContaining(["read", "exec"]));
-      expect(grant?.toolsAllow).toEqual(context.params.cliToolAvailability?.openClaw);
-      for (const denied of inheritedToolDeny) {
-        expect(grant?.toolsAllow).not.toContain(denied);
-      }
-      expect(grant?.trustedInternalHandoff).toEqual(trustedInternalHandoff);
-      expect(grant?.toolsAllow?.toSorted()).toEqual(["exec", "read"]);
-      const args = context.preparedBackend.backend.args ?? [];
-      const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
-      const bundle = JSON.parse(fs.readFileSync(mcpConfigPath ?? "", "utf-8")) as {
-        mcpServers: Record<string, unknown>;
+      );
+      const trustedInternalHandoff = {
+        kind: "subagent-completion" as const,
+        sourceSessionKey: childSessionKey,
+        sourceSessionId: "completion-child",
+        targetSessionKey: sessionTarget.sessionKey,
+        targetSessionId: sessionTarget.sessionId,
+        provider: "claude-cli",
+        model: "opus",
       };
-      expect(Object.keys(bundle.mcpServers)).toEqual(["openclaw"]);
-    } finally {
-      await context.preparedBackend.cleanup?.();
-    }
-  });
+      const run = {
+        sessionKey: sessionTarget.sessionKey,
+        sessionId: sessionTarget.sessionId,
+        provider: "claude-cli",
+        model: "opus",
+        modelHasVision: false,
+        sourceReplyDeliveryMode: "automatic",
+        toolsAllow: ["read", "exec", "write", "gateway", "intent"],
+        config: {
+          plugins: { allow: ["memory-core"], entries: { "memory-core": { enabled: true } } },
+          session: { store: sessionTarget.storePath },
+          tools: {
+            deny: ["apply_patch"],
+            toolsBySender: {
+              "id:owner": { allow: ["*"] },
+              "*": { deny: ["group:runtime", "group:fs"] },
+            },
+          },
+          mcp: { servers: { userProbe: { command: "node", args: ["user-probe.mjs"] } } },
+        },
+      } satisfies Partial<RunCliAgentParams>;
+      const owner = await fixture.prepare({ ...run, senderId: "owner", senderIsOwner: true });
+      const ownerGrant = mintGrant.mock.calls[0]![0].context;
+      const ownerTools = await resolveMcpLoopbackScopedTools({
+        cfg: run.config,
+        context: ownerGrant,
+        admittedRunContext: owner.params.admittedRunContext,
+      });
+      await owner.preparedBackend.cleanup?.();
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: async () => true,
+        claudeCliSessionTranscriptHasOrphanedToolUse: async () => false,
+      });
+      const context = await fixture.prepare({
+        ...run,
+        senderIsOwner,
+        cliSessionBinding: {
+          sessionId: "native-parent-session",
+          authEpoch: owner.authEpoch,
+          authEpochVersion: owner.authEpochVersion,
+          extraSystemPromptHash: owner.extraSystemPromptHash,
+          messageToolPolicyHash: owner.messageToolPolicyHash,
+          promptToolNamesHash: owner.promptToolNamesHash,
+          cwdHash: owner.cwdHash,
+          mcpConfigHash: owner.preparedBackend.mcpConfigHash,
+          mcpResumeHash: owner.preparedBackend.mcpResumeHash,
+        },
+        trustedInternalHandoff,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_announce",
+          sourceSessionKey: childSessionKey,
+        },
+      });
+      try {
+        const grant = mintGrant.mock.calls[1]![0].context;
+        expect(grant).toBeDefined();
+        expect(context.params.cliToolAvailability?.native).toEqual([]);
+        expect(ownerGrant.toolsAllow?.toSorted()).toEqual([
+          "exec",
+          "gateway",
+          "intent",
+          "read",
+          "write",
+        ]);
+        expect(grant.toolsAllow).toEqual(ownerGrant.toolsAllow);
+        expect(context.promptToolNamesHash).toBe(owner.promptToolNamesHash);
+        expect(context.reusableCliSession).toEqual({
+          mode: "reuse",
+          sessionId: "native-parent-session",
+        });
+        expect(grant.toolsAllow).toEqual(context.params.cliToolAvailability?.openClaw);
+        expect(grant.trustedInternalHandoff).toEqual(trustedInternalHandoff);
+        const scoped = await resolveMcpLoopbackScopedTools({
+          cfg: run.config,
+          context: grant,
+          admittedRunContext: context.params.admittedRunContext,
+        });
+        const toolSchema = buildMcpToolSchema(scoped.tools);
+        expect(toolSchema).toEqual(buildMcpToolSchema(ownerTools.tools));
+        const deniedPath = path.join(fixture.session.dir, "completion-must-not-write.txt");
+        for (const [name, args, denial] of [
+          [
+            "write",
+            { path: deniedPath, content: "must not execute" },
+            "write is outside the authority this completion turn carries from its requester. Do not retry write.",
+          ],
+          [
+            "gateway",
+            { action: "config.get" },
+            "gateway needs the owner's authority, and this turn was not started by the owner. Do not retry gateway.",
+          ],
+          [
+            "intent",
+            { action: "create", description: "Must not create", triggerKeywords: ["completion"] },
+            "intent needs the owner's authority, and this turn was not started by the owner. Do not retry intent.",
+          ],
+        ] as const) {
+          await expect(
+            handleMcpJsonRpc({
+              message: {
+                jsonrpc: "2.0",
+                id: name,
+                method: "tools/call",
+                params: { name, arguments: args },
+              },
+              tools: scoped.tools,
+              toolSchema,
+            }),
+          ).resolves.toMatchObject({ result: { content: [{ type: "text", text: denial }] } });
+        }
+        expect(fs.existsSync(deniedPath)).toBe(false);
+        const args = context.preparedBackend.backend.args ?? [];
+        const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
+        const bundle = JSON.parse(fs.readFileSync(mcpConfigPath ?? "", "utf-8")) as {
+          mcpServers: Record<string, unknown>;
+        };
+        expect(Object.keys(bundle.mcpServers)).toEqual(["openclaw"]);
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
+    },
+  );
 
   it.each([
     {
@@ -468,13 +707,15 @@ describe("restricted CLI tool preparation", () => {
     expect(mintGrant).not.toHaveBeenCalled();
   });
 
-  it("keeps a completion tool-free when the caller disabled tools", async () => {
+  it("lets disableTools override a completion's runtime tool cap", async () => {
     const context = await fixture.prepare({
       ...completionRun(fixture.session.sessionTarget),
       disableTools: true,
+      toolsAllow: ["write"],
     });
     try {
       expect(context.params.cliToolAvailability).toEqual({ native: [], openClaw: [] });
+      expect(context.params.toolsAllow).toBeUndefined();
     } finally {
       await context.preparedBackend.cleanup?.();
     }

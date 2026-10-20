@@ -56,11 +56,13 @@ import {
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { createPreparedGatewayModelCatalog } from "./server-model-catalog-view.js";
 import * as listFilters from "./session-list-filters.js";
-import * as projectionWork from "./session-projection-work.js";
 import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
+import {
+  createTestProjection,
+  holdForeground,
+} from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -131,8 +133,8 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
       ]);
     };
     let catalog = view("original");
-    const release = projectionWork.retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({
+    using release = holdForeground();
+    using projection = await createTestProjection({
       cfg,
       getConfig: () => cfg,
       getModelCatalog: async () => catalog,
@@ -220,8 +222,8 @@ it("reuses descendants after parent progress while keeping inherited models curr
         },
       );
     }
-    const release = projectionWork.retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
     const context = bindSessionRowProjection(requestContext(cfg), () => projection);
     const client = identifiedClient("viewer");
     const list = () => listSessions({ context, client, request: {} });
@@ -261,8 +263,9 @@ it("reuses descendants after parent progress while keeping inherited models curr
         prepareSessionRowPublication(projection, Date.now())(
           client,
           createVisibleActiveSessionRunProjector(
-            context,
             projection.state.rowContext.projectedAgentRuns,
+            undefined,
+            context.resolveGatewayContext,
           ),
         ).snapshot({
           agentId: "main",
@@ -292,34 +295,30 @@ it("reuses descendants after parent progress while keeping inherited models curr
           expect(parentSnapshot.label).toBeUndefined();
         }
       }
-      const cases: Array<{ change: Partial<SessionEntry>; provider: string; model: string }> = [
-        { change: { providerOverride: "other-test" }, provider: "other-test", model: "selected" },
-        { change: { modelOverride: "changed" }, provider: "other-test", model: "changed" },
-        { change: { modelOverrideSource: "default" }, provider: "unit-test", model: "default" },
-        {
-          change: {
+      const cases: Array<[Partial<SessionEntry>, string, string]> = [
+        [{ providerOverride: "other-test" }, "other-test", "selected"],
+        [{ modelOverride: "changed" }, "other-test", "changed"],
+        [{ modelOverrideSource: "default" }, "unit-test", "default"],
+        [
+          {
             modelOverrideSource: "auto",
             modelOverrideFallbackOriginProvider: "other-test",
             modelOverrideFallbackOriginModel: "changed",
           },
-          provider: "other-test",
-          model: "changed",
-        },
-        {
-          change: { modelOverrideFallbackOriginModel: "original" },
-          provider: "unit-test",
-          model: "default",
-        },
-        {
-          change: {
+          "other-test",
+          "changed",
+        ],
+        [{ modelOverrideFallbackOriginModel: "original" }, "unit-test", "default"],
+        [
+          {
             modelOverrideFallbackOriginModel: "changed",
             modelOverrideFallbackOriginProvider: "original-test",
           },
-          provider: "unit-test",
-          model: "default",
-        },
+          "unit-test",
+          "default",
+        ],
       ];
-      for (const { change, provider, model } of cases) {
+      for (const [change, provider, model] of cases) {
         reads.length = 0;
         Object.assign(parent, change);
         replaceSessionEntrySync(scope, { ...parent });
@@ -390,8 +389,6 @@ it("reuses descendants after parent progress while keeping inherited models curr
       expect.soft(reads, "Unchanged descendants after parent deletion").toEqual([]);
     } finally {
       await projection.ensureMaterialized();
-      projection.dispose();
-      release();
     }
   });
 });
@@ -402,107 +399,68 @@ it("refreshes profile display fields on selected live and archived rows without 
     const owner = ensureProfileForEmail("owner@example.com");
     const participant = ensureProfileForEmail("participant@example.com");
     for (const archived of [false, true]) {
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: `agent:main:profile-${archived}` },
-        {
-          sessionId: `profile-${archived}`,
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: owner.id },
-          ...(archived
-            ? { archivedAt: 1, archivedBy: { type: "human" as const, id: owner.id } }
-            : {}),
-        },
-      );
+      const scope = { agentId: "main", sessionKey: `agent:main:profile-${archived}` };
+      replaceSessionEntrySync(scope, {
+        sessionId: `profile-${archived}`,
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: owner.id },
+        ...(archived
+          ? { archivedAt: 1, archivedBy: { type: "human" as const, id: owner.id } }
+          : {}),
+      });
+      recordSessionParticipant(scope, {
+        identity: { type: "profile", id: participant.id },
+        promptedAt: 1,
+      });
     }
-    for (const archived of [false, true]) {
-      recordSessionParticipant(
-        { agentId: "main", sessionKey: `agent:main:profile-${archived}` },
-        { identity: { type: "profile", id: participant.id }, promptedAt: 1 },
-      );
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    const list = (opts: Parameters<typeof listProjectedSessions>[0]["opts"], serialized = false) =>
+      listProjectedSessions({ projection, opts, acceptsSerializedJson: serialized });
+    const allPeople = { archived: "all", includePeople: true } as const;
+    const expectedPerson = (id: string, label: string) =>
+      expect.objectContaining({ identity: { type: "profile", id }, label, sessionCount: 2 });
+
+    await list(allPeople, true);
+    const reads = vi.spyOn(materialization, "readSessionRowEntry");
+    setDisplayName(owner.id, "Current owner");
+    setDisplayName(participant.id, "Current participant");
+    const result = await list(allPeople, true);
+    expect(result.owners?.map((actor) => actor.label)).toEqual(["Current owner"]);
+    expect(result.people).toEqual([
+      expectedPerson(owner.id, "Current owner"),
+      expectedPerson(participant.id, "Current participant"),
+    ]);
+    expect(result.sessions).toHaveLength(2);
+    const originalPeople = structuredClone(result.people);
+    const live = await list({ includePeople: true });
+    expect(live.people).toEqual(originalPeople?.map((person) => ({ ...person, sessionCount: 1 })));
+    expect(result.people).toEqual(originalPeople);
+    for (const person of live.people ?? []) {
+      person.sessionCount = 99;
+      person.label = "Changed response";
     }
-    const release = projectionWork.retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    try {
-      await listProjectedSessions({
-        projection,
-        opts: { archived: "all", includePeople: true },
-        acceptsSerializedJson: true,
-      });
-      const reads = vi.spyOn(materialization, "readSessionRowEntry");
-      setDisplayName(owner.id, "Current owner");
-      setDisplayName(participant.id, "Current participant");
-      const result = await listProjectedSessions({
-        projection,
-        opts: { archived: "all", includePeople: true },
-        acceptsSerializedJson: true,
-      });
-      expect(result.owners?.map((actor) => actor.label)).toEqual(["Current owner"]);
-      expect(result.people).toEqual([
-        expect.objectContaining({
-          identity: { type: "profile", id: owner.id },
-          label: "Current owner",
-          sessionCount: 2,
-        }),
-        expect.objectContaining({
-          identity: { type: "profile", id: participant.id },
-          label: "Current participant",
-          sessionCount: 2,
-        }),
-      ]);
-      expect(result.sessions).toHaveLength(2);
-      const originalPeople = structuredClone(result.people);
-      const live = await listProjectedSessions({
-        projection,
-        opts: { includePeople: true },
-      });
-      expect(live.people).toEqual(
-        originalPeople?.map((person) => ({ ...person, sessionCount: 1 })),
-      );
-      expect(result.people).toEqual(originalPeople);
-      for (const person of live.people ?? []) {
-        person.sessionCount = 99;
-        person.label = "Changed response";
+    const repeated = await list(allPeople);
+    expect(repeated.people).toEqual(originalPeople);
+    expect(result.people).toEqual(originalPeople);
+    for (const row of result.sessions) {
+      expect(row.createdActor?.label).toBe("Current owner");
+      expect(row.owner?.actor.label).toBe("Current owner");
+      expect(row.participants).toMatchObject([{ label: "Current participant" }]);
+      if (row.archived) {
+        expect(row.archivedBy?.label).toBe("Current owner");
       }
-      const repeated = await listProjectedSessions({
-        projection,
-        opts: { archived: "all", includePeople: true },
-      });
-      expect(repeated.people).toEqual(originalPeople);
-      expect(result.people).toEqual(originalPeople);
-      for (const row of result.sessions) {
-        expect(row.createdActor?.label).toBe("Current owner");
-        expect(row.owner?.actor.label).toBe("Current owner");
-        expect(row.participants).toEqual([
-          expect.objectContaining({ label: "Current participant" }),
-        ]);
-        if (row.archived) {
-          expect(row.archivedBy?.label).toBe("Current owner");
-        }
-      }
-      expect(reads).not.toHaveBeenCalled();
-      linkEmail("participant@example.com", owner.id);
-      const merged = await listProjectedSessions({
-        projection,
-        opts: {
-          archived: "all",
-          includePeople: true,
-          profileRelation: { profileId: participant.id, relationship: "involving" },
-        },
-      });
-      expect(merged.sessions).toHaveLength(2);
-      expect(merged.people).toEqual([
-        expect.objectContaining({
-          identity: { type: "profile", id: owner.id },
-          label: "Current owner",
-          sessionCount: 2,
-        }),
-      ]);
-      expect(merged.sessions.every((row) => row.participants === undefined)).toBe(true);
-      expect(reads).not.toHaveBeenCalled();
-    } finally {
-      projection.dispose();
-      release();
     }
+    expect(reads).not.toHaveBeenCalled();
+    linkEmail("participant@example.com", owner.id);
+    const merged = await list({
+      ...allPeople,
+      profileRelation: { profileId: participant.id, relationship: "involving" },
+    });
+    expect(merged.sessions).toHaveLength(2);
+    expect(merged.people).toEqual([expectedPerson(owner.id, "Current owner")]);
+    expect(merged.sessions.every((row) => row.participants === undefined)).toBe(true);
+    expect(reads).not.toHaveBeenCalled();
   });
 });
 
@@ -523,8 +481,8 @@ it("reuses row identities across lists until their entry, profile, or config cha
     };
     replaceSessionEntrySync(scope, entry);
     recordSessionParticipant(scope, { identity: { type: "agent", id: "main" } });
-    const release = projectionWork.retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
     const list = () => listProjectedSessions({ projection, opts: {} });
     try {
       expect((await list()).sessions[0]?.effectiveCommunication).toEqual({
@@ -577,8 +535,6 @@ it("reuses row identities across lists until their entry, profile, or config cha
       expect((await list()).sessions[0]?.owner?.actor.label).toBe("Renamed agent");
     } finally {
       await projection.ensureMaterialized();
-      projection.dispose();
-      release();
     }
   });
 });
@@ -594,8 +550,8 @@ it.each(["source rewrite", "resolved snapshot"] as const)(
           { sessionId: `republish-${index}`, updatedAt: index + 1 },
         );
       }
-      const release = projectionWork.retainSessionListForegroundWork();
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      using release = holdForeground();
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
       try {
         if (publication === "source rewrite") {
           const source = (version: string) => ({

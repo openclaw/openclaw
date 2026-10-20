@@ -18,7 +18,6 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../src/gateway/message-action-turn-capability.js";
-import { runMessageAction } from "../src/infra/outbound/message-action-runner.js";
 import { createStartAccountContext } from "../src/plugin-sdk/test-helpers/start-account-context.js";
 import { setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { createRuntimeChannel } from "../src/plugins/runtime/runtime-channel.js";
@@ -135,14 +134,6 @@ async function withQaMessageTool(
               sourceReplyOnly: source.sourceReplyOnly,
               sourceReplyDeliveryMode: "message_tool_only",
               workspaceDir: state.workspaceDir,
-              runMessageAction,
-              getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-              resolveCommandSecretRefsViaGateway: async ({ config: inputConfig }) => ({
-                resolvedConfig: inputConfig,
-                diagnostics: [],
-                targetStatesByPath: {},
-                hadUnresolvedTargets: false,
-              }),
             });
             await exercise({ tool, inbound, busState, baseUrl: bus.baseUrl });
           } catch (error) {
@@ -183,41 +174,75 @@ async function withQaMessageTool(
 
 describe("QA message-tool current conversation delivery", () => {
   it.each([
-    { name: "implicit direct", kind: "direct", explicit: false },
-    { name: "implicit group", kind: "group", explicit: false },
-    { name: "implicit channel", kind: "channel", explicit: false },
-    { name: "explicit canonical DM", kind: "direct", explicit: true },
-    { name: "source-only direct", kind: "direct", explicit: false, sourceReplyOnly: true },
-  ] as const)("preserves the inbound conversation for $name", async (testCase) => {
+    ...(
+      [
+        { name: "implicit direct", kind: "direct", explicit: false },
+        { name: "implicit group", kind: "group", explicit: false },
+        { name: "implicit channel", kind: "channel", explicit: false },
+        { name: "explicit canonical DM", kind: "direct", explicit: true },
+        { name: "source-only direct", kind: "direct", explicit: false, sourceReplyOnly: true },
+      ] as const
+    ).map((source) => Object.assign({}, source, { mode: "root" as const })),
+    ...[
+      { name: "source-only", sourceReplyOnly: true, trusted: false },
+      { name: "trusted turn", sourceReplyOnly: false, trusted: true },
+      { name: "trusted source-only", sourceReplyOnly: true, trusted: true },
+    ].map((source) =>
+      Object.assign({}, source, {
+        mode: "authority" as const,
+        kind: "direct" as const,
+        threadId: "topic",
+        accountId: "secondary",
+      }),
+    ),
+  ] as const)("preserves the inbound conversation within $name", async (testCase) => {
+    const authority = testCase.mode === "authority";
     await withQaMessageTool(testCase, async ({ tool, inbound, baseUrl }) => {
-      if ("sourceReplyOnly" in testCase) {
-        await expect(
-          tool.execute("foreign-kind", {
-            action: "send",
-            target: `channel:${conversationId}`,
-            message: nonce,
-          }),
-        ).rejects.toThrow("cannot target another conversation or thread");
+      const send = (label: string, args: Record<string, unknown>) =>
+        tool.execute(label, { action: "send", message: nonce, ...args });
+      if (authority) {
+        await expect(send("other-account", { accountId: "default" })).rejects.toThrow(
+          testCase.sourceReplyOnly ? "another channel account" : "trusted current account",
+        );
+        if (testCase.sourceReplyOnly) {
+          for (const args of [
+            { target: `dm:${conversationId}-other` },
+            { target: `group:${conversationId}` },
+            { target: `thread:/v1/dm/${conversationId}/other` },
+            { threadId: "other" },
+            { replyTo: "foreign-message" },
+            { topLevel: true },
+          ]) {
+            await expect(send("outside-source", args)).rejects.toThrow("Completion source replies");
+          }
+        }
+      } else if ("sourceReplyOnly" in testCase) {
+        await expect(send("foreign-kind", { target: `channel:${conversationId}` })).rejects.toThrow(
+          "cannot target another conversation or thread",
+        );
       }
-      await tool.execute("qa-send", {
-        action: "send",
-        message: nonce,
-        final: true,
-        ...(testCase.explicit ? { target: `dm:${conversationId}` } : {}),
-      });
+      const sends = authority
+        ? [{}, { target: `dm:${conversationId}`, accountId: "SECONDARY", replyTo: inbound.id }]
+        : [{ final: true, ...(testCase.explicit ? { target: `dm:${conversationId}` } : {}) }];
+      for (const args of sends) {
+        await send(authority ? "within-source" : "qa-send", args);
+      }
       const snapshot = await getQaBusState(baseUrl);
       const outbound = snapshot.messages.filter((message) => message.direction === "outbound");
-      expect(outbound).toEqual([
-        expect.objectContaining({
-          conversation: inbound.conversation,
-          accountId: inbound.accountId,
-          text: nonce,
-          replyToId: inbound.id,
-          attachments: [],
-        }),
-      ]);
-      expect(outbound[0]?.threadId).toBeUndefined();
-      expect(snapshot.threads).toEqual([]);
+      const expected = {
+        conversation: inbound.conversation,
+        accountId: authority ? "secondary" : inbound.accountId,
+        text: nonce,
+        replyToId: inbound.id,
+        ...(authority ? {} : { attachments: [] }),
+      };
+      expect(outbound).toMatchObject(sends.map(() => expected));
+      for (const message of outbound) {
+        expect(message.threadId).toBe(authority ? "topic" : undefined);
+      }
+      if (!authority) {
+        expect(snapshot.threads).toEqual([]);
+      }
     });
   });
 
@@ -239,29 +264,29 @@ describe("QA message-tool current conversation delivery", () => {
       { ...source, trusted: true },
       async ({ tool, inbound, busState, baseUrl }) => {
         const { kind, root, thread, threadId, accountId } = source;
+        const otherAccount = accountId === "default" ? "secondary" : "default";
         const foreignRoots = conversationTargets
           .filter((target) => target.kind !== kind)
           .map((target) => target.root);
-        const own = busState.addOutboundMessage({
-          to: root,
-          accountId,
-          threadId,
-          text: "original",
-        });
+        const addMessage = (
+          text: string,
+          overrides: Partial<Parameters<typeof busState.addOutboundMessage>[0]> = {},
+        ) => busState.addOutboundMessage({ to: root, accountId, threadId, text, ...overrides });
+        const own = addMessage("original");
         const foreignMessages = [
           ...foreignRoots.map((to) => ({ name: "kind", to, threadId, accountId })),
           { name: "root", to: `${root}-other`, threadId, accountId },
           { name: "thread", to: root, threadId: "other", accountId },
-          ...(threadId ? [{ name: "unthreaded", to: root, accountId }] : []),
+          ...(threadId ? [{ name: "unthreaded", to: root, accountId, threadId: undefined }] : []),
           {
             name: "account",
             to: root,
             threadId,
-            accountId: accountId === "default" ? "secondary" : "default",
+            accountId: otherAccount,
           },
         ].map(({ name, ...params }) => ({
           name,
-          message: busState.addOutboundMessage({ ...params, text: `foreign ${name}` }),
+          message: addMessage(`foreign ${name}`, params),
         }));
         const inboundRead = await tool.execute("read-inbound", {
           action: "read",
@@ -273,32 +298,26 @@ describe("QA message-tool current conversation delivery", () => {
           { action: "react", emoji: "white_check_mark" },
           { action: "edit", message: "edited" },
         ]) {
+          const reject = (label: string, extra: Record<string, unknown>, reason: string) =>
+            expect(
+              tool.execute(`${label}-${args.action}`, { ...args, messageId: own.id, ...extra }),
+            ).rejects.toThrow(reason);
           for (const { name, message } of foreignMessages) {
-            await expect(
-              tool.execute(`foreign-${name}-${args.action}`, { ...args, messageId: message.id }),
-            ).rejects.toThrow(
+            await reject(
+              `foreign-${name}`,
+              { messageId: message.id },
               name === "account" ? "message not found" : "not in the selected conversation",
             );
           }
           for (const target of [...foreignRoots, `${root}-other`, `${thread}/other`]) {
-            await expect(
-              tool.execute(`foreign-target-${args.action}`, { ...args, target, messageId: own.id }),
-            ).rejects.toThrow("requires the exact current conversation and account");
+            await reject(
+              "foreign-target",
+              { target },
+              "requires the exact current conversation and account",
+            );
           }
-          await expect(
-            tool.execute(`foreign-thread-${args.action}`, {
-              ...args,
-              messageId: own.id,
-              threadId: "other",
-            }),
-          ).rejects.toThrow("not in the selected conversation");
-          await expect(
-            tool.execute(`foreign-account-${args.action}`, {
-              ...args,
-              messageId: own.id,
-              accountId: accountId === "default" ? "secondary" : "default",
-            }),
-          ).rejects.toThrow("trusted current account");
+          await reject("foreign-thread", { threadId: "other" }, "not in the selected conversation");
+          await reject("foreign-account", { accountId: otherAccount }, "trusted current account");
           for (const target of [
             {},
             { target: root },
@@ -344,84 +363,58 @@ describe("QA message-tool current conversation delivery", () => {
     "preserves thread and reply intent through $kind ingress",
     async ({ kind, root, thread }) => {
       await withQaMessageTool({ kind, threadId: "topic" }, async ({ tool, inbound, baseUrl }) => {
-        const cases: Array<{
-          name: string;
-          args: Record<string, unknown>;
-          threadId?: string;
-          replyToId?: string;
-          conversation?: QaBusMessage["conversation"];
-        }> = [
-          { name: "implicit", args: {}, threadId: "topic", replyToId: inbound.id },
-          { name: "same root", args: { target: root }, threadId: "topic", replyToId: inbound.id },
-          { name: "to alias", args: { to: root }, threadId: "topic", replyToId: inbound.id },
-          {
-            name: "bare explicit channel target",
-            args: { target: conversationId },
-            conversation: { kind: "channel", id: conversationId },
-            threadId: kind === "channel" ? "topic" : undefined,
-            replyToId: kind === "channel" ? inbound.id : undefined,
-          },
-          {
-            name: "same thread target",
-            args: { target: `${thread}/topic` },
-            threadId: "topic",
-            replyToId: inbound.id,
-          },
-          { name: "other thread target", args: { target: `${thread}/other` }, threadId: "other" },
-          {
-            name: "explicit thread",
-            args: { threadId: "other" },
-            threadId: "other",
-            replyToId: inbound.id,
-          },
-          {
-            name: "explicit reply",
-            args: { replyTo: "chosen-message" },
-            threadId: "topic",
-            replyToId: "chosen-message",
-          },
-          {
-            name: "other conversation",
-            args: { target: `${root}-other` },
-            conversation: { kind, id: `${conversationId}-other` },
-          },
-          {
-            name: "same ID foreign kind",
-            args: { target: `${kind === "direct" ? "group" : "dm"}:${conversationId}` },
-            conversation: { kind: kind === "direct" ? "group" : "direct", id: conversationId },
-          },
-          ...[{ topLevel: true }, { threadId: null }].flatMap((optOut) => [
-            { name: `implicit ${JSON.stringify(optOut)}`, args: optOut },
-            { name: `root ${JSON.stringify(optOut)}`, args: { target: root, ...optOut } },
-            {
-              name: `thread target ${JSON.stringify(optOut)}`,
-              args: { target: `${thread}/other`, ...optOut },
-              threadId: "other",
-            },
-            {
-              name: `explicit reply ${JSON.stringify(optOut)}`,
-              args: { ...optOut, replyTo: "chosen-message" },
-              replyToId: "chosen-message",
-            },
-          ]),
-          { name: "both opt-outs", args: { topLevel: true, threadId: null } },
-          {
-            name: "explicit thread with topLevel",
-            args: { threadId: "other", topLevel: true },
-            threadId: "other",
-          },
-          {
-            name: "explicit thread and reply with topLevel",
-            args: { threadId: "other", replyTo: "chosen-message", topLevel: true },
-            threadId: "other",
-            replyToId: "chosen-message",
-          },
+        type SendCase = [
+          args: Record<string, unknown>,
+          threadId?: string,
+          replyToId?: string,
+          conversation?: QaBusMessage["conversation"],
         ];
-        for (const testCase of cases) {
-          await tool.execute(testCase.name, {
+        const cases: SendCase[] = [
+          [{}, "topic", inbound.id],
+          [{ target: root }, "topic", inbound.id],
+          [{ to: root }, "topic", inbound.id],
+          [
+            { target: conversationId },
+            kind === "channel" ? "topic" : undefined,
+            kind === "channel" ? inbound.id : undefined,
+            { kind: "channel", id: conversationId },
+          ],
+          [{ target: `${thread}/topic` }, "topic", inbound.id],
+          [{ target: `${thread}/other` }, "other"],
+          [{ threadId: "other" }, "other", inbound.id],
+          [{ replyTo: "chosen-message" }, "topic", "chosen-message"],
+          [
+            { target: `${root}-other` },
+            undefined,
+            undefined,
+            { kind, id: `${conversationId}-other` },
+          ],
+          [
+            { target: `${kind === "direct" ? "group" : "dm"}:${conversationId}` },
+            undefined,
+            undefined,
+            { kind: kind === "direct" ? "group" : "direct", id: conversationId },
+          ],
+          ...[{ topLevel: true }, { threadId: null }].flatMap((optOut): SendCase[] => [
+            [optOut],
+            [{ target: root, ...optOut }],
+            [{ target: `${thread}/other`, ...optOut }, "other"],
+            [{ ...optOut, replyTo: "chosen-message" }, undefined, "chosen-message"],
+          ]),
+          [{ topLevel: true, threadId: null }],
+          [{ threadId: "other", topLevel: true }, "other"],
+          [
+            { threadId: "other", replyTo: "chosen-message", topLevel: true },
+            "other",
+            "chosen-message",
+          ],
+        ];
+        for (const [args] of cases) {
+          const name = JSON.stringify(args);
+          await tool.execute(name, {
             action: "send",
-            message: testCase.name,
-            ...testCase.args,
+            message: name,
+            ...args,
           });
         }
         await expect(
@@ -435,66 +428,18 @@ describe("QA message-tool current conversation delivery", () => {
         const snapshot = await getQaBusState(baseUrl);
         const outbound = snapshot.messages.filter((message) => message.direction === "outbound");
         expect(outbound).toHaveLength(cases.length);
-        for (const [index, testCase] of cases.entries()) {
-          expect.soft(outbound[index], testCase.name).toMatchObject({
-            conversation: testCase.conversation ?? inbound.conversation,
+        for (const [index, [args, threadId, replyToId, conversation]] of cases.entries()) {
+          const name = JSON.stringify(args);
+          expect.soft(outbound[index], name).toMatchObject({
+            conversation: conversation ?? inbound.conversation,
             accountId: inbound.accountId,
-            text: testCase.name,
+            text: name,
             attachments: [],
           });
-          expect.soft(outbound[index]?.threadId, testCase.name).toBe(testCase.threadId);
-          expect.soft(outbound[index]?.replyToId, testCase.name).toBe(testCase.replyToId);
+          expect.soft(outbound[index]?.threadId, name).toBe(threadId);
+          expect.soft(outbound[index]?.replyToId, name).toBe(replyToId);
         }
       });
     },
   );
-
-  it.each([
-    { name: "source-only", sourceReplyOnly: true, trusted: false },
-    { name: "trusted turn", sourceReplyOnly: false, trusted: true },
-    { name: "trusted source-only", sourceReplyOnly: true, trusted: true },
-  ])("inherits within $name authority and rejects account escapes", async (scope) => {
-    await withQaMessageTool(
-      { ...scope, kind: "direct", threadId: "topic", accountId: "secondary" },
-      async ({ tool, inbound, baseUrl }) => {
-        await expect(
-          tool.execute("other-account", { action: "send", accountId: "default", message: nonce }),
-        ).rejects.toThrow(
-          scope.sourceReplyOnly ? "another channel account" : "trusted current account",
-        );
-        if (scope.sourceReplyOnly) {
-          for (const args of [
-            { target: `dm:${conversationId}-other` },
-            { target: `group:${conversationId}` },
-            { target: `thread:/v1/dm/${conversationId}/other` },
-            { threadId: "other" },
-            { replyTo: "foreign-message" },
-            { topLevel: true },
-          ]) {
-            await expect(
-              tool.execute("outside-source", { action: "send", message: nonce, ...args }),
-            ).rejects.toThrow("Completion source replies");
-          }
-        }
-        for (const args of [
-          {},
-          { target: `dm:${conversationId}`, accountId: "SECONDARY", replyTo: inbound.id },
-        ]) {
-          await tool.execute("within-source", { action: "send", message: nonce, ...args });
-        }
-        const snapshot = await getQaBusState(baseUrl);
-        const outbound = snapshot.messages.filter((message) => message.direction === "outbound");
-        expect(outbound).toHaveLength(2);
-        for (const message of outbound) {
-          expect(message).toMatchObject({
-            conversation: inbound.conversation,
-            accountId: "secondary",
-            text: nonce,
-          });
-          expect.soft(message.threadId).toBe("topic");
-          expect(message.replyToId).toBe(inbound.id);
-        }
-      },
-    );
-  });
 });

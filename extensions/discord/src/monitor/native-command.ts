@@ -141,11 +141,9 @@ export function createDiscordNativeCommand(
     override name = command.name;
     override description = truncateDiscordCommandDescription({
       value: command.description,
-      label: `command:${command.name}`,
     });
     override descriptionLocalizations = truncateDiscordCommandDescriptionLocalizations({
       value: command.descriptionLocalizations,
-      label: `command:${command.name}`,
     });
     override defer = false;
     override ephemeral = ephemeralDefault;
@@ -468,17 +466,6 @@ async function dispatchDiscordCommandInteraction(
       command,
       menu,
       userId: interaction.user?.id ?? "",
-      ctx: {
-        cfg,
-        discordConfig,
-        accountId,
-        sessionPrefix,
-        threadBindings,
-        buildContext,
-        dispatchReplyFromConfig,
-      },
-      safeInteractionCall: safeDiscordInteractionCall,
-      dispatchCommandInteraction: dispatchDiscordCommandInteraction,
     });
     const delivered = await safeDiscordInteractionCall(
       preferFollowUp ? "interaction follow-up" : "interaction reply",

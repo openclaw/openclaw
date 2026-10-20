@@ -4,7 +4,6 @@ import path from "node:path";
 import OpenAI from "openai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { FailoverError } from "../agents/failover-error.js";
 import { HISTORY_CONTEXT_MARKER } from "../auto-reply/reply/history.js";
 import { CURRENT_MESSAGE_MARKER } from "../auto-reply/reply/mentions.js";
@@ -184,7 +183,7 @@ const WEATHER_TOOL = [
 const STREAM_FAILURE_CASES = [
   {
     name: "a reserved client tool",
-    createError: () => createClientToolNameConflictError(["read"]),
+    createError: () => new Error("client tool name conflict: read"),
     tools: [{ type: "function", name: "read" }],
     expectedCode: "invalid_request_error",
     expectedMessage: "invalid tool configuration",
@@ -489,7 +488,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         error: { type: "forbidden", message: "missing scope: operator.admin" },
       });
       expect(agentCommandMock).not.toHaveBeenCalled();
-      agentCommandMock.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+      agentCommandMock.mockRejectedValueOnce(new Error("client tool name conflict: exec"));
       const conflict = await postResponses(enabledPort, { ...request, tools: WEATHER_TOOL });
       expect(conflict.status).toBe(400);
       expect(await conflict.json()).toMatchObject({

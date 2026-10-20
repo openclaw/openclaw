@@ -6,14 +6,14 @@ import {
   SubagentRegistryWriteError,
 } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import type { ProgressContinuationCapability } from "../../channels/progress-continuation.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
-import type { ReplyOperation } from "./reply-run-registry.contracts.js";
-import { replyRunState } from "./reply-run-registry.state.js";
 
 export function buildWaitingStatusPayload(params: {
   completion: ReplyCompletion;
@@ -50,7 +50,7 @@ export function buildWaitingStatusPayload(params: {
  * Ordinary and queued waiting replies offer their progress draft to the work
  * that owes the result: the yielding turn's children, or its in-flight media runs.
  */
-export async function attachWaitingStatusProgressContinuation(params: {
+async function attachWaitingStatusProgressContinuation(params: {
   payload: ReplyPayload;
   acceptedSessionSpawns?: readonly AcceptedSessionSpawn[];
   /** Set only for a media continuation, which has no completion child. */
@@ -138,7 +138,7 @@ export async function prepareWaitingStatusContinuation(params: {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
     // Abort can still owe non-yielded cleanup; replacement cannot inherit this cohort.
     if (
-      replyRunState.activeRunsByKey.get(operationKey) !== replyOperation ||
+      !isCurrentSessionControllerOperation(replyOperation) ||
       replyOperation.key !== operationKey ||
       replyOperation.sessionId !== operationSessionId
     ) {

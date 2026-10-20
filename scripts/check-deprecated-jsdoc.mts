@@ -2,7 +2,7 @@
 // Checks deprecated JSDoc blocks for required migration details.
 import fs from "node:fs";
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { toLine } from "./lib/ts-guard-utils.mts";

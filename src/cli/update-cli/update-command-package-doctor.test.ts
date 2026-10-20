@@ -62,6 +62,47 @@ async function createDoctorFixture() {
 }
 
 it.each([
+  { requested: false, supported: false },
+  { requested: false, supported: true },
+  { requested: true, supported: false },
+  { requested: true, supported: true },
+])(
+  "runs the candidate Doctor with full integrity requested=$requested supported=$supported",
+  async ({ requested, supported }) => {
+    const { root, env } = await createDoctorFixture();
+    const calls = path.join(root, "doctor-calls.jsonl");
+    await fs.writeFile(
+      path.join(root, "dist", "entry.js"),
+      `const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
+if (args.includes("--help")) {
+  console.log(${JSON.stringify(supported ? "  --full-integrity-check  Check all indexes" : "  --fix  Repair problems")});
+} else {
+  if (!${supported} && args.includes("--full-integrity-check")) process.exit(2);
+  fs.writeFileSync(process.env.${UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV}, JSON.stringify({ status: "ok" }));
+}
+`,
+    );
+    const result = await runPackageUpdateDoctor({
+      root,
+      nodeRunner: process.execPath,
+      fullIntegrityCheck: requested,
+      managedServiceEnv: env,
+      timeoutMs: 5_000,
+      progress: {},
+    });
+    expect(result?.exitCode).toBe(0);
+    const argv = (await fs.readFile(calls, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as string[]);
+    expect(argv.filter((args) => args.includes("--help"))).toHaveLength(requested ? 1 : 0);
+    expect(argv.at(-1)?.includes("--full-integrity-check")).toBe(requested && supported);
+  },
+);
+
+it.each([
   { restart: false, contention: true },
   { restart: false, contention: true, wrapped: true },
   { restart: true, contention: true },

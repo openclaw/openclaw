@@ -81,3 +81,70 @@ it("retains foreground attachment custody when history settles during the input 
     attachments: [expect.objectContaining({ fileName: "held-enter.txt", content: "aGVsbG8=" })],
   });
 });
+
+it.each([false, true])(
+  "delivers steering across superseded history (refresh before send: %s)",
+  async (refreshBeforeSend) => {
+    const history = createDeferred<ChatHistoryResult>();
+    const admitted = createDeferred();
+    const sessionKey = "agent:main:history-steer";
+    const result: ChatHistoryResult = {
+      messages: [],
+      sessionInfo: {
+        key: sessionKey,
+        kind: "direct",
+        updatedAt: 1,
+        sessionId: "current-session",
+        activeLeafEntryId: "active-leaf",
+        hasActiveRun: true,
+        status: "running",
+        activeRunIds: ["active-run"],
+      },
+    };
+    let reads = 0;
+    const host = makeChatHost({
+      sessionKey,
+      currentSessionId: "current-session",
+      chatRunId: "active-run",
+      chatMessage: "Correct the active reply",
+      requestHandlers: {
+        "chat.history": () => (++reads === 1 ? history.promise : result),
+        "chat.send": { status: "in_flight", runId: "steer-input" },
+      },
+    });
+    const loading = loadChatHistory(host, { deferBranches: true });
+    // A live event invalidates the raw read and queues a replacement snapshot.
+    let refresh = refreshBeforeSend
+      ? loadChatHistory(host, { supersedeInFlight: true, deferBranches: true })
+      : undefined;
+    const sending = handleSendChat(host, undefined, {
+      followUpMode: "steer",
+      onOutboxAdmitted: () => admitted.resolve(),
+    });
+    try {
+      await admitted.promise;
+      expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
+      if (!refreshBeforeSend) {
+        refresh = loadChatHistory(host, { supersedeInFlight: true, deferBranches: true });
+      }
+      history.resolve({
+        ...result,
+        sessionInfo: { ...result.sessionInfo!, activeLeafEntryId: "stale-leaf" },
+      });
+      await Promise.all([loading, refresh, sending]);
+      expect(reads).toBe(2);
+      expect(host.chatDisplayedLeafEntryId).toBe("active-leaf");
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+      expect(findChatSendPayload(host)).toMatchObject({
+        sessionKey,
+        message: "Correct the active reply",
+        queueMode: "steer",
+      });
+      expect(host.chatRunId).toBe("active-run");
+    } finally {
+      history.resolve(result);
+      await Promise.all([loading, refresh, sending]);
+      host.sessions.dispose();
+    }
+  },
+);

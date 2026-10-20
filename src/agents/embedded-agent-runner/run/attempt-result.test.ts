@@ -196,13 +196,31 @@ function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
 }
 
 describe("attempt result projection", () => {
-  it.each([
+  it.each<{ parts: string[]; text: string; signedIndex?: number }>([
     { parts: ["First part.", "Second part."], text: "First part.\nSecond part." },
     { parts: ["NO_RE", "PLY\nFirst part.", "Second part."], text: "First part.\nSecond part." },
-  ])("preserves native answer boundaries for $parts", ({ parts, text }) => {
+    { parts: ["First part.", "Second part.\n\nNO_REPLY"], text: "First part.\nSecond part." },
+    { parts: ["First part.\n", "NO_", "REPLY"], text: "First part." },
+    {
+      parts: ["Legacy context.", "Signed answer."],
+      signedIndex: 1,
+      text: "Legacy context.\nSigned answer.",
+    },
+    {
+      parts: ["Legacy context.", "Signed answer.\n\nNO_REPLY"],
+      signedIndex: 1,
+      text: "Signed answer.",
+    },
+  ])("preserves native answer boundaries for $parts", ({ parts, text, signedIndex }) => {
     const assistant = makeAssistantMessageFixture({
       stopReason: "stop",
-      content: parts.map((part) => ({ type: "text", text: part })),
+      content: parts.map((part, index) => ({
+        type: "text",
+        text: part,
+        ...(index === signedIndex
+          ? { textSignature: JSON.stringify({ v: 1, id: "item_unphased" }) }
+          : {}),
+      })),
     });
     const result = completeResult({
       currentAttemptCompletedAssistant: assistant,

@@ -30,11 +30,8 @@ import {
   type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
-import {
-  areSessionCatalogsSettled,
-  type SessionDataControllerHost,
-} from "./session-data-controller-catalog.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import { areSessionCatalogsSettled, type SessionDataInputs } from "./session-data-catalog.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 import { resolveSidebarSessionSubtitle } from "./session-row-subtitle.ts";
 import { summarizeTeamSessionSlots } from "./solid/session-presentation.tsx";
 
@@ -86,7 +83,7 @@ export type SidebarVisibleSections = {
 };
 
 type SidebarPresentationHost = Pick<
-  SessionDataControllerHost,
+  SessionDataInputs,
   | "connected"
   | "navigationView"
   | "contextualSidebar"
@@ -95,7 +92,7 @@ type SidebarPresentationHost = Pick<
   | "sessionDataContext"
   | "expandedAgentId"
 > & {
-  readonly sessionData: SessionDataController;
+  readonly sessionData: SessionDataOwner;
   readonly sessionOwnershipVisibility: { filters: boolean; avatars: boolean };
   readonly sidebarMenus: { agentMenuPosition: { x: number; top: number } | null };
   readonly rosterSessionSource: {
@@ -116,7 +113,6 @@ type SidebarPresentationHost = Pick<
   otherAgentsHaveUnread(): boolean;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
   isSessionChildrenFullyShown(key: string): boolean;
-  querySelectorAll: HTMLElement["querySelectorAll"];
 };
 type SidebarPresentationReaders = {
   snapshot: boolean;
@@ -127,25 +123,19 @@ type SidebarPresentationReaders = {
   ownerOptions(): readonly SessionOwnerOption[];
 };
 
-/** Attention, agent-declared status, and the queued explanation are messages
- * the operator must act on; they replace a held subtitle immediately. */
-function isOperatorCriticalSubtitle(session: SidebarRecentSession): boolean {
-  return Boolean(
-    sessionAttentionSubtitle(session.attention) ||
-    session.agentStatusNote ||
-    (session.hasActiveRun && session.status === "queued"),
-  );
-}
-
 export class SidebarSessionProjection {
-  constructor(
-    private readonly now: () => number = () => Date.now(),
-    private readonly host?: { readonly isConnected: boolean; requestUpdate(): void },
-  ) {}
-
   // Record frame admission only; owner.updated can precede child DOM bindings.
   private publishedSessionPresentation = "";
   private admittedPresencePresentation = "";
+  private readonly mountedCatalogRows = new Set<{ key: string }>();
+
+  mountCatalogRow(key: string): () => void {
+    const row = { key };
+    this.mountedCatalogRows.add(row);
+    return () => {
+      this.mountedCatalogRows.delete(row);
+    };
+  }
 
   shouldPublishSessionData(
     host: SidebarPresentationHost,
@@ -224,13 +214,10 @@ export class SidebarSessionProjection {
                 (row) => host.sessionDataContext?.sessions.isRunVisuallyActive(row) ?? false,
               ),
             ),
-            Array.from(
-              host.querySelectorAll<HTMLElement>("[data-catalog-session-key][data-session-key]"),
-              (element) => {
-                const row = catalogRowsByKey.get(element.dataset.sessionKey ?? "");
-                return row ? navigation.toSidebarSession(row) : null;
-              },
-            ),
+            Array.from(this.mountedCatalogRows, ({ key }) => {
+              const row = catalogRowsByKey.get(key);
+              return row ? navigation.toSidebarSession(row) : null;
+            }),
             areSessionCatalogsSettled(data),
             [...data.visibleSessionLimits],
           ]
@@ -379,8 +366,7 @@ export class SidebarSessionProjection {
   revision = 0;
   createdOrderRevision = 0;
   private observedResults: readonly { sessions: readonly { key: string }[] }[] = [];
-  private subtitleTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private subtitleDeadline = Infinity;
+  subtitleDeadline = Infinity;
   private readonly observedOrder = new Map<string, number>();
   private nextCreatedOrder = 0;
   private readonly stickySections = new Map<string, Set<string>>();
@@ -460,7 +446,7 @@ export class SidebarSessionProjection {
   project(input: SidebarProjectionInput): SidebarVisibleSections {
     // Record the state published by this pass, including sticky membership and subtitles.
     this.revision += 1;
-    this.clearSubtitleTimer();
+    this.subtitleDeadline = Infinity;
     const previous = this.previousInput;
     const scopeChanged =
       previous !== null &&
@@ -619,34 +605,9 @@ export class SidebarSessionProjection {
     }
   }
 
-  dispose(): void {
-    this.clearSubtitleTimer();
-    this.revision += 1;
-  }
-
-  private clearSubtitleTimer(): void {
-    if (this.subtitleTimer !== null) {
-      globalThis.clearTimeout(this.subtitleTimer);
-    }
-    this.subtitleTimer = null;
+  invalidate(): void {
     this.subtitleDeadline = Infinity;
-  }
-
-  private scheduleSubtitleUpdate(deadline: number): void {
-    if (!this.host?.isConnected || this.subtitleDeadline <= deadline) {
-      return;
-    }
-    this.clearSubtitleTimer();
-    this.subtitleDeadline = deadline;
-    this.subtitleTimer = globalThis.setTimeout(
-      () => {
-        this.subtitleTimer = null;
-        this.subtitleDeadline = Infinity;
-        this.revision += 1;
-        this.host?.requestUpdate();
-      },
-      Math.max(0, deadline - this.now()),
-    );
+    this.revision += 1;
   }
 
   resolveSubtitle(params: SidebarSubtitleParams): SidebarSubtitleValue {
@@ -695,14 +656,23 @@ export class SidebarSessionProjection {
       return;
     }
     const held = this.heldSubtitles.get(session.key);
-    const now = this.now();
+    const now = Date.now();
     const replacing = held !== undefined && held.value.subtitle !== value.subtitle;
+    // Attention, agent-declared status, and the queued explanation require
+    // action; they replace a held subtitle immediately.
     if (
       replacing &&
       now - held.shownAt < SIDEBAR_SUBTITLE_MIN_DISPLAY_MS &&
-      !isOperatorCriticalSubtitle(session)
+      !(
+        sessionAttentionSubtitle(session.attention) ||
+        session.agentStatusNote ||
+        (session.hasActiveRun && session.status === "queued")
+      )
     ) {
-      this.scheduleSubtitleUpdate(held.shownAt + SIDEBAR_SUBTITLE_MIN_DISPLAY_MS);
+      this.subtitleDeadline = Math.min(
+        this.subtitleDeadline,
+        held.shownAt + SIDEBAR_SUBTITLE_MIN_DISPLAY_MS,
+      );
       return;
     }
     const catalogValue = resolveSidebarSessionSubtitle({ ...params, hasDisplay: true });

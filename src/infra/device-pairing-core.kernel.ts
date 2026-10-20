@@ -8,7 +8,6 @@ import type {
   PairedDeviceMetadataPatch,
   PrunedSupersededPairedDevice,
 } from "./device-pairing-core.types.js";
-// Manages device pairing requests, records, metadata, and node pairing state.
 import {
   listApprovedPairedDeviceRoles,
   resolveNodePairingGeneration,

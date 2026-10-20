@@ -1,24 +1,28 @@
-import { expect, it, onTestFinished, vi } from "vitest";
+import { createSignal } from "solid-js";
+import { expect, it, vi } from "vitest";
+import type { McpAppDiscoverResult } from "../../../src/shared/mcp-app-extensions.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import {
-  createApplicationGateway,
-  createApplicationContextProvider,
-} from "../test-helpers/application-context.ts";
+import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
+  McpAppResources,
   MCP_APP_RESOURCE_MENTION_EVENT,
   type McpAppResourceMentionDetail,
 } from "./mcp-app-resources.tsx";
 
-function mountResources() {
+function mountResources(
+  servers: McpAppDiscoverResult["servers"] = [
+    { serverName: "parts", label: "Parts", entrypoints: [], mentionTool: "search" },
+  ],
+) {
   const client = new GatewayBrowserClient({ url: "ws://gateway.example.test" });
-  const request = vi.spyOn(client, "request").mockResolvedValue({
-    servers: [{ serverName: "parts", label: "Parts", entrypoints: [], mentionTool: "search" }],
-  });
+  const request = vi.spyOn(client, "request").mockResolvedValue({ servers });
   const gatewayControl = createApplicationGateway();
   const { gateway, publishEvent } = gatewayControl;
   gatewayControl.publish({
@@ -34,18 +38,15 @@ function mountResources() {
       subscribe: () => () => {},
     }),
   };
+  const [sessionKey, updateSessionKey] = createSignal("agent:main:main");
   // SAFETY: This component only consumes the Gateway and agent selection capabilities.
-  const container = createApplicationContextProvider(context as ApplicationContext);
-  const picker = Object.assign(document.createElement("openclaw-mcp-app-resources"), {
-    sessionKey: "agent:main:main",
-    agentId: "main",
-  });
-  container.append(picker);
-  document.body.append(container);
-  onTestFinished(() => container.remove());
-  const setSessionKey = async (sessionKey: string) => {
-    picker.sessionKey = sessionKey;
-    await picker.updateComplete;
+  const { container } = mountSolid(
+    () => <McpAppResources sessionKey={sessionKey()} agentId="main" />,
+    { wrapper: createSolidApplicationContextProvider(context as ApplicationContext).wrapper },
+  );
+  const setSessionKey = (value: string) => {
+    updateSessionKey(value);
+    flush();
   };
   return { container, request, setSessionKey, publishEvent };
 }
@@ -153,7 +154,7 @@ it("keeps resource ownership through discovery reorder and ignores previous-sess
   }>();
   request.mockReturnValueOnce(pending.promise);
   container.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
-  await setSessionKey("agent:main:next");
+  setSessionKey("agent:main:next");
   flush();
   pending.resolve({
     resources: [{ type: "resource_link", uri: "file:///old.txt", name: "Old resource" }],
@@ -162,4 +163,102 @@ it("keeps resource ownership through discovery reorder and ignores previous-sess
   flush();
   expect(container.querySelector(".mcp-app-resources__result")).toBeNull();
   expect(container.textContent).not.toContain("Old resource");
+});
+
+it("submits native query and server changes made before presentation settles", async () => {
+  const { container, request } = mountResources([
+    { serverName: "parts", label: "Parts", entrypoints: [], mentionTool: "search" },
+    { serverName: "manuals", label: "Manuals", entrypoints: [], mentionTool: "search" },
+  ]);
+  await waitForSolid(() => expect(container.querySelector("button")).not.toBeNull());
+  container.querySelector<HTMLButtonElement>("button")!.click();
+  flush();
+  const input = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  const select = container.querySelector("select")!;
+  request.mockResolvedValueOnce({ resources: [] });
+
+  input.value = "brass gear";
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  select.value = "manuals";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  container.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+
+  expect(request).toHaveBeenLastCalledWith("mcp.app.mention", {
+    sessionKey: "agent:main:main",
+    agentId: "main",
+    serverName: "manuals",
+    query: "brass gear",
+  });
+  await waitForSolid(() => expect(container.querySelector('[role="status"]')).not.toBeNull());
+});
+
+it.each(["query", "server"])(
+  "rejects a retained resource button after a %s edit before rendering",
+  async (edit) => {
+    const { container, request } = mountResources([
+      { serverName: "parts", label: "Parts", entrypoints: [], mentionTool: "search" },
+      { serverName: "manuals", label: "Manuals", entrypoints: [], mentionTool: "search" },
+    ]);
+    const resource = {
+      type: "resource_link",
+      uri: "file:///parts/gear.txt",
+      name: "gear",
+    } as const;
+    await waitForSolid(() => expect(container.querySelector("button")).not.toBeNull());
+    request.mockResolvedValueOnce({ resources: [resource] });
+    await searchResources(container);
+    await waitForSolid(() =>
+      expect(container.querySelector(".mcp-app-resources__result")).not.toBeNull(),
+    );
+    const retained = container.querySelector<HTMLButtonElement>(".mcp-app-resources__result")!;
+    const mention = vi.fn((event: Event) => event.preventDefault());
+    container.addEventListener(MCP_APP_RESOURCE_MENTION_EVENT, mention);
+
+    if (edit === "query") {
+      const input = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+      input.value = "updated query";
+      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    } else {
+      const select = container.querySelector("select")!;
+      select.value = "manuals";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    retained.click();
+
+    expect(mention).not.toHaveBeenCalled();
+    flush();
+    expect(container.querySelector(".mcp-app-resources__result")).toBeNull();
+    expect(container.querySelector("form")).not.toBeNull();
+  },
+);
+
+it("retires a pending search across an empty intermediate session and return", async () => {
+  const { container, request, setSessionKey } = mountResources();
+  await waitForSolid(() => expect(container.querySelector("button")).not.toBeNull());
+  const pending = createDeferred<{
+    resources: { type: "resource_link"; uri: string; name: string }[];
+  }>();
+  request.mockReturnValueOnce(pending.promise).mockResolvedValueOnce({ servers: [] });
+  await searchResources(container);
+  expect(request).toHaveBeenCalledWith("mcp.app.mention", {
+    sessionKey: "agent:main:main",
+    agentId: "main",
+    serverName: "parts",
+    query: "",
+  });
+
+  setSessionKey("agent:main:other");
+  await waitForSolid(() => expect(container.querySelector(".mcp-app-resources")).toBeNull());
+  // The hidden picker has no presentation consumer during this committed identity.
+  setSessionKey("agent:main:main");
+  await waitForSolid(() => expect(container.querySelector("form")).not.toBeNull());
+  pending.resolve({
+    resources: [{ type: "resource_link", uri: "file:///old.txt", name: "Retired result" }],
+  });
+  await pending.promise;
+  flush();
+
+  expect(container.querySelector(".mcp-app-resources__result")).toBeNull();
+  expect(container.textContent).not.toContain("Retired result");
+  expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false);
 });

@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import {
   decorativeEmoji,
@@ -6,19 +7,20 @@ import {
 } from "../../packages/terminal-core/src/decorative-emoji.js";
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
+import { isLobsterDay, lobsterDayHash } from "../shared/lobster-day.js";
 import { hasRootVersionAlias } from "./argv.js";
-import { parseTaglineMode } from "./banner-config-lite.js";
-import { pickCliLobsterArt } from "./lobster-art.js";
 import { pickTagline, type TaglineOptions } from "./tagline.js";
 
 type BannerOptions = TaglineOptions & {
   argv?: string[];
   commit?: string | null;
-  columns?: number;
-  isTty?: boolean;
-  platform?: NodeJS.Platform;
   richTty?: boolean;
 };
+
+const LOBSTER_ARTS: readonly string[] = [
+  ["  (\\/)  (\\/)", "   \\_\\  /_/", "    ( o.o )", "    /|__|\\"].join("\n"),
+  ["     o   o", "     )   (", "  ~~~~~~~~~~~"].join("\n"),
+] as const;
 
 let bannerEmitted = false;
 
@@ -32,15 +34,12 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
   const commit =
     options.commit ?? resolveCommitHash({ env: options.env, moduleUrl: import.meta.url });
   const commitLabel = commit ?? "unknown";
-  const tagline = stripDecorativeEmojiForTerminal(
-    pickTagline({ ...options, mode: parseTaglineMode(options.mode) }),
-    options,
-  );
+  const tagline = stripDecorativeEmojiForTerminal(pickTagline(options), options);
   const rich = options.richTty ?? isRich();
   const title = decorativePrefix("🦞", "OpenClaw", options);
   const prefix = decorativeEmoji("🦞", options);
   const indent = prefix ? `${prefix} ` : "";
-  const columns = options.columns ?? process.stdout.columns ?? 120;
+  const columns = process.stdout.columns ?? 120;
   const plainBaseLine = `${title} ${version} (${commitLabel})`;
   const plainFullLine = tagline ? `${plainBaseLine} — ${tagline}` : plainBaseLine;
   const fitsOnOneLine = visibleWidth(plainFullLine) <= columns;
@@ -57,18 +56,25 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
 }
 
 // Rare day-seeded ASCII lobster above the banner: random-tagline mode only,
-// rich terminals only, never in CI (see lobster-art.ts for the odds).
+// rich terminals only, never in CI. The shared calendar keeps the UI pet in sync.
 function resolveLobsterArt(options: BannerOptions): string | null {
-  const mode = parseTaglineMode(options.mode);
-  if (mode === "off" || mode === "default") {
+  if (options.mode === "off" || options.mode === "default") {
     return null;
   }
   if (!(options.richTty ?? isRich())) {
     return null;
   }
-  const now = options.now ? options.now() : new Date();
-  const art = pickCliLobsterArt(now, options.env ?? process.env);
-  return art ? theme.accentDim(art) : null;
+  const now = new Date();
+  const env = options.env ?? process.env;
+  if (env.CI || env.VITEST || !isLobsterDay(now)) {
+    return null;
+  }
+  return theme.accentDim(
+    expectDefined(
+      LOBSTER_ARTS[(lobsterDayHash(now) >>> 8) % LOBSTER_ARTS.length],
+      "lobster arts entry at (lobster day hash(now) >>> 8) % lobster arts.length",
+    ),
+  );
 }
 
 export function emitCliBanner(version: string, options: BannerOptions = {}) {
@@ -76,8 +82,7 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
     return;
   }
   const argv = options.argv ?? process.argv;
-  const isTty = options.isTty ?? process.stdout.isTTY;
-  if (!isTty) {
+  if (!process.stdout.isTTY) {
     return;
   }
   if (hasJsonFlag(argv)) {

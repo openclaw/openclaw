@@ -4,10 +4,9 @@ import {
   type GeneratedImageAsset,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolveGeneratedImageDownloadMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   postJsonResponse,
   sanitizeConfiguredModelProviderRequest,
@@ -18,6 +17,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { toStandardGoogleProviderBase64 } from "./base64.js";
+import { resolveGoogleGenerationApiKey } from "./generation-auth.js";
 import {
   createGoogleImageGenerationProviderMetadata,
   DEFAULT_GOOGLE_IMAGE_MODEL,
@@ -117,20 +117,12 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
     ...createGoogleImageGenerationProviderMetadata(),
     isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "google", ...ctx }),
     async generateImage(req) {
-      const auth = await resolveApiKeyForProvider({
-        provider: "google",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("Google API key missing");
-      }
+      const apiKey = await resolveGoogleGenerationApiKey(req);
 
       const model = normalizeGoogleModelId(req.model?.trim() || DEFAULT_GOOGLE_IMAGE_MODEL);
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveGoogleGenerativeAiHttpRequestConfig({
-          apiKey: auth.apiKey,
+          apiKey,
           baseUrl: req.cfg?.models?.providers?.google?.baseUrl,
           request: sanitizeConfiguredModelProviderRequest(
             req.cfg?.models?.providers?.google?.request,
@@ -179,7 +171,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
         readOptions: {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(
             GOOGLE_MAX_IMAGE_RESULTS,
-            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+            resolveGeneratedImageDownloadMaxBytes(req.cfg),
           ),
         },
       });

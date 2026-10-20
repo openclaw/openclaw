@@ -1,6 +1,6 @@
 import { createComponent, createSignal, flush, merge } from "solid-js";
 import type { ControlUiSessionBranch } from "../../../../../src/gateway/control-ui-contract.js";
-import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
+import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 

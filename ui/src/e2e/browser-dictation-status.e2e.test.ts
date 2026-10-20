@@ -552,17 +552,39 @@ suite.define(() => {
           animations: "disabled",
           path: path.join(suite.artifactDir, "voice-controls/dictation-latched-after-release.png"),
         });
-        const composerBox = await composer.boundingBox();
-        expect(composerBox).not.toBeNull();
-        if (!composerBox) {
-          throw new Error("expected active dictation composer layout box");
-        }
-        for (const control of [phase, stop, send]) {
-          const box = await control.boundingBox();
-          expect(box, control.toString()).not.toBeNull();
+        // Read one rendered frame: owner publications can replace the status
+        // between Playwright's element lookup and its separate box request.
+        const { composerBox, controls } = await composer.evaluate((element) => {
+          const bounds = (target: Element) => {
+            const { x, y, width, height } = target.getBoundingClientRect();
+            return { x, y, width, height };
+          };
+          return {
+            composerBox: bounds(element),
+            controls: [
+              ".agent-chat__dictation-phase",
+              ".chat-mobile-dictation-action .chat-send-btn--dictating",
+              ".chat-send-btn--dictation-commit",
+            ].map((selector) => {
+              const control = element.querySelector(selector);
+              return {
+                selector,
+                box: control?.checkVisibility({ visibilityProperty: true })
+                  ? bounds(control)
+                  : null,
+              };
+            }),
+          };
+        });
+        expect(composerBox.width).toBeGreaterThan(0);
+        expect(composerBox.height).toBeGreaterThan(0);
+        for (const { selector, box } of controls) {
+          expect(box, selector).not.toBeNull();
           if (!box) {
             throw new Error("expected visible dictation control layout box");
           }
+          expect(box.width).toBeGreaterThan(0);
+          expect(box.height).toBeGreaterThan(0);
           expect(box.x).toBeGreaterThanOrEqual(composerBox.x);
           expect(box.x + box.width).toBeLessThanOrEqual(composerBox.x + composerBox.width);
         }

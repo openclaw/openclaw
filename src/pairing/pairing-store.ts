@@ -133,7 +133,7 @@ function mutatePairing(params: PairingOptions, mutation: PairingMutation) {
   );
 }
 
-/** @deprecated Await readChannelAllowFromStore; final compatibility day: 2026-12-31. */
+/** @deprecated Await readChannelAllowFromStore; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function readChannelAllowFromStoreSync(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,

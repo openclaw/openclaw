@@ -8,8 +8,8 @@ import {
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
-import { createStreamingErrorResponse } from "../test-support/streaming-error-response.js";
-import { openaiTTS } from "./tts.js";
+import { createStreamingResponse } from "../test-support/streaming-error-response.js";
+import { buildOpenAISpeechProvider } from "./speech-provider.js";
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: async ({
@@ -25,17 +25,26 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   ssrfPolicyFromHttpBaseUrlAllowedHostname: () => undefined,
 }));
 
-function synthesize(overrides: Partial<Parameters<typeof openaiTTS>[0]> = {}) {
-  return openaiTTS({
+const speech = buildOpenAISpeechProvider();
+
+async function synthesize(
+  providerConfig: Parameters<typeof speech.synthesize>[0]["providerConfig"] = {},
+) {
+  const result = await speech.synthesize({
     text: "hello",
-    apiKey: "test-key",
-    baseUrl: "https://api.openai.com/v1",
-    model: "gpt-4o-mini-tts",
-    voice: "alloy",
-    responseFormat: "mp3",
+    cfg: {},
+    providerConfig: {
+      apiKey: "test-key",
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o-mini-tts",
+      voice: "alloy",
+      responseFormat: "mp3",
+      ...providerConfig,
+    },
+    target: "audio-file",
     timeoutMs: 5_000,
-    ...overrides,
   });
+  return result.audioBuffer;
 }
 
 describe("openai tts", () => {
@@ -60,7 +69,7 @@ describe("openai tts", () => {
   // state helper removes its directory and restores the outer environment.
   const proxyReset = installDebugProxyTestResetHooks();
 
-  describe("openaiTTS diagnostics", () => {
+  describe("speech provider diagnostics", () => {
     it("adds OpenClaw attribution headers to native OpenAI speech requests", async () => {
       vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
       const fetchMock = vi.fn<typeof fetch>(
@@ -210,7 +219,7 @@ describe("openai tts", () => {
     });
 
     it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
-      const streamed = createStreamingErrorResponse({
+      const streamed = createStreamingResponse({
         status: 200,
         chunkCount: 20,
         chunkSize: 1024,
@@ -219,15 +228,21 @@ describe("openai tts", () => {
       const fetchMock = vi.fn<typeof fetch>(async () => streamed.response);
       globalThis.fetch = fetchMock;
 
-      await expect(synthesize({ maxBytes: 2048 })).rejects.toThrow(
-        "OpenAI TTS audio response exceeds 2048 bytes",
-      );
+      await expect(
+        speech.synthesize({
+          text: "hello",
+          cfg: { agents: { defaults: { mediaMaxMb: 2048 / (1024 * 1024) } } },
+          providerConfig: { apiKey: "test-key" },
+          target: "audio-file",
+          timeoutMs: 5_000,
+        }),
+      ).rejects.toThrow("OpenAI TTS audio response exceeds 2048 bytes");
 
       expect(streamed.getReadCount()).toBeLessThan(20);
     });
 
     it("caps streamed non-JSON error reads instead of consuming full response bodies", async () => {
-      const streamed = createStreamingErrorResponse({
+      const streamed = createStreamingResponse({
         status: 503,
         chunkCount: 200,
         chunkSize: 1024,

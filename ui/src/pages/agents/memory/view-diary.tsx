@@ -1,10 +1,11 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { createMemo, For, Show, untrack } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { HubTabs } from "../../../components/solid/hub-tabs.tsx";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import type { DreamingViewState } from "./dreaming.ts";
 import { DiaryEmpty, DreamingAction } from "./view-shared.tsx";
-import type { DreamingProps, DreamingViewState } from "./view-types.ts";
+import type { DreamingProps } from "./view-types.ts";
 import {
   ImportedInsightsContent,
   renderWikiPreviewOverlay,
@@ -178,8 +179,8 @@ function DreamDiaryContent(props: {
 }
 
 export function renderDiarySection(props: DreamingProps) {
-  const state = untrack(() => props.viewState);
-  const activeDiarySubTab = createMemo(() => state.activeDiarySubTab);
+  const state = () => props.viewState;
+  const activeDiarySubTab = createMemo(() => state().activeDiarySubTab);
   const content = createMemo(() => props.dreamDiaryContent);
   const entries = createMemo(() => {
     const current = content();
@@ -195,7 +196,7 @@ export function renderDiarySection(props: DreamingProps) {
         : (overview()?.clusters.map((cluster) => cluster.label) ?? []),
   );
   const selectedPage = createMemo(() =>
-    Math.max(0, Math.min(state.diaryPage, labels().length - 1)),
+    Math.max(0, Math.min(state().diaryPage, labels().length - 1)),
   );
   const diary = createMemo(
     () =>
@@ -245,10 +246,11 @@ export function renderDiarySection(props: DreamingProps) {
                 panelId: "dream-diary-panel",
                 variant: "sub",
                 onSelect: (tab) => {
-                  state.wikiPreview = null;
-                  state.activeDiarySubTab = tab;
-                  state.diaryPage = 0;
-                  props.onViewStateChange();
+                  props.onCloseWikiPreview();
+                  props.onViewStateChange((draft) => {
+                    draft.activeDiarySubTab = tab;
+                    draft.diaryPage = 0;
+                  });
                 },
               }}
             />
@@ -268,7 +270,9 @@ export function renderDiarySection(props: DreamingProps) {
                   : props.modeSaving || diary().loading
               }
               onClick={() => {
-                state.diaryPage = 0;
+                props.onViewStateChange((draft) => {
+                  draft.diaryPage = 0;
+                });
                 if (memoryWikiUnavailable()) {
                   props.onOpenConfig();
                 } else {
@@ -283,8 +287,9 @@ export function renderDiarySection(props: DreamingProps) {
               labels={labels()}
               selectedPage={selectedPage()}
               onSelect={(index) => {
-                state.diaryPage = index;
-                props.onViewStateChange();
+                props.onViewStateChange((draft) => {
+                  draft.diaryPage = index;
+                });
               }}
             />
           </Show>

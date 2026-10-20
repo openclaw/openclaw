@@ -1,4 +1,6 @@
 .session-title-placeholder {
+  --skeleton-base: var(--border-strong);
+
   display: inline-flex;
   align-items: center;
   width: 6.5em;
@@ -9,28 +11,10 @@
 .session-title-placeholder > span {
   display: block;
   width: 100%;
-  height: 0.72em;
-  background: var(--muted);
-  opacity: 0.28;
-  border-radius: 42% 58% 48% 52% / 60% 42% 58% 40%;
-  animation: session-title-wave 2.4s ease-in-out infinite alternate;
-}
-
-@keyframes session-title-wave {
-  to {
-    border-radius: 58% 42% 55% 45% / 40% 60% 42% 58%;
-    transform: scaleX(0.94) scaleY(1.12);
-    opacity: 0.4;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .session-title-placeholder > span {
-    animation: none;
-  }
+  height: 0.55em;
+  border-radius: 3px;
 }
 
 .sidebar-recent-session--creating .sidebar-recent-session__link {
-  padding-inline-start: 24px;
   cursor: default;
 }

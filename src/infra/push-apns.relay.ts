@@ -2,19 +2,9 @@ import {
   parseStrictPositiveInteger,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayConfig } from "../config/types.gateway.js";
-import { loadOrCreateProcessDeviceIdentityAsync } from "./device-identity-async.js";
-import { signDevicePayload, type DeviceIdentity } from "./device-identity.js";
-import { readResponseWithLimit } from "./http-body.js";
 import { normalizeApnsRelayBaseUrl } from "./push-apns-relay-url.js";
-import { requireCurrentApnsSend } from "./push-apns-send-current.js";
-
-type ApnsRelayPushType = "alert" | "background";
-type ApnsRelayEnvironment = "production" | "sandbox";
 
 export type ApnsRelayConfig = {
   baseUrl: string;
@@ -29,50 +19,13 @@ type ApnsRelayConfigResolutionOptions = {
   registrationRelayOrigin?: string;
 };
 
-export type ApnsRelayPushResponse = {
-  ok: boolean;
-  status: number;
-  apnsId?: string;
-  reason?: string;
-  environment?: ApnsRelayEnvironment;
-  tokenSuffix?: string;
-};
-
-export type ApnsRelayRequestSender = (params: {
-  relayConfig: ApnsRelayConfig;
-  sendGrant: string;
-  relayHandle: string;
-  gatewayDeviceId: string;
-  signature: string;
-  signedAtMs: number;
-  bodyJson: string;
-  pushType: ApnsRelayPushType;
-  priority: "10" | "5";
-  payload: object;
-  signal?: AbortSignal;
-  isCurrent?: () => Promise<boolean>;
-}) => Promise<ApnsRelayPushResponse>;
-
 /** Hosted APNs relay origin used only when registrations prove they were minted there. */
 const DEFAULT_APNS_RELAY_BASE_URL = "https://ios-push-relay.openclaw.ai";
 const DEFAULT_APNS_SANDBOX_RELAY_BASE_URL = "https://ios-push-relay-sandbox.openclaw.ai";
 const DEFAULT_APNS_RELAY_TIMEOUT_MS = 10_000;
-// Hard cap on the relay response body. The hosted relay reply is a tiny JSON status object;
-// without a cap a buggy/hostile/compromised relay could stream an unbounded body and exhaust
-// gateway memory (the existing AbortSignal.timeout only bounds connection latency, not body size).
-const APNS_RELAY_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
-const GATEWAY_DEVICE_ID_HEADER = "x-openclaw-gateway-device-id";
-const GATEWAY_SIGNATURE_HEADER = "x-openclaw-gateway-signature";
-const GATEWAY_SIGNED_AT_HEADER = "x-openclaw-gateway-signed-at-ms";
-
 function normalizeTimeoutMs(value: string | number | undefined): number {
   const parsed = typeof value === "number" ? value : parseStrictPositiveInteger(value);
   return resolveTimerTimeoutMs(parsed, DEFAULT_APNS_RELAY_TIMEOUT_MS, 1000);
-}
-
-function parseRelayEnvironment(value: unknown): ApnsRelayEnvironment | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(value);
-  return normalized === "sandbox" || normalized === "production" ? normalized : undefined;
 }
 
 /** Resolve the relay endpoint from env/config and require it to match relay-minted registrations. */
@@ -140,132 +93,4 @@ export function resolveApnsRelayConfigFromEnv(
       ),
     },
   };
-}
-
-// Sentinel marking an over-cap relay body. Carried as a distinct type so the response-read
-// catch path can fail closed on overflow instead of swallowing it into the malformed-JSON
-// (treat-as-empty-body) fallback that would otherwise report a successful send.
-class ApnsRelayResponseTooLargeError extends Error {
-  constructor(
-    readonly size: number,
-    readonly maxBytes: number,
-  ) {
-    super(`APNs relay response exceeded ${maxBytes} bytes (${size} bytes received)`);
-    this.name = "ApnsRelayResponseTooLargeError";
-  }
-}
-
-async function sendApnsRelayRequest(
-  params: Parameters<ApnsRelayRequestSender>[0],
-): Promise<ApnsRelayPushResponse> {
-  await requireCurrentApnsSend(params);
-  const timeoutSignal = AbortSignal.timeout(params.relayConfig.timeoutMs);
-  const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
-  const response = await fetch(`${params.relayConfig.baseUrl}/v1/push/send`, {
-    method: "POST",
-    redirect: "manual",
-    headers: {
-      authorization: `Bearer ${params.sendGrant}`,
-      "content-type": "application/json",
-      [GATEWAY_DEVICE_ID_HEADER]: params.gatewayDeviceId,
-      [GATEWAY_SIGNATURE_HEADER]: params.signature,
-      [GATEWAY_SIGNED_AT_HEADER]: String(params.signedAtMs),
-    },
-    body: params.bodyJson,
-    signal,
-  });
-  // Do not follow relay redirects; grants and signatures are scoped to the configured relay origin.
-  if (response.status >= 300 && response.status < 400) {
-    await response.body?.cancel().catch(() => undefined);
-    return {
-      ok: false,
-      status: response.status,
-      reason: "RelayRedirectNotAllowed",
-    };
-  }
-
-  let json: unknown;
-  try {
-    // Bound the relay body before buffering it; cancel the stream past the cap.
-    const buffer = await readResponseWithLimit(response, APNS_RELAY_MAX_RESPONSE_BYTES, {
-      onOverflow: ({ size, maxBytes }) => new ApnsRelayResponseTooLargeError(size, maxBytes),
-    });
-    json = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer)) as unknown;
-  } catch (err) {
-    if (err instanceof ApnsRelayResponseTooLargeError) {
-      // Fail closed: an oversized relay body must never be reported as a delivered push.
-      return {
-        ok: false,
-        status: response.status,
-        reason: "RelayResponseTooLarge",
-      };
-    }
-    // Malformed/empty JSON (or a non-overflow body read error) keeps the prior behaviour:
-    // treat the body as absent and derive status/ok from the HTTP response.
-    json = null;
-  }
-  const body =
-    json && typeof json === "object" && !Array.isArray(json)
-      ? (json as Record<string, unknown>)
-      : {};
-
-  const status =
-    typeof body.status === "number" && Number.isFinite(body.status)
-      ? Math.trunc(body.status)
-      : response.status;
-  const environment = parseRelayEnvironment(body.environment);
-  return {
-    ok: typeof body.ok === "boolean" ? body.ok : response.ok && status >= 200 && status < 300,
-    status,
-    apnsId: normalizeOptionalString(body.apnsId),
-    reason: normalizeOptionalString(body.reason),
-    ...(environment ? { environment } : {}),
-    tokenSuffix: normalizeOptionalString(body.tokenSuffix),
-  };
-}
-
-export async function sendApnsRelayPush(
-  params: Omit<
-    Parameters<ApnsRelayRequestSender>[0],
-    "gatewayDeviceId" | "signature" | "signedAtMs" | "bodyJson"
-  > & {
-    gatewayIdentity?: Pick<DeviceIdentity, "deviceId" | "privateKeyPem">;
-    requestSender?: ApnsRelayRequestSender;
-  },
-): Promise<ApnsRelayPushResponse> {
-  const sender = params.requestSender ?? sendApnsRelayRequest;
-  const gatewayIdentity =
-    params.gatewayIdentity ?? (await loadOrCreateProcessDeviceIdentityAsync());
-  await requireCurrentApnsSend(params);
-  const signedAtMs = Date.now();
-  const bodyJson = JSON.stringify({
-    relayHandle: params.relayHandle,
-    pushType: params.pushType,
-    priority: Number(params.priority),
-    payload: params.payload,
-  });
-  const signature = signDevicePayload(
-    gatewayIdentity.privateKeyPem,
-    // Domain-separate relay send signatures from other gateway/device signatures.
-    [
-      "openclaw-relay-send-v1",
-      gatewayIdentity.deviceId.trim(),
-      String(Math.trunc(signedAtMs)),
-      bodyJson,
-    ].join("\n"),
-  );
-  return await sender({
-    relayConfig: params.relayConfig,
-    sendGrant: params.sendGrant,
-    relayHandle: params.relayHandle,
-    gatewayDeviceId: gatewayIdentity.deviceId,
-    signature,
-    signedAtMs,
-    bodyJson,
-    pushType: params.pushType,
-    priority: params.priority,
-    payload: params.payload,
-    ...(params.signal ? { signal: params.signal } : {}),
-    ...(params.isCurrent ? { isCurrent: params.isCurrent } : {}),
-  });
 }

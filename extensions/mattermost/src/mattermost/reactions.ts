@@ -6,7 +6,6 @@ import {
   fetchMattermostChannel,
   fetchMattermostMe,
   type MattermostClient,
-  type MattermostFetch,
   type MattermostPost,
 } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -22,7 +21,6 @@ type ReactionParams = {
   accountId?: string | null;
   authorizedTarget?: string;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
-  fetchImpl?: MattermostFetch;
 };
 
 const BOT_USER_CACHE_TTL_MS = 10 * 60_000;
@@ -141,7 +139,6 @@ async function runMattermostReaction(
   const client = createMattermostClient({
     baseUrl,
     botToken,
-    fetchImpl: params.fetchImpl,
     allowPrivateNetwork: resolved.config.network?.dangerouslyAllowPrivateNetwork === true,
   });
 

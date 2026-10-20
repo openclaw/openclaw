@@ -25,13 +25,6 @@ import {
   isAutoManagedIMessageCliPath,
 } from "./setup-core.js";
 
-// Re-export for backwards compatibility
-export { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
-export {
-  getCachedIMessagePrivateApiStatus,
-  imessageRpcSupportsMethod,
-} from "./private-api-status.js";
-
 export type IMessageProbe = BaseProbeResult & {
   fatal?: boolean;
   privateApi?: IMessagePrivateApiStatus;

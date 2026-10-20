@@ -22,7 +22,7 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
   const state = await createOpenClawTestState({ scenario: "minimal" });
   setRuntimeConfigSnapshot({});
   const scheduler = createTestGatewayScheduler();
-  const terminalOwner = lifecyclePersistence.createSessionLifecyclePersistenceOwner(scheduler);
+  const terminalOwner = lifecyclePersistence.createSessionLifecyclePersistenceOwner();
   const writerEntered = createDeferredCore();
   const releaseWriter = createDeferredCore();
   const terminalDraining = createDeferredCore();

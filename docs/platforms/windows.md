@@ -259,6 +259,10 @@ running policy when ownership can still be verified. During an update, the
 updater retains recovery ownership. If recovery cannot be confirmed, inspect the
 reported Task Scheduler state before retrying.
 
+Publication accepts filesystem timestamp changes when the launcher's identity,
+permissions, and contents still match. Reinstallation reports the retained
+`.task.xml.bak` and launcher `.bak` recovery files beside the task script.
+
 Status reports the effective task working directory while checking runtime intent
 against the generated launcher. The standard unattended task directory does not
 invalidate an unchanged runtime pin. Inspection does not reinstall the service

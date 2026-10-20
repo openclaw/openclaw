@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Type } from "typebox";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
@@ -22,8 +22,6 @@ import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
-  prepareAgentRunAdmission,
-  type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
 import {
   rewrapToolWithBeforeToolCallHook,
@@ -44,6 +42,12 @@ import {
 import { callGatewayTool } from "../tools/gateway.js";
 import { getInProcessGatewayToolContext } from "../tools/in-process-gateway.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import {
+  admissionFixture,
+  bindTool,
+  testTool,
+  workspaceDefaults,
+} from "./host-capability.shard.test-support.js";
 import { retainBeforeToolCallForNativeHookRelay } from "./host-private-capabilities.js";
 
 vi.mock("../agent-tools.before-tool-call.js", async (importOriginal) => ({
@@ -56,78 +60,11 @@ vi.mock("../tools/gateway.js", () => ({ callGatewayTool: vi.fn() }));
 const mockRewrap = vi.mocked(rewrapToolWithBeforeToolCallHook);
 const mockRunBefore = vi.mocked(runBeforeToolCallHook);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
-type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
-
-const admissions: PreparedAgentRunAdmission[] = [];
-
-async function admittedAttempt(
-  runId = "run-1",
-  overrides: Omit<Partial<HostAttempt>, "admittedRunContext" | "runId"> = {},
-): Promise<{ attempt: HostAttempt; admission: PreparedAgentRunAdmission }> {
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "system", boundary: "host-capability-test", state: "present" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-  });
-  admissions.push(admission);
-  const admittedRunContext = await admission.admit("plugin-harness", `harness-${runId}`);
-  return {
-    admission,
-    attempt: {
-      agentId: "main",
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      runId,
-      cwd: "/attempt/worktree",
-      workspaceDir: "/workspace",
-      currentChannelId: "chat-1",
-      messageChannel: "telegram",
-      ...overrides,
-      admittedRunContext,
-    },
-  };
-}
-
-function testTool(execute = vi.fn(async () => ({ content: [], details: {} }))): {
-  tool: AnyAgentTool;
-  execute: typeof execute;
-} {
-  return {
-    execute,
-    tool: {
-      name: "read",
-      label: "Read",
-      description: "read",
-      parameters: Type.Object({}),
-      execute,
-    },
-  };
-}
-
-function bindTool(
-  attempt: HostAttempt,
-  tool: AnyAgentTool,
-): {
-  host: ReturnType<typeof createAgentHarnessHostCapabilities>;
-  bound: AnyAgentTool;
-} {
-  const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-  const [bound] = host.capabilities.bindToolSurface([tool]);
-  if (!bound) {
-    throw new Error("expected bound tool");
-  }
-  return { host, bound };
-}
+const { admittedAttempt, closeAdmissions } = admissionFixture(workspaceDefaults);
 
 afterEach(() => {
   vi.unstubAllEnvs();
-  for (const admission of admissions.splice(0)) {
-    admission.close();
-  }
+  closeAdmissions();
   resetAgentRunRegistryForTest();
 });
 
@@ -390,6 +327,18 @@ describe("agent harness host capability", () => {
 
     config.tools.loopDetection.enabled = false;
     skillsSnapshot.skills[0]!.name = "forged";
+    using createTools = vi
+      .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
+      .mockResolvedValue([]);
+    await host.capabilities.createToolSurfaceAsync!({
+      skillsSnapshot: { prompt: "remapped", skills: [{ name: "prompt-view" }] },
+    });
+    expect(createTools.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        skillsSnapshot: expect.objectContaining({ skills: [{ name: "prompt-view" }] }),
+        pluginExecutionSkillsSnapshot: expect.objectContaining({ skills: [{ name: "safe" }] }),
+      }),
+    );
     await host.capabilities.runBeforeToolCall({ toolName: "read", params: {} });
 
     expect(mockRunBefore).toHaveBeenLastCalledWith(
@@ -443,10 +392,10 @@ describe("agent harness host capability", () => {
     });
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
     const [bound] = host.capabilities.bindToolSurface([tool]);
-    const preparer = bound ? getInternalToolExecutionPreparer(bound) : undefined;
-    if (!preparer) {
-      throw new Error("expected bound preparer");
-    }
+    const preparer = expectDefined(
+      bound && getInternalToolExecutionPreparer(bound),
+      "bound preparer",
+    );
 
     await withPluginRuntimeGatewayRequestScope(
       { context: replacement, isWebchatConnect: () => false },
@@ -472,10 +421,7 @@ describe("agent harness host capability", () => {
     });
     const { attempt } = await admittedAttempt("run-reply-media");
     const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "codex" });
-    const prepare = host.capabilities.prepareReplyMedia;
-    if (!prepare) {
-      throw new Error("expected reply media capability");
-    }
+    const prepare = expectDefined(host.capabilities.prepareReplyMedia, "reply media capability");
     const request = {
       kind: "payload" as const,
       payload: { text: "Artifact ready\nMEDIA:./artifact.txt" },
@@ -813,10 +759,7 @@ describe("agent harness host capability", () => {
       return await preparationResult.promise;
     });
     const { host, bound } = bindTool(attempt, tool);
-    const boundPreparer = getInternalToolExecutionPreparer(bound);
-    if (!boundPreparer) {
-      throw new Error("expected retained bound execution preparer");
-    }
+    const boundPreparer = expectDefined(getInternalToolExecutionPreparer(bound), "bound preparer");
 
     const pending = boundPreparer({ toolCallId: "call-prepare-close-race", args: {} });
     await preparationStarted.promise;
@@ -847,10 +790,7 @@ describe("agent harness host capability", () => {
       dispose() {},
     }));
     const { host, bound } = bindTool(attempt, tool);
-    const boundPreparer = getInternalToolExecutionPreparer(bound);
-    if (!boundPreparer) {
-      throw new Error("expected retained bound execution preparer");
-    }
+    const boundPreparer = expectDefined(getInternalToolExecutionPreparer(bound), "bound preparer");
     const prepared = await boundPreparer({ toolCallId: "call-ready-close-race", args: {} });
     if (prepared.kind !== "ready") {
       throw new Error("expected ready execution preparation");

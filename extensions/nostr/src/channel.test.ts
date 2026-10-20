@@ -30,8 +30,8 @@ const secretCfg: OpenClawConfig = {
 };
 
 describe("nostr targets and access policy", () => {
-  it.each([npub.toUpperCase()])("resolves a prefixed public key: %s", (target) => {
-    const to = `  nostr:${target}  `;
+  it("resolves a prefixed public key", () => {
+    const to = `  nostr:${npub.toUpperCase()}  `;
     const normalized = nostrPlugin.messaging?.normalizeTarget?.(to);
     expect(normalized).toBe(TEST_HEX_PUBLIC_KEY);
     expect(nostrPlugin.messaging?.targetResolver?.looksLikeId?.(to)).toBe(true);
@@ -55,23 +55,17 @@ describe("nostr targets and access policy", () => {
 
   it("explains a missing outbound target", () => {
     const result = nostrPlugin.outbound?.resolveTarget?.({ cfg: {}, mode: "explicit" });
-    expect(result?.ok).toBe(false);
-    if (!result || result.ok) {
-      throw new Error("Expected blank Nostr target to fail");
-    }
-    expect(result.error.message).toBe(
-      "Delivering to Nostr requires target <npub|hex pubkey|nostr:npub...>",
-    );
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: "Delivering to Nostr requires target <npub|hex pubkey|nostr:npub...>" },
+    });
   });
 
-  it.each([{ entry: "nostr:*", expected: "nostr:*" }])(
-    "formats $entry without widening access",
-    ({ entry, expected }) => {
-      expect(nostrPlugin.config.formatAllowFrom?.({ cfg: {}, allowFrom: [entry] })).toEqual([
-        expected,
-      ]);
-    },
-  );
+  it("formats nostr:* without widening access", () => {
+    expect(nostrPlugin.config.formatAllowFrom?.({ cfg: {}, allowFrom: ["nostr:*"] })).toEqual([
+      "nostr:*",
+    ]);
+  });
 
   it("normalizes pairing entries with spaced prefixes", () => {
     expect(nostrPlugin.pairing?.normalizeAllowEntry?.(`  nostr:${TEST_HEX_PUBLIC_KEY}  `)).toBe(

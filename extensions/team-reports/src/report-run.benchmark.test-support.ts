@@ -93,8 +93,7 @@ try {
         new URL("./report-run.benchmark-worker.test-support.ts", import.meta.url),
       )
     : undefined;
-  const generate = runner ? runner.run.bind(runner) : generateReportPeriods;
-  const statuses = await generate({
+  const params: Parameters<typeof generateReportPeriods>[0] = {
     config,
     resolved,
     store,
@@ -108,10 +107,12 @@ try {
     runtime: {
       logger,
       fetchImpl: createReportRunFixtureFetch(),
-      signal: new AbortController().signal,
     },
     onRoster: () => {},
-  });
+  };
+  const statuses = runner
+    ? await runner.run({ ...params, runtime: { logger, signal: new AbortController().signal } })
+    : await generateReportPeriods(params);
   sampleHeap();
   const durationMs = performance.now() - start;
   monitoring.abort();

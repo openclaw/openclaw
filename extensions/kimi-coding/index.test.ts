@@ -34,26 +34,77 @@ describe("kimi provider plugin", () => {
     );
   });
 
-  it("uses binary thinking with thinking off by default and repairs replay signatures", async () => {
-    const provider = await registerSingleProviderPlugin(plugin);
+  it.each(["kimi-for-coding", "kimi-for-coding-highspeed", "kimi-code", "k2p5"])(
+    "keeps %s thinking enabled and repairs replay signatures",
+    async (modelId) => {
+      const provider = await registerSingleProviderPlugin(plugin);
 
-    expect(provider.buildReplayPolicy?.({ provider: "kimi" })).toEqual({
-      preserveSignatures: false,
-    });
-    expect(
-      provider.resolveThinkingProfile?.({
+      expect(provider.buildReplayPolicy?.({ provider: "kimi" })).toEqual({
+        preserveSignatures: false,
+      });
+      expect(
+        provider.resolveThinkingProfile?.({
+          provider: "kimi",
+          modelId,
+          reasoning: true,
+        } as never),
+      ).toEqual({
+        levels: [{ id: "low", label: "on" }],
+        defaultLevel: "low",
+      });
+    },
+  );
+
+  it.each(["kimi-for-coding", "kimi-for-coding-highspeed"])(
+    "sends enabled thinking for default, stored off, and on requests to %s",
+    async (modelId) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const model: Model<"anthropic-messages"> = {
         provider: "kimi",
-        modelId: "kimi-code",
+        id: modelId,
+        name: "Kimi Code",
+        api: "anthropic-messages",
+        baseUrl: "https://api.kimi.com/coding/",
         reasoning: true,
-      } as never),
-    ).toEqual({
-      levels: [
-        { id: "off", label: "off" },
-        { id: "low", label: "on" },
-      ],
-      defaultLevel: "off",
-    });
-  });
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262144,
+        maxTokens: 32768,
+      };
+      for (const thinkingLevel of [undefined, "off", "low"] as const) {
+        const wrapped = provider.wrapStreamFn?.({
+          provider: "kimi",
+          modelId,
+          model,
+          thinkingLevel,
+          streamFn: (runtimeModel, context, options) =>
+            streamSimpleAnthropic({ ...runtimeModel, api: "anthropic-messages" }, context, options),
+        });
+        if (!wrapped) {
+          throw new Error("Missing Kimi stream wrapper");
+        }
+        let payload: unknown;
+        const stream = await wrapped(
+          model,
+          {
+            messages: [
+              { role: "user", content: "Answer with just the number: 3 + 7", timestamp: 0 },
+            ],
+          },
+          {
+            apiKey: "synthetic-kimi-key",
+            onPayload: (value) => {
+              payload = value;
+              throw new Error("stop before network");
+            },
+          },
+        );
+        expect(await stream.result()).toMatchObject({ errorMessage: "stop before network" });
+        expect(payload).toMatchObject({ thinking: { type: "enabled", budget_tokens: 1024 } });
+        expect(payload).not.toHaveProperty("output_config.effort");
+      }
+    },
+  );
 
   it.each([
     ["weekly limit", "You've reached your weekly usage limit.", "rate_limit"],
@@ -142,6 +193,24 @@ describe("kimi provider plugin", () => {
       });
     },
   );
+
+  it("keeps off available for Kimi models outside the Kimi Code K2 backend", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "kimi",
+        modelId: "kimi-k2-instruct",
+        reasoning: true,
+      } as never),
+    ).toEqual({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+      defaultLevel: "off",
+    });
+  });
 
   it("leaves K2 simple completions unchanged", async () => {
     const provider = await registerSingleProviderPlugin(plugin);

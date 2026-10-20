@@ -5,7 +5,7 @@ import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-ca
 import {
   defaultTitle,
   normalizeToolDisplayName,
-  resolveToolVerbAndDetailForArgs,
+  resolveToolDetailForArgs,
   type ToolDisplaySpec,
 } from "../../../../src/agents/tool-display-common.js";
 import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js";
@@ -46,7 +46,7 @@ export function resolveToolDisplay(params: {
   const spec = TOOL_MAP[key];
   const icon = resolveToolDisplayIcon(name);
   const label = spec?.label ?? spec?.title ?? defaultTitle(name);
-  let { detail } = resolveToolVerbAndDetailForArgs({
+  let detail = resolveToolDetailForArgs({
     toolKey: key,
     args: call.args,
     spec,

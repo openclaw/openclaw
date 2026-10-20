@@ -277,7 +277,7 @@ describe("tool-loop-detection", () => {
         toolCallId: "rewritten-call",
         warningThreshold: 6,
       }),
-    ).toEqual({ active: true, count: 6, variantCount: 2 });
+    ).toBe(true);
   });
 
   it("does not reconcile a completed loop veto as a pending call", () => {
@@ -292,7 +292,7 @@ describe("tool-loop-detection", () => {
         toolParams: writeParams("/rewritten"),
         warningThreshold: 6,
       }),
-    ).toEqual({ active: false, count: 0, variantCount: 0 });
+    ).toBe(false);
     expect(state.toolCallHistory[0]?.argsHash).not.toBe("pending-args");
     expect(state.toolCallHistory[1]?.argsHash).toBe("vetoed-args");
   });

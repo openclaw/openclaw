@@ -33,17 +33,6 @@ if (process.versions.bun) {
 
 export type { LocalVitestScheduling };
 
-export const jsdomOptimizedDeps = {
-  optimizer: {
-    client: {
-      enabled: true,
-      // Root and directives must share browser/development internals; native
-      // Node deep imports otherwise mix incompatible private Lit fields.
-      include: ["lit/**"] as string[],
-    },
-  },
-};
-
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const nonIsolatedRunnerPath = path.join(repoRoot, "test", "non-isolated-runner.ts");
 const vitestConfigFiles = fs

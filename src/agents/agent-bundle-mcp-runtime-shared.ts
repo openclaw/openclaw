@@ -12,13 +12,21 @@ import type { McpServerConnectionResolved } from "./mcp-connection-resolver.js";
 
 export const SESSION_MCP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionMcpRuntimeManager");
 export const SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
-// Includes runtimes being created or drained; existing sessions never evict for capacity.
+// Includes runtimes being created or drained; idle owners yield capacity at the limit.
 export const SESSION_MCP_MAX_LIVE_RUNTIMES = 256;
 
-/** Idle eviction is opt-in; zero retains the session lifetime. */
+export class SessionMcpRuntimeCapacityError extends Error {
+  constructor(
+    readonly notify: boolean,
+    message = "MCP tools are temporarily unavailable: all 256 Gateway MCP runtimes are in use. This turn will continue without MCP tools; retry on the next turn.",
+  ) {
+    super(message);
+  }
+}
+
+/** TTL eviction is opt-in; capacity eviction also applies when zero. */
 export function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
-  const raw = cfg?.mcp?.sessionIdleTtlMs;
-  return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? Math.floor(raw) : 0;
+  return Math.floor(cfg?.mcp?.sessionIdleTtlMs ?? 0);
 }
 
 /** Checks whether harness-scoped MCP can affect a turn without loading its runtime graph. */

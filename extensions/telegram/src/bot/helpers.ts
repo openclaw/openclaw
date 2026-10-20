@@ -41,11 +41,7 @@ import type { TelegramGetChat } from "./types.js";
 export { resolveTelegramPreviewStreamMode as resolveTelegramStreamMode } from "../preview-streaming.js";
 export { normalizeTelegramReplyToMessageId as resolveTelegramReplyId } from "../outbound-params.js";
 
-export type {
-  TelegramForwardedContext,
-  TelegramMediaKind,
-  TelegramTextEntity,
-} from "./body-helpers.js";
+export type { TelegramForwardedContext, TelegramTextEntity } from "./body-helpers.js";
 export type { TelegramThreadSpec } from "../thread-spec.js";
 export {
   buildSenderLabel,

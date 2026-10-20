@@ -8,6 +8,8 @@ import {
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
 import { t } from "../../i18n/index.ts";
+import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
+import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
@@ -101,8 +103,18 @@ async function notifyWhenBackgroundSessionEnds(params: {
     path: nativeTarget.options.pathname,
     ...(nativeTarget.options.search ? { search: nativeTarget.options.search } : {}),
   });
+  const agent = params.context.agents.state.agentsList?.agents.find(
+    (entry) => entry.id === params.agentId,
+  ) ?? { id: params.agentId };
+  const identity = params.context.agentIdentity.get(params.agentId);
   showToast({
     fifo: true,
+    avatar: {
+      id: params.agentId,
+      name: normalizeAgentTargetLabel(agent, identity),
+      avatar: resolveAgentAvatarUrl(agent, identity),
+      textAvatar: resolveAgentTextAvatar(agent, identity),
+    },
     message: `${resolveSessionDisplayName(params.key, row)}: ${status}`,
     actionLabel: t("sessionsView.openSession"),
     onAction: () => {

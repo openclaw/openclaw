@@ -3,6 +3,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "@openclaw/normalization-core/number-coercion";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
@@ -143,12 +144,7 @@ export function createCodeModeRunOwner(
       retired.push(disposeContinuation(next));
     }
     const results = await Promise.allSettled(retired);
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      throw new AggregateError(failures, "Code Mode continuation cleanup failed");
-    }
+    throwSettledAggregate(results, "Code Mode continuation cleanup failed");
   };
   const close = (reason?: unknown): Promise<void> => {
     if (closing) {
@@ -248,6 +244,9 @@ export function createCodeModeRunOwner(
       return execution;
     },
     approvalWait,
+    releaseCall() {
+      releaseCall();
+    },
     bindCall(callSignal?: AbortSignal): AbortSignal {
       releaseCall();
       if (signal.aborted) {
@@ -344,12 +343,7 @@ export async function disposeAllCodeModeRuns(): Promise<void> {
   resumingRunIds.clear();
   scheduleActiveRunExpiry();
   const results = await Promise.allSettled(closing);
-  const failures = results.flatMap((result) =>
-    result.status === "rejected" ? [result.reason] : [],
-  );
-  if (failures.length) {
-    throw new AggregateError(failures, "Code Mode runs failed to close");
-  }
+  throwSettledAggregate(results, "Code Mode runs failed to close");
 }
 
 /** Abort each bridge call whose result has not already reached its guest. */
@@ -657,7 +651,11 @@ export function storeSuspendedRun(
   // A result that cannot expose its continuation must not leave an unreachable parked cell.
   activeRuns.set(runId, state);
   scheduleActiveRunExpiry();
-  return recordCodeModeToolOutcome(result, result, params.pending);
+  const recorded = recordCodeModeToolOutcome(result, result, params.pending);
+  // Successful observers can close before the next wait. Parked work remains
+  // owned by the parent run, catalog and expiry, not that completed call.
+  params.owner.releaseCall();
+  return recorded;
 }
 
 export function codeModeAbortedResult(params: {

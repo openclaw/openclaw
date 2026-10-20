@@ -50,7 +50,12 @@ import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provena
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
 import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
-import { assertCronRuntimeAuthorityCandidate } from "./run-admission.js";
+import {
+  assertCronCandidateSandboxPlacement,
+  assertCronRuntimeAuthorityCandidate,
+  resolveCronSandboxPlacement,
+  type CronSandboxPlacement,
+} from "./run-admission.js";
 import { createCronCandidateExecutionResolver } from "./run-candidate-runtime.js";
 import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import {
@@ -164,6 +169,9 @@ export function createCronPromptExecutor(
     hasNewGeneratedMediaTaskForSessionKey(params.runSessionKey, attemptMediaTaskIds);
 
   const resolveCandidateExecution = createCronCandidateExecutionResolver(params);
+  // Resolved once per isolated run from the prepared session entry; every
+  // candidate (initial, fallback, override) reuses the same placement facts.
+  let sandboxPlacement: CronSandboxPlacement | undefined;
 
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
     using inferenceLease = new DisposableStack();
@@ -204,6 +212,7 @@ export function createCronPromptExecutor(
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
     const cronAdmission = prepareCronRunAdmission({
+      operatorAuthority: params.operatorAuthority,
       admissionSource: params.admissionSource,
       deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
@@ -369,7 +378,12 @@ export function createCronPromptExecutor(
         });
         if (binding && (providerOverride !== binding.provider || cliExecution)) {
           throw new Error(
-            "Automation candidate is incompatible with its recorded inference account and route.",
+            "Automation candidate is incompatible with its recorded inference account and route. " +
+              (cliExecution
+                ? "The selected runtime uses a CLI login, which cannot replace this job's stored account. "
+                : "The selected model uses a different provider from this job's stored account. ") +
+              "Select a model compatible with the recorded account, or explicitly select a stored account with " +
+              "openclaw automations edit <jobId> --model <provider/model>@<profileId> using a host-managed runtime.",
           );
         }
         inferenceAuthorization?.assertCurrent();
@@ -377,6 +391,22 @@ export function createCronPromptExecutor(
           authority: params.job.runtimeAuthority,
           candidateRuntime,
           cliExecution,
+        });
+        // CLI backends execute on the gateway host; a session whose configured
+        // sandbox claims containment must fail closed instead of dispatching
+        // there. Covers every candidate: initial selection, fallbacks, and
+        // harness/runtime overrides. Unowned preflight errors are terminal for
+        // the whole fallback chain, so this cannot silently switch models.
+        sandboxPlacement ??= resolveCronSandboxPlacement({
+          cfg: params.cfgWithAgentDefaults,
+          agentId: params.agentId,
+          sessionKey: params.runSessionKey,
+          preparedSessionEntry: params.cronSession.sessionEntry,
+        });
+        assertCronCandidateSandboxPlacement({
+          ...sandboxPlacement,
+          cliExecution,
+          executionProvider,
         });
         // The validated candidate that admits detached work owns its continuation
         // even if the provider throws before returning result metadata.
@@ -442,6 +472,7 @@ export function createCronPromptExecutor(
             extraSystemPrompt: params.deliverySystemPrompt,
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+            messageToolFinalByDefault: sourceDelivery.messageTool.finalByDefault,
             scheduledToolPolicy,
             onExecutionStarted: notifyExecutionStarted,
             onExecutionPhase: notifyExecutionPhase,
@@ -538,11 +569,7 @@ export function createCronPromptExecutor(
                   nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
-                  cliSessionBindingFacts: {
-                    extraSystemPromptStatic: params.deliverySystemPrompt,
-                    sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
-                    requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
-                  },
+                  cliSessionBindingFacts: params.cliSessionBindingFacts,
                   toolsAllow: resolveCliRuntimeToolsAllow(params.agentPayload?.toolsAllow),
                   abortSignal: cliAbortSignal,
                 });

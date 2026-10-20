@@ -19,7 +19,10 @@ import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
 } from "../config/sessions/targets-read-availability.worker.js";
-import { dedupeSessionStoreTargetsBySqliteTarget } from "../config/sessions/targets.js";
+import {
+  dedupeSessionStoreTargetsBySqliteTarget,
+  type SessionStoreTarget as DoctorSessionStoreTarget,
+} from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWriteTransaction } from "../plugin-state/plugin-state-store.database.js";
 import {
@@ -63,8 +66,6 @@ import type { PluginDoctorRepairAuthority } from "./state-migrations.types.js";
 type SessionEvidenceResult = Awaited<
   ReturnType<NonNullable<PluginDoctorStateMigrationContext["readSessionIdentityEvidenceBatch"]>>
 >[number];
-type DoctorSessionStoreTarget = { agentId: string; storePath: string };
-
 type SessionSourceEvidence = { imported: boolean; sessionIds: ReadonlySet<string> };
 
 function hasUnimportedSessionIdentity(params: {

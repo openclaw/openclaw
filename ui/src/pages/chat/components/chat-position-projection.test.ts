@@ -28,7 +28,7 @@ function withPositionIndex(
       return null;
     });
   } finally {
-    transcript.hostDisconnected();
+    transcript.dispose();
   }
 }
 

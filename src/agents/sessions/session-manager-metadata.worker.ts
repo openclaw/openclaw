@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryInWorker } from "../../config/sessions/session-accessor.sqlite-compaction.js";
+import { readStagedConversationPublications } from "../../config/sessions/session-accessor.sqlite-conversation-publication.js";
 import { ensureSessionEntryInTransaction } from "../../config/sessions/session-accessor.sqlite-initial-entry.js";
 import { readTranscriptMutationAtSync } from "../../config/sessions/session-accessor.sqlite-metadata-read.js";
 import {
@@ -23,6 +23,7 @@ import {
   parseTranscriptAppendRefusal,
   SessionTranscriptWriterClaimReboundError,
 } from "../../config/sessions/session-transcript-writer-claim-error.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
@@ -68,7 +69,7 @@ export function bindSqliteWorkerBackend(
   _input: undefined,
   nativeContext: {
     databasePath: string;
-    database: DatabaseSync;
+    database: EngineConnection;
     admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
   },
 ): Omit<SqliteWorkerBackend<SessionMetadataWorkerOperations>, "close"> & { close(): undefined } {
@@ -86,7 +87,13 @@ export function bindSqliteWorkerBackend(
           : [];
       const entryPublication =
         stage === "commit" ? captureSessionEntryMetadataReceipts(entryChanges) : [];
-      if (!transcriptPublication.length && !entryPublication.length) {
+      const conversationPublication =
+        stage === "commit" ? readStagedConversationPublications({ db: context.database }) : [];
+      if (
+        !transcriptPublication.length &&
+        !entryPublication.length &&
+        !conversationPublication.length
+      ) {
         withoutSqliteDatabaseWriteScope(context.database, () =>
           nativeContext.admit(stage, restriction),
         );
@@ -96,6 +103,7 @@ export function bindSqliteWorkerBackend(
         kind: "session-manager-authority",
         transcriptPublication,
         entryPublication,
+        conversationPublication,
       };
       boundSessionEntryMetadataReceipts(entryPublication, publication);
       deferSqliteWorkerCommitReceipt(context.database, publication);
@@ -170,9 +178,6 @@ export function bindSqliteWorkerBackend(
           SessionMetadataWorkerOperations["session.transcript.appendMessage"]["output"]
         >(
           (database) => {
-            if (database.db !== context.database) {
-              throw new Error("Session message lost its borrowed canonical connection");
-            }
             admit("transaction");
             const value = applySessionDirectMessageInTransaction(database, {
               ...command.input,
@@ -207,9 +212,6 @@ export function bindSqliteWorkerBackend(
             | "session.metadata.append"]["output"]
         >(
           (database) => {
-            if (database.db !== context.database) {
-              throw new Error("Session metadata lost its borrowed canonical connection");
-            }
             admit("transaction");
             if (command.type === "session.metadata.initialize") {
               const initialized = ensureSessionEntryInTransaction(

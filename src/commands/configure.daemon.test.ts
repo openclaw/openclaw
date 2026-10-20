@@ -4,6 +4,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as runtimePaths from "../daemon/runtime-paths.js";
 import { maybeInstallDaemon } from "./configure.daemon.js";
 
+const runtime = vi.hoisted(() => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() }));
+vi.mock("../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: { ...actual.defaultRuntime, ...runtime },
+  };
+});
+
 const progressSetLabel = vi.hoisted(() => vi.fn());
 const loadConfig = vi.hoisted(() => vi.fn());
 const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
@@ -81,7 +90,6 @@ vi.mock("./systemd-linger.js", () => ({
 
 function runInstall(daemonRuntime?: Parameters<typeof maybeInstallDaemon>[0]["daemonRuntime"]) {
   return maybeInstallDaemon({
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     port: 18789,
     daemonRuntime,
   });
@@ -90,6 +98,7 @@ function runInstall(daemonRuntime?: Parameters<typeof maybeInstallDaemon>[0]["da
 describe("maybeInstallDaemon", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    runtime.exit.mockReset();
     readDaemonRuntimePinForInstall.mockReturnValue({ revision: "empty", stored: false });
     runExec.mockReset().mockResolvedValue({
       stdout: JSON.stringify({
@@ -148,15 +157,11 @@ describe("maybeInstallDaemon", () => {
       output: new PassThrough(),
     });
     select.mockResolvedValueOnce("reinstall").mockResolvedValueOnce(cancelled);
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(() => {
-        throw new Error("setup cancelled");
-      }),
-    };
+    runtime.exit.mockImplementationOnce(() => {
+      throw new Error("setup cancelled");
+    });
 
-    await expect(maybeInstallDaemon({ runtime, port: 18789 })).rejects.toThrow("setup cancelled");
+    await expect(maybeInstallDaemon({ port: 18789 })).rejects.toThrow("setup cancelled");
 
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(serviceUninstall).not.toHaveBeenCalled();

@@ -159,12 +159,12 @@ export async function updateAcpSessionStoreEntry(params: {
       maintenanceConfig,
       storePath: params.storePath,
     });
+    kickSessionHistoryDiskBudgetMaintenance({
+      agentId: scope.agentId,
+      env: scope.env,
+      storePath: params.storePath,
+      maintenanceConfig,
+    });
   }
-  kickSessionHistoryDiskBudgetMaintenance({
-    agentId: scope.agentId,
-    env: scope.env,
-    storePath: params.storePath,
-    maintenanceConfig,
-  });
   return result;
 }

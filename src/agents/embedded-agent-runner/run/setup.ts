@@ -1,4 +1,5 @@
 import { resolveOpenAIResponsesRequestContextTokens } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -124,7 +125,7 @@ export async function resolveHookModelSelection(params: {
   }
 
   if (modelResolveOverride?.providerOverride) {
-    selection.provider = modelResolveOverride.providerOverride;
+    selection.provider = normalizeProviderId(modelResolveOverride.providerOverride);
     log.info(`[hooks] provider overridden to ${selection.provider}`);
   }
   if (modelResolveOverride?.modelOverride) {
@@ -155,7 +156,7 @@ export function buildBeforeModelResolveAttachments(
   }));
 }
 
-/** Resolves only OpenClaw-owned context policy; native model owners keep that policy private. */
+/** Resolve host policy without inferring a native owner's private context capacity. */
 export function resolveEmbeddedRuntimeModelPolicy(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -163,6 +164,8 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
   modelId: string;
   runtimeModel: ProviderRuntimeModel;
   nativeModelOwned: boolean;
+  /** Explicit model policy on an ordinary host-owned run, never a supervised session. */
+  authoredContextTokenCap?: number;
   contextWindow?: string;
   contextTokenBudget?: number;
   requestExtraParams?: Record<string, unknown>;
@@ -173,7 +176,7 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
   contextTokensSource?: "resolved-v1";
   effectiveModel: ProviderRuntimeModel;
 } {
-  if (params.nativeModelOwned) {
+  if (params.nativeModelOwned && params.authoredContextTokenCap === undefined) {
     return { effectiveModel: params.runtimeModel };
   }
   // The session-selected context-window option caps native runs too; the CLI
@@ -237,11 +240,13 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
   const contextTokenBudget = Math.min(
     ctxInfo.tokens,
     params.contextTokenBudget ?? ctxInfo.tokens,
-    resolveOpenAIResponsesRequestContextTokens(
-      params.runtimeModel,
-      params.requestExtraParams,
-      params.requestServiceTiers,
-    ) ?? Infinity,
+    params.nativeModelOwned
+      ? Infinity
+      : (resolveOpenAIResponsesRequestContextTokens(
+          params.runtimeModel,
+          params.requestExtraParams,
+          params.requestServiceTiers,
+        ) ?? Infinity),
   );
   const contextWindowInfo =
     contextTokenBudget < ctxInfo.tokens
@@ -252,7 +257,7 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
         }
       : ctxInfo;
   const effectiveModel =
-    contextTokenBudget < (params.runtimeModel.contextWindow ?? Infinity)
+    !params.nativeModelOwned && contextTokenBudget < (params.runtimeModel.contextWindow ?? Infinity)
       ? { ...params.runtimeModel, contextWindow: contextTokenBudget }
       : params.runtimeModel;
   return {
@@ -261,6 +266,7 @@ export function resolveEmbeddedRuntimeModelPolicy(params: {
     // Cold readers match only provider/model/harness, so removable caps and
     // session-selectable windows cannot become persisted model facts.
     contextTokensSource:
+      !params.nativeModelOwned &&
       servingContextWindow === undefined &&
       contextWindowInfo.source === "model" &&
       contextWindowInfo.referenceTokens === undefined &&

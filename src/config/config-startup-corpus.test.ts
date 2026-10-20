@@ -96,43 +96,46 @@ const expectations: Record<
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());
 
+function writeJson(file: string, value: unknown) {
+  fs.writeFileSync(file, JSON.stringify(value));
+}
+
+function fixture(prefix: string, isolatedHome = false) {
+  const home = tempDirs.make(prefix);
+  const stateDir = isolatedHome ? path.join(home, ".openclaw") : home;
+  const configPath = path.join(stateDir, "openclaw.json");
+  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+  fs.mkdirSync(stateDir, { recursive: true });
+  const createIO = () => createConfigIO({ configPath, env, homedir: () => home, observe: false });
+  return { home, stateDir, configPath, env, createIO };
+}
+
+function stubEnv(env: NodeJS.ProcessEnv, values: Record<string, string>) {
+  Object.assign(env, values);
+  for (const [key, value] of Object.entries(values)) {
+    vi.stubEnv(key, value);
+  }
+}
+
 describe("operator config startup corpus", () => {
   it("preserves ambient channel ownership when retiring Copilot discovery", async () => {
-    const home = tempDirs.make("openclaw-copilot-owner-");
-    const configPath = path.join(home, "openclaw.json");
-    fs.writeFileSync(
-      configPath,
-      JSON.stringify({
-        agents: { list: [{ id: "worker", default: true }, { id: "other" }] },
-        plugins: {
-          entries: {
-            discord: { enabled: true },
-            "github-copilot": { config: { discovery: { enabled: false } } },
-          },
+    const { home, configPath, env, createIO } = fixture("openclaw-copilot-owner-");
+    writeJson(configPath, {
+      agents: { list: [{ id: "worker", default: true }, { id: "other" }] },
+      plugins: {
+        entries: {
+          discord: { enabled: true },
+          "github-copilot": { config: { discovery: { enabled: false } } },
         },
-      }),
-    );
-    const env = {
-      ...process.env,
+      },
+    });
+    stubEnv(env, {
       OPENCLAW_STATE_DIR: home,
       DISCORD_BOT_TOKEN: "synthetic-token",
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
       OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-    };
-    for (const key of [
-      "OPENCLAW_STATE_DIR",
-      "DISCORD_BOT_TOKEN",
-      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-      "OPENCLAW_BUNDLED_PLUGINS_DIR",
-    ] as const) {
-      vi.stubEnv(key, env[key]);
-    }
-    const snapshot = await createConfigIO({
-      configPath,
-      env,
-      homedir: () => home,
-      observe: false,
-    }).readConfigFileSnapshot();
+    });
+    const snapshot = await createIO().readConfigFileSnapshot();
     expect(snapshot.valid).toBe(false);
     const migrated = migrateLegacyConfig(snapshot.sourceConfig, {
       sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
@@ -148,22 +151,15 @@ describe("operator config startup corpus", () => {
   it.each([false, null])(
     "retains included Copilot discovery.enabled=%j until Doctor migrates it",
     async (enabled) => {
-      const home = tempDirs.make("openclaw-copilot-migration-");
-      const configPath = path.join(home, "openclaw.json");
+      const { home, configPath, createIO } = fixture("openclaw-copilot-migration-");
       const legacy = {
         plugins: {
           entries: { "github-copilot": { enabled: true, config: { discovery: { enabled } } } },
         },
       };
-      fs.writeFileSync(path.join(home, "copilot.json"), JSON.stringify(legacy));
-      fs.writeFileSync(configPath, JSON.stringify({ $include: "copilot.json" }));
-      const io = createConfigIO({
-        configPath,
-        env: { ...process.env, OPENCLAW_STATE_DIR: home },
-        homedir: () => home,
-        observe: false,
-      });
-      const snapshot = await io.readConfigFileSnapshot();
+      writeJson(path.join(home, "copilot.json"), legacy);
+      writeJson(configPath, { $include: "copilot.json" });
+      const snapshot = await createIO().readConfigFileSnapshot();
       expect(snapshot.valid).toBe(false);
       expect(snapshot.sourceConfig.plugins?.entries?.["github-copilot"]?.config).toEqual({
         discovery: { enabled },
@@ -186,10 +182,11 @@ describe("operator config startup corpus", () => {
   it.each(fixtureNames)(
     "%s loads, prepares model rows, and offers provider login",
     async (name) => {
-      const home = tempDirs.make("openclaw-config-corpus-");
-      const stateDir = path.join(home, ".openclaw");
-      const configPath = path.join(stateDir, "openclaw.json");
-      for (const [key, value] of Object.entries({
+      const { home, stateDir, configPath, env, createIO } = fixture(
+        "openclaw-config-corpus-",
+        true,
+      );
+      stubEnv(env, {
         HOME: home,
         USERPROFILE: home,
         OPENCLAW_TEST_HOME: home,
@@ -197,23 +194,17 @@ describe("operator config startup corpus", () => {
         OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-      })) {
-        vi.stubEnv(key, value);
-      }
-      fs.mkdirSync(stateDir, { recursive: true });
+      });
       const pluginDir = path.join(home, "external-plugin");
       fs.mkdirSync(pluginDir);
-      fs.writeFileSync(
-        path.join(pluginDir, "openclaw.plugin.json"),
-        JSON.stringify({
-          id: "fixture-extension",
-          configSchema: {
-            type: "object",
-            additionalProperties: false,
-            properties: { apiKey: { type: "string" } },
-          },
-        }),
-      );
+      writeJson(path.join(pluginDir, "openclaw.plugin.json"), {
+        id: "fixture-extension",
+        configSchema: {
+          type: "object",
+          additionalProperties: false,
+          properties: { apiKey: { type: "string" } },
+        },
+      });
       fs.writeFileSync(
         path.join(pluginDir, "index.ts"),
         'export default { id: "fixture-extension", register() {} };\n',
@@ -225,14 +216,8 @@ describe("operator config startup corpus", () => {
           ? path.join(home, value.slice("/home/fixture/".length))
           : value,
       );
-      fs.writeFileSync(configPath, JSON.stringify(raw));
-      const env = { ...process.env };
-      const io = createConfigIO({
-        configPath,
-        env,
-        homedir: () => home,
-        observe: false,
-      });
+      writeJson(configPath, raw);
+      const io = createIO();
       const snapshot = await io.readConfigFileSnapshot();
       const migrated = applyLegacyCompatibilityStep({
         snapshot,
@@ -248,7 +233,7 @@ describe("operator config startup corpus", () => {
       const normalized = normalizeCompatibilityConfigValues(migrated.state.candidate, {
         sourceRaw: snapshot.parsed,
       });
-      fs.writeFileSync(configPath, JSON.stringify(normalized.config));
+      writeJson(configPath, normalized.config);
       const startup = await loadGatewayStartupConfigSnapshot({
         initialSnapshotRead: await io.readConfigFileSnapshotWithPluginMetadata(),
         minimalTestGateway: false,

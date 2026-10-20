@@ -15,7 +15,7 @@ Typed decision provider for hosted Jev and local System One models.
 ## Distribution
 
 - Package: `@openclaw/typesafe`
-- Install route: npm or ClawHub: `clawhub:@openclaw/typesafe`
+- Install route: npm or ClawHub: `@openclaw/typesafe`
 
 ## Surface
 

@@ -211,7 +211,7 @@ async function createOpenAIRealtimeBrowserSession(
     const auth = await resolveOpenAIQuicksilverBridgeAuth({ ...authParams, model }, context);
     return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);
   }
-  if (req.gatewayControl) {
+  if (req.clientControl) {
     if (!quicksilverBroker) {
       throw new Error("OpenAI realtime browser session broker is unavailable");
     }
@@ -281,16 +281,10 @@ async function createOpenAIRealtimeBrowserSession(
               },
               context,
             );
-            if (gatewayControl.bindControl) {
-              gatewayControl.bindControl({
-                submitToolResult: bridge.submitToolResult.bind(bridge),
-                sendUserMessage: bridge.sendUserMessage.bind(bridge),
-              });
-            } else {
-              // v2026.8.1 hosts expose only bindBridge. Remove this fallback when the
-              // minimum supported host includes bindControl; native negotiation never uses it.
-              gatewayControl.bindBridge(bridge);
-            }
+            gatewayControl.bindControl({
+              submitToolResult: bridge.submitToolResult.bind(bridge),
+              sendUserMessage: bridge.sendUserMessage.bind(bridge),
+            });
             return bridge;
           },
         },
@@ -537,7 +531,7 @@ export function buildOpenAIRealtimeVoiceProvider(
       }
       const effectiveModel = model ?? config.model ?? "";
       if (isOpenAIGptLiveModel(effectiveModel)) {
-        // Older hosts do not prepare this control claim, even when they own native delegations.
+        // Native delegation callbacks alone do not grant Gateway control of client media.
         const supportsGatewayControl =
           clientControl?.owner === "gateway" &&
           internalApi.isBrowserSessionConfigured({
@@ -576,7 +570,7 @@ export function buildOpenAIRealtimeVoiceProvider(
       }
       const effectiveModel = model ?? config.model ?? "";
       if (isOpenAIGptLiveModel(effectiveModel)) {
-        // Older hosts do not prepare this control claim, even when they own native delegations.
+        // Native delegation callbacks alone do not grant Gateway control of client media.
         const supportsGatewayControl =
           clientControl?.owner === "gateway" &&
           (await isBrowserSessionConfiguredAsync({

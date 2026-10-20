@@ -104,6 +104,22 @@ describe("buildGuardedModelFetch", () => {
     }
   });
 
+  it("keeps the completed body and releases its local lease when guard cleanup fails", async () => {
+    const releaseLease = vi.fn();
+    ensureModelProviderLocalServiceMock.mockResolvedValue({ release: releaseLease });
+    const releaseGuard = mockResponse(
+      new Response("ok"),
+      vi.fn(async () => {
+        throw new Error("synthetic guard cleanup failure");
+      }),
+    );
+
+    await expect((await request({}, localModel)).text()).resolves.toBe("ok");
+
+    expect(releaseGuard).toHaveBeenCalledOnce();
+    expect(releaseLease).toHaveBeenCalledOnce();
+  });
+
   it("releases the local lease when guarded fetch fails", async () => {
     const release = vi.fn();
     const error = new Error("network down");

@@ -6,10 +6,7 @@ import type {
   BrowserPageError,
 } from "./pw-session.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
-import {
-  awaitActionWithAbort,
-  createAbortPromiseWithListener,
-} from "./pw-tools-core.interactions.navigation.js";
+import { awaitActionWithAbort } from "./pw-tools-core.interactions.navigation.js";
 
 /** Returns visible page text without evaluating caller-provided JavaScript. */
 export async function getPageTextViaPlaywright(opts: {
@@ -32,7 +29,6 @@ export async function getPageTextViaPlaywright(opts: {
   const signal = opts.signal
     ? AbortSignal.any([opts.signal, controller.signal])
     : controller.signal;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
   const read = async () => {
     signal.throwIfAborted();
     const page = await getPageForTargetId(opts);
@@ -52,18 +48,14 @@ export async function getPageTextViaPlaywright(opts: {
     // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- This action reads rendered text, not hidden DOM text.
     return await locator.innerText({ timeout: Math.max(1, deadline - Date.now()), signal });
   };
-  try {
-    const text = await withTimeout(awaitActionWithAbort(read(), abortPromise), timeout, {
-      createError: () => {
-        const error = new Error(`Page text extraction timed out after ${timeout}ms`);
-        controller.abort(error);
-        return error;
-      },
-    });
-    return { text: text.slice(0, maxChars), truncated: text.length > maxChars };
-  } finally {
-    cleanup();
-  }
+  const text = await withTimeout(awaitActionWithAbort(read(), signal), timeout, {
+    createError: () => {
+      const error = new Error(`Page text extraction timed out after ${timeout}ms`);
+      controller.abort(error);
+      return error;
+    },
+  });
+  return { text: text.slice(0, maxChars), truncated: text.length > maxChars };
 }
 
 export async function getPageErrorsViaPlaywright(opts: {

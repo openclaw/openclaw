@@ -56,11 +56,7 @@ import {
   sendMessageFeishu,
   sendStructuredCardFeishu,
 } from "./send.js";
-import {
-  FeishuStreamingFinalizationError,
-  FeishuStreamingSession,
-  mergeStreamingText,
-} from "./streaming-card.js";
+import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { queueFeishuStreamingUpdate } from "./streaming-update.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
@@ -87,12 +83,12 @@ const STREAMING_START_FAILURE_BACKOFF_MS = 60_000;
 const NO_VISIBLE_REPLY_FALLBACK_TEXT =
   "⚠️ This reply completed without visible content. The turn may have been interrupted; please retry or ask me to recover from recent context.";
 
-function isStreamingStartBackedOff(accountId: string, now = Date.now()): boolean {
+function isStreamingStartBackedOff(accountId: string): boolean {
   const backoffUntil = streamingStartBackoffUntilByAccount.get(accountId);
   if (backoffUntil === undefined) {
     return false;
   }
-  if (backoffUntil <= now) {
+  if (backoffUntil <= Date.now()) {
     streamingStartBackoffUntilByAccount.delete(accountId);
     return false;
   }
@@ -180,7 +176,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       accountId,
       typing: {
         start: async () => {
-          if (!(account.config.typingIndicator ?? true)) {
+          if (!account.config.typingIndicator) {
             return;
           }
           if (!typingTargetMessageId) {
@@ -466,7 +462,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (streamingToClose?.isActive()) {
         statusLine = "";
         const text = buildCombinedStreamText(finalizedReasoningText, finalizedAnswerText);
-        let closed;
+        let closed: FeishuReplyDeliveryResult;
         try {
           if (disposition === "discarded") {
             closed = await streamingToClose.discard();
@@ -475,21 +471,13 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             closed = await streamingToClose.closeWithResult(text, { note: finalNote });
           }
         } catch (error: unknown) {
-          if (!(error instanceof FeishuStreamingFinalizationError)) {
+          if (!isChannelPartialDeliveryError(error)) {
             throw error;
           }
-          closed = error.result;
+          closed = error.deliveryResult;
           finalizationError = error;
         }
-        result = {
-          ...createFeishuReplyDeliveryResult({
-            results: [closed],
-            visibleReplySent: closed.visibleReplySent,
-            content: closed.content,
-            kind: "card",
-          }),
-          ...(closed.finalTextAccepted === false ? { finalTextAccepted: false } : {}),
-        };
+        result = closed;
         if (result.visibleReplySent) {
           visibleReplySent = true;
         }
@@ -502,15 +490,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           (finalizationError === undefined || result.content === text)
         ) {
           deliveredFinalTexts.add(finalizedAnswerText);
-        }
-        if (
-          finalizationError instanceof FeishuStreamingFinalizationError &&
-          result.visibleReplySent
-        ) {
-          finalizationError = createFeishuPartialReplyDeliveryError(
-            finalizationError.cause ?? finalizationError,
-            result,
-          );
         }
       }
       return {
@@ -895,9 +874,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (deliveryError !== undefined) {
               completion.reject(
                 createFeishuPartialReplyDeliveryError(
-                  (isChannelPartialDeliveryError(deliveryError) &&
-                    deliveryError instanceof Error) ||
-                    deliveryError instanceof FeishuStreamingFinalizationError
+                  isChannelPartialDeliveryError(deliveryError) && deliveryError instanceof Error
                     ? (deliveryError.cause ?? deliveryError)
                     : deliveryError,
                   settledResult,
@@ -994,7 +971,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       ? new AggregateError(
           [
             mediaCause,
-            finalizationError instanceof Error
+            finalizationError instanceof Error &&
+            (isChannelPartialDeliveryError(finalizationError) || settlement.error === undefined)
               ? (finalizationError.cause ?? finalizationError)
               : finalizationError,
           ],

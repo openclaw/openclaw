@@ -280,7 +280,7 @@ describeTelegramDispatch("dispatchTelegramMessage final-delivery-lifecycle", () 
       context: progressContext(status),
       streamMode: "partial",
       telegramCfg: { streaming: { mode: "partial" } },
-      telegramDeps: {
+      moduleMocks: {
         ...telegramDepsForTest,
         recordOutboundMessageForPromptContext: recordContext,
       },

@@ -5,6 +5,7 @@ import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { CODE_MODE_NODES_TOOL_ID, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
 import { createCodeModeCatalogBindings, type CodeModeCatalogBinding } from "./code-mode-catalog.js";
+import { markCodeModeCheckpoint } from "./code-mode-checkpoint.js";
 import {
   CODE_MODE_EXEC_TOOL_NAME,
   CODE_MODE_WAIT_TOOL_NAME,
@@ -27,11 +28,11 @@ import {
   resolveCodeModeConfig,
 } from "./code-mode-runtime.js";
 import { recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
-import { isCoreCodingSurfaceToolName } from "./core-tool-factory-descriptors.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { copyInternalToolResultState } from "./runtime/internal-hooks.js";
 import { executionTitleSchema } from "./schema/typebox.js";
+import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   applyToolCatalogCompaction,
@@ -198,6 +199,8 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
   const resultBudget = resolveToolResultBudget(ctx.modelContextWindowTokens);
   const formatResult = (
     rawResult: Awaited<ReturnType<typeof runCodeModeExec | typeof runWait>>,
+    toolCallId: string,
+    toolName: string,
     runtime: ToolSearchRuntime | undefined,
     signal?: AbortSignal,
   ) => {
@@ -207,6 +210,8 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
       terminalBatchStatus: result.status,
       compact: true,
     });
+    runtime?.sourceReplyCell.attach(controlResult, result.status);
+    markCodeModeCheckpoint(controlResult, toolCallId, toolName, result);
     return recordCodeModeToolOutcome(
       copyInternalToolResultState(controlResult, {
         ...controlResult,
@@ -267,7 +272,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           runtime = value;
         },
       });
-      return formatResult(result, runtime, signal);
+      return formatResult(result, toolCallId, CODE_MODE_EXEC_TOOL_NAME, runtime, signal);
     },
   } as AnyAgentTool);
   const waitTool = markCodeModeControlTool({
@@ -301,7 +306,7 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
           runtime = value;
         },
       });
-      return formatResult(result, runtime, signal);
+      return formatResult(result, toolCallId, CODE_MODE_WAIT_TOOL_NAME, runtime, signal);
     },
   } as AnyAgentTool);
   return [execTool, waitTool];

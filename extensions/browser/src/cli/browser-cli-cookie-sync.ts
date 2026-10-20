@@ -107,7 +107,7 @@ async function watchSystemProfileCookies(params: {
   domains: readonly string[];
 }): Promise<void> {
   assertSystemCookiePlatform();
-  const source = resolveSystemCookieSource({
+  const source = await resolveSystemCookieSource({
     browser: params.options.browser,
     systemProfile: params.options.system,
   });

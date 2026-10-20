@@ -4,19 +4,16 @@ import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { expect, it, vi } from "vitest";
 import * as serviceFiles from "../../daemon/inspect-files.js";
-import {
-  buildLaunchAgentPlist,
-  readLaunchAgentProgramArgumentsFromFile,
-} from "../../daemon/launchd-plist.js";
+import { readLaunchAgentProgramArgumentsFromFile } from "../../daemon/launchd-plist.js";
 import * as gatewayBindings from "../../daemon/managed-gateway-bindings.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import * as gatewayServices from "../../daemon/service.js";
-import { readGatewayServiceState } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import * as nativeExec from "../../process/exec.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { gatewayCommand } from "./update-command-service-fixtures.test-support.js";
 import {
   revalidateManagedGatewayServiceAfterUpdate,
   type PreManagedServiceStop,
@@ -24,6 +21,50 @@ import {
 import { assertManagedGatewayArtifactPublication } from "./update-command-service-revalidation.js";
 
 const { withServiceHome } = await import("./update-command-service-maintenance.test-support.js");
+const root = process.cwd();
+type Publication = Parameters<typeof assertManagedGatewayArtifactPublication>[0];
+type Command = NonNullable<GatewayServiceState["command"]>;
+
+function publish(env: NodeJS.ProcessEnv, options: Partial<Publication> = {}) {
+  return assertManagedGatewayArtifactPublication({
+    roots: [root],
+    env,
+    timeoutMs: 30_000,
+    assertCurrent: () => {},
+    updateInstallKind: "package",
+    shouldRestart: true,
+    ...options,
+  });
+}
+
+function selected(
+  command: Command,
+  refreshDefinition = true,
+  overrides: Partial<PreManagedServiceStop> = {},
+): PreManagedServiceStop {
+  return {
+    inspected: true,
+    runtimeInspected: true,
+    running: true,
+    stopped: false,
+    serviceEnv: command.environment,
+    serviceUpdateVerdict: {
+      kind: "owned",
+      root,
+      fingerprint: sha256Hex(stableStringify(command)),
+      refreshDefinition,
+    },
+    ...overrides,
+  };
+}
+
+async function expectPublication(admission: Promise<void>, accepted: boolean) {
+  if (accepted) {
+    await expect(admission).resolves.toBeUndefined();
+  } else {
+    await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
+  }
+}
 
 it.each([
   "equivalent selected wrapper",
@@ -33,11 +74,10 @@ it.each([
 ])("keeps the package no-restart exception with its selected Startup owner: %s", (scenario) =>
   withServiceHome(async (home) => {
     mockProcessPlatform("win32");
-    const root = process.cwd();
     const env = { HOME: home, OPENCLAW_PROFILE: "selected" };
     const startup = "C:\\Startup\\Gateway.vbs";
     const command = {
-      programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
+      ...gatewayCommand(home),
       environment: env,
       sourcePath: "C:\\Gateway\\gateway.cmd",
     };
@@ -46,63 +86,38 @@ it.each([
       loadState: { status: "not-loaded" },
       running: true,
       env,
-      runtime: { status: "running", pid: process.pid },
       command,
+      runtime: { status: "running", pid: process.pid },
     };
     vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockResolvedValue([
       { env, scope: "user", windowsStartupEntry: startup },
     ]);
+    const startupCommand = {
+      ...command,
+      sourcePath: "c:/Gateway/gateway.cmd",
+      definitionPaths: [startup, "c:/Gateway/gateway.cmd"],
+      programArguments: [...command.programArguments],
+    };
+    if (scenario === "changed command") {
+      startupCommand.programArguments.push("--verbose");
+    }
+    const selectedCommand: Command = { ...command };
+    if (scenario !== "Task still registered") {
+      selectedCommand.startupEntryPaths = [
+        scenario === "unlisted wrapper" ? "C:\\Startup\\Other.vbs" : startup,
+      ];
+    }
     vi.spyOn(gatewayServices, "readGatewayServiceState").mockImplementation(
       async (_service, args) => ({
         ...state,
-        command: args?.windowsStartupEntry
-          ? {
-              ...command,
-              sourcePath: "c:/Gateway/gateway.cmd",
-              definitionPaths: [startup, "c:/Gateway/gateway.cmd"],
-              programArguments:
-                scenario === "changed command"
-                  ? [...command.programArguments, "--verbose"]
-                  : command.programArguments,
-            }
-          : {
-              ...command,
-              ...(scenario === "Task still registered"
-                ? {}
-                : {
-                    startupEntryPaths: [
-                      scenario === "unlisted wrapper" ? "C:\\Startup\\Other.vbs" : startup,
-                    ],
-                  }),
-            },
+        command: args?.windowsStartupEntry ? startupCommand : selectedCommand,
       }),
     );
-    const admission = assertManagedGatewayArtifactPublication({
-      roots: [root],
-      env,
-      timeoutMs: 30_000,
-      assertCurrent: () => {},
-      updateInstallKind: "package",
+    const admission = publish(env, {
       shouldRestart: false,
-      selected: {
-        inspected: true,
-        runtimeInspected: true,
-        running: true,
-        stopped: false,
-        serviceEnv: env,
-        serviceUpdateVerdict: {
-          kind: "owned",
-          root,
-          fingerprint: sha256Hex(stableStringify(command)),
-          refreshDefinition: true,
-        },
-      },
+      selected: selected(command),
     });
-    if (scenario === "equivalent selected wrapper") {
-      await expect(admission).resolves.toBeUndefined();
-    } else {
-      await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
-    }
+    await expectPublication(admission, scenario === "equivalent selected wrapper");
   }),
 );
 
@@ -118,7 +133,6 @@ it.each(
 )("keeps selected Linux correspondence at $phase: $scenario", ({ phase, scenario }) =>
   withServiceHome(async (home) => {
     mockProcessPlatform("linux");
-    const root = process.cwd();
     const unit = "custom-selected.service";
     const observedUnit = scenario === "other native unit" ? "custom-sibling.service" : unit;
     const selectedEnv = { HOME: home, OPENCLAW_PROFILE: "selected", OPENCLAW_SYSTEMD_UNIT: unit };
@@ -127,7 +141,7 @@ it.each(
       environment.OPENCLAW_PROFILE = "selected";
     }
     const command = {
-      programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
+      ...gatewayCommand(home),
       environment,
       sourcePath: path.join(home, "shared-template.service"),
     };
@@ -139,12 +153,12 @@ it.each(
       installed: true,
       loadState: { status: "loaded" },
       running: true,
+      command: observedCommand,
       env: {
         HOME: home,
         OPENCLAW_SYSTEMD_UNIT: observedUnit,
         OPENCLAW_PROFILE: observedCommand.environment.OPENCLAW_PROFILE,
       },
-      command: observedCommand,
       runtime: {
         status: "running",
         pid: process.pid,
@@ -159,36 +173,22 @@ it.each(
       },
     ]);
     vi.spyOn(gatewayServices, "readGatewayServiceState").mockResolvedValue(state);
-    const admission = assertManagedGatewayArtifactPublication({
-      roots: [root],
-      env: selectedEnv,
-      timeoutMs: 30_000,
-      assertCurrent: () => {},
-      updateInstallKind: "package",
+    const admission = publish(selectedEnv, {
       phase,
       shouldRestart: phase === "before-stop",
-      selected: {
-        inspected: true,
-        runtimeInspected: true,
-        running: true,
-        stopped: false,
+      selected: selected(command, false, {
         serviceEnv: selectedEnv,
         serviceManagerUid: 501,
-        serviceUpdateVerdict: {
-          kind: "owned",
-          root,
-          fingerprint: sha256Hex(stableStringify(command)),
-          refreshDefinition: false,
-        },
-      },
+      }),
     });
-    if (scenario === "changed declared profile" || scenario === "other native unit") {
-      await expect(admission).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
-    } else {
-      await expect(admission).resolves.toBeUndefined();
-    }
-    expect(state.env.OPENCLAW_SYSTEMD_UNIT).toBe(observedUnit);
-    expect(state.env.OPENCLAW_PROFILE).toBe(observedCommand.environment.OPENCLAW_PROFILE);
+    await expectPublication(
+      admission,
+      scenario !== "changed declared profile" && scenario !== "other native unit",
+    );
+    expect(state.env).toMatchObject({
+      OPENCLAW_SYSTEMD_UNIT: observedUnit,
+      OPENCLAW_PROFILE: observedCommand.environment.OPENCLAW_PROFILE,
+    });
   }),
 );
 
@@ -213,12 +213,7 @@ it.each(["unjoined native read", "authority revoked during read"])(
         throw new Error("Ordinary inspection unavailable");
       });
       await expect(
-        assertManagedGatewayArtifactPublication({
-          roots: [process.cwd()],
-          updateInstallKind: "package",
-          shouldRestart: true,
-          env,
-          timeoutMs: 30_000,
+        publish(env, {
           assertCurrent: () => {
             if (revoked) {
               throw failure;
@@ -234,24 +229,11 @@ it.each(["inventory", "effective command"])(
   (phase) =>
     withServiceHome(async (home) => {
       mockProcessPlatform("darwin");
-      const root = process.cwd();
       const directory = path.join(home, "Library", "LaunchAgents");
       const pathname = path.join(directory, "ai.openclaw.sibling.plist");
       await fs.mkdir(directory, { recursive: true });
-      await fs.writeFile(
-        pathname,
-        buildLaunchAgentPlist({
-          label: "ai.openclaw.sibling",
-          programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-          stdoutPath: path.join(home, "stdout.log"),
-          stderrPath: path.join(home, "stderr.log"),
-          environment: {
-            OPENCLAW_PROFILE: "sibling",
-            OPENCLAW_SERVICE_MARKER: "openclaw",
-            OPENCLAW_SERVICE_KIND: "gateway",
-          },
-        }),
-      );
+      // Native normalization fails before command fields are decoded.
+      await fs.writeFile(pathname, "<plist><dict/></plist>");
       const collect = serviceFiles.collectServiceFiles;
       vi.spyOn(serviceFiles, "collectServiceFiles").mockImplementation((params) =>
         params.dir === directory ? collect(params) : Promise.resolve([]),
@@ -264,14 +246,7 @@ it.each(["inventory", "effective command"])(
       const observed =
         phase === "effective command"
           ? readLaunchAgentProgramArgumentsFromFile(pathname, { requireEffective: true })
-          : assertManagedGatewayArtifactPublication({
-              roots: [root],
-              env: { HOME: home },
-              timeoutMs: 30_000,
-              updateInstallKind: "package",
-              shouldRestart: true,
-              assertCurrent: () => {},
-            });
+          : publish({ HOME: home });
       await expect(observed).rejects.toBe(failure);
     }),
 );
@@ -294,75 +269,55 @@ it.each([
 ])("revalidates the shipped managed-service stop record: %s", (scenario) =>
   withServiceHome(async (home) => {
     mockProcessPlatform(scenario.includes("startup") ? "win32" : "linux");
-    const root = process.cwd();
     const command = {
-      programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-      environment: { HOME: home },
+      ...gatewayCommand(home),
       ...(scenario.includes("startup") ? { sourcePath: path.join(home, "gateway.cmd") } : {}),
     };
     const protectedCommand = scenario.includes("protected");
     const fingerprint = sha256Hex(stableStringify(command));
     // Stable updaters through v2026.9.4 omit metadata for known-empty systemd overrides.
-    const before: PreManagedServiceStop = {
-      stoppedAtMs: 1,
-      stopped: true,
-      inspected: true,
-      runtimeInspected: true,
-      running: true,
-      offline: false,
-      serviceEnv: { HOME: home },
-      serviceDefinitionEnv: command.environment,
-      serviceNodeRunner: process.execPath,
-      serviceUpdateVerdict: {
-        kind: "owned",
-        root,
-        fingerprint,
-        refreshDefinition: !protectedCommand,
-      },
-    };
+    const before = selected(command, !protectedCommand, { stopped: true });
     if (scenario === "matching UID" || scenario === "mismatching UID") {
       before.serviceManagerUid = scenario === "matching UID" ? 2001 : 3002;
     }
+    const environment = { ...command.environment };
+    const observed: Command = { ...command, environment };
+    if (scenario.includes("startup")) {
+      observed.startupEntryPaths = [path.join(home, "Gateway.vbs")];
+    }
+    if (protectedCommand) {
+      observed.managedDefinition = command;
+      observed.managedOverrides =
+        scenario === "changed protected override" ? { launcher: "command" } : {};
+    }
+    if (scenario === "changed protected working directory") {
+      observed.workingDirectory = home;
+    }
+    if (scenario === "foreign executable") {
+      observed.programArguments = gatewayCommand(home, path.join(home, "other")).programArguments;
+    }
+    if (scenario === "changed protected command") {
+      observed.programArguments = [...command.programArguments, "--verbose"];
+    }
+    const environmentChanges: Record<string, NodeJS.ProcessEnv> = {
+      "changed protected environment": { FIXTURE_VALUE: "changed" },
+      "different unit": { OPENCLAW_SYSTEMD_UNIT: "other-gateway" },
+      "different profile": {
+        OPENCLAW_PROFILE: "other",
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw-other"),
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw-other", "openclaw.json"),
+      },
+    };
+    Object.assign(environment, environmentChanges[scenario]);
     const service = createMockGatewayService({
-      readCommand: async () => ({
-        ...command,
-        ...(scenario.includes("startup")
-          ? { startupEntryPaths: [path.join(home, "Gateway.vbs")] }
-          : {}),
-        ...(protectedCommand
-          ? {
-              managedDefinition: command,
-              managedOverrides:
-                scenario === "changed protected override" ? { launcher: "command" as const } : {},
-            }
-          : {}),
-        ...(scenario === "changed protected working directory" ? { workingDirectory: home } : {}),
-        programArguments:
-          scenario === "foreign executable"
-            ? [process.execPath, path.join(home, "other", "openclaw.mjs"), "gateway"]
-            : scenario === "changed protected command"
-              ? [...command.programArguments, "--verbose"]
-              : command.programArguments,
-        environment: {
-          ...command.environment,
-          ...(scenario === "changed protected environment" ? { FIXTURE_VALUE: "changed" } : {}),
-          ...(scenario === "different unit" ? { OPENCLAW_SYSTEMD_UNIT: "other-gateway" } : {}),
-          ...(scenario === "different profile"
-            ? {
-                OPENCLAW_PROFILE: "other",
-                OPENCLAW_STATE_DIR: path.join(home, ".openclaw-other"),
-                OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw-other", "openclaw.json"),
-              }
-            : {}),
-        },
-      }),
+      readCommand: async () => observed,
       readRuntime: async () => ({
         status: "stopped",
         systemd: { managerUid: scenario === "unavailable manager" ? undefined : 2001 },
       }),
       isLoaded: async () => true,
     });
-    const state = await readGatewayServiceState(service, {
+    const state = await gatewayServices.readGatewayServiceState(service, {
       env: before.serviceEnv,
       requireEffective: true,
       requireLoadedCommand: true,

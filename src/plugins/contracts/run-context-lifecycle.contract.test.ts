@@ -35,6 +35,20 @@ import type { OpenClawPluginApi } from "../types.js";
 
 const PLUGIN_HOST_CLEANUP_TIMEOUT_MS = 5_000;
 
+function createRegisteredPlugin(pluginId: string, register: (api: OpenClawPluginApi) => void) {
+  const fixture = createPluginRegistryFixture();
+  registerTestPlugin({ ...fixture, record: createPluginRecord({ id: pluginId }), register });
+  return fixture;
+}
+
+function contextReader(pluginId: string, runId: string) {
+  return (namespace: string) => getPluginRunContext({ pluginId, get: { runId, namespace } });
+}
+
+function emitRunEvent(runId: string, stream: string, data: Record<string, unknown>) {
+  emitAgentEvent({ runId, stream, data });
+}
+
 async function waitForPluginEventHandlers(): Promise<void> {
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
@@ -65,8 +79,9 @@ describe("plugin run context lifecycle", () => {
   });
 
   it("keeps run-context APIs callable after registration closes", () => {
-    const { config, registry } = createPluginRegistryFixture();
+    const selection = { runId: "late-run", namespace: "state" };
     let capturedApi: OpenClawPluginApi | undefined;
+    const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
       registry,
       config,
@@ -93,40 +108,20 @@ describe("plugin run context lifecycle", () => {
     );
     expect(
       capturedApi?.runContext.setRunContext({
-        runId: "late-run",
-        namespace: "state",
+        ...selection,
         value: { available: true },
       }),
     ).toBe(true);
-    expect(
-      capturedApi?.runContext.getRunContext({
-        runId: "late-run",
-        namespace: "state",
-      }),
-    ).toEqual({ available: true });
-
-    capturedApi?.runContext.clearRunContext({ runId: "late-run", namespace: "state" });
-    expect(
-      capturedApi?.runContext.getRunContext({
-        runId: "late-run",
-        namespace: "state",
-      }),
-    ).toBeUndefined();
+    expect(capturedApi?.runContext.getRunContext(selection)).toEqual({ available: true });
+    capturedApi?.runContext.clearRunContext(selection);
+    expect(capturedApi?.runContext.getRunContext(selection)).toBeUndefined();
   });
 
   it("blocks stale plugin API run-context access after registry replacement", () => {
-    const { config, registry } = createPluginRegistryFixture();
+    const readContext = contextReader("stale-run-context-plugin", "stale-run");
     let capturedApi: OpenClawPluginApi | undefined;
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "stale-run-context-plugin",
-        name: "Stale Run Context Plugin",
-      }),
-      register(api) {
-        capturedApi = api;
-      },
+    const { registry } = createRegisteredPlugin("stale-run-context-plugin", (api) => {
+      capturedApi = api;
     });
     setActivePluginRegistry(registry.registry);
     setActivePluginRegistry(createEmptyPluginRegistry());
@@ -138,12 +133,7 @@ describe("plugin run context lifecycle", () => {
         value: { stale: true },
       }),
     ).toBe(false);
-    expect(
-      getPluginRunContext({
-        pluginId: "stale-run-context-plugin",
-        get: { runId: "stale-run", namespace: "state" },
-      }),
-    ).toBeUndefined();
+    expect(readContext("state")).toBeUndefined();
 
     expect(
       setPluginRunContext({
@@ -156,27 +146,13 @@ describe("plugin run context lifecycle", () => {
       capturedApi?.runContext.getRunContext({ runId: "stale-run", namespace: "state" }),
     ).toBeUndefined();
     capturedApi?.runContext?.clearRunContext({ runId: "stale-run", namespace: "state" });
-    expect(
-      getPluginRunContext({
-        pluginId: "stale-run-context-plugin",
-        get: { runId: "stale-run", namespace: "state" },
-      }),
-    ).toEqual({ live: true });
+    expect(readContext("state")).toEqual({ live: true });
   });
 
   it("allows run-context mutations after a previous registry is restored active", () => {
-    const { config, registry } = createPluginRegistryFixture();
     let capturedApi: OpenClawPluginApi | undefined;
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "restored-run-context-plugin",
-        name: "Restored Run Context Plugin",
-      }),
-      register(api) {
-        capturedApi = api;
-      },
+    const { registry } = createRegisteredPlugin("restored-run-context-plugin", (api) => {
+      capturedApi = api;
     });
     setActivePluginRegistry(registry.registry);
     const snapshot = captureActivePluginRegistrySnapshot();
@@ -199,6 +175,7 @@ describe("plugin run context lifecycle", () => {
   });
 
   it("allows run-context initialization during activating plugin registration", () => {
+    const readContext = contextReader("registration-run-context-plugin", "run-registration");
     const { config, registry } = createPluginRegistryFixture();
     const record = createPluginRecord({
       id: "registration-run-context-plugin",
@@ -216,20 +193,10 @@ describe("plugin run context lifecycle", () => {
             value: { initialized: true },
           }),
         ).toBe(true);
-        expect(
-          getPluginRunContext({
-            pluginId: "registration-run-context-plugin",
-            get: { runId: "run-registration", namespace: "state" },
-          }),
-        ).toEqual({ initialized: true });
+        expect(readContext("state")).toEqual({ initialized: true });
 
         api.clearRunContext({ runId: "run-registration", namespace: "state" });
-        expect(
-          getPluginRunContext({
-            pluginId: "registration-run-context-plugin",
-            get: { runId: "run-registration", namespace: "state" },
-          }),
-        ).toBeUndefined();
+        expect(readContext("state")).toBeUndefined();
       },
       api,
       registry.registry,
@@ -238,158 +205,89 @@ describe("plugin run context lifecycle", () => {
   });
 
   it("fences retired agent-event callbacks from successor run context", async () => {
-    let releasePriorHandler: (() => void) | undefined;
-    let markPriorHandlerStarted: (() => void) | undefined;
+    const readContext = contextReader("agent-event-generation", "run-agent-event-generation");
     let retiredHandlerSawContext: unknown;
-    const priorHandlerStarted = new Promise<void>((resolve) => {
-      markPriorHandlerStarted = resolve;
+    const priorHandlerStarted = createDeferredCore();
+    const priorHandlerRelease = createDeferredCore();
+    const prior = createRegisteredPlugin("agent-event-generation", (api) => {
+      api.registerAgentEventSubscription({
+        id: "prior",
+        streams: ["tool"],
+        async handle(event, ctx) {
+          if (event.data.name !== "hold") {
+            return;
+          }
+          priorHandlerStarted.resolve();
+          await priorHandlerRelease.promise;
+          retiredHandlerSawContext = ctx.getRunContext("state");
+          ctx.setRunContext("state", { generation: "A" });
+          ctx.clearRunContext("preserved");
+        },
+      });
     });
-    const priorHandlerRelease = new Promise<void>((resolve) => {
-      releasePriorHandler = resolve;
-    });
-    const prior = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry: prior.registry,
-      config: prior.config,
-      record: createPluginRecord({
-        id: "agent-event-generation",
-        name: "Agent Event Generation",
-      }),
-      register(api) {
-        api.registerAgentEventSubscription({
-          id: "prior",
-          streams: ["tool"],
-          async handle(event, ctx) {
-            if (event.data.name !== "hold") {
-              return;
-            }
-            markPriorHandlerStarted?.();
-            await priorHandlerRelease;
-            retiredHandlerSawContext = ctx.getRunContext("state");
-            ctx.setRunContext("state", { generation: "A" });
-            ctx.clearRunContext("preserved");
-          },
-        });
-      },
-    });
-    const successor = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry: successor.registry,
-      config: successor.config,
-      record: createPluginRecord({
-        id: "agent-event-generation",
-        name: "Agent Event Generation",
-      }),
-      register(api) {
-        api.registerAgentEventSubscription({
-          id: "successor",
-          streams: ["tool"],
-          handle(event, ctx) {
-            if (event.data.name !== "successor") {
-              return;
-            }
-            ctx.setRunContext("state", { generation: "B" });
-            ctx.setRunContext("preserved", { generation: "B" });
-          },
-        });
-      },
+    const successor = createRegisteredPlugin("agent-event-generation", (api) => {
+      api.registerAgentEventSubscription({
+        id: "successor",
+        streams: ["tool"],
+        handle(event, ctx) {
+          if (event.data.name !== "successor") {
+            return;
+          }
+          ctx.setRunContext("state", { generation: "B" });
+          ctx.setRunContext("preserved", { generation: "B" });
+        },
+      });
     });
 
     setActivePluginRegistry(prior.registry.registry);
-    emitAgentEvent({
-      runId: "run-agent-event-generation",
-      stream: "tool",
-      data: { name: "hold" },
-    });
-    await priorHandlerStarted;
+    emitRunEvent("run-agent-event-generation", "tool", { name: "hold" });
+    await priorHandlerStarted.promise;
 
     setActivePluginRegistry(successor.registry.registry);
-    emitAgentEvent({
-      runId: "run-agent-event-generation",
-      stream: "tool",
-      data: { name: "successor" },
-    });
+    emitRunEvent("run-agent-event-generation", "tool", { name: "successor" });
     await waitForPluginEventHandlers();
 
     // Restoring the same registry object must not revive callbacks admitted before cutover.
     setActivePluginRegistry(prior.registry.registry);
-    releasePriorHandler?.();
+    priorHandlerRelease.resolve();
     await waitForPluginEventHandlers();
 
     expect(retiredHandlerSawContext).toBeUndefined();
-    expect(
-      getPluginRunContext({
-        pluginId: "agent-event-generation",
-        get: { runId: "run-agent-event-generation", namespace: "state" },
-      }),
-    ).toEqual({ generation: "B" });
-    expect(
-      getPluginRunContext({
-        pluginId: "agent-event-generation",
-        get: { runId: "run-agent-event-generation", namespace: "preserved" },
-      }),
-    ).toEqual({ generation: "B" });
+    expect(readContext("state")).toEqual({ generation: "B" });
+    expect(readContext("preserved")).toEqual({ generation: "B" });
   });
 
   it("does not let delayed non-terminal subscriptions resurrect closed run context", async () => {
-    let releaseToolHandler: (() => void) | undefined;
+    const readContext = contextReader("delayed-subscription", "run-delayed-subscription");
+    const toolHandlerRelease = createDeferredCore();
     let delayedToolHandlerSawContext: unknown;
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "delayed-subscription",
-        name: "Delayed Subscription",
-      }),
-      register(api) {
-        api.registerAgentEventSubscription({
-          id: "delayed",
-          streams: ["tool"],
-          async handle(eventValue, ctx) {
-            ctx.setRunContext("before-terminal", { visible: true });
-            await new Promise<void>((resolve) => {
-              releaseToolHandler = resolve;
-            });
-            delayedToolHandlerSawContext = ctx.getRunContext("before-terminal");
-            ctx.setRunContext("late", { resurrected: true });
-          },
-        });
-      },
+    const { registry } = createRegisteredPlugin("delayed-subscription", (api) => {
+      api.registerAgentEventSubscription({
+        id: "delayed",
+        streams: ["tool"],
+        async handle(eventValue, ctx) {
+          ctx.setRunContext("before-terminal", { visible: true });
+          await toolHandlerRelease.promise;
+          delayedToolHandlerSawContext = ctx.getRunContext("before-terminal");
+          ctx.setRunContext("late", { resurrected: true });
+        },
+      });
     });
     setActivePluginRegistry(registry.registry);
 
-    emitAgentEvent({
-      runId: "run-delayed-subscription",
-      stream: "tool",
-      data: { name: "tool" },
-    });
+    emitRunEvent("run-delayed-subscription", "tool", { name: "tool" });
     await Promise.resolve();
 
-    emitAgentEvent({
-      runId: "run-delayed-subscription",
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
+    emitRunEvent("run-delayed-subscription", "lifecycle", { phase: "end" });
     await Promise.resolve();
 
-    expect(
-      getPluginRunContext({
-        pluginId: "delayed-subscription",
-        get: { runId: "run-delayed-subscription", namespace: "before-terminal" },
-      }),
-    ).toEqual({ visible: true });
+    expect(readContext("before-terminal")).toEqual({ visible: true });
 
-    releaseToolHandler?.();
+    toolHandlerRelease.resolve();
     await waitForPluginEventHandlers();
 
     expect(delayedToolHandlerSawContext).toEqual({ visible: true });
-    expect(
-      getPluginRunContext({
-        pluginId: "delayed-subscription",
-        get: { runId: "run-delayed-subscription", namespace: "late" },
-      }),
-    ).toBeUndefined();
+    expect(readContext("late")).toBeUndefined();
   });
 
   it.each(
@@ -400,6 +298,7 @@ describe("plugin run context lifecycle", () => {
   )(
     "cleans up a filtered terminal $phase event with payload=$payload after pending handlers settle",
     async ({ phase, payload }) => {
+      const readContext = contextReader("filtered-terminal", "run-filtered-terminal");
       const pending = createDeferredCore();
       const handle = vi.fn<
         Parameters<OpenClawPluginApi["registerAgentEventSubscription"]>[0]["handle"]
@@ -408,39 +307,20 @@ describe("plugin run context lifecycle", () => {
         await pending.promise;
         ctx.setRunContext("late", { active: true });
       });
-      const { config, registry } = createPluginRegistryFixture();
-      registerTestPlugin({
-        registry,
-        config,
-        record: createPluginRecord({ id: "filtered-terminal" }),
-        register(api) {
-          api.agent.events.registerAgentEventSubscription({
-            id: "starts",
-            streams: ["tool", "lifecycle"],
-            phases: ["start"],
-            payload,
-            handle,
-          });
-        },
+      const { registry } = createRegisteredPlugin("filtered-terminal", (api) => {
+        api.agent.events.registerAgentEventSubscription({
+          id: "starts",
+          streams: ["tool", "lifecycle"],
+          phases: ["start"],
+          payload,
+          handle,
+        });
       });
       setActivePluginRegistry(registry.registry);
-      emitAgentEvent({
-        runId: "run-filtered-terminal",
-        stream: "tool",
-        data: { phase: "start" },
-      });
-      emitAgentEvent({
-        runId: "run-filtered-terminal",
-        stream: "lifecycle",
-        data: { phase },
-      });
+      emitRunEvent("run-filtered-terminal", "tool", { phase: "start" });
+      emitRunEvent("run-filtered-terminal", "lifecycle", { phase });
       expect(handle).toHaveBeenCalledTimes(1);
-      expect(
-        getPluginRunContext({
-          pluginId: "filtered-terminal",
-          get: { runId: "run-filtered-terminal", namespace: "seen" },
-        }),
-      ).toEqual({ active: true });
+      expect(readContext("seen")).toEqual({ active: true });
       expect(
         setPluginRunContext({
           pluginId: "filtered-terminal",
@@ -450,320 +330,195 @@ describe("plugin run context lifecycle", () => {
       pending.resolve();
       await waitForPluginEventHandlers();
       for (const namespace of ["seen", "late", "closed"]) {
-        expect(
-          getPluginRunContext({
-            pluginId: "filtered-terminal",
-            get: { runId: "run-filtered-terminal", namespace },
-          }),
-        ).toBeUndefined();
+        expect(readContext(namespace)).toBeUndefined();
       }
     },
   );
 
   it("preserves run context until async terminal event subscriptions settle", async () => {
-    let releaseTerminalHandler: (() => void) | undefined;
+    const readContext = contextReader("async-terminal-subscription", "run-async-terminal");
+    const terminalHandlerRelease = createDeferredCore();
     let terminalHandlerSawContext: unknown;
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "async-terminal-subscription",
-        name: "Async Terminal Subscription",
-      }),
-      register(api) {
-        api.registerAgentEventSubscription({
-          id: "records",
-          streams: ["tool", "lifecycle"],
-          async handle(event, ctx) {
-            if (event.stream === "tool") {
-              ctx.setRunContext("seen", { runId: event.runId });
-              return;
-            }
-            if (event.data?.phase !== "end") {
-              return;
-            }
-            await new Promise<void>((resolve) => {
-              releaseTerminalHandler = resolve;
-            });
-            terminalHandlerSawContext = ctx.getRunContext("seen");
-          },
-        });
-      },
+    const { registry } = createRegisteredPlugin("async-terminal-subscription", (api) => {
+      api.registerAgentEventSubscription({
+        id: "records",
+        streams: ["tool", "lifecycle"],
+        async handle(event, ctx) {
+          if (event.stream === "tool") {
+            ctx.setRunContext("seen", { runId: event.runId });
+            return;
+          }
+          if (event.data?.phase !== "end") {
+            return;
+          }
+          await terminalHandlerRelease.promise;
+          terminalHandlerSawContext = ctx.getRunContext("seen");
+        },
+      });
     });
     setActivePluginRegistry(registry.registry);
 
-    emitAgentEvent({
-      runId: "run-async-terminal",
-      stream: "tool",
-      data: { name: "tool" },
-    });
+    emitRunEvent("run-async-terminal", "tool", { name: "tool" });
     await Promise.resolve();
 
-    emitAgentEvent({
-      runId: "run-async-terminal",
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
+    emitRunEvent("run-async-terminal", "lifecycle", { phase: "end" });
     await Promise.resolve();
 
-    expect(
-      getPluginRunContext({
-        pluginId: "async-terminal-subscription",
-        get: { runId: "run-async-terminal", namespace: "seen" },
-      }),
-    ).toEqual({ runId: "run-async-terminal" });
+    expect(readContext("seen")).toEqual({ runId: "run-async-terminal" });
 
-    releaseTerminalHandler?.();
+    terminalHandlerRelease.resolve();
     await waitForPluginEventHandlers();
 
     expect(terminalHandlerSawContext).toEqual({ runId: "run-async-terminal" });
-    expect(
-      getPluginRunContext({
-        pluginId: "async-terminal-subscription",
-        get: { runId: "run-async-terminal", namespace: "seen" },
-      }),
-    ).toBeUndefined();
+    expect(readContext("seen")).toBeUndefined();
   });
 
   it("waits for terminal handlers added after the first terminal cleanup waiter starts", async () => {
-    let releaseFirstTerminalHandler: (() => void) | undefined;
-    let releaseSecondTerminalHandler: (() => void) | undefined;
+    const readContext = contextReader(
+      "repeated-terminal-live-wait",
+      "run-repeated-terminal-live-wait",
+    );
+    const secondTerminalHandlerRelease = createDeferredCore();
+    const firstTerminalHandlerRelease = createDeferredCore();
     let firstTerminalHandlerSawContext: unknown;
     let secondTerminalHandlerSawContext: unknown;
     let terminalEventsSeen = 0;
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "repeated-terminal-live-wait",
-        name: "Repeated Terminal Live Wait",
-      }),
-      register(api) {
-        api.registerAgentEventSubscription({
-          id: "records",
-          streams: ["tool", "lifecycle"],
-          async handle(event, ctx) {
-            if (event.stream === "tool") {
-              ctx.setRunContext("seen", { runId: event.runId });
-              return;
-            }
-            if (event.data?.phase !== "end") {
-              return;
-            }
-            terminalEventsSeen += 1;
-            if (terminalEventsSeen === 1) {
-              await new Promise<void>((resolve) => {
-                releaseFirstTerminalHandler = resolve;
-              });
-              firstTerminalHandlerSawContext = ctx.getRunContext("seen");
-              return;
-            }
-            await new Promise<void>((resolve) => {
-              releaseSecondTerminalHandler = resolve;
-            });
-            secondTerminalHandlerSawContext = ctx.getRunContext("seen");
-          },
-        });
-      },
+    const { registry } = createRegisteredPlugin("repeated-terminal-live-wait", (api) => {
+      api.registerAgentEventSubscription({
+        id: "records",
+        streams: ["tool", "lifecycle"],
+        async handle(event, ctx) {
+          if (event.stream === "tool") {
+            ctx.setRunContext("seen", { runId: event.runId });
+            return;
+          }
+          if (event.data?.phase !== "end") {
+            return;
+          }
+          terminalEventsSeen += 1;
+          if (terminalEventsSeen === 1) {
+            await firstTerminalHandlerRelease.promise;
+            firstTerminalHandlerSawContext = ctx.getRunContext("seen");
+            return;
+          }
+          await secondTerminalHandlerRelease.promise;
+          secondTerminalHandlerSawContext = ctx.getRunContext("seen");
+        },
+      });
     });
     setActivePluginRegistry(registry.registry);
 
-    emitAgentEvent({
-      runId: "run-repeated-terminal-live-wait",
-      stream: "tool",
-      data: { name: "tool" },
-    });
+    emitRunEvent("run-repeated-terminal-live-wait", "tool", { name: "tool" });
     await waitForPluginEventHandlers();
 
-    emitAgentEvent({
-      runId: "run-repeated-terminal-live-wait",
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
+    emitRunEvent("run-repeated-terminal-live-wait", "lifecycle", { phase: "end" });
     await waitForPluginEventHandlers();
 
-    emitAgentEvent({
-      runId: "run-repeated-terminal-live-wait",
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
+    emitRunEvent("run-repeated-terminal-live-wait", "lifecycle", { phase: "end" });
     await waitForPluginEventHandlers();
 
-    releaseFirstTerminalHandler?.();
+    firstTerminalHandlerRelease.resolve();
     await waitForPluginEventHandlers();
     expect(firstTerminalHandlerSawContext).toEqual({ runId: "run-repeated-terminal-live-wait" });
-    expect(
-      getPluginRunContext({
-        pluginId: "repeated-terminal-live-wait",
-        get: { runId: "run-repeated-terminal-live-wait", namespace: "seen" },
-      }),
-    ).toEqual({ runId: "run-repeated-terminal-live-wait" });
+    expect(readContext("seen")).toEqual({ runId: "run-repeated-terminal-live-wait" });
 
-    releaseSecondTerminalHandler?.();
+    secondTerminalHandlerRelease.resolve();
     await waitForPluginEventHandlers();
     await waitForPluginEventHandlers();
 
     expect(secondTerminalHandlerSawContext).toEqual({ runId: "run-repeated-terminal-live-wait" });
-    expect(
-      getPluginRunContext({
-        pluginId: "repeated-terminal-live-wait",
-        get: { runId: "run-repeated-terminal-live-wait", namespace: "seen" },
-      }),
-    ).toBeUndefined();
+    expect(readContext("seen")).toBeUndefined();
   });
 
   it("clears run context after the terminal subscription grace period", async () => {
+    const readContext = contextReader("slow-terminal-subscription", "run-slow-terminal");
+    const terminalHandlerRelease = createDeferredCore();
     vi.useFakeTimers();
-    let releaseTerminalHandler: (() => void) | undefined;
     let terminalHandlerSawContext: unknown;
     let terminalHandlerWroteContext: unknown;
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "slow-terminal-subscription",
-        name: "Slow Terminal Subscription",
-      }),
-      register(api) {
-        api.registerAgentEventSubscription({
-          id: "slow",
-          streams: ["tool", "lifecycle"],
-          async handle(event, ctx) {
-            if (event.stream === "tool") {
-              ctx.setRunContext("seen", { runId: event.runId });
-              return;
-            }
-            if (event.data?.phase === "end") {
-              await new Promise<void>((resolve) => {
-                releaseTerminalHandler = resolve;
-              });
-              terminalHandlerSawContext = ctx.getRunContext("seen");
-              ctx.setRunContext("terminal", { completed: true });
-              terminalHandlerWroteContext = ctx.getRunContext("terminal");
-            }
-          },
-        });
-      },
+    const { registry } = createRegisteredPlugin("slow-terminal-subscription", (api) => {
+      api.registerAgentEventSubscription({
+        id: "slow",
+        streams: ["tool", "lifecycle"],
+        async handle(event, ctx) {
+          if (event.stream === "tool") {
+            ctx.setRunContext("seen", { runId: event.runId });
+            return;
+          }
+          if (event.data?.phase === "end") {
+            await terminalHandlerRelease.promise;
+            terminalHandlerSawContext = ctx.getRunContext("seen");
+            ctx.setRunContext("terminal", { completed: true });
+            terminalHandlerWroteContext = ctx.getRunContext("terminal");
+          }
+        },
+      });
     });
     setActivePluginRegistry(registry.registry);
 
-    emitAgentEvent({
-      runId: "run-slow-terminal",
-      stream: "tool",
-      data: { name: "tool" },
-    });
+    emitRunEvent("run-slow-terminal", "tool", { name: "tool" });
     await Promise.resolve();
 
-    emitAgentEvent({
-      runId: "run-slow-terminal",
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
+    emitRunEvent("run-slow-terminal", "lifecycle", { phase: "end" });
     await Promise.resolve();
 
     await vi.advanceTimersByTimeAsync(PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
-    expect(
-      getPluginRunContext({
-        pluginId: "slow-terminal-subscription",
-        get: { runId: "run-slow-terminal", namespace: "seen" },
-      }),
-    ).toBeUndefined();
+    expect(readContext("seen")).toBeUndefined();
 
-    releaseTerminalHandler?.();
+    terminalHandlerRelease.resolve();
     await vi.advanceTimersByTimeAsync(0);
 
     expect(terminalHandlerSawContext).toBeUndefined();
     expect(terminalHandlerWroteContext).toBeUndefined();
-    expect(
-      getPluginRunContext({
-        pluginId: "slow-terminal-subscription",
-        get: { runId: "run-slow-terminal", namespace: "seen" },
-      }),
-    ).toBeUndefined();
-    expect(
-      getPluginRunContext({
-        pluginId: "slow-terminal-subscription",
-        get: { runId: "run-slow-terminal", namespace: "terminal" },
-      }),
-    ).toBeUndefined();
+    expect(readContext("seen")).toBeUndefined();
+    expect(readContext("terminal")).toBeUndefined();
   });
 
   it("keeps the expired terminal marker across repeated terminal events", async () => {
+    const readContext = contextReader("repeated-terminal-subscription", "run-repeat-terminal");
+    const firstTerminalHandlerRelease = createDeferredCore();
     vi.useFakeTimers();
-    let releaseFirstTerminalHandler: (() => void) | undefined;
     let firstTerminalHandlerWroteContext: unknown;
     let secondTerminalHandlerWroteContext: unknown;
     let terminalEventsSeen = 0;
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "repeated-terminal-subscription",
-        name: "Repeated Terminal Subscription",
-      }),
-      register(api) {
-        api.registerAgentEventSubscription({
-          id: "repeat-terminal",
-          streams: ["lifecycle"],
-          async handle(event, ctx) {
-            if (event.data?.phase !== "end") {
-              return;
-            }
-            terminalEventsSeen += 1;
-            if (terminalEventsSeen === 1) {
-              await new Promise<void>((resolve) => {
-                releaseFirstTerminalHandler = resolve;
-              });
-              ctx.setRunContext("terminal", { from: "first" });
-              firstTerminalHandlerWroteContext = ctx.getRunContext("terminal");
-              return;
-            }
-            ctx.setRunContext("terminal", { from: "second" });
-            secondTerminalHandlerWroteContext = ctx.getRunContext("terminal");
-          },
-        });
-      },
+    const { registry } = createRegisteredPlugin("repeated-terminal-subscription", (api) => {
+      api.registerAgentEventSubscription({
+        id: "repeat-terminal",
+        streams: ["lifecycle"],
+        async handle(event, ctx) {
+          if (event.data?.phase !== "end") {
+            return;
+          }
+          terminalEventsSeen += 1;
+          if (terminalEventsSeen === 1) {
+            await firstTerminalHandlerRelease.promise;
+            ctx.setRunContext("terminal", { from: "first" });
+            firstTerminalHandlerWroteContext = ctx.getRunContext("terminal");
+            return;
+          }
+          ctx.setRunContext("terminal", { from: "second" });
+          secondTerminalHandlerWroteContext = ctx.getRunContext("terminal");
+        },
+      });
     });
     setActivePluginRegistry(registry.registry);
 
-    emitAgentEvent({
-      runId: "run-repeat-terminal",
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
+    emitRunEvent("run-repeat-terminal", "lifecycle", { phase: "end" });
     await Promise.resolve();
 
     await vi.advanceTimersByTimeAsync(PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
 
-    emitAgentEvent({
-      runId: "run-repeat-terminal",
-      stream: "lifecycle",
-      data: { phase: "end" },
-    });
+    emitRunEvent("run-repeat-terminal", "lifecycle", { phase: "end" });
     await vi.advanceTimersByTimeAsync(0);
 
     expect(secondTerminalHandlerWroteContext).toBeUndefined();
-    expect(
-      getPluginRunContext({
-        pluginId: "repeated-terminal-subscription",
-        get: { runId: "run-repeat-terminal", namespace: "terminal" },
-      }),
-    ).toBeUndefined();
+    expect(readContext("terminal")).toBeUndefined();
 
-    releaseFirstTerminalHandler?.();
+    firstTerminalHandlerRelease.resolve();
     await vi.advanceTimersByTimeAsync(0);
 
     expect(firstTerminalHandlerWroteContext).toBeUndefined();
-    expect(
-      getPluginRunContext({
-        pluginId: "repeated-terminal-subscription",
-        get: { runId: "run-repeat-terminal", namespace: "terminal" },
-      }),
-    ).toBeUndefined();
+    expect(readContext("terminal")).toBeUndefined();
   });
 
   it("preserves scheduler jobs instead of invoking stale cleanup callbacks", async () => {
@@ -791,6 +546,7 @@ describe("plugin run context lifecycle", () => {
   });
 
   it("preserves plugin run context during restart cleanup", async () => {
+    const readContext = contextReader("restart-context-plugin", "run-restart");
     const registry = createEmptyPluginRegistry();
     expect(
       setPluginRunContext({
@@ -806,12 +562,7 @@ describe("plugin run context lifecycle", () => {
         reason: "restart",
       }),
     );
-    expect(
-      getPluginRunContext({
-        pluginId: "restart-context-plugin",
-        get: { runId: "run-restart", namespace: "state" },
-      }),
-    ).toEqual({ keep: true });
+    expect(readContext("state")).toEqual({ keep: true });
 
     expectNoCleanupFailures(
       await runPluginHostCleanup({
@@ -820,29 +571,15 @@ describe("plugin run context lifecycle", () => {
         reason: "disable",
       }),
     );
-    expect(
-      getPluginRunContext({
-        pluginId: "restart-context-plugin",
-        get: { runId: "run-restart", namespace: "state" },
-      }),
-    ).toBeUndefined();
+    expect(readContext("state")).toBeUndefined();
   });
 
   it("preserves durable plugin session state during plugin restart cleanup", async () => {
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
-        id: "restart-state-fixture",
-        name: "Restart State Fixture",
-      }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "restart state test",
-        });
-      },
+    const { registry } = createRegisteredPlugin("restart-state-fixture", (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "restart state test",
+      });
     });
 
     const openClawState = await createOpenClawTestState({

@@ -20,7 +20,7 @@ export type UserProfileDisplay = Pick<UserProfileListItem, "id" | "displayName" 
   avatarRevision: string;
 };
 
-export type UserProfileAuthority = {
+type UserProfileAuthority = {
   profileId: string;
   role: string | null;
   githubLogin?: string | null;
@@ -40,7 +40,14 @@ export type CachedGitHubIdentityBinding = { accountId: number; email: string } |
 
 export type StoredGitHubIdentity = { accountId: number; login: string };
 
-export type UserProfileGitHubAttribution = Map<string, StoredGitHubIdentity | null>;
+export type EnterpriseGitHubIdentity = StoredGitHubIdentity & {
+  host: string;
+  verifiedEmail?: string;
+};
+export type UserProfileGitHubAttribution = Map<
+  string,
+  StoredGitHubIdentity | EnterpriseGitHubIdentity | null
+>;
 
 export type UserProfileGitHubAttributionRead = {
   identities: UserProfileGitHubAttribution;

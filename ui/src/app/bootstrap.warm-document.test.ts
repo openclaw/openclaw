@@ -106,7 +106,9 @@ it.each(["/focus/terminal", "/approve/exec%3A1", "/ask/question-1"])(
         deviceToken: "independent-device-grant",
         recoveryScope: "independent-device",
       },
-      snapshot: { presence: [{ instanceId: opts.instanceId, user: { id: "same-profile" } }] },
+      snapshot: {
+        presence: [{ ts: 0, instanceId: opts.instanceId, user: { id: "same-profile" } }],
+      },
     });
     await runtime.context.agents.ensureList();
     await runtime.context.sessions.groupsLoad();

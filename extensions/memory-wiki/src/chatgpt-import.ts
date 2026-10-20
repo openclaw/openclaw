@@ -33,7 +33,9 @@ import {
 } from "./import-runs-state.js";
 import { appendMemoryWikiLog } from "./log.js";
 import {
+  decodeWikiPageUtf8,
   parseWikiMarkdown,
+  preserveHumanNotesBlock,
   renderWikiMarkdown,
   WIKI_RELATED_END_MARKER,
   WIKI_RELATED_START_MARKER,
@@ -463,7 +465,6 @@ function renderConversationPage(record: ChatGptConversationRecord): string {
   });
 }
 
-const HUMAN_BLOCK_PATTERN = new RegExp(`${HUMAN_START_MARKER}[\\s\\S]*?${HUMAN_END_MARKER}`);
 const RELATED_BLOCK_BODY_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}\\n?([\\s\\S]*?)\\n?${WIKI_RELATED_END_MARKER}`,
 );
@@ -474,12 +475,7 @@ function preserveExistingPageBlocks(rendered: string, existing: string): string 
   }
   const parsedExisting = parseWikiMarkdown(existing);
   const parsedRendered = parseWikiMarkdown(rendered);
-  let nextBody = parsedRendered.body;
-
-  const humanBlock = parsedExisting.body.match(HUMAN_BLOCK_PATTERN)?.[0];
-  if (humanBlock) {
-    nextBody = nextBody.replace(HUMAN_BLOCK_PATTERN, () => humanBlock);
-  }
+  let nextBody = preserveHumanNotesBlock(parsedRendered.body, parsedExisting.body);
 
   const relatedBody = parsedExisting.body.match(RELATED_BLOCK_BODY_PATTERN)?.[1]?.trim();
   if (relatedBody) {
@@ -595,7 +591,7 @@ export async function importChatGptConversations(params: {
       const rendered = renderConversationPage(record);
       const absolutePath = path.join(params.config.vault.path, record.pagePath);
       const existing = await readExistingWikiPage(
-        () => fs.readFile(absolutePath, "utf8"),
+        async () => decodeWikiPageUtf8(await fs.readFile(absolutePath), absolutePath),
         (error) => asNullableRecord(error)?.code === "ENOENT",
       );
       const stabilized = preserveExistingPageBlocks(rendered, existing);

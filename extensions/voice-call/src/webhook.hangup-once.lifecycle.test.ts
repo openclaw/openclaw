@@ -482,9 +482,9 @@ describe("Voice-call webhook lifecycle", () => {
         if (!state) {
           throw new Error("expected fixture SQLite runtime");
         }
-        const openStore = state.openKeyedStore.bind(state);
+        const openStore = state.openKeyedStoreV2.bind(state);
         const fault = vi
-          .spyOn(state, "openKeyedStore")
+          .spyOn(state, "openKeyedStoreV2")
           .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
             const store = openStore<T>(options);
             store.entries = async () => {

@@ -459,29 +459,31 @@ describe("createAcpVisibleTextAccumulator", () => {
     });
   });
 
-  it("buffers chunked NO_REPLY prefixes before emitting visible text", () => {
-    const acc = createAcpVisibleTextAccumulator();
+  it.each(["NO_REPLY", "no_reply", "No_Reply"])(
+    "buffers chunked %s prefixes before emitting visible text",
+    (token) => {
+      const acc = createAcpVisibleTextAccumulator();
 
-    expect(acc.consume("NO")).toBeNull();
-    expect(acc.consume("NO_")).toBeNull();
-    expect(acc.consume("NO_RE")).toBeNull();
-    expect(acc.consume("NO_REPLY")).toBeNull();
-    expect(acc.consume("\nActual answer")).toEqual({
-      text: "Actual answer",
-      delta: "Actual answer",
-    });
-  });
+      expect(acc.consume(token.slice(0, 2))).toBeNull();
+      expect(acc.consume(token.slice(0, 3))).toBeNull();
+      expect(acc.consume(token.slice(0, 5))).toBeNull();
+      expect(acc.consume(token)).toBeNull();
+      expect(acc.consume("\nActual answer")).toEqual({
+        text: "Actual answer",
+        delta: "Actual answer",
+      });
+    },
+  );
 
   it.each([
     { name: "exact silence", chunks: ["NO_REPLY"], expected: { disposition: "silent" } },
     { name: "padded silence", chunks: [" \tNO_REPLY\r\n"], expected: { disposition: "silent" } },
-    ...["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "no_reply", "No response needed."].map(
-      (text) => ({
-        name: `ordinary text ${text}`,
-        chunks: [text],
-        expected: { disposition: "visible", text },
-      }),
-    ),
+    { name: "lowercase silence", chunks: ["no_reply"], expected: { disposition: "silent" } },
+    ...["NO_REPLY.", '"NO_REPLY"', '{"action":"NO_REPLY"}', "No response needed."].map((text) => ({
+      name: `ordinary text ${text}`,
+      chunks: [text],
+      expected: { disposition: "visible", text },
+    })),
     {
       name: "literal suffix",
       chunks: ["NO_REPLY\nNO_REPLY"],

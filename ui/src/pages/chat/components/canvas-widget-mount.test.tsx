@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { createSignal, Show } from "solid-js";
 import { afterEach, expect, it } from "vitest";
-import { SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { CanvasWidgetMount } from "./canvas-widget-mount.tsx";
@@ -80,9 +80,9 @@ it("pauses a retained widget while its transcript is hidden and resumes the same
   const [presented, setPresented] = createSignal(true);
   const [current, setCurrent] = createSignal(properties);
   const root = mountSolid(() => (
-    <SolidContentPresentation value={presented}>
+    <ContentPresentation value={presented}>
       <CanvasWidgetMount {...current()} />
-    </SolidContentPresentation>
+    </ContentPresentation>
   ));
   flush();
   const element = root.container.querySelector("openclaw-canvas-widget-view");

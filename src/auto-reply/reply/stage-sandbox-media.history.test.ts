@@ -7,13 +7,19 @@ import { sanitizeChatHistoryMessages } from "../../gateway/chat-display-projecti
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.message.js";
 import {
   createSandboxMediaContexts,
+  createSandboxWorkspacePreparation,
   createSandboxMediaStageConfig,
   withSandboxMediaTempHome,
 } from "../stage-sandbox-media.test-harness.js";
 import { stageSandboxMedia } from "./stage-sandbox-media.js";
 
 const sandboxMocks = vi.hoisted(() => ({ ensureSandboxWorkspaceForSession: vi.fn() }));
-vi.mock("../../agents/sandbox.js", () => sandboxMocks);
+// mock-isolation: History rewriting owns synthetic workspaces without provisioning real sandboxes.
+vi.mock("../../agents/sandbox/context.js", () => ({
+  ...sandboxMocks,
+  prepareSandboxWorkspaceForSession: async (...args: unknown[]) =>
+    createSandboxWorkspacePreparation(await sandboxMocks.ensureSandboxWorkspaceForSession(...args)),
+}));
 beforeEach(() => sandboxMocks.ensureSandboxWorkspaceForSession.mockReset());
 
 it.each(["settled", "failed", "aborted"] as const)(

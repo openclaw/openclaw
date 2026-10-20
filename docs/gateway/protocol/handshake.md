@@ -110,6 +110,14 @@ checks.
 reports the negotiated role and the current socket's effective authorization
 scopes even when no device token is issued (shape above). `deviceToken`, when
 present, is the primary reusable credential for the same device and role.
+
+Clients that do not use health details at connection time can advertise
+`hello-health-on-demand` in `connect.caps`, as the Control UI does. The Gateway
+then sends `snapshot.health: {}` instead of the cached health details. The
+required snapshot fields and version counters remain present; health RPCs and
+health events are unchanged. Clients without this capability retain the full
+cached health snapshot, and older Gateways ignore the capability.
+
 `controlUiUrl` optionally advertises the Gateway's configured public Control UI
 origin and base path for shareable links, independent of the client's tunnel or
 development-server address. It is omitted when `gateway.publicOrigin` is unset

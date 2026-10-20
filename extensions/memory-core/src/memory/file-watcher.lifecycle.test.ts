@@ -134,6 +134,9 @@ describe("Memory observation lifecycle", () => {
       ),
     );
     await Promise.all(agents.map(({ watcher }) => watcher.start()));
+    for (const { onDirty } of agents) {
+      onDirty.mockClear();
+    }
     const shared = observer.observations.filter((entry) =>
       entry.options.scopes.some((scope) => path.resolve(entry.root.rootDir, scope.path) === extra),
     );
@@ -175,6 +178,53 @@ describe("Memory observation lifecycle", () => {
     expect(observer.observations).toHaveLength(4);
   });
 
+  it.each([
+    [false, false],
+    [true, true],
+    [true, false],
+  ])("retains the shared baseline for image policies %s then %s", async (images, peerImages) => {
+    const first = owner(undefined, 0, [], { images });
+    await first.watcher.start();
+    const entry = observer.observations[0]!;
+    const peer = owner(undefined, 0, [], { agentId: "peer", images: peerImages });
+    await peer.watcher.start();
+    expect(observer.observations).toHaveLength(1);
+    expect(entry.setScopes).not.toHaveBeenCalled();
+    expect(first.onDirty).not.toHaveBeenCalled();
+    expect(peer.onDirty).toHaveBeenCalledOnce();
+    expect(peer.watcher.health()[0]?.state).toBe("ready");
+
+    await peer.watcher.close();
+    expect(entry.setScopes).not.toHaveBeenCalled();
+    expect(entry.close).not.toHaveBeenCalled();
+    entry.dirty();
+    expect(first.onDirty).toHaveBeenCalledOnce();
+    expect(peer.onDirty).toHaveBeenCalledOnce();
+  });
+
+  it("rebaselines changed file kinds even when the shared scopes stay the same", async () => {
+    const text = owner();
+    await text.watcher.start();
+    const entry = observer.observations[0]!;
+    const scopes = entry.options.scopes;
+    const image = {
+      path: path.relative(entry.root.rootDir, path.join(state.workspaceDir, "memory", "photo.png")),
+      kind: "file" as const,
+    };
+    expect(entry.options.exclude?.(image)).toBe(true);
+    const media = owner(undefined, 0, [], { agentId: "media", images: true });
+    await media.watcher.start();
+    expect(entry.options.scopes).toEqual(scopes);
+    expect(entry.setScopes).toHaveBeenCalledOnce();
+    expect(entry.options.exclude?.(image)).toBe(false);
+    entry.dirty([{ path: image.path, type: "content" }]);
+    expect(text.onDirty).not.toHaveBeenCalled();
+    expect(media.onDirty).toHaveBeenCalledOnce();
+    await media.watcher.close();
+    expect(entry.setScopes).toHaveBeenCalledTimes(2);
+    expect(entry.options.exclude?.(image)).toBe(true);
+  });
+
   it("does not share a replaced root with an agent admitted to the new directory", async () => {
     const parent = state.path("shared");
     const notes = path.join(parent, "notes");
@@ -185,6 +235,7 @@ describe("Memory observation lifecycle", () => {
     await fs.mkdir(notes, { recursive: true });
     const replacement = owner(undefined, 0, [notes], { agentId: "replacement" });
     await replacement.watcher.start();
+    replacement.onDirty.mockClear();
     const entries = observer.observations.filter((entry) => entry.root.rootDir === parent);
     expect(entries).toHaveLength(2);
     entries[1]!.dirty([{ path: "notes/new.md", type: "content" }]);
@@ -308,6 +359,7 @@ describe("Memory observation lifecycle", () => {
       (observation) => observation.root.rootDir === path.dirname(notes),
     )!;
     expect(observer.observations).toHaveLength(2);
+    expect(entry.setScopes).toHaveBeenCalledOnce();
     expect(entry.options.scopes.map((scope) => scope.path).toSorted()).toEqual(["images", "notes"]);
     const image = { path: "notes/photo.png", kind: "file" as const };
     expect(entry.options.exclude?.(image)).toBe(false);
@@ -320,6 +372,7 @@ describe("Memory observation lifecycle", () => {
     expect(text.onDirty).toHaveBeenCalledOnce();
     expect(media.onDirty).toHaveBeenCalledTimes(4);
     await media.watcher.close();
+    expect(entry.setScopes).toHaveBeenCalledTimes(2);
     expect(entry.options.exclude?.(image)).toBe(true);
     expect(entry.close).not.toHaveBeenCalled();
   });

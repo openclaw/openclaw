@@ -4,6 +4,7 @@ import type {
   SessionEntryCurrentCheck,
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { validatePluginStateComparison } from "./plugin-state-observation.js";
@@ -114,7 +115,7 @@ function createReadAvailabilityAssertion(
     assertCurrent?.();
     context ??= captureOpenClawStateWorkerContext({ env: options.env });
     (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
-    assertPluginStatePublicationSettled(context.admission.identity.key);
+    assertPluginStatePublicationSettled(context.admission.identity.key, options);
   };
 }
 
@@ -160,9 +161,9 @@ function createKeyedStoreForPluginId<T>(
         moduleSource,
       );
     },
-    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. */
+    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     update: async (...args) => getLegacyStore().update(...args),
-    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. */
+    /** @deprecated Use observe and compareAndApply; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
     deleteIf: async (...args) => getLegacyStore().deleteIf(...args),
   };
   return bindPluginStateNativeBindingStore(
@@ -476,8 +477,15 @@ export function createPluginStateRuntimeStores(
         },
         captureModuleSource?.(),
       ),
-    openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
-      createSyncKeyedStoreForPluginId<T>(pluginId, options, true, pluginId),
+    openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) => {
+      warnPluginSdkDeprecation({
+        pluginId,
+        family: "plugin-state-keyed-store",
+        method: "api.runtime.state.openSyncKeyedStore",
+        replacement: "api.runtime.state.openKeyedStoreV2 and await its operations",
+      });
+      return createSyncKeyedStoreForPluginId<T>(pluginId, options, true, pluginId);
+    },
   };
 }
 
@@ -490,6 +498,12 @@ export function createPluginStateSyncKeyedStore<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
 ): Required<PluginStateSyncKeyedStore<T>> {
+  warnPluginSdkDeprecation({
+    pluginId,
+    family: "plugin-state-keyed-store",
+    method: "createPluginStateSyncKeyedStore",
+    replacement: "createPluginStateKeyedStoreV2 and await its operations",
+  });
   if (pluginId.startsWith("core:")) {
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }

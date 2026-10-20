@@ -1,6 +1,5 @@
 import { listAgentIds, resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Memory Core plugin entrypoint registers its OpenClaw integration.
 import {
   asToolParamsRecord,
   jsonResult,
@@ -24,6 +23,7 @@ import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
 import {
   buildMemoryPromptSection,
+  buildProjectMemoryWriteInstruction,
   MEMORY_GET_TOOL_CONTRACT,
   MEMORY_SEARCH_TOOL_CONTRACT,
   resolveMemoryToolContext,
@@ -31,7 +31,7 @@ import {
   type MemoryToolOptions,
 } from "./src/memory-tool-contract.js";
 import type { MemoryCoreAcquireLocalService } from "./src/memory/embedding-local-service.js";
-import { prepareMemoryManagerReload } from "./src/memory/lifecycle.js";
+import { hasMemoryIndexingBeenLive, prepareMemoryManagerReload } from "./src/memory/lifecycle.js";
 import type { MemoryCoreRuntimeHost } from "./src/memory/runtime-host.js";
 import { registerSessionBackfillGatewayMethods } from "./src/session-backfill-gateway.js";
 
@@ -85,9 +85,6 @@ function createLazyStandingIntentTool(
   ctx: OpenClawPluginToolContext,
   reportUnavailable: (reason: string) => void,
 ): AnyAgentTool | null {
-  if (ctx.senderIsOwner !== true) {
-    return null;
-  }
   const cfg = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
   const provider = ctx.messageChannel?.trim();
   const senderId = ctx.requesterSenderId?.trim();
@@ -264,6 +261,12 @@ export default definePluginEntry({
         id: "memory-core-index",
         reload: { configPrefixes: ["memory.search", "agents", "models.providers"] },
         start({ config, logger }) {
+          // Cold start stays demand-driven: opening every agent's index starts its
+          // transcript and index workers before any search or turn needs them.
+          // Restarts after a manager ran restore watching without a search.
+          if (!hasMemoryIndexingBeenLive()) {
+            return;
+          }
           const activate = async () => {
             await Promise.all(
               listAgentIds(config).map(async (agentId) => {
@@ -311,11 +314,13 @@ export default definePluginEntry({
       deterministicRecallToolName: "memory_search",
       supportsPrivateTranscriptRecall: true,
       promptBuilder: (params) => {
+        // Curated writes use file tools, so project guidance is independent of recall availability.
+        const projectInstruction = buildProjectMemoryWriteInstruction(params.projectKey);
         if (
           !params.availableTools.has("memory_search") &&
           !params.availableTools.has("memory_get")
         ) {
-          return [];
+          return projectInstruction;
         }
         const liveConfig = api.runtime.config?.current ? api.runtime.config.current() : api.config;
         const context = resolveMemoryToolContext({
@@ -324,7 +329,7 @@ export default definePluginEntry({
           agentId: params.agentId,
           agentSessionKey: params.agentSessionKey,
         });
-        return context ? buildMemoryPromptSection(params) : [];
+        return [...(context ? buildMemoryPromptSection(params) : []), ...projectInstruction];
       },
       flushPlanResolver: buildMemoryFlushPlan,
       runtime: memoryRuntime,

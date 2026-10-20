@@ -17,15 +17,15 @@ function voiceProjection(props: ChatThreadProps) {
   const container = document.body.appendChild(document.createElement("div"));
   onTestFinished(() => {
     render(null, container);
-    controller.hostDisconnected();
+    controller.dispose();
   });
   return () => {
     controller.renderSession(props.sessionKey, (session) => {
       const renderRows = vi.spyOn(session, "render");
       try {
         render(renderChatThread(props, controller), container);
-        controller.hostConnected();
-        controller.hostUpdated();
+        controller.start();
+        controller.update();
         flush();
         expect(renderRows).toHaveBeenCalledOnce();
       } finally {
@@ -109,8 +109,8 @@ describe("voice transcript membership", () => {
       },
     ];
     const state = getTranscriptState(props.paneId);
-    state.searchOpen = true;
-    state.searchQuery = "unmatched search";
+    state.search.toggle();
+    state.search.setQuery("unmatched search");
     const project = voiceProjection(props);
 
     expect(project()).toEqual([

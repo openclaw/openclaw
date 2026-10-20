@@ -28,30 +28,35 @@ export async function expectPathMissing(targetPath: string): Promise<void> {
   expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
-export function createMirrorBackendMock(): OpenShellMirrorBackend {
+export function createMirrorBackendMock() {
   return {
     remoteAgentWorkspaceDir: "/agent",
-    mkdirpRemotePath: vi.fn().mockResolvedValue(undefined),
-    renameRemotePath: vi.fn().mockResolvedValue(undefined),
-    removeRemotePath: vi.fn().mockResolvedValue(undefined),
-    syncLocalPathToRemote: vi.fn().mockResolvedValue(undefined),
-  };
+    mkdirpRemotePath: vi
+      .fn<OpenShellMirrorBackend["mkdirpRemotePath"]>()
+      .mockResolvedValue(undefined),
+    renameRemotePath: vi
+      .fn<OpenShellMirrorBackend["renameRemotePath"]>()
+      .mockResolvedValue(undefined),
+    removeRemotePath: vi
+      .fn<OpenShellMirrorBackend["removeRemotePath"]>()
+      .mockResolvedValue(undefined),
+    syncLocalPathToRemote: vi
+      .fn<OpenShellMirrorBackend["syncLocalPathToRemote"]>()
+      .mockResolvedValue(undefined),
+  } satisfies OpenShellMirrorBackend;
 }
 
-export async function createMirrorFsBridgeFixture(
-  workspaceDir: string,
-  backend: OpenShellMirrorBackend = createMirrorBackendMock(),
-  workspaceAccess: "rw" | "none" | "ro" = "rw",
-) {
+export async function createMirrorFsBridgeFixture(workspaceDir: string) {
+  const backend = createMirrorBackendMock();
   const sandbox = createSandboxTestContext({
     overrides: {
       backendId: "openshell",
       workspaceDir,
       agentWorkspaceDir: workspaceDir,
-      workspaceAccess,
+      workspaceAccess: "rw",
       containerWorkdir: "/sandbox",
     },
   });
-  const { createOpenShellFsBridge } = await import("./fs-bridge.js");
-  return { backend, bridge: createOpenShellFsBridge({ sandbox, backend }) };
+  const { OpenShellFsBridge } = await import("./fs-bridge.js");
+  return { bridge: new OpenShellFsBridge(sandbox, backend) };
 }

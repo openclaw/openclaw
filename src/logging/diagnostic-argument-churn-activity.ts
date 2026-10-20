@@ -1,3 +1,4 @@
+import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
 import { resolveCurrentDiagnosticRun } from "./diagnostic-embedded-run-index.js";
 
 // A semantic-stall clock remains continuous across short model/tool handoffs,
@@ -23,6 +24,7 @@ export function recordDiagnosticActivityProgress(activity: DiagnosticArgumentChu
 }
 
 export type DiagnosticArgumentChurnObservationParams = {
+  watchdogAttempt?: SessionControllerWatchdogAttempt;
   sessionId?: string;
   sessionKey?: string;
   runId?: string;

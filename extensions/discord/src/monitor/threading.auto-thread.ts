@@ -102,7 +102,7 @@ export async function resolveDiscordAutoThreadReplyPlan(
         parentInheritanceEnabled: params.threadParentInheritanceEnabled,
       })
     : null;
-  return { ...deliveryPlan, createdThreadId, autoThreadContext };
+  return { ...deliveryPlan, autoThreadContext };
 }
 
 export async function maybeCreateDiscordAutoThread(
@@ -133,9 +133,6 @@ export async function maybeCreateDiscordAutoThread(
       );
       const existingThreadId = message?.thread?.id;
       if (existingThreadId) {
-        logVerbose(
-          `discord: autoThread reusing existing thread ${existingThreadId} on ${messageChannelId}/${params.message.id}`,
-        );
         return existingThreadId;
       }
     } catch {

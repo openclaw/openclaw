@@ -5,21 +5,39 @@ import type {
   ModelsListParams,
 } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
+import { colorize, theme } from "../../../packages/terminal-core/src/theme.js";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import { ExpectedCliError } from "../../cli/failure-output.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
 import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { startProxy, stopProxy } from "../../infra/net/proxy/proxy-lifecycle.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { getModelCatalogWarnings, readSelectedGatewayModelCatalog } from "./catalog-warnings.js";
-import { printModelTable } from "./list.table.js";
+import { formatTag, formatTokenK, isRich, padTerminalCell, truncate } from "./list.format.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfigWithSource } from "./load-config.js";
 import { ensureFlagCompatibility, resolveModelsTargetAgent } from "./shared.js";
 
 // The catalog worker permits three minutes; leave room for connection and result projection.
 const MODEL_CATALOG_REFRESH_TIMEOUT_MS = 210_000;
+
+const MODEL_PAD = 42;
+const INPUT_PAD = 10;
+const CTX_PAD = 11;
+const STATE_PAD = 5;
+
+function formatContextLabel(row: ModelRow): string {
+  if (
+    typeof row.contextTokens === "number" &&
+    Number.isFinite(row.contextTokens) &&
+    row.contextTokens > 0 &&
+    row.contextTokens !== row.contextWindow
+  ) {
+    return `${formatTokenK(row.contextTokens)}/${formatTokenK(row.contextWindow)}`;
+  }
+  return formatTokenK(row.contextWindow);
+}
 
 function toCliModelRow(model: ModelChoice): ModelRow {
   return {
@@ -129,7 +147,6 @@ export async function modelsListCommand(
           target: "local model catalog",
           onForeignOwner: "refuse",
           runLocal: async ({ assertCurrent }) => {
-            assertCurrent();
             const refreshed = await readLocal();
             assertCurrent();
             return refreshed;
@@ -161,8 +178,66 @@ export async function modelsListCommand(
     .map(toCliModelRow);
   if (rows.length === 0 && !opts.json && !opts.plain) {
     runtime.log("No models found.");
+  } else if (opts.json) {
+    const providerOutcomes = result.providerOutcomes?.map(
+      ({ provider: outcomeProvider, profileId, status, unlistedConfiguredModelIds }) => ({
+        provider: outcomeProvider,
+        profileId: profileId || undefined,
+        status,
+        unlistedConfiguredModelIds:
+          status === "ready" && unlistedConfiguredModelIds?.length
+            ? unlistedConfiguredModelIds
+            : undefined,
+      }),
+    );
+    writeRuntimeJson(runtime, {
+      count: rows.length,
+      models: rows,
+      ...(providerOutcomes?.length ? { providerOutcomes } : {}),
+    });
+  } else if (opts.plain) {
+    for (const row of rows) {
+      writeRuntimeStdout(runtime, sanitizeTerminalText(row.key));
+    }
   } else {
-    printModelTable(rows, runtime, { ...opts, providerOutcomes: result.providerOutcomes });
+    const rich = isRich(opts);
+    const formatRowTag = rich
+      ? (tag: string) => formatTag(sanitizeTerminalText(tag))
+      : sanitizeTerminalText;
+    const formatState = (value: boolean | null, unavailableColor = theme.muted) =>
+      colorize(
+        rich,
+        value === null ? theme.muted : value ? theme.success : unavailableColor,
+        padTerminalCell(value === null ? "-" : value ? "yes" : "no", STATE_PAD),
+      );
+    const header = [
+      padTerminalCell("Model", MODEL_PAD),
+      padTerminalCell("Input", INPUT_PAD),
+      padTerminalCell("Ctx", CTX_PAD),
+      padTerminalCell("Local", STATE_PAD),
+      padTerminalCell("Auth", STATE_PAD),
+      "Tags",
+    ].join(" ");
+    runtime.log(rich ? theme.heading(header) : header);
+
+    for (const row of rows) {
+      const keyLabel = padTerminalCell(truncate(row.key, MODEL_PAD), MODEL_PAD);
+      const coloredInput = colorize(
+        rich,
+        row.input.includes("image") ? theme.accentBright : theme.info,
+        padTerminalCell(sanitizeTerminalText(row.input) || "-", INPUT_PAD),
+      );
+
+      const line = [
+        rich ? theme.accent(keyLabel) : keyLabel,
+        coloredInput,
+        padTerminalCell(formatContextLabel(row), CTX_PAD),
+        formatState(row.local),
+        formatState(row.available, theme.error),
+        row.tags.map(formatRowTag).join(","),
+      ].join(" ");
+      runtime.log(line);
+    }
   }
   requestExitAfterOneShotOutput(runtime);
 }

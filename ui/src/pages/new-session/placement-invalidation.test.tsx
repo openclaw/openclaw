@@ -3,9 +3,10 @@ import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { PlaceBrowserState } from "./place-browser-state.ts";
-import { resolveProjectChip, type ProjectChipOptions } from "./project-chip.ts";
+import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
+import { resolveProjectChip } from "./project-chip.ts";
 import { ProjectChip } from "./project-chip.tsx";
+import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 import { pickerParams } from "./where-chip.test-support.ts";
 import { WhereChip } from "./where-chip.tsx";
 
@@ -17,7 +18,7 @@ it("retains environment heading and device artwork through unrelated refreshes",
     { environmentQuery: "Build" },
   );
   const [current, setCurrent] = createSignal(params);
-  const view = mountSolid(() => <WhereChip params={current()} />);
+  const view = mountSolid(() => <WhereChip {...current()} />);
   const list = view.container.querySelector(".new-session-page__environment-list")!;
   const row = list.querySelector('[data-value="device:runner"]')!;
   const heading = list.querySelector(".new-session-page__environment-heading");
@@ -56,7 +57,38 @@ it("retains project artwork while current labels and selection remain live", () 
       source: "registered" as const,
     },
   ];
-  const params: ProjectChipOptions = {
+  const { state: place, browser, gateway } = createRepositoryFixture();
+  let projectId = "";
+  vi.spyOn(place, "folder", "get").mockReturnValue("");
+  vi.spyOn(place, "workspacePath").mockReturnValue("/fixture");
+  vi.spyOn(place, "browseAvailable").mockReturnValue(true);
+  vi.spyOn(place, "isAdmin").mockReturnValue(true);
+  vi.spyOn(place, "canWrite").mockReturnValue(true);
+  vi.spyOn(place, "deviceFolderAvailable", "get").mockReturnValue(false);
+  vi.spyOn(browser, "projects", "get").mockReturnValue(projects);
+  vi.spyOn(browser, "projectQuery", "get").mockReturnValue("Sample");
+  vi.spyOn(browser, "projectId", "get").mockImplementation(() => projectId);
+  vi.spyOn(browser, "popoverOpen").mockReturnValue(true);
+  vi.spyOn(browser, "popoverCallbacks").mockReturnValue({
+    popoverOpen: true,
+    onPopoverShow: vi.fn(),
+    onPopoverHide: vi.fn(),
+    onPopoverAfterHide: vi.fn(),
+  });
+  const options: NewSessionPlaceControlsOptions = {
+    place,
+    gateway,
+    context: undefined,
+    data: undefined,
+    submitting: false,
+    pendingPlacement: false,
+    onConnectMachine: vi.fn(),
+    onNavigate: vi.fn(),
+    onFocusComposer: vi.fn(),
+    onChange: vi.fn(),
+  };
+  const params = {
+    params: options,
     state: resolveProjectChip({
       folder: "",
       workspace: "/fixture",
@@ -66,43 +98,10 @@ it("retains project artwork while current labels and selection remain live", () 
       recents: [],
       projectQuery: "Sample",
     }),
-    browseAvailable: true,
-    isAdmin: true,
-    canWrite: true,
-    folder: "",
-    workspace: "/fixture",
-    projects,
-    projectQuery: "Sample",
-    projectSearchAvailable: false,
-    projectAddAvailable: false,
-    remoteProjects: [],
-    selectedRemoteProject: null,
-    projectSearchCredentialMissing: false,
-    projectSearchLoading: false,
-    projectSearchError: null,
-    projectId: "",
-    gatewayLabel: "Gateway",
-    submitting: false,
-    pendingPlacement: false,
-    popoverOpen: true,
-    browserOpen: false,
-    browser: new PlaceBrowserState(vi.fn(), vi.fn()),
-    registerProjectPath: null,
-    registeringProject: false,
-    onPopoverShow: vi.fn(),
-    onPopoverHide: vi.fn(),
-    onPopoverAfterHide: vi.fn(),
-    onSelectProject: vi.fn(),
-    onProjectQueryInput: vi.fn(),
-    onSelectRemoteProject: vi.fn(),
-    onApplyFolder: vi.fn(),
-    onBrowse: vi.fn(),
-    onBrowserBack: vi.fn(),
-    onRegisterProject: vi.fn(),
-    onClose: vi.fn(),
+    nativeTerminal: false,
   };
   const [current, setCurrent] = createSignal(params);
-  const view = mountSolid(() => <ProjectChip params={current()} />);
+  const view = mountSolid(() => <ProjectChip {...current()} />);
   const row = view.container.querySelector('[data-value="project:sample"]')!;
   const icon = row.querySelector(".session-menu__icon svg");
   const observer = new MutationObserver(() => {});
@@ -113,8 +112,8 @@ it("retains project artwork while current labels and selection remain live", () 
   expect(observer.takeRecords()).toHaveLength(0);
   expect(row.querySelector(".session-menu__icon svg")).toBe(icon);
   projects[0]!.displayName = "Sample Project refreshed";
-  params.projectId = "sample";
-  setCurrent({ ...params });
+  projectId = "sample";
+  setCurrent({ ...params, params: { ...options } });
   flush();
   expect(view.container.querySelector('[data-value="project:sample"]')).toBe(row);
   expect(row.textContent).toContain("Sample Project refreshed");

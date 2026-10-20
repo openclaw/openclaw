@@ -1,7 +1,4 @@
-import type {
-  ChannelMessageSendTextContext,
-  MessageReceipt,
-} from "openclaw/plugin-sdk/channel-outbound";
+import type { ChannelMessageSendTextContext } from "openclaw/plugin-sdk/channel-outbound";
 import type { z } from "zod";
 import type {
   ZalouserAccountSchema,
@@ -77,13 +74,6 @@ export type ZaloSendOptions = ZaloSendHandoff & {
   textChunkMode?: "length" | "newline";
   textChunkLimit?: number;
   textStyles?: Style[];
-};
-
-export type ZaloSendResult = {
-  ok: boolean;
-  messageId?: string;
-  receipt: MessageReceipt;
-  error?: string;
 };
 
 export type ZaloGroupContext = {

@@ -1,15 +1,11 @@
 import type { EnvironmentSummary } from "@openclaw/gateway-protocol";
-import { createComponent } from "solid-js";
 import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { DesktopConnectionHandle } from "./desktop-client.ts";
-import { DesktopPanelController } from "./desktop-panel-controller.ts";
-import { DesktopPanelContent } from "./desktop-panel-solid.tsx";
+import "./desktop-panel.ts";
 
-type DesktopPanelElement = DesktopPanelController;
-const mountedPanels = new WeakMap<DesktopPanelController, ReturnType<typeof mountSolid>>();
+type DesktopPanelElement = HTMLElementTagNameMap["openclaw-desktop-panel"];
 
 export const desktopEnvironment = {
   id: "worker-desktop-1",
@@ -27,7 +23,7 @@ export const desktopEnvironment = {
 } satisfies EnvironmentSummary;
 
 export function createPanel() {
-  const panel = new DesktopPanelController(document.createElement("div"));
+  const panel = document.createElement("openclaw-desktop-panel");
   updatePanel(panel, {
     sessions: {
       describe: (params, options) => {
@@ -59,7 +55,7 @@ export function clickPanelButton(
   panel: DesktopPanelElement,
   selector = ".desktop-environment button",
 ): void {
-  const button = panel.renderRoot.querySelector<HTMLButtonElement>(selector);
+  const button = panel.querySelector<HTMLButtonElement>(selector);
   if (!button) {
     throw new Error(`expected Desktop button: ${selector}`);
   }
@@ -67,7 +63,7 @@ export function clickPanelButton(
 }
 
 export function sizingMenu(panel: DesktopPanelElement): HTMLSelectElement {
-  const menu = panel.renderRoot.querySelector<HTMLSelectElement>(".desktop-sizing");
+  const menu = panel.querySelector<HTMLSelectElement>(".desktop-sizing");
   if (!menu) {
     throw new Error("expected the desktop sizing menu");
   }
@@ -81,34 +77,22 @@ export function selectSizing(panel: DesktopPanelElement, mode: string): void {
 }
 
 export function updatePanel(
-  panel: DesktopPanelController,
-  changes: Partial<DesktopPanelController>,
+  panel: DesktopPanelElement,
+  changes: Partial<DesktopPanelElement>,
 ): void {
-  for (const key of Object.keys(changes) as (keyof DesktopPanelController)[]) {
-    const previous = panel[key];
-    if (Object.is(previous, changes[key])) {
-      continue;
-    }
-    Object.assign(panel, { [key]: changes[key] });
-    panel.inputsChanged(key, previous);
-  }
+  Object.assign(panel, changes);
 }
 
-export function mountPanel(panel: DesktopPanelController): void {
-  document.body.append(panel.element);
-  mountedPanels.set(
-    panel,
-    mountSolid(() => createComponent(DesktopPanelContent, { controller: panel }), {
-      container: panel.element,
-    }),
-  );
+export async function mountPanel(panel: DesktopPanelElement): Promise<void> {
+  document.body.append(panel);
+  await panel.updateComplete;
   flush();
 }
 
-export function unmountPanel(panel: DesktopPanelController): void {
-  mountedPanels.get(panel)?.unmount();
-  mountedPanels.delete(panel);
-  panel.element.remove();
+export async function unmountPanel(panel: DesktopPanelElement): Promise<void> {
+  panel.remove();
+  await Promise.resolve();
+  flush();
 }
 
 export function createGatewayClient(request: unknown) {

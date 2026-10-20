@@ -1,4 +1,3 @@
-// ClawHub package metadata, security, search, and telemetry operations.
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExternalPluginCompatibility } from "../../packages/plugin-package-contract/src/index.js";
@@ -373,7 +372,6 @@ export async function fetchClawHubPackageDetail(
     path: `/api/v1/packages/${encodeURIComponent(params.name)}`,
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
@@ -390,7 +388,6 @@ export async function listClawHubPackages(
     path: "/api/v1/packages",
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
     search: {
       family: params.family,
       isOfficial: params.isOfficial === undefined ? undefined : String(params.isOfficial),
@@ -422,7 +419,6 @@ export async function fetchClawHubPackageVersion(
     )}`,
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
@@ -439,7 +435,6 @@ export async function fetchClawHubPackageArtifact(
     )}/artifact`,
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
 }
 
@@ -456,7 +451,6 @@ export async function fetchClawHubPackageSecurity(
     )}/security`,
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
   return parseClawHubPackageSecurityResponse(response);
 }
@@ -474,7 +468,6 @@ export async function searchClawHubPackages(
     path: "/api/v1/packages/search",
     token: params.token,
     timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
     search: {
       q: params.query.trim(),
       family: params.family,

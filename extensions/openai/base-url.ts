@@ -5,7 +5,7 @@ export const OPENAI_CODEX_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/
 // Bundled @openai/codex pin, reported when the Codex plugin cannot name the
 // binary its turns run; the client-version contract test keeps it equal to
 // extensions/codex's exact dependency.
-const OPENAI_CODEX_CLIENT_VERSION = "0.161.0";
+const OPENAI_CODEX_CLIENT_VERSION = "0.162.1";
 
 export type OpenAICodexModelsEndpointContext = {
   config?: OpenClawConfig;

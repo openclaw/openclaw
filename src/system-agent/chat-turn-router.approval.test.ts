@@ -1,9 +1,9 @@
 import "./chat-engine.mocks.test-support.js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SystemAgentTurnRunner } from "./agent-turn.js";
 import {
+  operationMocks,
   fakeOverviewLoader,
-  sharedVerifiedInference,
   classifySystemAgentApprovalText,
   mocks,
   useTempStateDir,
@@ -12,45 +12,38 @@ import {
   expectDefined,
   hashSystemAgentOperation,
 } from "./chat-engine.test-support.js";
-import { ChatTurnRouter } from "./chat-turn-router.js";
-import { ChatWizardHost } from "./chat-wizard-host.js";
 import { describeSystemAgentPersistentOperation } from "./operations.js";
+import * as operations from "./operations.js";
 
-function createRouterHarness(options: ConstructorParameters<typeof ChatTurnRouter>[0]) {
-  const verifiedInference = expectDefined(
-    sharedVerifiedInference,
-    "shared verified inference test fixture",
+const nativeExecuteOperation = operations.executeSystemAgentOperation;
+
+function mockApprovedOperation() {
+  vi.spyOn(operations, "executeSystemAgentOperation").mockImplementation((...args) =>
+    args[2]?.approved === true
+      ? Promise.resolve({ applied: true })
+      : nativeExecuteOperation(...args),
   );
-  const session = {
-    sessionId: "approval-router-test",
-    verifiedInference,
-    proposalRef: {},
-  };
-  return new ChatTurnRouter(
-    options,
-    { executeOperation: async () => ({ applied: true }) },
-    session,
-    new ChatWizardHost({ beforePersistentApply: async () => {} }),
-    {
-      requireVerifiedInference: async () => verifiedInference.execution,
-      requirePersistentApplyInference: async () => verifiedInference.execution,
-      rebindVerifiedInference: () => {},
-      getVerifiedInference: () => verifiedInference,
-      loadOverview: fakeOverviewLoader(),
-      verifyConfigAfterWrite: async () => null,
-    },
-  );
+}
+
+function createEngine(options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {}) {
+  const engine = new SystemAgentChatEngine({
+    ...options,
+    deps: { loadOverview: fakeOverviewLoader(), ...options.deps },
+  });
+  onTestFinished(() => engine.dispose());
+  return engine;
 }
 
 describe("SystemAgentChatEngine approval", () => {
   it("records the delegated requester before hashing a model-tool proposal", async () => {
+    mockApprovedOperation();
     const unrecordedOperation = {
       kind: "create-agent" as const,
       agentId: "researcher",
       workspace: "/tmp/researcher",
     };
     const unrecordedHash = hashSystemAgentOperation(unrecordedOperation);
-    const router = createRouterHarness({
+    const engine = createEngine({
       operatorApprovalOnly: true,
       requesterAgentId: "research",
       runAgentTurn: async ({ session }) => {
@@ -60,8 +53,8 @@ describe("SystemAgentChatEngine approval", () => {
       },
     });
 
-    await router.resolveTurn("Create a research agent.");
-    const proposal = expectDefined(router.getPendingOperatorProposal(), "delegated proposal");
+    await engine.handle("Create a research agent.");
+    const proposal = expectDefined(engine.getPendingOperatorProposal(), "delegated proposal");
 
     expect(proposal.operation).toEqual({
       ...unrecordedOperation,
@@ -71,9 +64,9 @@ describe("SystemAgentChatEngine approval", () => {
     expect(describeSystemAgentPersistentOperation(proposal.operation)).toContain(
       "requested by agent research",
     );
-    expect(await router.resolveOperatorApproval("allow-once", unrecordedHash)).toBeNull();
-    expect(await router.resolveOperatorApproval("allow-once", proposal.hash)).not.toBeNull();
-    expect(router.getPendingOperatorProposal()).toBeNull();
+    expect(await engine.resolveOperatorApproval("allow-once", unrecordedHash)).toBeNull();
+    expect(await engine.resolveOperatorApproval("allow-once", proposal.hash)).not.toBeNull();
+    expect(engine.getPendingOperatorProposal()).toBeNull();
   });
 
   it.each(["allow-once", null] as const)(
@@ -84,7 +77,7 @@ describe("SystemAgentChatEngine approval", () => {
       const proposalHash = hashSystemAgentOperation(operation);
       const armed: boolean[] = [];
       const observedInputs: string[] = [];
-      const runConfigSet = vi.fn(async () => {});
+      const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
       const engine = new SystemAgentChatEngine({
         operatorApprovalOnly: true,
         runAgentTurn: async (params) => {
@@ -96,7 +89,7 @@ describe("SystemAgentChatEngine approval", () => {
           }
           return { text: "Change ready." };
         },
-        deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+        deps: { loadOverview: fakeOverviewLoader() },
       });
 
       await engine.handle("Change port.");
@@ -123,6 +116,8 @@ describe("SystemAgentChatEngine approval", () => {
           path: "gateway.port",
           value: "19001",
           cliOptions: {},
+          runtime: expect.objectContaining({ exit: expect.any(Function) }),
+          throwOnError: false,
         });
         expect(applied?.text).toContain("[openclaw] done: config.set");
         expect(observedInputs[1]).toContain("was approved");
@@ -153,7 +148,7 @@ describe("SystemAgentChatEngine approval", () => {
     "hatches an agent requested by the $origin with approval-bound provenance",
     async ({ requesterAgentId, expectedCreatorAgentId, expectedDescription }) => {
       useTempStateDir();
-      const createAgent = vi.fn(async () => ({
+      const createAgent = operationMocks.createAgent.mockImplementation(async () => ({
         status: "created" as const,
         agentId: "researcher",
         name: "researcher",
@@ -166,7 +161,7 @@ describe("SystemAgentChatEngine approval", () => {
       const engine = new SystemAgentChatEngine({
         runAgentTurn: async () => ({ text: "noted" }),
         classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
-        deps: { createAgent, loadOverview: fakeOverviewLoader() },
+        deps: { loadOverview: fakeOverviewLoader() },
         ...(requesterAgentId ? { requesterAgentId, operatorApprovalOnly: true } : {}),
       });
       engine.propose({
@@ -205,13 +200,13 @@ describe("SystemAgentChatEngine approval", () => {
 
   it("stays in setup when post-write verification flags the config", async () => {
     useTempStateDir();
-    const verifyInferenceConfig = vi.fn(async () => ({
+    operationMocks.verifyInferenceConfig.mockImplementation(async () => ({
       ok: true as const,
       modelRef: "openai/gpt-5.5",
       latencyMs: 100,
     }));
     let applied = false;
-    const applySetup = vi.fn(async () => {
+    const applySetup = operationMocks.applySetup.mockImplementation(async () => {
       applied = true;
       return {
         configPath: "/tmp/openclaw.json",
@@ -241,8 +236,6 @@ describe("SystemAgentChatEngine approval", () => {
       runAgentTurn: async () => ({ text: "repair suggestion" }),
       classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
       deps: {
-        applySetup,
-        verifyInferenceConfig,
         loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
       },
     });
@@ -275,8 +268,8 @@ describe("SystemAgentChatEngine approval", () => {
   });
 
   it("drops the proposal when the user declines", async () => {
-    const runConfigSet = vi.fn(async () => {});
-    const engine = new SystemAgentChatEngine({ deps: { runConfigSet } });
+    const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
+    const engine = new SystemAgentChatEngine();
     engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
 
     const reply = await engine.handle("no thanks");
@@ -297,13 +290,13 @@ describe("SystemAgentChatEngine approval", () => {
         return { text: "Okay, leaving it as is." };
       },
     );
-    const router = createRouterHarness({
+    const engine = createEngine({
       runAgentTurn: runAgentTurn as never,
       classifyApproval: async ({ message }) => classifySystemAgentApprovalText(message),
     });
 
-    await router.resolveTurn("change the model");
-    const declined = await router.resolveTurn("no thanks");
+    await engine.handle("change the model");
+    const declined = await engine.handle("no thanks");
 
     // The decline voids the registered hash before the AI turn, so a later
     // generic approval can never arm the stale mutation.
@@ -320,22 +313,23 @@ describe("SystemAgentChatEngine approval", () => {
       params.session.proposalRef.operation = operation;
       return { text: "loop reply" };
     });
-    const router = createRouterHarness({
+    const engine = createEngine({
       runAgentTurn,
       classifyApproval: async ({ message }) => classifySystemAgentApprovalText(message),
     });
-    router.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
 
-    await router.resolveTurn("actually, tell me about workspaces first");
+    await engine.handle("actually, tell me about workspaces first");
 
-    expect(router.getPendingOperatorProposal()).toEqual({ operation, hash });
-    await router.resolveTurn("yes");
+    expect(engine.getPendingOperatorProposal()).toEqual({ operation, hash });
+    await engine.handle("yes");
 
     expect(runAgentTurn.mock.calls.map(([params]) => params.approvalArmed)).toEqual([false, true]);
     expect(runAgentTurn.mock.calls[1]?.[0].input).not.toContain("host-seeded");
   });
 
   it("keeps a host setup proposal across approval reads and follow-up questions", async () => {
+    mockApprovedOperation();
     const operation = {
       kind: "setup",
       workspace: "/tmp/work",
@@ -345,45 +339,46 @@ describe("SystemAgentChatEngine approval", () => {
     const runAgentTurn = vi.fn(async (_params: Parameters<SystemAgentTurnRunner>[0]) => ({
       text: "A workspace is where your agent keeps its project files.",
     }));
-    const router = createRouterHarness({
+    const engine = createEngine({
       runAgentTurn,
       classifyApproval: async ({ message }) => classifySystemAgentApprovalText(message),
     });
-    router.propose(operation);
+    engine.propose(operation);
 
-    expect(router.getPendingOperatorProposal()).toEqual(proposal);
-    expect(router.getPendingOperatorProposal()).toEqual(proposal);
+    expect(engine.getPendingOperatorProposal()).toEqual(proposal);
+    expect(engine.getPendingOperatorProposal()).toEqual(proposal);
 
-    await router.resolveTurn("what does workspace mean?");
+    await engine.handle("what does workspace mean?");
 
-    expect(router.getPendingOperatorProposal()).toEqual(proposal);
+    expect(engine.getPendingOperatorProposal()).toEqual(proposal);
     expect(runAgentTurn.mock.calls[0]?.[0].input).toContain('"model":"openai/gpt-5.5"');
     expect(runAgentTurn.mock.calls[0]?.[0].input).toContain("Keep the verified model");
 
-    await router.resolveTurn("yes");
+    await engine.handle("yes");
 
     expect(runAgentTurn).toHaveBeenCalledOnce();
-    expect(router.getPendingOperatorProposal()).toBeNull();
+    expect(engine.getPendingOperatorProposal()).toBeNull();
   });
 
   it("keeps a host-resolution marker queued across a failed turn", async () => {
+    mockApprovedOperation();
     const observedInputs: string[] = [];
     const runAgentTurn = vi.fn(async (params: { input: string }) => {
       observedInputs.push(params.input);
       return observedInputs.length === 1 ? null : { text: "native reply" };
     });
-    const router = createRouterHarness({
+    const engine = createEngine({
       runAgentTurn: runAgentTurn as never,
       classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
     });
-    router.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
+    engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
 
-    await router.resolveTurn("yes");
-    await expect(router.resolveTurn("what next?")).rejects.toBeInstanceOf(
+    await engine.handle("yes");
+    await expect(engine.handle("what next?")).rejects.toBeInstanceOf(
       SystemAgentInferenceUnavailableError,
     );
-    await router.resolveTurn("try the native session again");
-    await router.resolveTurn("and now?");
+    await engine.handle("try the native session again");
+    await engine.handle("and now?");
 
     expect(observedInputs).toHaveLength(3);
     expect(observedInputs[0]).toContain("was approved");
@@ -409,10 +404,10 @@ describe("SystemAgentChatEngine approval", () => {
     async ({ path, value }) => {
       useTempStateDir();
       const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({ text: "still pending" }));
-      const runConfigSet = vi.fn(async () => {});
+      const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
       const engine = new SystemAgentChatEngine({
         runAgentTurn,
-        deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+        deps: { loadOverview: fakeOverviewLoader() },
       });
 
       const proposed = await engine.handle(`config set ${path} ${value}`);
@@ -447,7 +442,7 @@ describe("SystemAgentChatEngine approval", () => {
         observedInputs.push(params.input);
         return { text: "still pending" };
       },
-      deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
+      deps: { loadOverview: fakeOverviewLoader() },
     });
 
     const proposed = await engine.handle(`config set-ref gateway.auth.token exec ${rawRef}`);
@@ -504,7 +499,7 @@ describe("SystemAgentChatEngine approval", () => {
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
     const engine = new SystemAgentChatEngine({
       runAgentTurn: runAgentTurn as never,
-      deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
+      deps: { loadOverview: fakeOverviewLoader() },
     });
 
     const proposed = await engine.handle(command);

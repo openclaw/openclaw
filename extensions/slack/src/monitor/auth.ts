@@ -11,6 +11,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeStringEntriesLower } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { collectSlackCursorPages } from "../cursor-pages.js";
 import { getSlackRuntime } from "../runtime.js";
+import type { SlackMessageEvent } from "../types.js";
 import {
   allowListMatches,
   normalizeSlackAllowOwnerEntry,
@@ -30,6 +31,7 @@ import {
   slackIngressIdentity,
   SLACK_USER_NAME_KIND,
 } from "./ingress-identity.js";
+import { getOrCreateWeakOwnerMap } from "./lru-map-cache.js";
 import { isTransientSlackThreadLookupError } from "./thread-resolution.js";
 
 type SlackChannelMembersCacheEntry = {
@@ -38,7 +40,7 @@ type SlackChannelMembersCacheEntry = {
   pending?: Promise<Set<string>>;
 };
 
-type SlackIngressChannelType = "im" | "mpim" | "channel" | "group";
+type SlackIngressChannelType = NonNullable<SlackMessageEvent["channel_type"]>;
 type SlackSystemEventAuthorization = ({ allowed: true } | { allowed: false; reason: string }) &
   Partial<{ channelType: SlackIngressChannelType; channelName: string }>;
 
@@ -58,18 +60,6 @@ function createSlackIngressResolver(ctx: SlackMonitorContext) {
     identity: slackIngressIdentity,
     cfg: ctx.cfg,
   });
-}
-
-function getChannelMembersCache(
-  ctx: SlackMonitorContext,
-): Map<string, SlackChannelMembersCacheEntry> {
-  const existing = slackChannelMembersCache.get(ctx);
-  if (existing) {
-    return existing;
-  }
-  const next = new Map<string, SlackChannelMembersCacheEntry>();
-  slackChannelMembersCache.set(ctx, next);
-  return next;
 }
 
 export async function resolveSlackEffectiveAllowFrom(
@@ -115,7 +105,7 @@ async function resolveSlackChannelMemberIds(
   channelId: string,
   eventScope?: SlackEventScope,
 ): Promise<Set<string>> {
-  const cache = getChannelMembersCache(ctx);
+  const cache = getOrCreateWeakOwnerMap(slackChannelMembersCache, ctx);
   const key = `${ctx.accountId}:${eventScope ? `${eventScope.teamId}:` : ""}${channelId}`;
   const nowMs = Date.now();
   const cached = cache.get(key);
@@ -434,7 +424,7 @@ export async function authorizeSlackSystemEventSender(params: {
   if (channelId) {
     const info: {
       name?: string;
-      type?: "im" | "mpim" | "channel" | "group";
+      type?: NonNullable<SlackMessageEvent["channel_type"]>;
     } = await params.ctx.resolveChannelName(channelId, params.eventScope).catch(() => ({}));
     channelName = info.name;
     const resolvedTypeSource = params.channelType ?? info.type;

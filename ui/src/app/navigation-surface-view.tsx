@@ -1,7 +1,10 @@
-import { Show } from "solid-js";
+import { dynamic } from "@solidjs/web";
+import { createSignal, onSettled, Show } from "solid-js";
 import type { SidebarAttentionElementAttributes } from "../components/sidebar-attention-element.ts";
+import type { SidebarUpdateCard } from "../components/sidebar-update-card.tsx";
 import type { ApplicationContext } from "./context.ts";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
+import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
 type FloatingUpdateCardProps = {
   navigationSurfaceHidden: boolean;
@@ -19,12 +22,6 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-sidebar-attention": SidebarAttentionElementAttributes;
-      "openclaw-sidebar-update-card": HTMLAttributes<HTMLElement> & {
-        "prop:updateRun": FloatingUpdateCardProps["updateRun"];
-        "prop:statusBanner": FloatingUpdateCardProps["statusBanner"];
-        "prop:refreshRequired": FloatingUpdateCardProps["refreshRequired"];
-        "prop:onRefresh": FloatingUpdateCardProps["onRefresh"];
-      };
     }
   }
 }
@@ -39,13 +36,28 @@ export function FloatingUpdateCard(props: FloatingUpdateCardProps) {
         />
       </Show>
       <Show when={!props.compact && props.refreshRequired}>
-        <openclaw-sidebar-update-card
-          class="sidebar-update-card--floating"
-          prop:updateRun={props.updateRun ?? null}
-          prop:statusBanner={props.statusBanner ?? null}
-          prop:refreshRequired={props.refreshRequired}
-          prop:onRefresh={props.onRefresh}
-        />
+        {(_refreshRequired) => {
+          const [card, setCard] = createSignal<typeof SidebarUpdateCard>();
+          const Card = dynamic(card);
+          onSettled(() => {
+            void import("../components/sidebar-update-card.tsx")
+              .then((module) => setCard(() => module.SidebarUpdateCard))
+              .catch((error: unknown) => {
+                if (isStaleChunkImportError(error)) {
+                  void scheduleStaleChunkReload();
+                }
+              });
+          });
+          return (
+            <Card
+              class="sidebar-update-card--floating"
+              updateRun={props.updateRun ?? null}
+              statusBanner={props.statusBanner ?? null}
+              refreshRequired={props.refreshRequired}
+              onRefresh={props.onRefresh}
+            />
+          );
+        }}
       </Show>
     </>
   );

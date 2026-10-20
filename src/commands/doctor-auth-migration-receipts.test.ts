@@ -12,7 +12,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   archiveAuthProfileMigrationSource,
-  createAuthProfileMigrationSourceReceipt,
+  prepareAuthProfileSourceReceipt,
   digestAuthProfileMigrationValue,
   finalizeAuthProfileMigrationSource,
   resumePendingAuthProfileMigrationArchives,
@@ -20,10 +20,10 @@ import {
 
 type MigrationReceiptTestApi = {
   recordAuthProfileMigrationImported: (
-    receipt: ReturnType<typeof createAuthProfileMigrationSourceReceipt>,
+    receipt: ReturnType<typeof prepareAuthProfileSourceReceipt>,
   ) => void;
   restoreAuthProfileMigrationArchiveNoClobber: (
-    receipt: ReturnType<typeof createAuthProfileMigrationSourceReceipt>,
+    receipt: ReturnType<typeof prepareAuthProfileSourceReceipt>,
   ) => "restored" | "source-exists";
 };
 
@@ -51,13 +51,11 @@ describe("auth profile migration receipts", () => {
       "credentials/oauth.json",
       `${JSON.stringify({ openai: { access: "fake", refresh: "fake", expires: 42 } })}\n`,
     );
-    const receipt = createAuthProfileMigrationSourceReceipt({
-      sourcePath,
-      sourceBytes: fs.readFileSync(sourcePath),
-      sourceRecordCount: 1,
+    const receipt = prepareAuthProfileSourceReceipt({
+      pathname: sourcePath,
       targetDatabasePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
       targetTable: "auth_profile_store",
-      now: new Date("2026-07-25T12:00:00.000Z"),
+      now: () => Date.parse("2026-07-25T12:00:00.000Z"),
       env: state.env,
     });
     return { state, sourcePath, receipt };

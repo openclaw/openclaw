@@ -214,39 +214,44 @@ describe("runCodexSettledTurnFinalization", () => {
     );
   });
 
-  it("uses configured transport for remote settled finalization", async () => {
-    const attempt = createAttempt();
-    const settledAttempt = createSettledAttempt({
-      model: "gpt-5.6-luna",
-      modelProvider: "openai",
-      authProfileId: "openai:captured",
-    });
-    const options = {
-      pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:19400" } },
-    };
+  it.each([true, undefined] as const)(
+    "preserves private display policy in remote settled finalization (private=%s)",
+    async (privateCompletion) => {
+      const attempt = createAttempt();
+      attempt.privateCompletion = privateCompletion;
+      const settledAttempt = createSettledAttempt({
+        model: "gpt-5.6-luna",
+        modelProvider: "openai",
+        authProfileId: "openai:captured",
+      });
+      const options: Parameters<typeof runCodexSettledTurnFinalization>[1] = {
+        pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:19400" } },
+      };
 
-    const result = await finalize(attempt, settledAttempt, options);
+      const result = await finalize(attempt, settledAttempt, options);
 
-    expect(mocks.runBounded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isolation: "configured-transport",
-        requireNoExternalCapabilities: true,
-        options,
-      }),
-    );
-    expect(result).toMatchObject({
-      assistantTranscriptOwned: true,
-      assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
-      usage: boundedResult().usage,
-      assistant: {
-        provider: "openai",
-        model: "synthetic-summary-model",
-        content: [{ type: "text", text: "The update was sent successfully." }],
-      },
-    });
-  });
+      expect(mocks.runBounded).toHaveBeenCalledWith(
+        expect.objectContaining({
+          isolation: "configured-transport",
+          requireNoExternalCapabilities: true,
+          options,
+        }),
+      );
+      expect(result).toMatchObject({
+        assistantTranscriptOwned: true,
+        assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
+        usage: boundedResult().usage,
+        assistant: {
+          provider: "openai",
+          model: "synthetic-summary-model",
+          content: [{ type: "text", text: "The update was sent successfully." }],
+        },
+      });
+      expect(Reflect.get(result.assistant, "display") === false).toBe(privateCompletion === true);
+    },
+  );
 
-  it.each(["agent", "user"])(
+  it.each(["agent", "user"] as const)(
     "uses the selected scoped subscription for a bounded side turn (ordinary home: %s)",
     async (homeScope) => {
       const attempt = createAttempt("subscription");
@@ -279,7 +284,9 @@ describe("runCodexSettledTurnFinalization", () => {
         model: "gpt-5.6-luna",
         authProfileId: ordinaryNativeHome ? undefined : "openai:captured",
       });
-      const options = { pluginConfig: { appServer: { homeScope } } };
+      const options: Parameters<typeof runCodexSettledTurnFinalization>[1] = {
+        pluginConfig: { appServer: { homeScope } },
+      };
 
       await finalize(attempt, settledAttempt, options);
 

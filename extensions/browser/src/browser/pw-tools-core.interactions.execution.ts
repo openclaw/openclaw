@@ -69,9 +69,7 @@ async function executeSingleAction(
         ...action,
         ...interaction,
         button: action.button as "left" | "right" | "middle" | undefined,
-        modifiers: action.modifiers as Array<
-          "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift"
-        >,
+        modifiers: action.modifiers as Parameters<typeof clickViaPlaywright>[0]["modifiers"],
       });
     case "clickCoords":
       return await clickCoordsViaPlaywright({
@@ -324,7 +322,6 @@ async function batchViaPlaywright(
       if (page.isClosed()) {
         return finishAborted("closed", index, page.url(), opts.actions.length - index);
       }
-      navigated = false;
       let result: BrowserBatchActionResult;
       try {
         await executeSingleAction(action, { ...opts, ...navigationPolicy });

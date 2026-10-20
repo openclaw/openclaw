@@ -5,6 +5,7 @@ import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import { recordPluginLoadDiagnostic } from "./load-diagnostics.js";
+import { createManifestProviderIdLists } from "./manifest-provider-ids.js";
 import type {
   PluginBundleFormat,
   PluginDiagnostic,
@@ -90,18 +91,7 @@ export function createPluginRecord(params: {
     channelIds: [...(params.channelIds ?? [])],
     cliBackendIds: [],
     providerIds: [...(params.providerIds ?? [])],
-    embeddingProviderIds: [...(params.contracts?.embeddingProviders ?? [])],
-    speechProviderIds: [...(params.contracts?.speechProviders ?? [])],
-    realtimeTranscriptionProviderIds: [...(params.contracts?.realtimeTranscriptionProviders ?? [])],
-    realtimeVoiceProviderIds: [...(params.contracts?.realtimeVoiceProviders ?? [])],
-    mediaUnderstandingProviderIds: [...(params.contracts?.mediaUnderstandingProviders ?? [])],
-    transcriptSourceProviderIds: [...(params.contracts?.transcriptSourceProviders ?? [])],
-    imageGenerationProviderIds: [...(params.contracts?.imageGenerationProviders ?? [])],
-    videoGenerationProviderIds: [...(params.contracts?.videoGenerationProviders ?? [])],
-    musicGenerationProviderIds: [...(params.contracts?.musicGenerationProviders ?? [])],
-    webFetchProviderIds: [...(params.contracts?.webFetchProviders ?? [])],
-    webSearchProviderIds: [...(params.contracts?.webSearchProviders ?? [])],
-    migrationProviderIds: [...(params.contracts?.migrationProviders ?? [])],
+    ...createManifestProviderIdLists(params.contracts),
     contextEngineIds: [],
     agentHarnessIds: [],
     cliCommands: [],

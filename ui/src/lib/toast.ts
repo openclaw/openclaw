@@ -1,4 +1,6 @@
 import type { IconName } from "../components/solid/icon.tsx";
+import type { AgentIdentity } from "./identity-avatar-view.ts";
+import { listen } from "./reactive/listener.ts";
 
 export type ToastDismissReason = "action" | "dismiss" | "disconnected" | "replaced" | "timeout";
 
@@ -11,6 +13,8 @@ export type ToastOptions = {
   /** Bottom placement suits settings feedback without covering the page heading. */
   placement?: "top" | "bottom";
   icon?: IconName;
+  /** Agent identity shown for session notifications, using the shared avatar loader. */
+  avatar?: AgentIdentity;
   actionLabel?: string;
   onAction?: () => void;
   onDismiss?: (reason: ToastDismissReason) => void;
@@ -36,9 +40,20 @@ function activeModalToastLayer() {
 }
 
 function restingToastLayer() {
+  const connected = [...toastContainers].filter(([element]) => element.isConnected);
   return (
-    document.querySelector(".shell-nav[aria-modal='true']") ?? document.querySelector(".shell")
+    connected.findLast(
+      ([element, role]) => role === "drawer" && element.ariaModal === "true",
+    )?.[0] ?? connected.findLast(([, role]) => role === "shell")?.[0]
   );
+}
+
+const toastContainers = new Map<HTMLElement, "shell" | "drawer">();
+const connectedHosts = new Set<OpenClawToastHost>();
+
+export function registerToastContainer(element: HTMLElement, role: "shell" | "drawer") {
+  toastContainers.set(element, role);
+  return () => toastContainers.delete(element);
 }
 
 // Outcomes reported during startup (a restored post-update result, for example)
@@ -46,15 +61,19 @@ function restingToastLayer() {
 // dropping it, so no caller's message disappears because it arrived too early.
 let queuedToast: ToastOptions | null = null;
 
-class ToastController {
+/** Keeps deadlines and queued outcomes alive across native host moves. */
+class ToastOwner {
   constructor(private readonly host: OpenClawToastHost) {}
+  body: HTMLElement | undefined;
   private readonly toastQueue: ToastOptions[] = [];
-  private dismissTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private exitTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private dismissTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
+  private exitTimer: ReturnType<typeof globalThis.setTimeout> | undefined;
   private exitReason: ToastDismissReason | null = null;
   private remainingMs = 0;
   private deadline = 0;
   private hovered = false;
+  private timerSyncPending = false;
+  private homeLayer: HTMLElement | undefined;
 
   hover(hovered: boolean) {
     this.hovered = hovered;
@@ -67,17 +86,23 @@ class ToastController {
     }
   }
 
-  private syncPlacement() {
+  connect() {
+    connectedHosts.add(this.host);
+    if (!this.host.closest("openclaw-modal-dialog")) {
+      const parent = this.host.parentElement;
+      // Document roots survive app teardown and must not resurrect removed hosts.
+      this.homeLayer =
+        parent !== this.host.ownerDocument.body &&
+        parent !== this.host.ownerDocument.documentElement
+          ? (parent ?? undefined)
+          : undefined;
+    }
+    this.host.style.display = "contents";
     this.host.dataset.toastPlacement = this.host.parentElement?.matches(".shell")
       ? "shell"
       : "overlay";
-  }
-
-  connect() {
-    this.host.style.display = "contents";
-    this.syncPlacement();
     // Moving the light-DOM host can drop focus without a focusout event.
-    this.hovered = this.host.querySelector(".app-toast")?.matches(":hover") ?? false;
+    this.hovered = this.body?.matches(":hover") ?? false;
     this.syncDismissTimer();
     const pending = queuedToast;
     queuedToast = null;
@@ -92,12 +117,25 @@ class ToastController {
     if (this.host.isConnected) {
       return;
     }
-    const target = activeModalToastLayer()?.container ?? restingToastLayer();
-    if (this.host.closest("openclaw-modal-dialog") && target) {
-      target.append(this.host);
-    } else {
-      this.dismiss("disconnected");
+    connectedHosts.delete(this.host);
+    if (this.host.closest("openclaw-modal-dialog") && this.restorePresentationLayer()) {
+      return;
     }
+    this.homeLayer = undefined;
+    this.dismiss("disconnected");
+  }
+
+  restorePresentationLayer(): boolean {
+    // Native hosts can present a toast before their shell registers its layers.
+    const target =
+      activeModalToastLayer()?.container ??
+      restingToastLayer() ??
+      (this.homeLayer?.isConnected ? this.homeLayer : undefined);
+    if (!target) {
+      return false;
+    }
+    target.append(this.host);
+    return true;
   }
 
   show(options: ToastOptions) {
@@ -113,15 +151,6 @@ class ToastController {
     this.syncDismissTimer();
   }
 
-  updated() {
-    // Replacement can retain a focused child, or remove the action that
-    // held focus. Reconcile after rendering rather than inheriting stale focus.
-    if (!this.host.toast) {
-      this.hovered = false;
-    }
-    this.syncDismissTimer();
-  }
-
   syncDismissTimer(focused?: boolean) {
     if (!this.host.toast || !this.host.active || !this.host.isConnected) {
       return;
@@ -131,23 +160,34 @@ class ToastController {
       root instanceof ShadowRoot ? root.activeElement : this.host.ownerDocument.activeElement;
     const hasFocus = focused ?? this.host.contains(active);
     if (this.hovered || hasFocus) {
-      if (this.dismissTimer !== null) {
+      if (this.dismissTimer !== undefined) {
         this.remainingMs = Math.max(0, this.deadline - performance.now());
         globalThis.clearTimeout(this.dismissTimer);
-        this.dismissTimer = null;
+        this.dismissTimer = undefined;
       }
-    } else if (this.dismissTimer === null) {
+    } else if (this.dismissTimer === undefined) {
       this.deadline = performance.now() + this.remainingMs;
       this.dismissTimer = globalThis.setTimeout(() => this.dismiss("timeout"), this.remainingMs);
     }
   }
 
+  afterPropertyChange() {
+    if (this.timerSyncPending) {
+      return;
+    }
+    this.timerSyncPending = true;
+    queueMicrotask(() => {
+      void this.host.updateComplete.then(() => {
+        this.timerSyncPending = false;
+        this.syncDismissTimer();
+      });
+    });
+  }
+
   private clearDismissTimer() {
     for (const key of ["dismissTimer", "exitTimer"] as const) {
-      if (this[key] !== null) {
-        globalThis.clearTimeout(this[key]);
-        this[key] = null;
-      }
+      globalThis.clearTimeout(this[key]);
+      this[key] = undefined;
     }
   }
 
@@ -160,8 +200,7 @@ class ToastController {
     toast?.onDismiss?.(reason);
     if (reason === "disconnected") {
       this.hovered = false;
-      const queued = this.toastQueue.splice(0);
-      for (const pending of queued) {
+      for (const pending of this.toastQueue.splice(0)) {
         pending.onDismiss?.("disconnected");
       }
     } else if (reason !== "replaced") {
@@ -199,27 +238,26 @@ class ToastController {
 
 export type ToastProperties = { toast: ToastOptions | null; active: boolean };
 export type ToastMethods = { show(options: ToastOptions): void };
-type OpenClawToastHost = HTMLElement & ToastProperties & ToastMethods;
-const controllers = new WeakMap<OpenClawToastHost, ToastController>();
-export function toastControllerFor(host: OpenClawToastHost) {
-  let controller = controllers.get(host);
-  if (!controller) {
-    controller = new ToastController(host);
-    controllers.set(host, controller);
+type OpenClawToastHost = HTMLElement &
+  ToastProperties &
+  ToastMethods & {
+    readonly updateComplete: Promise<boolean>;
+  };
+const owners = new WeakMap<OpenClawToastHost, ToastOwner>();
+export function toastOwnerFor(host: OpenClawToastHost) {
+  let owner = owners.get(host);
+  if (!owner) {
+    owner = new ToastOwner(host);
+    owners.set(host, owner);
   }
-  return controller;
+  return owner;
 }
 
 export function showToast(options: ToastOptions): boolean {
   if (typeof document === "undefined") {
     return false;
   }
-  // A modal can carry the host into a shadow root, outside document queries.
-  const host =
-    document.querySelector<OpenClawToastHost>("openclaw-toast-host") ??
-    [...(document.openClawModalLayers ?? [])]
-      .map((layer) => layer.querySelector<OpenClawToastHost>("openclaw-toast-host"))
-      .find((candidate) => candidate?.isConnected);
+  const host = [...connectedHosts].find((candidate) => candidate.isConnected);
   if (!host) {
     queuedToast = options;
     return false;
@@ -231,12 +269,10 @@ export function showToast(options: ToastOptions): boolean {
       if (event.target !== modal.owner) {
         return;
       }
-      modal.owner.removeEventListener("overlay-after-hide", handoff);
-      queueMicrotask(() =>
-        (activeModalToastLayer()?.container ?? restingToastLayer())?.append(host),
-      );
+      stopHandoff();
+      queueMicrotask(() => toastOwnerFor(host).restorePresentationLayer());
     };
-    modal.owner.addEventListener("overlay-after-hide", handoff);
+    const stopHandoff = listen(modal.owner, "overlay-after-hide", handoff);
   }
   host.show(options);
   return true;

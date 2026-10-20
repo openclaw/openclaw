@@ -48,14 +48,15 @@ it("keeps the context popover open and its usage link focused during live usage 
   });
   renderComposerInto(view.container, current);
   const details = view.container.querySelector<HTMLDetailsElement>(".context-usage details");
-  const usageLink = view.container.querySelector<HTMLAnchorElement>("[data-chat-provider-usage]");
-  if (!details || !usageLink) {
-    throw new Error("Expected the composer's context usage popover and provider link");
+  if (!details) {
+    throw new Error("Expected the composer's context usage popover");
   }
+  expect(details.querySelector(".context-usage__popover")).toBeNull();
   details.querySelector("summary")!.click();
   await waitForSolid(() =>
     expect(details.querySelector("[popover]")?.matches(":popover-open")).toBe(true),
   );
+  const usageLink = view.container.querySelector<HTMLAnchorElement>("[data-chat-provider-usage]")!;
   usageLink.focus();
   expect(document.activeElement).toBe(usageLink);
 
@@ -113,4 +114,7 @@ it("keeps the context popover open and its usage link focused during live usage 
     "Claude",
   );
   expect(view.container.querySelector(".context-usage__stats")?.textContent).toContain("9k");
+  details.querySelector("summary")!.click();
+  flush();
+  expect(details.querySelector(".context-usage__popover")).toBeNull();
 });

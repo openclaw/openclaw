@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, onCleanup, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import { presenceActivityLabel, presenceViewerLabel } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -17,7 +17,7 @@ import {
   SIDEBAR_SESSION_SEE_LESS_THRESHOLD,
 } from "./app-sidebar-session-types.ts";
 import { Icon } from "./solid/icon.tsx";
-import { renderNewSessionLink } from "./solid/new-session-link.tsx";
+import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 export function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
@@ -129,28 +129,6 @@ export function renderSessionSection(params: {
     Boolean(personOwner() || section().project || section().id.startsWith("agent:")),
   );
   const sectionDropEnabled = createMemo(() => groupWriteAccess().allowed && !derivedSection());
-  const sectionClass = createMemo(() => {
-    const zoneValue = zone();
-    const collapsedValue = collapsed();
-    const hostValue = host();
-    const sectionValue = section();
-    return [
-      "sidebar-recent-sessions__group",
-      `sidebar-recent-sessions__group--zone-${zoneValue}`,
-      collapsedValue ? "sidebar-recent-sessions__group--collapsed" : "",
-      hostValue.sessionOrganizer.draggingSidebarSection === sectionValue.id
-        ? "sidebar-recent-sessions__group--dragging"
-        : "",
-      hostValue.sessionOrganizer.sessionDropTarget === sectionValue.id
-        ? "sidebar-recent-sessions__group--session-drop"
-        : "",
-      hostValue.sessionOrganizer.sidebarSectionDropTarget?.sectionId === sectionValue.id
-        ? `sidebar-recent-sessions__group--section-drop-${hostValue.sessionOrganizer.sidebarSectionDropTarget.position}`
-        : "",
-    ]
-      .filter(Boolean)
-      .join(" ");
-  });
   const chevron = (
     <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
       <span class="sidebar-session-group-toggle__icon">
@@ -217,9 +195,27 @@ export function renderSessionSection(params: {
       </>
     ) : undefined,
   );
+  let personHeader: HTMLElement | undefined;
+  onCleanup(() => {
+    if (host().presencePeople?.get(section().id) === personHeader) {
+      host().presencePeople?.delete(section().id);
+    }
+  });
   return (
     <div
-      class={sectionClass()}
+      class={[
+        "sidebar-recent-sessions__group",
+        `sidebar-recent-sessions__group--zone-${zone()}`,
+        host().sessionOrganizer.sidebarSectionDropTarget?.sectionId === section().id &&
+          `sidebar-recent-sessions__group--section-drop-${host().sessionOrganizer.sidebarSectionDropTarget?.position}`,
+        {
+          "sidebar-recent-sessions__group--collapsed": collapsed(),
+          "sidebar-recent-sessions__group--dragging":
+            host().sessionOrganizer.draggingSidebarSection === section().id,
+          "sidebar-recent-sessions__group--session-drop":
+            host().sessionOrganizer.sessionDropTarget === section().id,
+        },
+      ]}
       data-session-section={section().id}
       data-zone={zone()}
       onDragOver={(event: DragEvent) => {
@@ -241,6 +237,7 @@ export function renderSessionSection(params: {
       {section().renderHeader ? (
         <SessionSectionHeader
           sectionId={section().id}
+          sectionHeaders={host().sessionOrganizer.sectionHeaders}
           status={
             headerStatus()
               ? {
@@ -291,6 +288,10 @@ export function renderSessionSection(params: {
                     {chevron}
                   </button>
                   <button
+                    ref={(element) => {
+                      personHeader = element;
+                      host().presencePeople?.set(section().id, element);
+                    }}
                     type="button"
                     class="sidebar-session-group-person"
                     data-person-card=""
@@ -320,36 +321,20 @@ export function renderSessionSection(params: {
                   {labelText()}
                 </button>
               )}
-              {group() || section().id === "ungrouped"
-                ? renderNewSessionLink({
-                    get basePath() {
-                      return host().basePath;
-                    },
-                    get agentId() {
-                      return host().expandedAgentId();
-                    },
-                    get target() {
-                      return {
-                        group: group() ?? "",
-                      };
-                    },
-                    get class() {
-                      return "sidebar-session-group-actions sidebar-new-session";
-                    },
-                    get label() {
-                      return t("sessionsView.newSessionInGroup", {
-                        group: label(),
-                      });
-                    },
-                    get disabledReason() {
-                      return (() => {
-                        const access = newSessionAccess();
-                        return access.allowed ? undefined : access.reason;
-                      })();
-                    },
-                    onOpen: (agentId, target) => host().requestOpenNewSession(agentId, target),
-                  })
-                : undefined}
+              {group() || section().id === "ungrouped" ? (
+                <NewSessionLink
+                  basePath={host().basePath}
+                  agentId={host().expandedAgentId()}
+                  target={{ group: group() ?? "" }}
+                  class="sidebar-session-group-actions sidebar-new-session"
+                  label={t("sessionsView.newSessionInGroup", { group: label() })}
+                  disabledReason={(() => {
+                    const access = newSessionAccess();
+                    return access.allowed ? undefined : access.reason;
+                  })()}
+                  onOpen={(agentId, target) => host().requestOpenNewSession(agentId, target)}
+                />
+              ) : undefined}
               <Show when={group()}>
                 {(currentGroup) => (
                   <button

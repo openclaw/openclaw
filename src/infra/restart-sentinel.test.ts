@@ -586,6 +586,25 @@ describe("restart sentinel", () => {
     });
   });
 
+  it("leaves a replacement and its revision floor intact after a stale conditional write", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const payload = { kind: "restart" as const, status: "ok" as const, ts: 1 };
+      const first = await writeRestartSentinel(payload);
+      const replacement = await writeRestartSentinel({ ...payload, message: "replacement" });
+      const written = runOpenClawStateWriteTransaction(({ db }) =>
+        writeRestartSentinelRowIfRevisionSync(
+          db,
+          { ...payload, message: "stale" },
+          first.revision,
+          first.revision,
+        ),
+      );
+      expect(written).toBeNull();
+      expect(readSentinelRevisionFloor()).toBe(replacement.revision);
+      await expect(readRestartSentinel()).resolves.toEqual(replacement);
+    });
+  });
+
   it.each(["transaction", "commit"] as const)(
     "preserves the notification when its producer loses authority at %s admission",
     async (stage) => {

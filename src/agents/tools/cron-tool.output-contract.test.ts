@@ -24,6 +24,7 @@ import {
   waitUntilCompleted,
 } from "../code-mode.test-support.js";
 import { createCronTool } from "./cron-tool.js";
+import * as gatewayModule from "./gateway.js";
 
 const job: CronJob = {
   id: "invoice-check",
@@ -114,7 +115,9 @@ describe("automations output contract", () => {
       const activeJob = await cron.add(input);
       const marker = markCronJobActive(activeJob.id);
       const gatewayCall = vi.fn().mockImplementation(async () => await cron.remove(activeJob.id));
-      const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
+      const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
+      onTestFinished(() => gatewaySpy.mockRestore());
+      const tool = createCronTool();
       const h = createCodeModeHarness();
       applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
       try {
@@ -159,7 +162,9 @@ describe("automations output contract", () => {
         jobs: [{ ...job, effectiveAgentId: "main" }],
         deliveryPreviews: { [job.id]: deliveryPreview },
       });
-    const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
+    const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createCronTool();
     const result = await tool.execute("call-full", { action: "list" });
     expect(gatewayCall).toHaveBeenCalledTimes(2);
     expect(
@@ -177,7 +182,9 @@ describe("automations output contract", () => {
         }),
       )
       .mockResolvedValueOnce({ ok: true, enqueued: true, runId: "manual:job:1" });
-    const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
+    const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createCronTool();
     const result = await tool.execute("call-run", {
       action: "run",
       jobId: "job",
@@ -217,7 +224,9 @@ describe("automations output contract", () => {
       }
       return replies[method];
     });
-    const tool = createCronTool(undefined, { callGatewayTool: gatewayCall });
+    const gatewaySpy = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(gatewayCall);
+    onTestFinished(() => gatewaySpy.mockRestore());
+    const tool = createCronTool();
     applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
     const result = await runUntilCompleted({
       execTool: expectDefined(h.tools[0], "Code Mode exec"),

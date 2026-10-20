@@ -5,8 +5,7 @@ import { resolveInstalledClawHubPlugin } from "../plugins/plugin-install-preflig
 import { defaultRuntime } from "../runtime.js";
 import {
   acquireClawPackageLifecycleLease,
-  maintainClawPackageLifecycleLease,
-  type MaintainedClawPackageLifecycleLease,
+  type ClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
 import { readClawPackageRefsForAdd } from "./add-state-write.js";
 import type { InstallClawPackagesOptions } from "./package-install-options.js";
@@ -14,7 +13,7 @@ import type { PersistedClawPackageRef } from "./provenance.js";
 
 type RollbackOptions = Pick<
   InstallClawPackagesOptions,
-  "assertCurrent" | "deps" | "env" | "path" | "runtime"
+  "assertCurrent" | "env" | "path" | "runtime"
 >;
 
 /** Undo only plugin installs made by this in-flight Add, before its agent is published. */
@@ -24,10 +23,6 @@ export async function rollbackStatelessClawPackagesWithStamps(
   stamps: WeakMap<PersistedClawPackageRef, { pluginId: string; installedAt: string }>,
 ): Promise<string[]> {
   const errors: string[] = [];
-  const deps = options.deps ?? {};
-  const acquirePackageLease = deps.acquirePackageLease ?? acquireClawPackageLifecycleLease;
-  const readPackageRefs = deps.readPackageRefs ?? readClawPackageRefsForAdd;
-  const resolvePlugin = deps.resolvePlugin ?? resolveInstalledClawHubPlugin;
   const runtime = options.runtime ?? defaultRuntime;
   for (const pkg of packages.toReversed()) {
     if (pkg.kind !== "plugin" || pkg.origin !== "claw-introduced") {
@@ -37,17 +32,17 @@ export async function rollbackStatelessClawPackagesWithStamps(
     if (!stamp) {
       continue;
     }
-    let lease: MaintainedClawPackageLifecycleLease | null = null;
+    let lease: ClawPackageLifecycleLease | null = null;
     try {
-      const acquired = await acquirePackageLease(
+      const acquired = await acquireClawPackageLifecycleLease(
         { kind: "plugin", source: "clawhub", ref: pkg.ref },
         { env: options.env, path: options.path, required: true },
       );
       if (!acquired) {
         throw new Error(`Could not acquire package lifecycle lease for ${pkg.ref}.`);
       }
-      lease = maintainClawPackageLifecycleLease(acquired);
-      const owners = await readPackageRefs({
+      lease = acquired;
+      const owners = await readClawPackageRefsForAdd({
         ...options,
         kind: "plugin",
         source: "clawhub",
@@ -58,7 +53,7 @@ export async function rollbackStatelessClawPackagesWithStamps(
       if (owners.some((owner) => owner.status === "pending" || owner.status === "complete")) {
         continue;
       }
-      const installed = await resolvePlugin({ clawhubPackage: pkg.ref });
+      const installed = await resolveInstalledClawHubPlugin({ clawhubPackage: pkg.ref });
       if (
         installed.status !== "found" ||
         installed.pluginId !== stamp.pluginId ||
@@ -84,13 +79,9 @@ export async function rollbackStatelessClawPackagesWithStamps(
         onWarning: (warning) => runtime.log(warning),
       };
       options.assertCurrent?.();
-      if (deps.uninstallPlugin) {
-        await deps.uninstallPlugin(params);
-      } else {
-        const removed = await uninstallPluginWithPolicy(params);
-        if (!removed.ok) {
-          throw new Error(removed.error);
-        }
+      const removed = await uninstallPluginWithPolicy(params);
+      if (!removed.ok) {
+        throw new Error(removed.error);
       }
       pkg.status = "rolled_back";
     } catch (error) {

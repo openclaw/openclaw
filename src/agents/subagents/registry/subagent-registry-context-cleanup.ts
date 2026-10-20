@@ -18,7 +18,10 @@ import {
   resolveSubagentRegistryContextEngine,
 } from "./subagent-registry-deps.js";
 import { safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
-import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
+import {
+  buildSafeLifecycleErrorMeta,
+  subagentRegistryLog as log,
+} from "./subagent-registry-lifecycle-log.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteOutcomeKnown,
@@ -34,9 +37,7 @@ import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run
 
 export function createSubagentRegistryContextCleanup(config: {
   isEndedHookOwnerCurrent: (entry: SubagentRunRecord) => boolean;
-  warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
-  const { warn } = config;
   const endedHookInFlightOwners = new Set<object>();
   const endedHookEmittedOwners = new WeakSet<object>();
 
@@ -83,7 +84,7 @@ export function createSubagentRegistryContextCleanup(config: {
       await runContextEngineSubagentEnded(params, options);
       return true;
     } catch (err) {
-      warn(warning, {
+      log.warn(warning, {
         error: buildSafeLifecycleErrorMeta(err),
         childSessionKey: params.childSessionKey,
         reason: params.reason,
@@ -124,7 +125,7 @@ export function createSubagentRegistryContextCleanup(config: {
         await removeInternalSessionEffectsSession(entry.execution.transcriptTarget);
       } catch (err) {
         internalEffectsRemoved = false;
-        warn("failed to remove collector internal session effects", {
+        log.warn("failed to remove collector internal session effects", {
           runId: entry.runId,
           childSessionKey: entry.childSessionKey,
           err,
@@ -200,7 +201,6 @@ export function createSubagentRegistryContextCleanup(config: {
     // Loading and entering plugin scope are part of the best-effort hook boundary.
     try {
       const stateContext = captureOpenClawStateWorkerContext();
-      const generation = params.entry.generation;
       const assertCurrent = () => {
         assertSubagentRegistryWriteSourceCurrent(stateContext);
         const current = getCurrentSubagentRunOwner(subagentRuns, params.entry);
@@ -208,11 +208,7 @@ export function createSubagentRegistryContextCleanup(config: {
           [current?.runId ?? entry.runId],
           stateContext.admission,
         );
-        if (
-          params.entry.generation !== generation ||
-          !config.isEndedHookOwnerCurrent(params.entry) ||
-          params.isCurrent?.() === false
-        ) {
+        if (!config.isEndedHookOwnerCurrent(params.entry) || params.isCurrent?.() === false) {
           throw new Error("Subagent ended hook lost its original owner");
         }
         if (!current && subagentRuns.has(entry.runId)) {
@@ -297,7 +293,7 @@ export function createSubagentRegistryContextCleanup(config: {
       if (hasSqliteWorkerOutcomeUnknown(err)) {
         throw err;
       }
-      warn("subagent_ended hook failed (best-effort)", { phase: "plugin-runtime", err });
+      log.warn("subagent_ended hook failed (best-effort)", { phase: "plugin-runtime", err });
     }
   }
 

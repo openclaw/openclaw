@@ -628,15 +628,19 @@ describe("update-cli", () => {
     expect(commandCalls()[packageInstallCallIndex]?.[0]).toContain("--prefix");
   });
 
-  it.each([{ json: false, handoff: undefined, expectedExitCode: 1 }])(
-    "attempts recovery after Git mutation throws and preserves failed readiness (json=$json)",
-    async ({ json, handoff, expectedExitCode }) => {
+  it.each([false, true])(
+    "attempts recovery after Git mutation throws and preserves failed readiness (json=%s)",
+    async (json) => {
       mockStoppedManagedGitGateway();
       setTty(true);
       setStdoutTty(true);
-      const cause = new Error("ENOSPC while replacing runtime files");
+      const cause = new Error(
+        json ? "The pipe is being closed (0x800700e8)" : "ENOSPC while replacing runtime files",
+      );
       const failure = new Error(
-        `updater interrupted after mutation: ${"replacement verification detail; ".repeat(12)}`,
+        json
+          ? `SQLite read-only worker failed to start for state.sqlite: ${cause.message}`
+          : `updater interrupted after mutation: ${"replacement verification detail; ".repeat(12)}`,
         { cause },
       );
       vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts }) => {
@@ -653,8 +657,8 @@ describe("update-cli", () => {
       });
 
       await expect(
-        withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, () => updateCommand({ json })),
-      ).rejects.toEqual(new ExitError(expectedExitCode));
+        withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: undefined }, () => updateCommand({ json })),
+      ).rejects.toEqual(new ExitError(1));
       expect(serviceStop).toHaveBeenCalledOnce();
       expect(freshRestartCalls()).toHaveLength(1);
       expectNoSideEffects(serviceStart, serviceRestart);

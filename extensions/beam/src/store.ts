@@ -53,7 +53,7 @@ function decideBeamUpload(
 }
 
 export function createBeamStore(runtime: PluginRuntime): BeamStore {
-  const store = runtime.state.openKeyedStore<BeamStoredSession>({
+  const store = runtime.state.openKeyedStoreV2<BeamStoredSession>({
     namespace: "sessions",
     maxEntries: BEAM_MAX_SESSIONS,
     overflowPolicy: "evict-oldest",
@@ -112,9 +112,6 @@ export function createBeamStore(runtime: PluginRuntime): BeamStore {
       },
     },
     async upload(upload, { receivedAt, uploaderProfileId, revalidatePublisher }) {
-      if (!store.observe || !store.compareAndApply) {
-        throw new Error("Beam uploads require plugin-state observe and compareAndApply support");
-      }
       const snapshot = {
         ...upload,
         // An anonymous replacement must not inherit a previous publisher's identity.

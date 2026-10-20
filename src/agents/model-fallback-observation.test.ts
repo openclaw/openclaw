@@ -77,6 +77,24 @@ afterEach(() => {
 });
 
 describe("logModelFallbackDecision", () => {
+  it.each(["candidate_failed", "candidate_succeeded"] as const)(
+    "keeps %s error details in the returned step, not routine diagnostics",
+    (decision) => {
+      const marker = "synthetic-private-tool-output";
+      const step = logModelFallbackDecision(
+        makeAuthFailure({
+          decision,
+          error: marker,
+          previousAttempts: [{ provider: "prior", model: "prior", error: marker, reason: "auth" }],
+        }),
+      );
+      expect(step?.fallbackStepFromFailureDetail).toBe(marker);
+      expect(loggerMocks.warn).toHaveBeenCalled();
+      expect(JSON.stringify(loggerMocks.warn.mock.calls)).not.toContain(marker);
+      expect(loggedPayloads()[0]).toMatchObject({ status: 401, code: "invalid_token" });
+    },
+  );
+
   it("coalesces duplicate auth failures while preserving fallback step fields", () => {
     const firstStep = logModelFallbackDecision(makeAuthFailure({ runId: "run-1" }));
     const secondStep = logModelFallbackDecision(makeAuthFailure({ runId: "run-2" }));

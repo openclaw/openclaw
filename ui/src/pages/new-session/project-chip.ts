@@ -1,12 +1,10 @@
 import type {
   ProjectRecord,
   ProjectRecent,
-  RemoteProject,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
-import type { PlaceBrowserState } from "./place-browser-state.ts";
 
 registerNewSessionSetupEnglish();
 
@@ -74,46 +72,3 @@ export function resolveProjectChip(params: {
         .includes(normalizedQuery),
   };
 }
-
-export type ProjectChipOptions = {
-  state: ProjectChipState;
-  browseAvailable: boolean;
-  isAdmin: boolean;
-  canWrite: boolean;
-  folder: string;
-  workspace: string;
-  projects: readonly ProjectRecord[];
-  projectQuery: string;
-  projectSearchAvailable: boolean;
-  projectAddAvailable: boolean;
-  remoteProjects: readonly RemoteProject[];
-  selectedRemoteProject: DraftRemoteProject | null;
-  projectSearchCredentialMissing: boolean;
-  projectSearchLoading: boolean;
-  projectSearchError: string | null;
-  projectId: string;
-  freshWorkspace?: boolean;
-  onNewWorkspace?: () => void;
-  deviceFolder?: boolean;
-  onDeviceFolder?: () => void;
-  deviceFolderDisabledReason?: string;
-  gatewayLabel: string;
-  submitting: boolean;
-  pendingPlacement: boolean;
-  popoverOpen: boolean;
-  browserOpen: boolean;
-  browser: PlaceBrowserState;
-  registerProjectPath: string | null;
-  registeringProject: boolean;
-  onPopoverShow: () => void;
-  onPopoverHide: () => void;
-  onPopoverAfterHide: () => void;
-  onSelectProject: (projectId: string) => void;
-  onProjectQueryInput: (query: string) => void;
-  onSelectRemoteProject: (project: DraftRemoteProject) => void;
-  onApplyFolder: (folder: string) => void;
-  onBrowse: () => void;
-  onBrowserBack: () => void;
-  onRegisterProject: (path: string) => void;
-  onClose: () => void;
-};

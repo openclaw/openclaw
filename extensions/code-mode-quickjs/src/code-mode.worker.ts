@@ -1,4 +1,3 @@
-/** QuickJS worker for Code Mode guest execution and suspended VM snapshots. */
 import { threadId } from "node:worker_threads";
 import {
   CODE_MODE_CONTROLLER_SOURCE,

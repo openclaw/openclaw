@@ -3235,7 +3235,7 @@ describe("MatrixClient crypto bootstrapping", () => {
       return event;
     });
 
-    bridge.retryPendingNow("test crypto signal", { includeExhausted: true });
+    bridge.retryPendingNow({ includeExhausted: true });
     await Promise.resolve();
     await Promise.resolve();
 

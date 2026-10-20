@@ -5,6 +5,7 @@ import { timestampedTextAssistant } from "../test-helpers/sparse-transcript.test
 import { consumeCompactionSafeguardCancellation } from "./compaction-safeguard-runtime.js";
 import {
   testing,
+  stubSessionManager,
   structuredSummary,
   userMessage,
   createQualityGuardSessionManager,
@@ -52,6 +53,54 @@ const terminalAttemptSession = (recentTurnsPreserve = 0) =>
   createQualityGuardSessionManager({ recentTurnsPreserve, qualityGuardMaxRetries: 0 });
 
 describe("compaction-safeguard degraded fallback", () => {
+  it.each(["branch read", "context projection"] as const)(
+    "cancels rather than writing an empty boundary after a failed %s",
+    async (stage) => {
+      const failure = new Error(`Failed ${stage}`);
+      const sessionManager = stubSessionManager();
+      sessionManager.getBranch = () => {
+        if (stage === "branch read") {
+          throw failure;
+        }
+        return [
+          {
+            type: "message",
+            id: "older",
+            parentId: null,
+            timestamp: "1970-01-01T00:00:00.000Z",
+            get message(): never {
+              throw failure;
+            },
+          },
+          {
+            type: "message",
+            id: "entry-1",
+            parentId: "older",
+            timestamp: "1970-01-01T00:00:00.001Z",
+            message: { role: "user", content: "Kept user request", timestamp: 1 },
+          },
+        ];
+      };
+      const event = createCompactionEvent({ preparation: { messagesToSummarize: [] } });
+
+      const { result, getApiKeyAndHeadersMock } = await runCompactionScenario(
+        sessionManager,
+        event,
+      );
+
+      expect(result).toEqual({ cancel: true });
+      expect(consumeCompactionSafeguardCancellation(sessionManager)).toEqual({
+        reason: "session history inspection failed",
+        error: failure,
+      });
+      expect(compactionLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("session history inspection failed"),
+      );
+      expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
+      expect(mockSummarizeCompactionHistory).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { name: "source ask", runOwnedRequest: false },
     { name: "run-owned request", runOwnedRequest: true },

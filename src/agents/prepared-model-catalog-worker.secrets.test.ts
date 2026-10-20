@@ -1,100 +1,86 @@
 import { once } from "node:events";
 import fs from "node:fs";
 import { createServer } from "node:http";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
-import { createConfigIoContext } from "../config/io.context.js";
-import { readConfigFileSnapshotFromContext } from "../config/io.snapshot.js";
+import { createConfigIO } from "../config/io.factory.js";
 import { getConfigResolutionFacts } from "../config/resolution-facts.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import * as configRuntime from "../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveUsableCustomProviderApiKey } from "./model-auth-provider-config.js";
-import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
+import { fingerprintPreparedModelCatalogPluginContext as fingerprint } from "./prepared-model-catalog-fingerprints.js";
+import { createPreparedModelCatalogWorkerInput as workerInput } from "./prepared-model-catalog-worker.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
 import { createCatalogInspectionPool } from "./test-helpers/prepared-model-catalog-inspection.js";
 
 const provider = "worker-secret-fixture";
-let state: OpenClawTestState;
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 beforeEach(async () => {
   state = await createOpenClawTestState({ label: "catalog-worker-secrets" });
   await state.writeAuthProfiles({ version: 1, profiles: {} });
 });
 afterEach(async () => {
-  vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
-  clearRuntimeConfigSnapshot();
+  configRuntime.clearRuntimeConfigSnapshot();
   await state.cleanup();
 });
 
-describe("serialized catalog credential provenance", () => {
-  it.each<{
-    owner: "config" | "profile";
-    label: string;
-    value: string;
-    loader?: { authored: string; env?: NodeJS.ProcessEnv; pending?: boolean; resolved?: boolean };
-  }>([
-    { owner: "config", label: "literal bytes", value: "synthetic-worker-config-key" },
-    { owner: "config", label: "marker bytes", value: NON_ENV_SECRETREF_MARKER },
-    { owner: "config", label: "env-template bytes", value: "${OPAQUE_WORKER_KEY}" },
-    { owner: "profile", label: "profile-only sibling", value: "synthetic-worker-profile-key" },
+async function loadConfig(config: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  await state.writeConfig(config);
+  const snapshot = await createConfigIO({ env, observe: false }).readConfigFileSnapshot();
+  expect(snapshot.valid).toBe(true);
+  return snapshot;
+}
+
+type CredentialCase = [
+  owner: "config" | "profile",
+  value: string,
+  loader?: { authored: string; env?: NodeJS.ProcessEnv; pending?: boolean; resolved?: boolean },
+];
+it.each<CredentialCase>([
+  ["config", "synthetic-worker-config-key"],
+  ["config", NON_ENV_SECRETREF_MARKER],
+  ["config", "${OPAQUE_WORKER_KEY}"],
+  ["profile", "synthetic-worker-profile-key"],
+  [
+    "config",
+    "${LITERAL_KEY}",
     {
-      owner: "config",
-      label: "loader-substituted literal",
-      value: "${LITERAL_KEY}",
-      loader: {
-        authored: "${SOURCE_KEY}",
-        env: { SOURCE_KEY: "${LITERAL_KEY}" },
-        resolved: true,
-      },
+      authored: "${SOURCE_KEY}",
+      env: { SOURCE_KEY: "${LITERAL_KEY}" },
+      resolved: true,
     },
-    {
-      owner: "config",
-      label: "loader-escaped literal",
-      value: "${LITERAL_KEY}",
-      loader: { authored: "$${LITERAL_KEY}" },
-    },
-    {
-      owner: "config",
-      label: "loader-pending shorthand",
-      value: "$PENDING_KEY",
-      loader: { authored: "$PENDING_KEY", pending: true },
-    },
-  ])(
-    "preserves $owner $label through discovery and the writable plan",
-    async ({ owner, value, loader, label }) => {
-      const requests: boolean[] = [];
-      const server = createServer((request, response) => {
-        requests.push(
-          request.url === "/v1/models" && request.headers.authorization === `Bearer ${value}`,
-        );
-        response.setHeader("content-type", "application/json");
-        response.end(
-          JSON.stringify({ data: [{ id: "discovered-model", name: "Discovered model" }] }),
-        );
-      });
-      server.listen(0, "127.0.0.1");
-      await once(server, "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Expected loopback catalog server");
-      }
-      try {
-        const baseUrl = `http://127.0.0.1:${address.port}/v1`;
-        const pluginFile = await state.writeText(
-          "catalog-plugin/index.cjs",
-          `
+  ],
+  ["config", "${LITERAL_KEY}", { authored: "$${LITERAL_KEY}" }],
+  ["config", "$PENDING_KEY", { authored: "$PENDING_KEY", pending: true }],
+])(
+  "preserves %s credential %s (%j) through discovery and the writable plan",
+  async (owner, value, loader) => {
+    const requests: boolean[] = [];
+    const server = createServer((request, response) => {
+      requests.push(
+        request.url === "/v1/models" && request.headers.authorization === `Bearer ${value}`,
+      );
+      response.setHeader("content-type", "application/json");
+      response.end('{"data":[{"id":"discovered-model","name":"Discovered model"}]}');
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Expected loopback catalog server");
+    }
+    try {
+      const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+      const pluginFile = await state.writeText(
+        "catalog-plugin/index.cjs",
+        `
 module.exports = {
   id: ${JSON.stringify(provider)},
   register(api) {
@@ -113,278 +99,197 @@ module.exports = {
   },
 };
 `,
+      );
+      await state.writeJson("catalog-plugin/openclaw.plugin.json", {
+        id: provider,
+        providers: [provider],
+        providerCatalogEntry: "./index.cjs",
+        modelCatalog: { discovery: { [provider]: "runtime" } },
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      });
+      const ref = { source: "store", provider: "default", id: "WORKER_CONFIG_KEY" } as const;
+      const makeConfig = (apiKey: ModelProviderConfig["apiKey"]): OpenClawConfig => ({
+        plugins: {
+          allow: [provider],
+          load: { paths: [pluginFile] },
+          slots: { memory: "none" },
+        },
+        agents: { defaults: { modelPolicy: { allow: [`${provider}/*`] } } },
+        models: {
+          providers: {
+            [provider]: {
+              baseUrl,
+              api: "openai-completions",
+              models: [],
+              ...(apiKey === undefined ? {} : { apiKey }),
+            },
+          },
+        },
+      });
+      const source = makeConfig(owner === "config" ? (loader?.authored ?? ref) : undefined);
+      let runtime = makeConfig(owner === "config" ? value : undefined);
+      const env = {
+        ...state.env,
+        LITERAL_KEY: undefined,
+        PENDING_KEY: undefined,
+        ...loader?.env,
+      };
+      let runtimeSource: OpenClawConfig = source;
+      if (loader) {
+        ({ config: runtime, sourceConfig: runtimeSource } = await loadConfig(source, env));
+        expect(getConfigResolutionFacts(runtime)).not.toBeNull();
+      }
+      configRuntime.setRuntimeConfigSnapshot(runtime, runtimeSource);
+      const prepared = await prepareWorkspaceBuildGroup(
+        [
+          {
+            agentId: "main",
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            config: runtime,
+            env,
+            skipCredentials: true,
+          },
+        ],
+        "static",
+      );
+      expect(requests).toEqual([]);
+      const facts = prepared.agentFacts[0]!;
+      const authStore = facts.authStore;
+      if (owner === "profile") {
+        authStore.profiles[`${provider}:fixture`] = {
+          type: "api_key",
+          provider,
+          keyRef: ref,
+          key: value,
+        };
+      }
+      const params = {
+        agentFacts: {
+          ...facts,
+          input: { ...facts.input, config: captureRuntimeConfig(runtime) },
+        },
+        pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+      };
+      expect(params.agentFacts.providerIds).toContain(provider);
+      const expectedAuth = loader?.pending ? undefined : value;
+      if (loader) {
+        expect(resolveUsableCustomProviderApiKey({ cfg: runtime, provider, env })?.apiKey).toBe(
+          expectedAuth,
         );
-        await state.writeJson("catalog-plugin/openclaw.plugin.json", {
-          id: provider,
-          providers: [provider],
-          providerCatalogEntry: "./index.cjs",
-          modelCatalog: { discovery: { [provider]: "runtime" } },
-          configSchema: { type: "object", additionalProperties: false, properties: {} },
-        });
-        const ref = { source: "store", provider: "default", id: "WORKER_CONFIG_KEY" } as const;
-        const source = {
-          plugins: {
-            allow: [provider],
-            load: { paths: [pluginFile] },
-            slots: { memory: "none" },
-            entries: { [provider]: { enabled: true } },
-          },
-          agents: {
-            defaults: {
-              workspace: state.workspaceDir,
-              model: { primary: "healthy-fixture/model" },
-              modelPolicy: { allow: ["healthy-fixture/model", `${provider}/*`] },
-            },
-          },
-          models: {
-            providers: {
-              "healthy-fixture": {
-                baseUrl: "https://healthy.example/v1",
-                api: "openai-completions",
-                apiKey: "synthetic-healthy-key",
-                models: [
-                  {
-                    id: "model",
-                    name: "Model",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 4096,
-                    maxTokens: 512,
-                  },
-                ],
-              },
-              [provider]: {
-                baseUrl,
-                api: "openai-completions",
-                models: [],
-                ...(owner === "config" ? { apiKey: loader?.authored ?? ref } : {}),
-              },
-            },
-          },
-        } satisfies OpenClawConfig;
-        let runtime: OpenClawConfig = {
-          ...source,
-          models: {
-            providers: {
-              ...source.models.providers,
-              [provider]: {
-                ...source.models.providers[provider],
-                ...(owner === "config" ? { apiKey: value } : {}),
-              },
-            },
-          },
-        };
-        const env = {
-          ...state.env,
-          LITERAL_KEY: undefined,
-          PENDING_KEY: undefined,
-          ...loader?.env,
-        };
-        let runtimeSource: OpenClawConfig = source;
-        if (loader) {
-          await state.writeConfig(source);
-          const snapshot = await readConfigFileSnapshotFromContext(
-            createConfigIoContext({
-              configPath: state.configPath,
-              env,
-              homedir: () => state.home,
-              observe: false,
-            }),
-          );
-          expect(snapshot.valid).toBe(true);
-          runtime = snapshot.config;
-          runtimeSource = snapshot.sourceConfig;
-          expect(getConfigResolutionFacts(runtime)).not.toBeNull();
-        }
-        setRuntimeConfigSnapshot(runtime, runtimeSource);
-        const prepared = await prepareWorkspaceBuildGroup(
-          [
-            {
-              agentId: "main",
-              agentDir: state.agentDir(),
-              workspaceDir: state.workspaceDir,
-              config: runtime,
-              env,
-              skipCredentials: true,
-            },
-          ],
-          "static",
+        await prepareAgentCatalogSource(
+          params.agentFacts,
+          prepared.pluginGeneration,
+          "live",
+          false,
+          { authStore },
         );
-        expect(requests).toEqual([]);
-        const authStore: AuthProfileStore = {
-          version: 1,
-          profiles:
-            owner === "profile"
-              ? {
-                  [`${provider}:fixture`]: { type: "api_key", provider, keyRef: ref, key: value },
-                }
-              : {},
-        };
-        const params = {
-          agentFacts: {
-            ...prepared.agentFacts[0]!,
-            authStore,
-            input: { ...prepared.agentFacts[0]!.input, config: captureRuntimeConfig(runtime) },
-          },
-          pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
-        };
-        expect(params.agentFacts.providerIds).toContain(provider);
-        const expectedAuth = loader?.pending ? undefined : value;
-        const nativeAuth = loader
-          ? resolveUsableCustomProviderApiKey({ cfg: runtime, provider, env })?.apiKey
-          : undefined;
-        let nativeRequests: boolean[] | undefined;
+        expect(requests.splice(0)).toEqual(loader.pending ? [] : [true]);
+      }
+      const nativeRuntimeFacts = getConfigResolutionFacts(runtime);
+      const nativeSourceFacts = getConfigResolutionFacts(runtimeSource);
+      const serialized = structuredClone(workerInput(params));
+      let alternativeFingerprint: string | undefined;
+      if (owner === "config" && !loader?.pending) {
+        const alternativeSource = makeConfig(loader ? value : { ...ref, id: "OTHER_WORKER_KEY" });
+        let alternativeRuntime = runtime;
+        let alternativeRuntimeSource = alternativeSource;
         if (loader) {
-          await prepareAgentCatalogSource(
-            params.agentFacts,
-            prepared.pluginGeneration,
-            "live",
-            false,
-            { authStore },
-          );
-          nativeRequests = requests.splice(0);
+          const { config, sourceConfig } = await loadConfig(alternativeSource, env);
+          expect([config, sourceConfig]).toEqual([runtime, runtimeSource]);
+          alternativeRuntime = config;
+          alternativeRuntimeSource = sourceConfig;
         }
-        const nativeRuntimeFacts = getConfigResolutionFacts(runtime);
-        const nativeSourceFacts = getConfigResolutionFacts(runtimeSource);
-        const serialized = structuredClone(createPreparedModelCatalogWorkerInput(params));
-        let alternativeFingerprint: string | undefined;
-        if (owner === "config" && !loader?.pending) {
-          const alternativeSource: OpenClawConfig = {
-            ...source,
-            models: {
-              providers: {
-                ...source.models.providers,
-                [provider]: {
-                  ...source.models.providers[provider],
-                  apiKey: loader ? value : { ...ref, id: "OTHER_WORKER_KEY" },
-                },
-              },
-            },
-          };
-          let alternativeRuntime = runtime;
-          let alternativeRuntimeSource = alternativeSource;
-          if (loader) {
-            await state.writeConfig(alternativeSource);
-            const snapshot = await readConfigFileSnapshotFromContext(
-              createConfigIoContext({
-                configPath: state.configPath,
-                env,
-                homedir: () => state.home,
-                observe: false,
-              }),
-            );
-            expect(snapshot.valid).toBe(true);
-            // Identical decoded bytes, but this source actually authored the pending reference.
-            expect(snapshot.config).toEqual(runtime);
-            expect(snapshot.sourceConfig).toEqual(runtimeSource);
-            alternativeRuntime = snapshot.config;
-            alternativeRuntimeSource = snapshot.sourceConfig;
-          }
-          setRuntimeConfigSnapshot(alternativeRuntime, alternativeRuntimeSource);
-          alternativeFingerprint = createPreparedModelCatalogWorkerInput({
+        configRuntime.setRuntimeConfigSnapshot(alternativeRuntime, alternativeRuntimeSource);
+        alternativeFingerprint = fingerprint(
+          workerInput({
             ...params,
             agentFacts: {
               ...params.agentFacts,
               input: { ...params.agentFacts.input, config: alternativeRuntime },
             },
-          }).generationFingerprint;
-        }
-        // Workers inherit neither the parent's source snapshot nor its WeakMap resolution facts.
-        clearRuntimeConfigSnapshot();
-        clearRuntimeAuthProfileStoreSnapshots();
-        const request = async (failCatalog = false) => {
-          const { pool, captureDirectory } = createCatalogInspectionPool(env);
-          try {
-            const result = await pool.run(
-              {
-                value: serialized,
-                request: {
-                  kind: "catalog",
-                  syntheticAuth: [],
-                  clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
-                },
-                inspection: { provider, expectedCredential: expectedAuth, failCatalog },
+          }),
+        );
+      }
+      // Workers inherit neither the parent's source snapshot nor its WeakMap resolution facts.
+      configRuntime.clearRuntimeConfigSnapshot();
+      clearRuntimeAuthProfileStoreSnapshots();
+      const request = async (failCatalog = false) => {
+        const { pool, captureDirectory } = createCatalogInspectionPool(env);
+        try {
+          const result = await pool.run(
+            {
+              value: serialized,
+              request: {
+                kind: "catalog",
+                syntheticAuth: [],
+                clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
               },
-              { timeoutMs: 30_000 },
-            );
-            if (failCatalog) {
-              expect(fs.readdirSync(captureDirectory)).toEqual([]);
-            }
-            return result;
-          } finally {
-            await pool.close();
-            expect(fs.existsSync(captureDirectory)).toBe(false);
+              inspection: { provider, expectedCredential: expectedAuth, failCatalog },
+            },
+            { timeoutMs: 30_000 },
+          );
+          if (failCatalog) {
+            expect(fs.readdirSync(captureDirectory)).toEqual([]);
           }
-        };
-        const { inspection, ...result } = await request();
-        const plans = inspection.plans;
-        expect(result.status).toBe("ok");
-        expect(inspection.runtimeFactsAbsent).toBe(nativeRuntimeFacts === null);
-        expect(inspection.sourceFactsAbsent).toBe(nativeSourceFacts === null);
-        expect(inspection.sameResolutionFacts).toBe(nativeRuntimeFacts === nativeSourceFacts);
-        if (loader) {
-          const expectedRef = loader.pending
-            ? { source: "env", provider: "default", id: "PENDING_KEY" }
-            : null;
-          expect({
-            nativeAuthMatches: nativeAuth === expectedAuth,
-            nativeRequests,
-            workerAuthMatches: inspection.credentialMatches,
-            workerRequests: requests,
-            authoredRef: inspection.authoredRef,
-            resolvedEnvRef: inspection.resolvedEnvRef,
-          }).toEqual({
-            nativeAuthMatches: true,
-            nativeRequests: loader.pending ? [] : [true],
-            workerAuthMatches: true,
-            workerRequests: loader.pending ? [] : [true],
-            authoredRef: expectedRef,
-            resolvedEnvRef: loader.resolved
-              ? { source: "env", provider: "default", id: "SOURCE_KEY" }
-              : null,
-          });
-          if (loader.pending) {
-            return;
-          }
+          return result;
+        } finally {
+          await pool.close();
+          expect(fs.existsSync(captureDirectory)).toBe(false);
         }
-        expect(requests).toEqual([true]);
-        expect(result).toMatchObject({
-          snapshot: {
-            entries: expect.arrayContaining([
-              expect.objectContaining({ provider, id: "discovered-model" }),
-            ]),
-          },
-        });
-        expect(plans).toHaveLength(1);
-        const catalog = plans[0]!.pluginCatalogs.find((entry) => entry.pluginId === provider);
-        if (!catalog) {
-          throw new Error("Expected the provider-owned writable catalog");
+      };
+      const { inspection, ...result } = await request();
+      expect(result.status).toBe("ok");
+      expect(inspection).toMatchObject({
+        runtimeFactsAbsent: nativeRuntimeFacts === null,
+        sourceFactsAbsent: nativeSourceFacts === null,
+        sameResolutionFacts: nativeRuntimeFacts === nativeSourceFacts,
+      });
+      if (loader) {
+        expect(requests).toEqual(loader.pending ? [] : [true]);
+        expect(inspection.credentialMatches).toBe(true);
+        expect(inspection.authoredRef).toEqual(
+          loader.pending ? { source: "env", provider: "default", id: "PENDING_KEY" } : null,
+        );
+        expect(inspection.resolvedEnvRef).toEqual(
+          loader.resolved ? { source: "env", provider: "default", id: "SOURCE_KEY" } : null,
+        );
+        if (loader.pending) {
+          return;
         }
-        expect(JSON.parse(catalog.contents)).toMatchObject({
-          providers: { [provider]: { apiKey: loader ? value : NON_ENV_SECRETREF_MARKER } },
-        });
-        expect(JSON.stringify(plans)).not.toContain("discoveryApiKey");
-        if (!loader && value !== NON_ENV_SECRETREF_MARKER) {
-          expect(JSON.stringify(plans).includes(value)).toBe(false);
-        }
-        if (alternativeFingerprint !== undefined) {
-          expect(serialized.generationFingerprint).not.toBe(alternativeFingerprint);
-        }
-        if (label === "literal bytes") {
-          const { inspection: _inspection, ...failure } = await request(true);
-          expect(failure).toEqual({
-            status: "failed",
-            authCredentials: [],
-            error: "synthetic catalog construction failure",
-          });
-        }
-      } finally {
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
+      }
+      expect(requests).toEqual([true]);
+      expect(result).toHaveProperty(
+        "snapshot.entries",
+        expect.arrayContaining([expect.objectContaining({ provider, id: "discovered-model" })]),
+      );
+      const plans = inspection.plans;
+      expect(plans).toHaveLength(1);
+      const catalog = plans[0]!.pluginCatalogs.find((entry) => entry.pluginId === provider);
+      expect(catalog).toBeDefined();
+      expect(JSON.parse(catalog!.contents)).toMatchObject({
+        providers: { [provider]: { apiKey: loader ? value : NON_ENV_SECRETREF_MARKER } },
+      });
+      expect(JSON.stringify(plans)).not.toContain("discoveryApiKey");
+      if (!loader && value !== NON_ENV_SECRETREF_MARKER) {
+        expect(JSON.stringify(plans).includes(value)).toBe(false);
+      }
+      if (alternativeFingerprint !== undefined) {
+        expect(fingerprint(serialized)).not.toBe(alternativeFingerprint);
+      }
+      if (value === "synthetic-worker-config-key") {
+        const { inspection: _inspection, ...failure } = await request(true);
+        expect(failure).toEqual({
+          status: "failed",
+          authCredentials: [],
+          error: "synthetic catalog construction failure",
         });
       }
-    },
-  );
-});
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  },
+);

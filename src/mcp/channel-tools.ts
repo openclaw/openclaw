@@ -1,4 +1,4 @@
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import type { OpenClawChannelBridge } from "./channel-bridge.js";
 import {
@@ -27,29 +27,30 @@ export function getChannelMcpCapabilities(claudeChannelMode: "off" | "on" | "aut
 }
 
 export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChannelBridge): void {
-  server.tool(
+  server.registerTool(
     "conversations_list",
-    "List OpenClaw channel-backed conversations available through session routes.",
     {
-      limit: z.number().int().min(1).max(500).optional(),
-      search: z.string().optional(),
-      channel: z.string().optional(),
-      includeDerivedTitles: z.boolean().optional(),
-      includeLastMessage: z.boolean().optional(),
+      description: "List OpenClaw channel-backed conversations available through session routes.",
+      inputSchema: z.object({
+        limit: z.number().int().min(1).max(500).optional(),
+        search: z.string().optional(),
+        channel: z.string().optional(),
+        includeDerivedTitles: z.boolean().optional(),
+        includeLastMessage: z.boolean().optional(),
+      }),
     },
     async (args) => {
       const conversations = await bridge.listConversations(args);
-      return {
-        ...summarizeStructuredResult("conversations", conversations.length, { conversations }),
-        structuredContent: { conversations },
-      };
+      return summarizeStructuredResult("conversations", conversations.length, { conversations });
     },
   );
 
-  server.tool(
+  server.registerTool(
     "conversation_get",
-    "Get one OpenClaw conversation by session key.",
-    { session_key: z.string().min(1) },
+    {
+      description: "Get one OpenClaw conversation by session key.",
+      inputSchema: z.object({ session_key: z.string().min(1) }),
+    },
     async ({ session_key }) => {
       const conversation = await bridge.getConversation(session_key);
       if (!conversation) {
@@ -65,28 +66,29 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
-  server.tool(
+  server.registerTool(
     "messages_read",
-    "Read recent messages for one OpenClaw conversation.",
     {
-      session_key: z.string().min(1),
-      limit: z.number().int().min(1).max(200).optional(),
+      description: "Read recent messages for one OpenClaw conversation.",
+      inputSchema: z.object({
+        session_key: z.string().min(1),
+        limit: z.number().int().min(1).max(200).optional(),
+      }),
     },
     async ({ session_key, limit }) => {
       const messages = await bridge.readMessages(session_key, limit);
-      return {
-        ...summarizeStructuredResult("messages", messages.length, { messages }),
-        structuredContent: { messages },
-      };
+      return summarizeStructuredResult("messages", messages.length, { messages });
     },
   );
 
-  server.tool(
+  server.registerTool(
     "attachments_fetch",
-    "List non-text attachments for a message in one OpenClaw conversation.",
     {
-      session_key: z.string().min(1),
-      message_id: z.string().min(1),
+      description: "List non-text attachments for a message in one OpenClaw conversation.",
+      inputSchema: z.object({
+        session_key: z.string().min(1),
+        message_id: z.string().min(1),
+      }),
     },
     async ({ session_key, message_id }) => {
       const message = await bridge.readMessage(session_key, message_id);
@@ -104,13 +106,15 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
-  server.tool(
+  server.registerTool(
     "events_poll",
-    "Poll queued OpenClaw conversation events since a cursor.",
     {
-      after_cursor: z.number().int().min(0).optional(),
-      session_key: z.string().optional(),
-      limit: z.number().int().min(1).max(200).optional(),
+      description: "Poll queued OpenClaw conversation events since a cursor.",
+      inputSchema: z.object({
+        after_cursor: z.number().int().min(0).optional(),
+        session_key: z.string().optional(),
+        limit: z.number().int().min(1).max(200).optional(),
+      }),
     },
     async ({ after_cursor, session_key, limit }) => {
       const { events, nextCursor, gap } = bridge.pollEvents(
@@ -128,19 +132,21 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
-  server.tool(
+  server.registerTool(
     "events_wait",
-    "Wait for the next queued OpenClaw conversation event.",
     {
-      after_cursor: z.number().int().min(0).optional(),
-      session_key: z.string().optional(),
-      timeout_ms: z.number().int().min(1).max(300_000).optional(),
+      description: "Wait for the next queued OpenClaw conversation event.",
+      inputSchema: z.object({
+        after_cursor: z.number().int().min(0).optional(),
+        session_key: z.string().optional(),
+        timeout_ms: z.number().int().min(1).max(300_000).optional(),
+      }),
     },
     async ({ after_cursor, session_key, timeout_ms }, extra) => {
       const { event, gap } = await bridge.waitForEvent(
         { afterCursor: after_cursor ?? 0, sessionKey: toText(session_key) },
         timeout_ms,
-        extra.signal,
+        extra.mcpReq.signal,
       );
       return {
         content: [
@@ -158,12 +164,14 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
-  server.tool(
+  server.registerTool(
     "messages_send",
-    "Send a message back through the same OpenClaw conversation route.",
     {
-      session_key: z.string().min(1),
-      text: z.string().min(1),
+      description: "Send a message back through the same OpenClaw conversation route.",
+      inputSchema: z.object({
+        session_key: z.string().min(1),
+        text: z.string().min(1),
+      }),
     },
     async ({ session_key, text }) => {
       const result = await bridge.sendMessage({ sessionKey: session_key, text });
@@ -174,10 +182,13 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
-  server.tool(
+  server.registerTool(
     "permissions_list_open",
-    "List open OpenClaw exec or plugin approval requests visible through the Gateway.",
-    {},
+    {
+      description:
+        "List open OpenClaw exec or plugin approval requests visible through the Gateway.",
+      inputSchema: z.object({}),
+    },
     async () => {
       const approvals = bridge.listPendingApprovals();
       return {
@@ -187,13 +198,15 @@ export function registerChannelMcpTools(server: McpServer, bridge: OpenClawChann
     },
   );
 
-  server.tool(
+  server.registerTool(
     "permissions_respond",
-    "Allow or deny one pending OpenClaw exec or plugin approval request.",
     {
-      kind: z.enum(["exec", "plugin"]),
-      id: z.string().min(1),
-      decision: z.enum(["allow-once", "allow-always", "deny"]),
+      description: "Allow or deny one pending OpenClaw exec or plugin approval request.",
+      inputSchema: z.object({
+        kind: z.enum(["exec", "plugin"]),
+        id: z.string().min(1),
+        decision: z.enum(["allow-once", "allow-always", "deny"]),
+      }),
     },
     async ({ kind, id, decision }) => {
       const result = await bridge.respondToApproval({ kind, id, decision });

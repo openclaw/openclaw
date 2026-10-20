@@ -11,7 +11,7 @@ const { detectBinaryMock, execFileSyncMock, readFileMock, runCommandWithTimeoutM
   () => ({
     detectBinaryMock: vi.fn<DetectBinary>(async () => false),
     execFileSyncMock: vi.fn<(file: string, args: readonly string[]) => string>(() => ""),
-    readFileMock: vi.fn(async () => "6.8.0-generic"),
+    readFileMock: vi.fn<() => Promise<string>>(),
     runCommandWithTimeoutMock: vi.fn<
       (argv: string[], optionsOrTimeout?: number | { timeoutMs?: number }) => Promise<SpawnResult>
     >(async () => ({
@@ -159,16 +159,11 @@ describe("browser support and launch", () => {
 
   it("reports display-less WSL support only when wslview is installed", async () => {
     detectBinaryMock.mockImplementation(async (binary) => binary === "wslview");
-
-    await expect(
-      detectBrowserOpenSupport({
-        platform: "linux",
-        env: { WSL_DISTRO_NAME: "Ubuntu" },
-      }),
-    ).resolves.toEqual({ ok: true });
-
     mockProcessPlatform("linux");
     vi.stubEnv("WSL_DISTRO_NAME", "Ubuntu");
+
+    await expect(detectBrowserOpenSupport()).resolves.toEqual({ ok: true });
+
     await expect(openUrl("https://example.com/")).resolves.toBe(true);
     expect(runCommandWithTimeoutMock).toHaveBeenCalledExactlyOnceWith(
       ["wslview", "https://example.com/"],
@@ -176,12 +171,10 @@ describe("browser support and launch", () => {
     );
 
     detectBinaryMock.mockResolvedValue(false);
-    await expect(
-      detectBrowserOpenSupport({
-        platform: "linux",
-        env: { WSL_DISTRO_NAME: "Ubuntu" },
-      }),
-    ).resolves.toEqual({ ok: false, reason: "wsl-no-wslview" });
+    await expect(detectBrowserOpenSupport()).resolves.toEqual({
+      ok: false,
+      reason: "wsl-no-wslview",
+    });
   });
 
   it("prefers the registry-backed Windows system root over process env", async () => {

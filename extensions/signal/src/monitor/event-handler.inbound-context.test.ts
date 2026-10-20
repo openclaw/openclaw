@@ -1154,9 +1154,6 @@ describe("signal createSignalEventHandler inbound context", () => {
         const context = requireCapturedContext();
         expect(context.BodyForAgent).toBe(deliveredText);
         expect(context.Body).toContain(deliveredText);
-        expect(logVerboseMock).toHaveBeenCalledWith(
-          expect.stringContaining(`signal inbound: from=${context.From} len=`),
-        );
         expect(JSON.stringify(logVerboseMock.mock.calls)).not.toContain("private line");
       } finally {
         shouldLogVerboseMock.mockReturnValue(false);

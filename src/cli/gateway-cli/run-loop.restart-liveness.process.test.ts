@@ -1,32 +1,26 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
+import { createProcessFixtures } from "./run-loop-process.test-support.js";
 
-const tempDirs = createTempDirTracker();
-const children = new Map<ChildProcess, Promise<unknown[]>>();
-const runLoopUrl = resolveRuntimeWorkerUrl(gatewayDirectStopEntrypoints.runLoop).href;
-const restartUrl = resolveRuntimeWorkerUrl(gatewayDirectStopEntrypoints.restartPolicy).href;
-const fileLogTransportUrl = resolveRuntimeWorkerUrl(
-  gatewayDirectStopEntrypoints.fileLogTransport,
-).href;
+const fixtures = createProcessFixtures("restart liveness cleanup failed", 5_000);
+const moduleUrl = (entry: Parameters<typeof resolveRuntimeWorkerUrl>[0]) =>
+  JSON.stringify(resolveRuntimeWorkerUrl(entry).href);
 
 const childScript = `
   import fs from "node:fs";
+  import fsPromises from "node:fs/promises";
   import http from "node:http";
-  import { runGatewayLoop } from ${JSON.stringify(runLoopUrl)};
-  import { setGatewayRestartPolicy } from ${JSON.stringify(restartUrl)};
-  import { fileLogTransport } from ${JSON.stringify(fileLogTransportUrl)};
-  const faultPath = process.argv[1];
-  const closeFailure = process.argv[2];
+  import { runGatewayLoop } from ${moduleUrl(gatewayDirectStopEntrypoints.runLoop)};
+  import { setGatewayRestartPolicy } from ${moduleUrl(gatewayDirectStopEntrypoints.restartPolicy)};
+  const [faultPath, closeFailure, logFile] = process.argv.slice(1);
   setGatewayRestartPolicy({ allowExternal: true });
   let starts = 0;
   try {
@@ -49,26 +43,28 @@ const childScript = `
         return {
           getTailscaleIngressEndpoint: () => undefined,
           startupSettled: Promise.resolve(),
-          close: () => {
+          close: async () => {
             if (closeFailure === "pending") {
-              fileLogTransport.setAppenderForTests(() => {
-                process.stdout.write("append:pending\\n");
-                return new Promise(() => {});
-              });
+              const openFile = fsPromises.open.bind(fsPromises);
+              fsPromises.open = (...args) => {
+                if (args[0] === logFile) {
+                  process.stdout.write("append:pending\\n");
+                  return new Promise(() => {});
+                }
+                return openFile(...args);
+              };
               process.stdout.write("close:pending\\n");
               return new Promise(() => {});
             }
+            await new Promise((resolve, reject) => {
+              server.close(error => error ? reject(error) : resolve());
+            });
             if (closeFailure) {
+              process.stdout.write("http-closed:" + attempt + "\\n");
               const error = new TypeError("fixture close owner failed");
               error.stack = "TypeError: fixture close owner failed\\n    at closeOwner (fixture.js:12:3)";
-              return new Promise((resolve, reject) => server.close(closeError => closeError ? reject(closeError) : resolve()))
-                .then(() => {
-                  process.stdout.write("http-closed:" + attempt + "\\n");
-                  throw error;
-                });
+              throw error;
             }
-            return new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()))
-              .then(() => process.stdout.write("closed:" + attempt + "\\n"));
           },
         };
       },
@@ -80,27 +76,8 @@ const childScript = `
   }
 `;
 
-afterEach(async () => {
-  for (const child of children.keys()) {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-    }
-  }
-  const results = await withTestTimeout(
-    Promise.allSettled(children.values()),
-    5_000,
-    "restart liveness children did not close; retaining their fixture directories",
-  );
-  const errors = results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
-  if (errors.length) {
-    throw new AggregateError(errors, "restart liveness cleanup failed");
-  }
-  children.clear();
-  tempDirs.cleanup();
-});
-
 function startFixture(initialFailure = false, closeFailure = "", executable = process.execPath) {
-  const directory = tempDirs.make("openclaw-restart-liveness-");
+  const directory = fixtures.make("openclaw-restart-liveness-");
   const home = path.join(directory, "home");
   fs.mkdirSync(home);
   const pendingClose = closeFailure === "pending";
@@ -117,32 +94,22 @@ function startFixture(initialFailure = false, closeFailure = "", executable = pr
   const faultPath = path.join(directory, "startup-fault");
   const logFile = path.join(directory, "gateway.jsonl");
   const stateDir = path.join(directory, "state");
-  fs.writeFileSync(
-    path.join(directory, "openclaw.json"),
-    JSON.stringify({ logging: { level: "info", file: logFile } }),
-  );
+  const configPath = path.join(directory, "openclaw.json");
+  fs.writeFileSync(configPath, JSON.stringify({ logging: { level: "info", file: logFile } }));
   if (initialFailure) {
     fs.writeFileSync(faultPath, "refuse");
   }
+  const moduleArgs = ["--import", "tsx", "--input-type=module", "--eval"];
   const child = spawn(
     executable,
-    [
-      "--inspect-port=127.0.0.1:0",
-      "--import",
-      "tsx",
-      "--input-type=module",
-      "--eval",
-      childScript,
-      faultPath,
-      closeFailure,
-    ],
+    ["--inspect-port=127.0.0.1:0", ...moduleArgs, childScript, faultPath, closeFailure, logFile],
     {
       env: {
         PATH: pendingClose ? `${bin}${path.delimiter}${process.env.PATH ?? ""}` : process.env.PATH,
         HOME: home,
         TMPDIR: directory,
         OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: path.join(directory, "openclaw.json"),
+        OPENCLAW_CONFIG_PATH: configPath,
         OPENCLAW_NO_RESPAWN: "1",
         ...(pendingClose ? { OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway.test" } : {}),
         NODE_DISABLE_COMPILE_CACHE: "1",
@@ -152,80 +119,69 @@ function startFixture(initialFailure = false, closeFailure = "", executable = pr
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  const closed = once(child, "close");
-  children.set(child, closed);
-  void closed.catch(() => {});
+  const tracked = fixtures.ownChild(child);
   if (pendingClose) {
     // Native queries may run through the spawn broker, so report the fixture's PID.
     fs.writeFileSync(path.join(bin, "launchctl.pid"), String(child.pid));
   }
-  let output = "";
-  child.stdout?.on("data", (chunk: Buffer) => (output += chunk.toString()));
-  child.stderr?.on("data", (chunk: Buffer) => (output += chunk.toString()));
+  const output = () => tracked.output.stdout + tracked.output.stderr;
   const waitForOutput = (text: string) =>
-    vi.waitFor(() => expect(output).toContain(text), { timeout: 45_000, interval: 25 });
-  return { child, closed, faultPath, logFile, stateDir, waitForOutput, output: () => output };
+    vi.waitFor(() => expect(output()).toContain(text), { timeout: 45_000, interval: 25 });
+  return { ...tracked, faultPath, logFile, stateDir, waitForOutput, output };
 }
 
-async function expectFailedRestartWaiting(
-  fixture: ReturnType<typeof startFixture>,
-  attempt: number,
-) {
+async function expectRestartWaiting(fixture: ReturnType<typeof startFixture>, attempt: number) {
   expect(fixture.child.kill("SIGUSR2")).toBe(true);
   await fixture.waitForOutput(`waiting:${attempt}`);
   // Only the parent observes an idle interval. A child timer or IPC channel
   // would hide the lost-process regression after its real listener closes.
-  expect(
-    await Promise.race([
-      fixture.closed.then((exit) => ({ exit })),
-      delay(750).then(() => "waiting"),
-    ]),
-    fixture.output(),
-  ).toBe("waiting");
+  const exited = fixture.closed.then((exit) => ({ exit }));
+  expect(await Promise.race([exited, delay(750).then(() => "waiting")]), fixture.output()).toBe(
+    "waiting",
+  );
 }
 
-describe("runGatewayLoop failed-restart process lifetime", () => {
+function readStabilityBundle(fixture: ReturnType<typeof startFixture>) {
+  const directory = path.join(fixture.stateDir, "logs", "stability");
+  const files = fs.readdirSync(directory);
+  expect(files).toHaveLength(1);
+  return JSON.parse(fs.readFileSync(path.join(directory, files[0]!), "utf8"));
+}
+
+describe("runGatewayLoop failed-restart process lifetime", { timeout: 60_000 }, () => {
   const posixIt = process.platform === "win32" ? it.skip : it;
 
-  posixIt(
-    "attaches the Node debugger on SIGUSR1 and restarts only on SIGUSR2",
-    async () => {
-      const fixture = startFixture(false, "", resolveTestNodeExecPath());
-      await fixture.waitForOutput("ready:1");
-      expect(fixture.child.kill("SIGUSR1")).toBe(true);
-      await fixture.waitForOutput("Debugger listening on ws://127.0.0.1:");
-      const inspectorUrl = fixture.output().match(/Debugger listening on (ws:\/\/[^\s]+)/)?.[1];
-      expect(inspectorUrl).toBeDefined();
-      const debuggerSocket = new WebSocket(inspectorUrl!);
-      try {
-        await once(debuggerSocket, "open");
-        const reply = once(debuggerSocket, "message");
-        debuggerSocket.send(
-          JSON.stringify({
-            id: 1,
-            method: "Runtime.evaluate",
-            params: { expression: "process.pid" },
-          }),
-        );
-        const [data] = await reply;
-        expect(JSON.parse(String(data))).toMatchObject({
-          id: 1,
-          result: { result: { value: fixture.child.pid } },
-        });
-        expect(fixture.output()).not.toContain("start:2");
-      } finally {
-        const closed = once(debuggerSocket, "close");
-        debuggerSocket.close();
-        await closed;
-      }
-      expect(fixture.child.kill("SIGUSR2")).toBe(true);
-      await fixture.waitForOutput("ready:2");
-      expect(fixture.child.kill("SIGTERM")).toBe(true);
-      expect(await fixture.closed, fixture.output()).toEqual([0, null]);
-      expect(fixture.output()).toContain("natural-exit");
-    },
-    60_000,
-  );
+  posixIt("attaches the Node debugger on SIGUSR1 and restarts only on SIGUSR2", async () => {
+    const fixture = startFixture(false, "", resolveTestNodeExecPath());
+    await fixture.waitForOutput("ready:1");
+    expect(fixture.child.kill("SIGUSR1")).toBe(true);
+    await fixture.waitForOutput("Debugger listening on ws://127.0.0.1:");
+    const inspectorUrl = fixture.output().match(/Debugger listening on (ws:\/\/[^\s]+)/)?.[1];
+    expect(inspectorUrl).toBeDefined();
+    const debuggerSocket = new WebSocket(inspectorUrl!);
+    try {
+      await once(debuggerSocket, "open");
+      const reply = once(debuggerSocket, "message");
+      debuggerSocket.send(
+        '{"id":1,"method":"Runtime.evaluate","params":{"expression":"process.pid"}}',
+      );
+      const [data] = await reply;
+      expect(JSON.parse(String(data))).toMatchObject({
+        id: 1,
+        result: { result: { value: fixture.child.pid } },
+      });
+      expect(fixture.output()).not.toContain("start:2");
+    } finally {
+      const closed = once(debuggerSocket, "close");
+      debuggerSocket.close();
+      await closed;
+    }
+    expect(fixture.child.kill("SIGUSR2")).toBe(true);
+    await fixture.waitForOutput("ready:2");
+    expect(fixture.child.kill("SIGTERM")).toBe(true);
+    expect(await fixture.closed, fixture.output()).toEqual([0, null]);
+    expect(fixture.output()).toContain("natural-exit");
+  });
 
   it.skipIf(process.platform !== "darwin")(
     "retains the hard watchdog when shutdown and its log append never settle",
@@ -238,94 +194,58 @@ describe("runGatewayLoop failed-restart process lifetime", () => {
       expect(fixture.output()).not.toContain("natural-exit");
       expect(fixture.output()).not.toContain("loop-returned:");
       expect(fixture.output()).toContain("append:pending");
-      const bundleDir = path.join(fixture.stateDir, "logs", "stability");
-      const files = fs.readdirSync(bundleDir);
-      expect(files).toHaveLength(1);
-      expect(JSON.parse(fs.readFileSync(path.join(bundleDir, files[0]!), "utf8"))).toMatchObject({
-        reason: "gateway.stop_shutdown_timeout",
-      });
+      expect(readStabilityBundle(fixture).reason).toBe("gateway.stop_shutdown_timeout");
     },
-    60_000,
   );
 
-  posixIt(
-    "naturally exits nonzero after native close settles with a reported failure",
-    async () => {
-      const fixture = startFixture(false, "rejected");
-      await fixture.waitForOutput("ready:1");
-      expect(fixture.child.kill("SIGUSR2")).toBe(true);
-      expect(await fixture.closed, fixture.output()).toEqual([1, null]);
-      expect(fixture.output()).toContain("http-closed:1");
-      expect(fixture.output()).toContain("loop-returned:1");
-      expect(fixture.output()).toContain("natural-exit");
-      expect(fixture.output()).not.toContain("shutdown deadline reached");
-      const bundleDir = path.join(fixture.stateDir, "logs", "stability");
-      const files = fs.readdirSync(bundleDir);
-      expect(files).toHaveLength(1);
-      const bundle = JSON.parse(fs.readFileSync(path.join(bundleDir, files[0]!), "utf8"));
-      expect(bundle).toMatchObject({
-        reason: "gateway.restart_close_failed",
-        error: { name: "TypeError", message: "fixture close owner failed" },
-        evidence: {
-          shutdown: {
-            step: "gateway-server-close",
-            errors: [
-              {
-                name: "TypeError",
-                message: "fixture close owner failed",
-                stack: "TypeError: fixture close owner failed\n    at closeOwner (fixture.js:12:3)",
-              },
-            ],
-          },
-        },
-      });
-      expect(fs.readFileSync(fixture.logFile, "utf8")).toContain(
-        "shutdown step failed (gateway server close): fixture close owner failed",
-      );
-      expect(fixture.output()).not.toContain("start:2");
-    },
-    60_000,
-  );
+  posixIt("naturally exits nonzero when native close rejects", async () => {
+    const fixture = startFixture(false, "rejected");
+    const error = { name: "TypeError", message: "fixture close owner failed" };
+    const shutdownError = {
+      ...error,
+      stack: "TypeError: fixture close owner failed\n    at closeOwner (fixture.js:12:3)",
+    };
+    await fixture.waitForOutput("ready:1");
+    expect(fixture.child.kill("SIGUSR2")).toBe(true);
+    expect(await fixture.closed, fixture.output()).toEqual([1, null]);
+    expect(fixture.output()).toContain("http-closed:1");
+    expect(fixture.output()).toContain("loop-returned:1");
+    expect(fixture.output()).toContain("natural-exit");
+    expect(fixture.output()).not.toContain("shutdown deadline reached");
+    const bundle = readStabilityBundle(fixture);
+    expect(bundle).toMatchObject({ reason: "gateway.restart_close_failed", error });
+    expect(bundle.evidence.shutdown).toMatchObject({
+      step: "gateway-server-close",
+      errors: [shutdownError],
+    });
+    expect(fs.readFileSync(fixture.logFile, "utf8")).toContain(
+      "shutdown step failed (gateway server close): fixture close owner failed",
+    );
+    expect(fixture.output()).not.toContain("start:2");
+  });
 
-  posixIt(
-    "recovers in the same process after repeated operator-triggered startup failures",
-    async () => {
-      const fixture = startFixture();
-      await fixture.waitForOutput("ready:1");
-      fs.writeFileSync(fixture.faultPath, "refuse");
-      await expectFailedRestartWaiting(fixture, 2);
-      await expectFailedRestartWaiting(fixture, 3);
+  posixIt.each([true, false])("holds failed-restart ownership: recovery=%s", async (recover) => {
+    const fixture = startFixture();
+    await fixture.waitForOutput("ready:1");
+    fs.writeFileSync(fixture.faultPath, "refuse");
+    await expectRestartWaiting(fixture, 2);
+    if (recover) {
+      await expectRestartWaiting(fixture, 3);
       fs.unlinkSync(fixture.faultPath);
       expect(fixture.child.kill("SIGUSR2")).toBe(true);
       await fixture.waitForOutput("ready:4");
-      expect(fixture.child.kill("SIGTERM")).toBe(true);
-      expect(await fixture.closed, fixture.output()).toEqual([0, null]);
-    },
-    60_000,
-  );
-
-  posixIt(
-    "exits cleanly on SIGTERM while waiting after a failed restart",
-    async () => {
-      const fixture = startFixture();
-      await fixture.waitForOutput("ready:1");
-      fs.writeFileSync(fixture.faultPath, "refuse");
-      await expectFailedRestartWaiting(fixture, 2);
-      expect(fixture.child.kill("SIGTERM")).toBe(true);
-      expect(await fixture.closed, fixture.output()).toEqual([0, null]);
+    }
+    expect(fixture.child.kill("SIGTERM")).toBe(true);
+    expect(await fixture.closed, fixture.output()).toEqual([0, null]);
+    if (!recover) {
       expect(fixture.output()).not.toContain("start:3");
-    },
-    60_000,
-  );
+    }
+  });
 
-  posixIt(
-    "releases process ownership when initial startup rejects",
-    async () => {
-      const fixture = startFixture(true);
-      expect(await fixture.closed, fixture.output()).toEqual([1, null]);
-      expect(fixture.output()).toContain("fixture startup refused");
-      expect(fixture.output()).not.toContain("Process will stay alive");
-    },
-    60_000,
-  );
+  posixIt("releases process ownership when initial startup rejects", async () => {
+    const fixture = startFixture(true);
+    expect(await fixture.closed, fixture.output()).toEqual([1, null]);
+    expect(fixture.output()).toContain("fixture startup refused");
+    expect(fixture.output()).not.toContain("Process will stay alive");
+  });
 });

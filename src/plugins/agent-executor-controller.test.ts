@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { resolveAgentExecutorController } from "./agent-executor-controller.js";
+import { resolveAgentExecutorController as resolve } from "./agent-executor-controller.js";
 import type {
   AgentExecutorBinding,
   AgentExecutorContext,
@@ -38,9 +38,9 @@ describe("plugin executor controllers", () => {
       }
     }
     const implementation = new ClassController();
-    const owner = fixture(implementation);
+    const owner = fixture({}, implementation);
     await owner.run(async () => {
-      const selected = resolveAgentExecutorController("remote-executor");
+      const selected = resolve("remote-executor");
       await selected.ensure(binding, context());
       await selected.retire(binding, context());
     });
@@ -51,13 +51,11 @@ describe("plugin executor controllers", () => {
     const first = fixture();
     const second = fixture();
     await first.run(async () => {
-      const selected = resolveAgentExecutorController("remote-executor");
+      const selected = resolve("remote-executor");
       expect(selected.workspaceDirectory).toBe("/executor/workspace");
       await selected.ensure(binding, context());
     });
-    await second.run(() =>
-      resolveAgentExecutorController("remote-executor").retire(binding, context()),
-    );
+    await second.invoke("retire");
     expect(first.controller.ensure).toHaveBeenCalledOnce();
     expect(second.controller.retire).toHaveBeenCalledOnce();
     expect(first.registry.agentExecutorControllers.get("remote-executor")?.pluginId).toBe(
@@ -71,17 +69,13 @@ describe("plugin executor controllers", () => {
 
   it("requires an invocation registry and an enabled registered owner", () => {
     const owner = fixture();
-    expect(() => resolveAgentExecutorController("remote-executor")).toThrow(
-      "requires a scoped plugin registry",
-    );
+    expect(() => resolve("remote-executor")).toThrow("requires a scoped plugin registry");
     owner.run(() => {
-      expect(() => resolveAgentExecutorController("missing")).toThrow(
+      expect(() => resolve("missing")).toThrow(
         'plugin "missing" is missing, disabled, or unavailable',
       );
       owner.record.enabled = false;
-      expect(() => resolveAgentExecutorController("remote-executor")).toThrow(
-        "missing, disabled, or unavailable",
-      );
+      expect(() => resolve("remote-executor")).toThrow("missing, disabled, or unavailable");
     });
   });
 
@@ -105,9 +99,7 @@ describe("plugin executor controllers", () => {
   ])("rejects invalid controller contracts: $error", ({ error, ...invalid }) => {
     const owner = fixture({ ...controller(), ...invalid } as AgentExecutorController);
     expect(owner.registry.diagnostics[0]?.message).toContain(error);
-    owner.run(() =>
-      expect(() => resolveAgentExecutorController("remote-executor")).toThrow("unavailable"),
-    );
+    owner.run(() => expect(() => resolve("remote-executor")).toThrow("unavailable"));
   });
 
   it("preserves contributions during projection and removes them on rollback", () => {
@@ -124,7 +116,7 @@ describe("plugin executor controllers", () => {
   it("rejects a retained handle in another invocation registry", async () => {
     const first = fixture();
     const second = fixture();
-    const selected = first.run(() => resolveAgentExecutorController("remote-executor"));
+    const selected = first.select();
     await second.run(() =>
       expect(selected.ensure(binding, context())).rejects.toThrow("no longer available"),
     );
@@ -136,7 +128,7 @@ describe("plugin executor controllers", () => {
       const owner = fixture();
       markPluginRegistryActive(owner.registry);
       await owner.run(async () => {
-        const selected = resolveAgentExecutorController("remote-executor");
+        const selected = resolve("remote-executor");
         if (change === "owner revocation") {
           revokePluginRecord(owner.registry, owner.record);
         } else if (change === "registration replacement") {
@@ -159,7 +151,7 @@ describe("plugin executor controllers", () => {
   it("invalidates an old handle when its instance is adopted into a replacement registry", async () => {
     const owner = fixture();
     markPluginRegistryActive(owner.registry);
-    const selected = owner.run(() => resolveAgentExecutorController("remote-executor"));
+    const selected = owner.select();
     const next = createEmptyPluginRegistry();
     next.plugins.push(owner.record);
     projectPluginContributions(owner.registry, owner.record, next);
@@ -169,7 +161,7 @@ describe("plugin executor controllers", () => {
       expect(selected.ensure(binding, context())).rejects.toThrow("no longer available"),
     );
     await withPluginRuntimeRegistryScope(next, () =>
-      resolveAgentExecutorController("remote-executor").ensure(binding, context()),
+      resolve("remote-executor").ensure(binding, context()),
     );
     expect(owner.controller.ensure).toHaveBeenCalledOnce();
   });
@@ -177,26 +169,22 @@ describe("plugin executor controllers", () => {
   it("preserves the caller assertion scope while the controller has its own identity", async () => {
     let retained: AgentExecutorContext | undefined;
     const seen: string[] = [];
-    const owner = fixture(
-      controller({
-        ensure: async (_binding, ctx) => {
-          expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe("remote-executor");
-          await Promise.resolve();
-          ctx.assertCurrent();
-          retained = ctx;
-        },
-      }),
-    );
+    const owner = fixture({
+      ensure: async (_binding, ctx) => {
+        expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe("remote-executor");
+        await Promise.resolve();
+        ctx.assertCurrent();
+        retained = ctx;
+      },
+    });
     await withPluginRuntimePluginScope(
       { pluginId: "caller-harness" },
-      () => {
-        const selected = resolveAgentExecutorController("remote-executor");
-        return selected.ensure(binding, {
+      () =>
+        resolve("remote-executor").ensure(binding, {
           signal: new AbortController().signal,
           assertCurrent: () =>
             seen.push(getPluginRuntimeGatewayRequestScope()?.pluginId ?? "missing"),
-        });
-      },
+        }),
       owner.registry,
     );
     expect(seen).toEqual(["caller-harness", "caller-harness", "caller-harness"]);
@@ -210,21 +198,17 @@ describe("plugin executor controllers", () => {
       const release = createDeferredCore();
       const abort = new AbortController();
       let received: AgentExecutorContext | undefined;
-      const owner = fixture(
-        controller({
-          ensure: async (_binding, ctx) => {
-            received = ctx;
-            started.resolve();
-            await release.promise;
-          },
-        }),
-      );
-      const pending = owner.run(() =>
-        resolveAgentExecutorController("remote-executor").ensure(binding, {
-          signal: abort.signal,
-          assertCurrent() {},
-        }),
-      );
+      const owner = fixture({
+        ensure: async (_binding, ctx) => {
+          received = ctx;
+          started.resolve();
+          await release.promise;
+        },
+      });
+      const pending = owner.invoke("ensure", {
+        signal: abort.signal,
+        assertCurrent() {},
+      });
       const rejected = expect(pending).rejects.toThrow();
       await started.promise;
       if (change === "caller cancellation") {
@@ -262,7 +246,10 @@ function controller(overrides: Partial<AgentExecutorController> = {}): AgentExec
   };
 }
 
-function fixture(implementation = controller()) {
+function fixture(
+  overrides: Partial<AgentExecutorController> = {},
+  implementation = controller(overrides),
+) {
   const builder = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "remote-executor",
@@ -274,12 +261,17 @@ function fixture(implementation = controller()) {
   builder.registry.plugins.push(record);
   const api = builder.createApi(record, { config: {} });
   api.registerAgentExecutorController(implementation);
+  const run = <T>(callback: () => T) => withPluginRuntimeRegistryScope(builder.registry, callback);
+  const select = () => run(() => resolve("remote-executor"));
   return {
     builder,
     registry: builder.registry,
     record,
     api,
     controller: implementation,
-    run: <T>(run: () => T) => withPluginRuntimeRegistryScope(builder.registry, run),
+    run,
+    select,
+    invoke: (method: "ensure" | "retire", ctx = context()) =>
+      run(() => resolve("remote-executor")[method](binding, ctx)),
   };
 }

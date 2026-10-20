@@ -1,7 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { captureRequesterOrigin } from "../requester-origin.js";
 import { SANDBOX_DEFAULT_TOOL_ALLOW, type SandboxToolPolicy } from "../sandbox/types.js";
+import type { AnyAgentTool } from "./common.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { createSessionsCreateTool } from "./sessions-create-tool.js";
 import { prepareSandboxSessionTools } from "./sessions-operator-authority.js";
@@ -14,10 +17,13 @@ vi.mock("./in-process-gateway.js", () => ({
   bindAgentToolGatewayRequest: () => gateway.request,
 }));
 
-function issueAuthority(scopes: readonly string[] = ["operator.sessions.write"]) {
+function issueAuthority(
+  scopes: readonly string[] = ["operator.sessions.write"],
+  profileId = "create-requester",
+) {
   const controller = new AbortController();
   const authority = createAdmittedRunOperatorAuthority({
-    profileId: "create-requester",
+    profileId,
     scopes,
     signal: controller.signal,
     assertCurrent: () => {},
@@ -25,13 +31,21 @@ function issueAuthority(scopes: readonly string[] = ["operator.sessions.write"])
   return { authority, revoke: () => controller.abort(new Error("creation source revoked")) };
 }
 
+const created = {
+  key: "agent:main:dashboard:created",
+  sessionId: "created-session",
+  runStarted: false,
+};
+function withTool(check: (tool: AnyAgentTool) => Promise<void>) {
+  return withSessionToolTestCaller(
+    () => check(expectDefined(createSessionsCreateTool(), "creation tool")),
+    issueAuthority().authority,
+  );
+}
+
 beforeEach(() => {
   gateway.available = true;
-  gateway.request.mockReset().mockResolvedValue({
-    key: "agent:main:dashboard:created",
-    sessionId: "created-session",
-    runStarted: false,
-  });
+  gateway.request.mockReset().mockResolvedValue(created);
 });
 
 describe("sessions_create", () => {
@@ -60,9 +74,7 @@ describe("sessions_create", () => {
   });
 
   it("keeps the approved destination choices separate from host identity and retry identity", async () => {
-    const { authority } = issueAuthority();
-    await withSessionToolTestCaller(async () => {
-      const tool = expectDefined(createSessionsCreateTool(), "creation tool");
+    await withTool(async (tool) => {
       const params = {
         label: "Review",
         message: "  Review the patch.\n",
@@ -72,44 +84,32 @@ describe("sessions_create", () => {
         model: "provider/model",
         permissionMode: "guarded",
       };
-      gateway.request.mockResolvedValue({
-        key: "agent:reviewer:dashboard:created",
-        sessionId: "created-session",
-        runStarted: false,
-        runError: { code: "UNAVAILABLE", message: "Try the existing session later" },
-      });
+      const runError = { code: "UNAVAILABLE", message: "Try the existing session later" };
+      const { key: _key, ...receipt } = created;
+      const key = "agent:reviewer:dashboard:created";
+      gateway.request.mockResolvedValue({ ...receipt, key, runError });
       const result = await tool.execute("create-one", params);
       expect(result.details).toEqual({
-        sessionKey: "agent:reviewer:dashboard:created",
-        sessionId: "created-session",
-        runStarted: false,
-        runError: { code: "UNAVAILABLE", message: "Try the existing session later" },
+        sessionKey: key,
+        ...receipt,
+        runError,
       });
       const request = gateway.request.mock.calls[0]?.[0];
       const { group, ...destination } = params;
       expect(request).toMatchObject({
         method: "sessions.create",
-        params: { ...destination, category: group, idempotencyKey: expect.any(String) },
         sessionCreation: {
           via: "operator",
-          actor: { type: "human", source: "profile", id: authority.profileId },
+          actor: { type: "human", source: "profile", id: "create-requester" },
           requesterSessionKey: "agent:main:main",
         },
         agentToolCaller: { agentId: "main", assertCurrent: expect.any(Function) },
       });
-      expect(request.params).not.toHaveProperty("group");
-      for (const key of [
-        "user",
-        "action",
-        "key",
-        "parentSessionKey",
-        "spawnDepth",
-        "fork",
-        "creator",
-        "role",
-      ]) {
-        expect(request.params).not.toHaveProperty(key);
-      }
+      expect(request.params).toEqual({
+        ...destination,
+        category: group,
+        idempotencyKey: expect.any(String),
+      });
       await tool.execute("create-one", params);
       expect(gateway.request.mock.calls[1]?.[0].params.idempotencyKey).toBe(
         request.params.idempotencyKey,
@@ -119,13 +119,11 @@ describe("sessions_create", () => {
       expect(idle.agentId).toBe("main");
       expect(idle).not.toHaveProperty("message");
       expect(idle.idempotencyKey).not.toBe(request.params.idempotencyKey);
-    }, authority);
+    });
   });
 
   it("rejects blank work, creation aliases, lineage, and unverified selectors before dispatch", async () => {
-    const { authority } = issueAuthority();
-    await withSessionToolTestCaller(async () => {
-      const tool = expectDefined(createSessionsCreateTool(), "creation tool");
+    await withTool(async (tool) => {
       for (const args of [
         null,
         [],
@@ -147,56 +145,59 @@ describe("sessions_create", () => {
       );
       gateway.available = false;
       await expect(tool.execute("no-gateway", {})).rejects.toThrow(/in-process Gateway/);
-    }, authority);
+    });
     expect(gateway.request).not.toHaveBeenCalled();
   });
 
   it("uses only a verified selected participant's live operator authority", async () => {
-    const { authority } = issueAuthority();
-    const selected = createAdmittedRunOperatorAuthority({
-      profileId: "selected-requester",
-      scopes: ["operator.sessions.write"],
-      signal: new AbortController().signal,
-      assertCurrent: () => {},
+    const { authority: selected, revoke } = issueAuthority(undefined, "selected-requester");
+    const requesterOrigin = captureRequesterOrigin({
+      sessionKey: "agent:main:main",
+      operatorProfileId: selected.profileId,
+      messageProvider: "webchat",
+      senderId: "selected-sender",
     });
-    await withSessionToolTestCaller(async () => {
-      const tool = expectDefined(createSessionsCreateTool(), "creation tool");
-      await withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          personalToolParticipants: {
-            accept: () => {},
-            close: () => {},
-            resolve: (user) => {
-              if (user !== selected.profileId) {
-                throw new Error("Select a current participant");
-              }
-              return {
-                profileId: selected.profileId,
-                senderId: "selected-sender",
-                name: "Selected participant",
-                operatorAuthority: selected,
-                assertCurrent: () => selected.assertCurrent(),
-              };
-            },
+    const participants = createReplyTurnParticipants({
+      operatorAuthority: issueAuthority().authority,
+    });
+    participants.accept({ operatorAuthority: selected });
+    try {
+      await withTool(async (tool) => {
+        await withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            personalToolParticipants: participants,
           },
-        },
-        async () => {
-          await expect(tool.execute("ambiguous", {})).rejects.toThrow(
-            "Select a current participant",
-          );
-          await tool.execute("selected", { user: selected.profileId });
-        },
-      );
-      expect(gateway.request).toHaveBeenCalledOnce();
-      expect(gateway.request.mock.calls[0]?.[0].sessionCreation.actor.id).toBe(selected.profileId);
-      expect(gateway.request.mock.calls[0]?.[0].params).not.toHaveProperty("user");
-    }, authority);
+          async () => {
+            await tool.execute("incumbent", {});
+            await expect(
+              tool.execute("missing-origin", { user: selected.profileId }),
+            ).rejects.toThrow("Selected user's requester identity is unavailable");
+            expect(gateway.request).toHaveBeenCalledOnce();
+            participants.accept({ operatorAuthority: selected, requesterOrigin });
+            await tool.execute("selected", { user: selected.profileId });
+            revoke();
+            await expect(
+              tool.execute("revoked-selected", { user: selected.profileId }),
+            ).rejects.toThrow(/access changed|creation source revoked/);
+          },
+        );
+        expect(gateway.request).toHaveBeenCalledTimes(2);
+        expect(gateway.request.mock.calls[1]?.[0].sessionCreation.actor).toEqual({
+          type: "human",
+          source: "profile",
+          id: selected.profileId,
+        });
+        expect(gateway.request.mock.calls[1]?.[0].agentToolCaller.requesterOrigin).toEqual(
+          requesterOrigin,
+        );
+        expect(gateway.request.mock.calls[1]?.[0].params).not.toHaveProperty("user");
+      });
+    } finally {
+      participants.close();
+    }
   });
-});
-
-describe("default guest session tool exposure", () => {
   it.each([
     { deny: [], added: ["sessions", "sessions_create"], renameOnly: true },
     { deny: ["sessions_create"], added: ["sessions"], renameOnly: true },

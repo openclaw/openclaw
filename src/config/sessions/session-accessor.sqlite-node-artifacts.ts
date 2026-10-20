@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -610,6 +612,13 @@ export function deleteSessionNodeArtifacts(
 function readSessionNodeArtifactTables(
   database: Pick<OpenClawAgentDatabase, "db">,
 ): ReadonlySet<string> {
+  if (isPostgresSqlConnection(database.db)) {
+    const facts = getPostgresPhysicalFacts(database.db);
+    if (!facts) {
+      throw new Error("Session artifacts require admitted PostgreSQL schema facts");
+    }
+    return new Set(facts.catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table));
+  }
   const schema = getAdmittedSqliteSchemaFacts(database.db);
   if (schema) {
     return schema.tables;

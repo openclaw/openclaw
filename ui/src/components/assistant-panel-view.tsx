@@ -1,35 +1,28 @@
 import { Show, For, type Accessor } from "solid-js";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import type { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
 import type { JSX } from "../types/solid-elements.d.ts";
-import type { AssistantPanelController } from "./assistant-panel-controller.ts";
+import type { AssistantPanelOwner } from "./assistant-panel-controller.ts";
 import { AssistantPanelLoading } from "./assistant-panel-loading.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { LazyElementStateView } from "./solid/lazy-view-error.tsx";
 import { askBrandLabel } from "./theme-brand-label.ts";
 
-export function AssistantPanelView(props: {
-  controller: AssistantPanelController;
-  revision: Accessor<number>;
-}): JSX.Element {
-  const state = () => {
-    props.revision();
-    return props.controller;
-  };
+export function AssistantPanelView(props: { state: Accessor<AssistantPanelOwner> }): JSX.Element {
+  const state = () => props.state();
   const resizer = () => state().dockLayout.resizer;
-  const visible = () => state().available && state().dockLayout.open;
+  const visible = () => state().available() && state().dockLayout.open;
   const dock = () => state().dockLayout.dock;
   const session = () => {
-    const destination = state().destination;
+    const destination = state().destination();
     return typeof destination === "string" ? undefined : destination.params;
   };
-  const target = () => session() ?? state().homeTarget;
+  const target = () => session() ?? state().homeTarget();
   const destinationKind = () => {
-    const destination = state().destination;
+    const destination = state().destination();
     return typeof destination === "string" ? destination : "session";
   };
-  const contentDefined = () => state().contentDefined;
+  const contentDefined = () => state().contentDefined();
   const contentState = () => state().contentLoader.visibleState;
   const style = () =>
     dock() === "bottom"
@@ -66,7 +59,7 @@ export function AssistantPanelView(props: {
         <div class="assistant-panel-title">
           <openclaw-mascot
             mood={
-              state().destination === "custodian" && state().props.store?.sending
+              state().destination() === "custodian" && state().props.store?.sending
                 ? "thinking"
                 : "idle"
             }
@@ -90,7 +83,7 @@ export function AssistantPanelView(props: {
                   <button
                     type="button"
                     class="assistant-panel-tab"
-                    aria-pressed={state().destination === destination ? "true" : "false"}
+                    aria-pressed={state().destination() === destination ? "true" : "false"}
                     onClick={() => state().openDestination(destination)}
                   >
                     {destination === "home" ? t("assistantPanel.home") : askBrandLabel(t)}
@@ -101,7 +94,7 @@ export function AssistantPanelView(props: {
           </For>
         </div>
         <div class="rail-header__actions assistant-panel-actions">
-          {state().destination === "home" ? (
+          {state().destination() === "home" ? (
             <button
               class="rail-header__action assistant-panel-icon"
               type="button"
@@ -133,24 +126,22 @@ export function AssistantPanelView(props: {
       </header>
       {contentDefined() ? (
         <openclaw-assistant-panel-content
-          hidden={!visible() || (state().destination === "home" && !state().homeStarted)}
-          prop:active={visible() && (state().destination !== "home" || state().homeStarted)}
+          hidden={!visible() || (state().destination() === "home" && !state().homeStarted())}
+          prop:active={visible() && (state().destination() !== "home" || state().homeStarted())}
           prop:destination={destinationKind()}
           prop:sessionKey={target().sessionKey}
           prop:agentId={target().agentId}
           prop:sessionContext={session()?.context}
-          prop:context={state().context}
+          prop:context={state().context()}
           prop:pageRouteId={state().props.pageRouteId}
           prop:pageSessionKey={state().props.pageSessionKey}
           prop:pageAgentId={state().props.pageAgentId}
           prop:store={state().props.store}
-          onAssistant-custodian-store={(event: CustomEvent<CustodianSessionStore>) => {
-            state().acceptStore(event.detail);
-          }}
+          prop:onStore={(store) => state().acceptStore(store)}
         />
       ) : undefined}
       {visible() &&
-      (!contentDefined() || (state().destination === "home" && !state().homeStarted)) ? (
+      (!contentDefined() || (state().destination() === "home" && !state().homeStarted())) ? (
         contentState()?.status === "error" ? (
           <LazyElementStateView
             state={contentState()!}

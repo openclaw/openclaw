@@ -110,17 +110,16 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     logWsControl,
   } = params;
 
-  const sendFrame = async (obj: unknown): Promise<number> =>
+  const sendFrame = async (obj: unknown, uncompressed = false): Promise<number> =>
     await new Promise<number>((resolve, reject) => {
       const encoded = JSON.stringify(obj);
       assertRemoteControlUiIngressCurrent(remoteIngress);
-      socket.send(encoded, (err) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(Buffer.byteLength(encoded));
-      });
+      const sent = (err?: Error) => (err ? reject(err) : resolve(Buffer.byteLength(encoded)));
+      if (uncompressed && socket.sendUncompressed) {
+        socket.sendUncompressed(encoded, sent);
+      } else {
+        socket.send(encoded, sent);
+      }
     });
 
   const configSnapshot = getRuntimeConfig();
@@ -214,11 +213,11 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     let decoded: unknown;
     try {
       decoded = JSON.parse(rawDataToString(data));
-    } catch (err) {
+    } catch {
       setHandshakeState("failed");
-      setCloseCause("parse-error", { error: formatForLog(err) });
-      logGateway.error(`parse error: ${formatForLog(err)}`);
-      logWs("out", "parse-error", { connId, error: formatForLog(err) });
+      setCloseCause("parse-error", { error: "invalid JSON" });
+      logGateway.error("parse error: invalid JSON");
+      logWs("out", "parse-error", { connId, error: "invalid JSON" });
       close(1007, "invalid JSON");
       return;
     }
@@ -365,7 +364,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           const sendStartedAt = performance.now();
           let bytes: number;
           try {
-            bytes = await sendFrame(response);
+            // Hello carries device tokens; compressed length must not leak them.
+            bytes = await sendFrame(response, true);
           } catch (error) {
             diagnostics?.response("unavailable");
             throw error;
@@ -468,36 +468,40 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           broadcastNodePairingResult,
           releasePendingNodePairingCleanup,
         } satisfies GatewayConnectPhaseContext;
-        await GatewayRpcDiagnostics.runHandler(async () => {
-          try {
-            connectPhase = "auth";
-            const authenticated = await authenticateGatewayConnect(phaseContext);
-            if (!authenticated) {
-              return;
+        await GatewayRpcDiagnostics.runHandler(
+          "connect",
+          async () => {
+            try {
+              connectPhase = "auth";
+              const authenticated = await authenticateGatewayConnect(phaseContext);
+              if (!authenticated) {
+                return;
+              }
+              const deviceStartedAt = performance.now();
+              connectPhase = "device";
+              const deviceAuthorized = await authorizeGatewayConnectDevice(
+                phaseContext,
+                authenticated,
+              );
+              phaseContext.recordAttachTiming("deviceAuthorizationMs", deviceStartedAt);
+              if (!deviceAuthorized) {
+                return;
+              }
+              connectPhase = "attach";
+              await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
+              runDetachedConnectWork(
+                () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
+                (error) =>
+                  logGateway.debug(`connection model catalog unavailable: ${formatForLog(error)}`),
+              );
+            } finally {
+              if (rejectionWrite) {
+                await rejectionWrite;
+              }
             }
-            const deviceStartedAt = performance.now();
-            connectPhase = "device";
-            const deviceAuthorized = await authorizeGatewayConnectDevice(
-              phaseContext,
-              authenticated,
-            );
-            phaseContext.recordAttachTiming("deviceAuthorizationMs", deviceStartedAt);
-            if (!deviceAuthorized) {
-              return;
-            }
-            connectPhase = "attach";
-            await attachAuthenticatedGatewayConnect(phaseContext, deviceAuthorized);
-            runDetachedConnectWork(
-              () => publishConnectModelCatalog(params, authenticatedRequestDispatcher),
-              (error) =>
-                logGateway.debug(`connection model catalog unavailable: ${formatForLog(error)}`),
-            );
-          } finally {
-            if (rejectionWrite) {
-              await rejectionWrite;
-            }
-          }
-        }, diagnostics);
+          },
+          diagnostics,
+        );
         return;
       }
       await authenticatedRequestDispatcher.dispatch(

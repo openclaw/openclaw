@@ -4,16 +4,18 @@ const commandRpcMocks = vi.hoisted(() => ({
   codexControlRequest: vi.fn() as Mock,
 }));
 const pinnedConnectionMocks = vi.hoisted(() => ({
-  client: { connectionId: "pinned-catalog-client" },
+  client: {
+    connectionId: "pinned-catalog-client",
+    getInstanceId: () => "pinned-catalog-client",
+  },
   getClient: vi.fn() as Mock,
   releaseClient: vi.fn() as Mock,
   request: vi.fn() as Mock,
 }));
 const transcriptMirrorMocks = vi.hoisted(() => ({
-  importCodexThreadHistoryToTranscript: vi.fn(async () => ({
-    importedMessages: 0,
-    omittedMessages: 0,
-  })),
+  importCodexThreadHistoryToTranscript: vi.fn<
+    typeof import("./app-server/transcript-mirror.js").importCodexThreadHistoryToTranscript
+  >(async () => undefined),
 }));
 const nodeHostMocks = vi.hoisted(() => ({
   runNodePtyCommand: vi.fn(async () => ({ exitCode: 0 })),

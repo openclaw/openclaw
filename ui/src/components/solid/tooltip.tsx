@@ -1,10 +1,12 @@
 import type { JSX } from "@solidjs/web";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { createOverlayAnchor } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../overlay-lifecycle.ts";
-import type { TooltipController, TooltipPolicyProps } from "../tooltip-controller.ts";
+import type { TooltipOwner, TooltipPolicyProps } from "../tooltip-owner.ts";
 import { TooltipElement, type TooltipRuntime } from "../tooltip.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
+import kbdStyles from "../kbd.css?inline";
 import overlayStyles from "./overlay.css?inline";
 import tooltipStyles from "./tooltip.css?inline";
 
@@ -15,7 +17,7 @@ export function mountTooltipView(
   host: TooltipElement,
   surface: HTMLDivElement,
   rich: HTMLSpanElement,
-  policy: TooltipController,
+  policy: TooltipOwner,
 ): TooltipRuntime {
   const content = host.ownerDocument.createElement("span");
   content.className = "tooltip-content";
@@ -36,15 +38,14 @@ export function mountTooltipView(
     interactionElements: () => (policy.trigger ? [policy.trigger] : []),
     onRootChange: (root) =>
       root === host.shadowRoot
-        ? retainShadowStyles(root, [overlayStyles, tooltipStyles])
+        ? retainShadowStyles(root, [overlayStyles, tooltipStyles, kbdStyles])
         : undefined,
   });
   overlay.bindSurface(surface);
   overlay.setParent(findOverlayParent(policy.trigger ?? host));
+  // Apply accepted-open policy synchronously; only completion events need forwarding.
   const unsubscribe = overlay.subscribe((open) => policy.acceptedOpen(open));
-  // Requests cross the shadow boundary; only completion events need forwarding.
-  const events = ["overlay-after-show", "overlay-after-hide"] as const;
-  const listeners = events.map((type) => {
+  const listeners = ["overlay-after-show", "overlay-after-hide"].map((type) => {
     const listener = (event: Event) => {
       if (event.target !== surface) {
         return;
@@ -58,8 +59,7 @@ export function mountTooltipView(
         event.preventDefault();
       }
     };
-    surface.addEventListener(type, listener);
-    return () => surface.removeEventListener(type, listener);
+    return listen(surface, type, listener);
   });
   const updateAnchor = () => {
     const trigger = policy.trigger;
@@ -119,6 +119,7 @@ export const Tooltip = Object.assign(
         prop:hoverDismissDelay={props.hoverDismissDelay}
         prop:delay={props.delay}
         prop:describe={props.describe ?? true}
+        prop:descriptionTarget={props.descriptionTarget}
         prop:pointerThrough={props.pointerThrough ?? false}
         prop:autoSize={props.autoSize ?? false}
         prop:disabled={props.disabled ?? false}

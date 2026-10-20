@@ -35,8 +35,6 @@ export async function installClawMcpServersStateless(
   plan: ClawAddPlan,
   options: ClawMutationStateOptions & {
     assertForwardCurrent?: () => void;
-    setMcpServer?: typeof setConfiguredMcpServer;
-    listMcpServers?: typeof listConfiguredMcpServers;
     nowMs?: number;
   } = {},
 ): Promise<PersistedClawMcpServerRef[]> {
@@ -56,7 +54,7 @@ export async function installClawMcpServersStateless(
           refs,
         );
       }
-      const listed = await (options.listMcpServers ?? listConfiguredMcpServers)();
+      const listed = await listConfiguredMcpServers();
       assertCurrent();
       if (!listed.ok) {
         throw new ClawMcpInstallError("mcp_preflight_failed", listed.error, refs);
@@ -85,7 +83,7 @@ export async function installClawMcpServersStateless(
       };
       if (!configured) {
         try {
-          const result = await (options.setMcpServer ?? setConfiguredMcpServer)({
+          const result = await setConfiguredMcpServer({
             name: action.id,
             server,
             createOnly: true,
@@ -115,10 +113,7 @@ export async function installClawMcpServersStateless(
 /** Remove unchanged MCP entries introduced before a failed Add published its agent. */
 export async function rollbackStatelessClawMcpServers(
   refs: PersistedClawMcpServerRef[],
-  options: ClawMutationStateOptions & {
-    listMcpServers?: typeof listConfiguredMcpServers;
-    unsetMcpServer?: typeof unsetConfiguredMcpServer;
-  } = {},
+  options: ClawMutationStateOptions = {},
 ): Promise<string[]> {
   const errors: string[] = [];
   for (const ref of refs.toReversed()) {
@@ -131,7 +126,7 @@ export async function rollbackStatelessClawMcpServers(
           assertOwned();
           options.assertCurrent?.();
         };
-        const listed = await (options.listMcpServers ?? listConfiguredMcpServers)();
+        const listed = await listConfiguredMcpServers();
         assertCurrent();
         if (!listed.ok) {
           throw new Error(listed.error);
@@ -144,7 +139,7 @@ export async function rollbackStatelessClawMcpServers(
         if (digestClawMcpServer(configured) !== ref.configDigest) {
           return;
         }
-        const removed = await (options.unsetMcpServer ?? unsetConfiguredMcpServer)({
+        const removed = await unsetConfiguredMcpServer({
           name: ref.name,
           expectedServer: configured,
           skipLifecycleLease: true,

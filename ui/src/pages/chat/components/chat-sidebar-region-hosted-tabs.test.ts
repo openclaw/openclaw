@@ -8,7 +8,6 @@ import {
   type PanelHostedTabsElement,
 } from "../../../components/panel-hosted-tabs.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import { sidebarPanelDefinitions } from "../chat-pane-embedded-panels.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import { activatePanel, openSlot, type SidebarSlotId } from "../sidebar-layout.ts";
@@ -33,10 +32,6 @@ const secondTab: PanelHostedTab = {
 };
 const tabs = [firstTab, secondTab];
 
-function HostedPanel(props: { panel: HTMLElement }) {
-  return props.panel;
-}
-
 async function mount(
   options: {
     tabs?: PanelHostedTab[];
@@ -57,7 +52,10 @@ async function mount(
   if (wrapped) {
     panel.setAttribute("data-sidebar-panel-host", "");
   }
-  const content = wrapped ? solidContent(HostedPanel, { panel }) : panel;
+  const content = wrapped ? document.createElement("section") : panel;
+  if (wrapped) {
+    content.append(panel);
+  }
   const region = document.createElement("openclaw-chat-sidebar-region");
   region.panelIdPrefix = `sidebar-region-fixture-${shells.length}`;
   region.layout = activatePanel(
@@ -67,6 +65,7 @@ async function mount(
   region.panelDefinitions = sidebarPanelDefinitions().map((definition) =>
     Object.assign(definition, {
       content: definition.slot === slot ? content : null,
+      panelHost: definition.slot === slot ? panel : undefined,
     }),
   );
   region.fetchFavicon = options.fetchFavicon;
@@ -83,7 +82,11 @@ async function mount(
   shell.className = "sidebar-region";
   const outlet = document.createElement("div");
   outlet.className = "sidebar-region__right-runtime";
-  shell.append(region, outlet);
+  const header = document.createElement("div");
+  const primary = document.createElement("div");
+  primary.className = "sidebar-region__primary";
+  region.elements = { shell, primary, header, outlet };
+  shell.append(header, region, primary, outlet);
   document.body.append(shell);
   shells.push(shell);
   await region.updateComplete;

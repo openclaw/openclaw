@@ -121,7 +121,7 @@ describe("runBrowserHatchHandoff", () => {
         },
         prompter,
       });
-      expect(result).toEqual({ handedOff: true });
+      expect(result).toBe(true);
       const url = new URL(sharedMocks.openUrlPrivately.mock.calls[0]![0]);
       expect(url.pathname).toBe("/custodian");
       expect(url.searchParams.get("onboarding")).toBe("1");
@@ -150,9 +150,7 @@ describe("runBrowserHatchHandoff", () => {
         ]);
       const prompter = createWizardPrompter();
       const result = await runHandoff({ config: {}, prompter }, change === "new-tab" ? 0 : 60_000);
-      expect(result).toEqual(
-        change === "new-tab" ? { handedOff: true } : { handedOff: false, reason: "timeout" },
-      );
+      expect(result).toBe(change === "new-tab");
       expect(Date.now()).toBe(change === "new-tab" ? 0 : 60_000);
       if (change !== "new-tab") {
         expect(prompter.note).not.toHaveBeenCalledWith(
@@ -168,9 +166,7 @@ describe("runBrowserHatchHandoff", () => {
     async (gui) => {
       sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: gui });
       const prompter = createWizardPrompter();
-      expect(await runHandoff({ config: {}, prompter, agentId: "coordinator" })).toEqual({
-        handedOff: true,
-      });
+      expect(await runHandoff({ config: {}, prompter, agentId: "coordinator" })).toBe(true);
       if (gui) {
         expect(sharedMocks.openUrlPrivately).toHaveBeenCalledWith(
           expect.stringContaining("?session=agent%3Acoordinator%3Amain#bootstrapToken="),
@@ -212,10 +208,7 @@ describe("runBrowserHatchHandoff", () => {
       sharedMocks.callGateway.mockReset().mockResolvedValue([]);
       vi.stubEnv("SSH_CONNECTION", "192.0.2.1 12345 192.0.2.2 22");
       const prompter = createWizardPrompter();
-      expect(await runHandoff({ config: {}, prompter }, 300_000)).toEqual({
-        handedOff: false,
-        reason: "timeout",
-      });
+      expect(await runHandoff({ config: {}, prompter }, 300_000)).toBe(false);
       expect(Date.now()).toBe(300_000);
       expect(sharedMocks.openUrlPrivately).toHaveBeenCalledWith(browserUrl);
       expect(displayedNotes(prompter)).toContain("ssh -N -L 18789:127.0.0.1:18789");
@@ -329,7 +322,7 @@ describe("runBrowserHatchHandoff", () => {
         prompter: createWizardPrompter(),
         suppressTokenOutput: reason === "suppressed",
       });
-      expect(result).toEqual({ handedOff: false, reason: "target-unavailable" });
+      expect(result).toBe(false);
       expect(sharedMocks.detectBrowserOpenSupport).not.toHaveBeenCalled();
       expect(sharedMocks.waitForControlUiDocument).not.toHaveBeenCalled();
       expect(sharedMocks.issueControlUiBrowserHandoff).not.toHaveBeenCalled();
@@ -343,11 +336,15 @@ describe("runBrowserHatchHandoff", () => {
       reason: "Control UI build failed.",
       status: 503,
     });
-    expect(await runHandoff({ config: {}, prompter: createWizardPrompter() })).toEqual({
-      handedOff: false,
-      reason: "target-unavailable",
-    });
+    expect(await runHandoff({ config: {}, prompter: createWizardPrompter() })).toBe(false);
     expect(sharedMocks.callGateway).not.toHaveBeenCalled();
+    expect(sharedMocks.issueControlUiBrowserHandoff).not.toHaveBeenCalled();
+    expect(sharedMocks.openUrlPrivately).not.toHaveBeenCalled();
+  });
+
+  it("does not issue browser credentials when the presence request fails", async () => {
+    sharedMocks.callGateway.mockReset().mockRejectedValue(new Error("gateway unavailable"));
+    expect(await runHandoff({ config: {}, prompter: createWizardPrompter() })).toBe(false);
     expect(sharedMocks.issueControlUiBrowserHandoff).not.toHaveBeenCalled();
     expect(sharedMocks.openUrlPrivately).not.toHaveBeenCalled();
   });
@@ -368,10 +365,7 @@ describe("runBrowserHatchHandoff", () => {
     sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
     sharedMocks.issueControlUiBrowserHandoff.mockRejectedValue(new Error("state unavailable"));
     const prompter = createWizardPrompter();
-    expect(await runHandoff({ config: {}, prompter })).toEqual({
-      handedOff: false,
-      reason: "target-unavailable",
-    });
+    expect(await runHandoff({ config: {}, prompter })).toBe(false);
     expect(sharedMocks.openUrlPrivately).not.toHaveBeenCalled();
     expect(prompter.note).not.toHaveBeenCalled();
   });

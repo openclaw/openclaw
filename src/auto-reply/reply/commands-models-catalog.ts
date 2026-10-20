@@ -356,7 +356,7 @@ export async function loadModelsProviderData(
   for (const modelConfig of [cfg.agents?.defaults?.model, cfg.agents?.defaults?.imageModel]) {
     if (typeof modelConfig === "string") {
       addRawModelRef(modelConfig);
-    } else if (modelConfig && typeof modelConfig === "object") {
+    } else if (modelConfig) {
       addRawModelRef(modelConfig.primary);
       for (const fallback of modelConfig.fallbacks ?? []) {
         addRawModelRef(fallback);

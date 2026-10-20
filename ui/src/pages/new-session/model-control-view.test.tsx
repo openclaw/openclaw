@@ -2,6 +2,7 @@ import { createSignal, flush, untrack } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { invalidateModelCatalogCache } from "../../lib/model-catalog-cache.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionModelControlView } from "./model-control-view.tsx";
 import { contextWith } from "./model-control.test-support.ts";
@@ -39,7 +40,16 @@ it("keeps one mounted model view live without depending on draft revisions", asy
     }
     const trigger = () => view.container.querySelector("[data-chat-model-select]");
     const mountedTrigger = trigger();
+    mountedTrigger?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    flush();
+    await waitForSolid(() =>
+      expect(
+        view.container.querySelector('[data-chat-model-option="openai/gpt-5.5"]'),
+      ).not.toBeNull(),
+    );
     const mountedOption = view.container.querySelector('[data-chat-model-option="openai/gpt-5.5"]');
+    expect(mountedOption).not.toBeNull();
+    render.mockClear();
     // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the receiver.
     const originalLowerCase = String.prototype.toLocaleLowerCase;
     const labels = vi.spyOn(String.prototype, "toLocaleLowerCase").mockImplementation(function (

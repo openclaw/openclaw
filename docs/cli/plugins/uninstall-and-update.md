@@ -180,15 +180,21 @@ the final applied receipt. Successful publication emits `plugins.changed` and
 logs the applied replacement. If work exceeds the budget, the reload fails once
 and the previous generation resumes serving; unfinished runs are not forcibly
 disposed. Retry `openclaw plugins reload <id>` after that work finishes, or use
-`openclaw plugins reload <id> --wait` to wait without a deadline for admitted work.
+`openclaw plugins reload <id> --wait` for a longer, ten-minute drain budget.
+New agent runs across the Gateway wait behind either reload until it finishes
+or rolls back; with `--wait`, admitted-work draining alone can delay scheduled
+work for ten minutes. Later cleanup and recovery have their own deadlines.
 
 `--wait` keeps new runs behind the same replacement gate. Press Ctrl+C to cancel
 the wait; disconnecting its Gateway request also cancels it. Before publication,
 cancellation restores the previous generation when recovery succeeds, without
 cancelling admitted runs. Once publication commits, cancellation does not undo it.
 Service shutdown, resource cleanup, and recovery keep their existing deadlines.
-Detailed readiness exposes the pending reload; an explicit wait has no drain
-deadline. Incoming messages retain their channel's existing queue and replay
+Detailed readiness, `openclaw status`, and `status --json` (`pluginReload`)
+expose the pending reload, its drain deadline, and why new runs are waiting.
+The ten-minute budget is shared across drain stages. On expiry, the reload fails
+and restores the previous generation without cancelling its admitted work.
+Incoming messages retain their channel's existing queue and replay
 contract; this option does not add durable ingress to channels that lack it.
 Run this maintenance command outside a turn that itself holds the target plugin:
 waiting for that turn while it waits for reload cannot make progress. Agents can

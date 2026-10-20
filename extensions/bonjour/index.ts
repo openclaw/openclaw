@@ -19,13 +19,7 @@ export default definePluginEntry({
     api.registerGatewayDiscoveryService({
       id: "bonjour",
       advertise: async (ctx) => {
-        const [
-          { startGatewayBonjourAdvertiser },
-          { registerUncaughtExceptionHandler, registerUnhandledRejectionHandler },
-        ] = await Promise.all([
-          import("./src/advertiser.js"),
-          import("openclaw/plugin-sdk/runtime"),
-        ]);
+        const { startGatewayBonjourAdvertiser } = await import("./src/advertiser.js");
         return startGatewayBonjourAdvertiser(
           {
             instanceName: formatBonjourInstanceName(ctx.machineDisplayName),
@@ -38,11 +32,7 @@ export default definePluginEntry({
             cliPath: ctx.cliPath,
             minimal: ctx.minimal,
           },
-          {
-            logger: api.logger,
-            registerUncaughtExceptionHandler,
-            registerUnhandledRejectionHandler,
-          },
+          api.logger,
         );
       },
     });

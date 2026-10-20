@@ -53,7 +53,9 @@ export async function readCronDeliveryTargetContexts(
     }
   });
   const recovered = await extractDeliveryInfoBatch(
-    planned.map((item) => (item.ok ? item.value.threadSessionKey : undefined)),
+    planned.map((item) =>
+      item.ok ? { sessionKey: item.value.threadSessionKey, agentId: item.value.agentId } : {},
+    ),
     { cfg },
   );
   const targets: Array<{ index: number; plan: CronDeliveryReadPlan }> = [];

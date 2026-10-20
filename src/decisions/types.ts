@@ -113,7 +113,8 @@ export type DecisionOutcome =
 export interface DecisionProviderV1 {
   readonly id: string;
   readonly contractVersion: 1;
-  /** Prepared local credential availability only; must not perform I/O. */
+  /** Prepared local credential availability only; must not perform I/O.
+   * Omission leaves readiness unconfirmed without blocking evaluation. */
   isReady?(): boolean;
   evaluate(
     batch: DecisionBatch,
@@ -144,7 +145,10 @@ export interface DecisionRuntimeV1 {
       /** Omit for the default role; agent-owned work supplies its owner agent. */
       readonly agentId?: string;
       readonly purpose: string;
+      /** Defaults to requested; optional work leaves capacity for requested evaluations. */
+      readonly priority?: "requested" | "optional";
       readonly rubricVersion: string;
+      /** Budget includes preparation; provider cleanup remains physically awaited. */
       readonly timeoutMs: number;
       readonly signal: AbortSignal;
     },

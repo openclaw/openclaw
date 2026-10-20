@@ -64,6 +64,31 @@ Unavailable storage or an unusable matching OAuth profile continues to interacti
 sign-in. A matching account identity alone does not make expired credentials usable.
 A failed selected import stops the operation instead of silently starting a different login.
 
+## Read a selected personal account
+
+`isUserModelAuthProfileId` and `withPersonalAuthProfileStore` from
+`openclaw/plugin-sdk/provider-auth-runtime` route an explicitly selected personal
+account through its credential owner. The ID predicate recognizes a storage
+locator; it does not authorize access.
+
+Inside the store callback, await `owner.read()` to prepare the selected credential.
+Before using that credential or disclosing an account-specific result, compare it
+with `owner.readCurrentCredential()`. This synchronous check uses owner-published
+facts without SQL. Reconnects, ownership changes, and unresolved writes invalidate
+the retained authority. Keep the asynchronous operation inside the callback and
+retain the caller's current-client and cancellation checks at each external effect.
+
+For an agent or shared auth store, `withAuthProfileStoreAtEffect` on the same
+runtime surface retains the admitted read sources for its callback. It requires
+a live shared-state owner. Each read groups the selected sources into one worker
+request. Await
+`reader.read()` at disclosure to read current worker-owned rows, then compare the
+selected credential or account with the prepared request. This read bypasses
+runtime snapshots and the row cache. Call `reader.assertCurrent()` immediately
+before the effect to reject intervening owner writes without SQL. Keep caller
+authorization and cancellation checks there too; a prepared store alone does not
+authorize disclosure. The reader expires when the callback returns.
+
 ## Loopback OAuth callbacks
 
 Bundled providers use `startProviderOAuthLoopbackCallbackServer` from
@@ -82,6 +107,29 @@ token requests and persistence; the listener deadline does not cancel that work.
 By default, the listener binds every loopback address resolved for the redirect
 hostname. `bindHostname` adds a loopback host. Use `bindOnlyHostname` instead to
 preserve a provider's exact Node bind host (`localhost`, `127.0.0.1`, or `::1`).
+
+## Declare physical credential ownership
+
+Normal providers use agent-scoped profiles and configured provider credentials by
+default. A provider whose credentials are protected plugin-global settings can
+declare `authScope: "plugin"` on its canonical `modelCatalog.providers` entry and
+its runtime provider definition. These declarations must agree; unavailable or
+disabled executables must not turn a plugin credential request into an agent-profile
+lookup.
+
+Plugin scope uses the selected live provider's synchronous `resolveSyntheticAuth`
+hook. Read the existing host-prepared plugin secret input there; do not resolve cold
+SecretRefs or copy them into agent auth stores. The common owner rechecks instance,
+hook identity and credential revision around that read. Cached/restored synthetic
+bearer results cannot replace live authority. Explicit or preferred profile pins
+are rejected before the hook, with no environment or `models.providers` fallback.
+
+A declared no-auth marker establishes credential eligibility only. It does not establish service
+health, successful inference, or verified local model artifacts. Catalog readiness
+uses this same live source and treats missing prepared evidence as unknown or
+unavailable, never as an implicit profile grant. Existing agent-scoped providers
+retain their normal account precedence. Tool preparations that explicitly exclude
+plugin auth also exclude agent-credential fallback for plugin-scoped providers.
 
 ## Handle model access after sign-in
 
@@ -173,6 +221,14 @@ the caller explicitly supplies the existing retry options.
 Keep `postJsonRequest` for streaming or binary responses, custom response/error
 parsers, and code that needs to retain the response transport. Those callers
 must release it in `finally`.
+
+Use `fetchWithProviderHttpGuard` from `openclaw/plugin-sdk/provider-http` when
+the provider owns its request admission, response parsing, and release lifetime.
+It accepts guarded-fetch options and returns the response and `release` callback.
+Always release in `finally`. Eligible direct requests share the host's bounded
+provider connection pool after fresh DNS and SSRF validation on every request.
+Proxy and custom TLS routes retain their existing transport policy. Plugins do
+not retain or close the shared pool; the Gateway owns its shutdown.
 
 ## Walkthrough
 
@@ -348,6 +404,13 @@ must release it in `finally`.
       },
     });
     ```
+
+    Auth callbacks return an authoring `configPatch` that the host applies.
+    A plugin-owned setup flow that applies its own result should use
+    `applyProviderAuthConfigPatch(config, result.configPatch, result)` from
+    `openclaw/plugin-sdk/provider-auth`. It preserves the host's merge semantics,
+    including individual header deletions and `replaceDefaultModels`; do not
+    shallow-spread an auth patch into runtime config.
 
     `registerModelCatalogProvider` is the newer control-plane catalog surface
     for list/help/picker UI, covering `text`, `voice`, `image_generation`,
@@ -594,6 +657,10 @@ runs defaults before the caller hook and wire constraints after its result settl
 each adapter keeps its own replacement/null policy. The stream mapper preserves
 synchronous returns without importing the embedded runner. These are bundled
 implementation helpers, not new third-party SDK contracts.
+
+`applyOpenAICompletionsToolReasoning` shares the native tools/reasoning wire
+policy with pass-through adapters through that private seam. Callers qualify
+the endpoint and normalize vendor-prefixed model IDs before applying it.
 
 Injected-client adapters also reuse the Anthropic thinking and output-cap owners
 through the private `provider-transport-runtime` seam. Client creation and

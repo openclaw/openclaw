@@ -1,4 +1,5 @@
 import { isMainThread } from "node:worker_threads";
+import { resolveDatabasePathKey } from "../../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   resolveOpenClawAgentSqlitePath,
@@ -183,7 +184,11 @@ export function resolveSessionTranscriptDatabasePath(
     return memory.path;
   }
   const resolved = resolveSqliteTranscriptScope(target);
-  return resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
+  const databasePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
+  // Unbound memory owners use lexical namespaces, not physical filesystem identities.
+  return isIncognitoSessionKey(target.sessionKey)
+    ? databasePath
+    : resolveDatabasePathKey(databasePath);
 }
 
 export function resolveSessionTranscriptReadTarget(

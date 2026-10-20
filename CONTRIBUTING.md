@@ -82,7 +82,7 @@ must declare their own development dependencies rather than rely on hoisting.
 ## Before You PR
 
 - Use **Node 24.16+ LTS** or **Node 26.1+** for source checkouts. Older Node releases can truncate SQLite TEXT reads; Node 22, 23, and 25 are unsupported. See [Node install guidance](docs/install/node.md) if your local version is too old.
-- Local Vitest 5 tests and `pnpm dev` default to the automatically cached, pinned OpenClaw Bun fork. Use `OPENCLAW_VITEST_RUNTIME=node pnpm test <file>` (or `pnpm dev`) to force Node; CI and unsupported platforms retain Node. See [local test runtimes](https://docs.openclaw.ai/reference/test/local#core-commands).
+- Local tests and `pnpm dev` use the pinned OpenClaw Bun fork. See [local development tools](https://docs.openclaw.ai/reference/test/local#openclaw-bun-fork) for supported platforms, automatic staging, runtime/tool overrides, and fallbacks, and [CI runtime selection](https://docs.openclaw.ai/ci/pipeline#test-runtime-selection) for CI policy.
 - Test locally with your OpenClaw instance
 - An explicit maintainer repair-and-land request covers internal database scheduling, admission, and lifecycle decisions. The implementer owns the design and its verification. Get separate design acceptance when changing public contracts, schemas, durability, retention, or permissions; see the [database schema review checkpoint](docs/reference/database-schemas.md#review-checkpoint-for-material-changes).
 - External PRs must describe the user, product, or operational problem in **What Problem This Solves** and include useful validation in **Evidence**. Focused tests, CI results, screenshots, recordings, terminal output, live observations, redacted logs, and artifact links all count. Reviewers will inspect the code, tests, and CI; use the PR body to explain intent and make validation easy to understand.
@@ -159,6 +159,11 @@ See [security review checks](https://docs.openclaw.ai/ci/pipeline#security-revie
 for check behavior and enforcement setup.
 
 ## Local commit hook
+
+`pnpm format` and the formatting hook share the [local development tool selector](https://docs.openclaw.ai/reference/test/local#openclaw-bun-fork).
+Use `OPENCLAW_FORMAT_TOOL=oxfmt pnpm format` to force oxfmt. The linked reference
+covers the pinned fork, supported platforms, overrides, fallbacks, and CI parity.
+Dedicated artifact formatters are listed in the [formatter caller inventory](scripts/README.md#formatting-and-lint-selection).
 
 The normal `pnpm install` setup enables the repository's pre-commit formatting hook
 when `core.hooksPath` is unset. Existing hook selections, including an explicitly

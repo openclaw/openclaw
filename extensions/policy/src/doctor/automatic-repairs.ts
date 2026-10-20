@@ -1,5 +1,6 @@
 // Policy automatic repairs apply only deterministic narrowing config changes.
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { ensureRecord } from "openclaw/plugin-sdk/collection-input-runtime";
 import type {
   HealthFinding,
   HealthRepairContext,
@@ -394,14 +395,4 @@ function isScopedInheritedChannelDefaultFinding(finding: HealthFinding): boolean
     hasScopedPolicyRequirement([finding]) &&
     finding.ocPath?.startsWith("oc://openclaw.config/channels/defaults/") === true
   );
-}
-
-function ensureRecord(parent: ConfigRecord, key: string): ConfigRecord {
-  const current = parent[key];
-  if (isRecord(current)) {
-    return current;
-  }
-  const next: ConfigRecord = {};
-  parent[key] = next;
-  return next;
 }

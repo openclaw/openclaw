@@ -1,30 +1,22 @@
-import { createEffect, createMemo, For, Show, untrack } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { ControlUiLinkReaderPreview } from "../../../../src/shared/control-ui-link-reader.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { availableLinkPreviewReaders } from "../../app/link-reader-routing.ts";
+import { SessionGitDiff } from "../../components/session-git-diff.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
-import "../../components/link-reader-hovercard-registration.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import "../../components/link-reader-hovercard-registration.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import {
+  orderSessionPullRequests,
+  sessionPullRequestStateIcons,
+} from "../../lib/session-pull-request-presentation.ts";
 import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 
 registerEnglishCatalog(registerActivityEnglish);
-
-function renderDiff(item: { additions?: number; deletions?: number }) {
-  return (
-    <>
-      {item.additions === undefined ? undefined : (
-        <span class="activity-feed__additions">+{item.additions.toLocaleString()}</span>
-      )}
-      {item.deletions === undefined ? undefined : (
-        <span class="activity-feed__deletions">−{item.deletions.toLocaleString()}</span>
-      )}
-    </>
-  );
-}
 
 function pullRequestPreview(pr: ControlUiSessionPullRequest): ControlUiLinkReaderPreview {
   return {
@@ -58,15 +50,6 @@ function pullRequestPreview(pr: ControlUiSessionPullRequest): ControlUiLinkReade
 }
 
 function PullRequest(props: { value: ControlUiSessionPullRequest }) {
-  const icon = () =>
-    (
-      ({
-        open: "gitPullRequest",
-        draft: "gitPullRequestDraft",
-        merged: "gitMerge",
-        closed: "gitPullRequestClosed",
-      }) as const
-    )[props.value.state];
   return (
     <a
       class="activity-feed__pr"
@@ -82,12 +65,12 @@ function PullRequest(props: { value: ControlUiSessionPullRequest }) {
       })}
     >
       <span class="activity-feed__git-icon" aria-hidden="true">
-        <Icon name={icon()} />
+        <Icon name={sessionPullRequestStateIcons[props.value.state]} />
       </span>
       <span class="activity-feed__git-label">
         {props.value.repo}#{props.value.number}
       </span>
-      {renderDiff(props.value)}
+      <SessionGitDiff classPrefix="activity-feed" item={props.value} />
     </a>
   );
 }
@@ -99,22 +82,28 @@ type ActivitySessionGitProps = {
 };
 
 export function ActivitySessionGit(props: ActivitySessionGitProps) {
+  const scope = createMemo(
+    () => ({ gateway: props.context.gateway, key: props.sessionKey ?? "" }),
+    { equals: (a, b) => a.gateway === b.gateway && a.key === b.key },
+  );
+  return (
+    <Show when={scope()} keyed>
+      {(source) => SessionGit(source, props)}
+    </Show>
+  );
+}
+
+function SessionGit(
+  source: { gateway: ApplicationContext["gateway"]; key: string },
+  props: ActivitySessionGitProps,
+) {
   const token = {};
-  const currentGateway = createMemo(() => props.context.gateway);
-  const sessionKey = createMemo(() => props.sessionKey ?? "");
-  const source = () => ({ gateway: currentGateway(), key: sessionKey() });
-  const initial = untrack(source);
-  const gatewayProjection = projectGateway(initial.gateway);
-  const projection = projectSource(initial, {
-    read: ({ gateway, key }) => sessionPullRequestsForGateway(gateway).get(key),
-    subscribe: ({ gateway }, notify) => sessionPullRequestsForGateway(gateway).subscribe(notify),
-    equality: "revision",
-  });
-  createEffect(source, ({ gateway, key }) => {
-    gatewayProjection.replaceSource(gateway);
-    projection.replaceSource({ gateway, key });
-    const store = sessionPullRequestsForGateway(gateway);
-    store.watch(token, [key], { foreground: true });
+  const store = sessionPullRequestsForGateway(source.gateway);
+  const gatewayProjection = projectGateway(source.gateway);
+  const projection = projectOwner(store, (owner) => owner.get(source.key));
+  // Each keyed Gateway/session scope owns exactly one remote watch.
+  onSettled(() => {
+    store.watch(token, [source.key], { foreground: true });
     return () => store.unwatch(token);
   });
   const connection = () => gatewayProjection.read().snapshot;
@@ -125,16 +114,17 @@ export function ActivitySessionGit(props: ActivitySessionGitProps) {
       ? undefined
       : current?.branch;
   });
-  const pullRequests = () => snapshot()?.pullRequests ?? [];
+  const pullRequests = createMemo(() => orderSessionPullRequests(snapshot()?.pullRequests ?? []));
   const visible = () => Boolean(branch() || pullRequests().length);
   const stale = () => snapshot()?.status !== "ready" || connection().phase !== "connected";
   return (
     <openclaw-activity-session-git>
       <Show when={visible()}>
         <openclaw-link-reader-hovercard-provider
-          prop:client={connection().phase === "connected" ? connection().client : null}
+          prop:client={connection().client}
           prop:readers={availableLinkPreviewReaders(connection())}
           prop:agentId={props.agentId ?? ""}
+          prop:sessionKey={props.sessionKey}
           prop:previewSeeds={pullRequests().map(pullRequestPreview)}
         >
           <div class="activity-feed__git">
@@ -148,7 +138,7 @@ export function ActivitySessionGit(props: ActivitySessionGitProps) {
                     <Icon name="gitBranch" />
                   </span>
                   <span class="activity-feed__git-label">{current().branch}</span>
-                  {renderDiff(current())}
+                  <SessionGitDiff classPrefix="activity-feed" item={current()} />
                 </span>
               )}
             </Show>

@@ -1,12 +1,47 @@
 import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import {
+  sanitizeInlineImageBase64,
+  sanitizeInlineImageDataUrlForStorage,
+} from "@openclaw/media-core/inline-image-data-url";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { AgentMessage } from "./runtime/index.js";
-import {
-  sanitizeTranscriptImageDataUrlField,
-  sanitizeTranscriptImageRecord,
-  shouldPreserveNestedTranscriptImageDataUrlFields,
-} from "./transcript-sanitize-images.js";
 import { sanitizeCompactionReplayState } from "./transcript-sanitize-replay.js";
+
+const isImageMimeType = (value: unknown): value is string =>
+  typeof value === "string" && /^image\//iu.test(value.trim());
+
+function sanitizeTranscriptImageRecord(
+  source: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const isImageBlock = source.type === "image";
+  const isBase64SourceBlock = source.type === "base64";
+  if ((!isImageBlock && !isBase64SourceBlock) || typeof source.data !== "string") {
+    return undefined;
+  }
+  const mimeTypeFields = ["mimeType", "mediaType", "media_type"].filter((key) =>
+    isImageMimeType(source[key]),
+  );
+  const mimeType = mimeTypeFields.map((key) => source[key]).find(isImageMimeType);
+  if (!mimeType) {
+    return undefined;
+  }
+  const sanitized = sanitizeInlineImageBase64({
+    base64: source.data,
+    mimeType: mimeType.trim().toLowerCase(),
+  });
+  if (!sanitized) {
+    return undefined;
+  }
+  const hasCanonicalMimeTypes = mimeTypeFields.every((key) => source[key] === sanitized.mimeType);
+  if (source.data === sanitized.base64 && hasCanonicalMimeTypes) {
+    return source;
+  }
+  const next: Record<string, unknown> = { ...source, data: sanitized.base64 };
+  for (const field of mimeTypeFields) {
+    next[field] = sanitized.mimeType;
+  }
+  return next;
+}
 
 function isPlainTranscriptObject(value: object): value is Record<string, unknown> {
   const prototype = Object.getPrototypeOf(value);
@@ -19,11 +54,7 @@ type TranscriptValueLocation =
   | "assistant-content-block"
   | "nested";
 
-type TranscriptAssistantRoute = {
-  api?: string;
-  model?: string;
-  provider?: string;
-};
+type TranscriptAssistantRoute = NonNullable<Parameters<typeof sanitizeCompactionReplayState>[1]>;
 
 const GOOGLE_REASONING_APIS = new Set([
   "google-generative-ai",
@@ -230,7 +261,7 @@ export function sanitizeOpenAIReasoningSignature(
   ) {
     return undefined;
   }
-  if (!hasEncryptedContent && typeof parsed.id !== "string") {
+  if (!hasEncryptedContent && parsed.id === undefined) {
     return undefined;
   }
   const replayMetadata = sanitizeOpenAIReasoningReplayMetadata(
@@ -238,7 +269,7 @@ export function sanitizeOpenAIReasoningSignature(
     route,
   );
   return JSON.stringify({
-    ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+    ...(parsed.id !== undefined ? { id: parsed.id } : {}),
     type: "reasoning",
     summary: [],
     ...(Array.isArray(parsed.content) && parsed.content.length === 0 ? { content: [] } : {}),
@@ -376,13 +407,17 @@ function sanitizeTranscriptStructuredValue(
     ) {
       sanitizedField = sanitizeOpenAICompletionsToolSignature(item);
     }
-    if (sanitizedField === undefined && typeof item === "string") {
-      sanitizedField = sanitizeTranscriptImageDataUrlField({
-        source,
-        key,
-        value: item,
-        preserveImageDataUrlFields,
-      });
+    if (
+      sanitizedField === undefined &&
+      typeof item === "string" &&
+      item.slice(0, "data:".length).toLowerCase() === "data:"
+    ) {
+      const isImageDataUrlField =
+        (preserveImageDataUrlFields && key === "url") ||
+        (source.type === "input_image" && key === "image_url") ||
+        ((source.type === "image" || source.type === "image_url") && key === "url") ||
+        (source.type === "image" && (key === "source" || key === "data"));
+      sanitizedField = isImageDataUrlField ? sanitizeInlineImageDataUrlForStorage(item) : undefined;
     }
     if (sanitizedField !== undefined) {
       if (sanitizedField !== item) {
@@ -397,7 +432,11 @@ function sanitizeTranscriptStructuredValue(
     const sanitized = sanitizeTranscriptStructuredValue(
       item,
       seen,
-      preserveImageDataUrlFields || shouldPreserveNestedTranscriptImageDataUrlFields(source, key),
+      preserveImageDataUrlFields ||
+        (key === "image_url" &&
+          (source.type === "image_url" ||
+            source.type === "input_image" ||
+            source.type === "image")),
       location === "root" && source.role === "assistant" && key === "content" && Array.isArray(item)
         ? "assistant-content-array"
         : "nested",

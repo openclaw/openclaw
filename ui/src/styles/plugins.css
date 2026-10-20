@@ -9,42 +9,8 @@
   font-size: 26px;
 }
 
-.content-header.hub-page-header.plugins-hub-header {
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "title actions"
-    "tabs tabs";
-  align-items: end;
-  row-gap: var(--space-2);
-  width: 100%;
-  max-width: 1120px;
-  max-height: none;
-  margin-inline: auto;
-  padding-inline: var(--settings-header-inline-padding, var(--space-4));
-}
-
-.content-header.plugins-hub-header .hub-page-header__tabs {
-  grid-area: tabs;
-  justify-self: start;
-  padding-block: var(--space-2);
-}
-
 .plugins-hub-header .hub-tabs--sub .hub-tab {
   padding-block: var(--space-2);
-}
-
-.content-header.plugins-hub-header .hub-page-header__title {
-  grid-area: title;
-  justify-self: start;
-}
-
-.content-header.plugins-hub-header .hub-page-header__actions {
-  grid-area: actions;
-}
-
-.plugins-hub-header + .settings-workspace {
-  /* The settings page already contributes the lower half of the tab rhythm. */
-  margin-top: 0;
 }
 
 .plugins-hub-header__secondary {
@@ -655,12 +621,6 @@
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
   font-weight: 400;
-}
-
-/* Item titles/subheadings are semantic <h3>s for AT heading navigation; the
- * shared classes own the look, so only the UA heading margin needs a reset. */
-h3.settings-row__title {
-  margin: 0;
 }
 
 .plugins-tile {

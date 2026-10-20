@@ -417,7 +417,7 @@ function NativeNotificationSection(props: {
             </button>
           ) : (
             <button
-              class={props.native.permission === "notDetermined" ? "btn primary" : "btn"}
+              class={["btn", { primary: props.native.permission === "notDetermined" }]}
               onClick={() => props.actions.onNativeNotificationsRequestPermission?.()}
             >
               {t(

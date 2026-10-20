@@ -141,9 +141,7 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
         providerId: "elevenlabs",
         callbacks,
         url: () => {
-          const url = new URL(
-            `${normalizeElevenLabsRealtimeBaseUrl(baseUrl)}/v1/speech-to-text/realtime`,
-          );
+          const url = new URL(`${baseUrl}/v1/speech-to-text/realtime`);
           url.searchParams.set("model_id", config.modelId ?? ELEVENLABS_REALTIME_DEFAULT_MODEL);
           url.searchParams.set(
             "audio_format",

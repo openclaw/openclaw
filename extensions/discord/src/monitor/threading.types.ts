@@ -60,7 +60,6 @@ export type DiscordAutoThreadContext = {
 };
 
 export type DiscordAutoThreadReplyPlan = DiscordReplyDeliveryPlan & {
-  createdThreadId?: string;
   autoThreadContext: DiscordAutoThreadContext | null;
 };
 

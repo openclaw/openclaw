@@ -95,7 +95,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     planExplanationFormat,
   } = createProgressDraftSnapshotState(params);
   let progressSuppressed = false;
-  let renderGeneration = 0;
   let lastRenderedText = "";
   let lastRenderedStatusFormat: "plain" | undefined;
   let lastRenderedLines = lines;
@@ -176,8 +175,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     });
   };
 
-  const resolveDiffStat = () =>
-    transferredDiffStat ? { ...transferredDiffStat } : diffStatTracker.resolve();
+  const resolveDiffStat = () => transferredDiffStat ?? diffStatTracker.resolve();
 
   const getSnapshot = (): ChannelProgressDraftCompositorSnapshot =>
     snapshotProgressDraftState({
@@ -198,7 +196,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     transferredStatus = undefined;
     transferredDiffStat = undefined;
     lines = [];
-    renderGeneration += 1;
     lastRenderedText = "";
     lastRenderedStatusFormat = undefined;
     lastRenderedLines = lines;
@@ -245,19 +242,17 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     ) {
       return false;
     }
-    const generation = renderGeneration;
     const observed = await settleProgressVisibilityCallbackResult(
       params.update(text, {
         ...options,
-        lines: [...lines],
+        lines,
         snapshot: {
           ...getSnapshot(),
           ...(blocks.some((block) => block.format === "plain") ? { preparedBlocks: blocks } : {}),
         },
       }),
     );
-    // A retired publication can finish after its replacement; it no longer owns dedupe state.
-    if (observed.visible && generation === renderGeneration) {
+    if (observed.visible) {
       lastRenderedText = text;
       lastRenderedStatusFormat = statusFormat;
       lastRenderedLines = lines;
@@ -344,7 +339,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       return lastRenderedText ? await publish() : false;
     }
     // Release the retiring baseline before an identical replacement can publish.
-    renderGeneration += 1;
     lastRenderedText = "";
     await params.deleteCurrent();
     return true;
@@ -596,7 +590,7 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
         return false;
       }
       transferredStatus = undefined;
-      planSteps = steps && steps.length > 0 ? steps.map((step) => ({ ...step })) : undefined;
+      planSteps = steps?.length ? steps : undefined;
       planExplanation = (options?.explanation ?? "").replace(/\s+/g, " ").trim();
       planExplanationFormat = options?.explanationFormat;
       if (!planSteps && !planExplanation) {

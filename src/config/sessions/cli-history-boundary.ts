@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import { sameSessionTranscriptStorePath } from "./transcript-store-identity.js";
 import type { InternalSessionEntry } from "./types.js";
 
 export type CliHistoryWriter = {
@@ -33,7 +34,7 @@ export function getCliHistoryWriter(
     writer.target.agentId === target.agentId &&
     writer.target.sessionId === target.sessionId &&
     writer.target.sessionKey === target.sessionKey &&
-    writer.target.storePath === target.storePath
+    sameSessionTranscriptStorePath(writer.target.storePath, target.storePath)
     ? writer
     : undefined;
 }

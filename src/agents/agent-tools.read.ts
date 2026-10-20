@@ -97,10 +97,6 @@ type SkillReadContent = {
 
 export type SkillInstructionDeliveryCache = Map<string, Promise<boolean>>;
 
-export function createSkillInstructionDeliveryCache(): SkillInstructionDeliveryCache {
-  return new Map();
-}
-
 /** Erase a schema-specific session tool only after its input passes that owned schema. */
 function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
   tool: AgentTool<TParameters, TDetails>,
@@ -280,7 +276,7 @@ async function executeReadWithAdaptivePaging(params: {
     // File data is independent of display notices; image/missing outcomes have only display text.
     const structuredContent = getReadResultContent(pageResult);
     const pageContent = structuredContent ?? pageText;
-    const delimiter = aggregatedText && pageText && next.kind === "line" ? "\n" : "";
+    const delimiter = page > 0 && next.kind === "line" ? "\n" : "";
     const candidateBytes = aggregatedBytes + delimiter.length + Buffer.byteLength(pageText, "utf8");
     const candidateContent = `${aggregatedContent}${delimiter}${pageContent}`;
     const continuationNotice = pageContinuation
@@ -296,7 +292,7 @@ async function executeReadWithAdaptivePaging(params: {
         params.modelBudget,
       )
     ) {
-      if (aggregatedText) {
+      if (page > 0) {
         return withReadContinuation(
           firstResult,
           `${aggregatedText}${previousNotice}`,

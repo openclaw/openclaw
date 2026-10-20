@@ -402,9 +402,8 @@ export async function aggregateQaProfileEvidenceShards(params: {
     }
     await assertShardDestinationAvailable(destination);
 
-    const rebasedSummary = structuredClone(summary);
     const resolvedArtifacts = new Map<string, string>();
-    for (const artifact of collectQaEvidenceArtifacts(rebasedSummary)) {
+    for (const artifact of collectQaEvidenceArtifacts(summary)) {
       let relativePath = resolvedArtifacts.get(artifact.path);
       if (!relativePath) {
         relativePath = await resolveChildArtifactPath({
@@ -418,7 +417,7 @@ export async function aggregateQaProfileEvidenceShards(params: {
       artifact.path = `shards/${shard.id}/${relativePath}`;
     }
     seenShardIds.add(shard.id);
-    summaries.push(rebasedSummary);
+    summaries.push(summary);
     payloads.push({ destination, source: payloadRoot });
     expectedCells.push(...childPlan.expectedCells);
     observedCells.push(...childPlan.observedCells);

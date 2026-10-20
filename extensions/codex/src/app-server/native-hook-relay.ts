@@ -15,6 +15,7 @@ import {
   finiteSecondsToTimerSafeMilliseconds,
 } from "openclaw/plugin-sdk/number-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import type { PluginHookToolContext } from "openclaw/plugin-sdk/types";
 import type { CodexAppServerClient } from "./client.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
@@ -294,7 +295,10 @@ export function createCodexNativeHookRelay(params: {
                       try {
                         params.hostCapabilities.assertNativeSubagentSpawnAllowed?.();
                       } catch (error) {
-                        return `${toErrorObject(error, "Native spawn participant selection failed").message} Use sessions_spawn with the requester's requester_profile.id as user.`;
+                        return toErrorObject(
+                          error,
+                          "Native spawn execution authority is no longer current",
+                        ).message;
                       }
                     }
                     return undefined;
@@ -388,22 +392,11 @@ export function createCodexNativeHookRelay(params: {
         }
         const admission = pending;
         admission.waiters++;
-        let onAbort: (() => void) | undefined;
-        const wait = new Promise<symbol>((resolve, reject) => {
-          void admission.promise.then(resolve, reject);
-          onAbort = () =>
-            reject(toErrorObject(signal?.reason, "native hook relay admission aborted"));
-          signal?.addEventListener("abort", onAbort, { once: true });
-          if (signal?.aborted) {
-            onAbort();
-          }
-        });
-        return wait
+        return racePromiseWithAbortSignal(admission.promise, signal, (aborted) =>
+          toErrorObject(aborted.reason, "native hook relay admission aborted"),
+        )
           .then((claim) => assertClaim(childThreadId, claim))
           .finally(() => {
-            if (onAbort) {
-              signal?.removeEventListener("abort", onAbort);
-            }
             // Duplicate callbacks share admission, but each owns its wait. A
             // disconnected last waiter releases capacity without revoking a child.
             admission.waiters--;
@@ -668,7 +661,7 @@ export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
 }
 
 function normalizeHookTimeoutSec(value: number | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
+  return value !== undefined && Number.isFinite(value) && value > 0
     ? Math.ceil(value)
     : CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC;
 }

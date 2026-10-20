@@ -1,7 +1,8 @@
 // Covers CLI execution paths where the process supervisor keeps stdout capture
 // disabled and the runner must parse streamed chunks without relying on tails.
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { buildExternalRunFailureReply } from "../../auto-reply/reply/agent-runner-failure-reply.js";
 import {
   markMcpLoopbackRequestFinished,
   markMcpLoopbackRequestStarted,
@@ -42,6 +43,7 @@ import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-tra
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
 import { hashCliImageTurnEntryId } from "../cli-image-turn-correlation.js";
+import { buildEmbeddedRunPayloads } from "../embedded-agent-runner/run/payloads.js";
 import { findCliTerminalStopError } from "../failover-error.js";
 import { resolveAgentRunErrorLifecycleFields } from "../run-termination.js";
 import { buildCliDeliveredFailure, buildCliRunResult } from "./cli-run-settlement.js";
@@ -56,20 +58,7 @@ import {
 import { prepareCliRunTerminalReply } from "./terminal-reply.js";
 import { captureCliRunStartTime, type PreparedCliRunContext } from "./types.js";
 const executePreparedCliRun = wrapPreparedCliRunWithTestAdmission(executePreparedCliRunImpl);
-vi.mock("../../process/supervisor/adapters/child.js", () => ({ createChildAdapter: vi.fn() })); // Gateway unit coverage owns quiet-admission timing. These integration cases only
-// need to drain calls already in flight, so skip the repeated 250 ms quiet window.
-vi.mock("../../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../gateway/mcp-http.loopback-runtime.js")>();
-  return {
-    ...actual,
-    waitForMcpLoopbackToolCallCaptureIdle: (
-      captureKey: string,
-      options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
-    ) =>
-      actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, { ...options, admissionGraceMs: 0 }),
-  };
-});
+vi.mock("../../process/supervisor/adapters/child.js", () => ({ createChildAdapter: vi.fn() }));
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnInput = Parameters<ProcessSupervisor["spawn"]>[0];
 const TEST_MESSAGE_CHANNEL = "test-channel";
@@ -686,6 +675,39 @@ describe("executePreparedCliRun supervisor output capture", () => {
       ),
     ).rejects.toMatchObject({ name: "FailoverError", message: "Credit balance is too low" });
   });
+
+  it.each([0, 1])(
+    "preserves the prepared backend failure code through process exit %i and reply copy",
+    async (exitCode) => {
+      const message =
+        "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again";
+      mockOutput(
+        [
+          jsonl({
+            type: "result",
+            subtype: "error_during_execution",
+            is_error: true,
+            errors: [message],
+            session_id: "session-refresh-contention",
+          }),
+        ],
+        { exitCode },
+      );
+      const context = buildPreparedCliRunContext({ output: "jsonl", provider: "claude-cli" });
+      const classifyErrorCode = vi.fn(() => "refresh_contention");
+      context.backendResolved.classifyErrorCode = classifyErrorCode;
+
+      const error = await executePreparedCliRun(context).catch((caught: unknown) => caught);
+
+      assert(error instanceof Error);
+      expect(classifyErrorCode).toHaveBeenCalledExactlyOnceWith(message);
+      expect(error).toMatchObject({ name: "FailoverError", code: "refresh_contention", message });
+      expect(buildExternalRunFailureReply({ message: error.message, error })).toEqual({
+        text: "Another sign-in is still in progress. Wait a moment, then try again.",
+        isGenericRunnerFailure: false,
+      });
+    },
+  );
 
   it("surfaces a local Claude synthetic empty terminal through the output error path", async () => {
     const stdout = [
@@ -1564,6 +1586,94 @@ describe("executePreparedCliRun supervisor output capture", () => {
       });
       if (exitCode !== 0) {
         expect(result.meta.error).toMatchObject({ kind: "incomplete_turn", fallbackSafe: false });
+      }
+    },
+  );
+
+  it.each([
+    ["explicit final", true, "source", "required", "Delivery complete", true],
+    ["default final", undefined, "source", "required", "Delivery complete", true],
+    ["progress", false, "source", "required", "Final answer", false],
+    ["other conversation", true, "other", "required", "Final answer", false],
+    ["partial delivery", true, "partial", "required", "Final answer", false],
+    ["failed delivery", true, "failed", "required", "Final answer", false],
+    ["dry run", true, "dry-run", "required", "Final answer", false],
+    ["unconfirmed delivery", true, "unconfirmed", "required", "Final answer", false],
+    ["result obligation", true, "source", "result-required", "Private result", false],
+    ["authored silence", true, "source", "required", "NO_REPLY", true],
+  ] as const)(
+    "settles automatic external source delivery with %s evidence",
+    async (_label, final, delivery, terminalReplyExpectation, text, suppress) => {
+      const context = buildPreparedCliRunContext({ output: "text", provider: "local-cli" });
+      context.mcpDeliveryCapture = true;
+      context.params.sourceReplyDeliveryMode = "automatic";
+      context.params.messageChannel = TEST_MESSAGE_CHANNEL;
+      context.params.currentChannelId = "source-chat";
+      context.params.terminalReplyExpectation = terminalReplyExpectation;
+      mockCaptureSpawn((input, captureKey) => {
+        recordMcpLoopbackToolCallResult({
+          captureKey,
+          toolName: "message",
+          args: {
+            action: "send",
+            channel: TEST_MESSAGE_CHANNEL,
+            target: delivery === "other" ? "other-chat" : "source-chat",
+            message: "Tool-authored answer",
+            ...(final !== undefined ? { final } : {}),
+            ...(delivery === "dry-run" ? { dryRun: true } : {}),
+          },
+          result: {
+            details: {
+              ...(delivery !== "other" ? { sourceReplyRoute: "current-source" } : {}),
+              ...(delivery !== "unconfirmed"
+                ? {
+                    messageDelivery: {
+                      status:
+                        delivery === "failed"
+                          ? "failed"
+                          : delivery === "dry-run"
+                            ? "dryRun"
+                            : "settled",
+                      partialDelivery: delivery === "partial",
+                      createdThreadIds: [],
+                      ...(delivery === "source" ? { sourceReplyDelivered: true } : {}),
+                    },
+                  }
+                : {}),
+            },
+          },
+          isError: delivery === "failed" || delivery === "partial",
+        });
+        input.onStdout?.(text);
+      });
+      const output = await executePreparedCliRun(context);
+      expect(output.messagingToolSourceReplyPayloads).toBeUndefined();
+      const preparedReply = prepareCliRunTerminalReply(context, output);
+      const result = buildCliRunResult({
+        context,
+        output,
+        preparedReply,
+        usedHistoryPrompt: false,
+        userTurnHandled: true,
+        sessionBindingDisabled: true,
+        preparedContextAgentMeta: {},
+      });
+      expect(result.payloads).toEqual(suppress ? undefined : [{ text }]);
+      if (text === "NO_REPLY") {
+        expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
+      }
+      if (terminalReplyExpectation === "result-required") {
+        expect(preparedReply.completedFinalSource).toBe(false);
+      } else {
+        expect(
+          buildEmbeddedRunPayloads({
+            ...output,
+            assistantTexts: [text],
+            lastAssistant: undefined,
+            sessionKey: context.params.sessionKey ?? "",
+            sourceReplyDeliveryMode: "automatic",
+          }),
+        ).toEqual(suppress ? [] : [{ text, replyToTag: false }]);
       }
     },
   );

@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { createSignal } from "solid-js";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SubagentRunReadRecord } from "../../../../../src/agents/subagents/registry/subagent-registry-read.types.js";
+import { afterEach, expect, it, vi } from "vitest";
+import type { SubagentRunReadRecord as Run } from "../../../../../src/agents/subagents/registry/subagent-registry-read.types.js";
 import { buildSessionSwarmSummary } from "../../../../../src/gateway/session-swarm-summary.js";
-import type { GatewaySessionRow } from "../../../api/types.ts";
+import { GatewayChatEvents } from "../../../api/gateway-chat-events.ts";
+import type { GatewaySessionRow as Row } from "../../../api/types.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { pt_BR } from "../../../i18n/locales/pt-BR.ts";
+import { reconcileSessionChangedRow } from "../../../lib/sessions/reconcile.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -22,39 +24,36 @@ const parentSessionKey = "agent:main:parent";
 const parentRunId = "11111111-2222-4333-8444-555555555555";
 const swarmGroupId = `swarm:${parentSessionKey}:${parentRunId}`;
 const childSessionKey = "agent:main:subagent:aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+const stoppedLabel = "Falhou ou foi interrompido";
 
-function session(overrides: Partial<GatewaySessionRow>): GatewaySessionRow {
+function session(key: string, status: Row["status"] = "running", fields: Partial<Row> = {}): Row {
   return {
-    key: "agent:main:child",
+    key,
+    status,
     kind: "direct",
     updatedAt: 1,
     parentSessionKey,
     swarmGroupId,
-    ...overrides,
+    ...fields,
   };
 }
 
-function withSummary(sessions: readonly GatewaySessionRow[]): GatewaySessionRow[] {
-  const runs: SubagentRunReadRecord[] = sessions
-    .filter((child) => child.swarmGroupId)
-    .map((child) => ({
-      runId: child.key,
-      childSessionKey: child.key,
-      requesterSessionKey: parentSessionKey,
-      requesterAgentId: "main",
-      swarmRequesterSessionKey: parentSessionKey,
-      collect: true,
-      groupId: child.swarmGroupId,
-      createdAt: child.updatedAt ?? 1,
-      execution: { status: child.status === "queued" ? "queued" : "running" },
-      collectorCompletion:
-        child.status === "done" ||
-        child.status === "failed" ||
-        child.status === "killed" ||
-        child.status === "timeout"
-          ? { status: child.status }
-          : undefined,
-    }));
+function withSummary(sessions: readonly Row[]): Row[] {
+  const runs: Run[] = sessions.map(({ key, status, swarmGroupId: groupId, updatedAt }) => ({
+    runId: key,
+    childSessionKey: key,
+    requesterSessionKey: parentSessionKey,
+    requesterAgentId: "main",
+    swarmRequesterSessionKey: parentSessionKey,
+    collect: true,
+    groupId,
+    createdAt: updatedAt ?? 1,
+    execution: { status: status === "queued" ? "queued" : "running" },
+    collectorCompletion:
+      status === "done" || status === "failed" || status === "killed" || status === "timeout"
+        ? { status }
+        : undefined,
+  }));
   return [
     {
       key: parentSessionKey,
@@ -65,318 +64,277 @@ function withSummary(sessions: readonly GatewaySessionRow[]): GatewaySessionRow[
   ];
 }
 
-function mountProgress(props: ChatSwarmProgressProps) {
-  const container = document.createElement("div");
-  document.body.append(container);
-  const [current, setCurrent] = createSignal(props);
-  mountSolid(() => <ChatSwarmProgress {...current()} />, { container });
+type ProgressProps = Pick<ChatSwarmProgressProps, "sessions"> & Partial<ChatSwarmProgressProps>;
+function mountProgress(props: ProgressProps) {
+  const [current, setCurrent] = createSignal({ sessionKey: parentSessionKey, ...props });
+  const { container } = mountSolid(() => <ChatSwarmProgress {...current()} />);
   return {
     container,
-    update: (next: ChatSwarmProgressProps) => {
-      setCurrent(next);
+    update: (next: ProgressProps) => {
+      setCurrent({ sessionKey: parentSessionKey, ...next });
       flush();
     },
   };
 }
 
-function renderProgress(sessions: readonly GatewaySessionRow[]) {
-  return mountProgress({ sessionKey: parentSessionKey, sessions: withSummary(sessions) }).container;
+const renderProgress = (sessions: readonly Row[]) =>
+  mountProgress({ sessions: withSummary(sessions) }).container;
+
+const text = (container: ParentNode, part: string) =>
+  container.querySelector(`.chat-swarm__${part}`)?.textContent;
+const all = (container: ParentNode, part: string) => [
+  ...container.querySelectorAll(`.chat-swarm__${part}`),
+];
+const progress = (container: ParentNode) => text(container, "header")?.replace(/\s+/g, " ");
+const taskLabels = (container: ParentNode) =>
+  [...container.querySelectorAll('[role="listitem"]')].map((row) =>
+    row.querySelector('[role="img"]')?.getAttribute("aria-label"),
+  );
+function expectCounts(container: ParentNode, counts: string) {
+  expect(text(container, "counts")).toBe(counts);
+  expect(container.querySelector(".chat-swarm__markers")?.getAttribute("aria-label")).toBe(counts);
 }
 
 afterEach(async () => {
-  i18n.registerTranslation("pt-BR", pt_BR);
   await i18n.setLocale("en");
-  document.body.replaceChildren();
   vi.useRealTimers();
 });
 
-describe("chat Swarm progress", () => {
-  it("renders completion progress from the active locale", async () => {
-    i18n.registerTranslation("pt-BR", {
-      labsPage: {
-        swarm: {
-          title: "Enxame",
-          groupTitle: "Tarefas paralelas",
-          progress: "{complete} de {total}",
-          failedOrStopped: "Falhou ou foi interrompida",
-        },
-      },
-      common: { running: "Em execução", completed: "Concluído" },
-    });
-    await i18n.setLocale("pt-BR");
+it.each([
+  ["en", 1, "Parallel tasks", "3 of 5"],
+  ["pt-BR", 2, "Tarefas paralelas", "3 de 5"],
+] as const)("localizes collector states: %s", async (locale, labelColumn, title, complete) => {
+  i18n.registerTranslation("pt-BR", pt_BR);
+  await i18n.setLocale(locale);
+  const states = [
+    ["queued", "Queued", "Na fila", "queued"],
+    ["running", "Running", "Em execução", "running"],
+    ["done", "Completed", "Concluída", "done"],
+    ["timeout", "Failed or stopped", stoppedLabel, "failed"],
+    ["killed", "Failed or stopped", stoppedLabel, "failed"],
+  ] as const;
+  const container = renderProgress(
+    states.map(([status]) =>
+      session(status, status, { label: `${status} child`, hasActiveRun: status === "queued" }),
+    ),
+  );
+  const group = container.querySelector("[data-swarm-group]");
+  expect(group).toMatchObject({ dataset: { swarmGroup: swarmGroupId } });
+  expect(text(group!, "header strong")).toBe(title);
+  expect(group?.textContent).not.toContain(parentRunId);
+  expect(progress(container)).toContain(complete);
+  expect(all(container, "task-icon").map((icon) => icon.className)).toEqual(
+    states.map((state) => `chat-swarm__task-icon chat-swarm__task-icon--${state[3]}`),
+  );
+  expect(taskLabels(container)).toEqual(states.map((state) => state[labelColumn]));
+});
 
-    const container = renderProgress([
-      session({ key: "running", status: "running" }),
-      session({ key: "done", status: "done" }),
-      session({ key: "stopped", status: "killed" }),
-    ]);
+it("names a single child from key-shaped names without exposing identifiers", () => {
+  const expected = "Subagent";
+  const container = renderProgress([
+    session(childSessionKey, "running", { label: childSessionKey, displayName: childSessionKey }),
+  ]);
+  const heading = container.querySelector(".chat-swarm__header strong");
+  expect(heading).toMatchObject({ textContent: expected, title: expected });
+  expect(text(container, "task-name")).toBe(expected);
+  expect(container.textContent).not.toContain(parentRunId);
+  expect(container.textContent).not.toContain(childSessionKey);
+  const group = container.querySelector("[data-swarm-group]");
+  expect(group).toMatchObject({ dataset: { swarmGroup: swarmGroupId } });
+});
 
-    expect(
-      container.querySelector(".chat-swarm__header")?.textContent?.replace(/\s+/g, " "),
-    ).toContain("2 de 3");
-    expect(container.querySelector(".chat-swarm__header strong")?.textContent).toBe(
-      "Tarefas paralelas",
-    );
-    expect(
-      [...container.querySelectorAll('[role="listitem"]')].map((row) =>
-        row.querySelector('[role="img"]')?.getAttribute("aria-label"),
-      ),
-    ).toEqual(["Em execução", "Concluído", "Falhou ou foi interrompida"]);
-  });
-
-  it("groups live collector children and maps their task states", () => {
-    const container = renderProgress([
-      session({
-        key: "queued",
-        label: "Queued child",
-        status: "queued",
-        hasActiveRun: true,
-      }),
-      session({ key: "running", label: "Running child", status: "running" }),
-      session({ key: "done", label: "Done child", status: "done" }),
-      session({ key: "failed", label: "Timed out child", status: "timeout" }),
-    ]);
-
-    const group = container.querySelector("[data-swarm-group]");
-    expect(group?.getAttribute("data-swarm-group")).toBe(swarmGroupId);
-    expect(group?.querySelector(".chat-swarm__header strong")?.textContent).toBe("Parallel tasks");
-    expect(group?.textContent).not.toContain(parentRunId);
-    expect(group?.textContent?.replace(/\s+/g, " ")).toContain("2 of 4");
-    expect(
-      [...container.querySelectorAll(".chat-swarm__task-icon")].map((icon) => icon.className),
-    ).toEqual([
-      "chat-swarm__task-icon chat-swarm__task-icon--queued",
-      "chat-swarm__task-icon chat-swarm__task-icon--running",
-      "chat-swarm__task-icon chat-swarm__task-icon--done",
-      "chat-swarm__task-icon chat-swarm__task-icon--failed",
-    ]);
-    expect(
-      [...container.querySelectorAll('[role="listitem"]')].map((row) =>
-        row.querySelector('[role="img"]')?.getAttribute("aria-label"),
-      ),
-    ).toEqual(["Queued", "Running", "Completed", "Failed or stopped"]);
-  });
-
-  it.each([
-    {
-      name: "key-shaped names",
-      fields: { label: childSessionKey, displayName: childSessionKey },
-      expected: "Subagent",
-    },
-  ])("names a single child from $name without exposing identifiers", ({ fields, expected }) => {
-    const container = renderProgress([
-      session({ key: childSessionKey, status: "running", ...fields }),
-    ]);
-    const heading = container.querySelector(".chat-swarm__header strong");
-    expect(heading?.textContent).toBe(expected);
-    expect(heading?.getAttribute("title")).toBe(expected);
-    expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe(expected);
-    expect(container.textContent).not.toContain(parentRunId);
-    expect(container.textContent).not.toContain(childSessionKey);
-    expect(container.querySelector("[data-swarm-group]")?.getAttribute("data-swarm-group")).toBe(
-      swarmGroupId,
-    );
-  });
-
-  it("updates the same group heading through live rows, hydration, and a second child", async () => {
-    vi.useFakeTimers();
-    const child = session({ key: childSessionKey, status: "running" });
-    const hydrated = { ...child, sessionId: "child-session", label: "Review CI", updatedAt: 2 };
-    let serverRows: GatewaySessionRow[] = [hydrated];
-    const hydrator = new SwarmRosterHydrator();
-    const client = createTestGatewayClient(async (method) =>
-      method === "sessions.list"
-        ? { ...sessionsResult(serverRows, 2), hasMore: false }
-        : { subscribed: true },
-    );
-    const { gateway, emitEvent } = createGatewayHarness(client);
-    const sessions = createTestSessionCapability(gateway);
-    const { container, update } = mountProgress({ sessionKey: parentSessionKey, sessions: [] });
-    const params = {
+it("updates the same group heading through live rows, hydration, and a second child", async () => {
+  vi.useFakeTimers();
+  const child = session(childSessionKey);
+  const hydrated = { ...child, sessionId: "child-session", label: "Review CI", updatedAt: 2 };
+  let serverRows: Row[] = [hydrated];
+  const hydrator = new SwarmRosterHydrator();
+  const client = createTestGatewayClient(async (method) =>
+    method === "sessions.list"
+      ? { ...sessionsResult(serverRows, 2), hasMore: false }
+      : { subscribed: true },
+  );
+  const { gateway, emitEvent } = createGatewayHarness(client);
+  const sessions = createTestSessionCapability(gateway);
+  const { container, update } = mountProgress({ sessions: [] });
+  const stop = hydrator.subscribe(() => update({ sessions: withSummary(hydrator.rows) }));
+  try {
+    hydrator.update({
       sessions,
       parentKey: parentSessionKey,
       readParent: async () => ({
         key: parentSessionKey,
         sessionId: "parent-session",
-        kind: "direct" as const,
+        kind: "direct",
       }),
       sourceEpoch: 1,
       currentRows: () => [child],
-      onRows: (rows: GatewaySessionRow[]) =>
-        update({ sessionKey: parentSessionKey, sessions: withSummary(rows) }),
-    };
-    try {
-      hydrator.update(params);
-      const group = container.querySelector("[data-swarm-group]");
-      expect(group?.querySelector("strong")?.textContent).toBe("Subagent");
-      await vi.runAllTimersAsync();
-      expect(group?.querySelector("strong")?.textContent).toBe("Review CI");
-      serverRows = [
-        hydrated,
-        {
-          ...session({
-            key: "agent:main:subagent:second",
-            label: "Check types",
-            status: "running",
-          }),
-          sessionId: "second-child-session",
-        },
-      ];
-      emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: { agentId: "main", session: serverRows[1], reason: "create" },
-      });
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(container.querySelectorAll("[data-swarm-group]")).toHaveLength(1);
-      expect(group?.getAttribute("data-swarm-group")).toBe(swarmGroupId);
-      expect(group?.querySelector("strong")?.textContent).toBe("Parallel tasks");
-      expect(
-        [...group!.querySelectorAll(".chat-swarm__task-name")].map((el) => el.textContent),
-      ).toEqual(["Review CI", "Check types"]);
-      expect(container.textContent).not.toContain(parentRunId);
-    } finally {
-      hydrator.dispose();
-      sessions.dispose();
-    }
-  });
-
-  it("caps historical tasks while keeping active workers visible", () => {
-    const container = renderProgress([
-      ...Array.from({ length: 300 }, (_, index) =>
-        session({ key: `done-${index}`, status: "done" }),
-      ),
-      session({ key: "running", status: "running" }),
+    });
+    const group = container.querySelector("[data-swarm-group]");
+    expect(group?.querySelector("strong")?.textContent).toBe("Subagent");
+    await vi.runAllTimersAsync();
+    expect(group?.querySelector("strong")?.textContent).toBe("Review CI");
+    serverRows = [
+      hydrated,
+      session("agent:main:subagent:second", "running", {
+        label: "Check types",
+        sessionId: "second-child-session",
+      }),
+    ];
+    emitEvent({
+      type: "event",
+      event: "sessions.changed",
+      payload: { agentId: "main", session: serverRows[1], reason: "create" },
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(container.querySelectorAll("[data-swarm-group]")).toHaveLength(1);
+    expect(group).toMatchObject({ dataset: { swarmGroup: swarmGroupId } });
+    expect(group?.querySelector("strong")?.textContent).toBe("Parallel tasks");
+    expect(all(group!, "task-name").map((el) => el.textContent)).toEqual([
+      "Review CI",
+      "Check types",
     ]);
+    expect(container.textContent).not.toContain(parentRunId);
+  } finally {
+    stop();
+    hydrator.dispose();
+    sessions.dispose();
+  }
+});
 
-    expect(container.querySelectorAll(".chat-swarm__task")).toHaveLength(64);
-    expect(container.querySelector(".chat-swarm__task-icon--running")).not.toBeNull();
-    expect(
-      container.querySelector(".chat-swarm__header")?.textContent?.replace(/\s+/g, " "),
-    ).toContain("300 of 301");
+it("caps historical tasks while keeping active workers visible", () => {
+  const container = renderProgress([
+    ...Array.from({ length: 300 }, (_, index) => session(`done-${index}`, "done")),
+    session("running"),
+  ]);
+
+  expect(all(container, "task")).toHaveLength(64);
+  expect(container.querySelector(".chat-swarm__task-icon--running")).not.toBeNull();
+  expect(progress(container)).toContain("300 of 301");
+});
+
+it("labels mixed outcomes as a combined count through completion", () => {
+  const terminal = (["done", "failed", "killed", "timeout"] as const).map((status) =>
+    session(status, status, { hasActiveRun: true }),
+  );
+  const { container, update } = mountProgress({
+    sessions: withSummary([session("running"), ...terminal]),
   });
+  expectCounts(container, "1 running · 0 queued · 3 failed or stopped");
+  expect(
+    ["running", "done", "failed"].map((state) => all(container, `task-icon--${state}`).length),
+  ).toEqual([1, 1, 3]);
 
-  it.each([{ name: "mixed", statuses: ["failed", "killed", "timeout"], completed: 1 }] as const)(
-    "labels $name outcomes as a combined count through completion",
-    ({ statuses, completed }) => {
-      const terminal = [
-        ...Array.from({ length: completed }, (_, index) =>
-          session({ key: `completed-${index}`, status: "done", hasActiveRun: true }),
-        ),
-        ...statuses.map((status, index) =>
-          session({ key: `unsuccessful-${index}`, status, hasActiveRun: true }),
-        ),
-      ];
-      const { container, update } = mountProgress({
-        sessionKey: parentSessionKey,
-        sessions: withSummary([session({ key: "running", status: "running" }), ...terminal]),
-      });
-      const activeCounts = `1 running · 0 queued · ${statuses.length} failed or stopped`;
+  update({ sessions: withSummary(terminal) });
+  expect(container.querySelector("[data-test-id=chat-swarm]")).not.toBeNull();
+  expectCounts(container, "1 completed · 3 failed or stopped");
+  expect(container.textContent).toContain("Check the conversation for the final response");
+});
 
-      expect(container.querySelector(".chat-swarm__counts")?.textContent).toBe(activeCounts);
-      expect(container.querySelector(".chat-swarm__markers")?.getAttribute("aria-label")).toBe(
-        activeCounts,
-      );
-      expect(container.querySelectorAll(".chat-swarm__task-icon--running")).toHaveLength(1);
-      expect(container.querySelectorAll(".chat-swarm__task-icon--done")).toHaveLength(completed);
-      expect(container.querySelectorAll(".chat-swarm__task-icon--failed")).toHaveLength(
-        statuses.length,
-      );
+it("says the parent is processing while child runs are finished but the parent is still active", () => {
+  const parentActive = withSummary([session("completed", "done", { hasActiveRun: true })]);
+  Object.assign(parentActive[0]!, { status: "running", hasActiveRun: true });
+  const { container } = mountProgress({ sessions: parentActive });
+  expect(container.textContent).toContain("The parent is processing their results");
+  expect(container.textContent).not.toContain("Check the conversation for the final response");
+});
 
-      update({ sessionKey: parentSessionKey, sessions: withSummary(terminal) });
-      const finishedCounts = `${completed} completed · ${statuses.length} failed or stopped`;
-      expect(container.querySelector("[data-test-id=chat-swarm]")).not.toBeNull();
-      expect(container.querySelector(".chat-swarm__counts")?.textContent).toBe(finishedCounts);
-      expect(container.querySelector(".chat-swarm__markers")?.getAttribute("aria-label")).toBe(
-        finishedCounts,
-      );
-      expect(container.textContent).toContain("Check the conversation for the final response");
-    },
+it("uses session runtime fields instead of the last row update", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(100_000);
+  const samples: [string, Row["status"], Partial<Row>, string][] = [
+    ["Running", "running", { startedAt: 90_000, updatedAt: 99_000 }, "10s"],
+    ["Sampled", "running", { runtimeMs: 4_000, runtimeSampledAt: 98_000, updatedAt: 50_000 }, "6s"],
+    ["Done", "done", { startedAt: 10_000, endedAt: 17_000, updatedAt: 99_999 }, "7s"],
+  ];
+  const container = renderProgress(
+    samples.map(([label, status, runtime]) =>
+      session(label.toLowerCase(), status, { label, ...runtime }),
+    ),
   );
 
-  it("says the parent is processing while child runs are finished but the parent is still active", () => {
-    const completed = session({ key: "completed", status: "done", hasActiveRun: true });
-    const parentActive: (typeof completed)[] = [];
-    for (const row of withSummary([completed])) {
-      parentActive.push(
-        row.key === parentSessionKey
-          ? { ...row, status: "running" as const, hasActiveRun: true }
-          : row,
-      );
-    }
-    const { container } = mountProgress({ sessionKey: parentSessionKey, sessions: parentActive });
-    expect(container.textContent).toContain("The parent is processing their results");
-    expect(container.textContent).not.toContain("Check the conversation for the final response");
-  });
+  expect(
+    all(container, "task").map((task) => [text(task, "task-name"), text(task, "task-duration")]),
+  ).toEqual(samples.map((sample) => [sample[0], sample[3]]));
+});
 
-  it("uses session runtime fields instead of the last row update", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(100_000);
-    const container = renderProgress([
-      session({
-        key: "running",
-        label: "Running",
-        status: "running",
-        startedAt: 90_000,
-        updatedAt: 99_000,
-      }),
-      session({
-        key: "sampled",
-        label: "Sampled",
-        status: "running",
-        runtimeMs: 4_000,
-        runtimeSampledAt: 98_000,
-        updatedAt: 50_000,
-      }),
-      session({
-        key: "done",
-        label: "Done",
-        status: "done",
-        startedAt: 10_000,
-        endedAt: 17_000,
-        updatedAt: 99_999,
-      }),
-    ]);
-
-    expect(
-      [...container.querySelectorAll(".chat-swarm__task")].map((task) => ({
-        label: task.querySelector(".chat-swarm__task-name")?.textContent,
-        duration: task.querySelector(".chat-swarm__task-duration")?.textContent,
-      })),
-    ).toEqual([
-      { label: "Running", duration: "10s" },
-      { label: "Sampled", duration: "6s" },
-      { label: "Done", duration: "7s" },
-    ]);
+it("renders the same live and settled timers after row-delta ingress", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(100_000);
+  const initial = session(childSessionKey, "running", {
+    sessionId: "child-session",
+    label: "Sampled child",
+    hasActiveRun: true,
+    runtimeMs: 4_000,
+    runtimeSampledAt: 98_000,
+    snapshotAt: 100_000,
   });
-  it.each(["unknown"])("keeps raw %s owners separate from ordinary qualified keys", (raw) => {
-    const makeParent = (key: string, agentId: string, done: number): GatewaySessionRow => ({
-      key,
-      agentId,
-      kind: "direct",
-      swarm: {
-        groups: [{ groupId: "custom", createdAt: 1, queued: 0, running: 0, done, failed: 0 }],
-        otherActiveGroups: 0,
+  let reconstructed = initial;
+  const reconnect = vi.fn();
+  const ingress = new GatewayChatEvents(reconnect);
+  const receive = (wire: unknown) => {
+    ingress.dispatch(
+      {
+        type: "event",
+        event: "sessions.changed",
+        payload: { key: childSessionKey, session: wire, ancestorSessions: [] },
       },
-    });
-    const sessions = [
-      makeParent(raw, "main", 1),
-      makeParent(raw, "research", 2),
-      makeParent(`agent:main:${raw}`, "main", 3),
-    ];
-    const { container, update } = mountProgress({ sessionKey: raw, sessions });
-    for (const target of [
-      { sessionKey: raw, agentId: "main", count: 1 },
-      { sessionKey: raw, agentId: "research", count: 2 },
-      { sessionKey: `agent:main:${raw}`, agentId: "main", count: 3 },
-    ]) {
-      update({ ...target, sessions });
-      expect(container.querySelector("summary")?.textContent).toContain(
-        `${target.count} completed`,
-      );
-      expect(container.textContent).toContain("Child details are unavailable");
-    }
-    update({ sessionKey: raw, sessions });
-    expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
-  });
+      (frame) => {
+        const applied = reconcileSessionChangedRow(reconstructed, frame.payload);
+        expect(applied.row).toMatchObject({ key: childSessionKey });
+        reconstructed = applied.row!;
+      },
+    );
+  };
+  receive({ key: childSessionKey, version: 1, full: initial });
+  const capable = mountProgress({ sessions: withSummary([reconstructed]) });
+  const legacy = mountProgress({ sessions: withSummary([initial]) });
+  const durations = () =>
+    [capable, legacy].map(({ container }) => text(container, "task-duration"));
+  expect(durations()).toEqual(["6s", "6s"]);
+
+  const changes: Partial<Row>[] = [
+    { runtimeMs: 9_000, runtimeSampledAt: 102_000, snapshotAt: 103_000 },
+    {
+      runtimeSampledAt: 104_000,
+      snapshotAt: 104_000,
+      status: "done",
+      hasActiveRun: false,
+    },
+  ];
+  const legacyRow = { ...initial };
+  for (const [index, set] of changes.entries()) {
+    vi.setSystemTime(103_000 + index * 1_000);
+    receive({ key: childSessionKey, base: index + 1, version: index + 2, set, remove: [] });
+    Object.assign(legacyRow, set);
+    capable.update({ sessions: withSummary([reconstructed]) });
+    legacy.update({ sessions: withSummary([legacyRow]) });
+    expect(durations()).toEqual(index === 0 ? ["10s", "10s"] : ["9s", "9s"]);
+  }
+  expect(reconnect).not.toHaveBeenCalled();
+});
+it("keeps raw unknown owners separate from ordinary qualified keys", () => {
+  const raw = "unknown";
+  const targets = [
+    [raw, "main", 1],
+    [raw, "research", 2],
+    [`agent:main:${raw}`, "main", 3],
+  ] as const;
+  const sessions = targets.map(([key, agentId, done]): Row => ({
+    key,
+    agentId,
+    kind: "direct",
+    swarm: {
+      groups: [{ groupId: "custom", createdAt: 1, queued: 0, running: 0, done, failed: 0 }],
+      otherActiveGroups: 0,
+    },
+  }));
+  const { container, update } = mountProgress({ sessionKey: raw, sessions });
+  for (const [sessionKey, agentId, count] of targets) {
+    update({ sessionKey, agentId, sessions });
+    expect(container.querySelector("summary")?.textContent).toContain(`${count} completed`);
+    expect(container.textContent).toContain("Child details are unavailable");
+  }
+  update({ sessionKey: raw, sessions });
+  expect(container.querySelector("[data-test-id=chat-swarm]")).toBeNull();
 });

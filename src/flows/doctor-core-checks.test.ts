@@ -469,7 +469,7 @@ describe("CORE_HEALTH_CHECKS", () => {
     expect(findings).not.toContainEqual(
       expect.objectContaining({ target: "google/gemini-3.8-flash" }),
     );
-    // OpenRouter plans no catalog rows, so an unlisted id there is not a finding.
+    // OpenRouter's decision-only seed rows do not establish a conversational catalog.
     for (const target of ["openrouter/openrouter/auto", "openrouter/deepseek/deepseek-v4-pro"]) {
       expect(findings).not.toContainEqual(expect.objectContaining({ target }));
     }

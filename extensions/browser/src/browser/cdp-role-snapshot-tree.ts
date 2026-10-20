@@ -3,7 +3,6 @@ import type { RoleRefMap, RoleSnapshotOptions } from "./pw-role-snapshot.js";
 import { ROLE_SNAPSHOT_MAX_DEPTH } from "./snapshot-depth-limit.js";
 import { INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-/** Role snapshot ref metadata used by agent-facing snapshots. */
 export type CdpRoleRef = RoleRefMap[string] & {
   backendDOMNodeId?: number;
   frameId?: string;

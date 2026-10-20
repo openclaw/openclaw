@@ -90,10 +90,6 @@ export function buildCliHookAssistantMessage(params: {
   };
 }
 
-function isAgentMessage(value: unknown): value is AgentMessage {
-  return Boolean(value && typeof value === "object" && "role" in value);
-}
-
 type CliAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
 
 export async function runCliAgentEndHook(
@@ -148,6 +144,9 @@ function buildCliAssistantTranscriptUsage(
     cacheWrite: usage?.cacheWrite,
     totalTokens: usage?.total,
   });
+  if (usage?.cacheWrite1h) {
+    counters.cacheWrite1h = usage.cacheWrite1h;
+  }
   return usage?.contextUsage ? { ...counters, contextUsage: usage.contextUsage } : counters;
 }
 
@@ -201,7 +200,7 @@ export async function persistCliAssistantTranscript(params: {
         const message = runAgentHarnessBeforeMessageWriteHook({
           ...write,
           message: projectAgentHarnessTranscriptMessageForDisplay({
-            hidden: false,
+            hidden: runParams.privateCompletion === true,
             inputProvenance: runParams.inputProvenance,
             message: write.message,
           }),
@@ -209,7 +208,7 @@ export async function persistCliAssistantTranscript(params: {
         });
         return message
           ? projectAgentHarnessTranscriptMessageForDisplay({
-              hidden: false,
+              hidden: runParams.privateCompletion === true,
               inputProvenance: runParams.inputProvenance,
               message,
             })
@@ -527,7 +526,7 @@ export async function persistCliRunBlock(
 
 export async function finalizeCliContextEngineTurn(params: {
   context: PreparedCliRunContext;
-  historyMessages: unknown[];
+  historyMessages: AgentMessage[];
   assistantText: string;
   terminalAnchor?: import("../../config/sessions/session-accessor.js").TranscriptEntryAnchor;
   output: CliOutput;
@@ -561,7 +560,7 @@ export async function finalizeCliContextEngineTurn(params: {
       });
     }
   } else {
-    const prePromptMessages = params.historyMessages.filter(isAgentMessage);
+    const prePromptMessages = params.historyMessages;
     const turnMessages: AgentMessage[] = [];
     if (context.contextEngineTurnPrompt) {
       turnMessages.push(buildCliHookUserMessage(context.contextEngineTurnPrompt));

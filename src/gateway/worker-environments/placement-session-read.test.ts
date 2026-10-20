@@ -1,7 +1,10 @@
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import {
@@ -130,5 +133,59 @@ it("installs the committed placement when acquisition overlaps its writer receip
     } finally {
       retained.release();
     }
+  });
+});
+
+it("retains a cold async placement read for SQL-free synchronous compatibility access", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const store = createWorkerSessionPlacementStore();
+    const sessionIds = ["cold-placement-absence"];
+    expect(await store.getManyAsync(sessionIds)).toEqual(new Map());
+    const sql = observeHostDataSql();
+    try {
+      expect(store.getMany(sessionIds)).toEqual(new Map());
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+    }
+  });
+});
+
+it("keeps cold async placement results independent of retained placement facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawStateDatabase();
+    const store = createWorkerSessionPlacementStore({ database });
+    const session = {
+      agentId: "main",
+      sessionKey: "agent:main:caller-owned-placement",
+      sessionId: "caller-owned-placement",
+    };
+    await store.claimTurn({
+      ...session,
+      owner: { kind: "local" },
+      runId: "caller-owned-run",
+      claimId: "caller-owned-claim",
+    });
+    await closeOpenClawStateDatabaseAsync();
+    openOpenClawStateDatabase();
+    const reopened = createWorkerSessionPlacementStore();
+    expect(() => reopened.get(session.sessionId)).toThrow("Await getAsync");
+    const result = (await reopened.getManyAsync([session.sessionId])).get(session.sessionId)!;
+    expect(result).toMatchObject({
+      ...session,
+      turnClaim: { claimId: "caller-owned-claim" },
+    });
+    result.agentId = "caller-mutated-agent";
+    result.turnClaim!.claimId = "caller-mutated-claim";
+    expect(reopened.get(session.sessionId)).toMatchObject({
+      ...session,
+      turnClaim: { claimId: "caller-owned-claim" },
+    });
+    expect((await reopened.getManyAsync([session.sessionId])).get(session.sessionId)).toMatchObject(
+      {
+        ...session,
+        turnClaim: { claimId: "caller-owned-claim" },
+      },
+    );
   });
 });

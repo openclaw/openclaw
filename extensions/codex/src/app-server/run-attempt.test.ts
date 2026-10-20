@@ -111,6 +111,7 @@ import * as attemptTurnState from "./run-attempt-turn-state.js";
 import { setAgentWorkspaceForTest } from "./run-attempt-workspace.test-support.js";
 import { registerSettledFinalizationTests } from "./run-attempt.settled-finalization.test-support.js";
 import { registerCodexUsageLimitTests } from "./run-attempt.usage-limits.test-support.js";
+import { registerCodexWorkspacePolicyTests } from "./run-attempt.workspace-policy.test-support.js";
 import {
   ensureCodexSandboxExecServerEnvironment,
   releaseCodexSandboxExecServerEnvironment,
@@ -1630,10 +1631,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(registeredToolNames).toContain("message");
     expect(registeredToolNames).toContain("heartbeat_respond");
     expect(normalInstructions).not.toContain(
-      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
+      "Deferred searchable OpenClaw dynamic tools available: openclaw.heartbeat_respond",
     );
     expect(heartbeatInstructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond.",
+      "Deferred searchable OpenClaw dynamic tools available: openclaw.heartbeat_respond.",
     );
     for (const bridge of [normalBridge, heartbeatBridge, nextNormalBridge]) {
       const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(
@@ -2198,9 +2199,6 @@ describe("runCodexAppServerAttempt", () => {
         if (kind === "heartbeat") {
           params.trigger = "heartbeat";
         }
-        if (kind === "authorized") {
-          params.toolAuthorityFingerprint = "synthetic-authority";
-        }
         const run = runCodexAppServerAttempt(params);
         await awaitGateBeforeSettlement(
           harness.waitForMethod("turn/start"),
@@ -2309,7 +2307,6 @@ describe("runCodexAppServerAttempt", () => {
     );
     const { sessionFile, workspaceDir } = createRunPaths();
     const params = createParams(sessionFile, workspaceDir);
-    params.toolAuthorityFingerprint = "restrictive-turn-authority";
 
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
       "Codex app-server cannot enforce before_prompt_build toolsAllow",
@@ -2328,7 +2325,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     const { sessionFile, workspaceDir } = createRunPaths();
     openRunSession(sessionFile).appendMessage(userMessage("previous request", Date.now()));
-    const { closeAndWait, events, retireSpy, state } = installCleanupTrackingClient();
+    const { closeAndWait, events, retireSpy } = installCleanupTrackingClient();
     const abortController = new AbortController();
     const removeAbortListener = vi.spyOn(abortController.signal, "removeEventListener");
     const params = createParams(sessionFile, workspaceDir);
@@ -2342,13 +2339,12 @@ describe("runCodexAppServerAttempt", () => {
     expect(beforePromptBuild).toHaveBeenCalledTimes(2);
     expect(events).toContain("request:thread/start");
     expect(events).not.toContain("request:turn/start");
-    expect(retireSpy).toHaveBeenCalledOnce();
-    expect(retireSpy).toHaveBeenCalledWith(state.client);
-    expect(closeAndWait).toHaveBeenCalledOnce();
+    expect(retireSpy).not.toHaveBeenCalled();
+    expect(closeAndWait).not.toHaveBeenCalled();
     expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
   });
 
-  it("preserves binding retention errors while releasing fundamental resources", async () => {
+  it("preserves binding retention errors while releasing the shared thread subscription", async () => {
     const bindingStore = createCodexTestBindingStore();
     const originalWithLease = bindingStore.withLease.bind(bindingStore);
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -2365,7 +2361,6 @@ describe("runCodexAppServerAttempt", () => {
           return await originalWithLease(identity, run);
         }
         bindingCleanupFailures += 1;
-        params.cleanupBundleMcpOnRunEnd = true;
         throw new Error("binding retention cleanup failed");
       },
     };
@@ -2385,12 +2380,11 @@ describe("runCodexAppServerAttempt", () => {
     await expect(run).rejects.toThrow("binding retention cleanup failed");
 
     expect(bindingCleanupFailures).toBe(1);
-    expect(params.cleanupBundleMcpOnRunEnd).toBe(true);
     expect(events).toContain("request:turn/start");
-    expect(events).toContain("closeAndWait");
-    expect(retireSpy).toHaveBeenCalledOnce();
-    expect(retireSpy).toHaveBeenCalledWith(state.client);
-    expect(closeAndWait).toHaveBeenCalledOnce();
+    expect(events).toContain("request:thread/unsubscribe");
+    expect(events).not.toContain("closeAndWait");
+    expect(retireSpy).not.toHaveBeenCalled();
+    expect(closeAndWait).not.toHaveBeenCalled();
     expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
     expect(queueActiveRunMessageForTest("session-1", "after cleanup")).toBe(false);
   });
@@ -3547,39 +3541,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.toolMetas.filter((meta) => meta.isError === true)).toHaveLength(2);
   });
 
-  it("applies the session permission mode and root to resumed harness turns", async () => {
-    const { sessionFile, workspaceDir } = createRunPaths();
-    const nestedCwd = path.join(workspaceDir, "packages", "app");
-    await fs.mkdir(nestedCwd, { recursive: true });
-    await writeExistingBinding(sessionFile, workspaceDir);
-    const harness = createResumeHarness();
-    const params = createParams(sessionFile, workspaceDir);
-    params.cwd = nestedCwd;
-    params.permissionMode = "full";
-    params.sessionRoot = workspaceDir;
-    const run = runCodexAppServerAttempt(params, {
-      pluginConfig: { appServer: { mode: "guardian" } },
-    });
-    await awaitGateBeforeSettlement(
-      harness.waitForMethod("turn/start"),
-      run,
-      "Codex attempt settled before turn/start",
-    );
-    await harness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
-    await run;
-    const resumeParams = harness.requests.find((request) => request.method === "thread/resume")
-      ?.params as Record<string, unknown> | undefined;
-    const turnParams = harness.requests.find((request) => request.method === "turn/start")
-      ?.params as Record<string, unknown> | undefined;
-    expect(resumeParams?.cwd).toBe(nestedCwd);
-    expect(resumeParams?.runtimeWorkspaceRoots).toEqual([workspaceDir]);
-    expect(resumeParams?.approvalPolicy).toBe("never");
-    expect(resumeParams?.sandbox).toBe("danger-full-access");
-    expect(turnParams?.cwd).toBe(nestedCwd);
-    expect(turnParams?.runtimeWorkspaceRoots).toEqual([workspaceDir]);
-    expect(turnParams?.approvalPolicy).toBe("never");
-    expect(turnParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
-  });
+  registerCodexWorkspacePolicyTests({ createRunPaths, writeExistingBinding });
+
   it("preserves a healthy binding when invalid image cleanup hits a transient thread", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     await writeExistingBinding(sessionFile, workspaceDir, {
@@ -3876,9 +3839,8 @@ describe("runCodexAppServerAttempt", () => {
     const settled = vi.fn();
     const settledRun = run.then(settled, settled);
     try {
-      await vi.waitFor(() => {
-        expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBe(params.sessionId);
-      }, fastWait);
+      // The controller reports the session active from admission; native events need the turn.
+      await run.waitForTurnAccepted();
       await harness.notify(
         itemNotification("item/started", {
           id: "msg-1",

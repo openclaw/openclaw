@@ -87,7 +87,7 @@ export abstract class NewSessionModelSelection {
     for (const listener of this.listeners) {
       listener();
     }
-    this.requestUpdate();
+    this.changed();
   };
 
   subscribe(listener: () => void): () => void {
@@ -97,7 +97,7 @@ export abstract class NewSessionModelSelection {
 
   constructor(
     private readonly onSelectionChange: ModelSelectionChange,
-    private readonly requestUpdate: () => void,
+    private readonly changed: () => void,
   ) {}
 
   protected resetSelection(model = "") {

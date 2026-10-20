@@ -127,6 +127,7 @@ export function runOpenClawAgentWriteAdmission<T>(
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
   caller?: DirectReservationCaller,
+  concurrentBoardReads?: "transcript-only",
 ): Promise<T> {
   return runOpenClawAgentPathWriteAdmission(
     resolveOpenClawAgentSqlitePath(options),
@@ -135,6 +136,7 @@ export function runOpenClawAgentWriteAdmission<T>(
     timing,
     signal,
     caller,
+    concurrentBoardReads,
   );
 }
 
@@ -146,6 +148,7 @@ export function runOpenClawAgentPathWriteAdmission<T>(
   timing?: StoreWriterTiming,
   signal?: AbortSignal,
   caller?: DirectReservationCaller,
+  concurrentBoardReads?: "transcript-only",
 ): Promise<T> {
   const identity = readDatabasePathIdentitySync(pathname);
   const storePath = identity.canonicalPath;
@@ -177,6 +180,7 @@ export function runOpenClawAgentPathWriteAdmission<T>(
             queues: admission.queues,
             storePath,
             label: "agent database write admission",
+            keys: concurrentBoardReads ? ["transcript"] : undefined,
             // Worker callbacks inherit their parent's async context, but not its native
             // writer lock. Their foreground writes must queue, never reenter that owner.
             reentrant: reentrant && !admission.queues.get(storePath)?.holder?.worker,
@@ -210,6 +214,7 @@ export async function runOpenClawAgentWorkerWrite<T>(
   signal?: AbortSignal,
   priority?: "background",
   caller?: WorkerReservationCaller,
+  concurrentBoardReads?: "transcript-only",
 ): Promise<T> {
   if (priority === "background") {
     const storePath = readDatabasePathIdentitySync(
@@ -233,9 +238,30 @@ export async function runOpenClawAgentWorkerWrite<T>(
         true,
         observed,
         signal,
+        undefined,
+        concurrentBoardReads,
       ),
     caller,
     worker,
+  );
+}
+
+/** Board authority remains exclusive with mutations, but not certified transcript appends. */
+export function runOpenClawAgentBoardReadAdmission<T>(
+  options: OpenClawAgentDatabaseOptions,
+  run: () => Promise<T>,
+): Promise<T> {
+  const pathname = resolveOpenClawAgentSqlitePath(options);
+  const storePath = readDatabasePathIdentitySync(pathname).canonicalPath;
+  return runWithSqliteDatabaseAdmissionTurn([pathname], () =>
+    runQueuedStoreWrite({
+      queues: admission.queues,
+      storePath,
+      label: "agent database board read admission",
+      keys: ["board"],
+      reentrant: !admission.queues.get(storePath)?.holder?.worker,
+      fn: run,
+    }),
   );
 }
 

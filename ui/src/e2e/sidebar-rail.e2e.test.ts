@@ -1,15 +1,17 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e-contract.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   defaultControlUiFeatureMethods,
   controlUiBundledSettingsStorageKey,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  installPreferenceServer,
+  captureFrame,
+  expectFocused,
+  seedStorage,
+} from "./sidebar-assertions.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Personal rail pins" });
 const unloaded = [
@@ -34,14 +36,11 @@ suite.define(() => {
             { key: "agent:main:design", kind: "direct", label: "Design ideas" },
           ],
         });
-        await page.addInitScript(
-          ({ key }) =>
-            localStorage.setItem(
-              key,
-              JSON.stringify({ railShortcuts: ["session:agent:main:design"] }),
-            ),
-          { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
-        );
+        await seedStorage(page, {
+          [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
+            railShortcuts: ["session:agent:main:design"],
+          }),
+        });
         await page.goto(suite.server.baseUrl + "chat");
         const pin = page
           .locator(".sidebar-rail")
@@ -129,14 +128,12 @@ suite.define(() => {
           },
         },
       });
-      await page.addInitScript(
-        ({ key, entries: savedEntries }) =>
-          localStorage.setItem(
-            key,
-            JSON.stringify({ railShortcuts: savedEntries, themeMode: "dark" }),
-          ),
-        { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl), entries },
-      );
+      await seedStorage(page, {
+        [controlUiBundledSettingsStorageKey(suite.server.baseUrl)]: JSON.stringify({
+          railShortcuts: entries,
+          themeMode: "dark",
+        }),
+      });
       await page.goto(suite.server.baseUrl + "chat");
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
       const rail = page.locator("openclaw-app-sidebar .sidebar-rail");
@@ -174,23 +171,14 @@ suite.define(() => {
       expect(await pins.locator(".sidebar-reorder-trigger").count()).toBe(0);
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const dir = createControlUiE2eArtifactDir("rail", process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR);
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".shell"),
-          [rail, pins.first()],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(dir, "after-desktop.png"), frame.png);
+        await captureFrame(dir, "after-desktop.png", page.locator(".shell"), [rail, pins.first()]);
         await page.setViewportSize({ width: 390, height: 844 });
         await page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first()
           .click();
         await page.locator(".shell--nav-drawer-open").waitFor();
-        const mobile = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [rail], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(dir, "after-mobile.png"), mobile.png);
+        await captureFrame(dir, "after-mobile.png", page.locator(".shell"), [rail]);
         await page.setViewportSize({ width: 1280, height: 800 });
       }
       const source = rail.getByRole("link", { name: "Research plan", exact: true });
@@ -208,113 +196,13 @@ suite.define(() => {
       await expect.poll(pinOrder).toEqual(reordered);
 
       const menu = page.locator(".sidebar-rail-pin-menu");
-      const focusTrace = await source.evaluateHandle((sourceElement) => {
-        const lifetime = new AbortController();
-        let shortcut: string | null = null;
-        const describe = (eventTarget: EventTarget | null) =>
-          eventTarget instanceof Element
-            ? {
-                tag: eventTarget.localName,
-                class: eventTarget.getAttribute("class")?.slice(0, 160) ?? null,
-                connected: eventTarget.isConnected,
-              }
-            : null;
-        const snapshot = (phase: string, event?: Event) => {
-          const dropdown = document.querySelector<HTMLElement>(".sidebar-rail-pin-menu");
-          const active: Array<ReturnType<typeof describe>> = [];
-          let element = document.activeElement;
-          while (element && active.length < 5) {
-            active.push(describe(element));
-            element = element.shadowRoot?.activeElement ?? null;
-          }
-          return {
-            shortcut,
-            phase,
-            event: event?.type ?? null,
-            key: event instanceof KeyboardEvent ? event.key : null,
-            defaultPrevented: event?.defaultPrevented ?? null,
-            target: describe(event?.composedPath()[0] ?? null),
-            source: describe(sourceElement),
-            sourceFocused: sourceElement === document.activeElement,
-            menu: dropdown
-              ? { ...describe(dropdown), open: dropdown.matches(":popover-open") }
-              : null,
-            active,
-          };
-        };
-        const events: Array<ReturnType<typeof snapshot>> = [];
-        const record = (phase: string, event: Event) => {
-          if (events.length === 100) {
-            events.shift();
-          }
-          events.push(snapshot(phase, event));
-        };
-        const keydown = (phase: string) => (event: KeyboardEvent) => {
-          if (event.key === "F10" && event.shiftKey) {
-            shortcut = "Shift+F10";
-          } else if (event.key === "ContextMenu") {
-            shortcut = "ContextMenu";
-          }
-          if (event.key === "Escape" || event.key === "ContextMenu" || event.key === "F10") {
-            record(phase, event);
-          }
-        };
-        window.addEventListener("keydown", keydown("window-capture"), {
-          capture: true,
-          signal: lifetime.signal,
-        });
-        document.addEventListener("keydown", keydown("document-bubble"), {
-          signal: lifetime.signal,
-        });
-        document.addEventListener("focusin", (event) => record("focusin", event), {
-          capture: true,
-          signal: lifetime.signal,
-        });
-        for (const type of ["overlay-hide", "overlay-after-hide"]) {
-          document.addEventListener(
-            type,
-            (event) => {
-              if (
-                event.target instanceof Element &&
-                event.target.matches(".sidebar-rail-pin-menu")
-              ) {
-                record(type, event);
-              }
-            },
-            { capture: true, signal: lifetime.signal },
-          );
-        }
-        return {
-          read: () => ({ events, final: snapshot("failure") }),
-          stop: () => lifetime.abort(),
-        };
-      });
-      try {
-        for (const key of ["Shift+F10", "ContextMenu"]) {
-          await source.focus();
-          await page.keyboard.press(key);
-          await menu.getByRole("menuitem", { name: "Move down", exact: true }).waitFor();
-          await expect
-            .poll(() =>
-              menu
-                .getByRole("menuitem", { name: "Move down", exact: true })
-                .evaluate((el) => el.matches(":focus-within")),
-            )
-            .toBe(true);
-          await page.keyboard.press("Escape");
-          await expect
-            .poll(() => source.evaluate((el) => el === document.activeElement))
-            .toBe(true);
-        }
-      } catch (error) {
-        await writeFile(
-          path.join(suite.artifactDir, "rail-keyboard-focus-failure.json"),
-          JSON.stringify(await focusTrace.evaluate((trace) => trace.read()), null, 2),
-        );
-        throw error;
-      } finally {
-        await focusTrace.evaluate((trace) => trace.stop());
-        await focusTrace.dispose();
+      for (const key of ["Shift+F10", "ContextMenu"]) {
+        await source.focus();
+        await page.keyboard.press(key);
+        await menu.getByRole("menuitem", { name: "Move down", exact: true }).waitFor();
+        await expectFocused(menu.getByRole("menuitem", { name: "Move down", exact: true }), true);
+        await page.keyboard.press("Escape");
+        await expectFocused(source);
       }
       await rail
         .getByRole("link", { name: "Release notes", exact: true })
@@ -371,34 +259,11 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl + "chat");
         await gateway.waitForRequest("connect");
         const installProfilePreferences = () =>
-          page.evaluate(() => {
-            const mock = (window as MockGatewayWindow).openclawControlUiE2eGateway!;
-            const storageKey = "openclaw-test:clean-rail:profile-prefs";
-            const saved = sessionStorage.getItem(storageKey);
-            const values: Record<string, unknown> = saved
-              ? JSON.parse(saved)
-              : { "ui.themeMode": "dark" };
-            mock.setRequestHandler("users.prefs.get", ({ respond }) =>
-              respond({ status: "ok", entries: values }),
-            );
-            mock.setRequestHandler("users.prefs.set", ({ params, respond }) => {
-              const request = params as {
-                entries: Record<string, unknown>;
-                expectedEntries?: Record<string, unknown>;
-              };
-              if (
-                Object.entries(request.expectedEntries ?? {}).some(
-                  ([key, value]) => JSON.stringify(values[key] ?? null) !== JSON.stringify(value),
-                )
-              ) {
-                respond({ status: "conflict" });
-                return;
-              }
-              Object.assign(values, request.entries);
-              sessionStorage.setItem(storageKey, JSON.stringify(values));
-              respond({ status: "ok" });
-            });
-          });
+          installPreferenceServer(
+            page,
+            { "ui.themeMode": "dark" },
+            "openclaw-test:clean-rail:profile-prefs",
+          );
         await installProfilePreferences();
         await gateway.resolveDeferred("connect");
         const sidebar = page.locator("openclaw-app-sidebar");
@@ -417,13 +282,7 @@ suite.define(() => {
           if (!dir) {
             return;
           }
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".shell"),
-            [rail, source],
-            { animations: "disabled" },
-          );
-          await writeFile(path.join(dir, name), frame.png);
+          await captureFrame(dir, name, page.locator(".shell"), [rail, source]);
         };
         await capture("rail-empty.png");
         const sourceBox = await source.boundingBox();

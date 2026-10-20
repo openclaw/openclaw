@@ -17,11 +17,9 @@ import type { PendingChatAbort } from "./chat-abort-request.ts";
 import type { ChatErrorState } from "./chat-error-state.ts";
 import type { PullRequestRefreshHost } from "./chat-pull-request-refresh.ts";
 import type { ChatRealtimeState } from "./chat-realtime.ts";
-import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
-import type { SidebarSelection } from "./components/chat-sidebar-content-types.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
 import type { handleAbortChat } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
@@ -73,7 +71,6 @@ export type ChatPageHost = ChatHost &
     chatAccountSelection?: ChatAccountSelection | null;
     modelAuthStatusRequestVersion: number;
     modelAuthStatusResult: ModelAuthStatusResult | null;
-    modelAuthStatusError: string | null;
     sessionsResult: SessionsListResult | null;
     sessionsResultAgentId: string | null;
     sessionsError: string | null;
@@ -85,7 +82,6 @@ export type ChatPageHost = ChatHost &
     pendingAbort: PendingChatAbort | null;
     pendingSessionMessageReloadSessionKey: string | null;
     chatSubmitGuards: Set<string>;
-    chatSendTimingsByRun: Map<string, ChatSendTimingEntry>;
     compactionStatus: CompactionStatus | null;
     fallbackStatus: FallbackStatus | null;
     observerDigest: SessionObserverDigest | null;
@@ -98,13 +94,9 @@ export type ChatPageHost = ChatHost &
     chatStreamRenderFrame: number | null;
     chatLastScrollHeight: number;
     sidebarLayout: SidebarLayout;
-    sidebarContent: SidebarSelection | null;
-    sidebarFocusPanelId: string;
-    sidebarFocusVersion: number;
     updateSidebarActivePanel: (panelId: string) => void;
     imageLightbox: ImageLightboxItem | null;
     imageLightboxRequestVersion: number;
-    querySelector: (selectors: string) => Element | null;
     resetToolStream: () => void;
     resetChatInputHistoryNavigation: () => void;
     scrollToBottom: (opts?: { smooth?: boolean }) => void;
@@ -133,7 +125,7 @@ export type ChatPageHost = ChatHost &
         persist?: boolean;
         dashboardPresentation?: "personal";
         geometryOnly?: boolean;
-        automaticResource?: "desktop" | "browser";
+        automaticResource?: "desktop";
       },
     ) => void;
     beginImageOpen: () => number;

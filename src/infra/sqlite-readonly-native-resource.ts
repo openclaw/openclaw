@@ -123,7 +123,6 @@ export function createNativeWorkerResource(
     }
     owned.removed = true;
     await announce(directory, owned);
-    await notifyOwner("removed", directory);
     directories.delete(directory);
   };
   const send = (message: SqliteNativeReply) => {

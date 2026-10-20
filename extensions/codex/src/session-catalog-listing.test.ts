@@ -560,7 +560,6 @@ describe("Codex supervision catalog", () => {
       await control.listPage({});
       runtimeConfig = { ...config };
 
-      expect(() => factory.forRequest("main", source)).toThrow("configuration changed");
       await expect(
         operation === "list"
           ? control.listPage({})

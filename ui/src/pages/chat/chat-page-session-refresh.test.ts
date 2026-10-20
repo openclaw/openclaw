@@ -9,18 +9,24 @@ vi.mock("./chat-pane.tsx", async () => {
   return { ChatPaneView: mockChatPagePane };
 });
 
+// mock-isolation: Count page snapshot publications while retaining the real keyed DOM renderer.
+vi.mock("./chat-page-pane-render.tsx", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-page-pane-render.tsx")>();
+  return { ...actual, createChatPageSnapshot: vi.fn(actual.createChatPageSnapshot) };
+});
+
+import { patchSettings } from "../../app/settings.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { ChatPageState } from "./chat-page-state.ts";
+import { createChatPageSnapshot } from "./chat-page-pane-render.tsx";
 import {
   settleChatPage,
   createSessionTitleSource,
   createSplitLayout,
-  setLayout,
   setNavigationContext,
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
-import { ChatPage } from "./chat-page.ts";
+import "./chat-page.ts";
 
 describe("chat page session refresh", () => {
   beforeEach(() => {
@@ -36,16 +42,16 @@ describe("chat page session refresh", () => {
   });
 
   it("leaves roster presentation updates with mounted panes", async () => {
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const source = createSessionTitleSource();
     const navigation = setNavigationContext(page);
     Object.assign(navigation.context, { sessions: source.sessions });
     page.data = { sessionKey: "agent:main:current" };
+    patchSettings({ chatSplitLayout: createSplitLayout(page.data.sessionKey) });
     document.body.append(page);
-    setLayout(page, createSplitLayout(page.data.sessionKey));
     await settleChatPage(page);
     const panes = [...page.querySelectorAll("openclaw-chat-pane")];
-    const render = vi.spyOn(ChatPageState.forHost(page), "render");
+    const render = vi.mocked(createChatPageSnapshot).mockClear();
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
       frames.push(callback),
@@ -67,7 +73,7 @@ describe("chat page session refresh", () => {
   });
 
   it("refreshes route defaults on hello changes while leaving profile updates with children", async () => {
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const navigation = setNavigationContext(page);
     const listeners = new Set<(snapshot: typeof navigation.context.gateway.snapshot) => void>();
     const gateway = {
@@ -81,7 +87,7 @@ describe("chat page session refresh", () => {
     page.data = { sessionKey: "agent:main:current" };
     document.body.append(page);
     await settleChatPage(page);
-    const render = vi.spyOn(ChatPageState.forHost(page), "render");
+    const render = vi.mocked(createChatPageSnapshot).mockClear();
     const frames: FrameRequestCallback[] = [];
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
       frames.push(callback),

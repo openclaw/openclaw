@@ -81,13 +81,12 @@ function buildCreateBody(req: VideoGenerationRequest): Record<string, unknown> {
   if (fps !== 30 && fps !== 60) {
     throw new Error("Z.AI video fps must be 30 or 60.");
   }
-  const duration = req.durationSeconds;
   const body: Record<string, unknown> = {
     model,
     prompt: req.prompt,
     quality,
     fps,
-    duration: typeof duration === "number" && Number.isFinite(duration) && duration > 7.5 ? 10 : 5,
+    duration: req.durationSeconds ?? 5,
     size:
       resolveClosestSize({
         requestedSize: req.size,

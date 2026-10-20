@@ -1,3 +1,4 @@
+import { ComponentType } from "discord-api-types/v10";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -12,13 +13,11 @@ import {
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  Button,
-  StringSelectMenu,
-  type ButtonInteraction,
-  type ComponentData,
-  type MessagePayload,
-  type StringSelectMenuInteraction,
+import type {
+  BaseMessageInteractiveComponent,
+  BaseComponentInteraction,
+  ComponentData,
+  MessagePayload,
 } from "../internal/discord.js";
 import { splitDiscordModelRef } from "./model-picker-preference-primitives.js";
 import { readDiscordModelPickerRecentModels } from "./model-picker-preferences.js";
@@ -55,9 +54,7 @@ import type {
   SafeDiscordInteractionCall,
 } from "./native-command-ui.types.js";
 
-function resolveModelPickerSelectionValue(
-  interaction: ButtonInteraction | StringSelectMenuInteraction,
-): string | null {
+function resolveModelPickerSelectionValue(interaction: BaseComponentInteraction): string | null {
   return normalizeOptionalString(interaction.values?.[0]) ?? null;
 }
 
@@ -74,9 +71,7 @@ function resolveRuntimeToken(
   return matches?.length === 1 ? matches[0]?.id : undefined;
 }
 
-function resolveSelectedBucket(
-  interaction: ButtonInteraction | StringSelectMenuInteraction,
-): string | undefined {
+function resolveSelectedBucket(interaction: BaseComponentInteraction): string | undefined {
   const raw = resolveModelPickerSelectionValue(interaction)?.toLowerCase();
   return raw && raw !== "all" ? raw : undefined;
 }
@@ -184,7 +179,7 @@ function resolveDiscordModelPickerModelSelection(params: {
 
 async function handleDiscordModelPickerInteraction(
   params: DiscordModelPickerFallbackParams & {
-    interaction: ButtonInteraction | StringSelectMenuInteraction;
+    interaction: BaseComponentInteraction;
     data: ComponentData;
   },
 ) {
@@ -559,26 +554,26 @@ type DiscordModelPickerFallbackParams = {
 
 export function createDiscordModelPickerFallbackButton(
   params: DiscordModelPickerFallbackParams,
-): Button {
-  return new (class extends Button {
-    label = "modelpick";
-    customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=btn`;
+): BaseMessageInteractiveComponent {
+  return {
+    type: ComponentType.Button,
+    customId: `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=btn`,
 
-    override async run(interaction: ButtonInteraction, data: ComponentData) {
+    async run(interaction: BaseComponentInteraction, data: ComponentData) {
       await handleDiscordModelPickerInteraction({ ...params, interaction, data });
-    }
-  })();
+    },
+  };
 }
 
 export function createDiscordModelPickerFallbackSelect(
   params: DiscordModelPickerFallbackParams,
-): StringSelectMenu {
-  return new (class extends StringSelectMenu {
-    customId = `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=sel`;
-    options = [];
+): BaseMessageInteractiveComponent {
+  return {
+    type: ComponentType.StringSelect,
+    customId: `${DISCORD_MODEL_PICKER_CUSTOM_ID_KEY}:seed=sel`,
 
-    override async run(interaction: StringSelectMenuInteraction, data: ComponentData) {
+    async run(interaction: BaseComponentInteraction, data: ComponentData) {
       await handleDiscordModelPickerInteraction({ ...params, interaction, data });
-    }
-  })();
+    },
+  };
 }

@@ -79,8 +79,12 @@ suite.define(() => {
         }
         await answer.waitFor();
         await expect.poll(() => reasoning.isVisible()).toBe(false);
-        await worked.click();
-        await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
+        if (withTools || reasoningLevel === "on") {
+          await worked.click();
+          await expect.poll(() => worked.getAttribute("aria-expanded")).toBe("true");
+        } else {
+          expect(await worked.count()).toBe(0);
+        }
         await expect.poll(() => reasoning.isVisible()).toBe(reasoningLevel === "on");
         if (reasoningLevel === "on") {
           expect(await reasoning.locator("pre code").allTextContents()).toEqual([code]);

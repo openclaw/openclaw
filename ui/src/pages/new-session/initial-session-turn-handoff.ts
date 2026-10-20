@@ -1,10 +1,10 @@
-import { readAgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { isAgentRuntimeRestrictionErrorDetails } from "../../lib/protocol-validators.generated/session-input.js";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -89,8 +89,9 @@ export async function completeInitialSessionTurn(
     return;
   }
   const restriction =
-    initialRun.status === "rejected"
-      ? readAgentRuntimeRestrictionErrorDetails(initialRun.errorDetails)
+    initialRun.status === "rejected" &&
+    isAgentRuntimeRestrictionErrorDetails(initialRun.errorDetails)
+      ? initialRun.errorDetails
       : undefined;
   const retry = restriction ? createDeferredCore<boolean>() : undefined;
   try {

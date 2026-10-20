@@ -48,41 +48,48 @@ function requireFetchGuardRequest(): unknown {
   return call[0];
 }
 
-async function expectRemoteMediaMaxBytesError(params: {
-  fetchImpl: Parameters<typeof readRemoteMediaBuffer>[0]["fetchImpl"];
-  maxBytes: number;
-}) {
-  await expect(
-    readRemoteMediaBuffer({
-      url: "https://example.com/file.bin",
-      fetchImpl: params.fetchImpl,
-      maxBytes: params.maxBytes,
-      lookupFn: makeLookupFn(),
-    }),
-  ).rejects.toThrow("exceeds maxBytes");
-}
-
-async function expectRedactedBotTokenFetchError(params: {
-  botFileUrl: string;
-  botToken: string;
-  expectedErrorText: string;
-  fetchImpl: Parameters<typeof readRemoteMediaBuffer>[0]["fetchImpl"];
-}) {
-  const error = await readRemoteMediaBuffer({
-    url: params.botFileUrl,
-    fetchImpl: params.fetchImpl,
+function mediaRequest(overrides: Partial<Parameters<typeof saveRemoteMedia>[0]> = {}) {
+  return {
+    url: "https://example.com/file.bin",
     lookupFn: makeLookupFn(),
     maxBytes: 1024,
-    ssrfPolicy: {
-      allowedHostnames: ["files.example.test"],
-      allowRfc2544BenchmarkRange: true,
-    },
-  }).catch((err: unknown) => err as Error);
+    ...overrides,
+  };
+}
 
-  expect(error).toBeInstanceOf(Error);
-  const errorText = error instanceof Error ? String(error) : "";
-  expect(errorText).not.toContain(params.botToken);
-  expect(errorText).toBe(params.expectedErrorText);
+const readMedia = (options: Partial<Parameters<typeof readRemoteMediaBuffer>[0]>) =>
+  readRemoteMediaBuffer(mediaRequest(options));
+const saveMedia = (options: Partial<Parameters<typeof saveRemoteMedia>[0]>) =>
+  saveRemoteMedia(mediaRequest(options));
+
+function abortableBodyFetch(onStart: () => void = () => {}, progressing = false) {
+  return vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const signal = init?.signal;
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          const failForAbort = () => controller.error(signal?.reason);
+          if (signal?.aborted) {
+            failForAbort();
+            return;
+          }
+          signal?.addEventListener("abort", failForAbort, { once: true });
+          if (progressing) {
+            setTimeout(() => controller.enqueue(new Uint8Array([1])), 25);
+            setTimeout(() => controller.enqueue(new Uint8Array([2])), 50);
+            setTimeout(() => {
+              signal?.removeEventListener("abort", failForAbort);
+              controller.close();
+            }, 75);
+          } else {
+            controller.enqueue(new Uint8Array([1]));
+          }
+          onStart();
+        },
+      }),
+      { status: 200 },
+    );
+  });
 }
 
 describe("readRemoteMediaBuffer", () => {
@@ -93,7 +100,7 @@ describe("readRemoteMediaBuffer", () => {
 
   it("rejects when streamed payload exceeds maxBytes", async () => {
     const fetchImpl = makeResponseFetch([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])]);
-    await expectRemoteMediaMaxBytesError({ fetchImpl, maxBytes: 4 });
+    await expect(readMedia({ fetchImpl, maxBytes: 4 })).rejects.toThrow("exceeds maxBytes");
   });
 
   it("rejects malformed content-length before remote buffer reads", async () => {
@@ -132,23 +139,22 @@ describe("readRemoteMediaBuffer", () => {
       expectedErrorText: `MediaFetchError: Failed to fetch media from https://files.example.test/file/bot${redactedBotToken}/photos/1.jpg: HTTP 401; body: unauthorized`,
     },
   ] as const)("$name", async ({ fetchImpl, expectedErrorText }) => {
-    await expectRedactedBotTokenFetchError({
-      botFileUrl,
-      botToken,
-      expectedErrorText,
+    const error = await readMedia({
+      url: botFileUrl,
       fetchImpl,
-    });
+      ssrfPolicy: { allowedHostnames: ["files.example.test"], allowRfc2544BenchmarkRange: true },
+    }).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(Error);
+    expect(String(error)).not.toContain(botToken);
+    expect(String(error)).toBe(expectedErrorText);
   });
 
   it("uses the default response-header deadline for stalled media", async () => {
     vi.useFakeTimers();
     try {
-      const result = readRemoteMediaBuffer({
-        url: "https://example.com/file.bin",
-        fetchImpl: makeResponseHeaderStallingFetch(),
-        lookupFn: makeLookupFn(),
-        maxBytes: 1024,
-      }).catch((error: unknown) => error);
+      const result = readMedia({ fetchImpl: makeResponseHeaderStallingFetch() }).catch(
+        (error: unknown) => error,
+      );
 
       await vi.advanceTimersByTimeAsync(15 * 60_000 + 5);
 
@@ -165,37 +171,9 @@ describe("readRemoteMediaBuffer", () => {
   it("clears the response-header deadline while a healthy body keeps progressing", async () => {
     vi.useFakeTimers();
     try {
-      const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        const signal = init?.signal;
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              const failForAbort = () => controller.error(signal?.reason);
-              if (signal?.aborted) {
-                failForAbort();
-                return;
-              }
-              signal?.addEventListener("abort", failForAbort, { once: true });
-              setTimeout(() => controller.enqueue(new Uint8Array([1])), 25);
-              setTimeout(() => controller.enqueue(new Uint8Array([2])), 50);
-              setTimeout(() => {
-                signal?.removeEventListener("abort", failForAbort);
-                controller.close();
-              }, 75);
-            },
-          }),
-          { status: 200 },
-        );
-      });
+      const fetchImpl = abortableBodyFetch(undefined, true);
 
-      const result = readRemoteMediaBuffer({
-        url: "https://example.com/file.bin",
-        fetchImpl,
-        lookupFn: makeLookupFn(),
-        maxBytes: 1024,
-        responseHeaderTimeoutMs: 10,
-        readIdleTimeoutMs: 30,
-      });
+      const result = readMedia({ fetchImpl, responseHeaderTimeoutMs: 10, readIdleTimeoutMs: 30 });
 
       await vi.advanceTimersByTimeAsync(80);
 
@@ -207,29 +185,10 @@ describe("readRemoteMediaBuffer", () => {
 
   it("keeps the parent abort active while reading the response body", async () => {
     const parent = new AbortController();
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const signal = init?.signal;
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array([1]));
-            const failForAbort = () => controller.error(signal?.reason);
-            if (signal?.aborted) {
-              failForAbort();
-              return;
-            }
-            signal?.addEventListener("abort", failForAbort, { once: true });
-          },
-        }),
-        { status: 200 },
-      );
-    });
-    const result = readRemoteMediaBuffer({
-      url: "https://example.com/file.bin",
+    const fetchImpl = abortableBodyFetch();
+    const result = readMedia({
       fetchImpl,
       requestInit: { signal: parent.signal },
-      lookupFn: makeLookupFn(),
-      maxBytes: 1024,
       responseHeaderTimeoutMs: 60_000,
     }).catch((error: unknown) => error);
 
@@ -260,11 +219,8 @@ describe("readRemoteMediaBuffer", () => {
         )
         .mockResolvedValueOnce(new Response("ok", { status: 200 }));
 
-      const result = readRemoteMediaBuffer({
-        url: "https://example.com/file.bin",
+      const result = readMedia({
         fetchImpl,
-        lookupFn: makeLookupFn(),
-        maxBytes: 1024,
         readIdleTimeoutMs: 20,
         retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
       });
@@ -278,41 +234,40 @@ describe("readRemoteMediaBuffer", () => {
     }
   });
 
-  it("does not retry 4xx responses", async () => {
+  it.each([
+    [
+      "4xx responses",
+      () => Promise.resolve(new Response("missing", { status: 404 })),
+      { code: "http_error", status: 404 },
+    ],
+    [
+      "caller aborts",
+      () =>
+        Promise.reject(
+          Object.assign(new Error("This operation was aborted"), { name: "AbortError" }),
+        ),
+      { code: "fetch_failed" },
+    ],
+    [
+      "maxBytes failures",
+      () =>
+        Promise.resolve(new Response("large", { status: 200, headers: { "content-length": "5" } })),
+      { code: "max_bytes" },
+    ],
+  ] as const)("does not retry %s", async (_name, firstResponse, expected) => {
     const fetchImpl = vi
       .fn()
-      .mockResolvedValueOnce(new Response("missing", { status: 404 }))
+      .mockImplementationOnce(firstResponse)
       .mockResolvedValueOnce(new Response("ok", { status: 200 }));
-
     await expect(
-      readRemoteMediaBuffer({
-        url: "https://example.com/file.bin",
-        fetchImpl,
-        lookupFn: makeLookupFn(),
-        maxBytes: 1024,
-        retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
-      }),
-    ).rejects.toMatchObject({ code: "http_error", status: 404 });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not retry caller aborts", async () => {
-    const abortError = new Error("This operation was aborted");
-    abortError.name = "AbortError";
-    const fetchImpl = vi
-      .fn()
-      .mockRejectedValueOnce(abortError)
-      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
-
-    await expect(
-      readRemoteMediaBuffer({
-        url: "https://example.com/file.bin",
-        fetchImpl,
-        lookupFn: makeLookupFn(),
-        maxBytes: 1024,
-        retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
-      }),
-    ).rejects.toMatchObject({ code: "fetch_failed" });
+      readRemoteMediaBuffer(
+        mediaRequest({
+          fetchImpl,
+          maxBytes: expected.code === "max_bytes" ? 4 : 1024,
+          retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+        }),
+      ),
+    ).rejects.toMatchObject(expected);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -362,26 +317,6 @@ describe("readRemoteMediaBuffer", () => {
     }
   });
 
-  it("does not retry maxBytes failures", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(
-        new Response("large", { status: 200, headers: { "content-length": "5" } }),
-      )
-      .mockResolvedValueOnce(new Response("ok", { status: 200 }));
-
-    await expect(
-      readRemoteMediaBuffer({
-        url: "https://example.com/file.bin",
-        fetchImpl,
-        lookupFn: makeLookupFn(),
-        maxBytes: 4,
-        retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
-      }),
-    ).rejects.toMatchObject({ code: "max_bytes" });
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-  });
-
   it("uses trusted explicit-proxy mode when the caller opts in for proxy-side DNS", async () => {
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
     const lookupFn = makeLookupFn();
@@ -421,14 +356,7 @@ describe("readRemoteMediaBuffer", () => {
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
     const parent = new AbortController();
 
-    await readRemoteMediaBuffer({
-      url: "https://example.com/file.bin",
-      fetchImpl,
-      requestInit: { signal: parent.signal },
-      lookupFn: makeLookupFn(),
-      maxBytes: 1024,
-      timeoutMs: 1234,
-    });
+    await readMedia({ fetchImpl, requestInit: { signal: parent.signal }, timeoutMs: 1234 });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
     expect(requireFetchGuardRequest()).toMatchObject({
@@ -441,11 +369,11 @@ describe("readRemoteMediaBuffer", () => {
   it("passes the HTTPS-only redirect policy through the guarded fetch path", async () => {
     const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
 
-    await readRemoteMediaBuffer({
+    await readMedia({
       url: "https://example.com/favicon.ico",
       fetchImpl,
-      lookupFn: makeLookupFn(),
       requireHttps: true,
+      maxBytes: undefined,
     });
 
     expect(requireFetchGuardRequest()).toMatchObject({
@@ -461,12 +389,7 @@ describe("readRemoteMediaBuffer", () => {
       "content-type": "application/octet-stream",
     });
 
-    const saved = await saveRemoteMedia({
-      url: "https://example.com/download",
-      fetchImpl,
-      lookupFn: makeLookupFn(),
-      maxBytes: 64,
-    });
+    const saved = await saveMedia({ url: "https://example.com/download", fetchImpl, maxBytes: 64 });
 
     expect(saved.fileName).toBe("report.csv");
     expect(saved.contentType).toBe("text/csv");
@@ -475,35 +398,32 @@ describe("readRemoteMediaBuffer", () => {
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(csv);
   });
 
+  it("retains the HTTP charset when staging remote text", async () => {
+    const bytes = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2, 0x20, 0x88]);
+    const saved = await saveMedia({
+      url: "https://example.com/download",
+      fetchImpl: makeResponseFetch([bytes], {
+        "content-disposition": 'attachment; filename="notes.txt"',
+        "content-type": 'application/x-openclaw-charset-proof; charset="cp1251"',
+      }),
+      maxBytes: 64,
+    });
+
+    expect(saved.contentType).toBe("application/x-openclaw-charset-proof;charset=cp1251");
+    await expect(fs.readFile(saved.path)).resolves.toStrictEqual(bytes);
+  });
+
   it("keeps the parent abort active while saving the response body", async () => {
     const parent = new AbortController();
     let bodyStarted!: () => void;
     const bodyReady = new Promise<void>((resolve) => {
       bodyStarted = resolve;
     });
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const signal = init?.signal;
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.enqueue(new Uint8Array([1]));
-            const failForAbort = () => controller.error(signal?.reason);
-            if (signal?.aborted) {
-              failForAbort();
-              return;
-            }
-            signal?.addEventListener("abort", failForAbort, { once: true });
-            bodyStarted();
-          },
-        }),
-        { status: 200 },
-      );
-    });
-    const result = saveRemoteMedia({
+    const fetchImpl = abortableBodyFetch(bodyStarted);
+    const result = saveMedia({
       url: "https://example.com/download",
       fetchImpl,
       requestInit: { signal: parent.signal },
-      lookupFn: makeLookupFn(),
       maxBytes: 8,
       responseHeaderTimeoutMs: 60_000,
     }).catch((error: unknown) => error);
@@ -558,10 +478,9 @@ describe("readRemoteMediaBuffer", () => {
       makeStreamResponse([1, 2, 3], { "content-type": "application/pdf" }),
     );
 
-    const saved = await saveRemoteMedia({
+    const saved = await saveMedia({
       url: "https://example.com/files/bad%E0%A4%A.pdf",
       fetchImpl,
-      lookupFn: makeLookupFn(),
       maxBytes: 8,
     });
 
@@ -575,12 +494,7 @@ describe("readRemoteMediaBuffer", () => {
         makeStreamResponse([1, 2, 3], { "content-type": "application/pdf" }),
       );
 
-      const saved = await saveRemoteMedia({
-        url,
-        fetchImpl,
-        lookupFn: makeLookupFn(),
-        maxBytes: 8,
-      });
+      const saved = await saveMedia({ url, fetchImpl, maxBytes: 8 });
 
       expect(saved.fileName).toBe(fileName);
     },
@@ -664,10 +578,9 @@ describe("readRemoteMediaBuffer", () => {
         }),
       );
 
-      const saved = await saveRemoteMedia({
+      const saved = await saveMedia({
         url: "https://example.com/download",
         fetchImpl,
-        lookupFn: makeLookupFn(),
         maxBytes: 8,
       });
 
@@ -709,10 +622,9 @@ describe("readRemoteMediaBuffer", () => {
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
     const fetchImpl = makeResponseFetch([jpeg], { "content-type": "application/octet-stream" });
 
-    const saved = await saveRemoteMedia({
+    const saved = await saveMedia({
       url: "https://example.com/views/original",
       fetchImpl,
-      lookupFn: makeLookupFn(),
       filePathHint: "document.docx",
       maxBytes: 8,
     });
@@ -731,10 +643,9 @@ describe("readRemoteMediaBuffer", () => {
       makeStreamResponse([1, 2, 3], { "content-type": "application/octet-stream" }),
     );
 
-    const saved = await saveRemoteMedia({
+    const saved = await saveMedia({
       url: "https://smba.trafficmanager.net/v3/attachments/att-1/views/original",
       fetchImpl,
-      lookupFn: makeLookupFn(),
       filePathHint: "document.docx",
       fallbackContentType: contentType,
       originalFilename: "document.docx",
@@ -751,10 +662,9 @@ describe("readRemoteMediaBuffer", () => {
       makeStreamResponse([7, 8, 9], { "content-type": "video/mp4" }),
     );
 
-    const saved = await saveRemoteMedia({
+    const saved = await saveMedia({
       url: "https://example.com/voice.mp4",
       fetchImpl,
-      lookupFn: makeLookupFn(),
       filePathHint: "voice.mp4",
       fallbackContentType: "audio/mp4",
       maxBytes: 8,
@@ -774,10 +684,9 @@ describe("readRemoteMediaBuffer", () => {
       const capture = response.clone();
       const subdir = `captured-${kind}`;
       let completed = false;
-      const operation = saveRemoteMedia({
+      const operation = saveMedia({
         url: "https://example.com/large.bin",
         fetchImpl: async () => response,
-        lookupFn: makeLookupFn(),
         maxBytes: 4,
         subdir,
       })
@@ -816,11 +725,10 @@ describe("readRemoteMediaBuffer", () => {
     const onRetry = vi.fn();
     const beforeRequest = vi.fn();
 
-    const saved = await saveRemoteMedia({
+    const saved = await saveMedia({
       url: "https://example.com/retry.png",
       fetchImpl,
       beforeRequest,
-      lookupFn: makeLookupFn(),
       maxBytes: 8,
       retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0, onRetry },
     });

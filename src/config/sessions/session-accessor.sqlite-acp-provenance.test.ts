@@ -4,6 +4,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { recordLegacyAcpMigrationSources } from "./session-accessor.sqlite-acp-provenance.js";
 import { clearSqliteSessionEntryPreservingWindows } from "./session-accessor.sqlite-entry-clear.js";
@@ -45,7 +46,7 @@ it("commits retained ACP sources with the entry lifecycle and clears them withou
     runOpenClawAgentWriteTransaction((owner) => {
       const previous = readExactSessionEntryRow(owner, sessionKey)!;
       const queries = trackSqliteStatementExecutions(
-        owner.db,
+        requireNativeSqliteDatabase(owner.db),
         ["provenanceReads", "provenanceUpdates"],
         (sql) =>
           /^select "legacy_acp_migration_json"/i.test(sql)
@@ -91,7 +92,7 @@ it("commits retained ACP sources with the entry lifecycle and clears them withou
 
     runOpenClawAgentWriteTransaction((owner) => {
       const queries = trackSqliteStatementExecutions(
-        owner.db,
+        requireNativeSqliteDatabase(owner.db),
         ["provenanceReads", "provenanceUpdates"],
         (sql) =>
           /^select "legacy_acp_migration_json"/i.test(sql)

@@ -67,7 +67,14 @@ const mocks = vi.hoisted(() => ({
   >(async () => undefined),
 }));
 
-vi.mock("./progress.js", () => ({ printResult: mocks.printResult }));
+vi.mock("./progress.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./progress.js")>()),
+  printResult: mocks.printResult,
+  prepareResult:
+    async (...args: Parameters<typeof import("./progress.js").printResult>) =>
+    () =>
+      mocks.printResult(...args.slice(0, 3)),
+}));
 vi.mock("./update-command-verification.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-verification.js")>()),
   verifyUpdatedGateway: mocks.verifyGateway,

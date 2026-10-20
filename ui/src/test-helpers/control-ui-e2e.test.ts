@@ -9,7 +9,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts"
 import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
 import { captureSidebarUiProof } from "../e2e/sidebar-customization.test-support.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
-import { installControlUiE2ePageDiagnosticRing } from "./control-ui-e2e-diagnostics.ts";
+import {
+  installControlUiE2ePageDiagnosticRing,
+  recordControlUiE2eFailureFacts,
+} from "./control-ui-e2e-diagnostics.ts";
 import { installControlUiE2eRendererStallProbe } from "./control-ui-e2e-renderer-stall.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -62,6 +65,7 @@ describe("shared proof capture", () => {
       } as unknown as Page;
       const original = new Error("original request failure");
       original.name = "TimeoutError";
+      recordControlUiE2eFailureFacts(page, { avatarPresent: false, avatarRequests: 1 });
       let observed: unknown;
       const failedAction = (async () => {
         await captureControlUiE2eFailureDiagnostics(page, {
@@ -90,6 +94,7 @@ describe("shared proof capture", () => {
           hostBeforeRead: { pageClosed: false, browserConnected: true },
           lifecycle: null,
           rendererRead: stage === "evaluation" ? "deadline" : "completed",
+          scenarioFacts: { avatarPresent: false, avatarRequests: 1 },
         });
         expect(report.failure).toMatchObject({
           name: "TimeoutError",

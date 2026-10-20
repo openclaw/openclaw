@@ -93,6 +93,18 @@ export type ConfiguredOAuthIdentity = {
   identity: GitHubToolIdentityConfig & { kind: "oauth" };
 };
 
+/** Device authorization snapshots must never persist an App signing key. */
+export function captureGitHubOAuthAuthorizationIdentity(
+  config: OpenClawConfig,
+  location: { scope: GitHubIdentityScope; agentId: string },
+) {
+  const selected = resolveConfiguredGitHubToolIdentity({ config, ...location });
+  if (selected?.kind === "app-installation") {
+    throw new Error("Remove the selected GitHub App identity before connecting an OAuth identity.");
+  }
+  return structuredClone(selected ?? null);
+}
+
 export function identityStillSelected(
   config: OpenClawConfig,
   location: { scope: GitHubIdentityScope; agentId: string },

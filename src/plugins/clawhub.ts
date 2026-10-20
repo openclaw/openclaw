@@ -51,11 +51,11 @@ import {
   CLAWHUB_INSTALL_ERROR_CODE,
   type ClawHubInstallFailure,
 } from "./clawhub-error-codes.js";
-import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import {
-  isDefaultOfficialClawHubPackage,
-  isTrustedSourceLinkedOfficialPackage,
-} from "./clawhub-official-source.js";
+  normalizeClawHubClawPackInstallFields,
+  type ClawHubPluginInstallRecordFields,
+} from "./clawhub-install-records.js";
+import { isDefaultOfficialClawHubPackage } from "./clawhub-official-source.js";
 import {
   formatClawHubReleaseLabel,
   formatClawHubSpecifier,
@@ -118,60 +118,6 @@ const CLAWHUB_ARCHIVE_LIMITS = {
   maxExtractedBytes: DEFAULT_MAX_EXTRACTED_BYTES,
   maxEntryBytes: DEFAULT_MAX_ENTRY_BYTES,
 };
-
-function normalizeClawHubClawPackInstallFields(
-  clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
-): Pick<
-  ClawHubPluginInstallRecordFields,
-  | "artifactKind"
-  | "artifactFormat"
-  | "npmIntegrity"
-  | "npmShasum"
-  | "npmTarballName"
-  | "clawpackSha256"
-  | "clawpackSpecVersion"
-  | "clawpackManifestSha256"
-  | "clawpackSize"
-> {
-  const isNpmPackArtifact =
-    clawpack && "kind" in clawpack && normalizeOptionalString(clawpack.kind) === "npm-pack";
-  const isLegacyClawPack = clawpack && "available" in clawpack && clawpack.available;
-  if (!isNpmPackArtifact && !isLegacyClawPack) {
-    return {};
-  }
-
-  const clawpackSha256 =
-    typeof clawpack.sha256 === "string" ? normalizeClawHubSha256Hex(clawpack.sha256) : null;
-  const clawpackManifestSha256 =
-    "manifestSha256" in clawpack && typeof clawpack.manifestSha256 === "string"
-      ? normalizeClawHubSha256Hex(clawpack.manifestSha256)
-      : null;
-  const clawpackSpecVersion =
-    "specVersion" in clawpack &&
-    typeof clawpack.specVersion === "number" &&
-    Number.isSafeInteger(clawpack.specVersion) &&
-    clawpack.specVersion >= 0
-      ? clawpack.specVersion
-      : undefined;
-  const clawpackSize =
-    typeof clawpack.size === "number" && Number.isSafeInteger(clawpack.size) && clawpack.size >= 0
-      ? clawpack.size
-      : undefined;
-  const npmIntegrity = normalizeOptionalString(clawpack.npmIntegrity);
-  const npmShasum = normalizeOptionalString(clawpack.npmShasum);
-  const npmTarballName = normalizeOptionalString(clawpack.npmTarballName);
-  return {
-    artifactKind: "npm-pack",
-    artifactFormat: "tgz",
-    ...(npmIntegrity ? { npmIntegrity } : {}),
-    ...(npmShasum ? { npmShasum } : {}),
-    ...(npmTarballName ? { npmTarballName } : {}),
-    ...(clawpackSha256 ? { clawpackSha256 } : {}),
-    ...(clawpackSpecVersion !== undefined ? { clawpackSpecVersion } : {}),
-    ...(clawpackManifestSha256 ? { clawpackManifestSha256 } : {}),
-    ...(clawpackSize !== undefined ? { clawpackSize } : {}),
-  };
-}
 
 function resolveClawHubClawPackArtifactSha256(
   clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
@@ -965,8 +911,7 @@ export async function installPluginFromClawHub(
         archivePath: archive.archivePath,
         verification,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
-        trustedSourceLinkedOfficialInstall:
-          officialClawHubPackage || isTrustedSourceLinkedOfficialPackage(detail.package!),
+        trustedSourceLinkedOfficialInstall: officialClawHubPackage,
         config: params.config,
         logger: params.logger,
         mode: params.mode,
@@ -1047,7 +992,11 @@ export async function installPluginFromClawHub(
       },
     };
   } finally {
-    await archive.cleanup().catch(() => undefined);
+    await archive.cleanup().catch((error: unknown) => {
+      params.logger?.warn?.(
+        `Failed to remove temporary ClawHub archive: ${formatErrorMessage(error)}`,
+      );
+    });
   }
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

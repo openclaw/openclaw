@@ -20,7 +20,6 @@ type ChatQueueStoreHost = {
   chatRunId?: string | null;
   chatSending?: boolean;
   chatSendingScopeKey?: string | null;
-  requestUpdate?: () => void;
 };
 type ChatQueueSessionHost = ChatQueueStoreHost & ChatComposerScope & { sessionKey: string };
 export type ChatQueueScopedSessionHost = ChatQueueSessionHost & SessionScopeHost;

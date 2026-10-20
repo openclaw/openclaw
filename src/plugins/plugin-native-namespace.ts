@@ -8,6 +8,7 @@ import {
   createPluginDependencyResolver,
   resolvePluginModulePackageRoot,
 } from "./plugin-package-metadata-capture.js";
+import { openClawHostRootsMatch } from "./plugin-peer-link.js";
 import { collectPluginSafetyInspectedFiles } from "./plugin-safety-inspected-files.js";
 import type { PluginNativeNamespaceFact } from "./plugin-source-admission.types.js";
 import {
@@ -83,7 +84,10 @@ export function assertPluginNativeNamespaceHost(
       ?.map((modules) => path.join(modules, "openclaw"))
       .find((filename) => fs.existsSync(filename));
     const resolvedHost = candidate ? fs.realpathSync(candidate) : undefined;
-    if (resolvedHost === hostRoot || (!candidate && directory !== pluginDirectory)) {
+    if (
+      (resolvedHost && openClawHostRootsMatch(resolvedHost, hostRoot)) ||
+      (!candidate && directory !== pluginDirectory)
+    ) {
       continue;
     }
     throw new Error(

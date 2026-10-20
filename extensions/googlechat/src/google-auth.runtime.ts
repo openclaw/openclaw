@@ -9,11 +9,7 @@ import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  asNullableObjectRecord,
-  isRecord,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNullableObjectRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { MAX_GOOGLE_CHAT_SERVICE_ACCOUNT_FILE_BYTES } from "./google-auth-limits.js";
@@ -24,7 +20,6 @@ type GoogleAuthTransportOptions = NonNullable<
   ConstructorParameters<GoogleAuthRuntime["gaxios"]["Gaxios"]>[0]
 >;
 type GoogleAuthTransportInit = GoogleAuthTransportOptions & { dispatcher?: unknown };
-type ProxyRule = NonNullable<GoogleAuthTransportOptions["noProxy"]>[number];
 type TlsOptions = Pick<ConnectionOptions, "cert" | "key">;
 type ProxyAgentLike = {
   connectOpts?: TlsOptions;
@@ -52,15 +47,6 @@ const GOOGLE_CLIENT_CERTS_URL_PREFIX = "https://www.googleapis.com/robot/v1/meta
 const MAX_GOOGLE_AUTH_RESPONSE_BYTES = 1024 * 1024;
 let googleAuthRuntimePromise: Promise<GoogleAuthRuntime> | null = null;
 
-function normalizeGoogleAuthHeaders<T extends { headers?: unknown }>(
-  value: T,
-): T & { headers: Headers } {
-  if (!(value.headers instanceof Headers)) {
-    value.headers = new Headers(value.headers as HeadersInit | undefined);
-  }
-  return value as T & { headers: Headers };
-}
-
 function hasProxyAgentShape(value: unknown): value is ProxyAgentLike {
   const record = asNullableObjectRecord(value);
   return record !== null && record.proxy instanceof URL;
@@ -71,15 +57,11 @@ function hasTlsAgentShape(value: unknown): value is TlsAgentLike {
   return record !== null && asNullableObjectRecord(record.options) !== null;
 }
 
-function resolveGoogleAuthAgent(init: GoogleAuthTransportOptions, url: URL): unknown {
-  return typeof init.agent === "function" ? init.agent(url) : init.agent;
-}
-
 function hasTlsOptions(options: TlsOptions): boolean {
   return options.cert !== undefined || options.key !== undefined;
 }
 
-function resolveGoogleAuthTlsOptions(init: GoogleAuthTransportOptions, url: URL): TlsOptions {
+function resolveGoogleAuthTlsOptions(init: GoogleAuthTransportOptions, agent: unknown): TlsOptions {
   const explicit = {
     cert: init.cert,
     key: init.key,
@@ -88,7 +70,6 @@ function resolveGoogleAuthTlsOptions(init: GoogleAuthTransportOptions, url: URL)
     return explicit;
   }
 
-  const agent = resolveGoogleAuthAgent(init, url);
   if (hasProxyAgentShape(agent)) {
     return {
       cert: agent.connectOpts?.cert,
@@ -102,59 +83,6 @@ function resolveGoogleAuthTlsOptions(init: GoogleAuthTransportOptions, url: URL)
     };
   }
   return {};
-}
-
-function resolveGoogleAuthEnvProxyUrl(protocol: "http" | "https"): string | undefined {
-  const httpProxy =
-    normalizeOptionalString(process.env.HTTP_PROXY) ??
-    normalizeOptionalString(process.env.http_proxy);
-  const httpsProxy =
-    normalizeOptionalString(process.env.HTTPS_PROXY) ??
-    normalizeOptionalString(process.env.https_proxy);
-  if (protocol === "https") {
-    return httpsProxy ?? httpProxy ?? undefined;
-  }
-  return httpProxy ?? undefined;
-}
-
-function collectGoogleAuthNoProxyRules(noProxy: ProxyRule[] = []): ProxyRule[] {
-  const rules = [...noProxy];
-  const envRules = (process.env.NO_PROXY ?? process.env.no_proxy)?.split(",") ?? [];
-  for (const rule of envRules) {
-    const trimmed = rule.trim();
-    if (trimmed.length > 0) {
-      rules.push(trimmed);
-    }
-  }
-  return rules;
-}
-
-function shouldBypassGoogleAuthProxy(url: URL, noProxy: ProxyRule[] = []): boolean {
-  for (const rule of collectGoogleAuthNoProxyRules(noProxy)) {
-    if (rule instanceof RegExp) {
-      if (rule.test(url.toString())) {
-        return true;
-      }
-      continue;
-    }
-    if (rule instanceof URL) {
-      if (rule.origin === url.origin) {
-        return true;
-      }
-      continue;
-    }
-    if (rule.startsWith("*.") || rule.startsWith(".")) {
-      const cleanedRule = rule.replace(/^\*\./, ".");
-      if (url.hostname.endsWith(cleanedRule)) {
-        return true;
-      }
-      continue;
-    }
-    if (rule === url.origin || rule === url.hostname || rule === url.href) {
-      return true;
-    }
-  }
-  return false;
 }
 
 function readOptionalTrimmedString(
@@ -276,7 +204,9 @@ async function readCredentialsFile(filePath: string): Promise<Record<string, unk
     }
     return parsed;
   } finally {
-    await handle.close().catch(() => {});
+    await handle.close().catch(() => {
+      // Closing this read-only descriptor cannot change the credential read outcome.
+    });
   }
 }
 
@@ -299,7 +229,7 @@ function resolveGoogleAuthDispatcherPolicy(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): {
-  dispatcherPolicy?: PinnedDispatcherPolicy;
+  dispatcherPolicy: PinnedDispatcherPolicy;
   init?: RequestInit;
 } {
   const requestUrl =
@@ -308,45 +238,31 @@ function resolveGoogleAuthDispatcherPolicy(
       : new URL(typeof input === "string" ? input : input.toString());
   const nextInit = sanitizeGoogleAuthInit(init);
   const googleAuthInit = (init ?? {}) as GoogleAuthTransportInit;
-  const tlsOptions = resolveGoogleAuthTlsOptions(googleAuthInit, requestUrl);
-  const proxyBypassed = shouldBypassGoogleAuthProxy(
-    requestUrl,
-    Array.isArray(googleAuthInit.noProxy) ? (googleAuthInit.noProxy as ProxyRule[]) : [],
-  );
-  const agent = resolveGoogleAuthAgent(googleAuthInit, requestUrl);
-  const explicitProxy =
-    (googleAuthInit.proxy instanceof URL
-      ? googleAuthInit.proxy.toString()
-      : normalizeOptionalString(googleAuthInit.proxy)) ??
-    (hasProxyAgentShape(agent) ? agent.proxy.toString() : undefined);
-
-  const proxyUrl = proxyBypassed
-    ? undefined
-    : (explicitProxy ??
-      resolveGoogleAuthEnvProxyUrl(requestUrl.protocol === "http:" ? "http" : "https"));
-  if (proxyUrl) {
+  const agent =
+    typeof googleAuthInit.agent === "function"
+      ? googleAuthInit.agent(requestUrl)
+      : googleAuthInit.agent;
+  const tlsOptions = resolveGoogleAuthTlsOptions(googleAuthInit, agent);
+  // Gaxios has already applied proxy/noProxy/environment policy before invoking this fetch hook.
+  if (hasProxyAgentShape(agent)) {
     return {
       dispatcherPolicy: {
-        ...(explicitProxy
-          ? { allowPrivateProxy: true, mode: "explicit-proxy", proxyUrl }
-          : { mode: "env-proxy" }),
-        ...(hasTlsOptions(tlsOptions) ? { proxyTls: { ...tlsOptions } } : {}),
+        allowPrivateProxy: true,
+        mode: "explicit-proxy",
+        proxyUrl: agent.proxy.toString(),
+        ...(hasTlsOptions(tlsOptions) ? { proxyTls: tlsOptions } : {}),
       },
       init: nextInit,
     };
   }
 
-  if (hasTlsOptions(tlsOptions)) {
-    return {
-      dispatcherPolicy: {
-        connect: { ...tlsOptions },
-        mode: "direct",
-      },
-      init: nextInit,
-    };
-  }
-
-  return { init: nextInit };
+  return {
+    dispatcherPolicy: {
+      mode: "direct",
+      ...(hasTlsOptions(tlsOptions) ? { connect: tlsOptions } : {}),
+    },
+    init: nextInit,
+  };
 }
 
 async function googleAuthFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -408,14 +324,7 @@ export async function loadGoogleAuthRuntime(): Promise<GoogleAuthRuntime> {
 
 export async function getGoogleAuthTransport(): Promise<GoogleAuthTransport> {
   const { gaxios } = await loadGoogleAuthRuntime();
-  const transport = new gaxios.Gaxios({ fetchImplementation: googleAuthFetch });
-  transport.interceptors.request.add({
-    resolved: async (config) => normalizeGoogleAuthHeaders(config),
-  });
-  transport.interceptors.response.add({
-    resolved: async (response) => normalizeGoogleAuthHeaders(response),
-  });
-  return transport;
+  return new gaxios.Gaxios({ fetchImplementation: googleAuthFetch });
 }
 
 export async function resolveValidatedGoogleChatCredentials(

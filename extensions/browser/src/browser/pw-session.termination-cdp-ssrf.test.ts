@@ -112,6 +112,19 @@ function discover(response: Response | Promise<Response>) {
 }
 
 describe("pw-session termination CDP SSRF guard", () => {
+  it("still disconnects the cached adapter when termination discovery fails", async () => {
+    const { browserClose, page } = installBrowserMock();
+    await listPagesViaPlaywright({ cdpUrl });
+    discover(targetResponse("127.0.0.1:18792")).mockRejectedValueOnce(
+      new Error("discovery unavailable"),
+    );
+    await expect(
+      forceDisconnectPlaywrightForTarget({ cdpUrl, page, targetId: "TARGET_1" }),
+    ).resolves.toBeUndefined();
+    expect(wsMockState.constructorUrls).toEqual([]);
+    expect(browserClose).toHaveBeenCalledOnce();
+  });
+
   it("does not terminate execution after its connection loses ownership during discovery", async () => {
     const { page } = installBrowserMock();
     await listPagesViaPlaywright({ cdpUrl });

@@ -17,6 +17,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { refreshCostUsageCacheForAgent } from "./session-cost-usage-aggregation.js";
 import { migrateSessionCostUsageRollupStorage } from "./session-cost-usage-cache-migration.js";
@@ -34,11 +35,7 @@ import {
   pruneUsageCostRollupsForTest,
   readSessionCostUsageRollupEntry,
 } from "./session-cost-usage-cache.test-support.js";
-import {
-  partitionUsageCostRollup,
-  decodeUsageCostPartition,
-  USAGE_COST_PARTITION_SCOPE,
-} from "./session-cost-usage-partitions.js";
+import * as partitions from "./session-cost-usage-partitions.js";
 import { projectSessionCostSummaries } from "./session-cost-usage-projection.js";
 import {
   decodeUsageCostRollup,
@@ -79,9 +76,7 @@ function writeRollup(
 function countRegisteredAgentDatabases(): number {
   const row = openOpenClawStateDatabase()
     .db.prepare("SELECT count(*) AS count FROM agent_databases")
-    .get() as {
-    count: number;
-  };
+    .get() as { count: number };
   return row.count;
 }
 
@@ -108,7 +103,7 @@ describe("session cost usage SQLite cache", () => {
         usageTotals: { ...rollup.untimestamped.totals, totalTokens: 10, totalCost: 1 },
       });
     }
-    const encoded = partitionUsageCostRollup({
+    const encoded = partitions.partitionUsageCostRollup({
       version: USAGE_COST_ROLLUP_VERSION,
       pricingFingerprint: "fixture",
       scannedAt: 1,
@@ -134,7 +129,9 @@ describe("session cost usage SQLite cache", () => {
       );
     expect(bytes).toBeLessThan(25_000);
     const buckets = encoded.partitions.flatMap((partition) =>
-      Object.values(decodeUsageCostPartition(partition.valueJson, partition.blob)!.buckets),
+      Object.values(
+        partitions.decodeUsageCostPartition(partition.valueJson, partition.blob)!.buckets,
+      ),
     );
     expect(buckets.reduce((sum, bucket) => sum + bucket.totals.totalTokens, 0)).toBe(5_000);
     expect(
@@ -160,16 +157,16 @@ describe("session cost usage SQLite cache", () => {
             "SELECT key, value_json, blob FROM cache_entries WHERE scope = ? AND key >= ? AND key <= ? ORDER BY key",
           )
           .all(
-            USAGE_COST_PARTITION_SCOPE,
-            `${sessionFile}\0${startDate}`,
-            `${sessionFile}\0${endDate}`,
+            partitions.USAGE_COST_PARTITION_SCOPE,
+            partitions.usageCostPartitionKey(sessionFile, startDate),
+            partitions.usageCostPartitionKey(sessionFile, endDate),
           )
           .map((row) => {
             if (typeof row.value_json !== "string" || !(row.blob instanceof Uint8Array)) {
               throw new Error("Expected a persisted usage partition");
             }
             return {
-              date: String(row.key).slice(sessionFile.length + 1),
+              date: partitions.readUsageCostPartitionKey(String(row.key)).date,
               valueJson: row.value_json,
               blob: row.blob,
             };
@@ -226,13 +223,13 @@ describe("session cost usage SQLite cache", () => {
           },
           rollup,
         };
-        const first = partitionUsageCostRollup(entry);
+        const first = partitions.partitionUsageCostRollup(entry);
         expect(await write(first, 1, { partitions: first.partitions })).toBe(true);
         const days = readPartitions();
         expect(days.map((day) => day.date)).toEqual(["2026-09-01", "2026-10-01"]);
         const selected = readPartitions("2026-09-01", "2026-09-01");
         expect(selected).toHaveLength(1);
-        const day = decodeUsageCostPartition(selected[0]!.valueJson, selected[0]!.blob)!;
+        const day = partitions.decodeUsageCostPartition(selected[0]!.valueJson, selected[0]!.blob)!;
         expect(Object.values(day.buckets)).toMatchObject([
           { totals: { totalTokens: 20, totalCost: 2 } },
           { totals: { totalTokens: 10, totalCost: 1 } },
@@ -243,7 +240,7 @@ describe("session cost usage SQLite cache", () => {
 
         const before = db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all();
         db.exec(`CREATE TRIGGER refuse_usage_partition BEFORE UPDATE ON cache_entries
-        WHEN NEW.scope = '${USAGE_COST_PARTITION_SCOPE}'
+        WHEN NEW.scope = '${partitions.USAGE_COST_PARTITION_SCOPE}'
         BEGIN SELECT RAISE(ABORT, 'partition refused'); END;`);
         await expect(write(first, 2, { partitions: first.partitions })).rejects.toThrow(
           "partition refused",
@@ -261,7 +258,7 @@ describe("session cost usage SQLite cache", () => {
           toolResultCounts: { total: 0, errors: 0 },
           usageTotals: { ...rollup.untimestamped.totals, totalTokens: 10, totalCost: 1 },
         });
-        const extended = partitionUsageCostRollup({
+        const extended = partitions.partitionUsageCostRollup({
           ...entry,
           rollup: extendedRollup,
           scannedAt: 3,
@@ -278,7 +275,9 @@ describe("session cost usage SQLite cache", () => {
         const october = readPartitions("2026-10-01", "2026-10-01");
         expect(october).toHaveLength(1);
         expect(
-          Object.values(decodeUsageCostPartition(october[0]!.valueJson, october[0]!.blob)!.buckets),
+          Object.values(
+            partitions.decodeUsageCostPartition(october[0]!.valueJson, october[0]!.blob)!.buckets,
+          ),
         ).toMatchObject([{ totals: { totalTokens: 20, totalCost: 2 } }]);
         const rows = readSessionCostUsageRollupRows(agentId);
         expect(rows).toHaveLength(1);
@@ -289,7 +288,7 @@ describe("session cost usage SQLite cache", () => {
           checkpoint: { parsedOffset: 5, observedSize: 5 },
         });
 
-        const rewritten = partitionUsageCostRollup({
+        const rewritten = partitions.partitionUsageCostRollup({
           ...entry,
           pricingFingerprint: "changed",
           rollup: createSessionUsageRollupData(),
@@ -355,10 +354,13 @@ describe("session cost usage SQLite cache", () => {
       const newer = encodeUsageCostRollup({ ...entry, scannedAt: 999 });
       insert.run("session-cost-usage-rollup-v3", "newer", newer.valueJson, newer.blob, 999);
       insert.run("other", "valid\0雪", "unchanged", null, 1);
-      runOpenClawAgentWriteTransaction(
-        ({ db: current }) => migrateSessionCostUsageRollupStorage(current),
-        { agentId },
-      );
+      const migrate = () =>
+        runOpenClawAgentWriteTransaction(
+          ({ db: current }) =>
+            migrateSessionCostUsageRollupStorage(requireNativeSqliteDatabase(current)),
+          { agentId },
+        );
+      migrate();
       const rows = db
         .prepare(
           "SELECT * FROM cache_entries WHERE scope IN ('session-cost-usage-rollup-v2', 'session-cost-usage-rollup-v3', 'other') ORDER BY scope, key",
@@ -382,10 +384,7 @@ describe("session cost usage SQLite cache", () => {
           migrated.blob as Uint8Array,
         ),
       ).toBeUndefined();
-      runOpenClawAgentWriteTransaction(
-        ({ db: current }) => migrateSessionCostUsageRollupStorage(current),
-        { agentId },
-      );
+      migrate();
       expect(
         db
           .prepare(
@@ -400,7 +399,7 @@ describe("session cost usage SQLite cache", () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-cas-payload-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
-      const { db } = openOpenClawAgentDatabase({ agentId });
+      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId }).db);
       const previousValueJson = JSON.stringify({ history: "雪".repeat(400_000) });
       expect(
         writeRollup(agentId, {
@@ -614,7 +613,7 @@ describe("session cost usage SQLite cache", () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-prune-batch-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const agentId = "worker-1";
-      const { db } = openOpenClawAgentDatabase({ agentId });
+      const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId }).db);
       const scope = "session-cost-usage-rollup-v3";
       const insert = db.prepare(
         "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
@@ -968,7 +967,7 @@ it.each(["missing", "oversized-first", "oversized-last", "identity-length"])(
               .prepare(
                 "SELECT key, value_json FROM cache_entries WHERE scope = ? ORDER BY key LIMIT 1",
               )
-              .get(USAGE_COST_PARTITION_SCOPE);
+              .get(partitions.USAGE_COST_PARTITION_SCOPE);
             if (
               !partition ||
               typeof partition.key !== "string" ||
@@ -982,7 +981,7 @@ it.each(["missing", "oversized-first", "oversized-last", "identity-length"])(
                 encoding: "identity",
                 bytes: 35 * 1024 * 1024,
               }),
-              USAGE_COST_PARTITION_SCOPE,
+              partitions.USAGE_COST_PARTITION_SCOPE,
               partition.key,
             );
             return;
@@ -993,11 +992,11 @@ it.each(["missing", "oversized-first", "oversized-last", "identity-length"])(
               : `UPDATE cache_entries SET value_json = CASE WHEN key = (SELECT key FROM cache_entries WHERE scope = ? ORDER BY key ${mode === "oversized-last" ? "DESC" : "ASC"} LIMIT 1) THEN ? || value_json ELSE value_json END, blob = zeroblob(2097152) WHERE scope = ?`,
           ).run(
             ...(mode === "missing"
-              ? [USAGE_COST_PARTITION_SCOPE]
+              ? [partitions.USAGE_COST_PARTITION_SCOPE]
               : [
-                  USAGE_COST_PARTITION_SCOPE,
+                  partitions.USAGE_COST_PARTITION_SCOPE,
                   " ".repeat(64 * 1024 + 1),
-                  USAGE_COST_PARTITION_SCOPE,
+                  partitions.USAGE_COST_PARTITION_SCOPE,
                 ]),
           );
         },

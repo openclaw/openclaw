@@ -4,7 +4,7 @@ import type {
   WorkerDesktopAppId,
 } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { For, Show, untrack } from "solid-js";
+import { For, Show, onSettled } from "solid-js";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
@@ -16,10 +16,6 @@ import { desktopSourceForEnvironment } from "./desktop-source.ts";
 
 registerEnglishCatalog(registerDesktopEnglish);
 
-export function DesktopLoading(props: { label: string; overlay?: boolean }) {
-  return <PanelLoadingSkeleton variant="desktop" label={props.label} overlay={props.overlay} />;
-}
-
 export function DesktopPanelView(props: {
   embedded: boolean;
   workspaceControls?: boolean;
@@ -27,6 +23,7 @@ export function DesktopPanelView(props: {
   height: number;
   width: number;
   fullscreen: boolean;
+  sectionRef: (element: HTMLElement) => void;
   renderResizer: () => JSX.Element;
   renderFullscreenControl: () => JSX.Element;
   onClose: () => void;
@@ -37,6 +34,7 @@ export function DesktopPanelView(props: {
 }) {
   return (
     <section
+      ref={(element) => props.sectionRef(element)}
       class={["bp", `bp--${props.embedded ? "embedded" : props.dock}`]}
       style={
         props.embedded || props.fullscreen
@@ -114,22 +112,18 @@ export function DesktopPanelContent(props: {
   recovery: () => JSX.Element;
   connection: () => JSX.Element;
 }) {
-  const notice = untrack(() => props.notice());
+  const Notice = () => props.notice();
   return (
     <div class="desktop-content">
-      {notice}
-      <Show when={props.state === "picker"}>
-        {(shown) => untrack(() => shown() && props.picker())}
-      </Show>
+      <Notice />
+      <Show when={props.state === "picker"}>{(shown) => shown() && props.picker()}</Show>
       <Show when={props.state === "inventory-error" || props.state === "disconnected"}>
-        {(shown) => untrack(() => shown() && props.recovery())}
+        {(shown) => shown() && props.recovery()}
       </Show>
-      <Show when={props.state === "credentials"}>
-        {(shown) => untrack(() => shown() && props.credentials())}
-      </Show>
+      <Show when={props.state === "credentials"}>{(shown) => shown() && props.credentials()}</Show>
       {/* Connection transitions update siblings without remounting noVNC's island. */}
       <Show when={props.state === "connecting" || props.state === "connected"}>
-        {(shown) => untrack(() => shown() && props.connection())}
+        {(shown) => shown() && props.connection()}
       </Show>
     </div>
   );
@@ -166,7 +160,7 @@ export function DesktopPicker(props: {
           </div>
           <div class="desktop-picker">
             {props.loading && props.environments.length === 0 ? (
-              <DesktopLoading label={t("desktop.loading")} />
+              <PanelLoadingSkeleton variant="desktop" label={t("desktop.loading")} />
             ) : props.environments.length === 0 ? (
               <div class="desktop-status">{t("desktop.empty")}</div>
             ) : (
@@ -262,6 +256,7 @@ export function DesktopCredentials(props: {
 
 function DesktopConnection(props: {
   state: DesktopPanelState;
+  surfaceRef: (element: HTMLElement | undefined) => void;
   controlling: boolean;
   desktopApps: WorkerDesktopAppId[];
   launchingApp: WorkerDesktopAppId | null;
@@ -340,7 +335,7 @@ function DesktopConnection(props: {
       </div>
       <div class="desktop-stage">
         {/* noVNC owns this island's children for the entire connection. */}
-        <div class="desktop-surface" />
+        <DesktopSurface bind={props.surfaceRef} />
         {!props.controlling && (
           <button
             class="desktop-stage__take-control"
@@ -351,7 +346,9 @@ function DesktopConnection(props: {
             onClick={props.onTakeControl}
           />
         )}
-        {props.state === "connecting" && <DesktopLoading label={t("desktop.connecting")} overlay />}
+        {props.state === "connecting" && (
+          <PanelLoadingSkeleton variant="desktop" label={t("desktop.connecting")} overlay />
+        )}
       </div>
     </>
   );
@@ -448,4 +445,13 @@ export function DesktopPanelRecovery(props: {
       </button>
     </div>
   );
+}
+
+/** Solid owns the target; noVNC owns its children for the whole connection. */
+export function DesktopSurface(props: { bind: (element: HTMLElement | undefined) => void }) {
+  onSettled(() => {
+    const bind = props.bind;
+    return () => bind(undefined);
+  });
+  return <div class="desktop-surface" ref={(element) => props.bind(element)} />;
 }

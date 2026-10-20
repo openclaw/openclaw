@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
@@ -29,7 +31,8 @@ function readStamp(options: OpenClawAgentDatabaseOptions, behavior?: { allowExte
   return result.value;
 }
 
-function inWriterTransaction<T>(db: DatabaseSync, operation: () => T): T {
+function inWriterTransaction<T>(connection: EngineConnection, operation: () => T): T {
+  const db = requireNativeSqliteDatabase(connection);
   db.exec("BEGIN IMMEDIATE");
   try {
     return operation();
@@ -150,12 +153,13 @@ describe("committed agent database reads", () => {
         const options = { agentId: "main", env };
         const owner = openOpenClawAgentDatabase(options);
         owner.db.exec("UPDATE schema_meta SET updated_at = 101 WHERE meta_key = 'primary'");
-        const bytes = owner.db.serialize();
+        const db = requireNativeSqliteDatabase(owner.db);
+        const bytes = db.serialize();
         inWriterTransaction(owner.db, () => {
           owner.db.prepare(stampQuery).get();
           const reader = readStamp(options).db;
           // SQLite rejects replacement while the connection holds a transaction.
-          expect(() => owner.db.deserialize(bytes)).toThrow();
+          expect(() => db.deserialize(bytes)).toThrow();
           expect(reader.isOpen).toBe(false);
           expect(owner.db.isOpen).toBe(true);
           expect(owner.db.isTransaction).toBe(true);

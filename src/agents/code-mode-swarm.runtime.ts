@@ -1,5 +1,5 @@
-import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -143,9 +143,7 @@ async function runAgentSpawnBridge(params: {
     ...(fastMode !== undefined ? { fastMode } : {}),
     ...(schema ? { outputSchema: schema } : {}),
   };
-  const requestFingerprint = `sha256:${createHash("sha256")
-    .update(stableStringify(spawnInput))
-    .digest("hex")}`;
+  const requestFingerprint = `sha256:${sha256Hex(stableStringify(spawnInput))}`;
   // The registry persists this exact tuple and payload hash before launch.
   const idempotencyKey = `${params.codeModeRunId}:${params.request.id}`;
   const requesterSessionKey = resolveCodeModeRequesterSessionKey(params.ctx);

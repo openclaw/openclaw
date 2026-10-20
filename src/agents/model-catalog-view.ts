@@ -10,6 +10,7 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteSource } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
@@ -87,13 +88,7 @@ export function createModelCatalogView(params: {
   keyOf?: ReturnType<typeof createModelCatalogIdentityKeyResolver>;
 }) {
   const keyOf = params.keyOf ?? createModelCatalogIdentityKeyResolver();
-  const variantsByKey = new Map<string, ModelCatalogEntry[]>();
-  for (const entry of params.routeVariants ?? params.catalog) {
-    const key = keyOf(entry);
-    const variants = variantsByKey.get(key) ?? [];
-    variants.push(entry);
-    variantsByKey.set(key, variants);
-  }
+  const variantsByKey = groupRecords(params.routeVariants ?? params.catalog, keyOf);
   // Identity lookups use the same captured policy as this view's physical index.
   const variantsOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">, key = keyOf(entry)) =>
     variantsByKey.get(key);
@@ -143,11 +138,14 @@ export function createModelCatalogView(params: {
       return row;
     },
     implicitNativeRuntime(entry: Pick<ModelCatalogEntry, "provider" | "id">) {
-      const variants = variantsOf(entry);
-      const runtime = variants?.[0]?.nativeRuntime;
-      return runtime && variants?.every((variant) => variant.nativeRuntime === runtime)
-        ? runtime
-        : undefined;
+      // An API metadata donor is not evidence of API credentials. Host bindings
+      // and credentials still take precedence in evaluateNative below.
+      const runtimes = new Set(
+        variantsOf(entry)?.flatMap((variant) =>
+          variant.nativeRuntime ? [variant.nativeRuntime] : [],
+        ),
+      );
+      return runtimes.size === 1 ? runtimes.values().next().value : undefined;
     },
     project(
       entry: ModelCatalogEntry,
@@ -291,7 +289,11 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
           config: params.cfg,
           agentScope: { kind: "prepared", agentId: params.agentId },
         });
-        if (!policy.forcedByEnvironment && policy.runtimeSource === "implicit") {
+        if (
+          !policy.forcedByEnvironment &&
+          policy.runtimeSource === "implicit" &&
+          policy.runtime === "auto"
+        ) {
           policy = { ...policy, runtime: routes.implicitNativeRuntime(entry) ?? policy.runtime };
         }
         prepared = { policy };
@@ -343,7 +345,8 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       // Native account evidence cannot replace an authored host binding or live host credentials.
       if (
         prepared.hostConfigured ||
-        (host.selectedAuthMode && (host.evidence !== "runtime" || !observedNative))
+        (host.selectedAuthMode &&
+          (host.selectedCredential?.source !== "harness" || !observedNative))
       ) {
         return host;
       }

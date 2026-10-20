@@ -67,7 +67,6 @@ export async function removeWorktreeIfLossless(
   params: Pick<CreateManagedWorktreeParams, "signal" | "commitGuard"> & {
     record: ManagedWorktreeRecord;
     env: NodeJS.ProcessEnv;
-    now: () => number;
     getConfig: () => OpenClawConfig;
     workerAuthority?: WorktreeWorkerAuthority;
     prepareRecord: (record: ManagedWorktreeRecord) => Promise<ManagedWorktreeRecord>;
@@ -82,7 +81,7 @@ export async function removeWorktreeIfLossless(
     params.signal?.throwIfAborted();
     params.commitGuard?.();
   };
-  const { env, now, getConfig } = params;
+  const { env, getConfig } = params;
   let record = params.record;
   const { id } = record;
   const claimToken = randomUUID();
@@ -99,7 +98,7 @@ export async function removeWorktreeIfLossless(
       {
         runEndCleanup: {
           outcome,
-          at: now(),
+          at: Date.now(),
           ...(outcome === "failed"
             ? { reason: truncateUtf16Safe(formatErrorMessage(error), 500) }
             : {}),

@@ -2,6 +2,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import {
+  requestDeferredPluginInstall,
+  resolvePluginInstallTransaction,
+} from "./install-transaction.js";
+import type { PluginInstallArtifactConsentRequest } from "./install-types.js";
 import { installPluginFromPath, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
 import { packToArchive } from "./test-helpers/archive-fixtures.js";
 import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
@@ -43,6 +48,44 @@ afterAll(() => {
 });
 
 describe("installPluginFromPath", () => {
+  it.each(["directory", "archive"] as const)(
+    "retains caller-owned rollback and staged artifact review for a %s",
+    async (source) => {
+      const { pluginDir, extensionsDir } = setupNativePluginInstallFixture();
+      const installPath =
+        source === "archive"
+          ? await packToArchive({
+              pkgDir: pluginDir,
+              outDir: suiteTempRootTracker.makeTempDir(),
+              outName: "deferred-plugin.tgz",
+            })
+          : pluginDir;
+      let reviewed = false;
+      const result = await installPluginFromPath(
+        requestDeferredPluginInstall({
+          path: installPath,
+          extensionsDir,
+          onBeforePluginArtifactCommit: async ({
+            stagedArtifactDir,
+          }: PluginInstallArtifactConsentRequest) => {
+            expect(fs.readFileSync(path.join(stagedArtifactDir, "dist", "index.js"), "utf8")).toBe(
+              "export {};\n",
+            );
+            reviewed = true;
+          },
+        }),
+      );
+
+      expect(result.ok).toBe(true);
+      expect(reviewed).toBe(true);
+      const transaction = resolvePluginInstallTransaction(result);
+      expect(transaction).toBeDefined();
+      expect(fs.existsSync(path.join(extensionsDir, "symlink-plugin", "package.json"))).toBe(true);
+      await transaction!.rollback();
+      expect(fs.existsSync(path.join(extensionsDir, "symlink-plugin"))).toBe(false);
+    },
+  );
+
   it.each(["native plugin", "bundle"] as const)(
     "does not publish an archived %s after authority closes during artifact review",
     async (kind) => {

@@ -1,6 +1,14 @@
-// Builds Node startup environment variables for subprocess launches.
+import fs from "node:fs";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { type EnvMap, resolveAutoNodeExtraCaCerts } from "./node-extra-ca-certs.js";
+import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
+
+const LINUX_CA_BUNDLE_PATHS = [
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/ca-bundle.pem",
+] as const;
+
+type EnvMap = Record<string, string | undefined>;
 
 // Startup TLS environment defaults for child Node processes. macOS needs
 // explicit system-CA env in launch-style contexts; Linux uses version-manager heuristics.
@@ -23,16 +31,29 @@ export function resolveNodeStartupTlsEnvironment(
   const platform = params.platform ?? process.platform;
   const includeDarwinDefaults = params.includeDarwinDefaults ?? true;
 
-  const nodeExtraCaCerts =
-    readNonBlankString(env.NODE_EXTRA_CA_CERTS) ??
-    (platform === "darwin" && includeDarwinDefaults
-      ? "/etc/ssl/cert.pem"
-      : resolveAutoNodeExtraCaCerts({
-          env,
-          platform,
-          execPath: params.execPath,
-          accessSync: params.accessSync,
-        }));
+  let nodeExtraCaCerts = readNonBlankString(env.NODE_EXTRA_CA_CERTS);
+  if (nodeExtraCaCerts === undefined) {
+    if (platform === "darwin" && includeDarwinDefaults) {
+      nodeExtraCaCerts = "/etc/ssl/cert.pem";
+    } else if (platform === "linux") {
+      const execPath = params.execPath ?? process.execPath;
+      // Version-manager Node may not inherit system CAs; supply NODE_EXTRA_CA_CERTS.
+      const isVersionManagerRuntime =
+        Boolean(env.NVM_DIR?.trim()) || matchesVersionManagerPath(execPath, "linux-ca");
+      if (isVersionManagerRuntime) {
+        const accessSync = params.accessSync ?? fs.accessSync.bind(fs);
+        for (const candidate of LINUX_CA_BUNDLE_PATHS) {
+          try {
+            accessSync(candidate, fs.constants.R_OK);
+            nodeExtraCaCerts = candidate;
+            break;
+          } catch {
+            continue;
+          }
+        }
+      }
+    }
+  }
   const nodeUseSystemCa =
     env.NODE_USE_SYSTEM_CA ?? (platform === "darwin" && includeDarwinDefaults ? "1" : undefined);
 

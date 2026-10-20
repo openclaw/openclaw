@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { getAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
-import { resolveActiveReplyOperationForSessionId } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
@@ -17,6 +16,11 @@ import {
 } from "../../infra/exec-request-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import {
+  assertSessionControllerOperation,
+  isCurrentSessionControllerOperation,
+} from "../../sessions/session-controller.identity.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
@@ -30,6 +34,7 @@ const pending = new WeakSet<object>();
 export async function handoffPluginReload(params: {
   sessionId?: string;
   runId?: string;
+  operation?: ReplyOperation;
   requestOwners?: readonly ExecRequestOwner[];
   onYield?: SessionsYieldCallback;
   request: Record<string, unknown>;
@@ -43,10 +48,15 @@ export async function handoffPluginReload(params: {
     });
   }
   const caller = getGatewayToolCallerIdentity();
-  const operation = params.sessionId
-    ? resolveActiveReplyOperationForSessionId(params.sessionId)
-    : undefined;
-  if (!caller || !params.onYield || !operation?.ownerSettlement) {
+  const operation = params.operation;
+  if (
+    !caller ||
+    !params.onYield ||
+    !params.sessionId ||
+    !operation?.hasOwnedSessionId(params.sessionId) ||
+    !isCurrentSessionControllerOperation(operation) ||
+    operation.result
+  ) {
     throw new ToolInputError(
       "reloadAndResume requires an active Gateway conversation with turn yielding.",
     );
@@ -70,7 +80,7 @@ export async function handoffPluginReload(params: {
       throw new ToolInputError("The reload requester session changed before handoff.");
     }
     continuation.assertCurrent();
-    operation.abortSignal.throwIfAborted();
+    assertSessionControllerOperation(operation);
     params.signal?.throwIfAborted();
     await params.onYield(
       "Plugin reload handed off; resume with its result in this same conversation.",
@@ -95,66 +105,62 @@ export async function handoffPluginReload(params: {
               const signal =
                 execRequestAbortSignal(params.requestOwners, operation.abortSignal) ??
                 operation.abortSignal;
+              await operation.ownerSettlement;
+              if (signal.aborted) {
+                return;
+              }
+              let result: Record<string, unknown>;
               try {
-                await operation.ownerSettlement;
-                if (signal.aborted) {
-                  return;
-                }
-                let result: Record<string, unknown>;
+                const destination = await prepareSessionEventTargetForHost(target);
                 try {
-                  const destination = await prepareSessionEventTargetForHost(target);
-                  try {
-                    result = await retained.run(() =>
-                      callAgentToolGatewayRequest({
-                        method: "plugins.reload",
-                        params: params.request,
-                        sessionMutationCommitGuard: destination.assertCurrent,
-                        signal: AbortSignal.any([retained.signal, signal]),
-                        timeoutMs: null,
-                      }),
-                    );
-                  } finally {
-                    destination.release();
-                  }
-                } catch (error) {
-                  result = {
-                    ok: false,
-                    error: formatErrorMessage(error),
-                    ...(error instanceof GatewayClientRequestError
-                      ? { code: error.gatewayCode, details: error.details }
-                      : {}),
-                  };
+                  result = await retained.run(() =>
+                    callAgentToolGatewayRequest({
+                      method: "plugins.reload",
+                      params: params.request,
+                      sessionMutationCommitGuard: destination.assertCurrent,
+                      signal: AbortSignal.any([retained.signal, signal]),
+                      timeoutMs: null,
+                    }),
+                  );
+                } finally {
+                  destination.release();
                 }
-                if (signal.aborted) {
-                  return;
-                }
-                const receipt = enqueueSessionEventForHost(
-                  "Plugin reload result: " +
-                    params.formatResult(result) +
-                    "\nContinue the original task in this conversation. Do not repeat a completed reload.",
-                  withExecRequestOwners(
-                    {
-                      agentId: caller.agentId,
-                      sessionKey: caller.sessionKey,
-                      source: "plugin",
-                      contextKey: "plugin-reload:" + randomUUID(),
-                      expectedTarget: target,
-                      assertCurrent: retained.assertCurrent,
-                      abortSignal: signal,
-                    },
-                    params.requestOwners,
-                  ),
-                );
-                const accepted = await receipt.accepted;
-                if (!accepted.ok) {
-                  throw new Error(accepted.error);
-                }
-                const outcome = await receipt.settled;
-                if (outcome.status === "failed") {
-                  throw new Error(outcome.error ?? "Plugin reload resume failed");
-                }
-              } finally {
-                retained.release();
+              } catch (error) {
+                result = {
+                  ok: false,
+                  error: formatErrorMessage(error),
+                  ...(error instanceof GatewayClientRequestError
+                    ? { code: error.gatewayCode, details: error.details }
+                    : {}),
+                };
+              }
+              if (signal.aborted) {
+                return;
+              }
+              const receipt = enqueueSessionEventForHost(
+                "Plugin reload result: " +
+                  params.formatResult(result) +
+                  "\nContinue the original task in this conversation. Do not repeat a completed reload.",
+                withExecRequestOwners(
+                  {
+                    agentId: caller.agentId,
+                    sessionKey: caller.sessionKey,
+                    source: "plugin",
+                    contextKey: "plugin-reload:" + randomUUID(),
+                    expectedTarget: target,
+                    assertCurrent: retained.assertCurrent,
+                    abortSignal: signal,
+                  },
+                  params.requestOwners,
+                ),
+              );
+              const accepted = await receipt.accepted;
+              if (!accepted.ok) {
+                throw new Error(accepted.error);
+              }
+              const outcome = await receipt.settled;
+              if (outcome.status === "failed") {
+                throw new Error(outcome.error ?? "Plugin reload resume failed");
               }
             },
           ),

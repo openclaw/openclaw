@@ -17,7 +17,7 @@ export type DraftPlaceSnapshot = Readonly<{
 }>;
 
 export type DraftPlaceCallbacks = {
-  requestUpdate: () => void;
+  changed: () => void;
   onError: (error: string | null) => void;
   onClearError: (error: string) => void;
 };

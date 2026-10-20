@@ -29,7 +29,7 @@ import {
   resolveAssistantStreamContentIndex,
   resolveAssistantStreamItemId,
   resolveAssistantTextChunk,
-  resolveStreamingReply,
+  createStreamingReplyResolver,
   scopeAssistantMessageToStreamBlock,
   shouldSuppressDeterministicApprovalOutput,
 } from "./embedded-agent-subscribe.handlers.messages.stream.js";
@@ -104,8 +104,12 @@ export function handleMessageUpdate(
   if (resolveAssistantMessagePhase(msg) === "commentary" && !isResponsesTextEvent) {
     // Even hidden commentary closes the preceding visible-text scope.
     ctx.flushAssistantStream();
+    if (evtType === "text_delta" && Date.now() < (ctx.state.nextCommentaryAt ?? 0)) {
+      return undefined;
+    }
     const commentaryText = extractAssistantCommentaryText(msg);
     if (commentaryText) {
+      ctx.state.nextCommentaryAt = Date.now() + 75;
       recordRawStream("assistant_text_stream", "commentary_update", "", commentaryText);
       emitAssistantCommentaryStreamData(ctx, msg);
     }
@@ -251,7 +255,7 @@ export function handleMessageUpdate(
   }
   if (deliveryPhase === "commentary") {
     if (ctx.state.assistantStream?.projection) {
-      ctx.state.assistantStream.projection.directiveCodePrefix = undefined;
+      ctx.state.assistantStream.projection = undefined;
     }
     const isResponsesCommentary = isResponsesApiAssistantMessage(partialAssistant);
     const hadResponsesCommentaryText = isResponsesCommentary && Boolean(ctx.state.deltaBuffer);
@@ -260,6 +264,10 @@ export function handleMessageUpdate(
       ctx.state.deltaBuffer += chunk;
       ctx.state.deltaBufferIsCommentary = true;
     }
+    if (evtType === "text_delta" && Date.now() < (ctx.state.nextCommentaryAt ?? 0)) {
+      return undefined;
+    }
+    ctx.state.nextCommentaryAt = Date.now() + 75;
     const commentaryText = isResponsesCommentary
       ? ctx.state.deltaBuffer
       : readAssistantTextBlocksForPhase(streamAssistant, "commentary")
@@ -359,7 +367,8 @@ export function handleMessageUpdate(
     final: finalText,
   });
   const preparedSource = ctx.getPartialReplySourceText();
-  chunk = snapshot ? preparedSource : preparedSource.slice(previousPreparedSource.length);
+  // Only the initial protocol prefix can hold or rewrite source bytes; later chunks append verbatim.
+  chunk = snapshot || !previousPreparedSource ? preparedSource : chunk;
   let next = shouldReadPartialText
     ? (snapshot?.text ?? extractAssistantVisibleText(selectedAssistant)).trimEnd()
     : undefined;
@@ -375,6 +384,7 @@ export function handleMessageUpdate(
   const hasSnapshotText = next !== undefined;
   let nextRawStreamText = next ?? "";
   let projection: NonNullable<EmbeddedAgentSubscribeState["assistantStream"]>["projection"];
+  let rawDirectiveDelta: string | undefined;
   if (next === undefined && deliveryPhase === "final_answer" && (reprojectBlockReply || chunk)) {
     // A late phase can reveal inline examples; retain already scoped snapshots above.
     visibleDelta = reprojectBlockReply
@@ -433,9 +443,11 @@ export function handleMessageUpdate(
             : "final";
       const previousStream = reprojectBlockReply ? undefined : ctx.state.assistantStream;
       projection = previousStream?.projection;
+      const continuingProjection = projection?.kind === kind;
       if (!projection || projection.kind !== kind) {
         projection = {
           kind,
+          resolveReply: createStreamingReplyResolver(),
           projector:
             kind === "raw"
               ? createTextProjection([
@@ -448,18 +460,21 @@ export function handleMessageUpdate(
         projection.projector.replace(previousStream?.raw ?? "");
       }
       previousText = projection.projector.text;
-      if (!textIsAppend) {
-        projection.directiveCodePrefix = undefined;
-      }
+      rawDirectiveDelta = continuingProjection && textIsAppend ? visibleDelta : undefined;
       const projected = textIsAppend
-        ? projection.projector.append(visibleDelta)
+        ? projection.projector.append(
+            visibleDelta,
+            unchangedBlockAppend && projection.projector.source === previousPreparedSource
+              ? preparedSource
+              : undefined,
+          )
         : projection.projector.replace(nextRawStreamText);
       nextRawStreamText = projection.projector.source;
       next = projected.text;
       appendDelta = projected.delta;
       // Generic directives retain their raw chunk coordinates: restored trim whitespace
       // could otherwise make an inline tag look like an indented code block.
-      if (kind !== "raw" || next !== nextRawStreamText.trim()) {
+      if (kind !== "raw" || !projection.projector.matchesTrimmedSource) {
         visibleDelta = projected.delta ?? (previousText.startsWith(next) ? "" : next);
       }
     }
@@ -478,8 +493,7 @@ export function handleMessageUpdate(
       hasText,
       replyDirectives,
       audioDirectiveCount,
-      directiveCodePrefix,
-    } = resolveStreamingReply({
+    } = (projection?.resolveReply ?? createStreamingReplyResolver())({
       evtType,
       next,
       previousText,
@@ -489,11 +503,8 @@ export function handleMessageUpdate(
       parsedStreamDirectives,
       previousAudioDirectiveCount: ctx.state.lastAssistantAudioDirectiveCount,
       rawDirectiveSource: projection?.kind === "raw" ? nextRawStreamText : undefined,
-      directiveCodePrefix: projection?.kind === "raw" ? projection.directiveCodePrefix : undefined,
+      rawDirectiveDelta,
     });
-    if (projection?.kind === "raw") {
-      projection.directiveCodePrefix = directiveCodePrefix;
-    }
     recordPendingAssistantReplyDirectives(ctx.state, replyDirectives, {
       previous: ctx.state.lastAssistantAudioDirectiveCount,
       current: audioDirectiveCount,
@@ -516,7 +527,7 @@ export function handleMessageUpdate(
       !ctx.params.enforceFinalTag &&
       (priorBlockIndex === streamContentIndex ||
         (priorBlockIndex === undefined && !priorBlockText)) &&
-      next === nextRawStreamText.trim() &&
+      projection?.projector.matchesTrimmedSource &&
       ((previousText === previousCleaned && next === cleanedText) ||
         (appendDelta !== null && replyDelta === appendDelta));
     if (plainAppend) {

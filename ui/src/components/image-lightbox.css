@@ -35,7 +35,6 @@ openclaw-image-lightbox {
   .action.zoom-control {
     color: var(--media-foreground);
     background-color: var(--media-control-bg);
-    -webkit-backdrop-filter: blur(16px) saturate(140%);
     backdrop-filter: blur(16px) saturate(140%);
     box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
   }
@@ -357,11 +356,6 @@ openclaw-image-lightbox {
   }
 
   @media (prefers-reduced-motion: reduce) {
-    openclaw-modal-dialog {
-      --show-duration: 0ms;
-      --hide-duration: 0ms;
-    }
-
     .actions .action,
     .lightbox-footer .action,
     .navigation {

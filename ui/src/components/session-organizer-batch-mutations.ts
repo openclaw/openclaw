@@ -18,7 +18,7 @@ import type {
   SidebarSessionMutationResult,
   SidebarSessionMutationScope,
 } from "./app-sidebar-session-types.ts";
-import type { SessionOrganizerControllerHost } from "./session-organizer-controller.ts";
+import type { SessionOrganizerDependencies } from "./session-organizer.ts";
 import { formatBatchSessionRemovalError } from "./session-workspace-recovery.runtime.ts";
 
 export type SessionActionRow = Pick<
@@ -47,11 +47,11 @@ export type SessionActionRow = Pick<
 };
 
 export type SessionActionHost = Pick<
-  SessionOrganizerControllerHost,
+  SessionOrganizerDependencies,
   "pruneSidebarSessionEntry" | "selectSession" | "sidebarSessionStatusFilter"
 > & {
   readonly sessionData: Pick<
-    SessionOrganizerControllerHost["sessionData"],
+    SessionOrganizerDependencies["sessionData"],
     "isSessionMutationScopeCurrent" | "publishSessionMutationError" | "refreshSidebarSessions"
   >;
 };
@@ -62,7 +62,7 @@ export type SessionActionHost = Pick<
  * runtime module, so it lives with the types they already import.
  */
 export function requireSessionMutationAccess(
-  host: SessionActionHost,
+  deps: SessionActionHost,
   scope: SidebarSessionMutationScope,
   request: SessionMethodAccessRequest,
 ): boolean {
@@ -70,7 +70,7 @@ export function requireSessionMutationAccess(
   if (access.allowed) {
     return true;
   }
-  host.sessionData.publishSessionMutationError(scope, access.reason);
+  deps.sessionData.publishSessionMutationError(scope, access.reason);
   return false;
 }
 
@@ -80,45 +80,45 @@ export function requireSessionMutationAccess(
  * remain visible to the caller.
  */
 async function refreshSessionsAfterBatch(
-  host: SessionActionHost,
+  deps: SessionActionHost,
   scope: SidebarSessionMutationScope,
   rows: readonly SessionActionRow[],
 ): Promise<SidebarSessionMutationResult> {
   const agentIds = [
     ...new Set(rows.map((row) => resolveUiSessionRowAgentId(row, scope.selectedAgentId))),
   ];
-  const refreshSidebar = host.sidebarSessionStatusFilter() !== "active";
+  const refreshSidebar = deps.sidebarSessionStatusFilter() !== "active";
   for (const agentId of agentIds) {
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       return "stale";
     }
     try {
       const outcome = await scope.sessions.reconcileMutation(agentId);
-      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
         return "stale";
       }
       if (outcome.status !== "refreshed") {
         if (outcome.status === "failed") {
-          host.sessionData.publishSessionMutationError(scope, outcome.error);
+          deps.sessionData.publishSessionMutationError(scope, outcome.error);
         }
         return outcome.status;
       }
       if (refreshSidebar) {
-        await host.sessionData.refreshSidebarSessions(agentId);
+        await deps.sessionData.refreshSidebarSessions(agentId);
       }
     } catch (error) {
-      if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
         return "stale";
       }
-      host.sessionData.publishSessionMutationError(scope, error);
+      deps.sessionData.publishSessionMutationError(scope, error);
       return "failed";
     }
   }
-  return host.sessionData.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
+  return deps.sessionData.isSessionMutationScopeCurrent(scope) ? "completed" : "stale";
 }
 
 export async function patchSessionRows(
-  host: SessionActionHost,
+  deps: SessionActionHost,
   rows: readonly SessionActionRow[],
   patch: SessionsPatchMutation,
   scope: SidebarSessionMutationScope,
@@ -128,7 +128,7 @@ export async function patchSessionRows(
   } = {},
 ): Promise<SessionActionRow[] | null> {
   if (typeof patch.archived === "boolean" && rows.some((row) => !row.sessionId?.trim())) {
-    host.sessionData.publishSessionMutationError(
+    deps.sessionData.publishSessionMutationError(
       scope,
       "Session lifecycle action requires a durable session identity.",
     );
@@ -140,7 +140,7 @@ export async function patchSessionRows(
   }> = [];
   let terminalError: unknown = null;
   for (let offset = 0; offset < rows.length; offset += SESSIONS_PATCH_MANY_MAX_TARGETS) {
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       return null;
     }
     const chunkRows = rows.slice(offset, offset + SESSIONS_PATCH_MANY_MAX_TARGETS);
@@ -162,20 +162,20 @@ export async function patchSessionRows(
     if (!access.allowed) {
       terminalError = access.reason;
       if (dispatched.length === 0) {
-        host.sessionData.publishSessionMutationError(scope, access.reason);
+        deps.sessionData.publishSessionMutationError(scope, access.reason);
       }
       break;
     }
     try {
       const result = await scope.sessions.patchMany(params.targets, params.patch);
-      if (!result || !host.sessionData.isSessionMutationScopeCurrent(scope)) {
+      if (!result || !deps.sessionData.isSessionMutationScopeCurrent(scope)) {
         return null;
       }
       dispatched.push({ rows: chunkRows, result });
     } catch (error) {
       terminalError = error;
       if (dispatched.length === 0) {
-        host.sessionData.publishSessionMutationError(scope, error);
+        deps.sessionData.publishSessionMutationError(scope, error);
       }
       break;
     }
@@ -184,12 +184,12 @@ export async function patchSessionRows(
     return null;
   }
   if (!options.deferListRefresh) {
-    const refreshResult = await refreshSessionsAfterBatch(host, scope, rows);
+    const refreshResult = await refreshSessionsAfterBatch(deps, scope, rows);
     if (refreshResult === "stale") {
       return null;
     }
   }
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
     return null;
   }
   const errors: string[] = [];
@@ -203,7 +203,7 @@ export async function patchSessionRows(
       }
       const row = chunkRows[index];
       if (row?.pinned && patch.archived === true) {
-        host.pruneSidebarSessionEntry(row.key);
+        deps.pruneSidebarSessionEntry(row.key);
       }
       return row ? [row] : [];
     }),
@@ -213,24 +213,24 @@ export async function patchSessionRows(
     errors.push(terminalErrorMessage);
   }
   if (errors.length > 0) {
-    host.sessionData.publishSessionMutationError(scope, errors.join("; "));
+    deps.sessionData.publishSessionMutationError(scope, errors.join("; "));
   }
   return successful;
 }
 
 /** A personal list choice is not an archive or a shared-session mutation. */
 export async function setSessionInvolvement(
-  host: SessionActionHost,
+  deps: SessionActionHost,
   session: SessionActionRow,
   hidden: boolean,
   scope: SidebarSessionMutationScope,
 ): Promise<void> {
-  if (!host.sessionData.isSessionMutationScopeCurrent(scope) || !session.sessionId) {
+  if (!deps.sessionData.isSessionMutationScopeCurrent(scope) || !session.sessionId) {
     return;
   }
   const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
   if (
-    !requireSessionMutationAccess(host, scope, {
+    !requireSessionMutationAccess(deps, scope, {
       method: "sessions.setInvolvement",
       requiredScope: "operator.read",
     })
@@ -244,7 +244,7 @@ export async function setSessionInvolvement(
       expectedSessionId: session.sessionId,
       hidden,
     });
-    if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
+    if (!deps.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
     scope.sessions.patchRowLocal(
@@ -255,10 +255,10 @@ export async function setSessionInvolvement(
         sessionId: session.sessionId,
       },
     );
-    await host.sessionData.refreshSidebarSessions(agentId);
+    await deps.sessionData.refreshSidebarSessions(agentId);
   } catch (error) {
-    if (host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      host.sessionData.publishSessionMutationError(scope, error);
+    if (deps.sessionData.isSessionMutationScopeCurrent(scope)) {
+      deps.sessionData.publishSessionMutationError(scope, error);
     }
   }
 }

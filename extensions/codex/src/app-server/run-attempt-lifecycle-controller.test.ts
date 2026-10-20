@@ -98,7 +98,7 @@ function createTerminalReleaseHarness() {
     const scope = { threadId: "thread-1", turnId: "turn-1" };
     const prepared = prepareCodexServerNotification(notification, scope);
     notifications.noteNotificationReceived(prepared, scope, 0);
-    await notifications.enqueueNotification(prepared, scope);
+    await notifications.enqueueNotification(prepared);
   };
   const completeTurn = () => {
     for (const handler of notificationHandlers) {
@@ -185,7 +185,6 @@ function createTerminalReleaseHarness() {
             },
           },
         }),
-        { threadId: "thread-1", turnId: "turn-1" },
       ),
     order,
     pendingOpenClawDynamicToolCompletionIds,
@@ -270,6 +269,7 @@ describe("Codex terminal dynamic-tool release", () => {
               params: { timeoutMs: 60_000 },
               options: {},
               attemptStartedAt: Date.now(),
+              attemptStartedAtMonotonicMs: performance.now(),
               runAbortController: new AbortController(),
               fastModeAutoProgressState: {},
             },
@@ -288,7 +288,7 @@ describe("Codex terminal dynamic-tool release", () => {
       route.armTurn();
       await route.bindTurn("turn-1");
       controller.recordDynamicToolResult(terminalYieldResult(true));
-      await yieldImmediate();
+      await runtime.completion;
       expect(runtime.state.completed).toBe(true);
       expect(interrupt).toHaveBeenCalledOnce();
       const nativeCleanup = interrupt.mock.results[0]?.value;

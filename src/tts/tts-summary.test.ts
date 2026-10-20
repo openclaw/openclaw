@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { processCompletionsStream } from "../../packages/ai/src/transports/openai-completions-stream.js";
+import * as globals from "../globals.js";
 import type { AssistantMessage, Model } from "../llm/types.js";
 import { summarizeText } from "./tts-core.js";
 import {
@@ -186,14 +187,47 @@ describe("TTS summary visible text", () => {
     });
   });
 
-  it("keeps the existing original-text fallback when the summary has no visible content", async () => {
+  it.each(["no visible content", "provider text echo"])(
+    "keeps original-text fallback for %s without logging content",
+    async (failure) => {
+      const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+      try {
+        if (failure === "provider text echo") {
+          completion.complete.mockImplementationOnce(async ({ context }) => {
+            throw new Error(JSON.stringify(context.messages));
+          });
+        } else {
+          completion.complete.mockResolvedValue(
+            assistant([{ type: "text", text: "<think>Private only</think>" }]),
+          );
+        }
+        const result = await applySummaryToSpeech();
+        expect(synthesizeMock).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ text: `${originalText.slice(0, 1497)}...` }),
+        );
+        expect(result.text).toBe(originalText);
+        expect(log).toHaveBeenCalledWith("TTS: summarization failed, truncating instead.");
+        expect(JSON.stringify(log.mock.calls)).not.toContain("The original reply remains visible.");
+        expect(JSON.stringify(log.mock.calls)).not.toContain("Private only");
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
+
+  it("fits auto speech under tts.maxTextLength when it is below the preference limit", async () => {
+    cfg = { ...cfg, tts: { ...cfg.tts, maxTextLength: 1000 } };
+    const text = "x".repeat(1200);
     completion.complete.mockResolvedValue(
       assistant([{ type: "text", text: "<think>Private only</think>" }]),
     );
-    const result = await applySummaryToSpeech();
-    expect(synthesizeMock).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ text: `${originalText.slice(0, 1497)}...` }),
+    const result = await maybeApplyTtsToPayloadCore(
+      { payload: { text }, cfg, channel: "telegram", kind: "final" },
+      persistAudio,
     );
-    expect(result.text).toBe(originalText);
+    expect(synthesizeMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ text: `${text.slice(0, 997)}...` }),
+    );
+    expect(result).toMatchObject({ text, mediaUrl: "/tmp/synthetic-summary.ogg" });
   });
 });

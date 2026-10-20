@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -52,6 +53,42 @@ async function installFixture(page: Page) {
 }
 
 suite.define(() => {
+  it("opens Details when its offline trigger retires during the click", async () => {
+    await suite.withPage({ viewport: { width: 560, height: 900 } }, async ({ page }) => {
+      page.setDefaultTimeout(1_000);
+      await page.setContent("<button id=offline>Details</button>");
+      await page.evaluate(() => {
+        const offline = document.getElementById("offline")!;
+        offline.addEventListener(
+          "pointerover",
+          () => {
+            const menu = document.createElement("button");
+            menu.className = "chat-header-session-menu__trigger";
+            menu.textContent = "Actions";
+            menu.addEventListener("click", () => {
+              const item = document.createElement("button");
+              item.setAttribute("role", "menuitem");
+              item.textContent = "Session details";
+              item.addEventListener("click", () => {
+                const details = document.createElement("aside");
+                details.setAttribute("role", "complementary");
+                details.setAttribute("aria-label", "Details");
+                details.textContent = "Session details content";
+                document.body.append(details);
+                item.remove();
+              });
+              document.body.append(item);
+            });
+            offline.replaceWith(menu);
+          },
+          { once: true },
+        );
+      });
+      const details = await openChatDetails(page);
+      expect(await details.textContent()).toBe("Session details content");
+    });
+  });
+
   for (const viewport of [
     { width: 390, height: 844, colorScheme: "light" },
     { width: 320, height: 700, colorScheme: "dark" },
@@ -114,11 +151,10 @@ suite.define(() => {
           expect(button.height).toBeGreaterThanOrEqual(44);
         }
 
-        await panels.click();
         const menu = header.locator(".chat-panel-layout-menu");
-        await menu.getByRole("menuitem", { name: "Details", exact: true }).waitFor();
-        await capture(page, header, "mobile-panels-" + viewport.width, [menu.getByRole("menu")]);
-        await menu.getByRole("menuitem", { name: "Details", exact: true }).click();
+        const actions = header.locator(".chat-header-session-menu__trigger");
+        await actions.click();
+        await page.getByRole("menuitem", { name: "Session details", exact: true }).click();
         const details = page.getByRole("dialog", { name: "Details", exact: true });
         await details.waitFor();
         const detailsBox = await details.boundingBox();
@@ -126,7 +162,7 @@ suite.define(() => {
         await capture(page, header, "mobile-details-" + viewport.width, [details]);
         await page.keyboard.press("Escape");
         await details.waitFor({ state: "hidden" });
-        expect(await panels.evaluate((element) => element === document.activeElement)).toBe(true);
+        expect(await actions.evaluate((element) => element === document.activeElement)).toBe(true);
 
         await panels.click();
         await menu
@@ -139,8 +175,8 @@ suite.define(() => {
           .waitFor();
         expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(viewport.width - 24);
         await capture(page, header, "mobile-files-" + viewport.width, [files]);
-        await panels.click();
-        await menu.getByRole("menuitem", { name: "Details", exact: true }).click();
+        await actions.click();
+        await page.getByRole("menuitem", { name: "Session details", exact: true }).click();
         await details.waitFor();
         expect(await files.isVisible()).toBe(true);
         expect((await details.boundingBox())!.width).toBeGreaterThanOrEqual(viewport.width - 32);

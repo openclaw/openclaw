@@ -26,6 +26,7 @@ import {
 import type { SolidRouteProps } from "./app-route-types.ts";
 import type { ApplicationContext } from "./app/context.ts";
 import { gatewayPresentationScope } from "./app/gateway-presentation-scope.ts";
+import { retryControlUiImport } from "./app/stale-chunk-reload.ts";
 import { page as aboutPage } from "./pages/about/route.ts";
 import { page as activityPage } from "./pages/activity/route.ts";
 import { page as agentsHomePage } from "./pages/agents-home/route.ts";
@@ -72,17 +73,9 @@ import { resolveWorkboardRouteLocation } from "./pages/workboard/route-location.
 import { page as workboardPage } from "./pages/workboard/route.ts";
 import { page as worktreesPage } from "./pages/worktrees/route.ts";
 
-type AppRouteModule = (
-  | {
-      render: (data: unknown, loaderPending: boolean, presented?: boolean) => unknown;
-      renderSolid?: never;
-    }
-  | {
-      render?: never;
-      /** Mounted once per route renderer; props follow the current loader and presentation. */
-      renderSolid: (props: SolidRouteProps) => JSX.Element;
-    }
-) & {
+type AppRouteModule = {
+  /** Mounted once per route renderer; props follow the current loader and presentation. */
+  renderSolid: (props: SolidRouteProps) => JSX.Element;
   /** Optional lower-sidebar content owned by the same route and loader as the page. */
   renderSidebar?: (data: unknown, loaderPending: boolean, presented?: boolean) => JSX.Element;
   retainOnNavigate?: boolean;
@@ -139,7 +132,17 @@ const APP_ROUTE_TREE = [
   pluginPage,
 ] as const;
 
-const appRoutes = APP_ROUTE_TREE as readonly AppRoute[];
+const appRoutes: AppRoute[] = [];
+for (const route of APP_ROUTE_TREE as readonly AppRoute[]) {
+  const loader = route.loader;
+  appRoutes.push({
+    ...route,
+    component: () => retryControlUiImport(route.component),
+    loader: loader
+      ? (context, options) => retryControlUiImport(() => loader(context, options), options.signal)
+      : undefined,
+  });
+}
 
 /** Starts route chunk downloads without running the route's loader. */
 export function warmApplicationRouteModule(

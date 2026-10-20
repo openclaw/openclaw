@@ -72,9 +72,6 @@ export async function readClawPreview(
     "claws.catalog.preview",
     { ...source, ...request },
   );
-  if (result.preview.kind !== request.kind || result.preview.name !== request.name) {
-    throw new Error("ClawHub returned a different preview item.");
-  }
   return result.preview;
 }
 

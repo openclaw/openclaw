@@ -58,11 +58,13 @@ export type Job = {
   dispatchState?: DispatchState;
   request: SqliteWorkerRequest;
   bytes: number;
+  result: Promise<unknown>;
   resolve(value: unknown): void;
   reject(error: unknown): void;
   detach(): void;
 };
 export type Slot = {
+  sharedState?: true;
   custody: SqliteWorkerSlotCustody;
   databaseAdmissionCursor: SqliteDatabaseAdmissionCursor;
   runtimeGeneration?: RuntimeWorkerGeneration;
@@ -149,6 +151,8 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  /** Shared-state intake must not share a carrier with synchronous agent preparation. */
+  sharedState?: true;
   /** The caching owner synchronously seals an idle client, or declines reclamation. */
   retireIdle?: () => Promise<void> | undefined;
   onNativeLost?: (reason: Error) => void;
@@ -193,6 +197,7 @@ export type SqliteWorkerOpenCustody = Pick<
   | "onNativeLost"
   | "signal"
   | "retireIdle"
+  | "sharedState"
 > & { preparation?: unknown };
 export type SqliteWorkerInputRetention = "snapshot" | "stream";
 export type SqliteWorkerInputPreparation = {

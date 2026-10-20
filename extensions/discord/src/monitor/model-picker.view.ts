@@ -1,4 +1,12 @@
-import { ButtonStyle, type APISelectMenuOption } from "discord-api-types/v10";
+import {
+  ButtonStyle,
+  ComponentType,
+  type APISelectMenuOption,
+  type APIActionRowComponent,
+  type APIButtonComponent,
+  type APIStringSelectComponent,
+  type APIContainerComponent,
+} from "discord-api-types/v10";
 import {
   getModelsRuntimeChoices,
   type ModelsProviderData,
@@ -6,15 +14,8 @@ import {
 } from "openclaw/plugin-sdk/models-provider-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { sliceUtf16Safe, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
-import {
-  Button,
-  Container,
-  Row,
-  Separator,
-  StringSelectMenu,
-  TextDisplay,
-  type TopLevelComponents,
-} from "../internal/discord.js";
+import { asSerializableComponent, type TopLevelComponents } from "../internal/payload.js";
+import { stripUndefinedFields } from "../internal/undefined-fields.js";
 import {
   buildDiscordModelPickerCustomId,
   createDiscordModelPickerModelToken,
@@ -38,7 +39,7 @@ type DiscordModelPickerCurrentModelRef = {
   model: string;
 };
 
-type DiscordModelPickerRow = Row<Button> | Row<StringSelectMenu>;
+type DiscordModelPickerRow = APIActionRowComponent<APIButtonComponent | APIStringSelectComponent>;
 type DiscordModelPickerRenderShellParams = {
   title: string;
   refreshWarning?: string;
@@ -102,32 +103,37 @@ function formatCurrentModelLine(currentModel?: string): string {
 function createModelPickerButton(
   label: string,
   state: DiscordModelPickerCustomIdState | string,
-  options: { style?: ButtonStyle; disabled?: boolean } = {},
-): Button {
+  options: { style?: ButtonStyle.Primary | ButtonStyle.Secondary; disabled?: boolean } = {},
+): APIButtonComponent {
   const customId = typeof state === "string" ? state : buildDiscordModelPickerCustomId(state);
-  class DiscordModelPickerButton extends Button {
-    label = label;
-    customId = customId;
-    override style = options.style ?? ButtonStyle.Secondary;
-    override disabled = options.disabled ?? false;
-  }
-  return new DiscordModelPickerButton();
+  return stripUndefinedFields({
+    type: ComponentType.Button,
+    label,
+    custom_id: customId,
+    style: options.style ?? ButtonStyle.Secondary,
+    disabled: options.disabled || undefined,
+  });
 }
 
 function createModelSelectRow(
   state: DiscordModelPickerCustomIdState,
   options: APISelectMenuOption[],
   placeholder: string,
-): Row<StringSelectMenu> {
+): DiscordModelPickerRow {
   const customId = buildDiscordModelPickerCustomId(state);
-  class DiscordModelPickerSelect extends StringSelectMenu {
-    customId = customId;
-    override options = options;
-    override minValues = 1;
-    override maxValues = 1;
-    override placeholder = placeholder;
-  }
-  return new Row([new DiscordModelPickerSelect()]);
+  return {
+    type: ComponentType.ActionRow,
+    components: [
+      {
+        type: ComponentType.StringSelect,
+        custom_id: customId,
+        options,
+        min_values: 1,
+        max_values: 1,
+        placeholder,
+      },
+    ],
+  };
 }
 
 function buildBucketSelectRow(params: {
@@ -141,7 +147,7 @@ function buildBucketSelectRow(params: {
   runtimeToken?: string;
   providerPage?: number;
   modelIndex?: number;
-}): Row<StringSelectMenu> | null {
+}): DiscordModelPickerRow | null {
   const { buckets, currentBucketId, ...state } = params;
   if (buckets.length <= 1) {
     return null;
@@ -175,29 +181,34 @@ function getActiveBucketId(
 function buildRenderedShell(
   params: DiscordModelPickerRenderShellParams,
 ): DiscordModelPickerRenderedView {
-  const containerComponents: Array<TextDisplay | Separator | DiscordModelPickerRow> = [
-    new TextDisplay(`## ${params.title}`),
+  const containerComponents: APIContainerComponent["components"] = [
+    { type: ComponentType.TextDisplay, content: `## ${params.title}` },
   ];
   if (params.refreshWarning) {
-    containerComponents.push(new TextDisplay(params.refreshWarning));
+    containerComponents.push({ type: ComponentType.TextDisplay, content: params.refreshWarning });
   }
-  containerComponents.push(new TextDisplay(params.detailLines.join("\n")));
-  containerComponents.push(new Separator({ divider: true, spacing: "small" }));
+  containerComponents.push({
+    type: ComponentType.TextDisplay,
+    content: params.detailLines.join("\n"),
+  });
+  containerComponents.push({ type: ComponentType.Separator, divider: true, spacing: 1 });
   if (params.preRowText) {
-    containerComponents.push(new TextDisplay(params.preRowText));
+    containerComponents.push({ type: ComponentType.TextDisplay, content: params.preRowText });
   }
   containerComponents.push(...params.rows);
   if (params.trailingRows && params.trailingRows.length > 0) {
-    containerComponents.push(new Separator({ divider: true, spacing: "small" }));
+    containerComponents.push({ type: ComponentType.Separator, divider: true, spacing: 1 });
     containerComponents.push(...params.trailingRows);
   }
   if (params.footer) {
-    containerComponents.push(new Separator({ divider: false, spacing: "small" }));
-    containerComponents.push(new TextDisplay(`-# ${params.footer}`));
+    containerComponents.push({ type: ComponentType.Separator, divider: false, spacing: 1 });
+    containerComponents.push({ type: ComponentType.TextDisplay, content: `-# ${params.footer}` });
   }
 
   return {
-    components: [new Container(containerComponents)],
+    components: [
+      asSerializableComponent({ type: ComponentType.Container, components: containerComponents }),
+    ],
   };
 }
 
@@ -209,7 +220,7 @@ function buildProviderSelectRow(params: {
   provider?: string;
   providerBucket?: string;
   showModelCounts?: boolean;
-}): Row<StringSelectMenu> {
+}): DiscordModelPickerRow {
   const { page, currentProvider, showModelCounts, ...state } = params;
   const options: APISelectMenuOption[] = page.items.map((provider) => ({
     label: provider.id,
@@ -248,7 +259,7 @@ function buildPaginationRow(params: {
   modelToken?: string;
   providerBucket?: string;
   modelBucket?: string;
-}): Row<Button> | null {
+}): DiscordModelPickerRow | null {
   if (params.totalPages <= 1) {
     return null;
   }
@@ -268,11 +279,14 @@ function buildPaginationRow(params: {
     DISCORD_MODEL_PICKER_PAGE_INDICATOR_CUSTOM_ID,
     { disabled: true },
   );
-  return new Row([
-    createNavigationButton("◀ Prev", Math.max(1, page - 1), hasPrev),
-    indicatorButton,
-    createNavigationButton("Next ▶", Math.min(totalPages, page + 1), hasNext),
-  ]);
+  return {
+    type: ComponentType.ActionRow,
+    components: [
+      createNavigationButton("◀ Prev", Math.max(1, page - 1), hasPrev),
+      indicatorButton,
+      createNavigationButton("Next ▶", Math.min(totalPages, page + 1), hasNext),
+    ],
+  };
 }
 
 function buildModelRows(
@@ -282,7 +296,7 @@ function buildModelRows(
   },
 ): {
   rows: DiscordModelPickerRow[];
-  buttonRow: Row<Button>;
+  buttonRow: DiscordModelPickerRow;
   runtimeChoices: ModelsRuntimeChoice[] | undefined;
   selectedRuntime: string | undefined;
 } {
@@ -421,7 +435,7 @@ function buildModelRows(
     typeof params.pendingModelIndex === "number" &&
     params.pendingModelIndex > 0;
 
-  const buttonRowItems: Button[] = [
+  const buttonRowItems: APIButtonComponent[] = [
     createModelPickerButton("Providers", {
       command: params.command,
       action: "back",
@@ -468,7 +482,12 @@ function buildModelRows(
     ),
   );
 
-  return { rows, buttonRow: new Row(buttonRowItems), runtimeChoices, selectedRuntime };
+  return {
+    rows,
+    buttonRow: { type: ComponentType.ActionRow, components: buttonRowItems },
+    runtimeChoices,
+    selectedRuntime,
+  };
 }
 
 export function renderDiscordModelPickerProvidersView(
@@ -553,16 +572,19 @@ export function renderDiscordModelPickerModelsView(
   });
 
   if (!modelPage) {
-    const rows: Row<Button>[] = [
-      new Row([
-        createModelPickerButton("Back", {
-          command: params.command,
-          action: "back",
-          view: "providers",
-          page: providerPage,
-          userId: params.userId,
-        }),
-      ]),
+    const rows: DiscordModelPickerRow[] = [
+      {
+        type: ComponentType.ActionRow,
+        components: [
+          createModelPickerButton("Back", {
+            command: params.command,
+            action: "back",
+            view: "providers",
+            page: providerPage,
+            userId: params.userId,
+          }),
+        ],
+      },
     ];
 
     return buildRenderedShell({
@@ -661,30 +683,33 @@ export function renderDiscordModelPickerRecentsView(
 ): DiscordModelPickerRenderedView {
   const { data, quickModels, currentModel, modelBucket, ...navigationState } = params;
   const recentModels = getDiscordModelPickerRecentModelRefs(data, quickModels);
-  const rows = recentModels.map(
-    (modelRef, index) =>
-      new Row([
-        createModelPickerButton(
-          formatRecentsButtonLabel(modelRef, index === 0 ? "(default)" : undefined),
-          {
-            ...navigationState,
-            action: "submit",
-            view: "recents",
-            recentSlot: index + 1,
-            modelToken: createModelRefToken(modelRef),
-          },
-        ),
-      ]),
-  );
+  const rows = recentModels.map((modelRef, index) => ({
+    type: ComponentType.ActionRow as const,
+    components: [
+      createModelPickerButton(
+        formatRecentsButtonLabel(modelRef, index === 0 ? "(default)" : undefined),
+        {
+          ...navigationState,
+          action: "submit",
+          view: "recents",
+          recentSlot: index + 1,
+          modelToken: createModelRefToken(modelRef),
+        },
+      ),
+    ],
+  }));
 
-  const backRow: Row<Button> = new Row([
-    createModelPickerButton("Back", {
-      ...navigationState,
-      action: "back",
-      view: "models",
-      modelBucket,
-    }),
-  ]);
+  const backRow: DiscordModelPickerRow = {
+    type: ComponentType.ActionRow,
+    components: [
+      createModelPickerButton("Back", {
+        ...navigationState,
+        action: "back",
+        view: "models",
+        modelBucket,
+      }),
+    ],
+  };
 
   return buildRenderedShell({
     title: "Recents",

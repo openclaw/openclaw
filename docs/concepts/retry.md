@@ -47,6 +47,8 @@ An OpenAI SDK stream that fails with malformed server-sent event JSON also quali
 
 A Responses stream that ends before its terminal event also qualifies for transient recovery, including when a tool call is still unfinished. Partial tool arguments are never executed. A completed response with inconsistent tool-call identities does not qualify as a disconnected stream. A Gemini or Vertex AI stream that ends inside an event frame qualifies the same way; a whole frame of malformed JSON does not.
 
+Responses tool calls that accumulate 32 KiB of consecutive trailing whitespace are aborted early and qualify for the same bounded transient recovery. This limit applies to the whitespace run, not the total argument size. Transport diagnostics label this abort `degenerate_output`; session watchdog recovery is labeled `session_watchdog`.
+
 Completed Responses replies are delivered immediately, even if the provider has not closed the HTTP response yet. OpenClaw discards up to 64 KiB of trailing bytes for at most 250 ms in the background so a finished connection can be reused. Trailing events never add output or tool calls. Cancellation and Gateway shutdown stop the drain.
 
 If a Responses request reaches its output-token limit while generating a tool call, the embedded runner also continues automatically from recorded results after admitted tools settle. It keeps the same model and account, preserves completed actions, and never executes partial arguments. This continuation shares the retry-count budget and existing timeout controls, but not the 90-second outage window: generating a full response can take longer than that. Its separate one-continuation limit applies to the whole run and is not reset by successful model responses. Cancellation, pending approval, active asynchronous work, and intentional tool termination still stop continuation. Provider refusals and unknown incomplete-response reasons do not qualify.
@@ -58,6 +60,8 @@ The [model failover controller](/concepts/model-failover#model-fallback) owns th
 ChatGPT SSE errors preserve HTTP status and `Retry-After` together, so a transient HTTP response remains retryable even when its message or provider code is unfamiliar. The ChatGPT transport separately reconnects once for `websocket_connection_limit_reached` before streaming; this is not an SSE HTTP-response retry.
 
 For SDK calls that retain internal retries, Stainless-based SDKs such as Anthropic and OpenAI can receive `retry-after-ms` or `retry-after` on retryable responses (`408`, `409`, `429`, and `5xx`). When that wait is longer than 60 seconds, OpenClaw injects `x-should-retry: false` so the SDK returns control promptly. Override this SDK-only cap with `OPENCLAW_SDK_RETRY_MAX_WAIT_SECONDS=<seconds>`. Set it to `0`, `false`, `off`, `none`, or `disabled` to let those SDK calls honor long `Retry-After` sleeps internally.
+
+When a fallback chain fails, bounded provider reset guidance is extracted from the error message without displaying the surrounding response metadata.
 
 Chinese exhausted-quota messages follow the same policy, including MiniMax Token Plan's `已达到 Token Plan 用量上限`, z.ai's `已达到每周/每月使用上限`, and `额度已用尽` / `配额已用尽`. Temporary `请求过于频繁` throttles keep the same-model retry budget.
 
@@ -98,7 +102,13 @@ policy does not wrap arbitrary Git commands run by agents or setup scripts.
 
 Discord and Telegram channel retry timings are built in and are not configurable in `openclaw.json`.
 
-The embedded runtime's existing session setting `retry.provider.maxRetries` overrides its recovery retry budget; `0` disables retries, and rate limits remain capped at 10 total attempts per consecutive outage. This is an embedded session setting, not an `openclaw.json` key, and it does not configure native harness request retries. Automatic recovery requires no new configuration.
+The existing session setting `retry.provider.maxRetries` overrides OpenClaw's continuation retry count for the embedded runtime and participating local native harnesses: Codex, Copilot, and Muse. `0` disables these retries; rate limits remain capped at 10 total attempts per consecutive outage. Without an explicit setting, the harness's existing retry count or OpenClaw's default applies.
+
+This is a `settings.json` setting, not an `openclaw.json` key. OpenClaw merges agent-global settings, enabled bundle settings, and project settings from the effective workspace, subject to the existing project-settings trust policy. Prepared sessions retain that snapshot until a new session or explicit invalidation.
+
+Native harnesses prepare this count from their admitted Gateway-local execution directory before tools or inference. Remote/container execution, ACP, Agents API, and external harnesses that do not report a local settings scope retain their existing retry count/default; OpenClaw does not read remote paths as local settings directories.
+
+Only the retry count is shared. `retry.provider.maxRetryDelayMs` and `timeoutMs` retain their embedded-runtime scope; native harness request retries, delays, and timeouts remain native-owned. Disabling continuation retries does not disable the separate tool-free finalizer for completed work. Automatic recovery requires no new configuration.
 
 ## Notes
 

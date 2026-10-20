@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Kysely } from "kysely";
 import type { EngineConnection, SqlConnection } from "../sql-connection.js";
+import type { PortDescriptor } from "./port-types.js";
 import type { FullTextCapability, TextIndex, TextIndexDefinition } from "./text-contract.js";
 import type { DatabaseEngineId, DatabaseEngineInput } from "./types.js";
 import type { VectorCapability, VectorIndex } from "./vector-contract.js";
@@ -57,17 +58,24 @@ export type StoreSchema = {
     sql: string;
     fromSchema: PostgresSchemaDefinition;
     schema: PostgresSchemaDefinition;
+    /** Exact predecessor export needed before Doctor may advance this family. */
+    backup?: PortDescriptor;
   }[];
   postgresFragments?: readonly PostgresSchemaFragment[];
   search?: SearchSchema;
+  /** Persisted, owner-registered derived search definitions. */
+  searchExtensions?: Record<string, SearchSchema>;
 };
 export type AdmittedStore = {
+  reusePostgresConnection?: boolean;
   anchor: DatabaseSync;
   schema: StoreSchema;
   input: DatabaseEngineInput;
   openSqlite: () => void;
   storeId?: string;
   namespace?: string;
+  /** Owner-specific data extraction inside the validated source migration transaction. */
+  beforeMigrate?: (database: EngineConnection, fromVersion: number) => void;
 };
 type TransactionRecipes<Connection extends SqlConnection> = {
   write<T>(connection: Connection, operation: () => T): T;

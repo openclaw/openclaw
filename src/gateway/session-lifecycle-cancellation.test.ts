@@ -3,22 +3,28 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.sqlite-entry.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import {
   getAgentRunContext,
   registerAgentRunContext,
   validateAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
+import { abortChatRunById } from "./chat-abort.js";
+import { captureRpcTargetForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
-import { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
+import {
+  createSubscriptionTestFixture,
+  registerSubscriptionChatRun,
+} from "./server-runtime-subscriptions.test-support.js";
+import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 it.each([
   { cancellation: "restart", status: "interrupted", replacement: false },
@@ -40,12 +46,11 @@ it.each([
       const admission = prepareSystemAgentRunAdmission({}, runId, "main", "cancellation-test", () =>
         registration.controller.signal.throwIfAborted(),
       );
-      const registration = registerChatAbortController({
+      const registration = registerSubscriptionChatRun(params, {
         ...target,
-        chatAbortControllers: params.chatAbortControllers,
+        target: captureRpcTargetForTest(target),
         runId,
         kind: "agent",
-        timeoutMs: 60_000,
         operationalRunInstance: admission.operationalRunInstance,
       });
       await admission.admit("embedded");
@@ -53,6 +58,7 @@ it.each([
       const authority = getAgentRunContext(runId)?.delegatedAuthority;
       assert(authority);
       registration.bindAgentRunDelegatedAuthority(authority);
+      const releaseClaim = await claimRpcSourceForTest(registration.entry);
       registration.markExecutionStarted();
       await replaceSessionEntry(target, {
         sessionId: target.sessionId,
@@ -64,9 +70,9 @@ it.each([
       });
       const writePrepared = createDeferred();
       const releaseWrite = createDeferred();
-      const patch = sessionAccessor.patchSessionEntryTarget;
+      const patch = sessionAccessor.applySessionEntryTargetOperation;
       const spy = vi
-        .spyOn(sessionAccessor, "patchSessionEntryTarget")
+        .spyOn(sessionAccessor, "applySessionEntryTargetOperation")
         .mockImplementation(async (...args) => {
           if (args[0].target.canonicalKey === target.sessionKey) {
             writePrepared.resolve();
@@ -104,7 +110,7 @@ it.each([
           ).toEqual({ aborted: true });
         }
         await writePrepared.promise;
-        persistence = registration.entry?.projectSessionTerminalPersistence;
+        persistence = registration.entry.adapter.projectSessionTerminalPersistence;
         expect(persistence).toBeDefined();
         // Actual runtime cleanup closes tools immediately while the queued write is still pending.
         registration.cleanup();
@@ -140,10 +146,11 @@ it.each([
       } finally {
         releaseWrite.resolve();
         await persistence?.catch(() => {});
+        releaseClaim();
         registration.cleanup();
         admission.close();
         await subscriptions.agentUnsub();
-        subscriptions.heartbeatUnsub();
+        heartbeatNotifications.onEvent = () => {};
         subscriptions.transcriptUnsub();
         subscriptions.lifecycleUnsub();
         await params.scheduler.stop();

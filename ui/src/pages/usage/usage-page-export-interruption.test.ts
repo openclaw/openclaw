@@ -3,8 +3,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { GatewayBrowserClient } from "../../api/gateway.ts";
 import * as toasts from "../../lib/toast.ts";
-import { UsagePageModel } from "./usage-page-model.ts";
-import { contextWithClient } from "./usage-page.test-support.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { contextWithClient, createPage } from "./usage-page.test-support.ts";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -15,12 +15,11 @@ it.each(["disconnect", "replacement"] as const)(
     const client = new GatewayBrowserClient({ url: "ws://test.invalid" });
     vi.spyOn(client, "request").mockReturnValue(response.promise);
     const context = contextWithClient(client);
-    const model = new UsagePageModel(context, () => {});
+    const page = await createPage(client, false, context);
     const toast = vi.spyOn(toasts, "showToast").mockReturnValue(true);
-    model.connect();
     try {
-      model.read().callbacks.display.onExportCsv("sessions-csv");
-      expect(model.read().data.exporting).toBe(true);
+      page.read().callbacks.display.onExportCsv("sessions-csv");
+      expect(page.read().data.exporting).toBe(true);
       context.setGatewaySnapshot(
         change === "disconnect"
           ? { phase: "reconnecting" }
@@ -28,14 +27,14 @@ it.each(["disconnect", "replacement"] as const)(
       );
       response.reject(new Error("Connection lost during export"));
       await response.promise.catch(() => {});
-      expect(model.read().data.exporting).toBe(false);
+      await waitForSolid(() => expect(page.read().data.exporting).toBe(false));
       if (change === "disconnect") {
         expect(toast).toHaveBeenCalledWith({ message: "Export: Connection lost during export" });
       } else {
         expect(toast).not.toHaveBeenCalled();
       }
     } finally {
-      model.dispose();
+      page.remove();
     }
   },
 );

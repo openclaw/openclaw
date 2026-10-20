@@ -1,9 +1,10 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, Show } from "solid-js";
+import { createMemo, createSignal, Show } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import { projectSource } from "../../../lib/reactive/projection.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
@@ -12,6 +13,7 @@ import {
   createAsyncQuestionPresentation,
   createAsyncQuestionPanelProps,
   readAsyncQuestions,
+  subscribeAsyncQuestionState,
 } from "./chat-async-question.ts";
 import type {
   AsyncQuestionDraft,
@@ -319,12 +321,10 @@ it.each(["answered", "failed"] as const)(
       itemId: "question-1",
       questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
     };
-    let updateView: ((value: ReturnType<typeof viewState>) => void) | undefined;
     const viewState = () => {
       const presentation = createAsyncQuestionPresentation(state, {
         sessionKey: "agent:main:main",
         onAsyncQuestionSubmit: submit,
-        onRequestUpdate: draw,
       });
       return {
         presentation,
@@ -333,24 +333,28 @@ it.each(["answered", "failed"] as const)(
       };
     };
     const draw = () => {
-      const next = viewState();
-      if (mounted) {
-        updateView!(next);
-      } else {
-        const [current, update] = createSignal(next);
-        updateView = update;
-        mounted = mountSolid(
-          () => (
+      mounted = mountSolid(
+        () => {
+          const questionState = projectSource(state, {
+            read: (source) => source.asyncQuestionRevision,
+            subscribe: subscribeAsyncQuestionState,
+            equality: "revision",
+          });
+          const current = createMemo(() => {
+            questionState.read();
+            return viewState();
+          });
+          return (
             <Show
               when={current().submitted}
               fallback={<ChatQuestionPanel props={current().panel} />}
             >
               <AsyncQuestionSummary questions={questions} presentation={current().presentation} />
             </Show>
-          ),
-          { container },
-        );
-      }
+          );
+        },
+        { container },
+      );
       flush();
     };
     draw();

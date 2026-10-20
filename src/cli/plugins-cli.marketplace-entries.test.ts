@@ -66,7 +66,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtime = mocks.defaultRuntime;
 const loadFeed = mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries;
 const output = () => runtime.log.mock.calls.map(([value]) => String(value)).join("\n");
-const warning = "Previous plugin service could not stop.";
 const privateUrl = "https://user:secret@packages.acme.example/openclaw/feed?token=leak#frag";
 const calendar = {
   name: "@acme/calendar",
@@ -200,11 +199,7 @@ describe("plugins marketplace entries", () => {
     const filename = timeline();
     vi.stubEnv("OPENCLAW_DIAGNOSTICS", "1");
     loadFeed.mockResolvedValue(
-      feed({
-        source: "hosted-snapshot",
-        url: privateUrl,
-        entries: [calendar],
-      }),
+      feed({ source: "hosted-snapshot", url: privateUrl, entries: [calendar] }),
     );
     await entries({ feedProfile: "acme", offline: true });
     expect(output()).toContain("signed by acme-root-2026 (1/1)");
@@ -229,10 +224,6 @@ describe("plugins marketplace refresh", () => {
       loadFeed.mockResolvedValue(
         feed({ entries: [calendar], checksum: "sha256:abcdef", includeTrust: false }),
       );
-      mocks.pluginLifecycleGateway.mockResolvedValue({
-        runtime: { generation: 4 },
-        ...(expectedSha256 === checksum ? {} : { warnings: [warning] }),
-      });
       await marketplaceCommand([
         "refresh",
         "--feed-profile",
@@ -267,10 +258,6 @@ describe("plugins marketplace refresh", () => {
     loadFeed.mockResolvedValue(
       feed({ entries: [{ name: "@acme/calendar" }], url: privateUrl, etag: '"abc"' }),
     );
-    mocks.pluginLifecycleGateway.mockResolvedValue({
-      runtime: { generation: 4 },
-      warnings: [warning],
-    });
     await refresh({
       expectedSha256: "feed-sha",
       feedProfile: "acme",

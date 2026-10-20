@@ -19,7 +19,6 @@ import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../../config/sessions/session-accessor.sqlite-read.js";
-import * as transcriptMessageAppend from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import * as sessionTranscript from "../../config/sessions/transcript.js";
 import { resolveAgentRestartRecoveryContext } from "../../gateway/agent-turn/agent-restart-recovery-context.js";
@@ -31,6 +30,8 @@ import {
 } from "../../gateway/managed-image-attachments.js";
 import { listManagedImageRecordEntries } from "../../gateway/managed-image-record-store.js";
 import { buildRestartSafeChatTranscriptState } from "../../gateway/server-methods/chat-restart-recovery.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   onSessionTranscriptUpdate,
   type SessionTranscriptUpdate,
@@ -65,13 +66,6 @@ function createCurrentSourceMessageTool(
     agentSessionKey: "agent:main:webchat:dm:dashboard",
     runId: "webchat-run",
     sandboxRoot: params.sandboxFsBridge ? params.workspaceDir : undefined,
-    getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-    resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-      resolvedConfig: config,
-      diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
-    }),
     ...params,
   };
   setRuntimeConfigSnapshot(options.config ?? {});
@@ -159,6 +153,10 @@ describe("WebChat message tool internal source reply", () => {
           expect(assistants[0]?.content).toEqual([
             { type: "text", text: "Still working after restart." },
           ]);
+          expect(assistants[0]).toMatchObject({
+            __openclaw: { runId },
+            openclawDeliveryMirror: { kind: "message-tool-source-reply", final: false },
+          });
         },
       );
     },
@@ -189,24 +187,18 @@ describe("WebChat message tool internal source reply", () => {
           async (owner) => {
             const message = "must never become a committed assistant message";
             let commitRequests = 0;
-            const append = transcriptMessageAppend.appendTranscriptMessageInTransaction;
-            const admission = vi
-              .spyOn(transcriptMessageAppend, "appendTranscriptMessageInTransaction")
-              .mockImplementation((database, resolved, options, preparedMessage, projection) => {
-                if (
-                  resolved.sessionKey === sessionKey &&
-                  resolved.sessionId === sessionId &&
-                  isRecord(options.message) &&
-                  options.message.role === "assistant" &&
-                  readAssistantDisplayContent(options.message).some(
-                    (block) => block.type === "text" && block.text === message,
-                  )
-                ) {
-                  commitRequests += 1;
-                  owner.closeAdmission();
-                }
-                return append(database, resolved, options, preparedMessage, projection);
-              });
+            const admission = probe.admission(operationAdmission, (request, grant, admit) => {
+              if (
+                request.stage === "commit" &&
+                isRecord(request.facts) &&
+                isRecord(request.facts.publication) &&
+                request.facts.publication.kind === "session-entry-patch-committed"
+              ) {
+                commitRequests += 1;
+                owner.closeAdmission();
+              }
+              admit(request, grant);
+            });
             try {
               const tool = owner.createTool({
                 preparedMessageToolCatalog: INTERNAL_SOURCE_CATALOG,
@@ -369,7 +361,6 @@ describe("WebChat message tool internal source reply", () => {
       const { replyPayloads: payloads } = await buildReplyPayloads({
         payloads: embeddedPayloads,
         isHeartbeat: false,
-        didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "off",
@@ -609,13 +600,20 @@ describe("WebChat message tool internal source reply", () => {
           }
         });
         const append = sessionTranscript.appendAssistantMessageToSessionTranscript;
-        let preCommitCleanup:
-          | Awaited<ReturnType<typeof cleanupManagedOutgoingMediaRecords>>
-          | undefined;
+        let preCommitEntries: Awaited<ReturnType<typeof listManagedImageRecordEntries>> = [];
         const appendSpy = vi
           .spyOn(sessionTranscript, "appendAssistantMessageToSessionTranscript")
           .mockImplementationOnce(async (params) => {
-            preCommitCleanup = await cleanupManagedOutgoingMediaRecords({ stateDir });
+            await cleanupManagedOutgoingMediaRecords({ stateDir });
+            preCommitEntries = await listManagedImageRecordEntries({ stateDir, sessionKey });
+            for (const { record } of preCommitEntries) {
+              const { mediaRoot, mediaSubdir, mediaId, contentType } = record.original;
+              expect(await fs.readFile(path.join(mediaRoot, mediaSubdir, mediaId))).toEqual(
+                contentType === "image/png"
+                  ? Buffer.from(TINY_PNG_BASE64, "base64")
+                  : Buffer.from('{"status":"ready"}\n'),
+              );
+            }
             return append(params);
           });
         const [toolResult, overlappingResult] = await Promise.all([
@@ -625,11 +623,7 @@ describe("WebChat message tool internal source reply", () => {
           unsubscribe();
           appendSpy.mockRestore();
         });
-        expect(preCommitCleanup).toEqual({
-          deletedRecordCount: 0,
-          deletedFileCount: 0,
-          retainedCount: 3,
-        });
+        expect(preCommitEntries).toHaveLength(3);
         const sourceReply = extractMessagingToolSourceReplyPayload(toolResult);
         expect(sourceReply).toMatchObject({ transcriptOwner: true });
         expect(overlappingResult.details).toMatchObject({

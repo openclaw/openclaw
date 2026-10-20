@@ -323,11 +323,11 @@ function ModelAccountRows(props: StateProps) {
 
 export function ModelAccountsSection(props: StateProps) {
   const state = () => props.readState();
-  const snapshot = () => state().context.gateway.snapshot;
+  const snapshot = () => state().props.target.read().gateway;
   const person = () =>
-    snapshot().selfUser?.id === state().props.identityId ? snapshot().selfUser : null;
+    snapshot().selfUser?.id === state().props.target.read().identityId ? snapshot().selfUser : null;
   const personLabel = () =>
-    person()
+    person() || state().target
       ? state().props.personLabel ||
         person()?.name ||
         person()?.email ||
@@ -358,7 +358,7 @@ export function ModelAccountsSection(props: StateProps) {
           <button
             type="button"
             class="btn btn--sm profile-auth-accounts-refresh"
-            disabled={state().inventoryLoading}
+            disabled={!state().connected || state().inventoryLoading}
             onClick={() => void state().loadAccounts()}
           >
             {t("common.refresh")}

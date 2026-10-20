@@ -150,28 +150,36 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       >,
     ) =>
       eb.and([
-        eb("agent_id", "=", identity.agentId),
-        eb("session_key", "=", identity.sessionKey),
+        eb("worker_session_placements.agent_id", "=", identity.agentId),
+        eb("worker_session_placements.session_key", "=", identity.sessionKey),
         local
-          ? eb("state", "=", "local")
+          ? eb("worker_session_placements.state", "=", "local")
           : eb.and([
               owner.kind === "worker"
                 ? eb.or([
-                    eb("execution_mode", "=", "worker-turn"),
-                    eb("execution_mode", "is", null),
+                    eb("worker_session_placements.execution_mode", "=", "worker-turn"),
+                    eb("worker_session_placements.execution_mode", "is", null),
                   ])
-                : eb("execution_mode", "=", "remote-exec"),
-              eb("state", "in", options.allowDraining ? ["active", "draining"] : ["active"]),
-              eb("environment_id", "=", owner.environmentId!),
-              eb("active_owner_epoch", "=", owner.ownerEpoch!),
+                : eb("worker_session_placements.execution_mode", "=", "remote-exec"),
+              eb(
+                "worker_session_placements.state",
+                "in",
+                options.allowDraining ? ["active", "draining"] : ["active"],
+              ),
+              eb("worker_session_placements.environment_id", "=", owner.environmentId!),
+              eb("worker_session_placements.active_owner_epoch", "=", owner.ownerEpoch!),
             ]),
         eb.or([
-          eb("turn_claim_owner", "is", null),
+          eb("worker_session_placements.turn_claim_owner", "is", null),
           eb.and([
-            eb("turn_claim_owner", "=", owner.kind),
-            eb("turn_claim_id", "=", claimId),
-            eb("turn_claim_run_id", "=", runId),
-            eb("turn_claim_generation", "=", eb.ref("transition_generation")),
+            eb("worker_session_placements.turn_claim_owner", "=", owner.kind),
+            eb("worker_session_placements.turn_claim_id", "=", claimId),
+            eb("worker_session_placements.turn_claim_run_id", "=", runId),
+            eb(
+              "worker_session_placements.turn_claim_generation",
+              "=",
+              eb.ref("worker_session_placements.transition_generation"),
+            ),
           ]),
         ]),
       ]);
@@ -215,7 +223,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
               .column("session_id")
               .doUpdateSet((eb) => ({
                 ...claimValues,
-                turn_claim_generation: eb.ref("transition_generation"),
+                turn_claim_generation: eb.ref("worker_session_placements.transition_generation"),
               }))
               .where(admissible),
           )
@@ -223,7 +231,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           .updateTable("worker_session_placements")
           .set((eb) => ({
             ...claimValues,
-            turn_claim_generation: eb.ref("transition_generation"),
+            turn_claim_generation: eb.ref("worker_session_placements.transition_generation"),
           }))
           .where("session_id", "=", identity.sessionId)
           .where(admissible)
@@ -390,9 +398,6 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
       const claimId = required(claim.claimId, "turn claim id");
       const runId = required(claim.runId, "turn claim run id");
       return write((db) => {
-        if (!hasWorkerWorkspacePendingResult(db, sessionId)) {
-          throw new Error(`Session ${sessionId} has no pending cloud workspace result`);
-        }
         if (!hasAcceptedWorkerWorkspacePendingResult(db, sessionId)) {
           throw new Error(`Session ${sessionId} cloud workspace result was not accepted`);
         }
@@ -521,7 +526,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
         ) {
           throw new Error(`Worker workspace journal owner is stale for session ${sessionId}`);
         }
-        const result = executeSqliteQuerySync(
+        const updatedRow = executeSqliteQuerySync(
           db,
           query(db)
             .updateTable("worker_session_placements")
@@ -542,9 +547,10 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
                   },
                 ),
               ),
-            ),
-        );
-        if (result.numAffectedRows !== 1n) {
+            )
+            .returningAll(),
+        ).rows[0];
+        if (!updatedRow) {
           throw new Error(`Worker session workspace ${sessionId} changed during reconciliation`);
         }
         if (reconciliation) {
@@ -566,7 +572,7 @@ export function createPlacementTurnClaimOps(runtime: PlacementStoreRuntime) {
           }
           publishPlacementWorkspaceJournalState(db, sessionId, true);
         }
-        const updated = getRequired(db, sessionId);
+        const updated = fromRow(updatedRow);
         publishPlacementTurnClaimState(db, updated, current.state);
         sessionChanges.emit({ agentId: current.agentId, sessionKey: current.sessionKey }, db);
         return updated;

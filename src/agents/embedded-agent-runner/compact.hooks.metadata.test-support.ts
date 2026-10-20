@@ -132,7 +132,7 @@ export function createCompactHooksPreparedModelRuntime(input: {
   };
 }
 
-export function createCompactHooksAuthStorage() {
+function createCompactHooksAuthStorage() {
   const runtimeKeys = new Map<string, string>();
   return {
     setRuntimeApiKey: vi.fn((provider: string, apiKey: string) => {

@@ -3,9 +3,14 @@ import {
   buildSessionEntryInProcess,
   readSessionEntryResetRecallCutoff,
 } from "../../../packages/memory-host-sdk/src/host/session-files.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { LruCache } from "../../infra/lru-cache.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { prepareAssistantTranscriptText } from "../../shared/chat-message-content.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { readTranscriptExportSnapshotFromDatabase } from "./session-accessor.sqlite-read.js";
+import {
+  readTranscriptExportSnapshotReadOnlySync,
+  readTranscriptExportSnapshotsFromDatabase,
+} from "./session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
@@ -18,9 +23,15 @@ import type {
 } from "./session-transcript-worker-read.types.js";
 import type { SessionTranscriptWorkerValues } from "./session-transcript-worker.types.js";
 
-type Snapshot = ReturnType<typeof readTranscriptExportSnapshotFromDatabase>;
-const snapshots = new Map<string, Snapshot>();
-const MAX_SNAPSHOTS = 16;
+type Snapshot = Exclude<
+  ReturnType<typeof readTranscriptExportSnapshotsFromDatabase>[number],
+  "cold"
+>;
+type ExportRequest = Parameters<typeof readTranscriptExportSnapshotsFromDatabase>[1][number];
+const snapshots = new LruCache<Snapshot>(16, {
+  maxBytes: 8 * 1024 * 1024,
+  sizeOf: (snapshot) => snapshot.stats.sizeBytes,
+});
 const MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 
 /** The export worker retains projected rows; transcript rewrite identity replaces the prefix. */
@@ -36,6 +47,7 @@ export async function prepareSessionMemoryEntries(
   entries: SessionEntriesWorkerInput["entries"],
 ): Promise<SessionTranscriptWorkerValues["session-entries"]["entries"]> {
   const prepared: (Snapshot | null | "cold")[] = entries.map(() => null);
+  const sliced = new Map<number, { options: ExportRequest["options"]; batchHead: Snapshot }>();
   const groups = new Map<
     string,
     { index: number; resolved: ReturnType<typeof resolveSqliteTranscriptReadScope> }[]
@@ -50,31 +62,42 @@ export async function prepareSessionMemoryEntries(
   for (const group of groups.values()) {
     withOpenClawAgentDatabaseReadOnly(
       (database) =>
-        runSqliteDeferredTransactionSync(
+        runSqliteReadSnapshotSync(
           database.db,
           () => {
-            for (const { index, resolved } of group) {
+            const requests = group.map(({ index, resolved }): ExportRequest => {
               const request = entries[index]!;
-              const previous = snapshots.get(snapshotKey(request));
-              try {
-                prepared[index] = runWithSessionTranscriptReadFence(request.admission, () =>
-                  readTranscriptExportSnapshotFromDatabase(database, resolved, request.options, {
-                    projectEvent: projectSessionEntryRecord,
-                    previous:
-                      previous?.generation != null && previous.throughSeq !== undefined
-                        ? {
-                            events: previous.events,
-                            generation: previous.generation,
-                            throughSeq: previous.throughSeq,
-                          }
-                        : null,
-                  }),
-                );
-              } catch (error) {
-                if (!(error instanceof SessionTranscriptColdError)) {
-                  throw error;
-                }
-                prepared[index] = "cold";
+              const previous = snapshots.peek(snapshotKey(request));
+              return {
+                resolved,
+                scope: request.options,
+                admission: request.admission,
+                options: {
+                  projectEvent: (event: unknown) =>
+                    projectSessionEntryRecord(event, prepareAssistantTranscriptText),
+                  previous:
+                    previous?.generation != null && previous.throughSeq !== undefined
+                      ? {
+                          events: previous.events,
+                          generation: previous.generation,
+                          throughSeq: previous.throughSeq,
+                        }
+                      : null,
+                },
+              };
+            });
+            // Transcripts the retained-snapshot cache admits (at most MAX_SNAPSHOT_BYTES) are read
+            // inside the batch transaction; on SQLite, larger ones, which the cache never retains,
+            // are read in slices after it.
+            const exported = readTranscriptExportSnapshotsFromDatabase(database, requests, {
+              deferAboveBytes: MAX_SNAPSHOT_BYTES,
+            });
+            for (const [offset, { index }] of group.entries()) {
+              const snapshot = exported[offset]!;
+              if (snapshot !== "cold" && snapshot.deferred) {
+                sliced.set(index, { options: requests[offset]!.options, batchHead: snapshot });
+              } else {
+                prepared[index] = snapshot;
               }
             }
           },
@@ -82,6 +105,22 @@ export async function prepareSessionMemoryEntries(
         ),
       toDatabaseOptions(group[0]!.resolved),
     );
+  }
+  // Transcripts above the retention limit read in short slices after the batch transaction.
+  for (const [index, { options, batchHead }] of sliced) {
+    const request = entries[index]!;
+    try {
+      // An unchanged transcript keeps the batch statistics instead of reading them again.
+      prepared[index] = runWithSessionTranscriptReadFence(
+        request.admission,
+        () => readTranscriptExportSnapshotReadOnlySync(request.options, options, batchHead) ?? null,
+      );
+    } catch (error) {
+      if (!(error instanceof SessionTranscriptColdError)) {
+        throw error;
+      }
+      prepared[index] = "cold";
+    }
   }
   return Promise.all(
     entries.map(async (request, index) => {
@@ -111,8 +150,5 @@ function retainSnapshot(key: string, snapshot: Snapshot | null) {
   snapshots.delete(key);
   if (snapshot && snapshot.stats.sizeBytes <= MAX_SNAPSHOT_BYTES) {
     snapshots.set(key, snapshot);
-    if (snapshots.size > MAX_SNAPSHOTS) {
-      snapshots.delete(snapshots.keys().next().value!);
-    }
   }
 }

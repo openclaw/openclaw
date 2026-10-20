@@ -31,9 +31,7 @@ export type { AssistantMessage, AssistantUsageSnapshot } from "./event-bridge-tr
 
 export interface OnAssistantDeltaPayload {
   delta: string;
-  sessionId?: string;
   text: string;
-  usage?: AssistantUsageSnapshot;
 }
 
 export interface SessionLike {
@@ -82,9 +80,7 @@ interface EventBridgeOptions {
 }
 
 interface EventBridgeSnapshot {
-  readonly assistantTexts: readonly string[];
   readonly completedCount: number;
-  readonly lastAssistantEvent: Extract<SessionEvent, { type: "assistant.message" }> | undefined;
   readonly startedCount: number;
   readonly streamError: Error | undefined;
   readonly toolMetas: ReadonlyArray<AgentHarnessAttemptResult["toolMetas"][number]>;
@@ -115,7 +111,6 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
   let activeCompactionCount = 0;
   let observedCompaction = false;
   let deltaQueue = Promise.resolve();
-  let deltaChain = Promise.resolve();
   let agentEventChain = Promise.resolve();
   let compactionChain = Promise.resolve();
   let compactionIdle: ReturnType<typeof createDeferred<void>> | undefined;
@@ -199,24 +194,13 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
     }
     const payload: OnAssistantDeltaPayload = {
       delta,
-      sessionId: options.getSdkSessionId(),
       text,
-      usage,
     };
     deltaQueue = deltaQueue
-      .then(
-        () => onAssistantDelta(payload),
-        () => onAssistantDelta(payload),
-      )
+      .then(() => onAssistantDelta(payload))
       .catch((error: unknown) => {
         firstDeltaError ??= error;
       });
-    deltaChain = deltaQueue.then(() => {
-      if (firstDeltaError !== undefined) {
-        throw toErrorObject(firstDeltaError, "Non-Error thrown");
-      }
-    });
-    void deltaChain.catch(() => undefined);
   });
 
   listenRoot("assistant.reasoning_delta", (event) => {
@@ -498,8 +482,11 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
       compactionIdle?.resolve();
       compactionIdle = undefined;
     },
-    awaitDeltaChain() {
-      return deltaChain;
+    async awaitDeltaChain() {
+      await deltaQueue;
+      if (firstDeltaError !== undefined) {
+        throw toErrorObject(firstDeltaError, "Non-Error thrown");
+      }
     },
     awaitAgentEventChain() {
       return agentEventChain;
@@ -519,20 +506,18 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
     },
     snapshot(): EventBridgeSnapshot {
       return {
-        assistantTexts: finalizeAssistantTexts(messagesById, lastAssistantEvent),
         completedCount,
-        lastAssistantEvent,
         startedCount,
         streamError,
-        toolMetas: toolMetas.map((toolMeta) => Object.assign({}, toolMeta)),
-        usage: usage ? { ...usage } : undefined,
+        toolMetas: [...toolMetas],
+        usage,
       };
     },
     buildAssistantMessage(
       args: Pick<Parameters<typeof buildAssistantMessage>[0], "modelRef" | "now">,
     ) {
       const group = pendingAssistantProjection ?? lastAssistantProjection;
-      return group
+      const message = group
         ? buildAssistantProjectionGroup(
             group,
             args.modelRef,
@@ -549,6 +534,7 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
             usage: resolveAssistantUsage(lastAssistantEvent, usage, usageByApiCallId),
             assistantTexts: finalizeAssistantTexts(messagesById, lastAssistantEvent),
           });
+      return message?.content.length ? message : undefined;
     },
     finalizeAssistantTexts() {
       return finalizeAssistantTexts(messagesById, lastAssistantEvent);
@@ -578,7 +564,7 @@ export function attachEventBridge(session: SessionLike, options: EventBridgeOpti
         return;
       }
       detached = true;
-      for (const unsubscribe of [...unsubscribeFns].toReversed()) {
+      for (const unsubscribe of unsubscribeFns.toReversed()) {
         try {
           unsubscribe();
         } catch {

@@ -4,8 +4,9 @@ import readline from "node:readline";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
-import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import {
   isToolCallBlock,
   resolveToolUseId,
@@ -28,7 +29,11 @@ import {
 } from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
-import { isClaudeToolResultBlockType, isClaudeToolUseBlockType } from "../cli-output-records.js";
+import {
+  isClaudeCliProvider,
+  isClaudeToolResultBlockType,
+  isClaudeToolUseBlockType,
+} from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -408,22 +413,17 @@ export function createAcpVisibleTextAccumulator() {
           : chunk;
       rawText += delta;
       if (!released) {
-        const candidate = rawText.trimStart();
-        if (
-          SILENT_REPLY_TOKEN.startsWith(candidate) ||
-          (candidate.startsWith(SILENT_REPLY_TOKEN) &&
-            !candidate.slice(SILENT_REPLY_TOKEN.length).trim())
-        ) {
+        const candidate = rawText.trimStart().toUpperCase();
+        const stripped = stripMixedSilentReplyTokens(rawText);
+        if (SILENT_REPLY_TOKEN.startsWith(candidate) || isSilentReplyText(candidate)) {
           // A literal newline ends the one permitted control line. Its suffix
           // is ordinary text, even if it spells another control token.
-          if (!rawText.startsWith(`${SILENT_REPLY_TOKEN}\n`)) {
+          if (stripped === null) {
             return null;
           }
         }
         released = true;
-        visibleText = rawText.startsWith(`${SILENT_REPLY_TOKEN}\n`)
-          ? rawText.slice(SILENT_REPLY_TOKEN.length + 1)
-          : rawText;
+        visibleText = stripped ?? rawText;
         return visibleText ? { text: visibleText, delta: visibleText } : null;
       }
       visibleText += delta;
@@ -457,10 +457,6 @@ export function rebaseExecApprovalContinuationPromptRange(params: {
     start: offset + params.range.start,
     end: offset + params.range.end,
   };
-}
-
-export function isClaudeCliProvider(provider: string): boolean {
-  return provider.trim().toLowerCase() === "claude-cli";
 }
 
 /** Restores completion tools only on runtimes that enforce the captured requester cap. */

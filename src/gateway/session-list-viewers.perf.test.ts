@@ -98,6 +98,13 @@ test("preserves viewer pages across publications while bounding shared predicate
       ],
     ];
     try {
+      await projection.ensureMaterialized();
+      // Establish active display demand without priming list selection or cold archives.
+      for (const row of projection.selectEntries()) {
+        if (row.entry?.archivedAt === undefined) {
+          projection.describe(row);
+        }
+      }
       for (let revision = 0; revision < 2; revision++) {
         await projection.ensureMaterialized();
         // The first viewer primes only viewer-independent membership.

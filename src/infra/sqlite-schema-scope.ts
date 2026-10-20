@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { PostgresPhysicalFacts } from "./database-engine/physical-facts.js";
 import type { SqliteSchemaMarkers } from "./sqlite-pinned-read-snapshot.js";
 import type { SqliteSchemaFacts } from "./sqlite-schema-admission.js";
 import type { SqliteTempTrackingSchema } from "./sqlite-temp-generation-schema.js";
@@ -8,14 +9,24 @@ type SqliteReadRevision = {
   mutationRevision: number;
 };
 
-export type SqliteReadOperationRevision = SqliteReadRevision & { writeRevision: number };
+export type PostgresReadSnapshotRevision = Readonly<{
+  schema: PostgresPhysicalFacts;
+  mutationRevision: number;
+  snapshot: object;
+  writeRevision: number;
+}>;
+
+export type SqliteReadOperationRevision =
+  | (SqliteReadRevision & { snapshot?: undefined; writeRevision: number })
+  | PostgresReadSnapshotRevision;
 
 export type SqliteReadScopeRevision = Readonly<
-  SqliteReadRevision &
-    (
-      | { snapshot: undefined; writeRevision: number }
-      | { snapshot: object; writeRevision: undefined }
-    )
+  | (SqliteReadRevision &
+      (
+        | { snapshot: undefined; writeRevision: number }
+        | { snapshot: object; writeRevision: undefined }
+      ))
+  | PostgresReadSnapshotRevision
 >;
 
 export type SchemaMutationListener = (observed?: SqliteSchemaMarkers) => void;

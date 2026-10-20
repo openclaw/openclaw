@@ -279,9 +279,10 @@ describe("session placement recovery", () => {
       getItem: storage.getItem.bind(storage),
       key: storage.key.bind(storage),
       removeItem: vi.fn((key: string) => {
-        if (key !== sourceKey) {
-          storage.removeItem(key);
+        if (key === sourceKey) {
+          throw new DOMException("storage disabled", "SecurityError");
         }
+        storage.removeItem(key);
       }),
       setItem: storage.setItem.bind(storage),
     });

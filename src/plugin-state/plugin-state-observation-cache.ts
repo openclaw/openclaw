@@ -7,13 +7,15 @@ import {
 import { pluginStatePublication, pluginStatePublicationKey } from "./plugin-state-publication.js";
 import type { PluginStateReadRow } from "./plugin-state-store.kernel.js";
 import type { PluginStateEntry } from "./plugin-state-store.types.js";
+import type { RuntimeHealthClearSelection } from "./runtime-health-records.js";
 
-type Key = { pluginId: string; namespace: string; key: string };
+type Key = Parameters<typeof pluginStateComparisonScope>[1];
 type Entry = { identity: string; loaded: boolean; row?: PluginStateReadRow };
 type NamespaceEntry = {
   identity: string;
   keyPrefix: string;
   entries?: PluginStateEntry<unknown>[];
+  runtimeHealthCleared?: boolean;
   bytes: number;
 };
 
@@ -148,6 +150,29 @@ export function preparePluginStateEntriesCacheRead(identity: string, key: Omit<K
         bytes: 128 + JSON.stringify(entries).length * 2,
       });
     }
+  };
+}
+
+/** Successful no-op clears share namespace receipt invalidation and the list cache's bounds. */
+export function prepareRuntimeHealthClearCache(
+  identity: string,
+  key: Omit<Key, "key"> & { processId: number; selection: RuntimeHealthClearSelection },
+) {
+  const id = JSON.stringify([identity, key.pluginId, key.namespace, key.processId, key.selection]);
+  const entry: NamespaceEntry = state.namespaces.get(id) ?? {
+    identity,
+    keyPrefix: `${JSON.stringify([key.pluginId, key.namespace]).slice(0, -1)},`,
+    bytes: 128 + id.length * 2,
+  };
+  state.namespaces.set(id, entry);
+  return {
+    cleared: entry.runtimeHealthCleared === true,
+    complete() {
+      // Any intervening namespace write wins, including this clear's own deletions.
+      if (state.namespaces.peek(id) === entry) {
+        entry.runtimeHealthCleared = true;
+      }
+    },
   };
 }
 

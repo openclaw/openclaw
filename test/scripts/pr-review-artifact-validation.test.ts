@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
@@ -40,8 +40,8 @@ it("runs dependency-free CLI and native lock regressions", () => {
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
 });
 
-function validReadyReview() {
-  const review = validReview();
+function validReadyReview(head = REVIEWED_HEAD) {
+  const review = validReview(head);
   review.recommendation = "READY FOR /prepare-pr";
   review.issueValidation.status = "valid";
   return review;
@@ -57,72 +57,58 @@ function runValidation(
   const fixtureRoot = tempDirs.make("openclaw-pr-review-validation-");
   writeReviewArtifacts(fixtureRoot, review, options);
 
-  return spawnSync(
-    bash,
+  return runReviewShellFunction(
+    fixtureRoot,
+    options.orList ? "review_validate_artifacts 42 || exit 1" : "review_validate_artifacts 42",
     [
-      "-c",
-      [
-        "set -euo pipefail",
-        'source "$1"',
-        REVIEW_SHELL_COMMAND_SURFACE,
-        'fixture_root="$2"',
-        'common_repo_root() { printf "%s\\n" "$fixture_root"; }',
-        `pr_worktree_state() { printf '{"path":"%s","present":true}\\n' "$fixture_root"; }`,
-        'enter_worktree() { cd "$fixture_root"; }',
-        'require_artifact() { [ -s "$1" ]; }',
-        options.guardFailure
-          ? "review_guard() { REVIEW_MODE=pr; echo 'review head guard failed'; return 1; }"
-          : `review_guard() { enter_worktree 42 || return 1; REVIEW_MODE=${options.mode ?? "pr"}; }`,
-        "print_review_stdout_summary() { :; }",
-        options.orList ? "review_validate_artifacts 42 || exit 1" : "review_validate_artifacts 42",
-      ].join("\n"),
-      "pr-review-artifact-validation",
-      reviewScript,
-      fixtureRoot,
+      'common_repo_root() { printf "%s\\n" "$fixture_root"; }',
+      `pr_worktree_state() { printf '{"path":"%s","present":true}\\n' "$fixture_root"; }`,
+      options.guardFailure
+        ? "review_guard() { REVIEW_MODE=pr; echo 'review head guard failed'; return 1; }"
+        : `review_guard() { enter_worktree 42 || return 1; REVIEW_MODE=${options.mode ?? "pr"}; }`,
+      "print_review_stdout_summary() { :; }",
     ],
-    { encoding: "utf8" },
   );
 }
 
-function runReviewShellFunction(fixtureRoot: string, invocation: string) {
-  return spawnSync(
-    bash,
-    [
-      "-c",
-      [
-        "set -euo pipefail",
-        'source "$1"',
-        REVIEW_SHELL_COMMAND_SURFACE,
-        'fixture_root="$2"',
-        'enter_worktree() { cd "$fixture_root"; }',
-        'require_artifact() { [ -s "$1" ]; }',
-        "mark_pr_operation_side_effects_started() { :; }",
-        invocation,
-      ].join("\n"),
-      "pr-review-shell",
-      reviewScript,
-      fixtureRoot,
-    ],
-    { encoding: "utf8" },
-  );
+function runReviewShellFunction(
+  fixtureRoot: string,
+  invocation: string,
+  setup = ["mark_pr_operation_side_effects_started() { :; }"],
+) {
+  return runShell(fixtureRoot, reviewScript, [REVIEW_SHELL_COMMAND_SURFACE, ...setup, invocation]);
 }
 
-function runArtifactsInit(existing: { review?: unknown; markdown?: string } = {}) {
+function runShell(fixtureRoot: string, script: string, commands: string[]) {
+  const source = [
+    "set -euo pipefail",
+    'source "$1"',
+    'fixture_root="$2"',
+    'enter_worktree() { cd "$fixture_root"; }',
+    'require_artifact() { [ -s "$1" ]; }',
+    ...commands,
+  ].join("\n");
+  return spawnSync(bash, ["-c", source, "pr-review-shell", script, fixtureRoot], {
+    encoding: "utf8",
+  });
+}
+
+function expectRejected(result: ReturnType<typeof spawnSync>, ...messages: string[]) {
+  expect(result.status).toBe(1);
+  for (const message of messages) {
+    expect(result.stdout).toContain(message);
+  }
+}
+
+function readArtifact(localDir: string, name: string) {
+  return readFileSync(join(localDir, name), "utf8");
+}
+
+function runArtifactsInit(review: ReturnType<typeof validReview>, markdown: string) {
   const fixtureRoot = tempDirs.make("openclaw-pr-review-artifacts-init-");
   const localDir = join(fixtureRoot, ".local");
-  mkdirSync(localDir);
-  writeFileSync(join(localDir, "pr-meta.env"), `PR_NUMBER=${REVIEWED_PR}\n`);
-  writeFileSync(
-    join(localDir, "pr-meta.json"),
-    `${JSON.stringify({ number: REVIEWED_PR, headRefOid: REVIEWED_HEAD, files: [] })}\n`,
-  );
-  if (existing.review !== undefined) {
-    writeFileSync(join(localDir, "review.json"), `${JSON.stringify(existing.review)}\n`);
-  }
-  if (existing.markdown !== undefined) {
-    writeFileSync(join(localDir, "review.md"), existing.markdown);
-  }
-
+  writeReviewArtifacts(fixtureRoot, review);
+  writeFileSync(join(localDir, "review.md"), markdown);
   const result = runReviewShellFunction(fixtureRoot, `review_artifacts_init ${REVIEWED_PR}`);
   return { result, localDir };
 }
@@ -134,9 +120,7 @@ function runMergeVerification(
   const fixtureRoot = tempDirs.make("openclaw-pr-merge-verification-");
   const localDir = join(fixtureRoot, ".local");
   const head = "a".repeat(40);
-  mkdirSync(localDir);
-  const review = validReadyReview();
-  review.pr = { number: 42, headSha: head };
+  const review = validReadyReview(head);
   if (investigatedLocalFailure) {
     Object.assign(review.tests, {
       result: "fail",
@@ -168,10 +152,7 @@ function runMergeVerification(
   const observation = {
     number: 42,
     url: "https://github.com/fixture/repo/pull/42",
-    state: "OPEN",
     isDraft: false,
-    baseRefName: "main",
-    baseRefOid: "b".repeat(40),
     baseRepository: {
       id: "fixture-repo",
       databaseId: 123,
@@ -180,97 +161,76 @@ function runMergeVerification(
     },
     headRefName: "review-branch",
     headRefOid: head,
-    headRepository: { nameWithOwner: "fixture/repo" },
-    headRepositoryOwner: { login: "fixture" },
   };
 
-  return spawnSync(
-    bash,
-    [
-      "-c",
-      [
-        "set -euo pipefail",
-        'source "$1"',
-        'script_parent_dir=$(cd "$(dirname "$1")/.." && pwd)',
-        'fixture_root="$2"',
-        'source "$script_parent_dir/pr-lib/common.sh"',
-        'source "$script_parent_dir/pr-lib/review.sh"',
-        'source "$script_parent_dir/pr-lib/worktree.sh"',
-        'source "$script_parent_dir/pr-lib/merge-outcome.sh"',
-        'repo_root() { printf "%s\\n" "$fixture_root"; }',
-        'enter_worktree() { cd "$fixture_root"; }',
-        'require_artifact() { [ -s "$1" ]; }',
-        "verify_prep_branch_matches_prepared_head() { :; }",
-        `refresh_main_snapshot() { PR_MAIN_SHA=${"b".repeat(40)}; }`,
-        "mark_pr_operation_side_effects_started() { :; }",
-        "pr_git() {",
-        '  if [ "${1-}" = -C ]; then shift 2; fi',
-        '  case "${1-}" in --git-dir=*) shift;; esac',
-        '  case "$1" in',
-        '    remote) printf "%s\\n" "https://github.com/fixture/repo.git";;',
-        '    rev-parse) case "$2" in',
-        '      --absolute-git-dir) printf "%s/.git\\n" "$fixture_root";;',
-        `      --verify) test "$3" = 'refs/heads/pr-42^{commit}' || return 1; printf '%s\\n' '${head}';;`,
-        "    esac;;",
-        "  esac",
-        "}",
-        'node() { case "$1" in */watch-pr-ci.mjs) return 0;; *) command node "$@";; esac; }',
-        "MERGE_REPO_NAME=fixture/repo",
-        "MERGE_REPO_HOST=github.com",
-        `pr_gh_plain() { case "$*" in "pr checks 42 --required --json name,bucket,state --repo https://github.com/fixture/repo") ${checksResponse};; *) return 99;; esac; }`,
-        'pr_gh_quota_read() { pr_gh_plain "$@"; }',
-        `merge_rest() { echo 'REST policy requires GraphQL' >&2; printf '%s\\n' '{"restUnavailable":true}'; }`,
-        "pr_gh() {",
-        '  test "$*" = "pr view 42 --json number,url,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository" || return 99',
-        `  printf '%s\\n' '${JSON.stringify(observation)}'`,
-        "}",
-        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
-      ].join("\n"),
-      "pr-merge-verification",
-      mergeScript,
-      fixtureRoot,
-    ],
-    { encoding: "utf8" },
-  );
+  return runShell(fixtureRoot, mergeScript, [
+    'script_parent_dir=$(cd "$(dirname "$1")/.." && pwd)',
+    'for module in common review worktree merge-outcome; do source "$script_parent_dir/pr-lib/$module.sh"; done',
+    'repo_root() { printf "%s\\n" "$fixture_root"; }',
+    // common.sh defines these too; reinstall the fixture boundary after sourcing it.
+    'enter_worktree() { cd "$fixture_root"; }',
+    'require_artifact() { [ -s "$1" ]; }',
+    "verify_prep_branch_matches_prepared_head() { :; }",
+    `refresh_main_snapshot() { PR_MAIN_SHA=${"b".repeat(40)}; }`,
+    "mark_pr_operation_side_effects_started() { :; }",
+    "pr_git() {",
+    '  if [ "${1-}" = -C ]; then shift 2; fi',
+    '  case "${1-}" in --git-dir=*) shift;; esac',
+    '  case "$1" in',
+    '    remote) printf "%s\\n" "https://github.com/fixture/repo.git";;',
+    '    rev-parse) case "$2" in',
+    '      --absolute-git-dir) printf "%s/.git\\n" "$fixture_root";;',
+    `      --verify) test "$3" = 'refs/heads/pr-42^{commit}' || return 1; printf '%s\\n' '${head}';;`,
+    "    esac;;",
+    "  esac",
+    "}",
+    'node() { case "$1" in */watch-pr-ci.mjs) return 0;; *) command node "$@";; esac; }',
+    "MERGE_REPO_NAME=fixture/repo",
+    "MERGE_REPO_HOST=github.com",
+    `pr_gh_plain() { case "$*" in "pr checks 42 --required --json name,bucket,state --repo https://github.com/fixture/repo") ${checksResponse};; *) return 99;; esac; }`,
+    'pr_gh_quota_read() { pr_gh_plain "$@"; }',
+    `merge_rest() { echo 'REST policy requires GraphQL' >&2; printf '%s\\n' '{"restUnavailable":true}'; }`,
+    "pr_gh() {",
+    '  test "$*" = "pr view 42 --json number,url,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository" || return 99',
+    `  printf '%s\\n' '${JSON.stringify(observation)}'`,
+    "}",
+    `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
+  ]);
 }
 
 describePosix("scripts/pr review artifact validation", () => {
-  it("rejects a review stamped with a superseded head", () => {
-    const review = validReadyReview();
-    review.pr.headSha = "c".repeat(40);
-
-    const result = runValidation(review);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("Review artifact identity mismatch in .local/review.json");
-  });
-
-  it("rejects a self-consistent artifact set describing another PR", () => {
-    const result = runValidation(validReadyReview(), { metaEnvPrNumber: 113928 });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(
+  it.each([
+    [
+      "superseded head",
+      () => runValidation(validReadyReview("c".repeat(40))),
+      "Review artifact identity mismatch in .local/review.json",
+    ],
+    [
+      "another PR",
+      () => runValidation(validReadyReview(), { metaEnvPrNumber: 113928 }),
       `Review artifact identity mismatch: .local/pr-meta.json describes PR #${REVIEWED_PR} at ${REVIEWED_HEAD}, which does not match .local/pr-meta.env.`,
-    );
-  });
+    ],
+    [
+      "main-baseline mode",
+      () => runValidation(validReview(), { mode: "main" }),
+      "Review artifact validation requires the reviewed PR head, not main-baseline mode.",
+    ],
+  ] as const)("rejects %s", (_name, run, message) => expectRejected(run(), message));
 
   it("rejects a review with no PR identity stamp", () => {
     const review = validReadyReview() as Partial<ReturnType<typeof validReadyReview>>;
     review.pr = undefined;
 
-    const result = runValidation(review as ReturnType<typeof validReadyReview>);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("Invalid PR identity in .local/review.json");
+    expectRejected(
+      runValidation(review as ReturnType<typeof validReadyReview>),
+      "Invalid PR identity in .local/review.json",
+    );
   });
 
   it("moves foreign review artifacts aside and stamps a fresh template", () => {
     const foreign = validReadyReview();
     foreign.pr.number = 113928;
-    const { result, localDir } = runArtifactsInit({
-      review: foreign,
-      markdown: "A) Ship another PR\n",
-    });
+    const { result, localDir } = runArtifactsInit(foreign, "A) Ship another PR\n");
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain("moved aside .local/review.json");
@@ -278,128 +238,82 @@ describePosix("scripts/pr review artifact validation", () => {
     expect(archives).toHaveLength(1);
     const archive = join(localDir, "superseded", archives[0]!);
     expect(readdirSync(archive).toSorted()).toEqual(["review.json", "review.md"]);
-    expect(JSON.parse(readFileSync(join(archive, "review.json"), "utf8")).pr.number).toBe(113928);
-    expect(readFileSync(join(archive, "review.md"), "utf8")).toBe("A) Ship another PR\n");
+    expect(JSON.parse(readArtifact(archive, "review.json")).pr.number).toBe(113928);
+    expect(readArtifact(archive, "review.md")).toBe("A) Ship another PR\n");
 
-    const rewritten = JSON.parse(readFileSync(join(localDir, "review.json"), "utf8"));
-    expect(rewritten.pr).toEqual({ number: REVIEWED_PR, headSha: REVIEWED_HEAD });
-    expect(rewritten.recommendation).toContain("NEEDS WORK");
+    const { pr, recommendation } = JSON.parse(readArtifact(localDir, "review.json"));
+    expect({ pr, recommendation }).toEqual({
+      pr: { number: REVIEWED_PR, headSha: REVIEWED_HEAD },
+      recommendation: expect.stringContaining("NEEDS WORK"),
+    });
     expect(existsSync(join(localDir, "review.md"))).toBe(false);
   });
 
   it("preserves in-progress artifacts already stamped for this head", () => {
     const inProgress = validReadyReview();
     inProgress.issueValidation.summary = "Half-written review worth keeping.";
-    const { result, localDir } = runArtifactsInit({
-      review: inProgress,
-      markdown: `${REVIEWED_IDENTITY_LINE}\n\nA) Half-written review worth keeping.\n`,
-    });
+    const markdown = `${REVIEWED_IDENTITY_LINE}\n\nA) Half-written review worth keeping.\n`;
+    const { result, localDir } = runArtifactsInit(inProgress, markdown);
 
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain(
       `review artifacts already stamped for PR #${REVIEWED_PR} at ${REVIEWED_HEAD}`,
     );
-    expect(readFileSync(join(localDir, "review.md"), "utf8")).toBe(
-      `${REVIEWED_IDENTITY_LINE}\n\nA) Half-written review worth keeping.\n`,
+    expect(readArtifact(localDir, "review.md")).toBe(markdown);
+    expect(JSON.parse(readArtifact(localDir, "review.json")).issueValidation.summary).toBe(
+      inProgress.issueValidation.summary,
     );
-    expect(
-      JSON.parse(readFileSync(join(localDir, "review.json"), "utf8")).issueValidation.summary,
-    ).toBe("Half-written review worth keeping.");
   });
 
   it("rejects a review guard whose PR metadata describes another PR", () => {
     const fixtureRoot = tempDirs.make("openclaw-pr-review-guard-");
-    const localDir = join(fixtureRoot, ".local");
-    mkdirSync(localDir);
-    writeFileSync(join(localDir, "review-mode.env"), "REVIEW_MODE=pr\n");
-    writeFileSync(join(localDir, "pr-meta.env"), "PR_NUMBER=113928\n");
+    writeReviewArtifacts(fixtureRoot, validReview(), { prNumber: 113928 });
 
     const result = runReviewShellFunction(fixtureRoot, `review_guard ${REVIEWED_PR}`);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(
+    expectRejected(
+      result,
       `Review guard failed: .local/pr-meta.env describes PR #113928, not #${REVIEWED_PR}`,
-    );
-  });
-
-  it("rejects validation from main-baseline mode", () => {
-    const result = runValidation(validReview(), { mode: "main" });
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(
-      "Review artifact validation requires the reviewed PR head, not main-baseline mode.",
     );
   });
 
   it("preserves head-guard failures when preparation calls validation in an OR-list", () => {
     const result = runValidation(validReview(), { guardFailure: true, orList: true });
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("review head guard failed");
+    expectRejected(result, "review head guard failed");
     expect(result.stdout).not.toContain("review artifacts validated");
   });
 
   it.each(["packages/normalization-core/src/string-normalization.ts", "ui/src/app.ts"])(
     "requires behavioral review for core runtime path %s",
     (path) => {
-      const result = runValidation(validReview(), { files: [path] });
-
-      expect(result.status).toBe(1);
-      expect(result.stdout).toContain(
+      expectRejected(
+        runValidation(validReview(), { files: [path] }),
         "runtime file changes require behavioralSweep.status=pass|needs_work",
+        "runtime file changes require at least one branch entry",
       );
-      expect(result.stdout).toContain("runtime file changes require at least one branch entry");
     },
   );
 
-  it("rejects merge verification when GitHub cannot verify required checks", () => {
-    const result = runMergeVerification("api-error");
-
+  it.each([
+    ["api-error", "stderr", "unable to verify the required GitHub checks"],
+    ["invalid-json", "stderr", "unable to verify the required GitHub checks"],
+    ["invalid-row", "stderr", "GitHub returned invalid required-check evidence"],
+    ["failed", "stdout", "Required checks are failing"],
+    ["cancelled", "stdout", "Required checks are failing"],
+    ["pending", "stdout", "Required checks are still pending."],
+  ] as const)("keeps %s required checks blocking in an OR-list", (checks, stream, message) => {
+    const result = runMergeVerification(checks, checks === "failed");
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("unable to verify the required GitHub checks");
-    expect(result.stderr).toContain("GitHub API unavailable");
+    expect(result[stream]).toContain(message);
     expect(result.stdout).not.toContain("merge-verify passed");
-    expect(result.stdout).not.toContain("No required checks configured");
-  });
-
-  it("keeps required CI failures blocking after local failure investigation", () => {
-    const result = runMergeVerification("failed", true);
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("Required checks are failing");
-    expect(result.stdout).not.toContain("merge-verify passed");
-  });
-
-  it("preserves GitHub CLI pending-check evidence from exit status eight", () => {
-    const result = runMergeVerification("pending");
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("Required checks are still pending.");
-    expect(result.stderr).not.toContain("unable to verify the required GitHub checks");
-    expect(result.stdout).not.toContain("merge-verify passed");
-  });
-
-  it.each(["invalid-json", "invalid-row"] as const)(
-    "rejects malformed required-check evidence in an OR-list caller: %s",
-    (checks) => {
-      const result = runMergeVerification(checks);
-
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        checks === "invalid-json"
-          ? "unable to verify the required GitHub checks"
-          : "GitHub returned invalid required-check evidence",
-      );
-      expect(result.stdout).not.toContain("merge-verify passed");
-    },
-  );
-
-  it("rejects cancelled required checks in an OR-list caller", () => {
-    const result = runMergeVerification("cancelled");
-
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain("Required checks are failing");
-    expect(result.stdout).not.toContain("merge-verify passed");
+    if (checks === "api-error") {
+      expect(result.stderr).toContain("GitHub API unavailable");
+      expect(result.stdout).not.toContain("No required checks configured");
+    }
+    if (checks === "pending") {
+      expect(result.stderr).not.toContain("unable to verify the required GitHub checks");
+    }
   });
 
   it("reports the required branch entry shape without a raw jq error", () => {
@@ -407,8 +321,8 @@ describePosix("scripts/pr review artifact validation", () => {
     review.behavioralSweep.branches = ["src/example.ts"];
     const result = runValidation(review);
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(
+    expectRejected(
+      result,
       "Invalid behavioral sweep branch entry in .local/review.json: each entry must be an object with string path/decision/outcome",
     );
     expect(`${result.stdout}\n${result.stderr}`).not.toContain(

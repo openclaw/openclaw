@@ -677,17 +677,29 @@ describe("gateway lock", () => {
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
   });
 
-  it("acquires when the predecessor releases during the startup wait", async ({ signal }) => {
+  it("acquires promptly when the predecessor releases during a prolonged startup wait", async ({
+    signal,
+  }) => {
     const { child, options } = await holdLifecycleCoordinator(signal);
+    const releasedAtMs = 5_001;
+    let elapsedMs = 0;
     const lock = await acquireGatewayLock({
       ...options,
-      sleep: async () => {
-        child.send("release");
-        await lifecycleChildren.get(child);
+      now: () => elapsedMs,
+      sleep: async (ms) => {
+        elapsedMs += ms;
+        if (elapsedMs >= releasedAtMs) {
+          child.send("release");
+          await lifecycleChildren.get(child);
+        }
       },
     });
-    expect(lock).not.toBeNull();
-    await lock?.release();
+    try {
+      expect(lock).not.toBeNull();
+      expect(elapsedMs - releasedAtMs).toBeLessThanOrEqual(250);
+    } finally {
+      await lock?.release();
+    }
   });
 
   it("bounds a live owner's wait at five minutes and names state ownership", async ({ signal }) => {
@@ -776,7 +788,7 @@ describe("gateway lock", () => {
         expect(scope?.ownsSchemaMaintenance).toBe(true);
         scope?.own({}, "shared-resources", close);
       });
-      const releases = [lock.release(), lock.releaseInTree(), lock.release()];
+      const releases = [lock.release(), lock.release(), lock.release()];
       try {
         await started.promise;
         await expect(contender()).rejects.toBeInstanceOf(GatewayLockError);
@@ -787,7 +799,7 @@ describe("gateway lock", () => {
         await Promise.all(releases);
       }
       expect(close).toHaveBeenCalledTimes(1);
-      await Promise.all([lock.release(), lock.releaseInTree()]);
+      await Promise.all([lock.release(), lock.release()]);
       expect(close).toHaveBeenCalledTimes(1);
       await expect(fs.access(lock.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.access(lock.stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -818,16 +830,5 @@ describe("gateway lock", () => {
       expect(closeShared).toHaveBeenCalledTimes(2);
       await (await contender())?.release();
     });
-  });
-
-  it("releases in-tree locks separately from Gateway lifecycle ownership", async () => {
-    const lock = expectGatewayLock(await acquireForTest(await makeEnv()));
-    try {
-      await lock.releaseInTree();
-      await fs.access(lock.lockPath);
-      await expect(fs.access(lock.stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      await lock.release();
-    }
   });
 });

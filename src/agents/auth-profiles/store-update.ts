@@ -106,6 +106,25 @@ type AuthProfileStoreUpdate = {
   ) => Promise<void>;
 };
 
+export function createAuthProfileStoreUpdatePublisher(
+  failureMessage?: string,
+): AuthProfileStoreUpdate["publish"] {
+  return async (committed, owner, ...publication) => {
+    if (!committed) {
+      return;
+    }
+    try {
+      await publishAuthProfileStoreUpdate(owner, committed, ...publication);
+    } catch (error) {
+      if (!failureMessage) {
+        throw error;
+      }
+      invalidateRuntimeAuthProfileStoreSnapshotsForOwner(owner);
+      reportCommittedInlineAuthFailure(failureMessage, error);
+    }
+  };
+}
+
 export function runAuthProfileStoreUpdate(params: AuthProfileStoreUpdate): Promise<void> {
   const env = prepareAuthProfileWriteEnvironment(params.options);
   return runAuthProfileUsage(async () => {
@@ -634,25 +653,9 @@ export function createAuthProfileStoreUpdater(
             },
           };
         },
-        async publish(committed, owner, assertCurrent, nativeCommits, committedIsCurrent) {
-          if (committed) {
-            try {
-              await publishAuthProfileStoreUpdate(
-                owner,
-                committed,
-                assertCurrent,
-                nativeCommits,
-                committedIsCurrent,
-              );
-            } catch (error) {
-              invalidateRuntimeAuthProfileStoreSnapshotsForOwner(owner);
-              reportCommittedInlineAuthFailure(
-                "Auth store committed before publication failed",
-                error,
-              );
-            }
-          }
-        },
+        publish: createAuthProfileStoreUpdatePublisher(
+          "Auth store committed before publication failed",
+        ),
       });
       return loadedStore!;
     } catch (error) {

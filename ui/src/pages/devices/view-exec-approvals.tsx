@@ -49,10 +49,6 @@ function normalizeSecurity(value?: string): ExecSecurity {
   return SECURITY_OPTIONS.find((option) => option.value === value)?.value ?? "deny";
 }
 
-function normalizeAsk(value?: string): ExecAsk {
-  return ASK_OPTIONS.find((option) => option.value === value)?.value ?? "on-miss";
-}
-
 function resolveExecApprovalsDefaults(
   form: ExecApprovalsFile | null,
   reported: ExecApprovalsResolvedDefaults | undefined,
@@ -60,9 +56,10 @@ function resolveExecApprovalsDefaults(
 ): ExecApprovalsResolvedDefaults {
   const defaults = form?.defaults ?? {};
   const wildcard = includeWildcard ? (form?.agents?.["*"] ?? {}) : {};
+  const ask = wildcard.ask ?? defaults.ask ?? reported?.ask;
   return {
     security: normalizeSecurity(wildcard.security ?? defaults.security ?? reported?.security),
-    ask: normalizeAsk(wildcard.ask ?? defaults.ask ?? reported?.ask),
+    ask: ASK_OPTIONS.find((option) => option.value === ask)?.value ?? "on-miss",
     askFallback: normalizeSecurity(
       wildcard.askFallback ?? defaults.askFallback ?? reported?.askFallback ?? "deny",
     ),
@@ -129,7 +126,11 @@ export function resolveExecApprovalsState(input: DevicesProps) {
   const allowlist = selectedAgent?.allowlist;
   return {
     ready,
-    disabled: !input.canAdmin || input.execApprovalsSaving || input.execApprovalsLoading,
+    disabled:
+      !input.connected ||
+      !input.canAdmin ||
+      input.execApprovalsSaving ||
+      input.execApprovalsLoading,
     dirty: input.execApprovalsDirty,
     loading: input.execApprovalsLoading,
     saving: input.execApprovalsSaving,
@@ -138,7 +139,7 @@ export function resolveExecApprovalsState(input: DevicesProps) {
     selectedScope,
     selectedAgent,
     agents,
-    allowlist: Array.isArray(allowlist) ? allowlist : [],
+    allowlist: allowlist ?? [],
     target,
     targetNodeId,
     targetNodes,
@@ -149,12 +150,13 @@ export function resolveExecApprovalsState(input: DevicesProps) {
     onLoad: input.onLoadExecApprovals,
     onSave: input.onSaveExecApprovals,
     canAdmin: input.canAdmin,
+    connected: input.connected,
   };
 }
 
 export function ExecApprovals(props: ExecApprovalsState) {
   const ready = createMemo(() => props.ready);
-  const targetReady = createMemo(() => props.target !== "node" || Boolean(props.targetNodeId));
+  const targetReady = () => props.target !== "node" || Boolean(props.targetNodeId);
   const saveButton = (
     <button
       class="btn"
@@ -167,7 +169,9 @@ export function ExecApprovals(props: ExecApprovalsState) {
   const rows = (
     <>
       {!props.canAdmin ? (
-        <SettingsRow title={t("devices.readOnly.adminRequired")} />
+        props.connected ? (
+          <SettingsRow title={t("devices.readOnly.adminRequired")} />
+        ) : undefined
       ) : (
         <>
           <ExecApprovalsTarget {...props} />
@@ -220,14 +224,7 @@ export function ExecApprovals(props: ExecApprovalsState) {
 }
 
 function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
-  const rules = createMemo(() =>
-    props.snapshot.enabled && Array.isArray(props.snapshot.rules) ? props.snapshot.rules : [],
-  );
-  const defaultAction = createMemo(() =>
-    props.snapshot.enabled
-      ? props.snapshot.defaultAction
-      : (props.snapshot.message ?? "unavailable"),
-  );
+  const rules = createMemo(() => (props.snapshot.enabled ? props.snapshot.rules : []));
   return (
     <>
       <SettingsRow
@@ -237,7 +234,11 @@ function NativeExecApprovals(props: { snapshot: NativeExecApprovalsSnapshot }) {
       />
       <SettingsRow
         title={t("devices.execApprovals.defaultAction")}
-        description={defaultAction()}
+        description={
+          props.snapshot.enabled
+            ? props.snapshot.defaultAction
+            : (props.snapshot.message ?? "unavailable")
+        }
         control={
           <SettingsValue
             value={t(

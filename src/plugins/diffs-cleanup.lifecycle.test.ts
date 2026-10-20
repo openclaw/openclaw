@@ -93,13 +93,15 @@ it.each([false, true])(
       const writeEntered = createDeferredCore();
       const siblingFinished = createDeferredCore();
       const failure = new Error("fixture Blob lookup failed");
-      const register = vi.spyOn(store, "registerIfAbsent").mockImplementationOnce(async () => {
-        writeEntered.resolve();
-        await releaseQuota.promise;
-        throw Object.assign(new Error("fixture namespace quota reached"), {
-          code: "PLUGIN_BLOB_LIMIT_EXCEEDED",
+      const register = vi
+        .spyOn(store, "registerIfAbsentWithReceipt")
+        .mockImplementationOnce(async () => {
+          writeEntered.resolve();
+          await releaseQuota.promise;
+          throw Object.assign(new Error("fixture namespace quota reached"), {
+            code: "PLUGIN_BLOB_LIMIT_EXCEEDED",
+          });
         });
-      });
       const lookup = store.lookup.bind(store);
       vi.spyOn(store, "lookup").mockImplementation(async (key) => {
         if (key === failedId) {
