@@ -62,19 +62,17 @@ it.for([
       }
       finish.resolve();
       const result = await operation;
-      if (override) {
-        expect(resolveDestroyTimeoutMs).not.toHaveBeenCalled();
-      } else {
-        expect(resolveDestroyTimeoutMs).toHaveBeenCalledExactlyOnceWith({ region: "test" });
-      }
+      expect(resolveDestroyTimeoutMs.mock.calls).toEqual(override ? [] : [[{ region: "test" }]]);
       expect(destroy).toHaveBeenCalledOnce();
-      if (entrance === "destroy") {
-        expect(result).toMatchObject({ state: "destroyed" });
-      } else {
-        expect(result).toMatchObject({
-          code: "bootstrap_failure",
-          message: "Worker bootstrap failed: bootstrap failed before admission",
-        });
+      expect(result).toMatchObject(
+        entrance === "destroy"
+          ? { state: "destroyed" }
+          : {
+              code: "bootstrap_failure",
+              message: "Worker bootstrap failed: bootstrap failed before admission",
+            },
+      );
+      if (entrance !== "destroy") {
         expect(support.testState.store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
       }
     } finally {

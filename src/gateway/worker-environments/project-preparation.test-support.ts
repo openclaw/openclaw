@@ -35,6 +35,17 @@ export async function runProjectScriptWithGitProbe(
     removeListener: process.removeListener.bind(process),
     kill: process.kill.bind(process),
   };
+  const modules = new Map<string, unknown>([
+    ["node:os", { ...os, homedir: () => home }],
+    [
+      "node:child_process",
+      {
+        ...cp,
+        spawnSync: (command: string, ...args: Parameters<typeof probe>) =>
+          (command === "git" ? probe(...args) : undefined) ?? cp.spawnSync(command, ...args),
+      },
+    ],
+  ]);
   // Both provider scripts wrap their Node program in a shell heredoc.
   const source = script.slice(script.indexOf("\n", script.indexOf("node <<'PROJECT_")) + 1);
   await runInNewContext(source.slice(0, source.lastIndexOf("\n")), {
@@ -44,24 +55,7 @@ export async function runProjectScriptWithGitProbe(
     clearTimeout,
     process: guestProcess,
     console: { error: (text: string) => (stderr += text) },
-    require: (id: string) => {
-      if (id === "node:os") {
-        return { ...os, homedir: () => home };
-      }
-      if (id === "node:child_process") {
-        return {
-          ...cp,
-          spawnSync: (
-            command: string,
-            args: string[],
-            options: cp.SpawnSyncOptionsWithStringEncoding,
-          ) =>
-            (command === "git" ? probe(args, options) : undefined) ??
-            cp.spawnSync(command, args, options),
-        };
-      }
-      return requireModule(id);
-    },
+    require: (id: string) => modules.get(id) ?? requireModule(id),
   });
   if (guestProcess.exitCode !== 0) {
     throw new Error(stderr);

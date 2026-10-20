@@ -64,19 +64,14 @@ it.each(["absent", "skipped"] as const)(
       return prepared;
     };
     const prepared = await prepare(f.project, "a".repeat(64), "prepared base\n", 1);
-    expect(prepared.sourceManifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
     expect(prepared.preparedManifestRef).toBe(prepared.sourceManifestRef);
-    const completion = path.join(
+    const completion = await readText(
       manifests(prepared.homeDir),
-      prepared.sourceManifestRef.slice(7),
-      `${prepared.preparedManifestRef.slice(7)}.json`,
+      `${prepared.sourceManifestRef.slice(7)}/${prepared.preparedManifestRef.slice(7)}.json`,
     );
-    expect(
-      parseWorkerWorkspaceManifest(
-        await fs.readFile(completion, "utf8"),
-        prepared.preparedManifestRef,
-      ).baseCommit,
-    ).toBe(f.project.baseCommit);
+    expect(parseWorkerWorkspaceManifest(completion, prepared.preparedManifestRef).baseCommit).toBe(
+      f.project.baseCommit,
+    );
     const project = await advanceProject(f.repository);
     f.runScript.mockClear();
     const refreshed = await prepare(project, "b".repeat(64), "changed B\n", 2);

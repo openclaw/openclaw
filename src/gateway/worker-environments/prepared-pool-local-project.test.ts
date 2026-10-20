@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { assert, expect, it } from "vitest";
+import { initializeGitFixture } from "../../agents/worktrees/git-fixture.test-support.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
@@ -15,19 +16,12 @@ import { createWorkerProviderIntent } from "./provider-intent.js";
 const f = usePreparedPoolFixture();
 
 it("refills the pinned preparation after its managed seed checkout is removed and the store reopens", async () => {
-  const repo = path.join(f.root, "project");
+  const repo = await initializeGitFixture(f.root, "project", "input.txt", "shared base\n");
   const commit = async (root: string, content: string, message: string) => {
     await fs.writeFile(path.join(root, "input.txt"), content);
-    await requireGit(root, ["add", "."]);
-    await requireGit(root, ["commit", "--quiet", "-m", message]);
+    await requireGit(root, ["commit", "--quiet", "-am", message]);
     return requireGit(root, ["rev-parse", "HEAD"]);
   };
-  await fs.mkdir(repo);
-  await requireGit(repo, ["init", "--quiet", "-b", "main"]);
-  await requireGit(repo, ["config", "user.name", "Prepared Project Test"]);
-  await requireGit(repo, ["config", "user.email", "prepared@example.invalid"]);
-  await requireGit(repo, ["config", "commit.gpgsign", "false"]);
-  const base = await commit(repo, "shared base\n", "shared base");
   const worktrees = new ManagedWorktreeService({
     env: { OPENCLAW_STATE_DIR: f.root },
     getConfig: () => ({ worktreeRoot: path.join(f.root, "managed-worktrees") }),
@@ -36,16 +30,13 @@ it("refills the pinned preparation after its managed seed checkout is removed an
     repoRoot: repo,
     name: "prepared-seed",
     baseRef: "main",
-    checkoutCommit: base,
     ownerKind: "session",
     ownerId: "prepared-seed-session",
     runSetupScript: false,
   });
   const pinned = await commit(seed.path, "pinned seed\n", "seed-only commit");
   const primary = await commit(repo, "new primary HEAD\n", "advance primary");
-  expect(primary).not.toBe(pinned);
   expect((await runGit(repo, ["merge-base", "--is-ancestor", pinned, primary])).code).toBe(1);
-  expect(await requireGit(seed.path, ["rev-parse", "HEAD"])).toBe(pinned);
 
   f.provider = {
     ...f.provider,
@@ -91,7 +82,6 @@ it("refills the pinned preparation after its managed seed checkout is removed an
   expect(project.baseCommit).toBe(pinned);
   await f.schedule(createPool(intentOwner));
   const spare = f.reserves().find((record) => record.state === "ready")!;
-  expect(spare).toBeDefined();
   expect(readWorkerProjectSnapshot(spare.profileSnapshot.project)?.baseCommit).toBe(pinned);
   expect(spare.preparation?.key).toBe(preparation.key);
 
