@@ -1,4 +1,3 @@
-// Log file path tests cover profile-aware rolling filename resolution.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -26,26 +25,12 @@ describe("resolveConfiguredLogFilePath", () => {
   };
 
   it.each([
-    { name: "unset", profile: undefined, expected: "openclaw-2026-07-22.log" },
-    {
-      name: "explicit default",
-      profile: "Default",
-      expected: "openclaw-2026-07-22.log",
-    },
-    {
-      name: "named",
-      profile: "dev",
-      expected: "openclaw-dev-2026-07-22.log",
-    },
-    {
-      name: "sanitized",
-      profile: "QA_Profile",
-      expected: "openclaw--1q-1a-0-1profile-2026-07-22.log",
-    },
-  ])("uses the $name profile filename", ({ profile, expected }) => {
-    const resolved = resolveForProfile(profile);
-
-    expect(path.basename(resolved)).toBe(expected);
+    [undefined, "openclaw"],
+    ["Default", "openclaw"],
+    ["dev", "openclaw-dev"],
+    ["QA_Profile", "openclaw--1q-1a-0-1profile"],
+  ])("uses the %s profile filename", (profile, prefix) => {
+    expect(path.basename(resolveForProfile(profile))).toBe(`${prefix}-2026-07-22.log`);
   });
 
   it("keeps profiles distinct when sanitization would otherwise collide", () => {
@@ -81,22 +66,13 @@ describe("resolveConfiguredLogFilePath", () => {
 });
 
 describe("profile rolling log families", () => {
-  it("preserves the profile segment across date rollover", () => {
+  it.each([
+    ["openclaw-dev-2026-07-22.log", "openclaw-dev-2026-07-23.log"],
+    ["openclaw-YYYY-MM-DD.log", "openclaw-2026-07-23.log"],
+  ])("advances %s while preserving its family", (before, after) => {
     expect(
-      resolveRollingLogFilePathForDate(
-        "/tmp/openclaw/openclaw-dev-2026-07-22.log",
-        new Date(2026, 6, 23, 12, 0, 0),
-      ),
-    ).toBe("/tmp/openclaw/openclaw-dev-2026-07-23.log");
-  });
-
-  it("expands the legacy YYYY-MM-DD placeholder", () => {
-    expect(
-      resolveRollingLogFilePathForDate(
-        "/tmp/openclaw/openclaw-YYYY-MM-DD.log",
-        new Date(2026, 6, 23, 12, 0, 0),
-      ),
-    ).toBe("/tmp/openclaw/openclaw-2026-07-23.log");
+      resolveRollingLogFilePathForDate(`/tmp/openclaw/${before}`, new Date(2026, 6, 23, 12)),
+    ).toBe(`/tmp/openclaw/${after}`);
   });
 
   it("keeps default and named profile fallback families separate", () => {

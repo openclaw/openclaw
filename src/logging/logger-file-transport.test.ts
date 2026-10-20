@@ -1,4 +1,3 @@
-// Logger file transport tests cover async ordering, overflow, and exit durability.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
@@ -15,6 +14,38 @@ import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry
 
 const logPathTracker = createSuiteLogPathTracker("openclaw-file-transport-");
 const failedLogPaths = new Set<string>();
+const captureStderr = () => vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+const warningLines = (spy: ReturnType<typeof captureStderr>) =>
+  spy.mock.calls.map(([line]) => String(line));
+function entry(file: string, payload: string, maxFileBytes = 1024 * 1024) {
+  return { file, hostname: "transport-test-host", maxFileBytes, payload };
+}
+function records(file: string): { message?: string; dropped?: number; index?: number }[] {
+  return fs
+    .readFileSync(file, "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+function logTo(file: string, message: string) {
+  setLoggerOverride({ level: "info", file });
+  getLogger().info(message);
+}
+function failAppends(shouldFail: (file: Parameters<typeof fsPromises.open>[0]) => boolean) {
+  const open = fsPromises.open.bind(fsPromises);
+  vi.spyOn(fsPromises, "open").mockImplementation(async (file, ...args) => {
+    if (shouldFail(file)) {
+      throw new Error("injected append failure");
+    }
+    return open(file, ...args);
+  });
+}
+async function logBatch(...messages: string[]) {
+  for (const message of messages) {
+    getLogger().info(message);
+  }
+  await testApi.flushFileLogQueueForTests();
+}
 
 function writeStableRecords(): void {
   const logger = getLogger();
@@ -38,12 +69,7 @@ afterEach(async () => {
     } else if (stat?.isSymbolicLink() || (stat && stat.nlink > 1)) {
       fs.unlinkSync(file);
     }
-    fileLogTransport.enqueue({
-      file,
-      hostname: "transport-test-host",
-      maxFileBytes: 1024 * 1024,
-      payload: "{}\n",
-    });
+    fileLogTransport.enqueue(entry(file, "{}\n"));
   }
   await fileLogTransport.flush();
   failedLogPaths.clear();
@@ -76,39 +102,28 @@ describe("async logger file transport", () => {
     await testApi.flushFileLogQueueForTests();
 
     expect(fs.readFileSync(asyncPath)).toEqual(syncBytes);
-    const messages = syncBytes
-      .toString("utf8")
-      .trim()
-      .split("\n")
-      .map((line) => (JSON.parse(line) as { message?: string }).message);
+    const messages = records(syncPath).map((record) => record.message);
     expect(messages).toEqual(["first queued record", "second queued record"]);
   });
 
   it("drops the oldest records on overflow and writes one count marker", async () => {
     const logPath = logPathTracker.nextPath();
     for (let index = 1; index <= 4_098; index += 1) {
-      fileLogTransport.enqueue({
-        file: logPath,
-        hostname: "transport-test-host",
-        maxFileBytes: 1024 * 1024,
-        payload: `${JSON.stringify({ message: `queued-record-${index}` })}\n`,
-      });
+      fileLogTransport.enqueue(
+        entry(logPath, `${JSON.stringify({ message: `queued-record-${index}` })}\n`),
+      );
     }
     await testApi.flushFileLogQueueForTests();
 
-    const records = fs
-      .readFileSync(logPath, "utf8")
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as { message?: string; dropped?: number });
-    const markers = records.filter((record) => record.message?.includes("queue overflow"));
+    const written = records(logPath);
+    const markers = written.filter((record) => record.message?.includes("queue overflow"));
     expect(markers).toEqual([
       expect.objectContaining({
         dropped: 2,
         message: "[openclaw] file log queue overflow; dropped 2 oldest records",
       }),
     ]);
-    expect(records.map((record) => record.message)).toEqual([
+    expect(written.map((record) => record.message)).toEqual([
       "[openclaw] file log queue overflow; dropped 2 oldest records",
       ...Array.from({ length: 4_096 }, (_, index) => `queued-record-${index + 3}`),
     ]);
@@ -123,12 +138,9 @@ describe("async logger file transport", () => {
         (value) => `${JSON.stringify(value)}\n`,
       );
       for (const [index, payload] of payloads.entries()) {
-        fileLogTransport.enqueue({
-          file: index === 3 ? secondPath : firstPath,
-          hostname: "transport-test-host",
-          maxFileBytes: index === 2 ? 4 : 64,
-          payload,
-        });
+        fileLogTransport.enqueue(
+          entry(index === 3 ? secondPath : firstPath, payload, index === 2 ? 4 : 64),
+        );
       }
       if (mode === "async") {
         await fileLogTransport.flush();
@@ -171,14 +183,11 @@ describe("async logger file transport", () => {
       }
       return handle;
     });
-    const entries = Array.from({ length: 4 }, (_, index) => ({
-      file: logPath,
-      hostname: "transport-test-host",
-      maxFileBytes: 1024 * 1024,
-      payload: `${JSON.stringify({ index, text: "x".repeat(20_000) })}\n`,
-    }));
-    for (const entry of entries) {
-      fileLogTransport.enqueue(entry);
+    const entries = Array.from({ length: 4 }, (_, index) =>
+      entry(logPath, `${JSON.stringify({ index, text: "x".repeat(20_000) })}\n`),
+    );
+    for (const record of entries) {
+      fileLogTransport.enqueue(record);
     }
     const flushing = fileLogTransport.flush();
     try {
@@ -188,37 +197,21 @@ describe("async logger file transport", () => {
         "logger flush completed without reaching the held append",
       );
       expect(issuedRecords).toBeGreaterThan(1);
-      fileLogTransport.enqueue({
-        file: logPath,
-        hostname: "transport-test-host",
-        maxFileBytes: 1024 * 1024,
-        payload: '{"index":4}\n',
-      });
+      fileLogTransport.enqueue(entry(logPath, '{"index":4}\n'));
       fileLogTransport.drainSync();
     } finally {
       release.resolve();
       await flushing;
     }
 
-    expect(
-      fs
-        .readFileSync(logPath, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line).index),
-    ).toEqual([0, 1, 2, 3, 4]);
-    expect(entries.every((entry) => entry.payload === "")).toBe(true);
+    expect(records(logPath).map((record) => record.index)).toEqual([0, 1, 2, 3, 4]);
+    expect(entries.every((record) => record.payload === "")).toBe(true);
   });
 
   it("keeps later exit records separate after a synchronous short write", () => {
     const logPath = logPathTracker.nextPath();
     for (const payload of ["first\n", "second\n"]) {
-      fileLogTransport.enqueue({
-        file: logPath,
-        hostname: "transport-test-host",
-        maxFileBytes: 1024,
-        payload,
-      });
+      fileLogTransport.enqueue(entry(logPath, payload, 1024));
     }
     vi.spyOn(fs, "writeSync").mockReturnValueOnce(0);
 
@@ -240,14 +233,14 @@ describe("async logger file transport", () => {
           fs.linkSync(target, logPath);
         }
         failedLogPaths.add(logPath);
-        const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+        const stderr = captureStderr();
         setLoggerOverride({ level: "info", file: logPath });
         writeStableRecords();
         await fileLogTransport.flush();
 
         expect(fs.readFileSync(target, "utf8")).toBe("untouched");
         expect(
-          stderr.mock.calls.filter(([line]) => String(line).includes("log file append failed")),
+          warningLines(stderr).filter((line) => line.includes("log file append failed")),
         ).toHaveLength(1);
       },
     );
@@ -258,32 +251,15 @@ describe("async logger file transport", () => {
     registerSecretValueForRedaction(secret);
     const logPath = `${logPathTracker.nextPath()}-${secret}`;
     let appendAttempts = 0;
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stderrSpy = captureStderr();
     failedLogPaths.add(logPath);
-    const openFile = fsPromises.open.bind(fsPromises);
-    vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
-      if (args[0] === logPath) {
-        appendAttempts += 1;
-        if (appendAttempts !== 3) {
-          throw new Error("injected append failure");
-        }
-      }
-      return openFile(...args);
-    });
+    failAppends((file) => file === logPath && ++appendAttempts !== 3);
     setLoggerOverride({ level: "info", file: logPath });
 
-    getLogger().info("first-dropped-record");
-    getLogger().info("first-dropped-companion");
-    await testApi.flushFileLogQueueForTests();
-    getLogger().info("second-dropped-record");
-    getLogger().info("second-dropped-companion");
-    await testApi.flushFileLogQueueForTests();
-    getLogger().info("written-after-failure");
-    getLogger().info("written-companion-after-failure");
-    await testApi.flushFileLogQueueForTests();
-    getLogger().info("dropped-after-recovery");
-    getLogger().info("dropped-companion-after-recovery");
-    await testApi.flushFileLogQueueForTests();
+    await logBatch("first-dropped-record", "first-dropped-companion");
+    await logBatch("second-dropped-record", "second-dropped-companion");
+    await logBatch("written-after-failure", "written-companion-after-failure");
+    await logBatch("dropped-after-recovery", "dropped-companion-after-recovery");
 
     const content = fs.readFileSync(logPath, "utf8");
     expect(appendAttempts).toBe(4);
@@ -291,7 +267,7 @@ describe("async logger file transport", () => {
     expect(content).toContain("written-after-failure");
     expect(content).toContain("written-companion-after-failure");
     expect(content).not.toContain("dropped-after-recovery");
-    const warnings = stderrSpy.mock.calls.map(([line]) => String(line));
+    const warnings = warningLines(stderrSpy);
     expect(warnings.filter((line) => line.includes("log file append failed"))).toHaveLength(2);
     expect(warnings[0]).toContain(
       "records dropped; check that the path is a writable regular file",
@@ -306,21 +282,18 @@ describe("async logger file transport", () => {
     fs.mkdirSync(secondPath);
     failedLogPaths.add(firstPath);
     failedLogPaths.add(secondPath);
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stderrSpy = captureStderr();
 
-    setLoggerOverride({ level: "info", file: firstPath });
-    getLogger().info("first-file-failure");
-    setLoggerOverride({ level: "info", file: secondPath });
-    getLogger().info("second-file-failure");
+    logTo(firstPath, "first-file-failure");
+    logTo(secondPath, "second-file-failure");
     await testApi.flushFileLogQueueForTests();
 
     fs.rmdirSync(secondPath);
     getLogger().info("second-file-recovery");
-    setLoggerOverride({ level: "info", file: firstPath });
-    getLogger().info("first-file-repeated-failure");
+    logTo(firstPath, "first-file-repeated-failure");
     await testApi.flushFileLogQueueForTests();
 
-    const warnings = stderrSpy.mock.calls.map(([line]) => String(line));
+    const warnings = warningLines(stderrSpy);
     expect(warnings.filter((line) => line.includes(`file=${firstPath}`))).toHaveLength(1);
     expect(warnings.filter((line) => line.includes(`file=${secondPath}`))).toHaveLength(1);
     expect(fs.readFileSync(secondPath, "utf8")).toContain("second-file-recovery");
@@ -338,13 +311,11 @@ describe("async logger file transport", () => {
       try {
         fs.rmdirSync(deletedDir);
         const logPath = `/proc/self/fd/${fd}/openclaw/openclaw.log`;
-        const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-        setLoggerOverride({ level: "info", file: logPath });
-
-        getLogger().info("only-record-after-deletion");
+        const stderrSpy = captureStderr();
+        logTo(logPath, "only-record-after-deletion");
         await testApi.flushFileLogQueueForTests();
 
-        const warnings = stderrSpy.mock.calls.map(([line]) => String(line));
+        const warnings = warningLines(stderrSpy);
         expect(warnings.some((line) => line.includes(`file=${logPath}`))).toBe(true);
       } finally {
         fs.closeSync(fd);
@@ -385,24 +356,16 @@ describe("async logger file transport", () => {
 
   it("retries the warning after stderr rejects it", async () => {
     const logPath = logPathTracker.nextPath();
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stderrSpy = captureStderr();
     stderrSpy.mockImplementationOnce(() => {
       throw new Error("injected stderr failure");
     });
     failedLogPaths.add(logPath);
-    const openFile = fsPromises.open.bind(fsPromises);
-    vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
-      if (args[0] === logPath) {
-        throw new Error("injected append failure");
-      }
-      return openFile(...args);
-    });
+    failAppends((file) => file === logPath);
     setLoggerOverride({ level: "info", file: logPath });
 
-    getLogger().info("first-dropped-record");
-    await testApi.flushFileLogQueueForTests();
-    getLogger().info("second-dropped-record");
-    await testApi.flushFileLogQueueForTests();
+    await logBatch("first-dropped-record");
+    await logBatch("second-dropped-record");
 
     expect(stderrSpy).toHaveBeenCalledTimes(2);
     expect(String(stderrSpy.mock.calls[1]?.[0])).toContain(`file=${logPath}`);
@@ -416,37 +379,29 @@ describe("async logger file transport", () => {
       ...Array.from({ length: 63 }, () => logPathTracker.nextPath()),
       lastPath,
     ];
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stderrSpy = captureStderr();
     const targets = new Set(paths);
     paths.forEach((file) => failedLogPaths.add(file));
-    const openFile = fsPromises.open.bind(fsPromises);
     let recoveringFirstPath = false;
-    vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
-      if (
-        typeof args[0] === "string" &&
-        targets.has(args[0]) &&
-        !(recoveringFirstPath && args[0] === firstPath)
-      ) {
-        throw new Error("injected append failure");
-      }
-      return openFile(...args);
-    });
+    failAppends(
+      (file) =>
+        typeof file === "string" &&
+        targets.has(file) &&
+        !(recoveringFirstPath && file === firstPath),
+    );
 
     for (const [index, file] of paths.entries()) {
-      setLoggerOverride({ level: "info", file });
-      getLogger().info(`failure-${index}`);
+      logTo(file, `failure-${index}`);
     }
     await testApi.flushFileLogQueueForTests();
 
-    const warnings = stderrSpy.mock.calls.map(([line]) => String(line));
+    const warnings = warningLines(stderrSpy);
     expect(warnings.filter((line) => line.includes("diagnostics saturated"))).toHaveLength(1);
     expect(warnings.some((line) => line.includes(`file=${lastPath}`))).toBe(false);
 
     recoveringFirstPath = true;
-    setLoggerOverride({ level: "info", file: firstPath });
-    getLogger().info("tracked-file-recovery");
-    setLoggerOverride({ level: "info", file: lastPath });
-    getLogger().info("newly-tracked-failure");
+    logTo(firstPath, "tracked-file-recovery");
+    logTo(lastPath, "newly-tracked-failure");
     await testApi.flushFileLogQueueForTests();
 
     expect(stderrSpy.mock.calls.some(([line]) => String(line).includes(`file=${lastPath}`))).toBe(

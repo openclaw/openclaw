@@ -1,4 +1,3 @@
-// Log tail redaction tests cover scrubbing sensitive data from tailed logs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
@@ -18,35 +17,19 @@ afterEach(async () => {
 
 describe("readConfiguredLogTail redaction", () => {
   it("redacts raw auth headers before returning log lines", async () => {
-    const dir = tempDirs.make("openclaw-log-tail-redaction-");
-    const logFile = path.join(dir, "openclaw.log");
-    const configFile = path.join(dir, "openclaw.json");
     const basicSecret = "c2VjcmV0OnBhc3M=";
     const openClawToken = "supersecretgatewaytoken1234567890";
     const pomeriumJwt = "eyJheaderabcd.eyJpayloadabcd.signatureabcd123456";
 
-    await fs.writeFile(
-      configFile,
-      JSON.stringify({ logging: { redactSensitive: "tools" } }),
-      "utf8",
-    );
-    await fs.writeFile(
-      logFile,
+    const text = await withLog(
       [
         `Authorization: Basic ${basicSecret}`,
         `X-OpenClaw-Token: ${openClawToken}`,
         `x-pomerium-jwt-assertion: ${pomeriumJwt}`,
         "normal diagnostic line",
       ].join("\n") + "\n",
-      "utf8",
+      async () => (await readConfiguredLogTail({ limit: 10 })).lines.join("\n"),
     );
-    setLoggerOverride({ file: logFile });
-
-    const payload = await withEnvAsync(
-      { OPENCLAW_CONFIG_PATH: configFile },
-      async () => await readConfiguredLogTail({ limit: 10 }),
-    );
-    const text = payload.lines.join("\n");
 
     expect(text).toContain("Authorization: Basic ***");
     expect(text).toContain("X-OpenClaw-Token: supers…7890");
@@ -59,10 +42,6 @@ describe("readConfiguredLogTail redaction", () => {
 });
 
 it("redacts raw JSON credentials and default tokens with custom tail patterns", async () => {
-  const dir = tempDirs.make("openclaw-raw-log-tail-");
-  const logFile = path.join(dir, "openclaw.log");
-  const configFile = path.join(dir, "openclaw.json");
-  await fs.writeFile(configFile, JSON.stringify({ logging: { redactPatterns: ["CUSTOM_VALUE"] } }));
   const record = {
     password: 1234,
     apiKey: false,
@@ -72,10 +51,14 @@ it("redacts raw JSON credentials and default tokens with custom tail patterns", 
     ordinary: "request completed",
   };
   const raw = `${JSON.stringify(record)}\n`;
-  await fs.writeFile(logFile, raw);
-  setLoggerOverride({ file: logFile });
-  const tail = await withEnvAsync({ OPENCLAW_CONFIG_PATH: configFile }, () =>
-    readConfiguredLogTail(),
+  const tail = await withLog(
+    raw,
+    async (file) => {
+      const result = await readConfiguredLogTail();
+      expect(await fs.readFile(file, "utf8")).toBe(raw);
+      return result;
+    },
+    { redactPatterns: ["CUSTOM_VALUE"] },
   );
   assert(tail.lines[0] !== undefined);
   const redacted = JSON.parse(tail.lines[0]);
@@ -89,17 +72,20 @@ it("redacts raw JSON credentials and default tokens with custom tail patterns", 
   expect(redacted.message).not.toContain("sk-syntheticcredential123456");
   expect(redacted.message).not.toContain("CUSTOM_VALUE");
   expect(tail.cursor).toBe(Buffer.byteLength(raw));
-  expect(await fs.readFile(logFile, "utf8")).toBe(raw);
 });
 
-async function withPemLog(content: string, run: (file: string) => Promise<void>) {
+async function withLog<T>(
+  content: string,
+  run: (file: string) => Promise<T>,
+  logging: { redactSensitive?: "tools"; redactPatterns?: string[] } = { redactSensitive: "tools" },
+) {
   const dir = tempDirs.make("openclaw-log-tail-pem-");
   const file = path.join(dir, "configured.log");
   const config = path.join(dir, "openclaw.json");
-  await fs.writeFile(config, JSON.stringify({ logging: { redactSensitive: "tools" } }));
+  await fs.writeFile(config, JSON.stringify({ logging }));
   await fs.writeFile(file, content);
   setLoggerOverride({ file });
-  await withEnvAsync({ OPENCLAW_CONFIG_PATH: config }, () => run(file));
+  return withEnvAsync({ OPENCLAW_CONFIG_PATH: config }, () => run(file));
 }
 
 const pemBegin = "-----BEGIN PRIVATE KEY-----\n";
@@ -110,7 +96,7 @@ describe("PEM tail context", () => {
     "preserves a block's state before cold and incremental windows (closed=%s)",
     async (closed) => {
       const prefix = pemBegin + "earlier body\n" + (closed ? pemEnd : "");
-      await withPemLog(prefix + "older line\n".repeat(2000) + "cold line\n", async (file) => {
+      await withLog(prefix + "older line\n".repeat(2000) + "cold line\n", async (file) => {
         const cold = await readConfiguredLogTail({ limit: 1, maxBytes: 64 });
         expect(cold.lines).toEqual([closed ? "cold line" : "…redacted…"]);
 
@@ -123,7 +109,7 @@ describe("PEM tail context", () => {
   );
 
   it("advances across filtered openers and resolves a closer between the anchor and selection", async () => {
-    await withPemLog("ordinary line\n", async (file) => {
+    await withLog("ordinary line\n", async (file) => {
       const initial = await readConfiguredLogTail();
       await fs.appendFile(file, pemBegin + "hidden body\n");
       const hidden = await readConfiguredLogTail({ cursor: initial.cursor }, () => false);
@@ -145,7 +131,7 @@ describe("PEM tail context", () => {
 
   it("keeps partial delimiters out of cached state until their record is complete", async () => {
     const complete = "ordinary line 🦞\n";
-    await withPemLog(complete + "-----BEGIN PRI", async (file) => {
+    await withLog(complete + "-----BEGIN PRI", async (file) => {
       const initial = await readConfiguredLogTail();
       expect(initial).toMatchObject({
         lines: ["ordinary line 🦞"],
@@ -168,7 +154,7 @@ describe("PEM tail context", () => {
   it.each(["rotation", "truncation", "empty poll"] as const)(
     "discards cached state after %s",
     async (change) => {
-      await withPemLog("old ordinary line\n".repeat(1000), async (file) => {
+      await withLog("old ordinary line\n".repeat(1000), async (file) => {
         const initial = await readConfiguredLogTail({ limit: 1 });
         if (change === "rotation") {
           await fs.rename(file, `${file}.retired`);
@@ -194,7 +180,7 @@ describe("PEM tail context", () => {
   );
 
   it("does not carry an open block into another configured file", async () => {
-    await withPemLog(pemBegin + "private body\n", async (file) => {
+    await withLog(pemBegin + "private body\n", async (file) => {
       expect((await readConfiguredLogTail({ limit: 1 })).lines).toEqual(["…redacted…"]);
       const otherFile = `${file}.other`;
       await fs.writeFile(otherFile, "ordinary line\n".repeat(100));
@@ -206,7 +192,7 @@ describe("PEM tail context", () => {
   });
 
   it("uses the opened inode when rotation replaces the path after metadata sampling", async () => {
-    await withPemLog("old ordinary line\n".repeat(1000), async (file) => {
+    await withLog("old ordinary line\n".repeat(1000), async (file) => {
       const initial = await readConfiguredLogTail({ limit: 1 });
       await fs.appendFile(file, "old pending line\n".repeat(100));
       const realOpen = fs.open.bind(fs);

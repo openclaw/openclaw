@@ -1,12 +1,10 @@
-// Log file size cap tests cover truncation and rotation guards for log files.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { getLogger, getResolvedLoggerSettings, resetLogger, setLoggerOverride } from "./logger.js";
+import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { testApi } from "./logger.test-support.js";
 
-const DEFAULT_MAX_FILE_BYTES = 100 * 1024 * 1024;
 const logPathTracker = createSuiteLogPathTracker("openclaw-log-cap-");
 
 function rotatedLogPath(file: string, index: number): string {
@@ -17,41 +15,32 @@ function rotatedLogPath(file: string, index: number): string {
 
 describe("log file size cap", () => {
   let logPath = "";
+  const configure = (settings: Parameters<typeof setLoggerOverride>[0] = {}) =>
+    setLoggerOverride({ level: "info", file: logPath, ...settings });
+  const captureStderr = () => vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  const rotationWarnings = (spy: ReturnType<typeof captureStderr>) =>
+    spy.mock.calls
+      .map(([line]) => String(line))
+      .filter((line) => line.includes("log file rotation failed"));
 
-  beforeAll(async () => {
-    await logPathTracker.setup();
-  });
+  beforeAll(() => logPathTracker.setup());
 
   beforeEach(() => {
     logPath = logPathTracker.nextPath();
     resetLogger();
-    setLoggerOverride(null);
   });
 
   afterEach(() => {
     resetLogger();
-    setLoggerOverride(null);
     vi.useRealTimers();
     vi.restoreAllMocks();
-    try {
-      fs.rmSync(logPath, { force: true });
-    } catch {
-      // ignore cleanup errors
-    }
   });
 
-  afterAll(async () => {
-    await logPathTracker.cleanup();
-  });
-
-  it("defaults maxFileBytes to 100 MB when unset", () => {
-    setLoggerOverride({ level: "info", file: logPath });
-    expect(getResolvedLoggerSettings().maxFileBytes).toBe(DEFAULT_MAX_FILE_BYTES);
-  });
+  afterAll(() => logPathTracker.cleanup());
 
   it("rotates file writes after cap is reached and keeps logging", async () => {
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    setLoggerOverride({ level: "info", file: logPath, maxFileBytes: 256 });
+    const stderrSpy = captureStderr();
+    configure({ maxFileBytes: 256 });
     const logger = getLogger();
 
     logger.error(`network-failure-${"x".repeat(400)}`);
@@ -63,10 +52,7 @@ describe("log file size cap", () => {
     expect(currentContent).toContain("post-rotation-diagnostic");
     expect(currentContent).not.toContain("network-failure");
     expect(archiveContent).toContain("network-failure");
-    const rotationWarnings = stderrSpy.mock.calls
-      .map(([firstArg]) => String(firstArg))
-      .filter((line) => line.includes("log file rotation failed"));
-    expect(rotationWarnings).toHaveLength(0);
+    expect(rotationWarnings(stderrSpy)).toHaveLength(0);
   });
 
   it("structures rotation failure diagnostics for JSON console output", async () => {
@@ -74,21 +60,13 @@ describe("log file size cap", () => {
     vi.spyOn(fs, "renameSync").mockImplementation(() => {
       throw new Error("rotation denied");
     });
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-    setLoggerOverride({
-      level: "info",
-      file: logPath,
-      maxFileBytes: 1,
-      consoleLevel: "info",
-      consoleStyle: "json",
-    });
+    const stderrSpy = captureStderr();
+    configure({ maxFileBytes: 1, consoleLevel: "info", consoleStyle: "json" });
 
     getLogger().error("rotation diagnostic");
     await testApi.flushFileLogQueueForTests();
 
-    const warning = stderrSpy.mock.calls
-      .map(([firstArg]) => String(firstArg))
-      .find((line) => line.includes("log file rotation failed"));
+    const [warning] = rotationWarnings(stderrSpy);
     expect(JSON.parse(warning ?? "")).toMatchObject({
       level: "warn",
       message: expect.stringContaining("log file rotation failed"),

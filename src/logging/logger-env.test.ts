@@ -1,4 +1,3 @@
-// Logger env tests cover log level and transport behavior from environment config.
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +8,20 @@ import { loggingState } from "./state.js";
 
 const defaultMaxFileBytes = 100 * 1024 * 1024;
 const testLogPath = path.join(os.tmpdir(), "openclaw-test-env-log-level.log");
+function configure(overrides: Parameters<typeof setLoggerOverride>[0]) {
+  setLoggerOverride({
+    level: "error",
+    consoleLevel: "warn",
+    consoleStyle: "compact",
+    file: testLogPath,
+    ...overrides,
+  });
+}
+const captureStderr = () => vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+const envWarnings = (spy: ReturnType<typeof captureStderr>) =>
+  spy.mock.calls
+    .map(([line]) => String(line))
+    .filter((line) => line.includes("OPENCLAW_LOG_LEVEL"));
 
 describe("OPENCLAW_LOG_LEVEL", () => {
   let envSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -31,12 +44,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
   });
 
   it("applies a valid env override to both file and console levels", () => {
-    setLoggerOverride({
-      level: "error",
-      consoleLevel: "warn",
-      consoleStyle: "json",
-      file: testLogPath,
-    });
+    configure({ consoleStyle: "json" });
     process.env.OPENCLAW_LOG_LEVEL = "debug";
 
     expect(getResolvedLoggerSettings()).toEqual({
@@ -44,49 +52,32 @@ describe("OPENCLAW_LOG_LEVEL", () => {
       file: testLogPath,
       maxFileBytes: defaultMaxFileBytes,
     });
-    expect(getConsoleSettings()).toEqual({
-      level: "debug",
-      style: "json",
-    });
+    expect(getConsoleSettings()).toEqual({ level: "debug", style: "json" });
   });
 
   it("warns once and ignores invalid env values", () => {
-    setLoggerOverride({
-      level: "error",
-      consoleLevel: "warn",
-      consoleStyle: "compact",
-      file: testLogPath,
-    });
+    configure({});
     process.env.OPENCLAW_LOG_LEVEL = "nope";
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stderrSpy = captureStderr();
 
     expect(getResolvedLoggerSettings().level).toBe("error");
     expect(getResolvedLoggerSettings().maxFileBytes).toBe(defaultMaxFileBytes);
     expect(getConsoleSettings().level).toBe("warn");
     expect(getResolvedLoggerSettings().level).toBe("error");
 
-    const warnings = stderrSpy.mock.calls
-      .map(([firstArg]) => String(firstArg))
-      .filter((line) => line.includes("OPENCLAW_LOG_LEVEL"));
+    const warnings = envWarnings(stderrSpy);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"');
   });
 
   it("structures invalid env warnings for JSON console output", () => {
-    setLoggerOverride({
-      level: "silent",
-      consoleLevel: "info",
-      consoleStyle: "json",
-      file: testLogPath,
-    });
+    configure({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
     process.env.OPENCLAW_LOG_LEVEL = "nope";
-    const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const stderrSpy = captureStderr();
 
     expect(getConsoleSettings().level).toBe("info");
 
-    const warning = stderrSpy.mock.calls
-      .map(([firstArg]) => String(firstArg))
-      .find((line) => line.includes("OPENCLAW_LOG_LEVEL"));
+    const [warning] = envWarnings(stderrSpy);
     expect(JSON.parse(warning ?? "")).toMatchObject({
       level: "warn",
       message: expect.stringContaining('Ignoring invalid OPENCLAW_LOG_LEVEL="nope"'),
@@ -99,7 +90,7 @@ describe("OPENCLAW_LOG_LEVEL", () => {
       const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456"; // pragma: allowlist secret
       setLoggerOverride({ level: "silent", consoleStyle, file: testLogPath });
       process.env.OPENCLAW_LOG_LEVEL = secret;
-      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      const stderrSpy = captureStderr();
 
       getResolvedLoggerSettings();
 
