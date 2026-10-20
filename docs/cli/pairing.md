@@ -1,30 +1,33 @@
 ---
-summary: "CLI reference for `openclaw pairing` (approve/list pairing requests)"
+summary: "CLI reference for `openclaw pairing` (list/approve/dismiss pairing requests)"
 read_when:
-  - You're using pairing-mode DMs and need to approve senders
+  - You're using pairing-mode DMs and need to approve or dismiss senders
 title: "Pairing CLI"
 ---
 
 # `openclaw pairing`
 
-Approve or inspect DM pairing requests for channels that support pairing (chat DMs only - node/device pairing uses [`openclaw devices`](/cli/devices)).
+Approve, dismiss, or inspect DM pairing requests for channels that support pairing (chat DMs only - node/device pairing uses [`openclaw devices`](/cli/devices)).
 
 Related: [Pairing flow](/channels/pairing)
 
 The same pending requests can be reviewed in the Control UI under **Settings →
-Channels → DM access requests**. The Control UI supports approve, optional
-requester notification, and dismiss. Dismiss removes the current request but does
-not permanently block the sender.
+Channels → DM access requests**. The Control UI and the CLI both support approve,
+optional requester notification, and dismiss. Dismiss removes the current request
+but does not permanently block the sender.
 
-Both CLI commands use the authenticated Gateway that owns the selected local
+The CLI commands use the authenticated Gateway that owns the selected local
 state directory, or hold exclusive offline ownership when no Gateway owns it.
 `list` participates because listing can prune expired or excess requests. The
-route requires `operator.admin` and the command's
-[owner capability](/gateway/protocol/versioning#local-state-owner-routing).
+route requires `operator.admin` and the operation's
+[owner capability](/gateway/protocol/versioning#local-state-owner-routing);
+`dismiss` uses the pair-listing capability for its code lookup and the existing
+`channels.pairing.dismiss` method for the delete.
 An older Gateway, missing credentials, a refusal, or an uncertain reply never
 triggers a direct local fallback. Update the Gateway or stop it through its
 service owner and retry offline; after an uncertain approval, inspect the
-pending requests and channel allowlist before retrying.
+pending requests and channel allowlist; after an uncertain dismissal, inspect
+the pending requests.
 
 ## Commands
 
@@ -36,11 +39,15 @@ openclaw pairing list telegram --json
 openclaw pairing approve <code>
 openclaw pairing approve telegram <code>
 openclaw pairing approve --channel telegram --account work <code> --notify
+
+openclaw pairing dismiss <code>
+openclaw pairing dismiss telegram <code>
+openclaw pairing dismiss --channel telegram --account work <code>
 ```
 
-Use `--account <accountId>` to restrict either command to one channel account.
+Use `--account <accountId>` to restrict any command to one channel account.
 If you omit `--account`, `list` shows pending requests across the channel's accounts,
-and `approve` uses the account belonging to the matching request. Explicitly empty
+and `approve`/`dismiss` use the account belonging to the matching request. Explicitly empty
 or whitespace-only values, such as `--account ""`, are rejected with
 `--account must not be blank`.
 
@@ -83,6 +90,24 @@ notification contracts; they do not run after a refused or uncertain RPC result.
 The command owner is the human operator account allowed to run owner-only commands and approve dangerous actions. Those actions include `/diagnostics`, `/export-session`, `/export-trajectory`, `/config`, and exec approvals. Pairing only lets a sender talk to the agent. It does not by itself grant owner privileges beyond this one-time bootstrap.
 
 If you approved a sender before the first-owner bootstrap shipped in 2026.4.29, run [`openclaw doctor`](/cli/doctor). It warns when no command owner is configured. It also shows the exact `openclaw config set commands.ownerAllowFrom ...` command to fix it.
+
+## `pairing dismiss`
+
+Dismiss a pending pairing code without allowing that sender. The request is
+removed and the sender can request pairing again later.
+
+Usage:
+
+- `openclaw pairing dismiss <channel> <code>`
+- `openclaw pairing dismiss --channel <channel> <code>`
+- `openclaw pairing dismiss <code>` when exactly one pairing-capable channel is configured
+
+Options: `--channel <channel>`, `--account <accountId>`.
+
+Only the named pending request is removed. An unknown or already-resolved code
+fails with `No pending pairing request found for code "<code>"` and leaves every
+other pending request untouched; run `openclaw pairing list --channel <channel>`
+to see the current codes.
 
 ## Related
 

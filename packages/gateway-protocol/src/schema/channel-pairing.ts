@@ -99,6 +99,9 @@ export const ChannelsPairingDismissParamsSchema = closedObject({
   channel: NonEmptyString,
   accountId: NonEmptyString,
   requestId: NonEmptyString,
+  // Attached by runWithLocalStateOwner for CLI-dispatched calls; the handler
+  // deletes by the opaque requestId, so this only admits the routing identity.
+  expectedOwnerId: Type.Optional(NonEmptyString),
 });
 
 export const ChannelsPairingDismissResultSchema = closedObject({

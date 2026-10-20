@@ -3729,7 +3729,6 @@
 ["src/cli/nodes-cli/rpc.transport-timeout.test.ts","../progress.js","5cedc81f8b7f64c8aa685f66168211d545781fffb5c51a2e7f5e6cdcb6b03fbb",1]
 ["src/cli/pairing-cli.test.ts","../channels/plugins/index.js","d4436df7b141266d6dd3d9d57858155d08bbb766f6942c55cc16e151f403408f",1]
 ["src/cli/pairing-cli.test.ts","../channels/plugins/pairing.js","81cc781f823c9b3bdad9ef721b267ebd1e0357fc5303c611693b44c1a757022c",1]
-["src/cli/pairing-cli.test.ts","../pairing/pairing-store.js","74754263791f6640371395ff81a8dd8923ced2be44a98f16b454b8dba14c80da",1]
 ["src/cli/pairing-cli.test.ts","./local-state-owner.js","ba5e55bd726e099e94443714a9655a96303b768fd2cb375e3a9d459f982fe999",1]
 ["src/cli/plugin-registry-loader.test.ts","../agents/sandbox/registry.js","5ffa4ff32f8ff797140ba393bd7ab67ed77d3e3250d16667af6bee54251132cb",1]
 ["src/cli/plugin-registry.test.ts","../plugins/loader.js","ccf74e8adf8ff24e8011d98b73ec10fb31adc135823e6ae37edbadccad1aeaff",1]

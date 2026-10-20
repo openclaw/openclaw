@@ -6,6 +6,7 @@ import type { Command } from "commander";
 import type {
   ChannelsPairingCliListResult,
   ChannelsPairingCodeApproveResult,
+  ChannelsPairingDismissResult,
 } from "../../packages/gateway-protocol/src/schema/channel-pairing.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
@@ -15,10 +16,17 @@ import { listPairingChannels, notifyPairingApproved } from "../channels/plugins/
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { bootstrapCommandOwnerFromPairing } from "../pairing/command-owner.js";
 import { resolvePairingIdLabel } from "../pairing/pairing-labels.js";
-import { approveChannelPairingCode, listChannelPairingRequests } from "../pairing/pairing-store.js";
+import { resolvePairingRequestAccountId } from "../pairing/pairing-store-keys.js";
+import {
+  approveChannelPairingCode,
+  dismissChannelPairingRequest,
+  listChannelPairingRequests,
+  resolveChannelPairingRequestId,
+} from "../pairing/pairing-store.js";
 import type { PairingChannel } from "../pairing/pairing-store.types.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
+import { ExpectedCliError } from "./failure-output.js";
 import { formatDocsHelp } from "./help-format.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 
@@ -58,6 +66,31 @@ function resolveAccountId(raw: unknown): string | undefined {
     throw new Error("--account must not be blank");
   }
   return accountId;
+}
+
+/** Resolve the shared `<channel> <code>` / `--channel <channel> <code>` argument forms. */
+function resolvePairingCodeTarget(params: {
+  command: "approve" | "dismiss";
+  codeOrChannel: string;
+  code?: string;
+  channelOption?: string;
+  defaultChannel: string;
+}): { channelRaw: string; code: string } {
+  const usingPositionalChannel = !params.channelOption && params.code != null;
+  const channelRaw =
+    params.channelOption || (usingPositionalChannel ? params.codeOrChannel : params.defaultChannel);
+  const resolvedCode = usingPositionalChannel ? params.code : params.codeOrChannel;
+  if (!channelRaw || !resolvedCode) {
+    throw new Error(
+      `Usage: ${formatCliCommand(`openclaw pairing ${params.command} <channel> <code>`)} (or: ${formatCliCommand(`openclaw pairing ${params.command} --channel <channel> <code>`)})`,
+    );
+  }
+  if (params.channelOption && params.code != null) {
+    throw new Error(
+      `Too many arguments. Use: ${formatCliCommand(`openclaw pairing ${params.command} --channel <channel> <code>`)}`,
+    );
+  }
+  return { channelRaw, code: String(resolvedCode) };
 }
 
 export function registerPairingCli(program: Command) {
@@ -148,23 +181,17 @@ export function registerPairingCli(program: Command) {
     .argument("[code]", "Pairing code (when channel is passed as the 1st arg)")
     .option("--notify", "Notify the requester on the same channel", false)
     .action(async (codeOrChannel, code, opts) => {
-      const defaultChannel = channels.length === 1 ? channels[0] : "";
-      const usingPositionalChannel = !opts.channel && code != null;
-      const channelRaw = opts.channel || (usingPositionalChannel ? codeOrChannel : defaultChannel);
-      const resolvedCode = usingPositionalChannel ? code : codeOrChannel;
-      if (!channelRaw || !resolvedCode) {
-        throw new Error(
-          `Usage: ${formatCliCommand("openclaw pairing approve <channel> <code>")} (or: ${formatCliCommand("openclaw pairing approve --channel <channel> <code>")})`,
-        );
-      }
-      if (opts.channel && code != null) {
-        throw new Error(
-          `Too many arguments. Use: ${formatCliCommand("openclaw pairing approve --channel <channel> <code>")}`,
-        );
-      }
-      const channel = parseChannel(channelRaw, channels);
+      const defaultChannel = channels.length === 1 ? (channels[0] ?? "") : "";
+      const target = resolvePairingCodeTarget({
+        command: "approve",
+        codeOrChannel,
+        code,
+        channelOption: opts.channel,
+        defaultChannel,
+      });
+      const channel = parseChannel(target.channelRaw, channels);
       const accountId = resolveAccountId(opts.account);
-      const params = { channel, code: String(resolvedCode), ...(accountId ? { accountId } : {}) };
+      const params = { channel, code: target.code, ...(accountId ? { accountId } : {}) };
       const approved = await runWithLocalStateOwner<ChannelsPairingCodeApproveResult>({
         method: "channels.pairing.approve",
         params,
@@ -176,7 +203,7 @@ export function registerPairingCli(program: Command) {
       });
       if (!approved) {
         throw new Error(
-          `No pending pairing request found for code "${String(resolvedCode)}". Run ${formatCliCommand(`openclaw pairing list --channel ${channel}`)} to list pending requests.`,
+          `No pending pairing request found for code "${target.code}". Run ${formatCliCommand(`openclaw pairing list --channel ${channel}`)} to list pending requests.`,
         );
       }
 
@@ -209,5 +236,70 @@ export function registerPairingCli(program: Command) {
       } catch (err) {
         defaultRuntime.log(theme.warn(`Failed to notify requester: ${String(err)}`));
       }
+    });
+
+  pairing
+    .command("dismiss")
+    .description("Dismiss a pending pairing request without allowing the sender")
+    .option("--channel <channel>", `Channel (${channelHint})`)
+    .option("--account <accountId>", "Account id (for multi-account channels)")
+    .argument("<codeOrChannel>", "Pairing code (or channel when using 2 args)")
+    .argument("[code]", "Pairing code (when channel is passed as the 1st arg)")
+    .action(async (codeOrChannel, code, opts) => {
+      const defaultChannel = channels.length === 1 ? (channels[0] ?? "") : "";
+      const target = resolvePairingCodeTarget({
+        command: "dismiss",
+        codeOrChannel,
+        code,
+        channelOption: opts.channel,
+        defaultChannel,
+      });
+      const channel = parseChannel(target.channelRaw, channels);
+      const accountId = resolveAccountId(opts.account);
+      const pairingCode = target.code.toUpperCase();
+      const noPendingRequest = () => {
+        const message = `No pending pairing request found for code "${pairingCode}". Run ${formatCliCommand(`openclaw pairing list --channel ${channel}`)} to list pending requests.`;
+        return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+      };
+      const requests = await runWithLocalStateOwner<ChannelsPairingCliListResult>({
+        method: "channels.pairing.list",
+        params: { channel, format: "cli", ...(accountId ? { accountId } : {}) },
+        target: `${channel} pairing requests`,
+        requiredCapabilities: [GATEWAY_SERVER_CAPS.CHANNELS_PAIRING_LIST_OWNER],
+        runLocal: async ({ env, assertCurrent }) =>
+          await listChannelPairingRequests(channel, env, accountId, assertCurrent),
+      });
+      const match = requests.find((request) => request.code === pairingCode);
+      if (!match) {
+        throw noPendingRequest();
+      }
+      // Dismiss by the opaque request id so the deletion names exactly the row
+      // listed above, even if its code is reused after it resolves.
+      const requestId = resolveChannelPairingRequestId(channel, match);
+      const params = {
+        channel,
+        accountId: accountId ?? resolvePairingRequestAccountId(match),
+        requestId,
+      };
+      const dismissed = await runWithLocalStateOwner<ChannelsPairingDismissResult>({
+        method: "channels.pairing.dismiss",
+        params,
+        target: `${channel} pairing request`,
+        recoveryCommand: `openclaw pairing list --channel ${channel}`,
+        runLocal: async ({ env, assertCurrent }) => {
+          // The dismiss store owner does not thread a caller guard (the Gateway
+          // RPC dismisses the same way), so revalidate custody here, right
+          // before the delete, rather than widening that owner's contract.
+          assertCurrent();
+          const result = await dismissChannelPairingRequest({ ...params, env });
+          if (!result) {
+            throw noPendingRequest();
+          }
+          return { requestId, senderId: result.entry.meta?.senderId ?? result.id };
+        },
+      });
+      defaultRuntime.log(
+        `${theme.success("Dismissed")} ${theme.muted(channel)} sender ${theme.command(dismissed.senderId)}.`,
+      );
     });
 }

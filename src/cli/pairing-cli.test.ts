@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   runWithLocalStateOwner: vi.fn<typeof runWithLocalStateOwner>(),
   listChannelPairingRequests: vi.fn(),
   approveChannelPairingCode: vi.fn(),
+  dismissChannelPairingRequest: vi.fn(),
+  resolveChannelPairingRequestId: vi.fn(() => "opaque-request-id"),
   notifyPairingApproved: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
   replaceConfigFile: vi.fn(),
@@ -23,6 +25,8 @@ const mocks = vi.hoisted(() => ({
 const {
   listChannelPairingRequests,
   approveChannelPairingCode,
+  dismissChannelPairingRequest,
+  resolveChannelPairingRequestId,
   notifyPairingApproved,
   readConfigFileSnapshotForWrite,
   replaceConfigFile,
@@ -58,9 +62,12 @@ function configSnapshot(ownerAllowFrom?: string[]) {
   };
 }
 
+// mock-isolation: CLI fixtures must not open the pairing state DB; every store call is stubbed here.
 vi.mock("../pairing/pairing-store.js", () => ({
   listChannelPairingRequests: mocks.listChannelPairingRequests,
   approveChannelPairingCode: mocks.approveChannelPairingCode,
+  dismissChannelPairingRequest: mocks.dismissChannelPairingRequest,
+  resolveChannelPairingRequestId: mocks.resolveChannelPairingRequestId,
 }));
 
 vi.mock("./local-state-owner.js", () => ({
@@ -86,6 +93,8 @@ vi.mock("../config/config.js", () => ({
   replaceConfigFile: mocks.replaceConfigFile,
 }));
 
+const assertCurrentSpy = vi.fn();
+
 afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
   vi.clearAllMocks();
@@ -94,17 +103,18 @@ beforeEach(() => {
       env: process.env,
       config: {},
       signal: new AbortController().signal,
-      assertCurrent() {},
+      assertCurrent: assertCurrentSpy,
     }),
   );
   listChannelPairingRequests.mockResolvedValue([]);
   approveChannelPairingCode.mockResolvedValue({ id: "123", entry: pairingRequest });
+  dismissChannelPairingRequest.mockResolvedValue({ id: "123", entry: pairingRequest });
   readConfigFileSnapshotForWrite.mockResolvedValue(configSnapshot());
   replaceConfigFile.mockResolvedValue(undefined);
   notifyPairingApproved.mockResolvedValue(undefined);
 });
 
-async function runPairing(command: "list" | "approve", ...args: string[]) {
+async function runPairing(command: "list" | "approve" | "dismiss", ...args: string[]) {
   const program = new Command();
   program.name("test");
   registerPairingCli(program);
@@ -248,4 +258,116 @@ it("does not bootstrap, notify, or approve locally after OUTCOME_UNKNOWN", async
   expect(approveChannelPairingCode).not.toHaveBeenCalled();
   expect(replaceConfigFile).not.toHaveBeenCalled();
   expect(notifyPairingApproved).not.toHaveBeenCalled();
+});
+
+it("lists the pending code, then dismisses the exact request id without approving", async () => {
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
+  listChannelPairingRequests.mockResolvedValueOnce([
+    { ...pairingRequest, meta: { accountId: "default", senderId: "user-alice" } },
+  ]);
+
+  await runPairing("dismiss", "telegram", "ABCDEFGH");
+
+  expect(listChannelPairingRequests).toHaveBeenCalledWith(
+    "telegram",
+    process.env,
+    undefined,
+    expect.any(Function),
+  );
+  expect(resolveChannelPairingRequestId).toHaveBeenCalledWith(
+    "telegram",
+    expect.objectContaining({ id: "123", code: "ABCDEFGH" }),
+  );
+  expect(mocks.runWithLocalStateOwner).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({
+      method: "channels.pairing.dismiss",
+      params: { channel: "telegram", accountId: "default", requestId: "opaque-request-id" },
+    }),
+  );
+  expect(dismissChannelPairingRequest).toHaveBeenCalledWith({
+    channel: "telegram",
+    accountId: "default",
+    requestId: "opaque-request-id",
+    env: process.env,
+  });
+  // Custody is revalidated here because the dismiss owner takes no caller guard.
+  expect(assertCurrentSpy).toHaveBeenCalledTimes(1);
+  expect(approveChannelPairingCode).not.toHaveBeenCalled();
+  expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+  expect(replaceConfigFile).not.toHaveBeenCalled();
+  expect(notifyPairingApproved).not.toHaveBeenCalled();
+  expect(log.mock.calls).toEqual([
+    [`${theme.success("Dismissed")} ${theme.muted("telegram")} sender ${theme.command("123")}.`],
+  ]);
+});
+
+it("reports an unknown pairing code for dismiss and leaves config untouched", async () => {
+  const error = await runPairing("dismiss", "telegram", "ZZZZZZZZ").then(
+    () => null,
+    (err: unknown) => err,
+  );
+
+  expect(error).toBeInstanceOf(Error);
+  expect((error as Error).name).toBe("ExpectedCliError");
+  expect((error as Error).message).toContain(
+    'No pending pairing request found for code "ZZZZZZZZ"',
+  );
+  expect((error as Error).message).toContain("openclaw pairing list --channel telegram");
+  expect(dismissChannelPairingRequest).not.toHaveBeenCalled();
+  expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+  expect(replaceConfigFile).not.toHaveBeenCalled();
+});
+
+it("reports a request that disappeared between list and dismiss", async () => {
+  listChannelPairingRequests.mockResolvedValueOnce([
+    { ...pairingRequest, meta: { accountId: "default" } },
+  ]);
+  dismissChannelPairingRequest.mockResolvedValueOnce(null);
+
+  await expect(runPairing("dismiss", "telegram", "ABCDEFGH")).rejects.toThrow(
+    'No pending pairing request found for code "ABCDEFGH"',
+  );
+  expect(approveChannelPairingCode).not.toHaveBeenCalled();
+});
+
+it.each([
+  {
+    name: "forwards --account",
+    args: ["--channel", "telegram", "--account", "yy", "ABCDEFGH"],
+    channel: "telegram",
+    accountId: "yy",
+  },
+  {
+    name: "defaults to the sole channel",
+    args: ["ABCDEFGH"],
+    channel: "slack",
+    accountId: "default",
+  },
+])("dismiss $name", async ({ args, channel, accountId }) => {
+  if (channel === "slack") {
+    listPairingChannels.mockReturnValueOnce([channel]);
+  }
+  listChannelPairingRequests.mockResolvedValueOnce([
+    { ...pairingRequest, meta: { accountId: "default" } },
+  ]);
+  await runPairing("dismiss", ...args);
+  expect(dismissChannelPairingRequest).toHaveBeenCalledWith({
+    channel,
+    accountId,
+    requestId: "opaque-request-id",
+    env: process.env,
+  });
+});
+
+it("keeps dismiss usage error when multiple channels exist and channel is omitted", async () => {
+  await expect(runPairing("dismiss", "ABCDEFGH")).rejects.toThrow("Usage:");
+  expect(dismissChannelPairingRequest).not.toHaveBeenCalled();
+});
+
+it("rejects too many dismiss arguments", async () => {
+  await expect(runPairing("dismiss", "--channel", "telegram", "ABCDEFGH", "EXTRA")).rejects.toThrow(
+    "Too many arguments",
+  );
+  expect(dismissChannelPairingRequest).not.toHaveBeenCalled();
 });
