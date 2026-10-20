@@ -2,10 +2,7 @@ import fs from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
-import {
-  managedHandoffBootSchema,
-  parseManagedHandoffLeasePayload,
-} from "./update-managed-service-handoff-schema.js";
+import * as schema from "./update-managed-service-handoff-schema.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -39,25 +36,20 @@ it.each([
       "(Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString('o')",
     ],
   ],
-] as const)(
-  "preserves the %s native boot query and identity",
-  async (platform, identity, command, args) => {
-    spawnSyncMock.mockReturnValue({
-      status: 0,
-      stdout: platform === "freebsd" ? bootBytes : `${identity}\n`,
-    });
-    await withMockedPlatform(platform, async () => {
-      expect(store.bootIdentity()).toEqual({ platform, identity });
-    });
-    expect(spawnSyncMock).toHaveBeenCalledExactlyOnceWith(command, args, {
-      env: serviceManagerEnv,
-      killSignal: "SIGKILL",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: platform === "win32" ? 5000 : 1000,
-      ...(platform === "freebsd" ? { maxBuffer: 16 } : { encoding: "utf8", windowsHide: true }),
-    });
-  },
-);
+] as const)("reads %s boot identity", async (platform, identity, command, args) => {
+  const stdout = platform === "freebsd" ? bootBytes : `${identity}\n`;
+  spawnSyncMock.mockReturnValue({ status: 0, stdout });
+  await withMockedPlatform(platform, async () => {
+    expect(store.bootIdentity()).toEqual({ platform, identity });
+  });
+  expect(spawnSyncMock).toHaveBeenCalledExactlyOnceWith(command, args, {
+    env: serviceManagerEnv,
+    killSignal: "SIGKILL",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: platform === "win32" ? 5000 : 1000,
+    ...(platform === "freebsd" ? { maxBuffer: 16 } : { encoding: "utf8", windowsHide: true }),
+  });
+});
 
 it.each([
   { status: 0, stdout: Buffer.alloc(15) },
@@ -92,9 +84,9 @@ it("round-trips a strict FreeBSD foreground lease token", () => {
     helper: { pid: 101, startIdentity: "201" },
     action: { kind: "triage", phase: "reserved", lifetime: { kind: "foreground", boot } },
   };
-  expect(parseManagedHandoffLeasePayload(JSON.stringify(payload))).toEqual(payload);
+  expect(schema.parseManagedHandoffLeasePayload(JSON.stringify(payload))).toEqual(payload);
   for (const identity of ["", "00", "0".repeat(33), "g".repeat(32), boot.identity.toUpperCase()]) {
-    expect(managedHandoffBootSchema.safeParse({ ...boot, identity }).success).toBe(false);
+    expect(schema.managedHandoffBootSchema.safeParse({ ...boot, identity }).success).toBe(false);
   }
-  expect(managedHandoffBootSchema.safeParse({ ...boot, extra: true }).success).toBe(false);
+  expect(schema.managedHandoffBootSchema.safeParse({ ...boot, extra: true }).success).toBe(false);
 });

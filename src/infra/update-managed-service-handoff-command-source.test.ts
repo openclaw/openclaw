@@ -4,12 +4,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MANAGED_HANDOFF_COMMAND_SOURCE } from "./update-managed-service-handoff-command-source.js";
 
 type CommandResult = { code: number; stdout: string; stderr: string };
+const output = (code = 1, stderr = ""): CommandResult => ({ code, stdout: "", stderr });
 type RunServiceCommand = (
-  command: string,
-  args: string[],
-  onSpawn?: () => void,
-  deadline?: number,
-  timeoutCap?: number,
+  ...args: [string, string[], (() => void)?, number?, number?]
 ) => Promise<CommandResult>;
 
 beforeEach(() => {
@@ -49,55 +46,33 @@ it.each([
   ["/Run", undefined, undefined, 15_000, 0],
   ["systemctl", 120_000, 120_000, 120_000],
   ["launchctl", 120_000, 120_000, 120_000],
-] as const)(
-  "bounds %s to its native drain budget",
-  async (operation, deadline, cap, elapsed, closeCode) => {
-    const helper = createHelper(closeCode);
-    const scheduled = operation.startsWith("/");
-    let result: CommandResult | undefined;
-    const completed = helper
-      .run(
-        scheduled ? "schtasks.exe" : operation,
-        scheduled ? [operation, "/TN", "Synthetic Gateway"] : ["stop", "synthetic"],
-        undefined,
-        deadline,
-        cap,
-      )
-      .then((value) => {
-        result = value;
-      });
-    if (scheduled) {
-      helper.child.stderr.emit("data", "native diagnostic");
-    } else {
-      await vi.advanceTimersByTimeAsync(15_000);
-      expect(result).toBeUndefined();
-    }
-    await vi.advanceTimersByTimeAsync(elapsed - (scheduled ? 0 : 15_000));
-    const detail = `schtasks ${operation} timed out after ${elapsed}ms`;
-    expect(result).toEqual({
-      code: scheduled ? 124 : 1,
-      stdout: "",
-      stderr: scheduled ? `${detail}\nnative diagnostic` : "",
-    });
-    if (scheduled) {
-      expect(helper.appendLog).toHaveBeenCalledWith(detail);
-    } else {
-      expect(helper.appendLog).not.toHaveBeenCalled();
-    }
-    await completed;
-  },
-);
+] as const)("bounds %s command duration", async (operation, deadline, cap, elapsed, closeCode) => {
+  const helper = createHelper(closeCode);
+  const scheduled = operation.startsWith("/");
+  const settled = vi.fn<(result: CommandResult) => void>();
+  const command = scheduled ? "schtasks.exe" : operation;
+  const args = scheduled ? [operation] : ["stop"];
+  const completed = helper.run(command, args, undefined, deadline, cap).then(settled);
+  if (scheduled) {
+    helper.child.stderr.emit("data", "native diagnostic");
+  } else {
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(settled).not.toHaveBeenCalled();
+  }
+  await vi.advanceTimersByTimeAsync(elapsed - (scheduled ? 0 : 15_000));
+  const detail = `schtasks ${operation} timed out after ${elapsed}ms`;
+  expect(settled).toHaveBeenCalledExactlyOnceWith(
+    output(scheduled ? 124 : 1, scheduled ? `${detail}\nnative diagnostic` : ""),
+  );
+  expect(helper.appendLog.mock.calls).toEqual(scheduled ? [[detail]] : []);
+  await completed;
+});
 
 it("does not dispatch a Scheduled Task command after its lease is lost", async () => {
   const helper = createHelper();
   helper.hasManagedUpdateLease.mockReturnValue(false);
 
-  await expect(helper.run("schtasks.exe", ["/Run"])).resolves.toEqual({
-    code: 1,
-    stdout: "",
-    stderr: "",
-  });
+  await expect(helper.run("schtasks.exe", ["/Run"])).resolves.toEqual(output());
 
-  expect(helper.spawn).not.toHaveBeenCalled();
-  expect(helper.appendLog).not.toHaveBeenCalled();
+  expect([helper.spawn.mock.calls, helper.appendLog.mock.calls]).toEqual([[], []]);
 });

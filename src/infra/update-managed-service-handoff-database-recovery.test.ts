@@ -8,16 +8,15 @@ import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import * as rollback from "./sqlite-rollback-recovery.js";
 import { recoverManagedUpdateLeaseJournal } from "./update-managed-service-handoff-database-recovery.js";
 import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-  type ManagedUpdateLeaseDatabaseIdentity,
+  captureManagedUpdateLeaseDatabaseIdentity as captureIdentity,
+  createManagedHandoffLeaseDatabase as createDatabase,
 } from "./update-managed-service-handoff-database.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 let databasePath: string;
 let installKey: string;
-let existingIdentity: ManagedUpdateLeaseDatabaseIdentity;
+let existingIdentity: ReturnType<typeof captureIdentity>;
 const dead = { pid: 2_147_483_647, startIdentity: "123" };
 const original = () => ({
   version: 2,
@@ -40,19 +39,14 @@ const row = () => {
 };
 function seed(payload: unknown = original(), key = installKey, recovery: string | null = null) {
   using db = new DatabaseSync(databasePath);
-  db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, 1, ?)").run(
-    key,
-    "committed-owner",
-    JSON.stringify(payload),
-    recovery,
-  );
+  const insert = db.prepare("INSERT INTO managed_update_handoffs VALUES (?, ?, ?, 1, ?)");
+  insert.run(key, "committed-owner", JSON.stringify(payload), recovery);
 }
-function crash(): void {
+const crash = () =>
   createHotSqliteRollbackJournal({
     path: databasePath,
     mutationSql: "UPDATE managed_update_handoffs SET owner='uncommitted-owner'",
   });
-}
 const bytes = () => [databasePath, `${databasePath}-journal`].map((file) => fs.readFileSync(file));
 
 beforeEach(() => {
@@ -60,8 +54,8 @@ beforeEach(() => {
   installKey = path.join(directory, "installation");
   fs.mkdirSync(installKey);
   databasePath = path.join(directory, "lease.sqlite");
-  createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
-  existingIdentity = captureManagedUpdateLeaseDatabaseIdentity(databasePath);
+  createDatabase(databasePath)(true, () => undefined);
+  existingIdentity = captureIdentity(databasePath);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -73,12 +67,9 @@ it("repairs a real cold rollback journal without deleting its committed owner, t
   await recover();
   expect(row()).toEqual(committed);
   expect(fs.existsSync(`${databasePath}-journal`)).toBe(false);
-  expect(captureManagedUpdateLeaseDatabaseIdentity(databasePath)).toEqual(existingIdentity);
+  expect(captureIdentity(databasePath)).toEqual(existingIdentity);
   const next = store().acquire(installKey, "next-owner", { kind: "update" });
-  expect(next.kind).toBe("acquired");
-  if (next.kind === "acquired") {
-    expect(store().release(next.lease)).toBe(true);
-  }
+  expect(next.kind === "acquired" && store().release(next.lease)).toBe(true);
 });
 
 it("admits an empty committed executor store after its interrupted transaction", async () => {
