@@ -3,8 +3,6 @@
 # // mock-isolation: reason annotation. Existing entries may only shrink.
 # JSON tuple: source path, specifier, factory/target SHA-256, duplicate ordinal.
 ["extensions/acpx/doctor-contract-api.test.ts","./runtime-api.js","5329539134ab3d7e4c3294ec1fc7a3a0e79a08c1b19497bbc74890b7583af70b",1]
-["extensions/acpx/index.test.ts","./register.runtime.js","e2ecf5538ba5e37b1a635514b416e03c1b1db077ec9d55e1c7b48dece9895824",1]
-["extensions/acpx/index.test.ts","openclaw/plugin-sdk/acp-runtime-backend","df14b197b7e433c9d4f43c0d68d7f51ee09daa037fce2291d2c7ca36b75571fb",1]
 ["extensions/acpx/lazy-import.test.ts","./src/pi-session-catalog-runtime.js","f5751f930c9e318c8aca1f1304941d5aa471ea3c853d99a910fcd7a0ab8528cf",1]
 ["extensions/acpx/src/service.test.ts","../runtime-api.js","91941c01a56741319974e0954147a4250f2af12038577981452270efe23fe30e",1]
 ["extensions/acpx/src/service.test.ts","./codex-auth-bridge.js","de4f723b3c26b0ecf9f064a544d19e0b270b5be2e8954939f1f3281e5fde5aa1",1]
