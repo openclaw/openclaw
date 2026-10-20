@@ -8,6 +8,7 @@ import {
 } from "../process/gateway-work-admission.js";
 
 const handleMcpAppStandaloneHttpRequest = vi.hoisted(() => vi.fn());
+// mock-isolation: suspend the standalone handler to observe Gateway admission independently.
 vi.mock("./mcp-app-standalone.js", () => ({ handleMcpAppStandaloneHttpRequest }));
 
 import { AUTH_NONE, sendRequest, withGatewayServer } from "./server-http.test-harness.js";

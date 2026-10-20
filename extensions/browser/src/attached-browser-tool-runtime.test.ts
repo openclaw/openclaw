@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   closePlaywrightBrowserConnection: vi.fn().mockResolvedValue(undefined),
 }));
 
+// mock-isolation: capture tool construction without loading the real browser execution graph.
 vi.mock("./browser-tool.js", () => ({ createBrowserTool: mocks.createBrowserTool }));
 
 vi.mock("./browser/bridge-server.js", () => ({

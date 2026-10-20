@@ -5,6 +5,7 @@ import { markBrowserRuntimeStopping } from "./browser/server-context.lifecycle.j
 type RuntimeParams = { server: Server | null; port: number; resolved: unknown };
 const stopRuntime = vi.hoisted(() => vi.fn());
 
+// mock-isolation: control shutdown settlement without starting or stopping real browser resources.
 vi.mock("./browser/runtime-lifecycle.js", () => ({
   createBrowserRuntimeState: (params: RuntimeParams) => ({ ...params, profiles: new Map() }),
   stopBrowserRuntime: stopRuntime,
