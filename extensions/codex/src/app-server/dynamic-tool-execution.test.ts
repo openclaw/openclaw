@@ -15,6 +15,7 @@ import {
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
+import { throwingResultObserver } from "./dynamic-tools.test-support.js";
 import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
 
 const dynamicCallContext = { threadId: "thread-1", turnId: "turn-1", namespace: null };
@@ -130,15 +131,8 @@ describe("dynamic tool execution helpers", () => {
 
   it("uses configured image generation timeouts for Codex dynamic tool calls", () => {
     const image = { primary: "openai/gpt-image-1", timeoutMs: 180_000 };
-    expect(
-      resolveTimeout(
-        "image_generate",
-        { prompt: "cat" },
-        {
-          agents: { defaults: { mediaModels: { image } } },
-        },
-      ),
-    ).toBe(180_000);
+    const config = { agents: { defaults: { mediaModels: { image } } } };
+    expect(resolveTimeout("image_generate", { prompt: "cat" }, config)).toBe(180_000);
     expect(viewTimeout([imageModel("vision")], { timeoutSeconds: 180 })).toBe(180_000);
     expect(
       viewTimeout([imageModel("inherited"), imageModel("short", 60)], {
@@ -148,14 +142,9 @@ describe("dynamic tool execution helpers", () => {
   });
 
   it("uses default media and message dynamic tool deadlines", () => {
+    const click = { action: "left_click", coordinate: [1, 1], timeoutMs: 1_000 };
     expect(resolveTimeout("computer", { action: "wait", duration: 100 })).toBe(220_000);
-    expect(
-      resolveTimeout("computer", {
-        action: "left_click",
-        coordinate: [1, 1],
-        timeoutMs: 1_000,
-      }),
-    ).toBe(34_000);
+    expect(resolveTimeout("computer", click)).toBe(34_000);
     expect(resolveTimeout("image_generate", { prompt: "cat" })).toBe(120_000);
     expect(resolveTimeout("view_image", imageArgs)).toBe(60_000);
     expect(resolveTimeout("message", messageArgs)).toBe(600_000);
@@ -163,17 +152,13 @@ describe("dynamic tool execution helpers", () => {
   });
 
   it("uses media image config and caps excessive dynamic tool timeouts", () => {
+    const excessive = { prompt: "cat", timeoutMs: 601_000 };
     expect(
       viewTimeout([imageModel("short", 60), imageModel("long", 180)], {
         preferredModel: "openai/long",
       }),
     ).toBe(180_000);
-    expect(
-      resolveTimeout("image_generate", {
-        prompt: "cat",
-        timeoutMs: 601_000,
-      }),
-    ).toBe(600_000);
+    expect(resolveTimeout("image_generate", excessive)).toBe(600_000);
   });
 
   it("gives agents_wait the long-running cap while preserving its inner timeout budget", () => {
@@ -357,19 +342,9 @@ describe("dynamic tool execution helpers", () => {
   });
 
   it("preserves a successful bridge result when its observer throws an unreadable error", async () => {
-    const observerError = Object.defineProperty(new Error(), "message", {
-      get() {
-        throw new Error("observer message getter escaped");
-      },
-    });
-    const onAgentToolResult = vi.fn(() => {
-      throw observerError;
-    });
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
-    warn.mockClear();
+    const { onAgentToolResult, warn } = throwingResultObserver();
     const successful = {
-      success: true,
-      contentItems: [{ type: "inputText" as const, text: "committed effect" }],
+      ...textResponse("committed effect"),
       executionStarted: true,
       sideEffectEvidence: true,
     };

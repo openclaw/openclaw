@@ -1,27 +1,13 @@
+import { setImmediate } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it } from "vitest";
 import { createFakeCodexAppServerClient } from "./codex-app-server.test-fixtures.js";
 import { CodexEphemeralTurn } from "./ephemeral-turn.js";
-import type { CodexServerNotification, CodexTurn, JsonObject } from "./protocol.js";
+import type { CodexTurn, JsonObject } from "./protocol.js";
 
 const threadId = "side-thread";
 const turn = { id: "side-turn", status: "inProgress", items: [] } satisfies CodexTurn;
-const answer = { id: "answer", type: "agentMessage", text: "Final answer." } as const;
-const waitOptions = () => ({
-  signal: new AbortController().signal,
-  abortError: () => new Error("aborted"),
-});
-const notification = (method: string, params: JsonObject): CodexServerNotification => ({
-  method,
-  params: { threadId, turnId: turn.id, ...params },
-});
-const streamedText = () =>
-  notification("item/agentMessage/delta", { itemId: "answer", delta: "Still working." });
-const completed = (items: Array<{ id: string; type: "agentMessage"; text: string }> | null) => ({
-  method: "turn/completed",
-  params: { threadId, turn: { ...turn, status: "completed", items } },
-});
-
+const answer = { id: "answer", type: "agentMessage" as const, text: "Final." };
 const collectors: CodexEphemeralTurn[] = [];
 function setup(
   options: ConstructorParameters<typeof CodexEphemeralTurn>[2] = { textMode: "last" },
@@ -29,26 +15,31 @@ function setup(
   const fixture = createFakeCodexAppServerClient();
   const collector = new CodexEphemeralTurn(fixture.client, threadId, options);
   collectors.push(collector);
-  const send = (method: string, params: JsonObject) => fixture.notify(notification(method, params));
-  return { fixture, collector, send };
+  const send = (method: string, params: JsonObject) =>
+    fixture.notify({ method, params: { threadId, turnId: turn.id, ...params } });
+  return {
+    fixture,
+    send,
+    wait: (signal = new AbortController().signal) =>
+      collector.wait(turn, { signal, abortError: () => new Error("caller aborted") }),
+    stream: () => send("item/agentMessage/delta", { itemId: "answer", delta: "Still working." }),
+    complete: (items: (typeof answer)[] | null = [answer]) =>
+      fixture.notify({
+        method: "turn/completed",
+        params: { threadId, turn: { ...turn, status: "completed", items } },
+      }),
+  };
 }
 afterEach(() => collectors.splice(0).forEach((collector) => collector.route.release()));
 
 it("rejects a disconnect after a malformed completion", async () => {
-  const { fixture, collector } = setup();
+  const { fixture, wait, complete } = setup();
   const abort = new AbortController();
-  const completion = collector
-    .wait(turn, { signal: abort.signal, abortError: () => new Error("caller aborted") })
-    .catch((error: unknown) => error);
+  const completion = wait(abort.signal).catch((error: unknown) => error);
   try {
-    await fixture.notify(completed(null));
+    await complete(null);
     fixture.close(new Error("connection lost"));
-    const outcome = await Promise.race([
-      completion,
-      new Promise((resolve) => {
-        setImmediate(resolve, "still waiting");
-      }),
-    ]);
+    const outcome = await Promise.race([completion, setImmediate("still waiting")]);
     expect(outcome).toMatchObject({ message: "codex app-server turn router closed" });
   } finally {
     abort.abort();
@@ -59,11 +50,11 @@ it("rejects a disconnect after a malformed completion", async () => {
 it("drains a validated completion through disconnect while earlier projection is pending", async () => {
   const started = createDeferred<void>();
   const releaseProjection = createDeferred<void>();
-  const { fixture, collector } = setup({
+  const { fixture, wait, stream, complete } = setup({
     textMode: "last",
-    onAssistantMessageStart: async () => {
+    onAssistantMessageStart: () => {
       started.resolve();
-      await releaseProjection.promise;
+      return releaseProjection.promise;
     },
     onNotificationReceived: (event) => {
       if (event.method === "turn/completed") {
@@ -71,32 +62,32 @@ it("drains a validated completion through disconnect while earlier projection is
       }
     },
   });
-  const completion = collector.wait(turn, waitOptions());
+  const completion = wait();
   try {
-    const delta = fixture.notify(streamedText());
+    const delta = stream();
     await started.promise;
-    const terminal = fixture.notify(completed([answer]));
+    const terminal = complete();
     releaseProjection.resolve();
     await Promise.all([delta, terminal]);
-    expect((await completion).text).toBe("Final answer.");
+    expect((await completion).text).toBe("Final.");
   } finally {
     releaseProjection.resolve();
   }
 });
 
 it("waits for a valid completion after streamed all-mode text", async () => {
-  const { fixture, collector } = setup({ textMode: "all" });
-  const completion = collector.wait(turn, waitOptions());
-  await fixture.notify(streamedText());
-  await fixture.notify(completed(null));
-  await fixture.notify(completed([answer]));
-  expect(await completion).toMatchObject({ turn: { status: "completed" }, text: "Final answer." });
+  const { wait, stream, complete } = setup({ textMode: "all" });
+  const completion = wait();
+  await stream();
+  await complete(null);
+  await complete();
+  expect(await completion).toMatchObject({ turn: { status: "completed" }, text: "Final." });
 });
 
 it.each(["last", "all"] as const)(
   "counts each completed response once with %s text aggregation",
   async (textMode) => {
-    const { fixture, collector, send } = setup({ textMode });
+    const { wait, complete, send } = setup({ textMode });
     const responses = [
       ["first-response", 8, 2, 1, 4, 3, 12],
       ["final-response", 15, 5, 2, 5, 2, 20],
@@ -115,13 +106,9 @@ it.each(["last", "all"] as const)(
         },
       });
     }
-    await fixture.notify(
-      completed([{ id: "commentary", type: "agentMessage", text: "Checking the answer." }, answer]),
-    );
-    const result = await collector.wait(turn, waitOptions());
-    expect(result.text).toBe(
-      textMode === "last" ? "Final answer." : "Checking the answer.\n\nFinal answer.",
-    );
+    await complete([{ ...answer, id: "commentary", text: "Checking." }, answer]);
+    const result = await wait();
+    expect(result.text).toBe(textMode === "last" ? "Final." : "Checking.\n\nFinal.");
     expect(result.usage).toEqual({
       input: 13,
       output: 9,
@@ -135,15 +122,9 @@ it.each(["last", "all"] as const)(
 );
 
 it("reports forked-thread usage, which arrives only as thread token updates", async () => {
-  const { fixture, collector, send } = setup();
-  const last = {
-    inputTokens: 21_000,
-    cachedInputTokens: 20_500,
-    outputTokens: 60,
-    totalTokens: 21_060,
-  };
+  const { wait, complete, send } = setup();
+  const last = { inputTokens: 21, cachedInputTokens: 20, outputTokens: 6, totalTokens: 27 };
   await send("thread/tokenUsage/updated", { tokenUsage: { last } });
-  await fixture.notify(completed([answer]));
-  const result = await collector.wait(turn, waitOptions());
-  expect(result.usage).toMatchObject({ input: 500, cacheRead: 20_500, output: 60 });
+  await complete();
+  expect((await wait()).usage).toMatchObject({ input: 1, cacheRead: 20, output: 6 });
 });
