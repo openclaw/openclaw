@@ -11,12 +11,10 @@ import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connec
 import type { WorkerInferenceStore } from "./inference-store.js";
 import { createWorkerInferenceManager, type WorkerInferenceSink } from "./inference.js";
 
-export function waitForFast<T>(
+export const waitForFast = <T>(
   callback: () => T | Promise<T>,
   options: { timeout?: number; interval?: number } = {},
-) {
-  return vi.waitFor(callback, { interval: 1, ...options });
-}
+) => vi.waitFor(callback, { interval: 1, ...options });
 
 export const REQUEST: WorkerInferenceStartParams = {
   runEpoch: 3,
@@ -27,31 +25,14 @@ export const REQUEST: WorkerInferenceStartParams = {
   context: { messages: [] },
   options: {},
 };
-const { runEpoch, sessionId, runId, turnId, modelRef } = REQUEST;
+const { runEpoch, sessionId: session, runId: run, turnId, modelRef } = REQUEST;
 export const SESSION_TARGET = {
   agentId: "main",
-  sessionId,
+  sessionId: session,
   sessionKey: "agent:main:inference",
   storePath: "inference-sessions.sqlite",
 };
-export const IDENTITY: WorkerConnectionIdentity = {
-  environmentId: "w",
-  credentialHash: "d",
-  bundleHash: "b",
-  sessionId,
-  runId,
-  turnClaim: {
-    sessionId,
-    claimId: "claim-r",
-    runId,
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: "w", ownerEpoch: runEpoch },
-  },
-  ownerEpoch: runEpoch,
-  rpcSetVersion: 1,
-  protocolFeatures: ["worker-inference-v1"],
-  credentialExpiresAtMs: 10_000,
-};
+export const IDENTITY = identityFor(REQUEST);
 export const ERROR: WorkerInferenceTerminalOutcome = {
   type: "error",
   reason: "provider-error",
@@ -66,19 +47,29 @@ export const DONE: WorkerInferenceTerminalOutcome = {
     timestamp: 1,
   }),
 };
-export const CANCEL = { runEpoch, sessionId, runId, turnId };
+export const CANCEL = { runEpoch, sessionId: session, runId: run, turnId };
 
-export function identityFor(request: WorkerInferenceStartParams): WorkerConnectionIdentity {
+export function identityFor({
+  sessionId,
+  runId,
+}: WorkerInferenceStartParams): WorkerConnectionIdentity {
   return {
-    ...IDENTITY,
-    sessionId: request.sessionId,
-    runId: request.runId,
+    environmentId: "w",
+    credentialHash: "d",
+    bundleHash: "b",
+    sessionId,
+    runId,
     turnClaim: {
-      ...IDENTITY.turnClaim!,
-      sessionId: request.sessionId,
-      runId: request.runId,
-      claimId: `claim-${request.runId}`,
+      sessionId,
+      runId,
+      claimId: `claim-${runId}`,
+      placementGeneration: 4,
+      owner: { kind: "worker", environmentId: "w", ownerEpoch: runEpoch },
     },
+    ownerEpoch: runEpoch,
+    rpcSetVersion: 1,
+    protocolFeatures: ["worker-inference-v1"],
+    credentialExpiresAtMs: 10_000,
   };
 }
 
@@ -90,14 +81,12 @@ type StartOverrides = {
   revalidate?: () => "epoch-mismatch" | null;
 };
 
-export function createMemoryStore(): WorkerInferenceStore {
-  return {
-    begin: async () => ({ kind: "claimed" }),
-    complete: async (input) => input.outcome,
-    async cancelPending() {},
-    async recoverPending() {},
-  };
-}
+export const createMemoryStore = (): WorkerInferenceStore => ({
+  begin: async () => ({ kind: "claimed" }),
+  complete: async (input) => input.outcome,
+  async cancelPending() {},
+  async recoverPending() {},
+});
 
 export function createSink(connectionId = "c") {
   const frames: Parameters<WorkerInferenceSink["send"]>[0][] = [];
@@ -114,11 +103,10 @@ export function createSink(connectionId = "c") {
   return { frames, sink, terminal: terminal.promise };
 }
 
-export function terminalFrames(frames: Parameters<WorkerInferenceSink["send"]>[0][]) {
-  return frames.filter(
+export const terminalFrames = (frames: Parameters<WorkerInferenceSink["send"]>[0][]) =>
+  frames.filter(
     (frame): frame is WorkerInferenceTerminalFrame => frame.event === "worker.inference.terminal",
   );
-}
 
 export async function accept(manager: Manager, overrides: StartOverrides = {}, launch = true) {
   const result = await manager.start({
@@ -137,6 +125,5 @@ export async function accept(manager: Manager, overrides: StartOverrides = {}, l
   return result;
 }
 
-export function makeManager(execute: WorkerInferenceExecutor, store = createMemoryStore()) {
-  return createWorkerInferenceManager({ execute, store });
-}
+export const makeManager = (execute: WorkerInferenceExecutor, store = createMemoryStore()) =>
+  createWorkerInferenceManager({ execute, store });
