@@ -15,9 +15,9 @@ import {
 import * as reindexLock from "./manager-reindex-lock.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 
-const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
+const memoryIndex = await import("./index.js");
 const embeddings = await import("./embeddings.js");
-const fixture = createManagerIndexFixture({ getMemorySearchManager, closeAllMemorySearchManagers });
+const fixture = createManagerIndexFixture(memoryIndex);
 
 it("does not write stale-provider chunks after a queued legacy upgrade loses its publication", async () => {
   const oldModel = "original-embedding";
@@ -39,20 +39,16 @@ it("does not write stale-provider chunks after a queued legacy upgrade loses its
           }
         : result;
     });
-  const oldConfig = fixture.createConfig({
-    provider: "openai",
-    fallback: "none",
-    model: oldModel,
-    vectorEnabled: false,
-    cacheEnabled: true,
-  });
-  const replacementConfig = fixture.createConfig({
-    provider: "openai",
-    fallback: "none",
-    model: "replacement-embedding",
-    vectorEnabled: false,
-    cacheEnabled: true,
-  });
+  const config = (model: string) =>
+    fixture.createConfig({
+      provider: "openai",
+      fallback: "none",
+      model,
+      vectorEnabled: false,
+      cacheEnabled: true,
+    });
+  const oldConfig = config(oldModel);
+  const replacementConfig = config("replacement-embedding");
   const replacementEntered = createDeferred<void>();
   const releaseReplacement = createDeferred<void>();
   const staleWaiting = createDeferred<void>();
@@ -68,7 +64,7 @@ it("does not write stale-provider chunks after a queued legacy upgrade loses its
       throw new Error("fixture memory database is unavailable");
     }
     await seeded.close();
-    await closeAllMemorySearchManagers();
+    await memoryIndex.closeAllMemorySearchManagers();
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     const seed = new DatabaseSync(dbPath);
