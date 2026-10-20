@@ -33,14 +33,7 @@ describe("legacy context-budget config migration", () => {
           model: "default",
           allowCacheLookup: false,
         }),
-      ).toBe(
-        resolveContextTokensForModelFromCache({
-          provider: "example",
-          model: "default",
-          modelContextTokens: 32_000,
-          allowCacheLookup: false,
-        }),
-      );
+      ).toBe(32_000);
       expect(provider?.models).toMatchObject([
         { contextTokens: 32_000, contextWindow: 64_000 },
         { contextTokens: 8_000, contextWindow: 16_000 },
