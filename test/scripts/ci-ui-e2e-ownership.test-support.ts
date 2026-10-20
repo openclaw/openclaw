@@ -19,7 +19,6 @@ import {
 } from "../vitest/vitest.ui-e2e.config.ts";
 import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
 
-/** Verify private-server discovery, serial ownership, and exact E2E selection. */
 export function assertControlUiE2eOwnership(
   makeTempDirectory: (prefix: string) => string,
   parser: NativeTypeScriptParser,
@@ -42,38 +41,39 @@ export function assertControlUiE2eOwnership(
     .split("\n")
     .filter(Boolean)
     .toSorted();
-  const helperPrivateServerFiles = trackedUiE2eFiles.filter((file) => {
-    const sourceFile = parser.parseSourceFile(file, readFileSync(file, "utf8"));
-    let ownsPrivateServer = false;
-    const visit = (node: ts.Node, inSuiteServer = false) => {
-      if (ownsPrivateServer) {
-        return;
-      }
+  const privateServerFiles = trackedUiE2eFiles.filter((file) => {
+    const source = readFileSync(file, "utf8");
+    const visit = (node: ts.Node, inSuiteServer = false): boolean => {
       if (ts.isCallExpression(node)) {
         const callName = ts.isIdentifier(node.expression)
           ? node.expression.text
           : ts.isPropertyAccessExpression(node.expression)
             ? node.expression.name.text
             : undefined;
-        if (callName === "createGatewayHttpServer") {
-          ownsPrivateServer = true;
-          return;
-        }
         // A Gateway or Vite proxy acquired by the suite owns its UI server;
         // a separate backend in a test can still use the shared UI bundle.
+        const buildInfo = node.arguments[1];
         if (
-          inSuiteServer &&
-          (callName === "createOpenClawTestInstance" ||
-            callName === "createBackgroundWorkInstance" ||
-            callName === "createDesktopResizeProxy" ||
-            callName === "createWaitClockInstance" ||
-            callName === "startBuiltControlUiE2eServer" ||
-            callName === "startProductionControlUiE2eServer" ||
-            callName === "startProviderBrowserLoginFixture" ||
-            callName === "createServer")
+          callName === "createGatewayHttpServer" ||
+          (inSuiteServer &&
+            [
+              "createOpenClawTestInstance",
+              "createBackgroundWorkInstance",
+              "createDesktopResizeProxy",
+              "createWaitClockInstance",
+              "startBuiltControlUiE2eServer",
+              "startProductionControlUiE2eServer",
+              "startProviderBrowserLoginFixture",
+              "createServer",
+            ].includes(callName ?? "")) ||
+          callName === "createQuotaResetFixture" ||
+          (callName === "createSessionManagementE2eSuite" &&
+            node.arguments[0]?.kind === ts.SyntaxKind.TrueKeyword) ||
+          (callName === "createSidebarFooterProofSuite" &&
+            buildInfo !== undefined &&
+            !(ts.isIdentifier(buildInfo) && buildInfo.text === "undefined"))
         ) {
-          ownsPrivateServer = true;
-          return;
+          return true;
         }
         const options = node.arguments[0];
         if (
@@ -85,49 +85,29 @@ export function assertControlUiE2eOwnership(
             if (
               (ts.isMethodDeclaration(property) || ts.isPropertyAssignment(property)) &&
               (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
-              property.name.text === "startServer"
+              property.name.text === "startServer" &&
+              visit(property, true)
             ) {
-              visit(property, true);
+              return true;
             }
           }
         }
-        if (
-          callName === "createQuotaResetFixture" ||
-          (callName === "createSessionManagementE2eSuite" &&
-            node.arguments[0]?.kind === ts.SyntaxKind.TrueKeyword)
-        ) {
-          ownsPrivateServer = true;
-          return;
-        }
-        const buildInfo = node.arguments[1];
-        if (
-          callName === "createSidebarFooterProofSuite" &&
-          buildInfo &&
-          !(ts.isIdentifier(buildInfo) && buildInfo.text === "undefined")
-        ) {
-          ownsPrivateServer = true;
-          return;
-        }
       }
-      node.forEachChild((child) => visit(child, inSuiteServer));
+      return node.forEachChild((child) => visit(child, inSuiteServer)) ?? false;
     };
-    visit(sourceFile);
-    return ownsPrivateServer;
+    return (
+      /\bsource:\s*true\b/u.test(source) ||
+      /\bstartControlUiE2eServer\(\s*\{/u.test(source) ||
+      visit(parser.parseSourceFile(file, source))
+    );
   });
-  const directPrivateServerFiles = trackedUiE2eFiles.filter((file) => {
-    const source = readFileSync(file, "utf8");
-    return /\bsource:\s*true\b/u.test(source) || /\bstartControlUiE2eServer\(\s*\{/u.test(source);
-  });
-  const privateServerFiles = [
-    ...new Set([...directPrivateServerFiles, ...helperPrivateServerFiles]),
-  ].toSorted();
 
   expect(privateServerFiles).toEqual(uiE2ePrivateServerTestFiles);
   expect(uiE2eRealGatewayTestFiles.every((file) => uiE2eSerialTestFiles.includes(file))).toBe(true);
   expect(uiE2eSerialTestFiles).toContain(uiE2eRuntimeBudgetTestFile);
 
   const config = createUiE2eVitestConfig({}, []);
-  const projects = config.test?.projects as Array<{
+  type Project = {
     cacheDir: string;
     test: {
       exclude: string[];
@@ -138,24 +118,21 @@ export function assertControlUiE2eOwnership(
       name: string;
       sequence: { groupOrder: number };
     };
-  }>;
+  };
+  const projectsOf = (value: typeof config) => value.test?.projects as Project[];
+  const projects = projectsOf(config);
   const selectedFiles = (test: { exclude: string[]; include: string[] }) =>
     globSync(test.include, { cwd: process.cwd(), exclude: test.exclude }).toSorted();
+  const select = (value: typeof config) => projectsOf(value).map(({ test }) => selectedFiles(test));
   const rootTest = config.test as { exclude: string[]; include: string[] };
   expect(config.test?.globalSetup).toEqual([]);
-  expect(projects.map((project) => project.test.name)).toEqual([
-    "ui-e2e-bundled",
-    "ui-e2e-standalone",
-    "ui-e2e-serial",
-    "ui-e2e-serial-standalone",
-  ]);
   const chromiumSetup = "test/vitest/vitest.ui-e2e.global-setup.ts";
   const bundledSetup = "test/vitest/vitest.ui-e2e.bundled.global-setup.ts";
-  expect(projects.map((project) => project.test.globalSetup)).toEqual([
-    [chromiumSetup, bundledSetup],
-    [chromiumSetup],
-    [chromiumSetup, bundledSetup],
-    [chromiumSetup],
+  expect(projects.map(({ test }) => [test.name, test.globalSetup])).toEqual([
+    ["ui-e2e-bundled", [chromiumSetup, bundledSetup]],
+    ["ui-e2e-standalone", [chromiumSetup]],
+    ["ui-e2e-serial", [chromiumSetup, bundledSetup]],
+    ["ui-e2e-serial-standalone", [chromiumSetup]],
   ]);
   expect(new Set(projects.map((project) => project.cacheDir)).size).toBe(projects.length);
   expect(config.test?.maxWorkers).toBe(Math.min(2, sharedVitestConfig.test.maxWorkers));
@@ -187,7 +164,7 @@ export function assertControlUiE2eOwnership(
     expect(selection.flat().toSorted()).toEqual(files);
     expect(new Set(selection.flat()).size).toBe(files.length);
   };
-  const localSelected = projects.map((project) => selectedFiles(project.test));
+  const localSelected = select(config);
   expect(selectedFiles(rootTest)).toEqual(trackedUiE2eFiles);
   assertPartition(localSelected, trackedUiE2eFiles);
   expect(localSelected.slice(2).flat().toSorted()).toEqual(uiE2eSerialTestFiles);
@@ -203,8 +180,7 @@ export function assertControlUiE2eOwnership(
   expect(localSelected[3]).toContain("ui/src/e2e/memory-overview-source.e2e.test.ts");
 
   const ordinaryConfig = createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []);
-  const ordinaryProjects = ordinaryConfig.test?.projects as typeof projects;
-  const ordinarySelected = ordinaryProjects.map((project) => selectedFiles(project.test));
+  const ordinarySelected = select(ordinaryConfig);
   expect(selectedFiles(ordinaryConfig.test as typeof rootTest)).toEqual(ordinary);
   assertPartition(ordinarySelected, ordinary);
 
@@ -212,24 +188,20 @@ export function assertControlUiE2eOwnership(
   const packagedWorkboard = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";
   expect(ordinarySelected.flat()).not.toContain(packagedWorkboard);
   const prebuilt = createPrebuiltUiE2eVitestConfig({}, ["node", "vitest", packagedWorkboard]);
-  const prebuiltProjects = prebuilt.test?.projects as typeof projects;
   expect(
-    prebuiltProjects
+    projectsOf(prebuilt)
       .map((project) => ({ name: project.test.name, files: selectedFiles(project.test) }))
       .filter((project) => project.files.length > 0),
   ).toEqual([{ name: "ui-e2e-serial-standalone", files: [packagedWorkboard] }]);
-  const packagedGroups = createUiTestShardGroups({ uiE2eFiles: [packagedWorkboard] });
   expect(
-    createUiRealGatewayTestShards(packagedGroups.e2e)
+    createUiRealGatewayTestShards(createUiTestShardGroups({ uiE2eFiles: [packagedWorkboard] }).e2e)
       .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
       .filter((file) => file === packagedWorkboard),
   ).toEqual([packagedWorkboard]);
 
   const bundledFile = expectDefined(ordinarySelected[0]?.[0], "bundled Control UI E2E file");
   const serialFile = expectDefined(ordinarySelected[3]?.[0], "serial Control UI E2E file");
-  const narrowedByArgv = createUiE2eVitestConfig({}, ["node", "vitest", serialFile]);
-  const argvProjects = narrowedByArgv.test?.projects as typeof projects;
-  expect(argvProjects.map((project) => selectedFiles(project.test))).toEqual([
+  expect(select(createUiE2eVitestConfig({}, ["node", "vitest", serialFile]))).toEqual([
     [],
     [],
     [],
@@ -239,33 +211,20 @@ export function assertControlUiE2eOwnership(
   const includeDir = makeTempDirectory("openclaw-ui-e2e-project-includes-");
   const includeFile = path.join(includeDir, "include.json");
   writeFileSync(includeFile, JSON.stringify([bundledFile, serialFile]));
-  const narrowedByFile = createUiE2eVitestConfig(
-    { OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1", OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
-    [],
-  );
-  const includeProjects = narrowedByFile.test?.projects as typeof projects;
-  expect(includeProjects.map((project) => selectedFiles(project.test))).toEqual([
-    [bundledFile],
-    [],
-    [],
-    [serialFile],
-  ]);
+  const includeEnv = {
+    OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
+    OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
+  };
+  const selectIncludeFile = () => select(createUiE2eVitestConfig(includeEnv, []));
+  expect(selectIncludeFile()).toEqual([[bundledFile], [], [], [serialFile]]);
 
   writeFileSync(includeFile, JSON.stringify(["ui/src/e2e/*.e2e.test.ts"]));
-  const narrowedByGlob = createUiE2eVitestConfig(
-    { OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1", OPENCLAW_VITEST_INCLUDE_FILE: includeFile },
-    [],
-  );
-  const globProjects = narrowedByGlob.test?.projects as typeof projects;
+  const globSelected = selectIncludeFile().flat();
   const expectedGlobFiles = ordinary.filter((file) =>
     path.matchesGlob(file, "ui/src/e2e/*.e2e.test.ts"),
   );
-  expect(globProjects.flatMap((project) => selectedFiles(project.test)).toSorted()).toEqual(
-    expectedGlobFiles,
-  );
-  expect(new Set(globProjects.flatMap((project) => selectedFiles(project.test))).size).toBe(
-    expectedGlobFiles.length,
-  );
+  expect(globSelected.toSorted()).toEqual(expectedGlobFiles);
+  expect(new Set(globSelected).size).toBe(expectedGlobFiles.length);
 }
 
 // Historical fallback for frozen targets predating prebuilt E2E config.
