@@ -15,7 +15,7 @@ import {
 } from "../../../test-helpers/native-gateways.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as diffSyntax from "./chat-diff-highlight.runtime.ts";
-import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./chat-sidebar-content-types.ts";
+import type { SessionDiffProps } from "./chat-sidebar-content-types.ts";
 import { SessionDiffPanel } from "./session-diff-panel.tsx";
 
 function mountPanel() {
@@ -408,7 +408,7 @@ describe("SessionDiffPanel", () => {
   it("shows loading instead of the old files while a changed scope is pending", async () => {
     const pending = deferred<SessionsDiffResult>();
     const loader = vi
-      .fn<SessionDiffLoader>()
+      .fn<NonNullable<SessionDiffProps["loader"]>>()
       .mockResolvedValueOnce(fileResult(SNAPSHOT_PATCH))
       .mockReturnValueOnce(pending.promise);
     const { panel, update } = mountPanel();
@@ -690,11 +690,11 @@ describe("SessionDiffPanel", () => {
 
   it("refreshes the diff instead of expanding file text from a stale gap snapshot", async () => {
     const loader = vi
-      .fn<SessionDiffLoader>()
+      .fn<NonNullable<SessionDiffProps["loader"]>>()
       .mockResolvedValueOnce(fileResult(SNAPSHOT_PATCH))
       .mockResolvedValueOnce(fileResult(FRESH_PATCH));
     const loadFileText = vi
-      .fn<SessionDiffFileTextLoader>()
+      .fn<NonNullable<SessionDiffProps["loadFileText"]>>()
       .mockResolvedValue(["expanded current file line", "context", "snapshot line"].join("\n"));
     const { panel, update } = mountPanel();
     update({ loader });
@@ -781,7 +781,7 @@ describe("manual code folding", () => {
     const { panel, update } = mountPanel();
     update({
       loader: vi
-        .fn<SessionDiffLoader>()
+        .fn<NonNullable<SessionDiffProps["loader"]>>()
         .mockResolvedValueOnce(current)
         .mockImplementationOnce(() => refreshed.promise),
     });

@@ -86,9 +86,9 @@ export type SessionDiffScope =
   | { scope: "all" | "uncommitted" }
   | { scope: "commit"; commit: string };
 
-export type SessionDiffLoader = (params: SessionDiffScope) => Promise<SessionsDiffResult>;
+type SessionDiffLoader = (params: SessionDiffScope) => Promise<SessionsDiffResult>;
 
-export type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
+type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
 
 export type SessionDiffOwner = { agentId: string; sessionKey: string };
 
