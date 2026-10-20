@@ -24,11 +24,11 @@ it("publishes durable metadata without host SQLite and preserves it after its wo
 
     const publications: SessionTranscriptAuthority[] = [];
     const unsubscribe = sessionChanges.subscribeFacts((change) => {
-      if (!("sessionKey" in change) || change.sessionKey !== target.sessionKey) {
-        return;
-      }
-      const fact = readPreparedSessionTranscriptChange(change);
-      if (fact?.kind === "postimage") {
+      const fact =
+        "sessionKey" in change &&
+        change.sessionKey === target.sessionKey &&
+        readPreparedSessionTranscriptChange(change);
+      if (fact && fact.kind === "postimage") {
         publications.push(fact.value);
       }
     });
@@ -58,7 +58,10 @@ it("publishes durable metadata without host SQLite and preserves it after its wo
         sessionId: target.sessionId,
         leafEventId: thinking,
       });
-      const custom = await manager.appendCustomEntryAsync("synthetic-metadata", { retained: true });
+      const metadata = { customType: "synthetic-metadata", data: { retained: true } };
+      const custom = await manager.appendCustomEntryAsync(metadata.customType, {
+        ...metadata.data,
+      });
       expect(publications.at(-1)?.leafEventId).toBe(custom);
       expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
       expect(hostSql.flatMap((probe) => probe.mock.calls)).toEqual([]);
@@ -72,24 +75,17 @@ it("publishes durable metadata without host SQLite and preserves it after its wo
       // Terminate the native owner without checkpoint/close, preserving the committed WAL.
       await worker.terminate();
       const reopened = await open();
-      const expected = [
-        ...initial,
-        { id: custom, type: "custom", customType: "synthetic-metadata", data: { retained: true } },
-      ];
+      const expected = [...initial, { id: custom, type: "custom", ...metadata }];
       expect(reopened.getEntries()).toMatchObject(expected);
-      const recovered = await reopened.appendCustomEntryAsync("synthetic-recovery", {
-        afterCrash: true,
+      const recovery = { customType: "synthetic-recovery", data: { afterCrash: true } };
+      const recovered = await reopened.appendCustomEntryAsync(recovery.customType, {
+        ...recovery.data,
       });
       expect(publications.at(-1)?.leafEventId).toBe(recovered);
       await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
       expect((await open()).getEntries()).toMatchObject([
         ...expected,
-        {
-          id: recovered,
-          type: "custom",
-          customType: "synthetic-recovery",
-          data: { afterCrash: true },
-        },
+        { id: recovered, type: "custom", ...recovery },
       ]);
     } finally {
       unsubscribe();

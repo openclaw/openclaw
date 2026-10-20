@@ -41,7 +41,10 @@ function createScope(sessionId: string) {
   const scope = sessionScope(path.join(dir, "openclaw-agent.sqlite"), sessionId);
   const persist = (eventId: string, message: unknown) =>
     appendTranscriptMessage(scope, { cwd: dir, eventId, message });
-  return { dir, scope, persist };
+  const open = (limits?: Parameters<typeof SessionManager.open>[2]) =>
+    SessionManager.open(scope, dir, limits);
+  const read = () => loadTranscriptEvents(scope);
+  return { dir, scope, persist, open, read };
 }
 
 function header(id: string, cwd: string, version = CURRENT_SESSION_VERSION) {
@@ -54,16 +57,10 @@ function row(type: string, id: string, parent: string | null, fields: Record<str
 
 describe("SessionManager persistence compatibility", () => {
   it("persists canonical delivery facts and keeps the live assistant bytes identical", async () => {
-    const { dir, scope } = createScope("directive-session");
-    const manager = SessionManager.open(scope, dir);
+    const { open, read } = createScope("directive-session");
+    const manager = open();
     const tagged = buildAssistantMessage(
-      [
-        "[[reply_to_current]]",
-        "[[reply_to:message-7]]",
-        "[[audio_as_voice]]",
-        "[[tts:provider=mock voiceId=voice-7]]",
-        "Final answer [[tts:text]]Spoken answer[[/tts:text]]",
-      ].join("\n"),
+      "[[reply_to_current]]\n[[reply_to:message-7]]\n[[audio_as_voice]]\n[[tts:provider=mock voiceId=voice-7]]\nFinal answer [[tts:text]]Spoken answer[[/tts:text]]",
     );
     const cases: Array<[string, string?]> = [
       [
@@ -98,15 +95,15 @@ describe("SessionManager persistence compatibility", () => {
         return message;
       }),
     ];
-    const persisted = (await loadTranscriptEvents(scope)).flatMap((event) =>
+    const persisted = (await read()).flatMap((event) =>
       isRecord(event) && event.type === "message" ? [event.message] : [],
     );
     expect(persisted).toEqual(messages);
-    expect(SessionManager.open(scope, dir).buildSessionContext().messages).toEqual(messages);
+    expect(open().buildSessionContext().messages).toEqual(messages);
   });
 
   it("removes an active tail followed by a later inactive raw row", async () => {
-    const { dir, scope } = createScope("later-inactive-row-session");
+    const { dir, scope, open, read } = createScope("later-inactive-row-session");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     expect(
       replaceTranscriptEventsSync(scope, [
@@ -125,10 +122,10 @@ describe("SessionManager persistence compatibility", () => {
       path: path.join(dir, "openclaw-agent.sqlite"),
     });
 
-    const manager = SessionManager.open(scope, dir);
+    const manager = open();
     expect(manager.removeTrailingEntries((entry) => entry.id === "active")).toBe(1);
 
-    const events = await loadTranscriptEvents(scope);
+    const events = await read();
     expect(events).not.toContainEqual(expect.objectContaining({ id: "active" }));
     expect(events).toContainEqual(
       expect.objectContaining({ id: "inactive", parentId: "root", appendMode: "side" }),
@@ -136,12 +133,12 @@ describe("SessionManager persistence compatibility", () => {
   });
 
   it("retains the append transaction fence when another write starts after commit", async () => {
-    const { dir, scope, persist } = createScope("sqlite-append-fence-session");
+    const { scope, persist, open, read } = createScope("sqlite-append-fence-session");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     await persist("base", { role: "user", content: "question" });
-    const manager = SessionManager.open(scope, dir);
+    const manager = open();
     const temporaryId = manager.appendMessage(buildAssistantMessage("temporary"));
-    const afterAppend = await loadTranscriptEvents(scope);
+    const afterAppend = await read();
     const base = afterAppend[1];
     assert(base && typeof base === "object", "Expected persisted base transcript event");
     expect(
@@ -155,7 +152,7 @@ describe("SessionManager persistence compatibility", () => {
     expect(() => manager.removeTrailingEntries((entry) => entry.id === temporaryId)).toThrow(
       "SQLite transcript changed while preparing suffix removal",
     );
-    expect(await loadTranscriptEvents(scope)).toMatchObject([
+    expect(await read()).toMatchObject([
       { type: "session" },
       { id: "base", message: { role: "user", content: "rewritten question" } },
       { id: temporaryId },
@@ -163,21 +160,22 @@ describe("SessionManager persistence compatibility", () => {
   });
 
   it("keeps the bounded tree unchanged after a rejected tail rewrite", async () => {
-    const { dir, scope } = createScope("tail-rewrite");
+    const { scope, open } = createScope("tail-rewrite");
     await upsertSessionEntryCore(scope, {
       sessionId: scope.sessionId,
       updatedAt: 1,
       activeWriterRunId: "original-writer",
       lifecycleRevision: "original-lifecycle",
     });
-    const seed = SessionManager.open(scope, dir);
+    const seed = open();
     const earlierId = seed.appendMessage(makeUserMessage("earlier history", 1));
     const questionId = seed.appendMessage(makeUserMessage("question", 2));
     const temporaryId = seed.appendMessage(buildAssistantMessage("temporary error"));
     const metadataId = seed.appendCustomEntry("preserved-state", { retained: true });
     const labelId = seed.appendLabelChange(temporaryId, "temporary label");
     const originalEvents = loadTranscriptEventsSync(scope);
-    const manager = SessionManager.open(scope, dir, { maxEvents: 3, maxBytes: 4096 });
+    const limits = { maxEvents: 3, maxBytes: 4096 };
+    const manager = open(limits);
     const database = openOpenClawAgentDatabase({
       agentId: scope.agentId,
       path: resolveSessionTranscriptDatabasePath(scope),
@@ -216,7 +214,7 @@ describe("SessionManager persistence compatibility", () => {
     expect(manager.getEntry(temporaryId)).toBeUndefined();
     expect(manager.getLabel(temporaryId)).toBeUndefined();
     // The next reader must work immediately, without waiting for a projection rebuild.
-    const reopened = SessionManager.open(scope, dir, { maxEvents: 3, maxBytes: 4096 });
+    const reopened = open(limits);
     const expectedRetained = structuredClone(
       originalEvents.filter(
         (event) => !isRecord(event) || (event.id !== temporaryId && event.id !== labelId),
@@ -234,19 +232,16 @@ describe("SessionManager persistence compatibility", () => {
     expect(control).toMatchObject({ parentId: metadataId, targetId: questionId });
     expect(control?.appendParentId ?? control?.targetId).toBe(questionId);
     expect(durable.filter((event) => !parseOpaqueLeafEntry(event))).toEqual(expectedRetained);
-    const full = SessionManager.open(scope, dir);
+    const full = open();
     expect(full.getBranch().map((entry) => entry.id)).toEqual([earlierId, questionId]);
     expect(reopened.getBranch()).toEqual(full.getBranch());
     expect(reopened.buildSessionContext()).toEqual(full.buildSessionContext());
     // The bounded public view normalizes an omitted parent; storage must retain its real ID.
-    expect(manager.getEntries()).toEqual(
-      expectedRetained.flatMap((event) =>
-        isRecord(event) && event.id === metadataId ? [{ ...event, parentId: null }] : [],
-      ),
-    );
-    expect(
-      manager.getPersistedEntries().filter((event) => isRecord(event) && event.id === metadataId),
-    ).toEqual(expectedRetained.filter((event) => isRecord(event) && event.id === metadataId));
+    const isMetadata = (event: unknown): event is Record<string, unknown> =>
+      isRecord(event) && event.id === metadataId;
+    const metadata = expectedRetained.filter(isMetadata);
+    expect(manager.getEntries()).toEqual(metadata.map((event) => ({ ...event, parentId: null })));
+    expect(manager.getPersistedEntries().filter(isMetadata)).toEqual(metadata);
     expect(manager.getLeafId()).toBe(questionId);
     expect(manager.getAppendParentId()).toBe(questionId);
   });

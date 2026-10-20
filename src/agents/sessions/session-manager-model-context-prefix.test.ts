@@ -33,9 +33,7 @@ it("keeps complete history prefixes across appends and restarts the window after
     const read = () => SessionManager.openModelContext(scope, { limits }).buildSessionContext();
     let previous = read().messages;
     expect(previous.length).toBeLessThan(90);
-    let consecutive = 1;
-    let longest = 1;
-    let steps = 0;
+    const streak = { length: 1, longest: 1, steps: 0 };
     for (let index = 30; index < 40; index++) {
       await appendTranscriptMessages(scope, { messages: turn(index) });
       // Each read creates a fresh detached manager: no process-local cutoff can supply stability.
@@ -51,15 +49,15 @@ it("keeps complete history prefixes across appends and restarts the window after
       }
       if (JSON.stringify(current[0]) === JSON.stringify(previous[0])) {
         expect(current.slice(0, previous.length)).toEqual(previous);
-        longest = Math.max(longest, ++consecutive);
+        streak.longest = Math.max(streak.longest, ++streak.length);
       } else {
-        steps++;
-        consecutive = 1;
+        streak.steps++;
+        streak.length = 1;
       }
       previous = current;
     }
-    expect(longest).toBeGreaterThanOrEqual(3);
-    expect(steps).toBeGreaterThan(0);
+    expect(streak.longest).toBeGreaterThanOrEqual(3);
+    expect(streak.steps).toBeGreaterThan(0);
 
     const source = SessionManager.open(scope);
     source.appendCompaction("Earlier turns summarized", "turn-39-user", 100);

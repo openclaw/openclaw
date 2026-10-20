@@ -55,13 +55,11 @@ async function anthropicPayload(context: { messages: AgentMessage[] }) {
   );
   const model = makeProviderModelFixture<"anthropic-messages">({
     id: "claude-sonnet-4-6",
-    name: "Claude Sonnet 4.6",
     provider: "anthropic",
     api: "anthropic-messages",
     baseUrl: "https://api.anthropic.com",
     reasoning: true,
     contextWindow: 200_000,
-    maxTokens: 4096,
   });
   let capturedPayload: unknown;
   const stream = streamAnthropic(model, { messages } satisfies Context, {
@@ -75,35 +73,28 @@ async function anthropicPayload(context: { messages: AgentMessage[] }) {
   return capturedPayload as Payload;
 }
 
-async function toolResultPayload(context: { messages: AgentMessage[] }) {
-  return (await anthropicPayload(context)).messages
-    .flatMap((message) => message.content)
-    .find((block) => block.type === "tool_result")?.content;
-}
-
-it.each(["assistant", "toolResult"] as const)(
-  "replays string %s JSONL as Anthropic text",
-  async (role) => {
-    const context = replayContext(role, "replay text");
-    expect(context.messages.find((message) => message.role === role)?.content).toEqual(
-      text("replay text"),
-    );
-    if (role === "toolResult") {
-      expect(await toolResultPayload(context)).toBe("replay text");
-    } else {
-      const payload = await anthropicPayload(context);
-      expect(payload.messages.find((message) => message.role === role)?.content).toEqual(
-        text("replay text"),
-      );
-    }
+const structuredResult = { output: "status card text" };
+it.each([
+  [
+    "assistant",
+    "assistant replay text",
+    text("assistant replay text"),
+    text("assistant replay text"),
+  ],
+  ["toolResult", "lookup result text", text("lookup result text"), "lookup result text"],
+  ["toolResult", structuredResult, [structuredResult], expect.stringContaining("status card text")],
+] as const)(
+  "replays %s JSONL content %j through Anthropic",
+  async (role, input, normalized, expected) => {
+    const context = replayContext(role, input);
+    expect(context.messages.find((message) => message.role === role)?.content).toEqual(normalized);
+    const payload = await anthropicPayload(context);
+    const wire =
+      role === "assistant"
+        ? payload.messages.find((message) => message.role === role)?.content
+        : payload.messages
+            .flatMap((message) => message.content)
+            .find((block) => block.type === "tool_result")?.content;
+    expect(typeof input === "string" ? wire : String(wire)).toEqual(expected);
   },
 );
-
-it("replays object tool-result JSONL content as structured Anthropic tool text", async () => {
-  const content = { output: "status card text" };
-  const context = replayContext("toolResult", content);
-  const toolResult = context.messages.find((message) => message.role === "toolResult");
-  expect(toolResult?.content).toEqual([content]);
-
-  expect(String(await toolResultPayload(context))).toContain("status card text");
-});
