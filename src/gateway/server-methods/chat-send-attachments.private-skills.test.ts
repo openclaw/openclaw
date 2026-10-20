@@ -7,21 +7,14 @@ import {
   prepareAttachmentFixture,
 } from "./chat-send-attachments.test-support.js";
 
-const mocks = vi.hoisted(() => ({
-  ensureSandboxWorkspaceForSession: vi.fn(),
-  stageSandboxMedia: vi.fn(),
-  resolveReusableWorkspaceSkillSnapshot: vi.fn(),
+const { sandbox, media, skills } = vi.hoisted(() => ({
+  sandbox: { ensureSandboxWorkspaceForSession: vi.fn() },
+  media: { SANDBOX_MEDIA_MAX_BYTES: 20 * 1024 * 1024, stageSandboxMedia: vi.fn() },
+  skills: { resolveReusableWorkspaceSkillSnapshot: vi.fn() },
 }));
-vi.mock("../../agents/sandbox/context.js", () => ({
-  ensureSandboxWorkspaceForSession: mocks.ensureSandboxWorkspaceForSession,
-}));
-vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => ({
-  SANDBOX_MEDIA_MAX_BYTES: 20 * 1024 * 1024,
-  stageSandboxMedia: mocks.stageSandboxMedia,
-}));
-vi.mock("../../skills/runtime/session-snapshot.js", () => ({
-  resolveReusableWorkspaceSkillSnapshot: mocks.resolveReusableWorkspaceSkillSnapshot,
-}));
+vi.mock("../../agents/sandbox/context.js", () => sandbox);
+vi.mock("../../auto-reply/reply/stage-sandbox-media.js", () => media);
+vi.mock("../../skills/runtime/session-snapshot.js", () => skills);
 
 it.each(["existing", "admitted new"] as const)(
   "uses %s session's private skill identity for both pre-ACK staging calls",
@@ -35,11 +28,11 @@ it.each(["existing", "admitted new"] as const)(
         ownerProfileId: "private-profile",
       };
       const snapshot = { prompt: "", skills: [], librarySelections: [selection] };
-      mocks.resolveReusableWorkspaceSkillSnapshot.mockReset().mockResolvedValue({ snapshot });
-      mocks.ensureSandboxWorkspaceForSession.mockReset().mockResolvedValue({
+      skills.resolveReusableWorkspaceSkillSnapshot.mockReset().mockResolvedValue({ snapshot });
+      sandbox.ensureSandboxWorkspaceForSession.mockReset().mockResolvedValue({
         workspaceDir: state.path("isolated-runtime"),
       });
-      mocks.stageSandboxMedia.mockReset().mockImplementation(async ({ ctx }) => {
+      media.stageSandboxMedia.mockReset().mockImplementation(async ({ ctx }) => {
         ctx.media[0].path = "media/inbound/private.txt";
         return { staged: new Map([[0, "media/inbound/private.txt"]]) };
       });
@@ -71,13 +64,13 @@ it.each(["existing", "admitted new"] as const)(
         context: {},
       });
       assert(result.ok, "private skill attachment preparation failed");
-      expect(mocks.resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+      expect(skills.resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
         expect.objectContaining({
           librarySelections: [selection],
           workspaceDir: state.workspaceDir,
         }),
       );
-      for (const stage of [mocks.ensureSandboxWorkspaceForSession, mocks.stageSandboxMedia]) {
+      for (const stage of [sandbox.ensureSandboxWorkspaceForSession, media.stageSandboxMedia]) {
         expect(stage).toHaveBeenCalledWith(
           expect.objectContaining({ skillsSnapshot: snapshot, workspaceDir }),
         );
