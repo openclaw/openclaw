@@ -462,6 +462,7 @@ export async function monitorIrcProvider(
           },
         },
       });
+      return undefined;
     },
   });
 
