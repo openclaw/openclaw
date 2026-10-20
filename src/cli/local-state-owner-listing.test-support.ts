@@ -21,28 +21,54 @@ type ListingOwnerFixture = {
   owner: GatewayLockHandle | null;
 };
 
-const missingListingRecord = (fixture: ListingOwnerFixture, id: string): ManagedWorktreeRecord => ({
-  id,
-  name: id,
-  repoRoot: fixture.repo,
-  repoFingerprint: "0123456789abcdef",
-  path: path.join(fixture.root, id),
-  branch: `openclaw/${id}`,
-  baseRef: "HEAD",
-  ownerKind: "manual",
-  createdAt: 1,
-  lastActiveAt: 1,
-});
+async function seedRecord(fixture: ListingOwnerFixture, id: string) {
+  const record: ManagedWorktreeRecord = {
+    id,
+    name: id,
+    repoRoot: fixture.repo,
+    repoFingerprint: "0123456789abcdef",
+    path: path.join(fixture.root, id),
+    branch: `openclaw/${id}`,
+    baseRef: "HEAD",
+    ownerKind: "manual",
+    createdAt: 1,
+    lastActiveAt: 1,
+  };
+  await insertRegistryWorktree(fixture.env, record, { provisionedPaths: [] });
+  return record;
+}
+
+async function changeOwner(fixture: ListingOwnerFixture, mode: "offline" | "embedded" | "gateway") {
+  await closeOpenClawStateDatabaseAsync();
+  await fixture.owner?.release();
+  fixture.owner =
+    mode === "offline"
+      ? null
+      : await acquireGatewayLock({
+          env: fixture.env,
+          ...(mode === "embedded" ? { role: "agent-embedded" as const } : { port: fixture.port }),
+          allowInTests: true,
+          timeoutMs: 0,
+        });
+}
+const readRecord = async (fixture: ListingOwnerFixture, id: string) =>
+  (await fixture.service.listRegistryRecords()).find((row) => row.id === id);
+const readObservation = async (fixture: ListingOwnerFixture) =>
+  JSON.parse(await fs.readFile(path.join(fixture.root, "control", "sql-observation.json"), "utf8"));
 
 export function registerWorktreeListingOwnerTests(
   getFixture: () => ListingOwnerFixture,
   entrypoint: readonly string[],
 ) {
+  const list = (env: NodeJS.ProcessEnv) =>
+    runCliProcessChild({
+      nodeArgs: [...entrypoint, "worktrees", "list", "--json"],
+      env,
+    });
   it("list: reports retirement candidates without mutating a foreign owner's registry", async () => {
     const fixture = getFixture();
-    const { root, env, service, methods } = fixture;
-    const record = missingListingRecord(fixture, "list-foreign-custody");
-    await insertRegistryWorktree(env, record, { provisionedPaths: [] });
+    const { env, methods } = fixture;
+    const record = await seedRecord(fixture, "list-foreign-custody");
     const held = createDeferred();
     const release = createDeferred();
     const holder = withWorktreeMutationLease({ env, id: record.id }, async () => {
@@ -55,23 +81,15 @@ export function registerWorktreeListingOwnerTests(
     });
     const before = methods.length;
     try {
-      const result = await runCliProcessChild({
-        nodeArgs: [...entrypoint, "worktrees", "list", "--json"],
-        env,
-      });
+      const result = await list(env);
       expect(result.code, result.stderr).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({
         worktrees: expect.arrayContaining([record]),
         retirementCandidates: [record.id],
       });
       expect(methods.slice(before)).toEqual([]);
-      expect((await service.listRegistryRecords()).find((row) => row.id === record.id)).toEqual(
-        record,
-      );
-      expect(
-        JSON.parse(await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"))
-          .worktreeSql,
-      ).toBe(0);
+      expect(await readRecord(fixture, record.id)).toEqual(record);
+      expect((await readObservation(fixture)).worktreeSql).toBe(0);
     } finally {
       release.resolve();
       await holder;
@@ -82,16 +100,8 @@ export function registerWorktreeListingOwnerTests(
   it("list: rereads an absent checkout after offline mutation custody", async () => {
     const fixture = getFixture();
     const { env, service } = fixture;
-    const record = missingListingRecord(fixture, "list-live-custody");
-    await insertRegistryWorktree(env, record, { provisionedPaths: [] });
-    await closeOpenClawStateDatabaseAsync();
-    await fixture.owner?.release();
-    fixture.owner = await acquireGatewayLock({
-      env,
-      role: "agent-embedded",
-      allowInTests: true,
-      timeoutMs: 0,
-    });
+    const record = await seedRecord(fixture, "list-live-custody");
+    await changeOwner(fixture, "embedded");
     const held = createDeferred();
     const release = createDeferred();
     const waiting = createDeferred();
@@ -115,68 +125,42 @@ export function registerWorktreeListingOwnerTests(
         "Listing settled without respecting worktree mutation custody",
       );
       fixture.owner!.assertCurrent();
-      expect((await service.listRegistryRecords()).find((row) => row.id === record.id)).toEqual(
-        record,
-      );
+      expect(await readRecord(fixture, record.id)).toEqual(record);
       await fs.mkdir(record.path);
       release.resolve();
       await holder;
       resume.resolve();
       expect(await listing).toContainEqual(record);
-      expect((await service.listRegistryRecords()).find((row) => row.id === record.id)).toEqual(
-        record,
-      );
+      expect(await readRecord(fixture, record.id)).toEqual(record);
     } finally {
       release.resolve();
       resume.resolve();
       await holder;
       await listing;
       sleep.mockRestore();
-      await closeOpenClawStateDatabaseAsync();
-      await fixture.owner?.release();
-      fixture.owner = await acquireGatewayLock({
-        env,
-        port: fixture.port,
-        allowInTests: true,
-        timeoutMs: 0,
-      });
+      await changeOwner(fixture, "gateway");
     }
   });
 
   it("list: retires an absent checkout under offline ownership", async () => {
     const fixture = getFixture();
-    const { root, env, service, methods } = fixture;
-    const record = missingListingRecord(fixture, "list-offline-custody");
-    await insertRegistryWorktree(env, record, { provisionedPaths: [] });
-    await closeOpenClawStateDatabaseAsync();
-    await fixture.owner?.release();
-    fixture.owner = null;
+    const { env, methods } = fixture;
+    const record = await seedRecord(fixture, "list-offline-custody");
+    await changeOwner(fixture, "offline");
     const before = methods.length;
     try {
-      const result = await runCliProcessChild({
-        nodeArgs: [...entrypoint, "worktrees", "list", "--json"],
-        env,
-      });
+      const result = await list(env);
       expect(result.code, result.stderr).toBe(0);
       expect(methods.slice(before)).toEqual([]);
       expect(JSON.parse(result.stdout).worktrees).not.toContainEqual(
         expect.objectContaining({ id: record.id }),
       );
-      const observation = JSON.parse(
-        await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
-      );
+      const observation = await readObservation(fixture);
       expect(observation.missingCustody).toBe(0);
       expect(observation.ownerPids.every((pid: number) => pid === observation.pid)).toBe(true);
     } finally {
-      fixture.owner = await acquireGatewayLock({
-        env,
-        port: fixture.port,
-        allowInTests: true,
-        timeoutMs: 0,
-      });
+      await changeOwner(fixture, "gateway");
     }
-    expect(
-      (await service.listRegistryRecords()).find((row) => row.id === record.id)?.removedAt,
-    ).toEqual(expect.any(Number));
+    expect((await readRecord(fixture, record.id))?.removedAt).toEqual(expect.any(Number));
   });
 }

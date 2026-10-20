@@ -14,6 +14,9 @@ vi.mock("./progress.js", () => ({
 }));
 const { callGatewayFromCliRuntime: call, isImplicitLocalGatewayTargetFromCliRuntime: classify } =
   await import("./gateway-rpc.runtime.js");
+const auth = { token: "test-gateway-token", password: "test-gateway-password" };
+const expectCall = (fields: Record<string, unknown>) =>
+  expect(callGatewayMock).toHaveBeenCalledWith(expect.objectContaining(fields));
 
 beforeEach(() => {
   callGatewayMock.mockClear().mockResolvedValue({ ok: true });
@@ -24,14 +27,11 @@ afterEach(() => vi.unstubAllEnvs());
 
 describe("Gateway CLI transport", () => {
   it.each([
-    {
-      target: ["--url", "wss://gateway.example/ws"],
-      expected: { url: "wss://gateway.example/ws" },
-    },
-    { target: ["--port", "19083"], expected: { localPortOverride: 19083 } },
-  ])(
-    "parses and forwards explicit authentication and target $target",
-    async ({ target, expected }) => {
+    ["url", "wss://gateway.example/ws", { url: "wss://gateway.example/ws" }],
+    ["port", "19083", { localPortOverride: 19083 }],
+  ] as const)(
+    "parses and forwards explicit authentication and target --%s",
+    async (option, value, expected) => {
       const program = new Command().exitOverride();
       const action = vi.fn(async (opts: GatewayRpcOpts) => {
         await call("cron.status", opts);
@@ -40,27 +40,21 @@ describe("Gateway CLI transport", () => {
       await program.parseAsync(
         [
           "gateway-command",
-          ...target,
+          `--${option}`,
+          value,
           "--token",
-          "test-gateway-token",
+          auth.token,
           "--password",
-          "test-gateway-password",
+          auth.password,
         ],
         { from: "user" },
       );
       expect(action).toHaveBeenCalledOnce();
       expect(action.mock.calls[0]?.[0]).toMatchObject({
-        [target[0]!.slice(2)]: target[1],
-        token: "test-gateway-token",
-        password: "test-gateway-password",
+        [option]: value,
+        ...auth,
       });
-      expect(callGatewayMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ...expected,
-          token: "test-gateway-token",
-          password: "test-gateway-password",
-        }),
-      );
+      expectCall({ ...expected, ...auth });
     },
   );
 
@@ -72,9 +66,7 @@ describe("Gateway CLI transport", () => {
     "resolves timeout $timeout with default $defaultTimeoutMs",
     async ({ timeout, defaultTimeoutMs, expected }) => {
       await call("cron.status", { timeout }, undefined, { defaultTimeoutMs });
-      expect(callGatewayMock).toHaveBeenCalledWith(
-        expect.objectContaining({ method: "cron.status", timeoutMs: expected }),
-      );
+      expectCall({ method: "cron.status", timeoutMs: expected });
     },
   );
 
@@ -91,7 +83,7 @@ describe("Gateway CLI transport", () => {
       signal: controller.signal,
     } satisfies NonNullable<Parameters<typeof call>[3]>;
     await call("node.list", target, {}, extra);
-    expect(callGatewayMock).toHaveBeenCalledWith(expect.objectContaining({ ...target, ...extra }));
+    expectCall({ ...target, ...extra });
   });
 
   it.each([

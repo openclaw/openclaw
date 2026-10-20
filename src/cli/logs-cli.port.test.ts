@@ -98,90 +98,65 @@ async function withLogsGateway(
 }
 
 async function runLogs(argv: string[]) {
-  await runRegisteredCli({ register: registerLogsCli, argv: ["logs", ...argv] });
+  await runRegisteredCli({
+    register: registerLogsCli,
+    argv: ["logs", ...argv, "--json", "--timeout", "1500"],
+  });
 }
+const explicitTarget = (port: string) => [
+  "--url",
+  `ws://127.0.0.1:${port}`,
+  "--token",
+  "fixture-token",
+];
 
 describe("logs local port selection", () => {
-  it.each(["config"] as const)(
-    "tails the selected local port instead of validating the %s default URL",
-    async (source) => {
-      await withLogsGateway({ source }, async ({ port, requests, stdout }) => {
-        await runLogs(["--port", port, "--json", "--timeout", "1500"]);
-        expect(requests).toEqual(["connect", "logs.tail"]);
-        expect(stdout.join("")).toContain("selected local log");
-      });
-    },
-  );
-
-  it.each(["--max-bytes"])(
-    "rejects an explicitly empty numeric %s before contacting Gateway",
-    async (flag) => {
-      await withLogsGateway({}, async ({ port, requests }) => {
-        await expect(
-          runLogs(["--port", port, flag, "", "--json", "--timeout", "1500"]),
-        ).rejects.toThrow(`${flag} must be a positive integer.`);
-        expect(requests).toEqual([]);
-      });
-    },
-  );
-
-  it.each([{ failure: "timeout" as const, error: /timeout|timed out/ }])(
-    "uses the failure reason as the JSON summary after a post-hello $failure",
-    async ({ failure, error }) => {
-      await withLogsGateway({ failure }, async ({ port, requests, stdout, stderr }) => {
-        await expect(
-          runLogs([
-            "--url",
-            `ws://127.0.0.1:${port}`,
-            "--token",
-            "fixture-token",
-            "--json",
-            "--timeout",
-            "1500",
-          ]),
-        ).rejects.toBeInstanceOf(ExitError);
-        expect(requests).toEqual(["connect", "logs.tail"]);
-        expect(stdout.join("")).toBe("");
-        expect(JSON.parse(stderr.join(""))).toMatchObject({
-          type: "error",
-          message: expect.stringMatching(error),
-          error: expect.stringMatching(error),
-          details: { url: `ws://127.0.0.1:${port}` },
-        });
-      });
-    },
-  );
-
-  it.each(["malformed"] as const)("honors an explicit URL with unusable %s", async (source) => {
-    await withLogsGateway({ source }, async ({ port, requests, stdout, stderr }) => {
-      await runLogs([
-        "--url",
-        `ws://127.0.0.1:${port}`,
-        "--token",
-        "fixture-token",
-        "--json",
-        "--timeout",
-        "1500",
-      ]);
+  it("tails the selected local port instead of validating the config default URL", async () => {
+    await withLogsGateway({ source: "config" }, async ({ port, requests, stdout }) => {
+      await runLogs(["--port", port]);
       expect(requests).toEqual(["connect", "logs.tail"]);
       expect(stdout.join("")).toContain("selected local log");
-      if (source === "malformed") {
-        expect(stderr.join("")).toContain("openclaw doctor --fix");
-      }
     });
   });
 
-  it.each(["config"] as const)(
-    "still rejects an unsafe %s target without an override",
-    async (source) => {
-      await withLogsGateway({ source }, async ({ requests }) => {
-        await expect(runLogs(["--json"])).rejects.toThrow(
-          "uses plaintext ws:// to a non-loopback address",
-        );
-        expect(requests).toEqual([]);
+  it("rejects explicitly empty --max-bytes before contacting Gateway", async () => {
+    await withLogsGateway({}, async ({ port, requests }) => {
+      await expect(runLogs(["--port", port, "--max-bytes", ""])).rejects.toThrow(
+        "--max-bytes must be a positive integer.",
+      );
+      expect(requests).toEqual([]);
+    });
+  });
+
+  it("uses the failure reason as the JSON summary after a post-hello timeout", async () => {
+    await withLogsGateway({ failure: "timeout" }, async ({ port, requests, stdout, stderr }) => {
+      await expect(runLogs(explicitTarget(port))).rejects.toBeInstanceOf(ExitError);
+      expect(requests).toEqual(["connect", "logs.tail"]);
+      expect(stdout.join("")).toBe("");
+      expect(JSON.parse(stderr.join(""))).toMatchObject({
+        type: "error",
+        message: expect.stringMatching(/timeout|timed out/),
+        error: expect.stringMatching(/timeout|timed out/),
+        details: { url: `ws://127.0.0.1:${port}` },
       });
-    },
-  );
+    });
+  });
+
+  it("honors an explicit URL with malformed config", async () => {
+    await withLogsGateway({ source: "malformed" }, async ({ port, requests, stdout, stderr }) => {
+      await runLogs(explicitTarget(port));
+      expect(requests).toEqual(["connect", "logs.tail"]);
+      expect(stdout.join("")).toContain("selected local log");
+      expect(stderr.join("")).toContain("openclaw doctor --fix");
+    });
+  });
+
+  it("still rejects an unsafe config target without an override", async () => {
+    await withLogsGateway({ source: "config" }, async ({ requests }) => {
+      await expect(runLogs([])).rejects.toThrow("uses plaintext ws:// to a non-loopback address");
+      expect(requests).toEqual([]);
+    });
+  });
 
   it.each([
     { args: ["--port", "65536"], message: "--port must be an integer between 1 and 65535." },

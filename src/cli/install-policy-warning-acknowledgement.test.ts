@@ -7,54 +7,53 @@ vi.mock("./prompt.js", () => ({
   promptText: promptTextMock,
 }));
 
-const ORIGINAL_STDIN_TTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
-const ORIGINAL_STDOUT_TTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+const streams = [process.stdin, process.stdout];
+const originalTtys = streams.map((stream) => Object.getOwnPropertyDescriptor(stream, "isTTY"));
+const warning = (targetName = "demo") => ({
+  targetName,
+  targetType: "plugin" as const,
+  requestMode: "install" as const,
+  reason: "Policy warning",
+});
 
 function setTty(value: boolean): void {
-  Object.defineProperty(process.stdin, "isTTY", { value, configurable: true });
-  Object.defineProperty(process.stdout, "isTTY", { value, configurable: true });
-}
-
-function restoreTty(): void {
-  if (ORIGINAL_STDIN_TTY) {
-    Object.defineProperty(process.stdin, "isTTY", ORIGINAL_STDIN_TTY);
-  } else {
-    Reflect.deleteProperty(process.stdin, "isTTY");
-  }
-  if (ORIGINAL_STDOUT_TTY) {
-    Object.defineProperty(process.stdout, "isTTY", ORIGINAL_STDOUT_TTY);
-  } else {
-    Reflect.deleteProperty(process.stdout, "isTTY");
+  for (const stream of streams) {
+    Object.defineProperty(stream, "isTTY", { value, configurable: true });
   }
 }
 
 describe("resolveInstallPolicyWarningAcknowledgementCliOptions", () => {
   afterEach(() => {
     promptTextMock.mockReset();
-    restoreTty();
+    streams.forEach((stream, index) => {
+      const descriptor = originalTtys[index];
+      if (descriptor) {
+        Object.defineProperty(stream, "isTTY", descriptor);
+      } else {
+        Reflect.deleteProperty(stream, "isTTY");
+      }
+    });
   });
 
-  it.each([
-    { requestMode: "install", action: "install" },
-    { requestMode: "update", action: "update" },
-  ] as const)("uses the ClawHub suspicious-warning copy for $requestMode", async (fixture) => {
-    setTty(true);
-    promptTextMock.mockResolvedValueOnce("demo\\npkg");
+  it.each(["install", "update"] as const)(
+    "uses the ClawHub suspicious-warning copy for %s",
+    async (requestMode) => {
+      setTty(true);
+      promptTextMock.mockResolvedValueOnce("demo\\npkg");
 
-    const options = resolveInstallPolicyWarningAcknowledgementCliOptions({});
-    await expect(
-      options.onInstallPolicyWarning?.({
-        targetName: "demo\npkg",
-        targetType: "plugin",
-        requestMode: fixture.requestMode,
-        reason: "Policy warning",
-      }),
-    ).resolves.toEqual({ status: "approved" });
+      const options = resolveInstallPolicyWarningAcknowledgementCliOptions({});
+      await expect(
+        options.onInstallPolicyWarning?.({
+          ...warning("demo\npkg"),
+          requestMode,
+        }),
+      ).resolves.toEqual({ status: "approved" });
 
-    expect(promptTextMock).toHaveBeenCalledWith(
-      `type: 'demo\\npkg' to ${fixture.action} anyway\n> `,
-    );
-  });
+      expect(promptTextMock).toHaveBeenCalledWith(
+        `type: 'demo\\npkg' to ${requestMode} anyway\n> `,
+      );
+    },
+  );
 
   it("requires the exact target name", async () => {
     setTty(true);
@@ -63,12 +62,7 @@ describe("resolveInstallPolicyWarningAcknowledgementCliOptions", () => {
     const options = resolveInstallPolicyWarningAcknowledgementCliOptions({});
 
     await expect(
-      options.onInstallPolicyWarning?.({
-        targetName: "demo",
-        targetType: "skill",
-        requestMode: "install",
-        reason: "Policy warning",
-      }),
+      options.onInstallPolicyWarning?.({ ...warning(), targetType: "skill" }),
     ).resolves.toEqual({ status: "declined" });
   });
 
@@ -91,19 +85,12 @@ describe("resolveInstallPolicyWarningAcknowledgementCliOptions", () => {
       acknowledgeInstallPolicyWarning: true,
     });
 
+    await expect(options.onInstallPolicyWarning?.(warning())).resolves.toEqual({
+      status: "approved",
+    });
     await expect(
       options.onInstallPolicyWarning?.({
-        targetName: "demo",
-        targetType: "plugin",
-        requestMode: "install",
-        reason: "Policy warning",
-      }),
-    ).resolves.toEqual({ status: "approved" });
-    await expect(
-      options.onInstallPolicyWarning?.({
-        targetName: "demo-dependency",
-        targetType: "plugin",
-        requestMode: "install",
+        ...warning("demo-dependency"),
         reason: "Dependency policy warning",
       }),
     ).resolves.toEqual({ status: "approved" });

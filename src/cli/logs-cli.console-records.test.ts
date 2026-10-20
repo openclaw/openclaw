@@ -94,8 +94,6 @@ describe("logs CLI with real JSON console records", () => {
         const original = await fs.readFile(logFile, "utf8");
         const text = await run(cliSource, ["logs", "--plain", "--utc", "--timeout", "100"]);
         const json = await run(cliSource, ["logs", "--json", "--timeout", "100"]);
-        console.info("Real logs CLI text:\n" + text.stdout.replaceAll(home, "<fixture-home>"));
-        console.info("Real logs CLI JSON:\n" + json.stdout.replaceAll(home, "<fixture-home>"));
         expect(text.stdout).toContain("info canonical metadata control");
         expect(text.stdout).toContain("warn gateway console warning");
         expect(text.stdout).toContain("error worker console error");
@@ -107,29 +105,18 @@ describe("logs CLI with real JSON console records", () => {
           sourceKind: "file",
           localFallback: true,
         });
-        expect(records.filter((record) => record.type === "log")).toEqual([
-          expect.objectContaining({
-            level: "warn",
-            subsystem: "gateway",
-            message: "console warning",
-          }),
-          expect.objectContaining({
-            level: "error",
-            subsystem: "worker",
-            message: "console error",
-          }),
-          expect.objectContaining({
-            level: "info",
-            subsystem: "canonical",
-            message: "metadata control",
-          }),
-        ]);
+        expect(records.filter((record) => record.type === "log")).toEqual(
+          [
+            ["warn", "gateway", "console warning"],
+            ["error", "worker", "console error"],
+            ["info", "canonical", "metadata control"],
+          ].map(([level, subsystem, message]) =>
+            expect.objectContaining({ level, subsystem, message }),
+          ),
+        );
         expect(await fs.readFile(logFile, "utf8")).toBe(original);
-        await expect(
-          fs.access(path.join(stateDir, "state", "openclaw.sqlite")),
-        ).rejects.toMatchObject({
-          code: "ENOENT",
-        });
+        const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+        await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         await new Promise<void>((resolve, reject) => {
           unavailable.close((error) => (error ? reject(error) : resolve()));
