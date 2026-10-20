@@ -38,10 +38,7 @@ describe("runEmbeddedAttemptPromptPhase runtime-only persistence", () => {
     const { submitEmbeddedAttemptPrompt } = await vi.importActual<
       typeof import("./attempt-prompt-submit.js")
     >("./attempt-prompt-submit.js");
-    mocks.preparePromptContext.mockImplementation(
-      async (...args: Parameters<typeof prepareEmbeddedAttemptPromptContext>) =>
-        await prepareEmbeddedAttemptPromptContext(...args),
-    );
+    mocks.preparePromptContext.mockImplementation(prepareEmbeddedAttemptPromptContext);
     const assembly = mocks.preparePromptAssembly.getMockImplementation()!;
     mocks.preparePromptAssembly.mockImplementation(async (...args: Parameters<typeof assembly>) => {
       const [assemblyInput] = args;

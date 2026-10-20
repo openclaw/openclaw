@@ -36,6 +36,8 @@ import type { SubagentRunRecord } from "../../subagents/registry/subagent-regist
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+type PromptAssemblyInput = Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0];
+
 vi.mock("../../../plugins/host-hook-state.js", () => ({
   drainPluginNextTurnInjectionContext: vi.fn(async () => ({ queuedInjections: [] })),
 }));
@@ -75,12 +77,8 @@ async function assembleWithCapturedHookCtx(
   attemptOverrides?: Partial<EmbeddedRunAttemptParams>,
   promptPolicy: {
     hookResult?: PluginHookBeforePromptBuildResult;
-    applyPromptBuildToolsAllow?: Parameters<
-      typeof prepareEmbeddedAttemptPromptAssembly
-    >[0]["applyPromptBuildToolsAllow"];
-    prepareSystemPrompt?: Parameters<
-      typeof prepareEmbeddedAttemptPromptAssembly
-    >[0]["prepareSystemPrompt"];
+    applyPromptBuildToolsAllow?: PromptAssemblyInput["applyPromptBuildToolsAllow"];
+    prepareSystemPrompt?: PromptAssemblyInput["prepareSystemPrompt"];
     requiresToolAuthority?: true;
   } = {},
 ) {
@@ -141,8 +139,7 @@ async function assembleWithCapturedHookCtx(
       },
     ],
   });
-  const setLeasedSteering =
-    vi.fn<Parameters<typeof prepareEmbeddedAttemptPromptAssembly>[0]["setLeasedSteering"]>();
+  const setLeasedSteering = vi.fn<PromptAssemblyInput["setLeasedSteering"]>();
   const setSystemPrompt = vi.fn<(prompt: string) => void>();
   const priorMessages = structuredClone(session.messages);
   const prompt = await prepareEmbeddedAttemptPromptAssembly({
@@ -264,9 +261,7 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
       childSessionKey: `agent:main:subagent:steering-${index}`,
       childSessionIdentity: { sessionId: `child-session-${index}` },
       requesterSessionKey,
-      requesterDisplayKey: "main",
       task: "Return the complete findings",
-      cleanup: "keep",
       createdAt: 1_000 + index,
       expectsCompletionMessage: true,
       execution: {

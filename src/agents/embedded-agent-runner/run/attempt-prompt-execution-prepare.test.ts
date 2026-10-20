@@ -19,9 +19,9 @@ vi.mock("./images.js", () => ({
   detectAndLoadPromptImages: hoisted.detectAndLoadPromptImages,
 }));
 
-import { prepareEmbeddedAttemptPromptExecution } from "./prompt-image-preparation.js";
+import { prepareEmbeddedAttemptPromptExecution as prepare } from "./prompt-image-preparation.js";
 
-type PromptExecutionInput = Parameters<typeof prepareEmbeddedAttemptPromptExecution>[0];
+type PromptExecutionInput = Parameters<typeof prepare>[0];
 
 function createInput(overrides: Partial<PromptExecutionInput> = {}): PromptExecutionInput {
   return {
@@ -30,14 +30,7 @@ function createInput(overrides: Partial<PromptExecutionInput> = {}): PromptExecu
       config: { agents: { defaults: { imageMaxDimensionPx: 2048 } } },
       imageOrder: ["inline"],
       images: [{ type: "image", data: "data", mimeType: "image/png" }],
-      model: {
-        api: "google-generative-ai",
-        id: "model-1",
-        input: ["text", "image"],
-        provider: "provider-1",
-      },
-      sessionFile: "/tmp/session.jsonl",
-      sessionKey: "agent:main:session-1",
+      model: { input: ["text", "image"] },
     },
     effectiveFsWorkspaceOnly: true,
     effectiveWorkspace: "/tmp/workspace",
@@ -67,13 +60,9 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
   });
 
   it("returns an isolated empty image result when prompt submission is already skipped", async () => {
-    const first = await prepareEmbeddedAttemptPromptExecution(
-      createInput({ skipPromptSubmission: true }),
-    );
+    const first = await prepare(createInput({ skipPromptSubmission: true }));
     first.images.push({ type: "image", data: "mutated", mimeType: "image/png" });
-    const second = await prepareEmbeddedAttemptPromptExecution(
-      createInput({ skipPromptSubmission: true }),
-    );
+    const second = await prepare(createInput({ skipPromptSubmission: true }));
 
     expect(second).toEqual({
       images: [],
@@ -89,7 +78,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
   it("loads prompt images with the prepared workspace policy", async () => {
     const input = createInput();
 
-    const result = await prepareEmbeddedAttemptPromptExecution(input);
+    const result = await prepare(input);
 
     expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith({
       prompt: "inspect image.png",
@@ -119,7 +108,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
   it("omits sandbox constraints when no sandbox bridge is active", async () => {
     const input = createInput({ sandbox: null });
 
-    await prepareEmbeddedAttemptPromptExecution(input);
+    await prepare(input);
 
     expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
       expect.objectContaining({ sandbox: undefined }),
@@ -139,7 +128,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
       skippedCount: 1,
     });
 
-    const result = await prepareEmbeddedAttemptPromptExecution(input);
+    const result = await prepare(input);
 
     expect(result.failedMediaCount).toBe(1);
     expect(input.attempt.media).toBe(media);
@@ -156,7 +145,7 @@ describe("prepareEmbeddedAttemptPromptExecution", () => {
       attempt: { ...base.attempt, media, userTurnTranscriptRecorder: recorder },
     });
 
-    await prepareEmbeddedAttemptPromptExecution(input);
+    await prepare(input);
 
     expect(hoisted.detectAndLoadPromptImages).toHaveBeenCalledWith(
       expect.objectContaining({ media, userTurnTranscriptRecorder: recorder }),
