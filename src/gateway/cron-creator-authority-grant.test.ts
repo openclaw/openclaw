@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
+import type { CronScheduledToolCallerOrigin } from "../cron/scheduled-tool-policy.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -28,14 +29,17 @@ afterEach(() => {
   resetAgentRunRegistryForTest();
 });
 
-function createManagementFixture(controlUiAdmin = true) {
+function createManagementFixture(
+  controlUiAdmin = true,
+  callerOrigin: CronScheduledToolCallerOrigin = { kind: "local" },
+) {
   let continuationCurrent = true;
   const runId = "run-admin-management";
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
   const scope = createCronCreatorAuthorityRunScope(
     runId,
-    { kind: "local" },
+    callerOrigin,
     controlUiAdmin ? { source: "control-ui-admin" } : undefined,
     () => continuationCurrent,
   );
@@ -257,31 +261,40 @@ describe("cron management authority grants", () => {
   const denied =
     /Retry from a fresh authenticated configured channel owner or Control UI administrator turn/;
 
-  it("retains a redeemed queued operation until its exact run closes, without permitting replay", async () => {
-    const fixture = createManagementFixture();
-    const grant = fixture.mint();
-    let retained: (() => void) | undefined;
-    await withCronManagementGrant(grant, fixture.identity, "cron.get", async () => {
-      retained = getCronManagementAuthority(fixture.identity);
-      expect(retained).toBeTypeOf("function");
-      expect(getCronManagementCallerOrigin(fixture.identity)).toEqual({ kind: "local" });
-      expect(getCronManagementAuthority({ ...fixture.identity })).toBeUndefined();
-      expect(getCronManagementCallerOrigin({ ...fixture.identity })).toBeUndefined();
-      retained!();
-      await Promise.resolve();
-      retained!();
-    });
-    expect(getCronManagementAuthority(fixture.identity)).toBeUndefined();
-    expect(getCronManagementCallerOrigin(fixture.identity)).toBeUndefined();
-    expect(retained).not.toThrow();
-    revokeCronCreatorAuthorityRunScope(fixture.scope);
-    expect(retained).toThrow(denied);
-    const replay = vi.fn();
-    await expect(
-      withCronManagementGrant(grant, fixture.identity, "cron.get", replay),
-    ).rejects.toThrow(denied);
-    expect(replay).not.toHaveBeenCalled();
-  });
+  it.each([
+    { kind: "local" },
+    { kind: "external", channel: "slack" },
+    { kind: "unknown" },
+  ] as const)(
+    "retains origin $kind only within the exact redeemed management operation",
+    async (origin) => {
+      const fixture = createManagementFixture(true, origin);
+      const grant = fixture.mint();
+      let retained: (() => void) | undefined;
+      await withCronManagementGrant(grant, fixture.identity, "cron.get", async () => {
+        retained = getCronManagementAuthority(fixture.identity);
+        expect(retained).toBeTypeOf("function");
+        expect(getCronManagementCallerOrigin(fixture.identity)).toEqual(
+          origin.kind === "unknown" ? undefined : origin,
+        );
+        expect(getCronManagementAuthority({ ...fixture.identity })).toBeUndefined();
+        expect(getCronManagementCallerOrigin({ ...fixture.identity })).toBeUndefined();
+        retained!();
+        await Promise.resolve();
+        retained!();
+      });
+      expect(getCronManagementAuthority(fixture.identity)).toBeUndefined();
+      expect(getCronManagementCallerOrigin(fixture.identity)).toBeUndefined();
+      expect(retained).not.toThrow();
+      revokeCronCreatorAuthorityRunScope(fixture.scope);
+      expect(retained).toThrow(denied);
+      const replay = vi.fn();
+      await expect(
+        withCronManagementGrant(grant, fixture.identity, "cron.get", replay),
+      ).rejects.toThrow(denied);
+      expect(replay).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects missing grants and callers without an admitted admin capability", async () => {
     const fixture = createManagementFixture(false);

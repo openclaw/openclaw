@@ -571,6 +571,7 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
           toolName,
           metadata,
           currentAppCeiling,
+          currentApp,
         );
         return [
           toolName,

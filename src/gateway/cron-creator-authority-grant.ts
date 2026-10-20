@@ -234,7 +234,8 @@ export function resolveCronCreatorAuthorityGrantProvenance(
   const channelRequester = channelRequestersByScope.get(scope);
   return {
     capturesRuntimeAuthority: entry.capturesRuntimeAuthority,
-    ...(scope.callerOrigin.kind === "local" ? { callerOrigin: { kind: "local" as const } } : {}),
+    // The admitted source is independent of the tool transport's routing label.
+    ...(scope.callerOrigin.kind !== "unknown" ? { callerOrigin: { ...scope.callerOrigin } } : {}),
     ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),
   };
 }
@@ -412,8 +413,8 @@ export async function withCronManagementGrant<T>(
     {
       identity,
       assertActive,
-      ...(entry.scope.callerOrigin.kind === "local"
-        ? { callerOrigin: { kind: "local" as const } }
+      ...(entry.scope.callerOrigin.kind !== "unknown"
+        ? { callerOrigin: { ...entry.scope.callerOrigin } }
         : {}),
       channelRequester: channelRequestersByScope.get(entry.scope),
     },

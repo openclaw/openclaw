@@ -636,6 +636,7 @@ describe("agent runtime identity token", () => {
         expect(grants.resolveCronCreatorAuthorityGrantProvenance(grant, scope.runId)).toEqual({
           capturesRuntimeAuthority: false,
           channelRequester: requester,
+          callerOrigin: { kind: "external", channel: "discord" },
         });
         grants.revokeCronCreatorAuthorityRunScope(scope);
         await expect(createIdentity(runtimeToken, mode, params)).rejects.toThrow(
