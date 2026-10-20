@@ -68,10 +68,13 @@ function capture(agentId: string, pathname?: string) {
   return captureOpenClawAgentDatabaseExecution({ agentId, env, path: pathname });
 }
 
-async function use(agentId: string) {
+async function use(agentId: string, ...following: string[]) {
   const execution = capture(agentId);
   await execution.prepare(source);
   await execution.release();
+  for (const next of following) {
+    await use(next);
+  }
   return execution;
 }
 
@@ -79,11 +82,7 @@ function closedAgents() {
   return opened.filter(({ close }) => close.mock.calls.length > 0).map(({ agentId }) => agentId);
 }
 
-async function fillIdlePool() {
-  for (const agentId of ["first", "second", "third", "fourth"]) {
-    await use(agentId);
-  }
-}
+const fillIdlePool = () => use("first", "second", "third", "fourth");
 
 it("keeps a shared creating owner out of idle eviction until its last borrower releases", async () => {
   const options = {
@@ -97,9 +96,7 @@ it("keeps a shared creating owner out of idle eviction until its last borrower r
   try {
     await first.prepare(source);
     await first.release();
-    for (const agentId of ["first", "second", "third", "fourth", "fifth"]) {
-      await use(agentId);
-    }
+    await use("first", "second", "third", "fourth", "fifth");
     expect(closedAgents()).toEqual(["first"]);
     await joining.prepare(source);
     expect(opened.filter(({ agentId }) => agentId === "creating")).toHaveLength(1);
@@ -119,8 +116,7 @@ it("expires each executor independently and refreshes only the borrowed one", as
   const terminal = vi.fn();
   first.onTerminal(terminal);
   await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
-  await use("second");
-  await use("first");
+  await use("second", "first");
   await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
   expect(closedAgents()).toEqual([]);
   await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
@@ -164,8 +160,7 @@ it("retires only the selected physical store and shares its directory alias", as
   expect(opened).toHaveLength(2);
   await closeOpenClawAgentDatabaseByPathAsync(borrowed.path, "first");
   expect(closedAgents()).toEqual(["first"]);
-  await use("first");
-  await use("second");
+  await use("first", "second");
   expect(opened.map(({ agentId }) => agentId)).toEqual(["first", "second", "first"]);
 });
 

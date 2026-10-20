@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { getEnvironmentData, Worker } from "node:worker_threads";
@@ -126,7 +127,7 @@ describe.skipIf(!connection)("PostgreSQL Doctor media inspection", () => {
         "./openclaw-agent-doctor-media.postgres.test-support.ts",
         import.meta.url,
       );
-      const worker = new Worker(url, {
+      await using worker = new Worker(url, {
         execArgv: resolveRuntimeWorkerThreadExecArgv(url),
         workerData: {
           env,
@@ -135,26 +136,19 @@ describe.skipIf(!connection)("PostgreSQL Doctor media inspection", () => {
           admissions: captureSqliteDatabaseAdmissions(undefined, { location: pathname }),
         },
       });
-      try {
-        return await new Promise<MediaInspection>((resolve, reject) => {
-          let reply: { result: MediaInspection } | { error: string } | undefined;
-          worker.on("message", (message: typeof reply) => {
-            reply = message;
-          });
-          worker.once("error", reject);
-          worker.once("exit", (code) => {
-            if (code !== 0 || !reply) {
-              reject(new Error(`Media inspection worker exited ${code} without a result`));
-            } else if ("error" in reply) {
-              reject(new Error(reply.error));
-            } else {
-              resolve(reply.result);
-            }
-          });
-        });
-      } finally {
-        await worker.terminate();
+      const response: { reply?: { result: MediaInspection } | { error: string } } = {};
+      worker.on("message", (reply: typeof response.reply) => {
+        response.reply = reply;
+      });
+      const [code] = await once(worker, "exit");
+      const { reply } = response;
+      if (code !== 0 || !reply) {
+        throw new Error(`Media inspection worker exited ${code} without a result`);
       }
+      if ("error" in reply) {
+        throw new Error(reply.error);
+      }
+      return reply.result;
     };
     await updateTranscript(clean);
     expect(await inspect()).toEqual({

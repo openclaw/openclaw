@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
@@ -10,28 +9,22 @@ import { AgentDatabaseSchemaAdmissionInvalidError } from "./agent-database-admis
 import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
-  closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
 import type { AgentDatabaseExecutionFileIdentity } from "./openclaw-agent-execution-contract.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
+import {
+  createAgentCreationWitnessFixture,
+  createAgentCreationWitnessSource as createSource,
+} from "./openclaw-agent-execution.creation-fixture.test-support.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
-    cleanup();
-  }),
-);
-
 function fixture() {
-  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-schema-")) };
-  const options = { agentId: "main", env };
+  const options = createAgentCreationWitnessFixture();
+  const { env } = options;
   const database = openOpenClawAgentDatabase(options);
   const generation = (identity?: AgentDatabaseExecutionFileIdentity) =>
     createAgentDatabaseNativeGeneration(
@@ -46,25 +39,6 @@ function fixture() {
       () => {},
     );
   return { env, options, database, generation };
-}
-
-function createSource(
-  assertCurrent = () => {},
-  onRequest?: (request: workerAdmission.SqliteWorkerAdmissionRequest) => void,
-): AgentDatabaseRequestExecutionSource {
-  return {
-    assertCurrent,
-    createAdmission: (binding) => () => ({
-      nativeLocations: binding.nativeLocations,
-      admission: workerAdmission.createSqliteWorkerOperationAdmission((request, grant) => {
-        onRequest?.(request);
-        binding.authorize(request);
-        if (!grant()) {
-          throw new Error("Schema admission fixture lost admission");
-        }
-      }, binding.attachment),
-    }),
-  };
 }
 
 it.each([false, true])(
@@ -85,7 +59,7 @@ it.each([false, true])(
         : undefined,
     );
     let refused = false;
-    const refusal = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
+    using refusal = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, admit) => {
       if (
         request.stage === "prepare" &&
         isRecord(request.facts) &&
@@ -99,12 +73,9 @@ it.each([false, true])(
     try {
       await expect(generation.run(createSource(), async () => "forbidden")).rejects.toThrow();
     } finally {
-      try {
-        await generation.close();
-      } finally {
-        refusal.mockRestore();
-      }
+      await generation.close();
     }
+    refusal.mockRestore();
     expect(refused).toBe(true);
     expect(
       openOpenClawStateDatabase({ env })
@@ -135,7 +106,7 @@ it("rejects malformed native schema receipts without replaying caller work", asy
     }
     admit(request, grant);
   });
-  const source = createSource(() => execution.assertCurrent());
+  const source = { ...createSource(), assertCurrent: () => execution.assertCurrent() };
   const operation = vi.fn(async () => "not admitted");
   try {
     await expect(execution.runExisting(source, operation)).rejects.toBeInstanceOf(
@@ -155,7 +126,7 @@ it("admits schema and integrity once, then warm turns request only their writes"
   invalidateOpenClawAgentDatabaseValidation(database.path);
   const generation = createGeneration();
   const requests: string[] = [];
-  const source = createSource(undefined, (request) => {
+  const source = createSource((request) => {
     const kind = isRecord(request.facts) ? request.facts.kind : undefined;
     requests.push(typeof kind === "string" ? `${request.stage}:${kind}` : request.stage);
   });
