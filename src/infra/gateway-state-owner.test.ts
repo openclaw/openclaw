@@ -220,6 +220,7 @@ describe("Gateway state ownership", () => {
         databasePath,
         payload: {
           pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
           createdAt: new Date().toISOString(),
           configPath: path.join(root, "openclaw.json"),
           role: "gateway",
@@ -364,6 +365,7 @@ describe("Gateway state ownership", () => {
         databasePath,
         payload: {
           pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
           createdAt: new Date().toISOString(),
           configPath: path.join(root, "openclaw.json"),
           role: "gateway",

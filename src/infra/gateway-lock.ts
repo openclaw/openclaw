@@ -159,8 +159,7 @@ function resolveGatewayOwnerStatusSync(
   const args = readFn(pid);
   remainingTimeoutMs();
   if (!args) {
-    // Legacy Linux locks can eventually become stale. Other Gateway locks retain
-    // conservative liveness when platform inspection is unavailable.
+    // An unavailable command observation cannot prove that the owner stopped.
     return embedded || platform === "linux" || opts.trustUnknownCmdlineOwner === false
       ? "unknown"
       : "alive";

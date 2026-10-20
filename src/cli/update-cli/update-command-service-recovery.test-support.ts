@@ -71,6 +71,7 @@ function createServingOwnerFixture() {
           databasePath: resolveOpenClawStateSqlitePath(env),
           payload: {
             pid: process.pid,
+            processNamespace: gatewayNamespace.readGatewayLockProcessNamespace(),
             createdAt: new Date().toISOString(),
             configPath: resolveConfigPath(env),
             role: "gateway",

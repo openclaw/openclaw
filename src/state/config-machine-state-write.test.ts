@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readSharedAuthProfileRows } from "../agents/auth-profiles/sqlite-read.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -72,6 +73,7 @@ function credentialFixture() {
       databasePath: database.path,
       payload: {
         pid: process.pid,
+        processNamespace: readGatewayLockProcessNamespace(),
         createdAt: new Date().toISOString(),
         configPath: `${options.env.OPENCLAW_STATE_DIR}/openclaw.json`,
         role: "gateway",

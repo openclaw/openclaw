@@ -14,6 +14,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -165,6 +166,7 @@ it.for(["durable", "incognito", "shared"])(
         databasePath: resolveOpenClawStateSqlitePath(),
         payload: {
           pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
           createdAt: new Date().toISOString(),
           configPath: state.configPath,
           stateDir: state.stateDir,
