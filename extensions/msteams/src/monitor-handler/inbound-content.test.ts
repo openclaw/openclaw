@@ -16,8 +16,11 @@ vi.mock("../attachments/bot-framework.js", async (importOriginal) => ({
 import { downloadMSTeamsBotFrameworkAttachments } from "../attachments/bot-framework.js";
 import { downloadMSTeamsAttachments } from "../attachments/download.js";
 import { downloadMSTeamsGraphMedia } from "../attachments/graph.js";
+import { resolveMSTeamsAdvertisedMedia } from "../attachments/html.js";
 import type { MSTeamsAttachmentLike, MSTeamsInboundMedia } from "../attachments/types.js";
+import type { MSTeamsTurnContext } from "../sdk-types.js";
 import { prepareMSTeamsInboundContent } from "./inbound-content.js";
+import { assembleMSTeamsInboundFacts, prepareMSTeamsDebounceEntry } from "./inbound-facts.js";
 
 const markedHtml = {
   contentType: "text/html",
@@ -28,9 +31,9 @@ const htmlSummary = {
   imgTags: 0,
   dataImages: 0,
   cidImages: 0,
-  srcHosts: [],
+  srcHosts: [] as string[],
   attachmentTags: 0,
-  attachmentIds: [],
+  attachmentIds: [] as string[],
 };
 
 function setup(
@@ -100,6 +103,78 @@ describe("Teams inbound content", () => {
     });
     expect(await setup({ attachments: [] }).run()).toEqual({
       agentBody: "hello",
+      inboundMedia: [],
+    });
+  });
+
+  it("does not append an unavailable notice for emoji-only group-chat messages", async () => {
+    const emojiHtml = {
+      contentType: "text/html",
+      content:
+        '<div><at>Bot</at> can you tell <at>Other User</at> what works now <img src="https://statics.teams.cdn.office.net/evergreen-assets/emoji/smile/default/30_f.png" alt="🙂" title=""></div>',
+    };
+    const attachments: MSTeamsAttachmentLike[] = [emojiHtml];
+    expect(
+      await setup({
+        rawBody: "can you tell what works now",
+        attachments,
+        advertisedMedia: resolveMSTeamsAdvertisedMedia(attachments),
+        conversationType: "groupchat",
+        graphMediaFallback: true,
+        htmlSummary: {
+          ...htmlSummary,
+          imgTags: 1,
+          srcHosts: ["statics.teams.cdn.office.net"],
+        },
+      }).run(),
+    ).toEqual({
+      agentBody: "can you tell what works now",
+      inboundMedia: [],
+    });
+  });
+
+  it("delivers a genuinely emoji-only HTML message instead of dropping it", async () => {
+    const emojiOnlyAttachment = {
+      contentType: "text/html",
+      content:
+        '<img src="https://statics.teams.cdn.office.net/evergreen-assets/emoji/smile/default/30_f.png" alt="🙂">',
+    };
+    const entry = await prepareMSTeamsDebounceEntry({
+      accountId: "default",
+      context: {
+        activity: {
+          type: "message",
+          id: "msg-emoji-only",
+          attachments: [emojiOnlyAttachment],
+          conversation: { id: "19:group@thread.v2;messageid=abc", conversationType: "groupChat" },
+          serviceUrl: "https://smba.trafficmanager.net/emea/",
+        },
+        sendActivity: vi.fn(async () => undefined),
+        sendActivities: vi.fn(async () => []),
+        updateActivity: vi.fn(async () => undefined),
+        deleteActivity: vi.fn(async () => undefined),
+      } as MSTeamsTurnContext,
+    });
+    const facts = assembleMSTeamsInboundFacts(entry);
+    expect(facts.rawBody).toBe("🙂");
+    expect(facts.advertisedMedia).toEqual([]);
+
+    expect(
+      await prepareMSTeamsInboundContent({
+        entry: facts,
+        rawBody: facts.rawBody,
+        advertisedMedia: facts.advertisedMedia,
+        htmlSummary: facts.htmlSummary,
+        conversationType: facts.conversationType,
+        conversationId: facts.conversationId,
+        resolveTeamAadGroupId: vi.fn(async () => undefined),
+        mediaMaxBytes: 1024 * 1024,
+        tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+        graphMediaFallback: true,
+        log: { debug: vi.fn(), info: vi.fn(), error: vi.fn() },
+      }),
+    ).toEqual({
+      agentBody: "🙂",
       inboundMedia: [],
     });
   });

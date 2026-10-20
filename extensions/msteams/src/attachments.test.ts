@@ -383,6 +383,37 @@ describe("msteams attachments", () => {
       expect(media).toEqual([{ kind: "document", sourceId: "graph-file-1" }]);
     });
 
+    it("skips Teams emoji sprite images when downloading inline media", async () => {
+      const fetchMock = createOkFetchMock(CONTENT_TYPE_IMAGE_PNG, "sprite");
+      const media = await downloadAttachmentsWithFetch(
+        [
+          createHtmlAttachment(
+            '<div><at>Bot</at> can you tell <at>Other User</at> what works now <img src="https://statics.teams.cdn.office.net/evergreen-assets/emoji/smile/default/30_f.png" alt="🙂" title=""></div>',
+          ),
+        ],
+        fetchMock,
+        { allowHosts: ["statics.teams.cdn.office.net"] },
+        { expectFetchCalled: false },
+      );
+
+      expect(media).toEqual([]);
+    });
+
+    it("keeps real inline images in mixed emoji-and-image messages when downloading", async () => {
+      const realUrl = createTestUrl("photo");
+      const media = await downloadAttachmentsWithFetch(
+        [
+          createHtmlAttachment(
+            `<img src="${realUrl}"><img src="https://statics.teams.cdn.office.net/evergreen-assets/emoji/smile/default/30_f.png" alt="🙂">`,
+          ),
+        ],
+        createOkFetchMock(CONTENT_TYPE_IMAGE_PNG),
+        { allowHosts: [TEST_HOST, "statics.teams.cdn.office.net"] },
+      );
+
+      expectSingleMedia(media, { path: SAVED_PNG_PATH, kind: "image" });
+    });
+
     it("skips auth retries when the host is not in auth allowlist", async () => {
       const tokenProvider = createTokenProvider();
       const fetchMock = createAuthAwareImageFetchMock({

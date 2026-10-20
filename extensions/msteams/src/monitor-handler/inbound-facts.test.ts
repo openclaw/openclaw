@@ -74,6 +74,24 @@ describe("msteams inbound facts", () => {
     expect(entry.text).toBe("answer &lt;tag&gt;");
   });
 
+  it("preserves the emoji for genuinely emoji-only HTML messages", async () => {
+    const entry = await prepareMSTeamsDebounceEntry({
+      accountId: "default",
+      context: context({
+        type: "message",
+        attachments: [
+          {
+            contentType: "text/html",
+            content:
+              '<div><img src="https://statics.teams.cdn.office.net/evergreen-assets/emoji/smile/default/30_f.png" alt="🙂" title=""></div>',
+          },
+        ],
+      }),
+    });
+
+    expect(assembleMSTeamsInboundFacts(entry).rawBody).toBe("🙂");
+  });
+
   it("preserves raw Bot Framework IDs while normalizing routing facts", async () => {
     const entry = await prepareMSTeamsDebounceEntry({
       accountId: "default",

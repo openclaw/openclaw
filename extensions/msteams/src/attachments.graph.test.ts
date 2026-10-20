@@ -381,6 +381,52 @@ describe("msteams attachment helpers", () => {
       ).toEqual([{ kind: "image", sourceId: "image-1" }]);
     });
 
+    it("excludes Teams emoji sprite images from advertised media", () => {
+      expect(
+        resolveMSTeamsAdvertisedMedia([
+          createHtmlAttachment(
+            '<div><at>Bot</at> can you tell <at>Other User</at> what works now <img src="https://statics.teams.cdn.office.net/evergreen-assets/emoji/smile/default/30_f.png" alt="🙂" title=""></div>',
+          ),
+        ]),
+      ).toEqual([]);
+    });
+
+    it("excludes Teams emoji sprites without alt text by their asset path", () => {
+      expect(
+        resolveMSTeamsAdvertisedMedia([
+          createHtmlAttachment(
+            '<img src="https://statics.teams.cdn.office.net/evergreen-assets/emoji/1f44b/default/30_f.png" />',
+          ),
+        ]),
+      ).toEqual([]);
+    });
+
+    it("keeps non-emoji images from the Teams emoji CDN host as advertised media", () => {
+      expect(
+        resolveMSTeamsAdvertisedMedia([
+          createHtmlAttachment(
+            '<img src="https://statics.teams.cdn.office.net/evergreen-assets/brand/brand.png" alt="brand.png" />',
+          ),
+        ]),
+      ).toEqual([
+        {
+          kind: "image",
+          sourceId: "https://statics.teams.cdn.office.net/evergreen-assets/brand/brand.png",
+        },
+      ]);
+    });
+
+    it("keeps real inline images in mixed emoji-and-image messages", () => {
+      const realUrl = "https://example.com/photo.png";
+      expect(
+        resolveMSTeamsAdvertisedMedia([
+          createHtmlAttachment(
+            `<img src="${realUrl}"><img src="https://statics.teams.cdn.office.net/evergreen-assets/emoji/smile/default/30_f.png" alt="🙂">`,
+          ),
+        ]),
+      ).toEqual([{ kind: "image", sourceId: realUrl }]);
+    });
+
     it("counts repeated inline URLs once while keeping data images per occurrence", () => {
       const repeatedUrl = "https://example.com/repeated.png";
       expect(

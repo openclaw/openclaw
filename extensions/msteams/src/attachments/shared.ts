@@ -36,6 +36,51 @@ export const IMG_SRC_RE = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
 export const ATTACHMENT_TAG_RE = /<attachment[^>]+id=["']([^"']+)["'][^>]*>/gi;
 const GRAPH_HOSTED_CONTENT_SRC_RE = /\/hostedContents\/([^/?#]+)/i;
 
+// Teams renders emoji in HTML attachments as <img> sprite tags served from its
+// emoji CDN (e.g. https://statics.teams.cdn.office.net/evergreen-assets/emoji/
+// <id>/default/30_f.png with the emoji character in the alt attribute). They
+// are message text, not user media, so verified sprites are excluded from
+// inline media extraction (issue #177341). Verification requires BOTH the
+// Teams emoji CDN host AND an emoji marker (asset path segment or pictographic
+// alt text) so genuine images served from the same CDN stay advertised.
+// Because the sprite emoji is message text, the same classification is reused
+// to keep the emoji (its alt text) in the extracted body when the media
+// reference is discarded, so emoji-only messages stay deliverable.
+const TEAMS_EMOJI_CDN_HOST = "statics.teams.cdn.office.net";
+const TEAMS_EMOJI_ASSET_PATH_RE = /\/emoji([/?#]|$)/i;
+const IMG_ALT_ATTR_RE = /<img\b[^>]*?\balt=["']([^"']*)["']/i;
+const EMOJI_PICTOGRAPHIC_RE = /\p{Extended_Pictographic}/u;
+
+function isTeamsEmojiSpriteImage(src: string, imgTag: string): boolean {
+  const host = safeHostForUrl(src);
+  if (host !== TEAMS_EMOJI_CDN_HOST && !host.endsWith(`.${TEAMS_EMOJI_CDN_HOST}`)) {
+    return false;
+  }
+  const path = URL.parse(src)?.pathname ?? "";
+  if (TEAMS_EMOJI_ASSET_PATH_RE.test(path)) {
+    return true;
+  }
+  const alt = IMG_ALT_ATTR_RE.exec(imgTag)?.[1] ?? "";
+  return EMOJI_PICTOGRAPHIC_RE.test(alt);
+}
+
+/**
+ * Replace recognized Teams emoji sprite <img> tags with their alt text (the
+ * emoji character) so the emoji survives HTML-to-text extraction after its
+ * media reference is excluded from inline media (issue #177341). Non-sprite
+ * <img> tags are returned unchanged.
+ */
+export function replaceTeamsEmojiSpriteImagesWithAltText(html: string): string {
+  IMG_SRC_RE.lastIndex = 0;
+  return html.replace(IMG_SRC_RE, (imgTag: string, src: string) => {
+    const trimmedSrc = src.trim();
+    if (!trimmedSrc || !isTeamsEmojiSpriteImage(trimmedSrc, imgTag)) {
+      return imgTag;
+    }
+    return IMG_ALT_ATTR_RE.exec(imgTag)?.[1] ?? "";
+  });
+}
+
 function resolveInlineImageSourceId(src: string): string {
   // Graph fallback names hosted content by item ID, while activity HTML carries its `$value` URL.
   // Normalize both paths to one identity so a recovered image replaces its advertised slot.
@@ -274,6 +319,9 @@ export function extractInlineImageReferences(
     for (const match of html.matchAll(IMG_SRC_RE)) {
       const src = match[1]?.trim();
       if (src) {
+        if (isTeamsEmojiSpriteImage(src, match[0])) {
+          continue;
+        }
         if (src.startsWith("data:")) {
           out.push({ kind: "data", src });
         } else if (!seenReferences.has(src)) {
