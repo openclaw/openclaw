@@ -10,10 +10,10 @@ import { listTemplatesAsync } from "./template-registry-async.js";
 
 vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.fn() }));
 const read = (target: string, file: string) => fs.readFile(path.join(target, file), "utf8");
+const readFiles = (files: string[]) => Promise.all(files.map((file) => fs.readFile(file)));
 
 async function gitMetadata(target: string) {
-  // Batch reads: Linux fork cost grows with the test worker's retained memory.
-  // Resolve afresh at every observation because sparse setup changes path routing.
+  // Resolve fresh metadata in one process: sparse setup changes Git path routing.
   const [commit, commonDir, indexPath, headPath] = (
     await git(
       target,
@@ -54,7 +54,10 @@ it("preserves isolated source and guarded fallback across sparse checkout change
   await git(repo, "add", ".");
   await git(repo, "commit", "-m", "source profile");
   const commit = await git(repo, "rev-parse", "HEAD");
+  const request = (name: string, profiles?: string[]) =>
+    service.create({ repoRoot: repo, name, baseRef: commit, profiles });
   const targets = new Map<string, string>([["repository", repo]]);
+  const full: string[] = [];
   const observe = async () => {
     const samples = [];
     for (const target of [
@@ -71,62 +74,42 @@ it("preserves isolated source and guarded fallback across sparse checkout change
     const siblings = await Promise.all(
       [...targets.entries()].map(async ([label, target]) => {
         const { indexPath: index, headPath: head } = await gitMetadata(target);
-        return {
-          label,
-          index,
-          head,
-          indexBytes: await fs.readFile(index),
-          headBytes: await fs.readFile(head),
-        };
+        const paths = [index, head];
+        return { label, paths, bytes: await readFiles(paths) };
       }),
     );
     const calls = vi.mocked(backend.cloneTemplate).mock.calls.length;
-    const created = await service.create({ repoRoot: repo, name, baseRef: commit, profiles });
-    // Only explicitly profiled creates need native sparse materialization.
+    const created = await request(name, profiles);
     expect(vi.mocked(backend.cloneTemplate).mock.calls.length > calls, name).toBe(
       !profiles?.length,
     );
     for (const sibling of siblings) {
-      expect(await fs.readFile(sibling.index), sibling.label).toEqual(sibling.indexBytes);
-      expect(await fs.readFile(sibling.head), sibling.label).toEqual(sibling.headBytes);
+      expect(await readFiles(sibling.paths), sibling.label).toEqual(sibling.bytes);
+    }
+    if (!profiles?.length) {
+      full.push(created.path);
     }
     targets.set(name, created.path);
     await observe();
     return created;
   };
-  const cold = await create("full-cold");
-  const warm = await create("full-warm");
+  await create("full-cold");
+  await create("full-warm");
   const sparseA = await create("sparse-a", ["selected"]);
   await fs.writeFile(path.join(sparseA.path, "selected/source.txt"), "sparse edit\n");
   await fs.mkdir(path.join(sparseA.path, "excluded"), { recursive: true });
   await fs.writeFile(path.join(sparseA.path, "excluded/ignored.txt"), "retained ignored\n");
-  const companion = await create("full-companion");
+  await create("full-companion");
   await git(sparseA.path, "sparse-checkout", "disable");
   await observe();
-  const fullB = await create("full-after-disable");
+  await create("full-after-disable");
   const sparseC = await create("sparse-c", ["selected"]);
   await fs.writeFile(path.join(sparseC.path, "selected/source.txt"), "sparse reuse edit\n");
-  expect((await service.create({ repoRoot: repo, name: "sparse-c", baseRef: commit })).id).toBe(
-    sparseC.id,
-  );
-  await expect(
-    service.create({
-      repoRoot: repo,
-      name: "sparse-c",
-      baseRef: commit,
-      profiles: ["selected"],
-    }),
-  ).rejects.toThrow(/new worktree/);
+  expect((await request("sparse-c")).id).toBe(sparseC.id);
+  await expect(request("sparse-c", ["selected"])).rejects.toThrow(/new worktree/);
   await observe();
-  const fullD = await create("full-with-sparse-c");
-  for (const target of [
-    cold.path,
-    warm.path,
-    fullB.path,
-    fullD.path,
-    companion.path,
-    ...(await listTemplatesAsync(env)).map((t) => t.path),
-  ]) {
+  await create("full-with-sparse-c");
+  for (const target of [...full, ...(await listTemplatesAsync(env)).map((t) => t.path)]) {
     expect(await read(target, "selected/source.txt")).toBe("selected\n");
     expect(await read(target, "excluded/source.txt")).toBe("excluded\n");
     expect(await git(target, "ls-files", "-t")).not.toMatch(/^S /m);

@@ -6,8 +6,13 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, assert, beforeAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { withWorktreeMutationLease } from "./allocation.js";
 import { insertRegistryWorktree } from "./registry.js";
+import {
+  admitWorktreeRunLeaseInDatabase,
+  type WorktreeRunLeaseRowInput,
+} from "./run-lease-store.kernel.js";
 import {
   listTemplatesAsync,
   markTemplateReadyAsync,
@@ -40,6 +45,19 @@ export function makeWorktreeRecord(
     lastActiveAt: 1,
     ...overrides,
   };
+}
+
+export async function seedWorktreeRunLease(
+  env: NodeJS.ProcessEnv,
+  record: ManagedWorktreeRecord,
+  owner: Pick<WorktreeRunLeaseRowInput, "pid" | "startTime"> = {
+    pid: process.pid,
+    startTime: null,
+  },
+): Promise<void> {
+  await insertRegistryWorktree(env, record);
+  const input = { worktreeId: record.id, token: record.id, now: 1, ...owner };
+  runOpenClawStateWriteTransaction(({ db }) => admitWorktreeRunLeaseInDatabase(db, input), { env });
 }
 
 export async function initializeManagedWorktreeTestRepository(root: string): Promise<string> {

@@ -1,19 +1,17 @@
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import * as state from "../../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { readWorktreeCleanupState } from "./registry-read.js";
-import { insertRegistryWorktree } from "./registry.js";
 import {
   readWorktreeRunLeaseStateInDatabase,
   worktreeRunLeaseScope as scope,
 } from "./run-lease-owner.js";
 import { reapWorktreeRunLeases } from "./run-lease-store.js";
-import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import { hasLiveWorktreeRunLease as hasLiveLease } from "./run-lease.test-support.js";
-import { makeWorktreeRecord } from "./service.test-support.js";
+import { makeWorktreeRecord, seedWorktreeRunLease } from "./service.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 
 const tempDirs = useWorktreeStateRoots();
@@ -29,21 +27,8 @@ it("reads live, dead, reused, and unverifiable owners without reaping or writer 
   ];
   for (const entry of cases) {
     const record = makeWorktreeRecord(root, entry.id, { path: path.join(root, entry.id) });
-    await insertRegistryWorktree(env, record);
+    await seedWorktreeRunLease(env, record, entry);
   }
-  state.runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      for (const entry of cases) {
-        admitWorktreeRunLeaseInDatabase(db, {
-          ...entry,
-          worktreeId: entry.id,
-          token: entry.id,
-          now: 1,
-        });
-      }
-    },
-    { env },
-  );
   const db = requireNativeSqliteDatabase(state.openOpenClawStateDatabase({ env }).db);
   const query = (sql: string) => db.prepare(sql);
   const writes = vi.spyOn(state, "runOpenClawStateWriteTransaction");
@@ -60,14 +45,12 @@ it("reads live, dead, reused, and unverifiable owners without reaping or writer 
     const queries = trackSqliteStatementExecutions(db, ["leases"], (sql) =>
       sql.startsWith("select") && sql.includes('"state_leases"') ? "leases" : null,
     );
-    try {
-      const leases = readWorktreeRunLeaseStateInDatabase(db);
-      expect(leases.liveScopes).toContain(scope("live"));
-      expect(leases.staleScopes).toContain(scope("dead"));
-      expect(queries.counts.leases).toBe(1);
-    } finally {
-      queries.restore();
-    }
+    onTestFinished(queries.restore);
+    const leases = readWorktreeRunLeaseStateInDatabase(db);
+    expect(leases.liveScopes).toContain(scope("live"));
+    expect(leases.staleScopes).toContain(scope("dead"));
+    expect(queries.counts.leases).toBe(1);
+    queries.restore();
     expect(query("SELECT count(*) AS count FROM state_leases").get()?.count).toBe(4);
   } finally {
     db.exec("PRAGMA query_only = OFF");

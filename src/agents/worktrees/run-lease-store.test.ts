@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -22,11 +22,11 @@ it("settles exact lease deletions without host SQL or fsync and refuses a retire
   const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("worktree-release-worker-") };
   const database = openOpenClawStateDatabase({ env });
   await insertRegistryWorktree(env, makeWorktreeRecord(env.OPENCLAW_STATE_DIR, "synthetic"));
+  const insert = database.db.prepare(
+    "INSERT INTO state_leases (scope, lease_key, owner, created_at, updated_at) VALUES (?, ?, ?, 1, 1)",
+  );
   runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const insert = db.prepare(
-        "INSERT INTO state_leases (scope, lease_key, owner, created_at, updated_at) VALUES (?, ?, ?, 1, 1)",
-      );
+    () => {
       for (let index = 0; index < 100; index++) {
         insert.run("worktree-run:synthetic", `run-${index}`, "synthetic-owner");
       }
@@ -49,29 +49,21 @@ it("settles exact lease deletions without host SQL or fsync and refuses a retire
       }
     }
   });
+  onTestFinished(unsubscribe);
   const sql = observeMainThreadSql();
   const sync = vi.spyOn(fs, "fsyncSync");
-  try {
-    for (let index = 0; index < 99; index++) {
-      await release(`run-${index}`);
-    }
-    sql.expectIdle();
-    expect(sync).not.toHaveBeenCalled();
-  } finally {
-    sql.restore();
-    sync.mockRestore();
+  for (let index = 0; index < 99; index++) {
+    await release(`run-${index}`);
   }
-  try {
-    // Exit-only cleanup must publish synchronously, including the exact token tombstone.
-    releaseWorktreeRunLeaseRow(env, "synthetic", "run-99");
-    expect(deleted).toEqual(
-      Array.from({ length: 100 }, (_, index) =>
-        JSON.stringify(["state_leases", "worktree-run:synthetic", `run-${index}`]),
-      ),
-    );
-  } finally {
-    unsubscribe();
-  }
+  sql.expectIdle();
+  expect(sync).not.toHaveBeenCalled();
+  // Exit-only cleanup must publish synchronously, including the exact token tombstone.
+  releaseWorktreeRunLeaseRow(env, "synthetic", "run-99");
+  expect(deleted).toEqual(
+    Array.from({ length: 100 }, (_, index) =>
+      JSON.stringify(["state_leases", "worktree-run:synthetic", `run-${index}`]),
+    ),
+  );
   const remaining = database.db.prepare(
     "SELECT scope, lease_key FROM state_leases ORDER BY scope, lease_key",
   );
@@ -92,7 +84,5 @@ it("settles exact lease deletions without host SQL or fsync and refuses a retire
   await expect(admitWorktreeRunLeaseRowAsync(context, retired, settlement)).rejects.toThrow();
   expect(settlement).toHaveBeenCalledExactlyOnceWith("not-entered");
   const reopened = openOpenClawStateDatabase({ env }).db;
-  expect(reopened.prepare("SELECT COUNT(*) AS count FROM state_leases").get()).toMatchObject({
-    count: 2,
-  });
+  expect(reopened.prepare("SELECT COUNT(*) AS count FROM state_leases").get()?.count).toBe(2);
 });

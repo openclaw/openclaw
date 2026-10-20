@@ -1,7 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -11,10 +21,6 @@ import * as gitExec from "../../infra/git-exec.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../../state/openclaw-state-db.js";
 import * as checkoutInspection from "./checkout-inspection.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
 import { createWorktreeGitMaintenance } from "./git-maintenance.js";
@@ -24,11 +30,11 @@ import * as registry from "./registry.js";
 import { deleteRegistryWorktree, insertRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
 import { resolveRepository } from "./repository-paths.js";
-import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
 import { ManagedWorktreeService, WORKTREE_GC_INTERVAL_MS } from "./service.js";
 import {
   makeWorktreeRecord,
   materializeManagedWorktreeFixtures,
+  seedWorktreeRunLease,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
 import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
@@ -51,8 +57,8 @@ afterEach(() => {
 describe("worktree Git maintenance", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterAll(async () => {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
+      await stateDatabase.closeOpenClawStateDatabaseAsync();
+      stateDatabase.closeOpenClawStateDatabaseForTest();
       cleanup();
     }),
   );
@@ -62,10 +68,9 @@ describe("worktree Git maintenance", () => {
   };
 
   const initRepo = useManagedWorktreeTestRepository();
-  const captures: ReturnType<typeof createWarnLogCapture>[] = [];
   function captureWarnings(label: string) {
     const capture = createWarnLogCapture(label);
-    captures.push(capture);
+    onTestFinished(() => capture.cleanup());
     return capture;
   }
   const register = (repo: string, id: string, overrides: Partial<ManagedWorktreeRecord> = {}) =>
@@ -96,9 +101,6 @@ describe("worktree Git maintenance", () => {
   });
 
   afterEach(async () => {
-    for (const capture of captures.splice(0)) {
-      capture.cleanup();
-    }
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     for (const record of listRegistryWorktrees(env)) {
@@ -331,7 +333,7 @@ describe("worktree Git maintenance", () => {
       });
     }
     const records = await registryReads.readRegistryWorktrees(env);
-    await closeOpenClawStateDatabaseAsync();
+    await stateDatabase.closeOpenClawStateDatabaseAsync();
     vi.spyOn(registryReads, "readRegistryWorktrees").mockResolvedValue(records);
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -680,6 +682,21 @@ describe("worktree GC inventories", () => {
   const tempDirs = useWorktreeStateRoots();
 
   const initializeRepository = useManagedWorktreeTestRepository();
+  async function fixture(names: string[], now = 1) {
+    const root = tempDirs.make("openclaw-gc-");
+    const repo = await initializeRepository(root);
+    const stateDir = path.join(root, "state");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const records = await materializeManagedWorktreeFixtures({
+      env,
+      stateDir,
+      repoRoot: repo,
+      now,
+      ownerKind: "session",
+      names,
+    });
+    return { root, repo, env, records };
+  }
 
   function isRepositoryMaintenance(args: readonly string[]): boolean {
     return (
@@ -692,19 +709,11 @@ describe("worktree GC inventories", () => {
   }
 
   it("bounds cold cleanup inventories and retains dispositions across registry reopen", async () => {
-    const root = tempDirs.make("openclaw-gc-spawns-");
-    const repo = await initializeRepository(root);
-    const stateDir = path.join(root, "state");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     const now = Date.now();
-    const records = await materializeManagedWorktreeFixtures({
-      env,
-      stateDir,
-      repoRoot: repo,
+    const { root, repo, env, records } = await fixture(
+      Array.from({ length: 40 }, (_, index) => `checkout-${index}`),
       now,
-      ownerKind: "session",
-      names: Array.from({ length: 40 }, (_, index) => `checkout-${index}`),
-    });
+    );
     const repository = await resolveRepository(repo);
     for (const record of records) {
       await registry.updateRegistryWorktree(env, record.id, {
@@ -733,15 +742,14 @@ describe("worktree GC inventories", () => {
     const text = vi.spyOn(gitExec, "executeGitCommand");
     const bytes = vi.spyOn(gitExec, "executeGitCommandBytes");
     const buffered = vi.spyOn(gitExec, "executeGitCommandBuffered");
+    const resetSpawns = () => [text, bytes, buffered].forEach((spy) => spy.mockClear());
     const gitSpawns = [];
     for (let pass = 0; pass < 2; pass++) {
       if (pass > 0) {
         await stateDatabase.closeOpenClawStateDatabaseAsync();
         stateDatabase.closeOpenClawStateDatabaseForTest();
       }
-      text.mockClear();
-      bytes.mockClear();
-      buffered.mockClear();
+      resetSpawns();
       const result = await new ManagedWorktreeService({ env }).gc();
       gitSpawns.push(
         text.mock.calls.filter(([, args]) => !isRepositoryMaintenance(args)).length +
@@ -760,9 +768,7 @@ describe("worktree GC inventories", () => {
     ).toBe(true);
     // A managed owner revision reopens only that record, even if it is still idle.
     await registry.updateRegistryWorktree(env, records[0]!.id, { lastActiveAt: 2 });
-    text.mockClear();
-    bytes.mockClear();
-    buffered.mockClear();
+    resetSpawns();
     await new ManagedWorktreeService({ env }).gc();
     const inspectedPaths = [...text.mock.calls, ...bytes.mock.calls, ...buffered.mock.calls]
       .filter(([, args]) => !isRepositoryMaintenance(args))
@@ -793,18 +799,11 @@ describe("worktree GC inventories", () => {
   });
 
   it("rescans protected checkouts only when their root or HEAD changes", async () => {
-    const root = tempDirs.make("openclaw-gc-fingerprint-");
-    const repoRoot = await initializeRepository(root);
-    const stateDir = path.join(root, "state");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const [nested, moved] = await materializeManagedWorktreeFixtures({
+    const {
+      repo: repoRoot,
       env,
-      stateDir,
-      repoRoot,
-      now: 1,
-      ownerKind: "session",
-      names: ["nested", "moved"],
-    });
+      records: [nested, moved],
+    } = await fixture(["nested", "moved"]);
     await fs.mkdir(path.join(nested!.path, "inner", ".git"), { recursive: true });
     await requireGit(moved!.path, ["checkout", "-b", "external-branch"]);
     await requireGit(repoRoot, ["pack-refs", "--all"]);
@@ -840,23 +839,12 @@ describe("worktree GC inventories", () => {
   });
 
   async function addLeasedWorktree(env: NodeJS.ProcessEnv, root: string, id: string) {
-    await registry.insertRegistryWorktree(
+    await seedWorktreeRunLease(
       env,
       makeWorktreeRecord(root, id, {
         branch: `openclaw/${id}`,
         ownerId: id,
       }),
-    );
-    stateDatabase.runOpenClawStateWriteTransaction(
-      ({ db }) =>
-        admitWorktreeRunLeaseInDatabase(db, {
-          worktreeId: id,
-          token: id,
-          pid: process.pid,
-          startTime: null,
-          now: 1,
-        }),
-      { env },
     );
   }
 

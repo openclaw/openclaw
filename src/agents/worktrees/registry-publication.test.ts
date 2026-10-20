@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import {
   openOpenClawStateDatabase,
@@ -31,6 +31,7 @@ it("installs the whole committed registry batch before observers and discards sa
       }
     }
   });
+  onTestFinished(unsubscribeFacts);
   const observe = () =>
     deferSqlitePostCommitPublication(database.db, () => observed.push([...installed.keys()]));
   const write = (run: () => void) => runOpenClawStateWriteTransaction(run, { env, database });
@@ -47,38 +48,34 @@ it("installs the whole committed registry batch before observers and discards sa
         throw new Error(message);
       }),
     ).toThrow(message);
-  try {
-    write(() => {
-      insertRegistryWorktreeInDatabase(database.db, { record });
-      observe();
-      rollback("rollback savepoint", { lastActiveAt: 2 });
-      insertRegistryWorktreeInDatabase(database.db, {
-        record: {
-          ...record,
-          id: "second",
-          path: `${env.OPENCLAW_STATE_DIR}/second`,
-          branch: "second",
-        },
-      });
-      observe();
-      expect(installed.size).toBe(0);
-      expect(observed).toEqual([]);
+  write(() => {
+    insertRegistryWorktreeInDatabase(database.db, { record });
+    observe();
+    rollback("rollback savepoint", { lastActiveAt: 2 });
+    insertRegistryWorktreeInDatabase(database.db, {
+      record: {
+        ...record,
+        id: "second",
+        path: `${env.OPENCLAW_STATE_DIR}/second`,
+        branch: "second",
+      },
     });
-    expect(observed).toEqual([keys, keys]);
-    expectFact({ last_active_at: 1 });
-    rollback("rollback outer", { removedAt: 3 });
-    expect(observed).toHaveLength(2);
-    expectFact({ removed_at: null });
-    installed.clear();
-    const before = database.db.prepare("SELECT total_changes() AS count").get();
-    write(() => update({ lastActiveAt: 1, removedAt: undefined, snapshotRef: undefined }));
-    expect(database.db.prepare("SELECT total_changes() AS count").get()).toEqual(before);
+    observe();
     expect(installed.size).toBe(0);
-    write(() => update({ snapshotRef: "refs/openclaw/snapshots/first" }));
-    expectFact({ snapshot_ref: "refs/openclaw/snapshots/first" });
-    write(() => update({ snapshotRef: undefined }));
-    expectFact({ snapshot_ref: null });
-  } finally {
-    unsubscribeFacts();
-  }
+    expect(observed).toEqual([]);
+  });
+  expect(observed).toEqual([keys, keys]);
+  expectFact({ last_active_at: 1 });
+  rollback("rollback outer", { removedAt: 3 });
+  expect(observed).toHaveLength(2);
+  expectFact({ removed_at: null });
+  installed.clear();
+  const before = database.db.prepare("SELECT total_changes() AS count").get();
+  write(() => update({ lastActiveAt: 1, removedAt: undefined, snapshotRef: undefined }));
+  expect(database.db.prepare("SELECT total_changes() AS count").get()).toEqual(before);
+  expect(installed.size).toBe(0);
+  write(() => update({ snapshotRef: "refs/openclaw/snapshots/first" }));
+  expectFact({ snapshot_ref: "refs/openclaw/snapshots/first" });
+  write(() => update({ snapshotRef: undefined }));
+  expectFact({ snapshot_ref: null });
 });
