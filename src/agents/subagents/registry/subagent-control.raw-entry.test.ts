@@ -117,12 +117,15 @@ function sendWatched(opts: Parameters<typeof createSessionsSendTool>[0], mode = 
     timeoutSeconds: 0,
   });
 }
+function expectAccepted(result: { details: unknown }, expected: Record<string, unknown> = {}) {
+  expect(result.details).toMatchObject({ status: "accepted", ...expected });
+}
 function queueFollowup(
-  config: OpenClawConfig,
   storePath: string,
   sessionId: string,
-  agentId = "main",
   sessionKey = "global",
+  agentId = "main",
+  config: OpenClawConfig = { session: { store: storePath } },
 ) {
   const followup = createQueueTestRun({ prompt: "Queued followup" });
   Object.assign(followup.run, { agentId, sessionKey, sessionId, config });
@@ -151,13 +154,10 @@ function nativeController(storePath: string, sessionKey: string, sessionId: stri
     timeoutMs: 60_000,
   });
 }
-async function rawChild(
-  agentId: string,
-  sessionId = `${agentId}-global`,
-  parentId = `${agentId}-parent`,
-) {
+async function rawChild(agentId: string) {
+  const sessionId = `${agentId}-global`;
   const parentKey = `agent:${agentId}:dashboard:parent`;
-  const storePath = await writeSession(agentId, parentKey, parentId);
+  const storePath = await writeSession(agentId, parentKey, `${agentId}-parent`);
   await replaceSessionEntry(sessionScope(storePath, "global", agentId), {
     sessionId,
     lifecycleRevision: `${sessionId}-revision`,
@@ -172,42 +172,19 @@ async function rawChild(
 }
 
 it("cancelling a watched main/global child preserves the other agent's work", async () => {
-  const owner = "main";
-  const foreignAgent = "research";
-  const childId = `${owner}-global-session`;
-  const foreignId = `${foreignAgent}-global-session`;
-  const cfg = rawConfig();
-  setRuntimeConfigSnapshot(cfg);
-  const { storePath: childStorePath, parentKey } = await rawChild(
-    owner,
-    childId,
-    `${owner}-parent-session`,
-  );
-  const foreignStorePath = await writeSession(foreignAgent, "global", foreignId);
-  const dispatched: Record<string, unknown>[] = [];
-  const callGateway: AgentToolGatewayRequestCaller = async (request) => {
-    if (request.method !== "agent") {
-      throw new Error(`Unexpected tool RPC ${request.method}`);
-    }
-    request.assertDispatchCurrent?.();
-    dispatched.push(request.params as Record<string, unknown>);
-    return { runId: "watched-global-run", status: "accepted" } as never;
-  };
-  const sent = await sendWatched({
-    config: cfg,
-    agentId: owner,
-    agentSessionKey: parentKey,
-    requesterTurnRunId: "parent-turn",
-    callGateway,
-  });
-  expect(sent.details).toMatchObject({ status: "accepted", watched: false });
+  const { cfg, children, dispatched } = await prepareWatchedRawChildren(false);
+  const { storePath: childStorePath, parentKey } = children.get("main")!;
+  const foreignStorePath = children.get("research")!.storePath;
+  const childId = "main-global",
+    foreignId = "research-global",
+    foreignAgent = "research";
   expect(dispatched).toHaveLength(1);
-  expect(dispatched[0]).toMatchObject({ agentId: owner, sessionKey: "global" });
-  expect.soft(getSubagentRunByRunId("watched-global-run")).toMatchObject({
+  expect(dispatched[0]).toMatchObject({ agentId: "main", sessionKey: "global" });
+  expect.soft(getSubagentRunByRunId("main-1")).toMatchObject({
     childSessionKey: "global",
-    childAgentId: owner,
+    childAgentId: "main",
     requesterSessionKey: parentKey,
-    requesterAgentId: owner,
+    requesterAgentId: "main",
   });
   expect(() => resolveSessionAgentId({ config: cfg, sessionKey: "global" })).toThrow(
     AgentSelectionRequiredError,
@@ -224,13 +201,14 @@ it("cancelling a watched main/global child preserves the other agent's work", as
     foreignAgent,
   );
   const { followup, target: foreignTarget } = queueFollowup(
-    cfg,
     foreignStorePath,
     foreignId,
+    "global",
     foreignAgent,
+    cfg,
   );
   const childTarget = sessionTarget(childStorePath, childId);
-  const childSource = nativeController(childStorePath, "global", childId, "watched-global-run");
+  const childSource = nativeController(childStorePath, "global", childId, "main-1");
   const foreignTurn = vi.fn(async () => "foreign command survived");
   const childTurn = vi.fn(async () => "unrelated child turn survived");
   const foreignCommand = withSessionTurn(
@@ -250,7 +228,7 @@ it("cancelling a watched main/global child preserves the other agent's work", as
     onInterrupt: interruptChild,
   });
   try {
-    const cancelled = await cancelChild(cfg, parentKey, "watched-global-run");
+    const cancelled = await cancelChild(cfg, parentKey, "main-1");
     expect(cancelled.details).toMatchObject({ found: true, killed: true });
     expect(interruptChild).toHaveBeenCalledOnce();
     expect(loadSessionEntry(sessionScope(childStorePath))?.abortedLastRun).not.toBe(true);
@@ -282,21 +260,28 @@ it("cancelling a watched main/global child preserves the other agent's work", as
   }
 });
 
-async function prepareWatchedRawChildren() {
+async function prepareWatchedRawChildren(watchResearch = true) {
   const cfg = rawConfig();
   setRuntimeConfigSnapshot(cfg);
   let sequence = 0;
+  const dispatched: Record<string, unknown>[] = [];
   const callGateway: AgentToolGatewayRequestCaller = async (request) => {
     if (request.method !== "agent") {
       throw new Error(`Unexpected tool RPC ${request.method}`);
     }
     request.assertDispatchCurrent?.();
     const params = request.params as { agentId: string };
+    dispatched.push(params);
     return { runId: `${params.agentId}-${++sequence}`, status: "accepted" } as never;
   };
   const children = new Map<string, { storePath: string; parentKey: string }>();
   for (const agentId of ["main", "research"]) {
-    children.set(agentId, await rawChild(agentId));
+    children.set(
+      agentId,
+      agentId === "research" && !watchResearch
+        ? { storePath: await writeSession(agentId, "global", "research-global"), parentKey: "" }
+        : await rawChild(agentId),
+    );
   }
   const send = (agentId: string, turn: string, mode: "followup" | "steer" = "followup") =>
     sendWatched(
@@ -309,9 +294,11 @@ async function prepareWatchedRawChildren() {
       },
       mode,
     );
-  expect((await send("main", "main-turn")).details).toMatchObject({ status: "accepted" });
-  expect((await send("research", "research-turn")).details).toMatchObject({ status: "accepted" });
-  return { cfg, children, send };
+  expectAccepted(await send("main", "main-turn"), { watched: false });
+  if (watchResearch) {
+    expectAccepted(await send("research", "research-turn"));
+  }
+  return { cfg, children, send, dispatched };
 }
 
 it.each([
@@ -409,8 +396,7 @@ it("numbers watched raw children independently and keeps their completion owner"
     parentSessionKey: otherParentKey,
     parentSessionId: "main-other-parent",
   });
-  const sent = await send("main", "main-next-turn");
-  expect(sent.details, JSON.stringify(sent.details)).toMatchObject({ status: "accepted" });
+  expectAccepted(await send("main", "main-next-turn"));
   expect(getSubagentRunByRunId("main-3")).toMatchObject({
     childAgentId: "main",
     generation: 2,
@@ -441,10 +427,7 @@ it("steers its watched raw child while another agent has a newer row", async () 
     const sent = await withoutGatewayToolCallerIdentity(() =>
       withGatewayToolCallerIdentity(caller, () => send("main", "main-turn", "steer")),
     );
-    expect(sent.details, JSON.stringify(sent.details)).toMatchObject({
-      status: "accepted",
-      targetDisposition: "steered",
-    });
+    expectAccepted(sent, { targetDisposition: "steered" });
     expect(queueMessage).toHaveBeenCalledOnce();
     expect(
       await loadTranscriptEvents({
@@ -531,10 +514,7 @@ it.each(["main-3", "main-4"])(
     const followups: Promise<string>[] = [];
     try {
       for (const runId of ["main-3", "main-4"]) {
-        expect((await send("main", "main-turn")).details).toMatchObject({
-          status: "accepted",
-          runId,
-        });
+        expectAccepted(await send("main", "main-turn"), { runId });
         followups.push(
           withSessionTurn({ ...turn, controllerInput: reserve(runId) }, async () => {
             completed.push(runId);
@@ -598,13 +578,11 @@ it("keeps a watched registration current while the other raw owner commits", asy
       pending,
       "Watched registration settled before its registry write",
     );
-    expect((await send("research", "research-concurrent-turn")).details).toMatchObject({
-      status: "accepted",
-    });
+    expectAccepted(await send("research", "research-concurrent-turn"));
   } finally {
     release.resolve();
   }
-  expect((await pending).details).toMatchObject({ status: "accepted" });
+  expectAccepted(await pending);
   expect(getSubagentRunByRunId("main-3")).toMatchObject({
     generation: 2,
     requesterTurnRunId: "main-concurrent-turn",
@@ -642,7 +620,13 @@ it.each(["admin", "bulk", "tool"] as const)(
     expect(getSubagentRunByRunId("main-legacy")?.childAgentId).toBeUndefined();
     const before = structuredClone(research);
     const sessionBefore = loadSessionEntry(sessionScope(storePath));
-    const { followup, target } = queueFollowup(cfg, storePath, "legacy-global", "research");
+    const { followup, target } = queueFollowup(
+      storePath,
+      "legacy-global",
+      "global",
+      "research",
+      cfg,
+    );
 
     try {
       const result =
@@ -697,7 +681,6 @@ it.each([
       runId: "unbound-incarnation",
       childSessionKey: sessionKey,
       childAgentId,
-      requesterSessionKey: "agent:main:main",
       childSessionIdentity: undefined,
       generation: 1,
     });
@@ -708,7 +691,6 @@ it.each([
       runId: "next-incarnation",
       childSessionKey: sessionKey,
       childAgentId: "main",
-      requesterSessionKey: "agent:main:main",
       childSessionIdentity: sessionBefore,
       generation: 2,
     });
@@ -757,13 +739,7 @@ it.each([
     if (bindNativeRun) {
       bindGatewayContextResolver(legacyRun, () => context);
     }
-    const { followup, target } = queueFollowup(
-      cfg,
-      storePath,
-      sessionBefore!.sessionId,
-      "main",
-      sessionKey,
-    );
+    const { followup, target } = queueFollowup(storePath, sessionBefore!.sessionId, sessionKey);
     fixture.worker.mockClear();
     try {
       expect(await cancelAdmin(storePath, sessionKey, "unbound-incarnation", 2)).toEqual({
@@ -812,7 +788,6 @@ it.each(["registration", "execution target"] as const)(
       runId,
       childSessionKey: sessionKey,
       childAgentId: "main",
-      requesterSessionKey: "agent:main:main",
       childSessionIdentity: {
         sessionId,
         lifecycleRevision: identitySource === "registration" ? undefined : lifecycleRevision,
@@ -834,13 +809,7 @@ it.each(["registration", "execution target"] as const)(
     const handle = createEmbeddedRunHandle({ runId, abort });
     abort.mockImplementation(() => detachActiveEmbeddedRun(sessionId, handle, sessionKey));
     attachActiveEmbeddedRun(sessionId, handle, sessionKey, storePath, undefined, "main");
-    const { followup, target } = queueFollowup(
-      { session: { store: storePath } },
-      storePath,
-      sessionId,
-      "main",
-      sessionKey,
-    );
+    const { followup, target } = queueFollowup(storePath, sessionId, sessionKey);
     fixture.worker.mockClear();
     try {
       expect(await cancelAdmin(storePath, sessionKey, runId)).toMatchObject({

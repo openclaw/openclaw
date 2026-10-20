@@ -2,15 +2,12 @@
 // oxfmt-ignore
 import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { existsSync } from "node:fs";
-import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import { assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import * as sync from "../../../../test/helpers/promise.js";
 import * as sqlite from "../../../../test/helpers/sqlite-parent-observer.js";
 import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
-import {
-  loadExactSessionEntryReadOnly,
-  replaceSessionEntrySync,
-} from "../../../config/sessions/session-accessor.js";
+import * as sessions from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import * as pluginHooks from "../../../plugins/hook-runner-global.js";
@@ -24,49 +21,36 @@ import * as embedded from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { createOpenClawToolsAsync } from "../../openclaw-tools.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
-import {
-  createSubagentRunParams,
-  createSubagentRunRecord,
-  isSubagentRegistryWriteCommand,
-} from "../../subagent-test-fixtures.test-helpers.js";
+import * as records from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import { holdQueuedSwarmRun, releaseSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import {
-  mutateSubagentRuns,
-  restoreSubagentRunsFromDisk,
-} from "./subagent-registry-persistence.js";
+import * as persistence from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import * as registryState from "./subagent-registry-state.js";
 import { registerSubagentRun } from "./subagent-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 
 const fixture = useSubagentControlFixture();
-beforeEach(async () => {
-  await captureRuntimeConfigAsyncReader()();
-});
+beforeEach(() => captureRuntimeConfigAsyncReader()());
 function seedSession(sessionKey: string, entry: Partial<SessionEntry> = {}, agentId = "main") {
-  replaceSessionEntrySync(
+  sessions.replaceSessionEntrySync(
     { agentId, sessionKey },
     { sessionId: `${sessionKey.split(":").at(-1)}-session`, updatedAt: Date.now(), ...entry },
   );
 }
 
-function observeWrites(
-  runId: string,
-  hooks: {
-    before?: (row: ReturnType<typeof rowToSubagentRunRecord>) => void | Promise<void>;
-    after?: (row: ReturnType<typeof rowToSubagentRunRecord>) => void;
-  },
-) {
+type WriteHook = (row: ReturnType<typeof rowToSubagentRunRecord>) => void | Promise<void>;
+type Hooks = { before?: WriteHook; after?: (row: Parameters<WriteHook>[0]) => void };
+function observeWrites(runId: string, hooks: Hooks) {
   fixture.worker.mockImplementation((context, operation, options) =>
     runSubagentStateWorkerOperation(
       context,
       (scope) =>
         operation({
           execute: async (command, commandOptions) => {
-            const value = isSubagentRegistryWriteCommand(command)
+            const value = records.isSubagentRegistryWriteCommand(command)
               ? command.input.values.find((candidate) => candidate.run_id === runId)
               : undefined;
             const row = value ? rowToSubagentRunRecord(value) : null;
@@ -84,41 +68,38 @@ function observeWrites(
   );
 }
 function registration(runId: string, sessionKey: string, task = "original") {
-  return createSubagentRunParams({
+  return records.createSubagentRunParams({
     runId,
     childSessionKey: sessionKey,
-    sessionEntry: loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
+    sessionEntry: sessions.loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry,
     requesterAgentId: "main",
     task,
     expectsCompletionMessage: false,
   });
 }
 async function subagentsTool(config = getRuntimeConfig(), agentSessionKey = "agent:main:main") {
-  const tool = (
-    await createOpenClawToolsAsync({
-      config,
-      agentSessionKey,
-      workspaceDir: fixture.stateDir,
-      disableMessageTool: true,
-    })
-  ).find((candidate) => candidate.name === "subagents");
-  if (!tool) {
-    throw new Error("Missing registered subagents tool");
-  }
+  const tools = await createOpenClawToolsAsync({
+    config,
+    agentSessionKey,
+    workspaceDir: fixture.stateDir,
+    disableMessageTool: true,
+  });
+  const tool = tools.find((candidate) => candidate.name === "subagents");
+  assert(tool, "Missing registered subagents tool");
   return tool;
 }
 
 // Native fixture handles must remain attached to their admitted controller turn until cleanup.
 async function admitNativeRun(runId: string, sessionKey: string, detachOnAbort = true) {
   const sessionId = `${runId}-session`;
+  const admitted = sync.createDeferred();
+  const release = sync.createDeferred();
   const abort = vi.fn(() => {
     if (detachOnAbort) {
       embedded.detachActiveEmbeddedRun(sessionId, handle, sessionKey);
     }
   });
   const handle = createEmbeddedRunHandle({ runId, abort });
-  const admitted = createDeferred();
-  const release = createDeferred();
   const originalAbort = handle.abort;
   handle.abort = (...args) => {
     try {
@@ -130,24 +111,19 @@ async function admitNativeRun(runId: string, sessionKey: string, detachOnAbort =
   const settlement = withSessionTurn(
     { sessionKey, sessionId, agentId: "main" },
     async (operation) => {
-      if (!operation) {
-        throw new Error("Native fixture did not receive controller turn admission");
-      }
+      assert(operation, "Native fixture did not receive controller turn admission");
       embedded.attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main", operation);
       admitted.resolve();
       await release.promise;
     },
   );
   await Promise.race([admitted.promise, settlement]);
-  return {
-    id: runId,
-    abort,
-    finish: async () => {
-      embedded.detachActiveEmbeddedRun(sessionId, handle, sessionKey);
-      release.resolve();
-      await settlement;
-    },
+  const finish = async () => {
+    embedded.detachActiveEmbeddedRun(sessionId, handle, sessionKey);
+    release.resolve();
+    await settlement;
   };
+  return { id: runId, abort, finish };
 }
 
 it.each(["caller admission", "session generation"] as const)(
@@ -160,18 +136,16 @@ it.each(["caller admission", "session generation"] as const)(
     await registerSubagentRun(registration(runId, sessionKey, "Stop admitted work"));
     const caller = new AbortController();
     const nativeRun = await admitNativeRun(runId, sessionKey, false);
-    const { abort } = nativeRun;
     let retiredAfterAck = false;
     observeWrites(runId, {
       after: (row) => {
-        if (!row?.killIntent || retiredAfterAck) {
-          return;
-        }
-        retiredAfterAck = true;
-        if (retirement === "caller admission") {
-          caller.abort(new Error("Caller retired after commit"));
-        } else {
-          seedSession(sessionKey, { lifecycleRevision: "replacement" });
+        if (row?.killIntent && !retiredAfterAck) {
+          retiredAfterAck = true;
+          if (retirement === "caller admission") {
+            caller.abort(new Error("Caller retired after commit"));
+          } else {
+            seedSession(sessionKey, { lifecycleRevision: "replacement" });
+          }
         }
       },
     });
@@ -181,11 +155,7 @@ it.each(["caller admission", "session generation"] as const)(
     sql?.calibrate();
     let counts: number[] | undefined;
     try {
-      const cancellation = tool.execute(
-        "retired-caller-stop",
-        { action: "cancel", runId },
-        caller.signal,
-      );
+      const cancellation = tool.execute("stop", { action: "cancel", runId }, caller.signal);
       if (retirement === "caller admission") {
         await expect(cancellation).rejects.toThrow("Caller retired after commit");
       } else {
@@ -198,17 +168,14 @@ it.each(["caller admission", "session generation"] as const)(
       await nativeRun.finish();
     }
     expect(retiredAfterAck).toBe(true);
-    expect(abort).not.toHaveBeenCalled();
+    expect(nativeRun.abort).not.toHaveBeenCalled();
     const persisted = loadSubagentRegistryFromSqlite().get(runId);
     expect([persisted?.killIntent, persisted?.execution.endedAt]).toEqual([undefined, undefined]);
     if (counts) {
       expect(counts).toEqual(counts.map(() => 0));
     } else {
-      const entry = loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry;
-      expect(entry).toMatchObject({
-        sessionId,
-        lifecycleRevision: "replacement",
-      });
+      const entry = sessions.loadExactSessionEntryReadOnly({ agentId: "main", sessionKey })?.entry;
+      expect(entry).toMatchObject({ sessionId, lifecycleRevision: "replacement" });
       expect(entry?.abortedLastRun).not.toBe(true);
     }
   },
@@ -216,21 +183,21 @@ it.each(["caller admission", "session generation"] as const)(
 
 it.each(["same-ID replacement", "cold hydration"] as const)(
   "preserves registered Stop selection across %s",
-  async (kind) => {
-    await withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
+  async (kind) =>
+    withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
       const runId = "replace-during-control-preparation";
       const sessionKey = `agent:main:subagent:${runId}`;
       seedSession(sessionKey, { lifecycleRevision: "same-session" });
-      const originalRegistration = registration(runId, sessionKey);
-      await registerSubagentRun(originalRegistration);
+      const params = registration(runId, sessionKey);
+      await registerSubagentRun(params);
       const original = subagentRuns.get(runId)!;
       if (kind === "cold hydration") {
         subagentRuns.clear();
       }
       const tool = await subagentsTool();
       registryState.clearSubagentRunsReadCacheForTest();
-      const entered = createDeferred();
-      const release = createDeferred();
+      const entered = sync.createDeferred();
+      const release = sync.createDeferred();
       const prepareReadCache = registryState.prepareSubagentSessionListReadCache;
       vi.spyOn(registryState, "prepareSubagentSessionListReadCache").mockImplementationOnce(
         async () => {
@@ -240,21 +207,18 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
         },
       );
       const pending = tool
-        .execute("prepared-stop", { action: "cancel", runId })
+        .execute("stop", { action: "cancel", runId })
         .catch((error: unknown) => error);
       let nativeRun: Awaited<ReturnType<typeof admitNativeRun>> | undefined;
       try {
-        await Promise.race([
-          entered.promise,
-          pending.then(() => {
-            throw new Error("Stop skipped control preparation");
-          }),
-        ]);
+        await sync.awaitGateBeforeSettlement(entered.promise, pending, "Stop skipped preparation");
         if (kind === "same-ID replacement") {
-          await registerSubagentRun({ ...originalRegistration, task: "successor" });
+          await registerSubagentRun({ ...params, task: "successor" });
         } else {
           // The existing startup owner hydrates the persisted row; this is not an absence witness.
-          expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBeGreaterThan(0);
+          expect(
+            await persistence.restoreSubagentRunsFromDisk({ runs: subagentRuns }),
+          ).toBeGreaterThan(0);
         }
         const successor = subagentRuns.get(runId)!;
         expect(successor).not.toBe(original);
@@ -264,17 +228,16 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
           expect(successor.generation).toBe(original.generation);
         }
         nativeRun = await admitNativeRun(runId, sessionKey);
-        const { abort } = nativeRun;
         release.resolve();
         const outcome = await pending;
         await fixture.settle();
         if (kind === "same-ID replacement") {
-          expect(abort, "Stop must not transfer to newly registered work").not.toHaveBeenCalled();
+          expect(nativeRun.abort).not.toHaveBeenCalled();
           expect(outcome).toBeInstanceOf(Error);
           expect(subagentRuns.get(runId)?.execution.endedAt).toBeUndefined();
         } else {
           expect(outcome).toMatchObject({ details: { found: true, killed: true } });
-          expect(abort).toHaveBeenCalledOnce();
+          expect(nativeRun.abort).toHaveBeenCalledOnce();
           expect(loadSubagentRegistryFromSqlite().get(runId)?.endedReason).toBe("subagent-killed");
         }
       } finally {
@@ -282,8 +245,7 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
         await pending;
         await nativeRun?.finish();
       }
-    });
-  },
+    }),
 );
 
 it.each([
@@ -309,23 +271,19 @@ it.each([
     const opaqueParentId = kind === "subagent caller with opaque id";
     const keyedParent = kind === "subagent caller with cross-agent key";
     const earlierSuccess = kind === "earlier success";
-    const completesDuringStop = kind === "completion" || earlierSuccess;
-    const fixtureStartedAt = Date.now();
-    const clock = earlierSuccess
-      ? vi.spyOn(Date, "now").mockReturnValue(fixtureStartedAt)
-      : undefined;
-    if (clock) {
-      onTestFinished(() => clock.mockRestore());
-    }
+    const terminalRace = kind === "completion" || earlierSuccess;
+    const startedAt = Date.now();
+    const clock = earlierSuccess ? vi.spyOn(Date, "now").mockReturnValue(startedAt) : undefined;
+    onTestFinished(() => clock?.mockRestore());
     const endedHook = vi.fn(async () => {});
+    const reply = { disposition: "visible", text: "Completed before Stop" };
     if (earlierSuccess) {
-      const registry = createMockPluginRegistry([
-        { hookName: "subagent_ended", handler: endedHook },
-      ]);
+      const hook = { hookName: "subagent_ended", handler: endedHook };
+      const registry = createMockPluginRegistry([hook]);
       vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReturnValue(registry);
       pluginHooks.initializeGlobalHookRunner(registry);
       onTestFinished(pluginHooks.resetGlobalHookRunner);
-      fixture.capture.mockResolvedValue("Completed before Stop");
+      fixture.capture.mockResolvedValue(reply.text);
     }
     const requester = subagentCaller ? "agent:main:subagent:controller" : "agent:main:main";
     const config = structuredClone(getRuntimeConfig());
@@ -335,29 +293,17 @@ it.each([
       const parentKey = `agent:${parentAgentId}:controller-parent`;
       config.agents ??= {};
       config.agents.defaults ??= {};
-      config.agents.defaults.subagents = {
-        ...config.agents.defaults.subagents,
-        maxSpawnDepth: 2,
-      };
+      config.agents.defaults.subagents = { ...config.agents.defaults.subagents, maxSpawnDepth: 2 };
       seedSession(requester, {
         sessionId: "controller-session",
         lifecycleRevision: "controller-original",
         spawnedBy: keyedParent ? parentKey : parentId,
       });
-      seedSession(
-        parentKey,
-        {
-          sessionId: keyedParent ? "controller-parent-session" : parentId,
-          spawnDepth: 0,
-        },
-        parentAgentId,
-      );
+      const parent = { sessionId: keyedParent ? "parent-session" : parentId, spawnDepth: 0 };
+      seedSession(parentKey, parent, parentAgentId);
       if (opaqueParentId) {
-        seedSession(
-          "agent:other:controller-decoy",
-          { sessionId: parentId, spawnDepth: 7 },
-          "other",
-        );
+        const decoy = { sessionId: parentId, spawnDepth: 7 };
+        seedSession("agent:other:controller-decoy", decoy, "other");
       }
       expect(
         await withPreparedSessionCapabilityRead(() =>
@@ -365,35 +311,29 @@ it.each([
         ),
       ).toMatchObject({ controlScope: "children" });
     }
-    const terminalEntered = createDeferred();
-    const terminalRelease = createDeferred();
+    const entered = sync.createDeferred();
+    const release = sync.createDeferred();
     let heldTerminal = false;
     let admission: lifecycle.SessionEffectRef | undefined;
     let runnerSettlement: Promise<void> | undefined;
-    if (completesDuringStop) {
+    if (terminalRace) {
       observeWrites(runId, {
         before: (row) => {
           if (!heldTerminal && row?.execution.status === "terminal") {
             heldTerminal = true;
-            terminalEntered.resolve();
-            return terminalRelease.promise;
+            entered.resolve();
+            return release.promise;
           }
         },
       });
     }
     if (queued) {
-      expect(
-        reserveSwarmRun({
-          runId,
-          groupId: runId,
-          maxConcurrent: 1,
-          activeRunIds: [capacityOwner],
-        }),
-      ).toBe(true);
+      const capacity = { runId, groupId: runId, maxConcurrent: 1, activeRunIds: [capacityOwner] };
+      expect(reserveSwarmRun(capacity)).toBe(true);
     }
     for (const id of [runId, siblingId]) {
       if (missingStore && id === runId) {
-        const retained = createSubagentRunRecord({
+        const retained = records.createSubagentRunRecord({
           runId: id,
           childSessionKey: key(id),
           childAgentId: "missing",
@@ -404,18 +344,14 @@ it.each([
           collect: true,
           expectsCompletionMessage: false,
         });
-        await mutateSubagentRuns([id], () => ({
+        await persistence.mutateSubagentRuns([id], () => ({
           value: undefined,
           postimages: new Map([[id, retained]]),
         }));
         continue;
       }
-      seedSession(key(id), {
-        lifecycleRevision: `${id}-revision`,
-        inputTokens: 11,
-        outputTokens: 7,
-        totalTokens: 18,
-      });
+      const usage = { inputTokens: 11, outputTokens: 7, totalTokens: 18 };
+      seedSession(key(id), { lifecycleRevision: `${id}-revision`, ...usage });
       await registerSubagentRun({
         ...registration(id, key(id), id),
         requesterSessionKey: requester,
@@ -431,35 +367,24 @@ it.each([
       handles.push(await admitNativeRun(id, key(id)));
     }
     const tool = await subagentsTool(config, requester);
-    const completedAtBeforeStop = earlierSuccess ? fixtureStartedAt + 1 : Date.now();
-    clock?.mockReturnValue(fixtureStartedAt + 2);
-    if (completesDuringStop) {
+    const completedAt = earlierSuccess ? startedAt + 1 : Date.now();
+    const completed = { status: "ok", endedAt: completedAt, terminalReply: reply };
+    clock?.mockReturnValue(startedAt + 2);
+    if (terminalRace) {
       admission = await lifecycle.beginSessionEffect({
-        scope: resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-          agentId: "main",
-        }),
+        scope: resolveSessionStorePathCore(config.session?.store, { agentId: "main" }),
         identities: [key(runId), `${runId}-session`],
         run: { runId, sessionKey: key(runId), sessionId: `${runId}-session`, agentId: "main" },
         assertAllowed: () => {},
         onInterrupt: () => {
           handles.find(({ id }) => id === runId)!.abort();
           if (earlierSuccess) {
-            expect(subagentRuns.get(runId)?.killIntent?.requestedAt).toBeGreaterThan(
-              completedAtBeforeStop,
-            );
+            expect(subagentRuns.get(runId)?.killIntent?.requestedAt).toBeGreaterThan(completedAt);
           }
-          emitAgentEvent({
-            runId,
-            stream: "lifecycle",
-            data: earlierSuccess
-              ? {
-                  phase: "end",
-                  status: "ok",
-                  endedAt: completedAtBeforeStop,
-                  terminalReply: { disposition: "visible", text: "Completed before Stop" },
-                }
-              : { phase: "end", status: "error", aborted: true, endedAt: Date.now() },
-          });
+          const terminal = earlierSuccess
+            ? completed
+            : { status: "error", aborted: true, endedAt: Date.now() };
+          emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end", ...terminal } });
           runnerSettlement = fixture.settle().finally(() => admission?.release());
           return { runId };
         },
@@ -467,8 +392,7 @@ it.each([
     }
     await fixture.settle();
     registryState.clearSubagentRunsReadCacheForTest();
-    // Warm initialization ends here. Count all eight host APIs through Stop and
-    // its owned settlement; independent durable readbacks begin after restore.
+    // Observe host APIs through Stop settlement; restore before independent durable readbacks.
     const sql = sqlite.observeParentSqlite();
     let counts: ReturnType<typeof sqlite.emptySqliteCounts>;
     let unexpectedHold: ReturnType<typeof holdQueuedSwarmRun>;
@@ -481,27 +405,24 @@ it.each([
           settled = true;
           return result;
         });
-      if (completesDuringStop) {
-        await Promise.race([
-          terminalEntered.promise,
-          cancellation.then(() => {
-            throw new Error("Stop settled before its terminal writer was admitted");
-          }),
-        ]);
+      if (terminalRace) {
+        await sync.awaitGateBeforeSettlement(
+          entered.promise,
+          cancellation,
+          "Stop skipped terminal write",
+        );
         expect(settled, "Stop joins the runner's held terminal publication").toBe(false);
-        terminalRelease.resolve();
+        release.resolve();
       }
       const result = await cancellation;
-      expect(result.details, JSON.stringify(result.details)).toMatchObject({
-        found: true,
-        killed: !earlierSuccess,
-        runId,
-        ...(earlierSuccess ? { targetState: { task: { status: "succeeded" } } } : {}),
-      });
+      expect(result.details).toMatchObject({ found: true, killed: !earlierSuccess, runId });
+      if (earlierSuccess) {
+        expect(result.details).toMatchObject({ targetState: { task: { status: "succeeded" } } });
+      }
       await fixture.settle();
       await runnerSettlement;
     } finally {
-      terminalRelease.resolve();
+      release.resolve();
       admission?.release();
       await Promise.allSettled([runnerSettlement, cancellation]);
       counts = { ...sql.counts };
@@ -512,9 +433,8 @@ it.each([
       await Promise.all(handles.map((nativeRun) => nativeRun.finish()));
       releaseSwarmRun(capacityOwner);
       if (missingStore) {
-        expect
-          .soft(existsSync(missingPath), "Stop must not provision the missing child store")
-          .toBe(false);
+        const provisioned = existsSync(missingPath);
+        expect.soft(provisioned, "Stop created the missing child store").toBe(false);
       }
     }
     try {
@@ -530,15 +450,12 @@ it.each([
       });
       expect(persisted.get(siblingId)?.execution.endedAt).toBeUndefined();
       const entry = !missingStore
-        ? loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(runId) })?.entry
+        ? sessions.loadExactSessionEntryReadOnly({ agentId: "main", sessionKey: key(runId) })?.entry
         : undefined;
       if (!missingStore) {
+        const status = earlierSuccess ? "done" : kind === "completion" ? "killed" : undefined;
         expect(entry).toMatchObject({
-          ...(earlierSuccess
-            ? { status: "done" }
-            : kind === "completion"
-              ? { status: "killed" }
-              : { abortedLastRun: true }),
+          ...(status ? { status } : { abortedLastRun: true }),
           endedAt: expect.any(Number),
         });
       }
@@ -559,7 +476,7 @@ it.each([
         expect(target).toMatchObject({
           execution: { outcome: { status: "ok" } },
           endedHookEmittedAt: expect.any(Number),
-          completion: { resultText: "Completed before Stop" },
+          completion: { resultText: reply.text },
         });
         expect(endedHook).toHaveBeenCalledOnce();
         expect(entry?.abortedLastRun).not.toBe(true);

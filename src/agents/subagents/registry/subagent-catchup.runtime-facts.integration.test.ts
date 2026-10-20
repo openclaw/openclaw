@@ -4,7 +4,7 @@ import {
   makeRestartRecoveryRun,
   useSubagentRestartRecoveryFixture,
 } from "./subagent-restart-recovery.test-support.js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
@@ -57,13 +57,11 @@ function completedChild(overrides: Parameters<typeof makeRestartRecoveryRun>[0])
     ...overrides,
   });
 }
-function completion(text = RESULT) {
-  return {
-    required: true,
-    terminalReply: prepareAgentRunTerminalReply({ rawText: text }).terminalReply,
-    resultText: text,
-  };
-}
+const completion = (text = RESULT) => ({
+  required: true,
+  terminalReply: prepareAgentRunTerminalReply({ rawText: text }).terminalReply,
+  resultText: text,
+});
 const factParams = (sessionKey = PARENT) => ({
   cfg: getRuntimeConfig(),
   agentId: "main",
@@ -118,9 +116,7 @@ it("reads a cold private envelope without changing delivery or processing receip
       provenance: { kind: "inter_session", sourceTool: "subagent_announce" },
     },
   });
-  if (!receipt?.completeAsync) {
-    throw new Error("Expected a private processing completion owner");
-  }
+  assert(receipt?.completeAsync, "Expected a private processing completion owner");
   await receipt.completeAsync(buildAgentRunTerminalOutcome({ status: "ok" }));
   receipt.finish("interrupted");
   await resetSubagentRegistryForTests({ persist: false });
@@ -135,9 +131,7 @@ it("reads a cold private envelope without changing delivery or processing receip
   const beforeReceipts = receipts();
   expect(before).toHaveLength(1);
   const payload = before[0]?.payload_json;
-  if (typeof payload !== "string") {
-    throw new Error("Expected the persisted private envelope");
-  }
+  assert(typeof payload === "string", "Expected the persisted private envelope");
   expect(JSON.parse(payload)).toMatchObject({
     parentCompletion: { completionTarget: "parent", completionRequesterSessionId: sessionId },
   });
@@ -164,9 +158,7 @@ it("reads a cold private envelope without changing delivery or processing receip
       expect(text).toContain('run_json="private-catchup"');
       expect(text).toContain("result_truncated=true");
       const encoded = text.split("result_json=")[1]?.split("; result_truncated=")[0];
-      if (!encoded) {
-        throw new Error("Expected a quoted bounded result");
-      }
+      assert(encoded, "Expected a quoted bounded result");
       expect(JSON.parse(encoded)).toBe(result.slice(0, 2_000));
     } else {
       expect(facts).toEqual([temporalFact]);
@@ -351,9 +343,7 @@ it("keeps requester and controller reads scoped after committed ownership change
   await restoreSubagentRunsFromDisk({ runs: subagentRuns, mergeOnly: true });
   await mutateSubagentRuns([child.runId], (rows) => {
     const current = rows.get(child.runId);
-    if (!current) {
-      throw new Error("Expected retained child after version refresh");
-    }
+    assert(current, "Expected retained child after version refresh");
     const redirected = {
       ...current,
       requesterSessionKey: "agent:main:moved",

@@ -1,4 +1,4 @@
-import { onTestFinished, vi } from "vitest";
+import { assert, onTestFinished, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { WRITE_SCOPE } from "../../../gateway/method-scopes.js";
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
@@ -27,9 +27,7 @@ export const registrationDefaults = {
   cleanup: "keep" as const,
   expectsCompletionMessage: false,
 };
-function rejectUntypedTurn(): never {
-  throw new Error("Expected the typed agent turn facade");
-}
+const rejectUntypedTurn = () => assert.fail("Expected the typed agent turn facade");
 
 export function installEndedHook(handler: () => Promise<void>) {
   const { registry, runner } = createHookRunnerWithRegistry([
@@ -52,16 +50,15 @@ export function completeRegistered(
   });
 }
 
-export function updateRun(runId: string, edit: (draft: SubagentRunRecord) => void) {
-  return mutateSubagentRuns([runId], (rows) => {
+export const updateRun = (runId: string, edit: (draft: SubagentRunRecord) => void) =>
+  mutateSubagentRuns([runId], (rows) => {
     const next = structuredClone(rows.get(runId)!);
     edit(next);
     return { value: undefined, postimages: new Map([[runId, next]]) };
   });
-}
 
-export function suspendRun(runId: string) {
-  return updateRun(runId, (draft) => {
+export const suspendRun = (runId: string) =>
+  updateRun(runId, (draft) => {
     draft.delivery = {
       ...draft.delivery,
       status: "suspended",
@@ -69,14 +66,13 @@ export function suspendRun(runId: string) {
       suspendedReason: "expiry",
     };
   });
-}
 
-export function registerSuccessor(
+export const registerSuccessor = (
   run: SubagentRunRecord,
   task: string,
   options: Partial<Registration> = {},
-) {
-  return registerSubagentRun({
+) =>
+  registerSubagentRun({
     ...registrationDefaults,
     runId: run.runId,
     childSessionKey: run.childSessionKey,
@@ -84,7 +80,6 @@ export function registerSuccessor(
     task,
     ...options,
   });
-}
 
 export function announcementFixture(
   fixture: ReturnType<typeof useSubagentControlFixture>,
@@ -97,26 +92,17 @@ export function announcementFixture(
     > & { holdForRequester?: boolean } = {},
   ) => {
     const { holdForRequester, ...overrides } = options;
+    const write = writeChildSession.bind(null, fixture.stateDir);
     const childSessionKey = `agent:main:subagent:${runId}`;
     const sessionEntry = {
       sessionId: delivery ? `${runId}-session` : "ordinary-child-session",
       lifecycleRevision: delivery ? "original-child" : "ordinary-child-revision",
     };
-    await writeChildSession(
-      fixture.stateDir,
-      childSessionKey,
-      sessionEntry.sessionId,
-      sessionEntry.lifecycleRevision,
-    );
+    await write(childSessionKey, sessionEntry.sessionId, sessionEntry.lifecycleRevision);
     fixture.capture.mockResolvedValue("Synthetic completed result.");
     let gatewayContextResolver: Registration["gatewayContextResolver"];
     if (delivery) {
-      await writeChildSession(
-        fixture.stateDir,
-        "agent:main:main",
-        "synthetic-requester-session",
-        "original-requester",
-      );
+      await write("agent:main:main", "synthetic-requester-session", "original-requester");
       const context = createContext(
         [["agent", WRITE_SCOPE, "test", rejectUntypedTurn]],
         getRuntimeConfig,
@@ -172,18 +158,14 @@ export function withUnreadableReceipt<T>(
         async execute(command, executeOptions) {
           const selected = select(command);
           const result = await scope.execute(command, executeOptions);
-          if (selected) {
-            onLost();
-            admission?.service();
-            if (!admission?.committed) {
-              throw new Error(
-                "Expected a committed native receipt before losing its acknowledgement",
-              );
-            }
-            Object.defineProperty(admission, "committed", { value: { facts: undefined } });
-            throw new SqliteWorkerError("Unreadable registry acknowledgement", "outcome-unknown");
+          if (!selected) {
+            return result;
           }
-          return result;
+          onLost();
+          admission?.service();
+          assert(admission?.committed, "Missing committed native receipt");
+          Object.defineProperty(admission, "committed", { value: { facts: undefined } });
+          throw new SqliteWorkerError("Unreadable registry acknowledgement", "outcome-unknown");
         },
       }),
     {
