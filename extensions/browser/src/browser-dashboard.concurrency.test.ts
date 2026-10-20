@@ -219,7 +219,6 @@ describe("Browser dashboard operation ordering", () => {
       }
       fixture.widgets = [];
       const reading = barrier();
-      const pauseRead = async () => await reading.block();
       let remainingReads = phase === "intents" ? 2 : 1;
       const storeRead =
         phase !== "board"
@@ -227,7 +226,7 @@ describe("Browser dashboard operation ordering", () => {
               ...store,
               entries: async () => {
                 if (--remainingReads === 0) {
-                  await pauseRead();
+                  await reading.block();
                 }
                 return await store.entries();
               },
@@ -235,7 +234,7 @@ describe("Browser dashboard operation ordering", () => {
           : undefined;
       if (phase === "board") {
         fixture.readBoard.mockImplementationOnce(async () => {
-          await pauseRead();
+          await reading.block();
           return { sessionKey, widgets: [] };
         });
       }
@@ -320,7 +319,6 @@ describe("Browser dashboard operation ordering", () => {
     async (failure) => {
       const openingGate = barrier();
       const followerRead = createDeferred<void>();
-      const stopping = failure.startsWith("stop ");
       const cancelInitiator = failure === "stop after resume";
       browser.open.mockImplementation(async () => {
         await setImmediate();
@@ -345,7 +343,7 @@ describe("Browser dashboard operation ordering", () => {
       const settled = Promise.allSettled([opening, waiting]);
       await followerRead.promise;
       await setImmediate();
-      const stopCall = stopping ? stopBrowserDashboard(request) : undefined;
+      const stopCall = failure.startsWith("stop ") ? stopBrowserDashboard(request) : undefined;
       if (cancelInitiator) {
         initiator.abort(new Error("initiator cancelled"));
       }

@@ -19,21 +19,16 @@ const {
 } = await import("./browser-control-state.js");
 
 const resolved = { profiles: {}, controlPort: 18_791 } as never;
-const onWarn = vi.fn();
 const runtimeParams = { server: null, port: 18_791, resolved };
 const expectState = (state: unknown, work: boolean) =>
-  expect({ state: getBrowserControlState(), work: hasBrowserControlWork() }).toEqual({
-    state,
-    work,
-  });
+  expect([getBrowserControlState(), hasBrowserControlWork()]).toEqual([state, work]);
 
 function start(server: Server | null = null) {
   return withBrowserControlStart(() => ensureBrowserControlRuntime({ ...runtimeParams, server }));
 }
 
-function stop(requestedBy: "server" | "service") {
-  return stopBrowserControlRuntime({ requestedBy, onWarn });
-}
+const stop = (requestedBy: "server" | "service") =>
+  stopBrowserControlRuntime({ requestedBy, onWarn: vi.fn() });
 
 beforeEach(() => {
   stopRuntime.mockReset().mockImplementation(async (params) => params.clearState());
@@ -49,10 +44,7 @@ describe("browser control lifecycle", () => {
   it("rejects new starts while ordinary shutdown is pending", async () => {
     await start();
     const gate = Promise.withResolvers<void>();
-    stopRuntime.mockImplementationOnce(async (params) => {
-      await gate.promise;
-      params.clearState();
-    });
+    stopRuntime.mockImplementationOnce(({ clearState }) => gate.promise.then(clearState));
     const stopping = stop("service");
     try {
       await expect(start()).rejects.toThrow("Browser runtime is stopping.");
@@ -71,10 +63,8 @@ describe("browser control lifecycle", () => {
       markBrowserRuntimeStopping(params.current);
       throw new Error("cleanup failed");
     });
-
     await expect(stop("service")).rejects.toThrow("cleanup failed");
     expectState(null, true);
-
     await expect(stop("service")).resolves.toBeTruthy();
     expect(hasBrowserControlWork()).toBe(false);
     await expect(start()).resolves.toBeTruthy();
@@ -84,12 +74,10 @@ describe("browser control lifecycle", () => {
     const serviceState = await start();
     const server = {} as Server;
     const serverState = await start(server);
-
     expect(serverState).toBe(serviceState);
     expect(serverState.server).toBe(server);
     await stop("service");
     expect(stopRuntime).not.toHaveBeenCalled();
-
     await stop("server");
     expect(stopRuntime).toHaveBeenCalledOnce();
   });
@@ -104,9 +92,7 @@ describe("browser control lifecycle", () => {
     expectState(null, true);
     const stopping = stop("service");
     startGate.resolve();
-
-    await starting;
-    await stopping;
+    await Promise.all([starting, stopping]);
     expect(stopRuntime).toHaveBeenCalledOnce();
     expectState(null, false);
   });
