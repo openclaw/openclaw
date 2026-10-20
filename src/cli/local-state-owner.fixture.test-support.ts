@@ -17,6 +17,7 @@ const ownerTransport = vi.hoisted(() => ({
   revokeBeforeMutation: false,
   current: true,
 }));
+const initialTransport = { ...ownerTransport };
 // Model the separate CLI's lack of hosted custody while retaining the real physical owner and writer guards.
 vi.mock("../infra/gateway-state-owner.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/gateway-state-owner.js")>();
@@ -43,24 +44,18 @@ async function inGateway<T>(run: () => T | Promise<T>): Promise<T> {
 export function useLocalStateOwnerFixture(initialHandlers: GatewayRequestHandlers = {}) {
   const roots = useAutoCleanupTempDirTracker(afterEach);
   const disposers: Array<() => void | Promise<void>> = [];
-  const handlers: GatewayRequestHandlers = {};
   let owner: GatewayLockHandle | null = null;
-  async function invoke(
-    method: string,
-    params: Record<string, unknown>,
-    scopes = ["operator.admin"],
-  ) {
-    const handler = handlers[method];
+  async function invoke(method: string, params: Request["params"], scopes = ["operator.admin"]) {
+    const handler = fixture.handlers[method];
     if (!handler) {
       throw new Error(`Missing handler: ${method}`);
     }
-    const client = { connect: { scopes } } as Request["client"];
     const response: { value?: unknown; error?: unknown } = {};
     await inGateway(() =>
       handler({
         req: { type: "req", id: "fixture", method, params },
         params,
-        client,
+        client: { connect: { scopes } } as Request["client"],
         isWebchatConnect: () => false,
         context: { getRuntimeConfig: () => fixture.config } as Request["context"],
         hasCurrentClientAuthority: () => ownerTransport.current,
@@ -79,6 +74,22 @@ export function useLocalStateOwnerFixture(initialHandlers: GatewayRequestHandler
     }
     return response.value;
   }
+  async function dispatch(options: {
+    method: string;
+    params: Record<string, unknown>;
+    scopes: string[];
+    assertDispatchCurrent(): void;
+  }) {
+    options.assertDispatchCurrent();
+    if (ownerTransport.revokeBeforeMutation) {
+      ownerTransport.current = false;
+    }
+    const result = await invoke(options.method, options.params, options.scopes);
+    if (ownerTransport.failReply) {
+      throw new Error("synthetic connection lost after acceptance");
+    }
+    return result;
+  }
   beforeEach(async () => {
     const root = roots.make("openclaw-cli-state-owner-");
     const stateDir = path.join(root, "state");
@@ -90,36 +101,9 @@ export function useLocalStateOwnerFixture(initialHandlers: GatewayRequestHandler
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "0");
     resetConfigRuntimeState();
-    for (const key of Object.keys(handlers)) {
-      delete handlers[key];
-    }
-    Object.assign(handlers, initialHandlers);
-    Object.assign(ownerTransport, {
-      gatewayContext: false,
-      current: true,
-      failReply: false,
-      revokeBeforeMutation: false,
-    });
-    ownerTransport.request
-      .mockReset()
-      .mockImplementation(
-        async (options: {
-          method: string;
-          params: Record<string, unknown>;
-          scopes: string[];
-          assertDispatchCurrent(): void;
-        }) => {
-          options.assertDispatchCurrent();
-          if (ownerTransport.revokeBeforeMutation) {
-            ownerTransport.current = false;
-          }
-          const result = await invoke(options.method, options.params, options.scopes);
-          if (ownerTransport.failReply) {
-            throw new Error("synthetic connection lost after acceptance");
-          }
-          return result;
-        },
-      );
+    fixture.handlers = { ...initialHandlers };
+    Object.assign(ownerTransport, initialTransport);
+    ownerTransport.request.mockReset().mockImplementation(dispatch);
     fixture.output = "";
     vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
       fixture.output += String(chunk);
@@ -141,19 +125,14 @@ export function useLocalStateOwnerFixture(initialHandlers: GatewayRequestHandler
   const fixture = {
     transport: ownerTransport,
     roots,
-    handlers,
+    handlers: { ...initialHandlers },
     disposers,
     invoke,
     output: "",
     config: { gateway: { mode: "local" as const, port: 18789 } },
     async startOwner(this: void) {
       owner = await inGateway(() =>
-        acquireGatewayLock({
-          env: process.env,
-          port: 18789,
-          allowInTests: true,
-          timeoutMs: 0,
-        }),
+        acquireGatewayLock({ env: process.env, port: 18789, allowInTests: true, timeoutMs: 0 }),
       );
       expect(owner).not.toBeNull();
     },

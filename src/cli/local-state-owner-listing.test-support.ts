@@ -5,7 +5,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/pr
 import { withWorktreeMutationLease } from "../agents/worktrees/allocation.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import type { ManagedWorktreeService } from "../agents/worktrees/service.js";
-import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js";
 import * as backoff from "../infra/backoff.js";
 import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -22,18 +22,11 @@ type ListingOwnerFixture = {
 };
 
 async function seedRecord(fixture: ListingOwnerFixture, id: string) {
-  const record: ManagedWorktreeRecord = {
-    id,
-    name: id,
-    repoRoot: fixture.repo,
-    repoFingerprint: "0123456789abcdef",
+  const record = makeWorktreeRecord(fixture.repo, id, {
     path: path.join(fixture.root, id),
     branch: `openclaw/${id}`,
-    baseRef: "HEAD",
     ownerKind: "manual",
-    createdAt: 1,
-    lastActiveAt: 1,
-  };
+  });
   await insertRegistryWorktree(fixture.env, record, { provisionedPaths: [] });
   return record;
 }
@@ -41,15 +34,9 @@ async function seedRecord(fixture: ListingOwnerFixture, id: string) {
 async function changeOwner(fixture: ListingOwnerFixture, mode: "offline" | "embedded" | "gateway") {
   await closeOpenClawStateDatabaseAsync();
   await fixture.owner?.release();
-  fixture.owner =
-    mode === "offline"
-      ? null
-      : await acquireGatewayLock({
-          env: fixture.env,
-          ...(mode === "embedded" ? { role: "agent-embedded" as const } : { port: fixture.port }),
-          allowInTests: true,
-          timeoutMs: 0,
-        });
+  const target = mode === "embedded" ? { role: "agent-embedded" as const } : { port: fixture.port };
+  const options = { env: fixture.env, ...target, allowInTests: true, timeoutMs: 0 };
+  fixture.owner = mode === "offline" ? null : await acquireGatewayLock(options);
 }
 const readRecord = async (fixture: ListingOwnerFixture, id: string) =>
   (await fixture.service.listRegistryRecords()).find((row) => row.id === id);
@@ -126,7 +113,7 @@ export function registerWorktreeListingOwnerTests(
       await awaitGateBeforeSettlement(
         waiting.promise,
         listing,
-        "Listing settled without respecting worktree mutation custody",
+        "Listing bypassed mutation custody",
       );
       fixture.owner!.assertCurrent();
       expect(await readRecord(fixture, record.id)).toEqual(record);

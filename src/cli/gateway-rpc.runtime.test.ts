@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { addGatewayClientOptions } from "./gateway-rpc.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.types.js";
 
@@ -26,96 +26,69 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllEnvs());
 
-describe("Gateway CLI transport", () => {
-  it.each([
-    ["url", "wss://gateway.example/ws", { url: "wss://gateway.example/ws" }],
-    ["port", "19083", { localPortOverride: 19083 }],
-  ] as const)(
-    "parses and forwards explicit authentication and target --%s",
-    async (option, value, expected) => {
-      const program = new Command().exitOverride();
-      addGatewayClientOptions(program.command("gateway-command")).action((opts: GatewayRpcOpts) =>
-        call("cron.status", opts),
-      );
-      await program.parseAsync(["gateway-command", `--${option}`, value, ...credentials], {
-        from: "user",
-      });
-      expectCall({ ...expected, ...auth });
-    },
+it.each([
+  ["url", "wss://gateway.example/ws", { url: "wss://gateway.example/ws" }],
+  ["port", "19083", { localPortOverride: 19083 }],
+] as const)("parses authentication and --%s", async (option, value, expected) => {
+  const program = new Command().exitOverride();
+  addGatewayClientOptions(program.command("gateway-command")).action((opts: GatewayRpcOpts) =>
+    call("cron.status", opts),
   );
-
-  it.each([
-    [undefined, undefined, 30_000],
-    [undefined, 10_000, 10_000],
-    ["15000", 600_000, 15_000],
-  ] as const)(
-    "resolves timeout %s with default %s",
-    async (timeout, defaultTimeoutMs, expected) => {
-      await call("cron.status", { timeout }, undefined, { defaultTimeoutMs });
-      expectCall({ method: "cron.status", timeoutMs: expected });
-    },
-  );
-
-  it("forwards specialized connection, authorization and cancellation context", async () => {
-    const controller = new AbortController();
-    const target = {
-      config: { gateway: { mode: "local" as const } },
-      localPortOverride: 19083,
-      expectUrl: "ws://127.0.0.1:19083",
-    };
-    const extra = {
-      timeoutMs: null,
-      scopes: ["operator.read", "operator.pairing"],
-      useStoredDeviceAuth: true,
-      requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
-      requireLocalBackendSharedAuth: true,
-      signal: controller.signal,
-    } satisfies NonNullable<Parameters<typeof call>[3]>;
-    await call("node.list", target, {}, extra);
-    expectCall({ ...target, ...extra });
+  await program.parseAsync(["gateway-command", `--${option}`, value, ...credentials], {
+    from: "user",
   });
-
-  it("classifies the CLI target through the canonical Gateway classifier", async () => {
-    isImplicitLocalGatewayTargetMock.mockResolvedValueOnce(false);
-    await expect(classify({ url: "ws://127.0.0.1:18789", token: "token" })).resolves.toBe(false);
-    expect(isImplicitLocalGatewayTargetMock).toHaveBeenCalledWith({
-      config: undefined,
-      url: "ws://127.0.0.1:18789",
-      localPortOverride: undefined,
-    });
-  });
+  expectCall({ ...expected, ...auth });
 });
 
-describe("agent exec session input", () => {
-  it.each([
-    { shell: undefined, subagent: undefined, method: "sessions.send" },
-    { shell: undefined, subagent: "1", method: "sessions.history" },
-    { shell: "exec", subagent: undefined, method: "health" },
-  ])(
-    "preserves permitted $method with shell=$shell subagent=$subagent",
-    async ({ shell, subagent, method }) => {
-      vi.stubEnv("OPENCLAW_SHELL", shell);
-      vi.stubEnv("OPENCLAW_SUBAGENT_EXEC", subagent);
-      const params = { key: "agent:main:main", message: "Human request" };
-      await call(method, {}, params);
-      expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ method, params }),
-      );
-    },
-  );
-
-  it("preserves session creation without an initial turn", async () => {
-    vi.stubEnv("OPENCLAW_SHELL", "exec");
-    await call("sessions.create", {}, { key: "agent:main:empty", message: " ", attachments: [] });
-    expect(callGatewayMock).toHaveBeenCalledOnce();
-  });
-});
-
-type Refusal = [
-  args: Parameters<typeof call>,
-  error: string | RegExp,
-  source?: "exec" | "subagent",
+const target = {
+  config: { gateway: { mode: "local" as const } },
+  localPortOverride: 19083,
+  expectUrl: "ws://127.0.0.1:19083",
+};
+const extra = {
+  timeoutMs: null,
+  scopes: ["operator.read", "operator.pairing"],
+  useStoredDeviceAuth: true,
+  requiredStoredDeviceAuthScopes: ["operator.read", "operator.pairing"],
+  requireLocalBackendSharedAuth: true,
+  signal: new AbortController().signal,
+} satisfies NonNullable<Parameters<typeof call>[3]>;
+const message = { key: "agent:main:main", message: "Human request" };
+type CallArgs = Parameters<typeof call>;
+type Source = "exec" | "subagent";
+type Forwarding = [args: CallArgs, expected: Record<string, unknown>, source?: Source];
+const timeoutCase = (
+  timeout: string | undefined,
+  defaultTimeoutMs: number | undefined,
+  timeoutMs: number,
+): Forwarding => [
+  ["cron.status", { timeout }, undefined, { defaultTimeoutMs }],
+  { method: "cron.status", timeoutMs },
 ];
+it.each([
+  timeoutCase(undefined, undefined, 30_000),
+  timeoutCase(undefined, 10_000, 10_000),
+  timeoutCase("15000", 600_000, 15_000),
+  [["node.list", target, {}, extra], { ...target, ...extra }],
+  [["sessions.send", {}, message], { method: "sessions.send", params: message }],
+  [["sessions.history", {}, message], { method: "sessions.history", params: message }, "subagent"],
+  [["health", {}, message], { method: "health", params: message }, "exec"],
+  [["sessions.create", {}, { key: "agent:main:empty", message: " ", attachments: [] }], {}, "exec"],
+] satisfies Forwarding[])("forwards %j with source=%s", async (args, expected, source) => {
+  vi.stubEnv("OPENCLAW_SHELL", source === "exec" ? "exec" : undefined);
+  vi.stubEnv("OPENCLAW_SUBAGENT_EXEC", source === "subagent" ? "1" : undefined);
+  await call(...args);
+  expectCall(expected);
+});
+
+it("classifies through the canonical Gateway classifier", async () => {
+  isImplicitLocalGatewayTargetMock.mockResolvedValueOnce(false);
+  const expected = { config: undefined, url: "ws://127.0.0.1:18789", localPortOverride: undefined };
+  await expect(classify({ ...expected, token: "token" })).resolves.toBe(false);
+  expect(isImplicitLocalGatewayTargetMock).toHaveBeenCalledWith(expected);
+});
+
+type Refusal = [args: CallArgs, error: string | RegExp, source?: Source];
 const subagentRefusal = (method: string): Refusal => [
   [method, {}, { key: "agent:main:main", message: "Done" }],
   "task completion path",

@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import {
   buildMinimalGatewayHelloOkPayload,
@@ -98,57 +98,51 @@ async function runLogs(argv: string[]) {
     argv: ["logs", ...argv, "--json", "--timeout", "1500"],
   });
 }
-const explicitTarget = (port: string) => [
-  "--url",
-  `ws://127.0.0.1:${port}`,
-  "--token",
-  "fixture-token",
-];
+const gatewayUrl = (port: string) => `ws://127.0.0.1:${port}`;
+const explicitTarget = (port: string) => ["--url", gatewayUrl(port), "--token", "fixture-token"];
 
-describe("logs local port selection", () => {
-  it.each(["config", "malformed"] as const)(
-    "honors an explicit target with %s config",
-    async (source) => {
-      await withLogsGateway({ source }, async ({ port, requests, stdout, stderr }) => {
-        await runLogs(source === "config" ? ["--port", port] : explicitTarget(port));
-        expect(requests).toEqual(["connect", "logs.tail"]);
-        expect(stdout.join("")).toContain("selected local log");
-        if (source === "malformed") {
-          expect(stderr.join("")).toContain("openclaw doctor --fix");
-        }
-      });
-    },
-  );
-
-  it("uses the failure reason as the JSON summary after a post-hello timeout", async () => {
-    await withLogsGateway({ failure: "timeout" }, async ({ port, requests, stdout, stderr }) => {
-      await expect(runLogs(explicitTarget(port))).rejects.toBeInstanceOf(ExitError);
+it.each(["config", "malformed"] as const)(
+  "honors an explicit target with %s config",
+  async (source) => {
+    await withLogsGateway({ source }, async ({ port, requests, stdout, stderr }) => {
+      await runLogs(source === "config" ? ["--port", port] : explicitTarget(port));
       expect(requests).toEqual(["connect", "logs.tail"]);
-      expect(stdout.join("")).toBe("");
-      expect(JSON.parse(stderr.join(""))).toMatchObject({
-        type: "error",
-        message: expect.stringMatching(/timeout|timed out/),
-        error: expect.stringMatching(/timeout|timed out/),
-        details: { url: `ws://127.0.0.1:${port}` },
-      });
+      expect(stdout.join("")).toContain("selected local log");
+      if (source === "malformed") {
+        expect(stderr.join("")).toContain("openclaw doctor --fix");
+      }
+    });
+  },
+);
+
+it("uses the failure reason as the JSON summary after a post-hello timeout", async () => {
+  await withLogsGateway({ failure: "timeout" }, async ({ port, requests, stdout, stderr }) => {
+    await expect(runLogs(explicitTarget(port))).rejects.toBeInstanceOf(ExitError);
+    expect(requests).toEqual(["connect", "logs.tail"]);
+    expect(stdout.join("")).toBe("");
+    expect(JSON.parse(stderr.join(""))).toMatchObject({
+      type: "error",
+      message: expect.stringMatching(/timeout|timed out/),
+      error: expect.stringMatching(/timeout|timed out/),
+      details: { url: gatewayUrl(port) },
     });
   });
+});
 
-  it.each([
-    [undefined, ["--port", "$port", "--max-bytes", ""], "--max-bytes must be a positive integer."],
-    ["config", [], "uses plaintext ws:// to a non-loopback address"],
-    [undefined, ["--port", "65536"], "--port must be an integer between 1 and 65535."],
-    [
-      undefined,
-      ["--port", "19083", "--url", "ws://127.0.0.1:19083"],
-      "Use either --url or --port, not both.",
-    ],
-  ] as const)("rejects config=%s args=%j before connecting", async (source, args, message) => {
-    await withLogsGateway({ source }, async ({ port, requests }) => {
-      await expect(runLogs(args.map((arg) => (arg === "$port" ? port : arg)))).rejects.toThrow(
-        message,
-      );
-      expect(requests).toEqual([]);
-    });
+it.each([
+  [undefined, ["--port", "$port", "--max-bytes", ""], "--max-bytes must be a positive integer."],
+  ["config", [], "uses plaintext ws:// to a non-loopback address"],
+  [undefined, ["--port", "65536"], "--port must be an integer between 1 and 65535."],
+  [
+    undefined,
+    ["--port", "19083", "--url", "ws://127.0.0.1:19083"],
+    "Use either --url or --port, not both.",
+  ],
+] as const)("rejects config=%s args=%j before connecting", async (source, args, message) => {
+  await withLogsGateway({ source }, async ({ port, requests }) => {
+    await expect(runLogs(args.map((arg) => (arg === "$port" ? port : arg)))).rejects.toThrow(
+      message,
+    );
+    expect(requests).toEqual([]);
   });
 });

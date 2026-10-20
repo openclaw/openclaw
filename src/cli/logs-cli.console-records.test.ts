@@ -1,14 +1,19 @@
 import { execFile } from "node:child_process";
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const expectedLogs = [
+  ["warn", "gateway", "console warning"],
+  ["error", "worker", "console error"],
+  ["info", "canonical", "metadata control"],
+] as const;
 const cliSource = `
   import { Command } from "commander";
   import { registerLogsCli } from "./src/cli/logs-cli.ts";
@@ -42,25 +47,20 @@ it.each(["sqlite", "postgres"])(
     const logFile = path.join(home, "console.jsonl");
     await fs.mkdir(stateDir, { recursive: true });
     // Own the unavailable endpoint so the real client cannot reach a user's Gateway.
-    const unavailable = net.createServer((socket) => socket.destroy());
-    unavailable.listen(0, "127.0.0.1");
-    await once(unavailable, "listening");
-    const address = unavailable.address();
-    if (!address || typeof address === "string") {
-      throw new Error("fixture listener did not expose a TCP port");
-    }
+    const { claim, releaseListener } = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () => net.createServer((socket) => socket.destroy()),
+    });
     try {
       const connection = { source: "env", provider: "default", id: "OPENCLAW_MISSING_LOGS_DSN" };
       const database = engine === "postgres" ? { engine, postgres: { connection } } : undefined;
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({
-          database,
-          gateway: { mode: "local", port: address.port, auth: { mode: "none" } },
-          plugins: { enabled: false },
-          logging: { file: logFile, level: "silent", consoleLevel: "silent" },
-        }),
-      );
+      const config = {
+        database,
+        gateway: { mode: "local", port: claim.port, auth: { mode: "none" } },
+        plugins: { enabled: false },
+        logging: { file: logFile, level: "silent", consoleLevel: "silent" },
+      };
+      await fs.writeFile(configPath, JSON.stringify(config));
       const env: NodeJS.ProcessEnv = {
         PATH: process.env.PATH,
         SystemRoot: process.env.SystemRoot,
@@ -82,33 +82,23 @@ it.each(["sqlite", "postgres"])(
       const original = await fs.readFile(logFile, "utf8");
       const text = await run(cliSource, "logs", "--plain", "--utc", "--timeout", "100");
       const json = await run(cliSource, "logs", "--json", "--timeout", "100");
-      expect(text.stdout).toContain("info canonical metadata control");
-      expect(text.stdout).toContain("warn gateway console warning");
-      expect(text.stdout).toContain("error worker console error");
-      const records = json.stdout
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
+      for (const row of expectedLogs) {
+        expect(text.stdout).toContain(row.join(" "));
+      }
+      const lines = json.stdout.trim().split("\n");
+      const records = lines.map((line) => JSON.parse(line));
       expect(records.find((record) => record.type === "meta")).toMatchObject({
         sourceKind: "file",
         localFallback: true,
       });
-      expect(records.filter((record) => record.type === "log")).toEqual(
-        [
-          ["warn", "gateway", "console warning"],
-          ["error", "worker", "console error"],
-          ["info", "canonical", "metadata control"],
-        ].map(([level, subsystem, message]) =>
-          expect.objectContaining({ level, subsystem, message }),
-        ),
+      expect(records.filter((record) => record.type === "log")).toMatchObject(
+        expectedLogs.map(([level, subsystem, message]) => ({ level, subsystem, message })),
       );
       expect(await fs.readFile(logFile, "utf8")).toBe(original);
       const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
       await expect(fs.access(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        unavailable.close((error) => (error ? reject(error) : resolve()));
-      });
+      await releaseListener().finally(() => claim.release());
     }
   },
   180_000,
