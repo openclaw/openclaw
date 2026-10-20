@@ -1,5 +1,6 @@
 import { createServer, IncomingMessage, request, ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { buffer } from "node:stream/consumers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import {
@@ -52,41 +53,35 @@ describe("HTTP JSON representation", () => {
     async (writer) => {
       for (const method of ["GET", "HEAD"]) {
         const response = await new Promise<{
-          status: number | undefined;
-          headers: import("node:http").IncomingHttpHeaders;
+          res: IncomingMessage;
           body: Buffer;
         }>((resolve, reject) => {
           const req = request(
             `http://127.0.0.1:${listener.claim.port}/${writer}`,
             { method, agent: false },
             (res) => {
-              const chunks: Buffer[] = [];
-              res.on("data", (chunk: Buffer) => chunks.push(chunk));
-              res.once("error", reject);
-              res.once("end", () =>
-                resolve({
-                  status: res.statusCode,
-                  headers: res.headers,
-                  body: Buffer.concat(chunks),
-                }),
-              );
+              buffer(res).then((body) => resolve({ res, body }), reject);
             },
           );
           req.once("error", reject);
           req.end();
         });
-        expect(response.status).toBe(202);
-        expect(response.headers["content-type"]).toBe(contentType(writer));
-        expect(response.headers["cache-control"]).toBe(
+        expect(response.res.statusCode).toBe(202);
+        expect(
+          [
+            "content-type",
+            "cache-control",
+            "x-content-type-options",
+            "transfer-encoding",
+            "content-length",
+          ].map((key) => response.res.headers[key]),
+        ).toEqual([
+          contentType(writer),
           writer === "private" ? "no-store" : "private, no-cache",
-        );
-        expect(response.headers["x-content-type-options"]).toBe("nosniff");
-        expect(response.headers["transfer-encoding"]).toBe(
+          "nosniff",
           writer === "committed" && method === "GET" ? "chunked" : undefined,
-        );
-        expect(response.headers["content-length"]).toBe(
           (method === "GET" && writer !== "committed") || writer === "framed" ? "21" : undefined,
-        );
+        ]);
         expect(response.body.toString("utf8")).toBe(method === "GET" ? '{"text":"🦞 café"}' : "");
       }
     },
