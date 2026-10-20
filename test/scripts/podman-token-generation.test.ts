@@ -1,17 +1,17 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
-// Synthetic fixture bytes only; never used by a real Gateway.
+// Synthetic rootless fixture (including root CI); never used by a real Gateway.
 const fixtureToken = "ab".repeat(32);
 const tokenLine = `OPENCLAW_GATEWAY_TOKEN=${fixtureToken}\n`;
 const entrypoints = ["scripts/podman/setup.sh", "scripts/run-openclaw-podman.sh"] as const;
 const backends = ["openssl", "python3", "od"] as const;
 
-function createFixture(backend: (typeof backends)[number], generatorExit: number) {
+function runFixture(entrypoint: string, backend: (typeof backends)[number], exit: number) {
   const root = createTempDir("openclaw-podman-token-");
   const bin = path.join(root, "bin");
   const home = path.join(root, "home");
@@ -37,7 +37,6 @@ function createFixture(backend: (typeof backends)[number], generatorExit: number
   }
   const command = (name: string, body: string) =>
     fs.writeFileSync(path.join(bin, name), `#!/bin/bash\n${body}\n`, { mode: 0o755 });
-  // Rootless identity works in root CI; persistence is real, without containers or credentials.
   command("id", 'case "$1" in -un) printf "fixture\\n";; *) printf "1000\\n";; esac');
   command(
     "stat",
@@ -62,35 +61,27 @@ printf '%s' '${emitted}'`,
     OPENCLAW_CONFIG_DIR: config,
     OPENCLAW_IMAGE: "fixture:local",
     OPENCLAW_BUILD_TIMESTAMP: "2026-09-28T12:00:00Z",
-    GENERATOR_EXIT: String(generatorExit),
+    GENERATOR_EXIT: String(exit),
     PODMAN_CALLS: calls,
   };
-  return {
-    config,
-    calls,
-    run: (entrypoint: string) =>
-      spawnSync("/bin/bash", [path.join(root, entrypoint)], { env, encoding: "utf8" }),
-  };
+  const result = spawnSync("/bin/bash", [path.join(root, entrypoint)], { env, encoding: "utf8" });
+  return { result, token: path.join(config, ".env"), calls };
 }
 
-describe("Podman generated gateway tokens", () => {
-  for (const entrypoint of entrypoints) {
-    it.each(backends)(`${entrypoint} persists a successful %s token`, (backend) => {
-      const { run, config } = createFixture(backend, 0);
-      const result = run(entrypoint);
-      expect(result.status, result.stderr).toBe(0);
-      expect(fs.readFileSync(path.join(config, ".env"), "utf8")).toContain(tokenLine);
-      expect(`${result.stdout}${result.stderr}`).not.toContain(fixtureToken);
-    });
+for (const entrypoint of entrypoints) {
+  it.each(backends)(`${entrypoint} persists a successful %s token`, (backend) => {
+    const { result, token } = runFixture(entrypoint, backend, 0);
+    expect(result.status, result.stderr).toBe(0);
+    expect(fs.readFileSync(token, "utf8")).toContain(tokenLine);
+    expect(`${result.stdout}${result.stderr}`).not.toContain(fixtureToken);
+  });
 
-    it.each(backends)(`${entrypoint} stops when %s token generation fails`, (backend) => {
-      const { run, config, calls } = createFixture(backend, 7);
-      const result = run(entrypoint);
-      expect(result.stderr).toContain("fixture random source failed");
-      expect(result.status).toBe(7);
-      expect(fs.existsSync(path.join(config, ".env"))).toBe(false);
-      expect(`${result.stdout}${result.stderr}`).not.toContain("Generated OPENCLAW_GATEWAY_TOKEN");
-      expect(fs.existsSync(calls) ? fs.readFileSync(calls, "utf8") : "").not.toMatch(/^run /m);
-    });
-  }
-});
+  it.each(backends)(`${entrypoint} stops when %s token generation fails`, (backend) => {
+    const { result, token, calls } = runFixture(entrypoint, backend, 7);
+    expect(result.stderr).toContain("fixture random source failed");
+    expect(result.status).toBe(7);
+    expect(fs.existsSync(token)).toBe(false);
+    expect(`${result.stdout}${result.stderr}`).not.toContain("Generated OPENCLAW_GATEWAY_TOKEN");
+    expect(fs.existsSync(calls) ? fs.readFileSync(calls, "utf8") : "").not.toMatch(/^run /m);
+  });
+}

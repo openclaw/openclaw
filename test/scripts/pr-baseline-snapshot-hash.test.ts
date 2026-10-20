@@ -6,6 +6,7 @@ import { createServer } from "node:net";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { createCorrectionFixture } from "./pr-correction-preparation.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const scripts = join(process.cwd(), "scripts");
@@ -22,7 +23,6 @@ const oid = (bytes: Buffer) =>
   createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
 const expectClean = () =>
   expect(readdirSync(scratch).filter((name) => name.startsWith("openclaw-pr-hash-"))).toEqual([]);
-const gitRun = (...args: string[]) => spawnSync(git, args, { cwd: root, env, encoding: "utf8" });
 
 function invocation(bytes: Buffer) {
   writeFileSync(join(root, authorityPath), bytes);
@@ -56,30 +56,14 @@ function run(bytes: Buffer, overrides: NodeJS.ProcessEnv = {}, limitedWrite = fa
 
 describePosix("captured baseline hash stdin", () => {
   beforeAll(() => {
-    root = dirs.make("pr-hash-");
+    const fixture = createCorrectionFixture(dirs.make("pr-hash-"));
+    root = fixture.root;
+    head = fixture.incoming;
     scratch = join(root, ".local/tmp");
     mkdirSync(scratch, { recursive: true });
     git = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
     node = spawnSync("which", ["node"], { encoding: "utf8" }).stdout.trim();
-    env = {
-      ...process.env,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
-      TMPDIR: scratch,
-    };
-    for (const args of [
-      ["init", "-q"],
-      ["config", "user.name", "Fixture"],
-      ["config", "user.email", "fixture@example.invalid"],
-      ["config", "core.hooksPath", "/dev/null"],
-      ["config", "commit.gpgSign", "false"],
-    ]) {
-      expect(gitRun(...args).status).toBe(0);
-    }
-    writeFileSync(join(root, ".gitignore"), ".local/\n");
-    expect(gitRun("add", ".gitignore").status).toBe(0);
-    expect(gitRun("commit", "-qm", "fixture").status).toBe(0);
-    head = gitRun("rev-parse", "HEAD").stdout.trim();
+    env = { ...fixture.env, TMPDIR: scratch };
     probe = join(root, ".local/git-probe");
     writeFileSync(
       probe,
@@ -118,11 +102,8 @@ os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
       const result = run(bytes);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Missing baseline transition operation owner.");
-      expect(JSON.parse(readFileSync(join(root, ".local/probe.json"), "utf8"))).toEqual({
-        size: bytes.length,
-        links: 0,
-        offset: 0,
-      });
+      const captured = JSON.parse(readFileSync(join(root, ".local/probe.json"), "utf8"));
+      expect(captured).toEqual({ size: bytes.length, links: 0, offset: 0 });
     }
   });
 

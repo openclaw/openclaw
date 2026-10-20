@@ -8,13 +8,7 @@ const scripts = join(process.cwd(), "scripts");
 export function reviewWithFinding(head: string, area: string, id = "I1") {
   const review = validReview(head);
   review.issueValidation.status = "valid";
-  review.findings.push({
-    id,
-    severity: "IMPORTANT",
-    title: "Incorrect behavior",
-    area,
-    fix: "Correct the behavior",
-  });
+  review.findings.push({ id, severity: "IMPORTANT", title: "Bug", area, fix: "Fix" });
   return review;
 }
 
@@ -43,17 +37,13 @@ export function createCorrectionFixture(root: string, initialContent = "broken\n
   const incoming = git("rev-parse", "HEAD");
   const review = reviewWithFinding(incoming, "docs/fix.md");
   writeReviewArtifacts(root, review, { headSha: incoming, files: ["docs/fix.md"] });
+  const url = "https://github.com/fixture/repo";
   json(".local/pr-meta.json", {
     number: 42,
     headRefOid: incoming,
     headRefName: "topic",
-    url: "https://github.com/fixture/repo/pull/42",
-    baseRepository: {
-      id: "fixture-repo",
-      databaseId: 1,
-      nameWithOwner: "fixture/repo",
-      url: "https://github.com/fixture/repo",
-    },
+    url: `${url}/pull/42`,
+    baseRepository: { id: "fixture-repo", databaseId: 1, nameWithOwner: "fixture/repo", url },
     files: [{ path: "docs/fix.md" }],
   });
   write(".local/pr-meta.env", `PR_NUMBER=42\nPR_HEAD=topic\nPR_HEAD_SHA=${incoming}\n`);
@@ -67,7 +57,6 @@ script_parent_dir="$1"
 for lib in common review prepare-core gates; do source "$1/pr-lib/$lib.sh"; done
 require_artifact() { [ -s "$1" ]; }
 enter_worktree() { :; }
-pr_git() { "\${OPENCLAW_PR_GIT:-\${GIT_EXEC:-git}}" "$@"; }
 pr_gh() { gh "$@"; }
 common_repo_root() { pwd; }
 pr_worktree_state() { jq -n --arg path "$PWD" '{present:true,path:$path}'; }
@@ -99,5 +88,5 @@ ${invocation}`,
     correction.correction.resolvedFindings[0].resolution = "The corrected behavior is verified.";
     json(".local/correction-review.json", correction);
   };
-  return { root, run, git, incoming, review, commitFix, approve };
+  return { root, env, run, git, incoming, review, commitFix, approve };
 }
