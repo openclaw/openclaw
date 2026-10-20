@@ -13,7 +13,7 @@ export async function openFileActions(panel: Locator): Promise<Locator> {
     await trigger.click();
   }
   const menu = panel.getByRole("menu", { name: label, exact: true });
-  await menu.waitFor();
+  await menu.and(panel.locator('[data-phase="open"]')).waitFor();
   return menu;
 }
 
