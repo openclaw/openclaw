@@ -1,12 +1,12 @@
-import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { normalizeCapabilities } from "./catalog.test-support.js";
 import {
   decisionBatchV1ToV2,
   decisionBatchV2ToV1,
   decisionResultV1ToV2,
   decisionResultV2ToV1,
 } from "./compatibility.js";
-import type { DecisionAnswerV2, DecisionBatchResultV2, DecisionBatchV2 } from "./types-v2.js";
+import type { DecisionAnswerV2, DecisionBatchV2 } from "./types-v2.js";
 import type { DecisionAnswer, DecisionBatch, DecisionBatchResult } from "./types.js";
 import { validateDecisionResultV2 } from "./validation-v2.js";
 import {
@@ -51,36 +51,18 @@ describe("explicit decision version conversion", () => {
   });
 
   it("uses provider-defined V1 estimates after real metadata and result conversion", () => {
-    const capabilities = normalizeModelCatalog(
+    const capabilities = normalizeCapabilities(
       {
-        providers: {
-          fixture: {
-            models: [
-              {
-                id: result.model,
-                name: "Fixture",
-                inference: {
-                  chat: false,
-                  decision: {
-                    protocol: "fixture",
-                    input: ["text"],
-                    questions: {
-                      boolean: { probabilities: "boolean", abstention: false },
-                      choice: { probabilities: "provider-defined", abstention: false },
-                      score: { probabilities: "provider-defined", abstention: false },
-                    },
-                  },
-                },
-              },
-            ],
-          },
+        protocol: "fixture",
+        input: ["text"],
+        questions: {
+          boolean: { probabilities: "boolean", abstention: false },
+          choice: { probabilities: "provider-defined", abstention: false },
+          score: { probabilities: "provider-defined", abstention: false },
         },
       },
-      { ownedProviders: new Set(["fixture"]) },
-    )?.providers?.fixture?.models[0]?.inference?.decision;
-    if (!capabilities) {
-      throw new Error("Missing fixture capabilities");
-    }
+      result.model,
+    );
     const reported: DecisionBatchResult = {
       model: result.model,
       answers: {
@@ -105,26 +87,16 @@ describe("explicit decision version conversion", () => {
     const trap = vi.fn(() => {
       throw new Error("must not execute");
     });
-    const v1Getter: DecisionBatch = {
-      questions: batch.questions,
-      get state() {
-        return getter();
-      },
-    };
-    const v2Getter: DecisionBatchV2 = {
-      questions: v2Batch.questions,
-      get state() {
-        getter();
-        return v2Batch.state;
-      },
-    };
-    const resultGetter: DecisionBatchResult = {
-      model: result.model,
-      get answers() {
-        getter();
-        return result.answers;
-      },
-    };
+    const withGetter = <T extends object>(value: T, key: keyof T) =>
+      Object.defineProperty({ ...value }, key, {
+        get: () => {
+          getter();
+          return value[key];
+        },
+      });
+    const v1Getter = withGetter(batch, "state");
+    const v2Getter = withGetter(v2Batch, "state");
+    const resultGetter = withGetter(result, "answers");
     const revoked = Proxy.revocable(batch, {});
     revoked.revoke();
     for (const input of [v1Getter, new Proxy(batch, { get: trap, ownKeys: trap }), revoked.proxy]) {
@@ -203,39 +175,34 @@ describe("explicit decision version conversion", () => {
   });
 
   it("refuses to drop abstention, explicit decisions, errors, missing distributions or metadata", () => {
-    const answers: DecisionBatchResultV2["answers"][] = [
-      { boolean: { type: "boolean", probabilityTrue: 0.99, answer: null } },
-      { boolean: { type: "boolean", probabilityTrue: 0.99, answer: false } },
-      { choice: { type: "choice", choice: null, probabilities: { yes: 0, no: 0 } } },
-      { choice: { type: "choice", choice: "no", probabilities: { yes: 0, no: 0 } } },
+    const answers: DecisionAnswerV2[] = [
+      { type: "boolean", probabilityTrue: 0.99, answer: null },
+      { type: "boolean", probabilityTrue: 0.99, answer: false },
+      { type: "choice", choice: null, probabilities: { yes: 0, no: 0 } },
+      { type: "choice", choice: "no", probabilities: { yes: 0, no: 0 } },
       {
-        choice: {
-          type: "choice",
-          choice: "no",
-          probabilities: { yes: 0.8, no: 0.2 },
-          probability: 0.2,
-        },
+        type: "choice",
+        choice: "no",
+        probabilities: { yes: 0.8, no: 0.2 },
+        probability: 0.2,
       },
       {
-        choice: {
-          type: "choice",
-          choice: "no",
-          probabilities: { yes: 0.8, no: 0.2 },
-          confidence: null,
-        },
+        type: "choice",
+        choice: "no",
+        probabilities: { yes: 0.8, no: 0.2 },
+        confidence: null,
       },
-      { score: { type: "score", score: 1.3 } },
-      { score: { type: "score", score: 1.3, probabilities: [0, 0, 0] } },
-      {
-        boolean: { type: "boolean", probabilityTrue: 0.99, metadata: { reasoning: "reported" } },
-      },
-      { boolean: { type: "error", code: "provider-error", providerCode: "synthetic" } },
+      { type: "score", score: 1.3 },
+      { type: "score", score: 1.3, probabilities: [0, 0, 0] },
+      { type: "boolean", probabilityTrue: 0.99, metadata: { reasoning: "reported" } },
+      { type: "error", code: "provider-error", providerCode: "synthetic" },
     ];
     for (const answer of answers) {
+      const key = answer.type === "error" ? "boolean" : answer.type;
       expect(
         decisionResultV2ToV1(v2Batch, {
           ...result,
-          answers: { ...result.answers, ...answer },
+          answers: { ...result.answers, [key]: answer },
         }),
       ).toBeUndefined();
     }

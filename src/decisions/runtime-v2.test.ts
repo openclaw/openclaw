@@ -13,13 +13,11 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
-import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtime.js";
-import { createPluginRecord } from "../plugins/loader-records.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
-import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { decisionBatchV1ToV2 } from "./compatibility.js";
+import { createDecisionRegistry } from "./contract.test-support.js";
 import type { DecisionProviderContextV2 } from "./provider-context.js";
 import {
   evaluateDecisionInRegistry,
@@ -32,15 +30,9 @@ import type { DecisionProviderV1 } from "./types.js";
 
 // mock-isolation: Keep model preparation and credential discovery outside decision host contract tests.
 vi.mock("../agents/decision-inference.js", () => ({
-  executePreparedDecision: (params: {
-    provider: DecisionProviderV2;
-    batch: Parameters<DecisionProviderV2["evaluate"]>[0];
-    modelId: string;
-    options: DecisionEvaluateOptionsV2;
-    signal: AbortSignal;
-    deadlineMonotonicMs: number;
-    isAdmissible: () => boolean;
-  }) =>
+  executePreparedDecision: (
+    params: Parameters<typeof import("../agents/decision-inference.js").executePreparedDecision>[0],
+  ) =>
     params.provider.evaluate(params.batch, {
       model: { id: params.modelId, name: params.modelId, provider: "fixture" },
       config,
@@ -74,30 +66,13 @@ afterEach(() => {
 });
 
 function native(evaluate: DecisionProviderV2["evaluate"]) {
-  const builder = createTestPluginRegistry();
-  const record = createPluginRecord({
-    id: "owner",
-    source: "/synthetic/index.ts",
-    origin: "global",
-    enabled: true,
-    configSchema: false,
-    contracts: { decisionProviders: ["fixture"] },
+  const builder = createDecisionRegistry(config, {
+    id: "fixture",
+    contractVersion: 2,
+    provider: { label: "Fixture", auth: [] },
+    evaluate,
   });
-  const api = builder.createApi(record, { config });
-  runPluginRegisterSyncInRegistry(
-    (registration) =>
-      registration.registerDecisionProvider({
-        id: "fixture",
-        contractVersion: 2,
-        provider: { label: "Fixture", auth: [] },
-        evaluate,
-      }),
-    api,
-    builder.registry,
-    record.id,
-  );
-  builder.registry.plugins.push(record);
-  setActivePluginRegistry(builder.registry);
+  const { record, api } = builder;
   setRuntimeConfigSnapshot(config);
   onTestFinished(async () => {
     prepareDecisionProviderReload(builder.registry, new Set([record.id]));
@@ -105,9 +80,6 @@ function native(evaluate: DecisionProviderV2["evaluate"]) {
   });
   return {
     ...builder,
-    record,
-    api,
-    evaluate,
     run: (opts = options()) => api.runtime.decisions.evaluateV2(richer, opts),
   };
 }
@@ -123,7 +95,6 @@ function selectOwner(agents: OpenClawConfig["agents"], llm: PluginEntryConfig["l
 it.each([1, 2] as const)(
   "prefilters through a registered V%d provider without narrowing native result facts",
   async (version) => {
-    const selected = assistanceConfig;
     const evaluate = vi.fn(async () => ({
       status: "ok" as const,
       result: {
@@ -156,7 +127,7 @@ it.each([1, 2] as const)(
       }),
     );
     onTestFinished(stop);
-    setRuntimeConfigSnapshot(selected);
+    setRuntimeConfigSnapshot(assistanceConfig);
     const result = await prefilter();
     expect(evaluate).toHaveBeenCalledOnce();
     expect(events).toEqual([
@@ -173,7 +144,9 @@ it.each([1, 2] as const)(
       shouldPruneTools: true,
       status: "proposed",
     });
-    expect(host.registry.decisionProviders[0]!.host.inspect(selected).activeRequests).toBe(0);
+    expect(host.registry.decisionProviders[0]!.host.inspect(assistanceConfig).activeRequests).toBe(
+      0,
+    );
   },
 );
 
@@ -283,42 +256,39 @@ it("leaves V2 credential admission to preparation without a global readiness cla
   expect(retired.callable).toBe(false);
 });
 
-it.each([undefined, false, true])(
-  "preserves the explicit V2 owner independently of LLM override permission (%j)",
-  async (allowAgentIdOverride) => {
+it.each([
+  ...[undefined, false, true].map((allowAgentIdOverride) => ({
+    allowAgentIdOverride,
+    model: "specialist-v2",
+    profile: false,
+  })),
+  ...["specialist-v2", "other"].map((model) => ({
+    allowAgentIdOverride: undefined,
+    model,
+    profile: true,
+  })),
+])(
+  "authorizes the explicit V2 owner ($model, profile=$profile, override=$allowAgentIdOverride)",
+  async ({ allowAgentIdOverride, model, profile }) => {
     const { evaluate, ...host } = mockNative();
+    const selectedModel = profile ? `${model}@fixture:agent` : model;
     selectOwner(
       {
-        defaults: { model: "fixture/primary" },
-        entries: { specialist: { decisionModel: "fixture/specialist-v2" } },
+        ...(!profile ? { defaults: { model: "fixture/primary" } } : {}),
+        entries: { specialist: { decisionModel: `fixture/${selectedModel}` } },
       },
-      { allowAgentIdOverride, allowedCompletionModels: ["fixture/specialist-v2"] },
-    );
-    await expect(
-      withGatewayToolCallerIdentity(
-        { agentId: "ambient", sessionKey: "agent:ambient:fixture" },
-        () => host.run({ ...options(), agentId: "specialist" }),
-      ),
-    ).resolves.toMatchObject({ status: "ok" });
-    expect(evaluate).toHaveBeenCalledOnce();
-    expect(evaluate.mock.calls[0]?.[1]).toMatchObject({
-      agentId: "specialist",
-      model: { id: "specialist-v2" },
-    });
-  },
-);
-
-it.each(["specialist-v2", "other"])(
-  "authorizes the bare model while retaining an explicit credential profile (%s)",
-  async (model) => {
-    const { evaluate, ...host } = mockNative();
-    selectOwner(
       {
-        entries: { specialist: { decisionModel: `fixture/${model}@fixture:agent` } },
+        ...(!profile ? { allowAgentIdOverride } : {}),
+        allowedCompletionModels: ["fixture/specialist-v2"],
       },
-      { allowedCompletionModels: ["fixture/specialist-v2"] },
     );
-    const pending = host.run({ ...options(), agentId: "specialist" });
+    const run = () => host.run({ ...options(), agentId: "specialist" });
+    const pending = profile
+      ? run()
+      : withGatewayToolCallerIdentity(
+          { agentId: "ambient", sessionKey: "agent:ambient:fixture" },
+          run,
+        );
     if (model === "other") {
       await expect(pending).rejects.toThrow(/not allowlisted/);
       expect(evaluate).not.toHaveBeenCalled();
@@ -326,10 +296,10 @@ it.each(["specialist-v2", "other"])(
     }
     await expect(pending).resolves.toMatchObject({ status: "ok" });
     expect(evaluate).toHaveBeenCalledOnce();
-    // This fixture captures the host handoff before credential preparation splits the profile.
+    // Capture the handoff before credential preparation splits any profile suffix.
     expect(evaluate.mock.calls[0]?.[1]).toMatchObject({
       agentId: "specialist",
-      model: { id: "specialist-v2@fixture:agent" },
+      model: { id: selectedModel },
     });
   },
 );

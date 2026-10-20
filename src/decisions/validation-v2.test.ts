@@ -1,6 +1,6 @@
-import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import type { ModelDecisionCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import { describe, expect, it, vi } from "vitest";
+import { normalizeCapabilities } from "./catalog.test-support.js";
 import type { DecisionAnswerV2, DecisionBatchV2 } from "./types-v2.js";
 import { validateDecisionBatchV2, validateDecisionResultV2 } from "./validation-v2.js";
 import { DecisionContractError } from "./validation.js";
@@ -32,14 +32,12 @@ function result(answers: Record<string, unknown> = {}) {
     metadata: { route: "synthetic" },
   };
 }
-function expectResult(
-  value: unknown,
-  valid = true,
-  input = batch,
-  capabilities?: ModelDecisionCapabilities,
-) {
-  expect(validateDecisionResultV2(input, value, capabilities)).toBe(valid);
+function resultChecker(input = batch, capabilities?: ModelDecisionCapabilities) {
+  return (value: unknown, valid = true) => {
+    expect(validateDecisionResultV2(input, value, capabilities)).toBe(valid);
+  };
 }
+const expectResult = resultChecker();
 function expectState(state: unknown, valid = true, input = batch) {
   expect(validateDecisionBatchV2({ ...input, state })).toBe(valid);
 }
@@ -49,34 +47,33 @@ function expectAnswers(answers: Record<string, unknown>, valid = true) {
 function choice(selected: unknown, probabilities: unknown) {
   return { type: "choice", choice: selected, probabilities };
 }
+function tag(id: string, applies: boolean | null, probability?: number) {
+  return { id, applies, ...(probability === undefined ? {} : { probability }) };
+}
+function listState(...ids: string[]) {
+  return { type: "list", items: ids.map((id) => ({ id, content: null })) };
+}
+const listItems = [
+  { id: "a", content: "a" },
+  { id: "b", content: { value: 2 } },
+];
 const listBatch: DecisionBatchV2 = {
-  state: {
-    type: "list",
-    items: [
-      { id: "a", content: "a" },
-      { id: "b", content: { value: 2 } },
-    ],
-  },
+  state: { type: "list", items: listItems },
   questions: {
     sort: { type: "sort" },
     tags: { type: "tags", criteria: { red: "red", blue: "blue" } },
   },
 };
-function listResult() {
-  return {
-    model: "synthetic-model",
-    answers: {
-      sort: { type: "sort", order: ["b", "a"], confidence: 2.5 },
-      tags: {
-        type: "tags",
-        tags: [
-          { id: "blue", probability: 0, applies: null },
-          { id: "red", probability: 0.9, applies: false },
-        ],
-      },
+const listResult = {
+  model: "synthetic-model",
+  answers: {
+    sort: { type: "sort", order: ["b", "a"], confidence: 2.5 },
+    tags: {
+      type: "tags",
+      tags: [tag("blue", null, 0), tag("red", false, 0.9)],
     },
-  };
-}
+  },
+};
 
 describe("V2 decision admission", () => {
   it("preserves normalized image boxes and rejects missing, inverted or out-of-range edges", () => {
@@ -89,8 +86,9 @@ describe("V2 decision admission", () => {
       model: "fixture",
       answers: { target: { type: "box", box: value, confidence: 0.91 } },
     });
+    const check = resultChecker(imageBatch);
     expect(validateDecisionBatchV2(imageBatch)).toBe(true);
-    expectResult(answer(box), true, imageBatch);
+    check(answer(box));
     for (const invalid of [
       { ...box, left: -0.1 },
       { ...box, right: 1.1 },
@@ -100,7 +98,7 @@ describe("V2 decision admission", () => {
       { top: 0, bottom: 1, left: 0 },
       { ...box, width: 0.51 },
     ]) {
-      expectResult(answer(invalid), false, imageBatch);
+      check(answer(invalid), false);
     }
     for (const invalid of [
       { ...imageBatch, state: { type: "text", text: "no image" } },
@@ -126,17 +124,8 @@ describe("V2 decision admission", () => {
           score: { probabilities: semantics, abstention: false },
         },
       } satisfies ModelDecisionCapabilities;
-      const capabilities = normalizeModelCatalog(
-        {
-          providers: {
-            fixture: { models: [{ id: "native", inference: { chat: false, decision: declared } }] },
-          },
-        },
-        { ownedProviders: new Set(["fixture"]) },
-      )?.providers?.fixture?.models[0]?.inference?.decision;
-      if (!capabilities) {
-        throw new Error("Missing declared route");
-      }
+      const capabilities = normalizeCapabilities(declared);
+      const check = resultChecker(batch, capabilities);
       const value = {
         model: "native",
         answers: {
@@ -146,7 +135,7 @@ describe("V2 decision admission", () => {
         },
       };
       const before = structuredClone(value);
-      expectResult(value, true, batch, capabilities);
+      check(value);
       expect(value).toEqual(before);
       // Choice/Score categorical distributions require positive mass, including
       // rounded TypeSafe-style reports. Independent abstention does not.
@@ -154,7 +143,7 @@ describe("V2 decision admission", () => {
         { ...value.answers, pick: choice(null, { yes: 0, no: 0 }) },
         { ...value.answers, rank: { type: "score", score: 1.25, probabilities: [0, 0, 0] } },
       ]) {
-        expectResult({ ...value, answers }, semantics !== "categorical", batch, capabilities);
+        check({ ...value, answers }, semantics !== "categorical");
       }
     },
   );
@@ -164,11 +153,11 @@ describe("V2 decision admission", () => {
       protocol: "fixture-native",
       input: ["text"],
     };
-    expectResult(result(), true, batch, capabilities);
-    expectResult(result(), false, batch, {
+    resultChecker(batch, capabilities)(result());
+    resultChecker(batch, {
       ...capabilities,
       questions: { boolean: { probabilities: "boolean", abstention: true } },
-    });
+    })(result(), false);
   });
 
   it("rejects confidence reports when the route declares no confidence metric", () => {
@@ -193,7 +182,8 @@ describe("V2 decision admission", () => {
     ];
     for (const { input, answers } of cases) {
       const value = { model: "fixture", answers };
-      expectResult(value, true, input, capabilities);
+      const check = resultChecker(input, capabilities);
+      check(value);
       for (const [key, answer] of Object.entries(answers)) {
         if (answer.type === "boolean") {
           continue;
@@ -203,8 +193,8 @@ describe("V2 decision admission", () => {
             ...value,
             answers: { ...answers, [key]: { ...answer, confidence } },
           };
-          expectResult(reported, false, input, capabilities);
-          expectResult(reported, true, input, { ...capabilities, confidence: "provider-specific" });
+          check(reported, false);
+          resultChecker(input, { ...capabilities, confidence: "provider-specific" })(reported);
         }
       }
     }
@@ -230,19 +220,15 @@ describe("V2 decision admission", () => {
       model: "native",
       answers: { truth: { type: "boolean", answer: null }, scale: { type: "score", score: 2.5 } },
     };
-    expectResult(value, true, scaleBatch, capabilities);
-    expectResult(
-      { ...value, usage: { costUsd: 0, units: { unit: "requests", amount: 1 } } },
-      true,
-      scaleBatch,
-      capabilities,
-    );
+    const check = resultChecker(scaleBatch, capabilities);
+    check(value);
+    check({ ...value, usage: { costUsd: 0, units: { unit: "requests", amount: 1 } } });
     for (const answers of [
       { ...value.answers, truth: { type: "boolean", answer: null, probabilityTrue: 0 } },
       { ...value.answers, scale: { type: "score", score: 2.5, probabilities: [0, 0, 0, 0, 0] } },
       { ...value.answers, scale: { type: "score", score: 4.01 } },
     ]) {
-      expectResult({ ...value, answers }, false, scaleBatch, capabilities);
+      check({ ...value, answers }, false);
     }
   });
 
@@ -259,32 +245,16 @@ describe("V2 decision admission", () => {
       model: "native",
       answers: {
         sort: { type: "error", code: "unsupported-input" },
-        tags: {
-          type: "tags",
-          tags: [
-            { id: "red", applies: false },
-            { id: "blue", applies: true },
-          ],
-        },
+        tags: { type: "tags", tags: [tag("red", false), tag("blue", true)] },
       },
     };
-    expectResult(value, true, listBatch, capabilities);
+    const check = resultChecker(listBatch, capabilities);
+    check(value);
     for (const tags of [
-      [
-        { id: "red", applies: null },
-        { id: "blue", applies: true },
-      ],
-      [
-        { id: "red", applies: false, probability: 0 },
-        { id: "blue", applies: true },
-      ],
+      [tag("red", null), tag("blue", true)],
+      [tag("red", false, 0), tag("blue", true)],
     ]) {
-      expectResult(
-        { ...value, answers: { ...value.answers, tags: { type: "tags", tags } } },
-        false,
-        listBatch,
-        capabilities,
-      );
+      check({ ...value, answers: { ...value.answers, tags: { type: "tags", tags } } }, false);
     }
   });
 
@@ -355,40 +325,24 @@ describe("V2 decision admission", () => {
   });
 
   it("validates native sort and tags identities without sorting or thresholding", () => {
-    const value = listResult();
+    const value = listResult;
+    const check = resultChecker(listBatch);
     expect(validateDecisionBatchV2(listBatch)).toBe(true);
     expectState({ type: "list", items: [] }, true, {
       ...listBatch,
       questions: { sort: { type: "sort" } },
     });
-    expectResult(value, true, listBatch);
+    check(value);
     for (const order of [["a", "a"], ["a"], ["a", "c"], ["a", "b", "c"]]) {
-      expectResult(
-        { ...value, answers: { ...value.answers, sort: { type: "sort", order } } },
-        false,
-        listBatch,
-      );
+      check({ ...value, answers: { ...value.answers, sort: { type: "sort", order } } }, false);
     }
     for (const tags of [
-      [{ id: "red", probability: 1, applies: true }],
-      [
-        { id: "red", probability: 1, applies: true },
-        { id: "red", probability: 0, applies: false },
-      ],
-      [
-        { id: "red", probability: 1, applies: true },
-        { id: "other", probability: 0, applies: null },
-      ],
-      [
-        { id: "red", probability: 1, applies: true },
-        { id: "blue", probability: 0 },
-      ],
+      [tag("red", true, 1)],
+      [tag("red", true, 1), tag("red", false, 0)],
+      [tag("red", true, 1), tag("other", null, 0)],
+      [tag("red", true, 1), { id: "blue", probability: 0 }],
     ]) {
-      expectResult(
-        { ...value, answers: { ...value.answers, tags: { type: "tags", tags } } },
-        false,
-        listBatch,
-      );
+      check({ ...value, answers: { ...value.answers, tags: { type: "tags", tags } } }, false);
     }
   });
 
@@ -399,17 +353,8 @@ describe("V2 decision admission", () => {
       { ...batch, grounding: {} },
       { ...batch, state: "implicit" },
       { ...batch, state: { type: "json" } },
-      { ...batch, state: { type: "list", items: [{ id: "", content: null }] } },
-      {
-        ...batch,
-        state: {
-          type: "list",
-          items: [
-            { id: "a", content: null },
-            { id: "a", content: null },
-          ],
-        },
-      },
+      { ...batch, state: listState("") },
+      { ...batch, state: listState("a", "a") },
       { ...batch, questions: {} },
       { ...batch, questions: { q: { type: "sort" } } },
       { ...batch, questions: { q: { type: "boolean", instructions: 1 } } },
