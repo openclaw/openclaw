@@ -34,31 +34,28 @@ describe("board session shell", () => {
       const container = document.body.appendChild(document.createElement("div"));
       onTestFinished(() => container.remove());
       const mount = () => mountSolid(() => <BoardSessionSurface {...current()} />, { container });
+      const present = (next: boolean) => {
+        active = next;
+        if (parent === "parked") {
+          owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+        } else {
+          setCurrent(next ? props : { ...props, active: false });
+        }
+        flush();
+      };
       let mounted = mount();
       flush();
       const board = container.querySelector("openclaw-board-view");
       expect(board?.active).toBe(true);
 
-      active = false;
-      if (parent === "parked") {
-        owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-      } else {
-        setCurrent({ ...props, active: false });
-      }
-      flush();
+      present(false);
       const hiddenSurface = container.querySelector<HTMLElement>(".board-session-surface");
       expect(hiddenSurface?.hidden).toBe(true);
       expect(hiddenSurface?.hasAttribute("inert")).toBe(true);
       expect(container.querySelector("openclaw-board-view")).toBe(board);
       expect(board?.active).toBe(false);
 
-      active = true;
-      if (parent === "parked") {
-        owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-      } else {
-        setCurrent(props);
-      }
-      flush();
+      present(true);
       expect(container.querySelector("openclaw-board-view")).toBe(board);
       expect(container.querySelector<HTMLElement>(".board-session-surface")?.hidden).toBe(false);
       expect(board?.active).toBe(true);
@@ -72,9 +69,7 @@ describe("board session shell", () => {
         const replacement = container.querySelector("openclaw-board-view");
         expect(replacement).not.toBe(board);
         expect(replacement?.active).toBe(false);
-        active = true;
-        owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
-        flush();
+        present(true);
         expect(replacement?.active).toBe(true);
       }
       mounted.unmount();
