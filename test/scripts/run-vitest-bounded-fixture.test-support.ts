@@ -9,29 +9,29 @@ import { createPreparedWorkerCompiler } from "./vitest-worker-artifacts.prepared
 export function createPreparedVitestCliFixture(
   repoRoot: string,
   scripts: string[],
-  {
-    prepareWorkerArtifacts = false,
-    preserveSourceModuleExports = false,
-  }: { prepareWorkerArtifacts?: boolean; preserveSourceModuleExports?: boolean } = {},
+  options: { prepareWorkerArtifacts?: boolean; preserveSourceModuleExports?: boolean } = {},
 ) {
   const lifetime = createFixtureLifetime();
-  const compiler = prepareWorkerArtifacts ? createPreparedWorkerCompiler() : undefined;
+  const compiler = options.prepareWorkerArtifacts ? createPreparedWorkerCompiler() : undefined;
   let root: string;
   let redirect: string;
+  const local = (file: string) => path.join(root, file);
+  const compilerPath = "scripts/lib/vitest-worker-compiler.mts";
+  const moduleUrl = (directory: string) =>
+    JSON.stringify(pathToFileURL(path.join(directory, compilerPath)).href);
   return {
     get root() {
       return root;
     },
     env(base: NodeJS.ProcessEnv) {
-      if (!compiler) {
-        return base;
-      }
-      return compiler.env(
-        {
-          ...base,
-          NODE_OPTIONS: `${base.NODE_OPTIONS ?? ""} --import=${pathToFileURL(redirect).href}`,
-        },
-        "node",
+      return (
+        compiler?.env(
+          {
+            ...base,
+            NODE_OPTIONS: `${base.NODE_OPTIONS ?? ""} --import=${pathToFileURL(redirect).href}`,
+          },
+          "node",
+        ) ?? base
       );
     },
     async prepare() {
@@ -49,45 +49,37 @@ export function createPreparedVitestCliFixture(
         [...entries, "scripts/run-vitest.mjs", "scripts/tsx.mjs"],
         { includeDynamicImports: true },
       );
-      const files = new Set([
+      for (const file of new Set([
         ...closure,
         "scripts/lib/vitest-worker-bootstrap.mts",
-        "scripts/lib/vitest-worker-compiler.mts",
+        compilerPath,
         "package.json",
         "pnpm-workspace.yaml",
         "tsconfig.json",
-      ]);
-      for (const file of files) {
-        const target = path.join(root, file);
+      ])) {
+        const target = local(file);
         fs.mkdirSync(path.dirname(target), { recursive: true });
         fs.copyFileSync(path.join(repoRoot, file), target);
       }
-      fs.symlinkSync(
-        path.join(repoRoot, "node_modules"),
-        path.join(root, "node_modules"),
-        "junction",
-      );
+      fs.symlinkSync(path.join(repoRoot, "node_modules"), local("node_modules"), "junction");
       // Source URL adapters must also serve exports used by unchanged native wrappers.
       await prepareCopiedSourceModules(
         root,
-        preserveSourceModuleExports
+        options.preserveSourceModuleExports
           ? closure.filter((source) => /\.[cm]?ts$/u.test(source))
           : entries,
       );
       // CLI wrappers and generated configs retain their original entry paths.
       for (const source of entries) {
-        fs.copyFileSync(
-          path.join(root, source.replace(/\.[cm]?ts$/u, ".js")),
-          path.join(root, source),
-        );
+        fs.copyFileSync(local(source.replace(/\.[cm]?ts$/u, ".js")), local(source));
       }
       if (compiler) {
-        redirect = path.join(root, "prepared-compiler.mjs");
+        redirect = local("prepared-compiler.mjs");
         fs.writeFileSync(
           redirect,
           `import {registerHooks} from "node:module";
-const copied = ${JSON.stringify(pathToFileURL(path.join(root, "scripts/lib/vitest-worker-compiler.mts")).href)};
-const original = ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/lib/vitest-worker-compiler.mts")).href)};
+const copied = ${moduleUrl(root)};
+const original = ${moduleUrl(repoRoot)};
 registerHooks({resolve(specifier, context, nextResolve) {
   const resolved = nextResolve(specifier, context);
   return resolved.url === copied ? {...resolved, url: original} : resolved;
