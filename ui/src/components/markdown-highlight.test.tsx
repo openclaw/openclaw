@@ -35,29 +35,21 @@ it("keeps code readable while loading and refreshes cached, streamed, and reader
   const [stream, setStream] = createSignal(initial);
   const [streaming, setStreaming] = createSignal(true);
   const proseRuns = { cached: 0, streaming: 0 };
-  const counted = (key: keyof typeof proseRuns, read: () => string) =>
-    createMemo(() => {
-      proseRuns[key]++;
-      return read();
-    });
   function Prose() {
-    const cached = counted("cached", () =>
-      prepareMessageMarkdown(
+    const cached = createMemo(() => {
+      proseRuns.cached++;
+      return prepareMessageMarkdown(
         "Plain **text**",
         "plain-history",
         { role: "assistant", isStreaming: false },
         {},
-      ).parts.join(""),
-    );
-    const streamed = counted("streaming", () =>
-      toStreamingMarkdownParts("Plain **streamed** prose", {}, "plain-stream").join(""),
-    );
-    return (
-      <>
-        <SanitizedHtml html={cached()} />
-        <SanitizedHtml html={streamed()} />
-      </>
-    );
+      ).parts.join("");
+    });
+    const streamed = createMemo(() => {
+      proseRuns.streaming++;
+      return toStreamingMarkdownParts("Plain **streamed** prose", {}, "plain-stream").join("");
+    });
+    return [<SanitizedHtml html={cached()} />, <SanitizedHtml html={streamed()} />];
   }
   const json = parseMarkdownJson(JSON.stringify({ lines: Array(12).fill("value") }, null, 2))!;
   function TranscriptMarkdown(props: { streaming: boolean; history?: boolean }) {

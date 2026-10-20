@@ -4,15 +4,12 @@ import {
   markdownSessionLinkFromEvent,
   markdownSessionLinkFromKeyboardEvent,
   navigateMarkdownSession,
-  type SessionLinkTarget,
 } from "./markdown-session-links.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
 
-function makeContext(
-  rows?: { key: string; agentId: string; displayName: string }[],
-  navigate = vi.fn(),
-) {
+type SessionRow = { key: string; agentId: string; displayName: string };
+function makeContext(rows?: SessionRow[], navigate = vi.fn()) {
   return {
     basePath: "",
     sessions: { state: rows ? { result: { sessions: rows } } : {} },
@@ -65,15 +62,12 @@ it.each([
   ["Enter", "code"],
 ])("routes public-origin %s on %s before hovercard init", (action, tag) => {
   const runtimeConfig = { gateway: { publicOrigin: "https://CHAT.example:443/" } };
-  const provider = Object.assign(
-    document.createElement("openclaw-session-progress-hovercard-provider"),
-    {
-      context: {
-        basePath: "/control",
-        runtimeConfig: { state: { configSnapshot: { runtimeConfig } } },
-      },
-    },
-  );
+  const context = {
+    basePath: "/control",
+    runtimeConfig: { state: { configSnapshot: { runtimeConfig } } },
+  };
+  const provider = document.createElement("openclaw-session-progress-hovercard-provider");
+  Object.assign(provider, { context });
   const anchor = document.createElement(tag);
   const href = "https://chat.example/control/chat/roboclaw/d0effac9?view=full#latest";
   if (tag === "a") {
@@ -82,22 +76,21 @@ it.each([
     anchor.dataset.sessionHref = href;
   }
   provider.append(anchor);
-  let resolved: SessionLinkTarget | null = null;
-  anchor.addEventListener(action === "click" ? "click" : "keydown", (event) => {
-    resolved =
-      event instanceof KeyboardEvent
-        ? markdownSessionLinkFromKeyboardEvent(event)
-        : markdownSessionLinkFromEvent(event);
+  const resolve = vi.fn((event: Event) => {
     if (event instanceof MouseEvent) {
       event.preventDefault();
     }
+    return event instanceof KeyboardEvent
+      ? markdownSessionLinkFromKeyboardEvent(event)
+      : markdownSessionLinkFromEvent(event);
   });
+  anchor.addEventListener(action === "click" ? "click" : "keydown", resolve);
   const event =
     action === "click"
       ? new MouseEvent("click", { bubbles: true, cancelable: true })
       : new KeyboardEvent("keydown", { key: action, bubbles: true, cancelable: true });
   anchor.dispatchEvent(event);
-  expect(resolved).toEqual({
+  expect(resolve).toHaveReturnedWith({
     namespace: "chat",
     pathname: "/control/chat/roboclaw/d0effac9",
     search: "?view=full",

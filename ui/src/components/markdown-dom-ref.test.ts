@@ -6,8 +6,7 @@ import { createMarkdownRef } from "./markdown-dom-ref.ts";
 import { toStreamingMarkdownParts } from "./markdown.ts";
 
 it("commits Markdown before onUpdate and retires a replaced island", () => {
-  const container = document.createElement("div");
-  document.body.append(container);
+  const container = document.body.appendChild(document.createElement("div"));
   const [html, setHtml] = createSignal('<a href="#first">First</a>');
   const onUpdate = vi.fn(() => container.textContent);
   let bind!: (element: ParentNode) => void;
@@ -38,7 +37,7 @@ it.each([
   ["code fence", "```text\nA growing block", "pre"],
 ])("retains every node across 12 %s updates", (_label, initial, selector) => {
   const [source, setSource] = createSignal(initial);
-  const view = mountSolid(() => {
+  const { container: target } = mountSolid(() => {
     const fragment = document.createDocumentFragment();
     createMarkdownRef(() => ({
       content: {
@@ -49,7 +48,6 @@ it.each([
     }))(fragment);
     return Array.from(fragment.childNodes);
   });
-  const target = view.container;
   const retained = target.querySelector(selector);
   expect(retained).not.toBeNull();
   const observer = new MutationObserver(() => {});
@@ -77,12 +75,8 @@ it("retires retained media when the Solid owner unmounts", () => {
       return { dispose, setConnected };
     },
   };
-  const view = renderSolidRef(
-    () => createMarkdownRef(() => ({ content: "<p>MEDIA0END</p>", media })),
-    {
-      targetElement: target,
-    },
-  );
+  const read = () => ({ content: "<p>MEDIA0END</p>", media });
+  const view = renderSolidRef(() => createMarkdownRef(read), { targetElement: target });
   expect(target.textContent).toBe("Attachment");
   expect(setConnected).toHaveBeenCalledWith(true);
   view.unmount();
