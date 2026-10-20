@@ -1,8 +1,8 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveCodeModeConfig } from "../agents/code-mode-runtime.js";
 import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,98 +17,80 @@ import { resolvePluginCodeModeExecutor } from "./code-mode-executor.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 
 describe("Code Mode executor plugin selection", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let root: string;
+  const pluginId = "code-mode-quickjs";
+  const unavailable = 'Code Mode executor "quickjs" is unavailable or disabled';
+  const writeArtifact = (name: string, source: string) =>
+    fs.writeFileSync(path.join(root, name), source);
 
-  beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-code-mode-executor-"));
-    fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
-    fs.writeFileSync(path.join(root, "index.js"), "export default {};\n");
-    fs.writeFileSync(
-      path.join(root, "code-mode-executor-api.js"),
-      'export const codeModeExecutor = { id: "quickjs", async execute() { return { status: "completed", value: { kind: "complete", json: "42" }, output: { count: 0, source: { kind: "complete", json: "[]" } } }; } };\n',
-    );
+  function setOrigin(origin: "bundled" | "global") {
     loadManifestMetadataSnapshot.mockReturnValue(
       createPluginMetadataSnapshotFixture({
         plugins: [
           {
-            id: "code-mode-quickjs",
+            id: pluginId,
             rootDir: root,
-            source: path.join(root, "index.js"),
-            origin: "bundled",
+            origin,
             contracts: { codeModeExecutors: ["quickjs"] },
           },
         ],
       }),
     );
+  }
+
+  beforeEach(() => {
+    root = tempDirs.make("openclaw-code-mode-executor-");
+    writeArtifact("package.json", JSON.stringify({ type: "module" }));
+    writeArtifact("index.js", "export default {};\n");
+    writeArtifact(
+      "code-mode-executor-api.js",
+      'export const codeModeExecutor = { id: "quickjs", async execute() { return { status: "completed", value: { kind: "complete", json: "42" }, output: { count: 0, source: { kind: "complete", json: "[]" } } }; } };\n',
+    );
+    setOrigin("bundled");
   });
 
-  afterEach(() => {
-    fs.rmSync(root, { recursive: true, force: true });
-  });
-
-  it.each(["bundled", "global"] as const)(
+  it.each([
+    ["bundled", {}],
+    ["global", { plugins: { allow: [pluginId], entries: { [pluginId]: { enabled: true } } } }],
+  ] satisfies Array<["bundled" | "global", OpenClawConfig]>)(
     "loads the selected %s executor without global runtime registration",
-    async (origin) => {
-      const config: OpenClawConfig =
-        origin === "bundled"
-          ? {}
-          : {
-              plugins: {
-                allow: ["code-mode-quickjs"],
-                entries: { "code-mode-quickjs": { enabled: true } },
-              },
-            };
-      const snapshot = loadManifestMetadataSnapshot();
-      snapshot.plugins[0].origin = origin;
-      snapshot.index.plugins[0].origin = origin;
+    async (origin, config) => {
+      setOrigin(origin);
       const executor = resolvePluginCodeModeExecutor("quickjs", config);
       expect(executor.id).toBe("quickjs");
-      expect(
-        await executor.execute(
-          {
-            kind: "exec",
-            source: "return 42",
-            catalog: [],
-            namespaces: [],
-            config: {
-              timeoutMs: 1000,
-              memoryLimitBytes: 1024 * 1024,
-              maxOutputBytes: 1024,
-              maxPendingToolCalls: 1,
-              maxSnapshotBytes: 1024 * 1024,
-            },
-          },
-          { timeoutMs: 1000 },
-        ),
-      ).toMatchObject({ status: "completed", value: { json: "42" } });
+      const result = await executor.execute(
+        {
+          kind: "exec",
+          source: "return 42",
+          catalog: [],
+          namespaces: [],
+          config: resolveCodeModeConfig(),
+        },
+        { timeoutMs: 1000 },
+      );
+      expect(result).toMatchObject({ status: "completed", value: { json: "42" } });
     },
   );
 
   it.each([
     { plugins: { enabled: false } },
-    { plugins: { deny: ["code-mode-quickjs"] } },
+    { plugins: { deny: [pluginId] } },
     { plugins: { allow: ["another-plugin"] } },
-    { plugins: { entries: { "code-mode-quickjs": { enabled: false } } } },
+    { plugins: { entries: { [pluginId]: { enabled: false } } } },
   ] satisfies OpenClawConfig[])("retains the full policy for external executors: %j", (config) => {
-    const snapshot = loadManifestMetadataSnapshot();
-    snapshot.plugins[0].origin = "global";
-    snapshot.index.plugins[0].origin = "global";
-    expect(() => resolvePluginCodeModeExecutor("quickjs", config)).toThrow(
-      'Code Mode executor "quickjs" is unavailable or disabled',
-    );
+    setOrigin("global");
+    expect(() => resolvePluginCodeModeExecutor("quickjs", config)).toThrow(unavailable);
   });
 
   it.each([
-    { plugins: { enabled: false }, allowed: true },
-    { plugins: { allow: ["openai"] }, allowed: true },
-    { plugins: { enabled: false, deny: ["code-mode-quickjs"] }, allowed: false },
-    {
-      plugins: { allow: ["openai"], entries: { "code-mode-quickjs": { enabled: false } } },
-      allowed: false,
-    },
-  ] satisfies Array<{ plugins: OpenClawConfig["plugins"]; allowed: boolean }>)(
-    "preserves migrated QuickJS availability and owner policy: $plugins",
-    ({ plugins, allowed }) => {
+    [{ enabled: false }, true],
+    [{ allow: ["openai"] }, true],
+    [{ enabled: false, deny: [pluginId] }, false],
+    [{ allow: ["openai"], entries: { [pluginId]: { enabled: false } } }, false],
+  ] satisfies Array<[OpenClawConfig["plugins"], boolean]>)(
+    "preserves migrated QuickJS availability and owner policy: %j => %s",
+    (plugins, allowed) => {
       const raw = {
         tools: { codeMode: { enabled: true, runtime: "quickjs-wasi" } },
         plugins,
@@ -123,9 +105,7 @@ describe("Code Mode executor plugin selection", () => {
       if (allowed) {
         expect(resolvePluginCodeModeExecutor(codeMode.executor, config).id).toBe("quickjs");
       } else {
-        expect(() => resolvePluginCodeModeExecutor(codeMode.executor, config)).toThrow(
-          'Code Mode executor "quickjs" is unavailable or disabled',
-        );
+        expect(() => resolvePluginCodeModeExecutor(codeMode.executor, config)).toThrow(unavailable);
       }
       expect(raw).toEqual(original);
     },
@@ -140,8 +120,8 @@ describe("Code Mode executor plugin selection", () => {
     if (kind === "missing") {
       fs.unlinkSync(artifact);
     } else if (kind === "mismatched") {
-      fs.writeFileSync(
-        artifact,
+      writeArtifact(
+        "code-mode-executor-api.js",
         'export const codeModeExecutor = { id: "node", async execute() {} };\n',
       );
     } else {

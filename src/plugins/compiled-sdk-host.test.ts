@@ -64,9 +64,9 @@ module.exports = {
     sourceWorkerName: `../plugin-sdk/${name}`,
     distWorkerPath: `plugin-sdk/${name}.js`,
   });
-  const createHost = (...names: string[]) =>
+  const createHost = (first: string, ...rest: string[]) =>
     expectDefined(
-      createCompiledSdkHost(names.map(entrypoint), (prefix) => tempDirs.make(prefix)),
+      createCompiledSdkHost([entrypoint(first), ...rest.map(entrypoint)], tempDirs.make),
       "compiled SDK host",
     );
   const host = createHost("first", "second");
