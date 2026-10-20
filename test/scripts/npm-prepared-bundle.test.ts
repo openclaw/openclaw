@@ -49,19 +49,51 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => {
+  pnpmPack.impl = undefined;
+  pnpmPack.observer = undefined;
+  pnpmPack.calls.length = 0;
+});
 const repository = "openclaw/openclaw";
 const sourceSha = "a".repeat(40);
 const toolingSha = "b".repeat(40);
 const workflowPath = ".github/workflows/full-release-validation.yml";
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
+const gitIdentity = [
+  "-c",
+  "user.name=Release fixture",
+  "-c",
+  "user.email=release-fixture@example.invalid",
+  "-c",
+  "commit.gpgsign=false",
+];
 
-async function zipFiles(files: Iterable<readonly [string, Buffer]>) {
+async function artifactFixture(
+  id: string,
+  name: string,
+  files: Iterable<readonly [string, Buffer]>,
+) {
   const zip = new JSZip();
-  for (const [name, bytes] of files) {
-    zip.file(name, bytes);
+  for (const [fileName, bytes] of files) {
+    zip.file(fileName, bytes);
   }
-  return zip.generateAsync({ type: "nodebuffer", compression: "STORE", platform: "UNIX" });
+  const archive = await zip.generateAsync({
+    type: "nodebuffer",
+    compression: "STORE",
+    platform: "UNIX",
+  });
+  const artifact = { id, name, digest: hash(archive), runId: "12", runAttempt: "2" };
+  const metadata = {
+    id: Number(id),
+    name,
+    digest: `sha256:${artifact.digest}`,
+    size_in_bytes: archive.length,
+    expired: false,
+    expires_at: "2026-10-01T00:00:00Z",
+    workflow_run: { id: 12, head_sha: toolingSha },
+  };
+  return { archive, artifact, metadata };
 }
 
 function workflowRun(callerWorkflowPath = workflowPath) {
@@ -111,12 +143,10 @@ function packSourcePackage(directory: string, destination: string) {
   };
   const staging = tempDirs.make("npm-package-staging-");
   mkdirSync(join(staging, "package"));
-  copyFileSync(join(directory, "package.json"), join(staging, "package/package.json"));
-  if (existsSync(join(directory, "npm-shrinkwrap.json"))) {
-    copyFileSync(
-      join(directory, "npm-shrinkwrap.json"),
-      join(staging, "package/npm-shrinkwrap.json"),
-    );
+  for (const fileName of ["package.json", "npm-shrinkwrap.json"]) {
+    if (existsSync(join(directory, fileName))) {
+      copyFileSync(join(directory, fileName), join(staging, "package", fileName));
+    }
   }
   return execFileSync("tar", [
     "-czf",
@@ -130,27 +160,21 @@ function packSourcePackage(directory: string, destination: string) {
 function packageSourceFixture(
   packageVersion: string,
   baseTag?: "same-source" | "different-source",
+  dependencies?: Record<string, string>,
 ) {
   const sourceDir = tempDirs.make("npm-source-");
   const outputDir = join(tempDirs.make("npm-package-output-"), "prepared");
   const git = (...args: string[]) =>
-    execFileSync(
-      "git",
-      [
-        "-C",
-        sourceDir,
-        "-c",
-        "user.name=Release fixture",
-        "-c",
-        "user.email=release-fixture@example.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        ...args,
-      ],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-    ).trim();
+    execFileSync("git", ["-C", sourceDir, ...gitIdentity, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
   git("init", "--quiet");
-  writeJson(join(sourceDir, "package.json"), { name: "openclaw", version: packageVersion });
+  writeJson(join(sourceDir, "package.json"), {
+    name: "openclaw",
+    version: packageVersion,
+    ...(dependencies ? { dependencies } : {}),
+  });
   git("add", "package.json");
   git("commit", "--quiet", "-m", "release package fixture");
   if (baseTag) {
@@ -168,6 +192,15 @@ function packageSourceFixture(
     producer: packageProducer(),
     runPack,
     runRootPack: runPack,
+  };
+}
+
+function runtimeLock(name: string, version: string) {
+  return {
+    packages: {
+      "": { dependencies: { [name]: version } },
+      [`node_modules/${name}`]: { version },
+    },
   };
 }
 
@@ -199,17 +232,15 @@ async function bundleFixture(callerWorkflowPath = workflowPath) {
     [manifest.tarballName, tarball],
     [corePackage.tarballName, aiTarball],
   ]);
-  const archive = await zipFiles(files);
+  const { archive, artifact, metadata } = await artifactFixture(
+    "78",
+    "openclaw-npm-package-12-2",
+    files,
+  );
   const descriptor = {
     schema: PREPARED_NPM_BUNDLE_SCHEMA,
     source: { sha: sourceSha },
-    artifact: {
-      id: "78",
-      name: "openclaw-npm-package-12-2",
-      digest: hash(archive),
-      runId: "12",
-      runAttempt: "2",
-    },
+    artifact,
     package: {
       name: "openclaw",
       fileName: manifest.tarballName,
@@ -223,15 +254,6 @@ async function bundleFixture(callerWorkflowPath = workflowPath) {
   };
   const run = workflowRun(callerWorkflowPath);
   const job = producerJob(producer);
-  const metadata = {
-    id: 78,
-    name: descriptor.artifact.name,
-    digest: `sha256:${descriptor.artifact.digest}`,
-    size_in_bytes: archive.length,
-    expired: false,
-    expires_at: "2026-10-01T00:00:00Z",
-    workflow_run: { id: 12, head_sha: toolingSha },
-  };
   const runGh = (args: string[]) => {
     const endpoint = args[1];
     if (!endpoint) {
@@ -254,7 +276,7 @@ async function bundleFixture(callerWorkflowPath = workflowPath) {
     }
     return url.endsWith("/zip") ? new Response(new Uint8Array(archive)) : Response.json(metadata);
   };
-  return { archive, descriptor, fetchImpl, files, job, manifest, metadata, run, runGh };
+  return { descriptor, fetchImpl, files, job, manifest, run, runGh };
 }
 
 type PreparedFixtureDescriptor = Awaited<ReturnType<typeof bundleFixture>>["descriptor"];
@@ -301,23 +323,11 @@ async function qualificationFixture<
           Buffer.from(typeof value === "string" ? value : `${JSON.stringify(value)}\n`),
         ] as const,
     );
-    const archive = await zipFiles(entries);
-    const artifact = {
+    const { archive, artifact, metadata } = await artifactFixture(
       id,
-      name: `openclaw-npm-${kind}-proof-${producer.runId}-${producer.runAttempt}`,
-      digest: hash(archive),
-      runId: producer.runId,
-      runAttempt: producer.runAttempt,
-    };
-    const metadata = {
-      id: Number(id),
-      name: artifact.name,
-      digest: `sha256:${artifact.digest}`,
-      size_in_bytes: archive.length,
-      expired: false,
-      expires_at: "2026-10-01T00:00:00Z",
-      workflow_run: { id: Number(producer.runId), head_sha: toolingSha },
-    };
+      `openclaw-npm-${kind}-proof-${producer.runId}-${producer.runAttempt}`,
+      entries,
+    );
     archives.set(id, { archive, metadata });
     const { preparedBundle: _preparedBundle, ...identity } = contentsProof;
     return {
@@ -392,6 +402,46 @@ type QualificationFixture = Awaited<
 >;
 
 type BundleFixture = Awaited<ReturnType<typeof bundleFixture>>;
+type AttemptChanges = {
+  current?: Partial<ReturnType<typeof workflowRun>>;
+  reread?: Partial<ReturnType<typeof workflowRun>>;
+  receipt?: Partial<ReturnType<typeof producerJob>>;
+  noJobs?: boolean;
+};
+
+function validateDescriptor(descriptor: PreparedFixtureDescriptor, sha = sourceSha) {
+  return validatePreparedNpmBundleDescriptor({
+    descriptor,
+    repository,
+    sourceSha: sha,
+    toolingSha,
+  });
+}
+
+function laterAttemptRequests(
+  fixture: BundleFixture,
+  current: (read: number) => object,
+  jobs: () => object[],
+  { project = false, requests = [] }: { project?: boolean; requests?: string[] } = {},
+) {
+  let reads = 0;
+  return (args: string[]) => {
+    const endpoint = args[1] ?? "";
+    requests.push(endpoint);
+    if (endpoint.endsWith("/runs/12")) {
+      return JSON.stringify(current(++reads));
+    }
+    if (endpoint.includes("/attempts/3/jobs?")) {
+      const entries = jobs();
+      const input = JSON.stringify({ total_count: entries.length, jobs: entries });
+      // Preserve the real --jq projection in the carried-forward job regression.
+      return project
+        ? execFileSync("jq", ["-c", args[args.indexOf("--jq") + 1]!], { input, encoding: "utf8" })
+        : input;
+    }
+    return fixture.runGh(args);
+  };
+}
 
 function publicationOptions(fixture: BundleFixture, runGh = fixture.runGh, qualified = true) {
   return {
@@ -492,17 +542,12 @@ describe("prepared npm bundle", () => {
     const current = { ...fixture.run, run_attempt: 3, conclusion: "success" };
     const receipt = { ...fixture.job, id: 46, run_attempt: 3, name: "Seal artifact receipt" };
     const requests: string[] = [];
-    const runGh = (args: string[]) => {
-      const endpoint = args[1] ?? "";
-      requests.push(endpoint);
-      if (endpoint.endsWith("/runs/12")) {
-        return JSON.stringify(current);
-      }
-      if (endpoint.includes("/attempts/3/jobs?")) {
-        return JSON.stringify({ total_count: 1, jobs: [receipt] });
-      }
-      return fixture.runGh(args);
-    };
+    const runGh = laterAttemptRequests(
+      fixture,
+      () => current,
+      () => [receipt],
+      { requests },
+    );
     const result = verifyNpmBundleProducer(publicationOptions(fixture, runGh));
     expect(result).toMatchObject({
       run: { run_attempt: 3 },
@@ -524,20 +569,12 @@ describe("prepared npm bundle", () => {
     });
     const current = { ...fixture.run, run_attempt: 3 };
     const later = { ...fixture.job, id: 47, run_attempt: 3, started_at: startedAt };
-    const runGh = (args: string[]) => {
-      const endpoint = args[1] ?? "";
-      if (endpoint.endsWith("/runs/12")) {
-        return JSON.stringify(current);
-      }
-      if (endpoint.includes("/attempts/3/jobs?")) {
-        // Apply the production --jq projection so dropped execution fields fail here.
-        return execFileSync("jq", ["-c", args[args.indexOf("--jq") + 1]!], {
-          input: JSON.stringify({ total_count: 1, jobs: [later] }),
-          encoding: "utf8",
-        });
-      }
-      return fixture.runGh(args);
-    };
+    const runGh = laterAttemptRequests(
+      fixture,
+      () => current,
+      () => [later],
+      { project: true },
+    );
     const verify = () => verifyNpmBundleProducer(publicationOptions(fixture, runGh, false));
     if (accepted) {
       expect(verify().job.id).toBe(fixture.job.id);
@@ -546,52 +583,28 @@ describe("prepared npm bundle", () => {
     }
   });
 
-  it.each([
-    "superseded qualifier",
-    "missing attempt jobs",
-    "mismatched attempt jobs",
-    "changed current tooling",
-    "current attempt regressed",
-    "current attempt advanced during verification",
-    "current run restarted during verification",
-  ])("rejects stale producer proof: %s", async (scenario) => {
+  it.each<[string, AttemptChanges]>([
+    ["superseded qualifier", { receipt: { name: "Qualify prepared npm package" } }],
+    ["missing attempt jobs", { noJobs: true }],
+    ["mismatched attempt jobs", { receipt: { run_attempt: 2 } }],
+    ["changed current tooling", { current: { head_sha: "d".repeat(40) } }],
+    ["current attempt regressed", { current: { run_attempt: 1 } }],
+    ["current attempt advanced during verification", { reread: { run_attempt: 4 } }],
+    [
+      "current run restarted during verification",
+      { reread: { status: "in_progress", conclusion: null } },
+    ],
+  ])("rejects stale producer proof: %s", async (_scenario, changes) => {
     const fixture = await bundleFixture();
     Object.assign(fixture.run, { status: "completed", conclusion: "success" });
     fixture.job.name = "Qualify prepared npm package";
     const current = { ...fixture.run, run_attempt: 3 };
     const receipt = { ...fixture.job, id: 46, run_attempt: 3, name: "Seal artifact receipt" };
-    let currentReads = 0;
-    const runGh = (args: string[]) => {
-      const endpoint = args[1] ?? "";
-      if (endpoint.endsWith("/runs/12")) {
-        currentReads += 1;
-        return JSON.stringify({
-          ...current,
-          ...(scenario === "changed current tooling" ? { head_sha: "d".repeat(40) } : {}),
-          ...(scenario === "current attempt regressed" ? { run_attempt: 1 } : {}),
-          ...(currentReads === 2 && scenario === "current attempt advanced during verification"
-            ? { run_attempt: 4 }
-            : {}),
-          ...(currentReads === 2 && scenario === "current run restarted during verification"
-            ? { status: "in_progress", conclusion: null }
-            : {}),
-        });
-      }
-      if (endpoint.includes("/attempts/3/jobs?")) {
-        const jobs =
-          scenario === "missing attempt jobs"
-            ? []
-            : [
-                {
-                  ...receipt,
-                  ...(scenario === "superseded qualifier" ? { name: fixture.job.name } : {}),
-                  ...(scenario === "mismatched attempt jobs" ? { run_attempt: 2 } : {}),
-                },
-              ];
-        return JSON.stringify({ total_count: jobs.length, jobs });
-      }
-      return fixture.runGh(args);
-    };
+    const runGh = laterAttemptRequests(
+      fixture,
+      (read) => ({ ...current, ...changes.current, ...(read === 2 ? changes.reread : {}) }),
+      () => (changes.noJobs ? [] : [{ ...receipt, ...changes.receipt }]),
+    );
     expect(() => verifyNpmBundleProducer(publicationOptions(fixture, runGh))).toThrow(
       /producer|attempt evidence/,
     );
@@ -600,26 +613,13 @@ describe("prepared npm bundle", () => {
   it.each([false, true])(
     "checks packed legacy runtime dependencies before sealing (complete=%s)",
     (complete) => {
-      const fixture = packageSourceFixture("2026.7.33");
+      const fixture = packageSourceFixture("2026.7.33", undefined, { "runtime-fixture": "1.0.0" });
       // Use a non-workspace runtime: coverage must protect every declared dependency,
       // not just the AI package whose omission broke 2026.7.33.
-      writeJson(join(fixture.sourceDir, "package.json"), {
-        name: "openclaw",
-        version: "2026.7.33",
-        files: ["npm-shrinkwrap.json"],
-        dependencies: { "runtime-fixture": "1.0.0" },
-      });
-      writeJson(join(fixture.sourceDir, "npm-shrinkwrap.json"), {
-        name: "openclaw",
-        version: "2026.7.33",
-        lockfileVersion: 3,
-        packages: complete
-          ? {
-              "": { dependencies: { "runtime-fixture": "1.0.0" } },
-              "node_modules/runtime-fixture": { version: "1.0.0" },
-            }
-          : { "": {} },
-      });
+      writeJson(
+        join(fixture.sourceDir, "npm-shrinkwrap.json"),
+        complete ? runtimeLock("runtime-fixture", "1.0.0") : { packages: { "": {} } },
+      );
       if (complete) {
         const bundle = prepareNpmPackageBundle(fixture);
         expect(bundle.packageVersion).toBe("2026.7.33");
@@ -650,39 +650,34 @@ describe("prepared npm bundle", () => {
     pnpmPack.observer = (args) => {
       steps.push(args.includes("pack") ? "pack" : String(args.at(-1)));
     };
-    try {
-      expect(
-        prepareNpmPackageBundle({
-          ...fixture,
-          sanitizeRootDeclarations,
-          refreshRootDistInventory,
-        }).packageVersion,
-      ).toBe("2026.8.33");
-    } finally {
-      pnpmPack.impl = undefined;
-      pnpmPack.observer = undefined;
-    }
+    expect(
+      prepareNpmPackageBundle({
+        ...fixture,
+        sanitizeRootDeclarations,
+        refreshRootDistInventory,
+      }).packageVersion,
+    ).toBe("2026.8.33");
 
     expect(sanitizeRootDeclarations).toHaveBeenCalledOnce();
     expect(refreshRootDistInventory).toHaveBeenCalledOnce();
     expect(steps).toEqual(["prepack", "sanitize", "inventory", "pack", "postpack"]);
-    expect(pnpmPack.calls.map((call) => call.args)).toEqual([
-      ["run", "prepack"],
+    expect(pnpmPack.calls).toEqual(
       [
-        "pack",
-        "--config.ignore-scripts=true",
-        "--config.node-linker=hoisted",
-        "--pack-destination",
-        fixture.outputDir,
-      ],
-      ["run", "--if-present", "postpack"],
-    ]);
-    expect(pnpmPack.calls.map((call) => call.cwd)).toEqual([
-      fixture.sourceDir,
-      fixture.sourceDir,
-      fixture.sourceDir,
-    ]);
-    expect(pnpmPack.calls.every((call) => call.env.OPENCLAW_PREPACK_PREPARED === "1")).toBe(true);
+        ["run", "prepack"],
+        [
+          "pack",
+          "--config.ignore-scripts=true",
+          "--config.node-linker=hoisted",
+          "--pack-destination",
+          fixture.outputDir,
+        ],
+        ["run", "--if-present", "postpack"],
+      ].map((args) => ({
+        args,
+        cwd: fixture.sourceDir,
+        env: expect.objectContaining({ OPENCLAW_PREPACK_PREPARED: "1" }),
+      })),
+    );
   });
 
   it("does not load the declaration parser from the frozen candidate", () => {
@@ -706,14 +701,7 @@ describe("prepared npm bundle", () => {
     );
     writeFileSync(join(distRoot, "chunk.d.ts"), "export { __exportAll as helper };\n");
     pnpmPack.impl = runPack;
-    try {
-      prepareNpmPackageBundle({
-        ...fixture,
-        refreshRootDistInventory: vi.fn(),
-      });
-    } finally {
-      pnpmPack.impl = undefined;
-    }
+    prepareNpmPackageBundle({ ...fixture, refreshRootDistInventory: vi.fn() });
 
     expect(existsSync(marker)).toBe(false);
     expect(readFileSync(join(distRoot, "chunk.d.ts"), "utf8")).toBe("export { };\n");
@@ -723,26 +711,15 @@ describe("prepared npm bundle", () => {
     "prepares a legacy root shrinkwrap before sealing (has shrinkwrap=%s)",
     (hasShrinkwrap) => {
       const version = "2026.7.34";
-      const fixture = packageSourceFixture(version);
+      const fixture = packageSourceFixture(version, undefined, { "@openclaw/ai": version });
       const aiDir = join(fixture.sourceDir, "packages/ai");
       mkdirSync(aiDir, { recursive: true });
-      writeJson(join(fixture.sourceDir, "package.json"), {
-        name: "openclaw",
-        version,
-        files: ["npm-shrinkwrap.json"],
-        dependencies: { "@openclaw/ai": version },
-      });
       writeJson(join(aiDir, "package.json"), { name: "@openclaw/ai", version });
       if (hasShrinkwrap) {
-        writeJson(join(fixture.sourceDir, "npm-shrinkwrap.json"), {
-          name: "openclaw",
-          version,
-          lockfileVersion: 3,
-          packages: {
-            "": { dependencies: { "@openclaw/ai": "2026.7.33" } },
-            "node_modules/@openclaw/ai": { version: "2026.7.33" },
-          },
-        });
+        writeJson(
+          join(fixture.sourceDir, "npm-shrinkwrap.json"),
+          runtimeLock("@openclaw/ai", "2026.7.33"),
+        );
       }
       const prepareRootShrinkwrap = vi.fn(({ aiTarballPath }: { aiTarballPath: string }) => {
         expect(existsSync(aiTarballPath)).toBe(true);
@@ -753,10 +730,7 @@ describe("prepared npm bundle", () => {
         writeJson(shrinkwrapPath, shrinkwrap);
       });
 
-      const prepared = prepareNpmPackageBundle({
-        ...fixture,
-        prepareRootShrinkwrap,
-      });
+      const prepared = prepareNpmPackageBundle({ ...fixture, prepareRootShrinkwrap });
 
       expect(prepareRootShrinkwrap).toHaveBeenCalledTimes(hasShrinkwrap ? 1 : 0);
       expect(prepared.dependencyTarballs).toHaveLength(1);
@@ -773,8 +747,7 @@ describe("prepared npm bundle", () => {
       const fixture = packageSourceFixture(packageVersion, baseTag);
       const prepared = prepareNpmPackageBundle({ ...fixture, releaseTag });
       const expectedTag = releaseTag ?? `v${packageVersion}`;
-      expect(prepared.releaseTag).toBe(expectedTag);
-      expect(prepared.releaseSha).toBe(fixture.releaseRef);
+      expect(prepared).toMatchObject({ releaseTag: expectedTag, releaseSha: fixture.releaseRef });
       const descriptor = describeNpmBundle({
         directory: fixture.outputDir,
         artifact: {
@@ -785,12 +758,7 @@ describe("prepared npm bundle", () => {
           runAttempt: "2",
         },
       });
-      validatePreparedNpmBundleDescriptor({
-        descriptor,
-        repository,
-        sourceSha: fixture.releaseRef,
-        toolingSha,
-      });
+      validateDescriptor(descriptor, fixture.releaseRef);
       const proof = await qualificationFixture(descriptor);
       for (const entry of [proof.sdkProof, proof.dependencyProof, proof.contentsProof]) {
         const directory = tempDirs.make("npm-qualification-evidence-");
@@ -819,8 +787,7 @@ describe("prepared npm bundle", () => {
       }
       const outputDir = join(tempDirs.make("npm-qualified-output-"), "qualified");
       const qualified = await qualifyFixture(descriptor, fixture.outputDir, outputDir, proof);
-      expect(qualified.releaseTag).toBe(expectedTag);
-      expect(qualified.packageVersion).toBe(packageVersion);
+      expect(qualified).toMatchObject({ releaseTag: expectedTag, packageVersion });
       const params = { tag: expectedTag, targetSha: fixture.releaseRef, npmDistTag: "beta" };
       expect(() => validatePreflightManifest(qualified, params)).not.toThrow();
       expect(() => validatePreflightManifest(qualified, { ...params, tag: "v2026.8.1-3" })).toThrow(
@@ -963,18 +930,9 @@ describe("prepared npm bundle", () => {
 
   it("rejects a descriptor for another source or reusable owner", async () => {
     const { descriptor } = await bundleFixture();
-    expect(() =>
-      validatePreparedNpmBundleDescriptor({
-        descriptor,
-        repository,
-        sourceSha: "c".repeat(40),
-        toolingSha,
-      }),
-    ).toThrow("source SHA mismatch");
+    expect(() => validateDescriptor(descriptor, "c".repeat(40))).toThrow("source SHA mismatch");
     descriptor.producer.producerWorkflowPath = ".github/workflows/ci.yml";
-    expect(() =>
-      validatePreparedNpmBundleDescriptor({ descriptor, repository, sourceSha, toolingSha }),
-    ).toThrow("trusted preflight owner");
+    expect(() => validateDescriptor(descriptor)).toThrow("trusted preflight owner");
   });
 
   it.each<[string, (proof: QualificationFixture) => void, string]>([

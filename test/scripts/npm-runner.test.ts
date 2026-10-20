@@ -4,9 +4,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { resolveNpmRunner, type NpmRunnerParams } from "../../scripts/npm-runner.mts";
 
 const originalVersions = process.versions;
-afterEach(() => {
-  Object.defineProperty(process, "versions", { value: originalVersions });
-});
+afterEach(() => Object.defineProperty(process, "versions", { value: originalVersions }));
 
 function localRunner(execPath: string, npmPath: string, options: NpmRunnerParams = {}) {
   return resolveNpmRunner({
@@ -65,13 +63,12 @@ describe("resolveNpmRunner", () => {
     const execPath = "C:\\nodejs\\node.exe";
     const expectedNpmExePath = path.win32.resolve(path.win32.dirname(execPath), "npm.exe");
 
-    expect(localRunner(execPath, expectedNpmExePath, { npmArgs: ["install", "--silent"] })).toEqual(
-      {
-        command: expectedNpmExePath,
-        args: ["install", "--silent"],
-        shell: false,
-      },
-    );
+    const runner = localRunner(execPath, expectedNpmExePath, { npmArgs: ["install", "--silent"] });
+    expect(runner).toEqual({
+      command: expectedNpmExePath,
+      args: ["install", "--silent"],
+      shell: false,
+    });
   });
 
   it.each([
@@ -122,9 +119,7 @@ describe("resolveNpmRunner", () => {
     expect(
       resolveNpmRunner({
         execPath: "/tmp/node",
-        env: {
-          PATH: "/usr/bin:/bin",
-        },
+        env: { PATH: "/usr/bin:/bin" },
         existsSync: () => false,
         platform: "linux",
       }),
@@ -132,9 +127,7 @@ describe("resolveNpmRunner", () => {
       command: "npm",
       args: [],
       shell: false,
-      env: {
-        PATH: `/tmp${path.delimiter}/usr/bin:/bin`,
-      },
+      env: { PATH: `/tmp${path.delimiter}/usr/bin:/bin` },
     });
   });
 
@@ -142,9 +135,7 @@ describe("resolveNpmRunner", () => {
     expect(() =>
       resolveNpmRunner({
         execPath: "C:\\node\\node.exe",
-        env: {
-          Path: "C:\\Windows\\System32",
-        },
+        env: { Path: "C:\\Windows\\System32" },
         existsSync: () => false,
         platform: "win32",
       }),

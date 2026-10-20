@@ -3,7 +3,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-const helper = "scripts/e2e/lib/onboard/first-agent-flow.sh";
+function run(script: string, env: NodeJS.ProcessEnv, timeout = 10_000) {
+  return spawnSync("bash", ["-c", script], {
+    encoding: "utf8",
+    timeout,
+    env: { ...process.env, NODE_BIN: process.execPath, ...env },
+  });
+}
 
 describe.skipIf(process.platform === "win32")("guided first-agent prompt handshake", () => {
   it.each([
@@ -14,19 +20,12 @@ describe.skipIf(process.platform === "win32")("guided first-agent prompt handsha
   ] as const)(
     "drives the real guided sender through %s %s %s prompts",
     (layout, rendering, modelPrompt, count) => {
-      const root = dirs.make("onboard-first-agent-flow-");
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          `
-set -euo pipefail
+      const result = run(
+        `
 export OPENCLAW_ONBOARD_SCENARIO_SOURCE_ONLY=1
 export OPENCLAW_ONBOARD_E2E_TMPDIR="$CASE_ROOT"
 source scripts/e2e/lib/onboard/scenario.sh
-trap 'rm -rf "$ONBOARD_TMP_DIR"' EXIT
-WIZARD_LOG_PATH="$CASE_ROOT/prompts.log"
-export WIZARD_LOG_PATH
+export WIZARD_LOG_PATH="$CASE_ROOT/prompts.log"
 prompts=("Help make OpenClaw better?")
 if [[ "$LAYOUT" == team ]]; then
   prompts+=($'\\e[36mWhat would you like to create?\\e[39m\\n● One agent\\n○ A small team')
@@ -41,14 +40,7 @@ index=0
 render() {
   "$NODE_BIN" -e 'const fs=require("node:fs"); const text=process.argv[2]; fs.writeFileSync(process.argv[1], process.env.RENDERING === "fragmented" ? text.split("").join("\\n") : text);' "$WIZARD_LOG_PATH" "$1"
 }
-# The terminal is the boundary double. Prompt recognition and the production
-# sender are real; unexpected keystrokes or out-of-order waits fail immediately.
-wait_for_log() {
-  if ! log_contains "$1"; then
-    printf 'unexpected wait: %s\\n' "$1" >&2
-    return 21
-  fi
-}
+wait_for_log() { log_contains "$1"; }
 send() {
   [[ "$1" == $'\\r' ]] || { echo 'unexpected keystroke' >&2; return 22; }
   index=$((index + 1))
@@ -59,18 +51,11 @@ send_guided_skip_ui_flow
 [[ "$index" == "\${#prompts[@]}" ]]
 printf 'responses=%s\\n' "$index"
 `,
-        ],
         {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            CASE_ROOT: root,
-            LAYOUT: layout,
-            MODEL_PROMPT: modelPrompt,
-            RENDERING: rendering,
-            NODE_BIN: process.execPath,
-          },
-          timeout: 10_000,
+          CASE_ROOT: dirs.make("onboard-first-agent-flow-"),
+          LAYOUT: layout,
+          MODEL_PROMPT: modelPrompt,
+          RENDERING: rendering,
         },
       );
       expect(result.status, result.stderr).toBe(0);
@@ -82,12 +67,9 @@ printf 'responses=%s\\n' "$index"
     ["incomplete", 0],
     ["menu", 1],
   ] as const)("does not send blindly or re-answer a stalled %s state", (mode, expectedInputs) => {
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `
-source ${helper}
+    const result = run(
+      `
+source scripts/e2e/lib/onboard/first-agent-flow.sh
 count=0
 contains() {
   case "$1" in
@@ -102,8 +84,8 @@ status=$?
 printf 'inputs=%s\\n' "$count"
 exit "$status"
 `,
-      ],
-      { encoding: "utf8", env: { ...process.env, MODE: mode }, timeout: 5_000 },
+      { MODE: mode },
+      5_000,
     );
     expect(result.status).toBe(1);
     expect(result.stdout.trim()).toBe(`inputs=${expectedInputs}`);

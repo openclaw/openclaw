@@ -24,17 +24,15 @@ function projection() {
         contextId: "context-1",
         executionId: "execution-1",
         runId: "admitted-run-1",
-        createdAt: 123,
-        trustDomain: { kind: "gateway-cell", domainRef, state: "present" },
+        trustDomain: { domainRef },
         invoker: { state: "absent" },
         ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-        agentPrincipal: { kind: "agent", domainRef, principalRef: "main" },
-        agentDefinition: { definitionRef: "main", state: "present" },
-        runtimeInstance: { runtimeRef: domainRef, kind: "gateway", state: "present" },
+        agentPrincipal: { domainRef, principalRef: "main" },
+        agentDefinition: { definitionRef: "main" },
+        runtimeInstance: { runtimeRef: domainRef },
         applicableGrants: [],
         assurance: [],
         coverageState: "unattributed",
-        missingEvidence: ["invoker.principal"],
       },
     },
     decisionDisplays: [
@@ -60,20 +58,19 @@ describe("installed-package execution identity proof", () => {
     ["wrong run", (result) => Object.assign(result.run, { runId: "other-run" })],
     [
       "fabricated invoker",
-      (result) => Object.assign(result.identity.context.invoker, { state: "present" }),
+      ({ identity: { context } }) => Object.assign(context.invoker, { state: "present" }),
     ],
     [
       "raw runtime",
-      (result) =>
-        Object.assign(result.identity.context.runtimeInstance, { runtimeRef: "raw-runtime" }),
+      ({ identity: { context } }) =>
+        Object.assign(context.runtimeInstance, { runtimeRef: "raw-runtime" }),
     ],
     [
       "false enforcement",
-      (result) => {
-        for (const display of result.decisionDisplays) {
-          display.enforcement.coverageState = "enforced";
-        }
-      },
+      ({ decisionDisplays }) =>
+        decisionDisplays.forEach(({ enforcement }) =>
+          Object.assign(enforcement, { coverageState: "enforced" }),
+        ),
     ],
     ["lost admission", (result) => Object.assign(result, { decisionDisplays: [] })],
   ])("rejects %s", (_label, mutate) => {
@@ -104,7 +101,7 @@ describe("installed-package execution identity proof", () => {
     const beforePath = path.join(home, "before.json");
     const afterPath = path.join(home, "after.json");
     const before = projection();
-    const db = new DatabaseSync(path.join(stateDir, "state/openclaw.sqlite"));
+    using db = new DatabaseSync(path.join(stateDir, "state/openclaw.sqlite"));
     const verify = () =>
       spawnSync(process.execPath, [helper, "verify", afterPath, beforePath], {
         encoding: "utf8",
@@ -116,24 +113,20 @@ describe("installed-package execution identity proof", () => {
           OPENCLAW_CONFIG_PATH: config,
         },
       });
-    try {
-      db.exec("CREATE TABLE execution_identity_contexts (context_json TEXT NOT NULL)");
-      const insert = db.prepare("INSERT INTO execution_identity_contexts VALUES (?)");
-      insert.run(JSON.stringify(before.identity.context));
-      writeFileSync(beforePath, JSON.stringify(before));
-      writeFileSync(afterPath, JSON.stringify(before));
-      expect(verify()).toMatchObject({ status: 0, stdout: "execution-1" });
-      const after = projection();
-      after.identity.context.runtimeInstance.runtimeRef = domainRef.replace(/b/gu, "c");
-      db.prepare("UPDATE execution_identity_contexts SET context_json = ?").run(
-        JSON.stringify(after.identity.context),
-      );
-      writeFileSync(afterPath, JSON.stringify(after));
-      expect(verify().stderr).toContain("CLI context differs from persisted bytes");
-      insert.run(JSON.stringify(after.identity.context));
-      expect(verify().stderr).toContain("expected exactly one admitted execution identity");
-    } finally {
-      db.close();
-    }
+    db.exec("CREATE TABLE execution_identity_contexts (context_json TEXT NOT NULL)");
+    const insert = db.prepare("INSERT INTO execution_identity_contexts VALUES (?)");
+    insert.run(JSON.stringify(before.identity.context));
+    writeFileSync(beforePath, JSON.stringify(before));
+    writeFileSync(afterPath, JSON.stringify(before));
+    expect(verify()).toMatchObject({ status: 0, stdout: "execution-1" });
+    const after = projection();
+    after.identity.context.runtimeInstance.runtimeRef = domainRef.replace(/b/gu, "c");
+    db.prepare("UPDATE execution_identity_contexts SET context_json = ?").run(
+      JSON.stringify(after.identity.context),
+    );
+    writeFileSync(afterPath, JSON.stringify(after));
+    expect(verify().stderr).toContain("CLI context differs from persisted bytes");
+    insert.run(JSON.stringify(after.identity.context));
+    expect(verify().stderr).toContain("expected exactly one admitted execution identity");
   });
 });
