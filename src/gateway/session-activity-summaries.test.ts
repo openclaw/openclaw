@@ -58,6 +58,7 @@ import {
 import { projectSessionActivitySummary } from "./session-activity-summary-state.js";
 import { listSessionFixture } from "./session-list.test-support.js";
 import type { defaultCompleteModel, defaultPrepareModel } from "./session-observer-model.js";
+import * as observerModel from "./session-observer-model.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
@@ -102,14 +103,12 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       entry: read(session),
       watermark: readSessionTranscriptWatermark(session),
     });
-  const createService = (prepareModel: typeof defaultPrepareModel = prepare) =>
+  const createService = () =>
     createSessionActivitySummaries({
       scheduler: createTestGatewayScheduler(),
       getConfig: () => cfg,
       getSessionRowProjection: () => residentProjection,
       onChanged: changed,
-      prepareModel,
-      completeModel: complete,
     });
 
   const holdCompletion = () => {
@@ -236,6 +235,8 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     testState = await createActivityRecapSessionFixture(cfg);
     complete.mockReset().mockImplementation(async () => result(completedText));
     prepare.mockReset().mockImplementation(async () => prepared);
+    vi.spyOn(observerModel, "defaultPrepareModel").mockImplementation(prepare);
+    vi.spyOn(observerModel, "defaultCompleteModel").mockImplementation(complete);
     changed.mockReset();
     service = createService();
   });
@@ -256,6 +257,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     describeProjection = undefined;
     await testState.cleanup();
     clearRuntimeConfigSnapshot();
+    vi.restoreAllMocks();
   });
 
   it("does not enqueue recaps for excluded sessions or disabled utility routing", async () => {
@@ -739,7 +741,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     await ensureRecap(target);
     await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
     const oldService = service;
-    service = createService(() => preparation.promise);
+    service = createService();
     const entry = await readSessionEntryReadOnlyInWorker(scope);
     const published = publication();
     await service.ensure(target, entry);

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { chunkItems } from "../utils/chunk-items.js";
@@ -13,12 +13,16 @@ import {
   serializeClientCredentialReceipt,
   type ClientCredentialReceipt,
 } from "./client-credential-receipt.js";
-import type { ClientCredentialDatabase } from "./client-credential-schema.js";
+import {
+  CLIENT_CREDENTIAL_SCHEMA_VERSION,
+  type ClientCredentialDatabase,
+} from "./client-credential-schema.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { StartupMaintenanceRequiredError } from "./startup-maintenance-required.js";
 
 function notReady(): Error {
@@ -27,10 +31,64 @@ function notReady(): Error {
   );
 }
 
+type ClientCredentialReceiptState = {
+  phase: "copied" | "complete";
+  receipt: ClientCredentialReceipt;
+};
+
+function assertSupportedVersion(version: number): void {
+  if (version !== CLIENT_CREDENTIAL_SCHEMA_VERSION) {
+    throw new Error(
+      `Client credentials have unsupported schema version ${String(version)}. Use a compatible OpenClaw version.`,
+    );
+  }
+}
+
+/** The receipt is a cross-process migration-phase guard, including in-place copied → complete transitions. */
+export function readClientCredentialAdmission(database: DatabaseSync): {
+  version: number;
+  stored: ClientCredentialReceiptState | null;
+} {
+  let row: Record<string, SQLOutputValue> | undefined;
+  try {
+    row =
+      // sqlite-allow-raw -- Read the native header and its migration receipt in one bounded statement.
+      database
+        .prepare(`
+    SELECT header.user_version, receipt.source_store, receipt.phase
+    FROM pragma_user_version AS header
+    LEFT JOIN client_credential_migration AS receipt ON receipt.version = 1
+  `)
+        .get();
+  } catch (error) {
+    // A newer schema may change the receipt's SQL shape before this query can read its version.
+    assertSupportedVersion(readSqliteUserVersion(database));
+    throw error;
+  }
+  if (!row || typeof row.user_version !== "number") {
+    throw notReady();
+  }
+  assertSupportedVersion(row.user_version);
+  const localPath = database.location();
+  return {
+    version: row.user_version,
+    stored:
+      row.source_store === null
+        ? null
+        : {
+            phase: row.phase === "complete" ? "complete" : "copied",
+            receipt: parseClientCredentialReceipt(
+              String(row.source_store),
+              localPath ? path.dirname(path.dirname(localPath)) : undefined,
+            ),
+          },
+  };
+}
+
 export function readClientCredentialReceipt(
   database: DatabaseSync,
   rootPath?: string,
-): { phase: "copied" | "complete"; receipt: ClientCredentialReceipt } | null {
+): ClientCredentialReceiptState | null {
   const db = getNodeSqliteKysely<ClientCredentialDatabase>(database);
   const row = executeSqliteQueryTakeFirstSync(
     database,
@@ -143,9 +201,10 @@ function prepareClientCredentialReceipt(
   env: NodeJS.ProcessEnv,
   initialize: boolean,
   readOnly = false,
+  knownReceipt = readClientCredentialReceipt(database),
 ) {
+  let stored = knownReceipt;
   const sharedFile = readClientCredentialFileIdentity(resolveOpenClawStateSqlitePath(env));
-  let stored = readClientCredentialReceipt(database);
   if (!stored && initialize && !sharedFile) {
     assertClientCredentialLegacyReady(null, env);
     const receipt = emptyClientCredentialReceipt();
@@ -224,13 +283,18 @@ export function assertClientCredentialStoreReady(
 export function admitClientCredentialStore(
   database: DatabaseSync,
   env: NodeJS.ProcessEnv,
-  options: { initialize: boolean; readOnly: boolean },
+  options: {
+    initialize: boolean;
+    readOnly: boolean;
+    stored?: ClientCredentialReceiptState | null;
+  },
 ): void {
   const stored = prepareClientCredentialReceipt(
     database,
     env,
     options.initialize,
     options.readOnly,
+    options.stored,
   );
   assertClientCredentialLegacyReady(database, env, !options.readOnly, stored.receipt);
 }

@@ -90,7 +90,6 @@ const BINDING_STORE_OPTIONS = {
   maxEntries: MAX_DISCUSSION_BINDINGS,
   overflowPolicy: "reject-new",
 } as const;
-export const MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS = 1_000;
 const storesByRuntime = new WeakMap<PluginRuntime, ClickClackDiscussionBindingStore>();
 
 function channelKey(serverBaseUrl: string, channelId: string): string {
