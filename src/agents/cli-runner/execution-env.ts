@@ -18,10 +18,10 @@ type ChildEnvBackend = Pick<
  * The executor layers per-attempt MCP capture and installation target variables on top; those
  * never carry identity.
  */
-export function resolveCliChildEnv(
-  preparedBackend: ChildEnvBackend,
-  baseEnv: NodeJS.ProcessEnv = process.env,
-): { env: Record<string, string>; selectedClaudeClearEnv: Set<string> | undefined } {
+export function resolveCliChildEnv(preparedBackend: ChildEnvBackend): {
+  env: Record<string, string>;
+  selectedClaudeClearEnv: Set<string> | undefined;
+} {
   const { backend } = preparedBackend;
   const preparedBackendEnv = preparedBackend.env ?? {};
   const hasSelectedClaudeAuth =
@@ -34,8 +34,8 @@ export function resolveCliChildEnv(
     Object.entries(backend.env ?? {}).filter(([key]) => !selectedClaudeClearEnv?.has(key)),
   );
   const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
-  const env = sanitizeHostExecEnv({ baseEnv, blockPathOverrides: true });
-  const preservedEnv = parseCliBackendPreserveEnv(baseEnv[CLI_BACKEND_PRESERVE_ENV]);
+  const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
+  const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
   for (const key of backend.clearEnv ?? []) {
     if (!preservedEnv.has(key) || selectedClaudeClearEnv?.has(key)) {
       delete env[key];
