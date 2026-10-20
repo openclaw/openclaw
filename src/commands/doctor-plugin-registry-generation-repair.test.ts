@@ -117,64 +117,50 @@ describe("doctor managed npm generation repair", () => {
     },
   );
 
-  it("retires the stale flat install and prunes it after gateway shutdown", async () => {
-    const stateDir = tempDirs.make("openclaw-doctor-plugin-generation-");
-    const npmDir = path.join(stateDir, "npm");
-    const activePackageDir = writeManaged(stateDir, "2026.7.1", true);
-    const stalePackageDir = writeManaged(stateDir, "2026.6.11");
-    await seedInstalledPluginIndex(
-      {
-        [PLUGIN_ID]: {
-          source: "npm",
-          spec: `${PACKAGE_NAME}@latest`,
-          installPath: activePackageDir,
-          resolvedName: PACKAGE_NAME,
-          resolvedSpec: `${PACKAGE_NAME}@2026.7.1`,
-          resolvedVersion: "2026.7.1",
-          version: "2026.7.1",
-        },
-      },
-      { stateDir, candidates: [] },
-    );
-
-    await expect(
-      maybeRepairStaleManagedNpmInstallGenerations(repairParams(stateDir)),
-    ).resolves.toBe(true);
-    expect(hasRetainedManagedNpmInstallMarker(stalePackageDir)).toBe(true);
-    expect(hasRetainedManagedNpmInstallMarker(activePackageDir)).toBe(false);
-
-    await expect(
-      cleanupRetainedManagedNpmInstallGenerations({
-        activeInstallPaths: [activePackageDir],
-        npmDir,
-      }),
-    ).resolves.toBe(1);
-    expect(fs.existsSync(stalePackageDir)).toBe(false);
-    expect(fs.existsSync(activePackageDir)).toBe(true);
-  });
-
-  it("persists the recency fallback when no authoritative record exists", async () => {
-    const stateDir = tempDirs.make("openclaw-doctor-plugin-generation-");
-    const activePackageDir = writeManaged(stateDir, "1.0.0", true);
-    const stalePackageDir = writeManaged(stateDir, "9.0.0");
-    setInstallTimestamp(activePackageDir, new Date("2026-01-02T00:00:00.000Z"));
-    setInstallTimestamp(stalePackageDir, new Date("2026-01-01T00:00:00.000Z"));
-    await seedInstalledPluginIndex({}, { stateDir, candidates: [] });
-    vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-
-    await maybeRepairPluginRegistryState({
-      config: {
-        plugins: {
-          allow: [PLUGIN_ID],
-          entries: { [PLUGIN_ID]: { enabled: true } },
-        },
-      },
-      ...repairParams(stateDir),
-    });
-
-    const persisted = await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir });
-    expect(persisted?.[PLUGIN_ID]?.installPath).toBe(activePackageDir);
-    expect(hasRetainedManagedNpmInstallMarker(stalePackageDir)).toBe(true);
-    expect(hasRetainedManagedNpmInstallMarker(activePackageDir)).toBe(false);
-  });
+  it.each(["record", "recency"] as const)(
+    "retires stale generations using %s authority",
+    async (authority) => {
+      const stateDir = tempDirs.make("openclaw-doctor-plugin-generation-");
+      const active = writeManaged(stateDir, authority === "record" ? "2026.7.1" : "1.0.0", true);
+      const stale = writeManaged(stateDir, authority === "record" ? "2026.6.11" : "9.0.0");
+      await seedInstalledPluginIndex(
+        authority === "record"
+          ? {
+              [PLUGIN_ID]: {
+                source: "npm",
+                spec: `${PACKAGE_NAME}@latest`,
+                installPath: active,
+                resolvedVersion: "2026.7.1",
+              },
+            }
+          : {},
+        { stateDir, candidates: [] },
+      );
+      if (authority === "recency") {
+        setInstallTimestamp(active, new Date("2026-01-02T00:00:00.000Z"));
+        setInstallTimestamp(stale, new Date("2026-01-01T00:00:00.000Z"));
+        vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+        await maybeRepairPluginRegistryState({
+          ...repairParams(stateDir),
+          config: { plugins: { allow: [PLUGIN_ID], entries: { [PLUGIN_ID]: { enabled: true } } } },
+        });
+        const persisted = await readPersistedInstalledPluginIndexInstallRecordsAsync({ stateDir });
+        expect(persisted?.[PLUGIN_ID]?.installPath).toBe(active);
+      } else {
+        await expect(
+          maybeRepairStaleManagedNpmInstallGenerations(repairParams(stateDir)),
+        ).resolves.toBe(true);
+      }
+      expect([stale, active].map(hasRetainedManagedNpmInstallMarker)).toEqual([true, false]);
+      if (authority === "record") {
+        await expect(
+          cleanupRetainedManagedNpmInstallGenerations({
+            activeInstallPaths: [active],
+            npmDir: path.join(stateDir, "npm"),
+          }),
+        ).resolves.toBe(1);
+        expect([stale, active].map((dir) => fs.existsSync(dir))).toEqual([false, true]);
+      }
+    },
+  );
 });

@@ -1,9 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as notes from "../../packages/terminal-core/src/note.js";
 import { resolveNodeServiceIdentityEnvironment } from "../daemon/constants.js";
+import * as futureConfig from "../daemon/future-config-guard.js";
+import * as launchdCurrent from "../daemon/launchd-current-service.js";
+import * as launchdExec from "../daemon/launchd-exec.js";
 import { buildLaunchAgentPlist } from "../daemon/launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "../daemon/launchd-plist.test-support.js";
+import * as launchdSystem from "../daemon/launchd-system.js";
 import { resolveNodeService } from "../daemon/node-service.js";
 import { resolveGatewaySupervisorLogPaths } from "../daemon/restart-logs.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
@@ -13,46 +18,16 @@ import * as exec from "../process/exec.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import * as foreignJobs from "./doctor-foreign-launchd-jobs.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
+import * as repairPolicy from "./doctor-service-repair-policy.js";
 
-vi.mock("../infra/tmp-openclaw-dir.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/tmp-openclaw-dir.js")>()),
+vi.mock(import("../infra/tmp-openclaw-dir.js"), async (original) => ({
+  ...(await original()),
   resolvePreferredOpenClawTmpDir: () => process.env.HOME!,
 }));
 
-const native = vi.hoisted(() => ({ loaded: true, failBootstrap: false, exec: vi.fn() }));
-vi.mock("../daemon/launchd-exec.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/launchd-exec.js")>()),
-  execLaunchctl: native.exec,
-}));
-vi.mock("../daemon/launchd-current-service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/launchd-current-service.js")>()),
-  isCurrentProcessInsideLaunchdService: async () => false,
-}));
-vi.mock("../daemon/launchd-system.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/launchd-system.js")>()),
-  inspectSystemLaunchDaemonOwnership: async () => ({
-    status: "absent",
-    serviceTarget: "system/ai.openclaw.node",
-  }),
-  assertNoSystemLaunchDaemonOwnership: async () => {},
-}));
-vi.mock("../daemon/future-config-guard.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/future-config-guard.js")>()),
-  assertFutureConfigActionAllowed: async () => {},
-}));
-vi.mock("../../packages/terminal-core/src/note.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../packages/terminal-core/src/note.js")>()),
-  note: vi.fn(),
-}));
-vi.mock("./doctor-foreign-launchd-jobs.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./doctor-foreign-launchd-jobs.js")>()),
-  noteMacForeignLaunchdJobs: async () => {},
-}));
-vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./doctor-service-repair-policy.js")>()),
-  shouldManageGatewayService: async () => false,
-}));
+const native = { loaded: true, failBootstrap: false, exec: vi.fn() };
 
 const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 let home: string;
@@ -114,6 +89,17 @@ async function writeDefinition(entry = "index.js", customPolicy = false) {
 }
 
 beforeEach(async () => {
+  vi.spyOn(launchdExec, "execLaunchctl").mockImplementation(native.exec);
+  vi.spyOn(launchdCurrent, "isCurrentProcessInsideLaunchdService").mockResolvedValue(false);
+  vi.spyOn(launchdSystem, "inspectSystemLaunchDaemonOwnership").mockResolvedValue({
+    status: "absent",
+    serviceTarget: "system/ai.openclaw.node",
+  });
+  vi.spyOn(launchdSystem, "assertNoSystemLaunchDaemonOwnership").mockResolvedValue(undefined);
+  vi.spyOn(futureConfig, "assertFutureConfigActionAllowed").mockResolvedValue(undefined);
+  vi.spyOn(notes, "note").mockImplementation(() => {});
+  vi.spyOn(foreignJobs, "noteMacForeignLaunchdJobs").mockResolvedValue(undefined);
+  vi.spyOn(repairPolicy, "shouldManageGatewayService").mockResolvedValue(false);
   restoreEnv = captureEnv(["HOME", "OPENCLAW_STATE_DIR", ...isolatedEnvKeys]);
   home = await fs.realpath(await fs.mkdtemp(path.join(process.env.HOME!, "doctor-node-")));
   process.env.HOME = home;
@@ -188,85 +174,65 @@ function repair() {
   });
 }
 
-describe("Doctor node service launcher repair", () => {
-  it.each(["index.js", "index.mjs"])(
-    "repairs %s through native installation and retains node options",
-    async (entry) => {
-      await writeDefinition(entry);
-      const before = await resolveNodeService().readCommand(process.env);
-      await repair();
-      expect(runtime.error).not.toHaveBeenCalled();
-      const after = await resolveNodeService().readCommand(process.env);
-      expect(after?.programArguments).toEqual([
-        process.execPath,
-        "--no-warnings",
-        path.join(packageRoot, "openclaw.mjs"),
-        ...nodeOptions,
-      ]);
-      expect(after?.workingDirectory).toBe(before?.workingDirectory);
-      expect(after?.environment).toEqual(before?.environment);
-      expect(native.loaded).toBe(true);
-      expect(bootstrapped()).toBe(true);
-    },
-  );
+it.each([
+  ["index.js", true],
+  ["index.mjs", true],
+  ["index.js", false],
+] as const)("repairs %s and preserves activation (%s)", async (entry, loaded) => {
+  native.loaded = loaded;
+  await writeDefinition(entry);
+  const before = await resolveNodeService().readCommand(process.env);
+  await repair();
+  expect(runtime.error).not.toHaveBeenCalled();
+  const after = await resolveNodeService().readCommand(process.env);
+  expect(after?.programArguments).toEqual([
+    process.execPath,
+    "--no-warnings",
+    path.join(packageRoot, "openclaw.mjs"),
+    ...nodeOptions,
+  ]);
+  expect(after?.workingDirectory).toBe(before?.workingDirectory);
+  expect(after?.environment).toEqual(before?.environment);
+  expect(native.loaded).toBe(loaded);
+  expect(bootstrapped()).toBe(loaded);
+});
 
-  it("preserves the previous definition when native activation fails", async () => {
-    native.failBootstrap = true;
-    await repair();
-    expect(runtime.error).toHaveBeenCalled();
-    expect(await fs.readFile(plist, "utf8")).toBe(original);
-    expect(native.loaded).toBe(true);
-  });
+it("preserves the previous definition when native activation fails", async () => {
+  native.failBootstrap = true;
+  await repair();
+  expect(runtime.error).toHaveBeenCalled();
+  expect(await fs.readFile(plist, "utf8")).toBe(original);
+  expect(native.loaded).toBe(true);
+});
 
-  it("repairs a stopped node without starting it", async () => {
-    native.loaded = false;
-    await repair();
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect((await resolveNodeService().readCommand(process.env))?.programArguments[2]).toBe(
-      path.join(packageRoot, "openclaw.mjs"),
-    );
-    expect(native.loaded).toBe(false);
-    expect(bootstrapped()).toBe(false);
-  });
+it("leaves an absent node service alone", async () => {
+  await fs.unlink(plist);
+  native.loaded = false;
+  await repair();
+  expect(runtime.error).not.toHaveBeenCalled();
+  expect(await resolveNodeService().readCommand(process.env)).toBeNull();
+  expect(bootstrapped()).toBe(false);
+});
 
-  it("leaves an absent node service alone", async () => {
-    await fs.unlink(plist);
-    native.loaded = false;
-    await repair();
-    expect(runtime.error).not.toHaveBeenCalled();
-    expect(await resolveNodeService().readCommand(process.env)).toBeNull();
-    expect(bootstrapped()).toBe(false);
-  });
-
-  it("preserves a custom launcher", async () => {
+it.each([
+  ["update", "OPENCLAW_UPDATE_IN_PROGRESS", "1"],
+  ["external", "OPENCLAW_SERVICE_REPAIR_POLICY", "external"],
+  ["nix", "OPENCLAW_NIX_MODE", "1"],
+  ["relocated-state", "OPENCLAW_STATE_DIR", "other-state"],
+  ["custom-policy", undefined, undefined],
+  ["custom-launcher", undefined, undefined],
+] as const)("leaves %s ownership unchanged", async (owner, key, value) => {
+  if (key) {
+    process.env[key] = key === "OPENCLAW_STATE_DIR" ? path.join(home, value) : value;
+  }
+  if (owner === "custom-policy") {
+    await writeDefinition("index.js", true);
+  }
+  if (owner === "custom-launcher") {
     original = original.replace("<key>CUSTOM_NODE_SETTING</key>", "<key>OPENCLAW_WRAPPER</key>");
     await fs.writeFile(plist, original);
-    await repair();
-    expect(await fs.readFile(plist, "utf8")).toBe(original);
-    expect(bootstrapped()).toBe(false);
-  });
-
-  it.each(["update", "external", "custom-policy", "relocated-state", "nix"])(
-    "leaves %s ownership unchanged",
-    async (owner) => {
-      if (owner === "update") {
-        process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-      }
-      if (owner === "external") {
-        process.env.OPENCLAW_SERVICE_REPAIR_POLICY = "external";
-      }
-      if (owner === "custom-policy") {
-        await writeDefinition("index.js", true);
-      }
-      if (owner === "relocated-state") {
-        process.env.OPENCLAW_STATE_DIR = path.join(home, "other-state");
-      }
-      if (owner === "nix") {
-        process.env.OPENCLAW_NIX_MODE = "1";
-      }
-      await repair();
-      expect(await fs.readFile(plist, "utf8")).toBe(original);
-      expect(bootstrapped()).toBe(false);
-    },
-  );
+  }
+  await repair();
+  expect(await fs.readFile(plist, "utf8")).toBe(original);
+  expect(bootstrapped()).toBe(false);
 });
