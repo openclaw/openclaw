@@ -2193,10 +2193,9 @@ describe("chat state render lifecycle", () => {
       return nextFrame;
     });
     vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => frames.delete(id));
-    let state: ChatPageHost;
     const rendered: Array<{ stream: string | null; run: string | null }> = [];
-    const dispose = createRoot((stop) => {
-      state = createPageState(
+    const { state, dispose } = createRoot((dispose) => {
+      const state = createPageState(
         createChatPageStateContext(),
         { afterCommit: () => () => {} },
         { dispatchEvent: () => true },
@@ -2208,7 +2207,7 @@ describe("chat state render lifecycle", () => {
           rendered.push(value);
         },
       );
-      return stop;
+      return { state, dispose };
     });
     onTestFinished(dispose);
     flush();
