@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -8,7 +9,7 @@ import {
   writeDiagnosticStabilityBundleForFailureSync,
 } from "../../logging/diagnostic-stability-bundle.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-import { relayPeer } from "./service-child-relay-host.fixture.test-support.js";
+import { relayDefaults, relayPeer } from "./service-child-relay-host.fixture.test-support.js";
 import {
   createServiceChildRelayAdapter,
   createWritableRelayChild,
@@ -44,13 +45,12 @@ it.each(["lineage", "signal"] as const)(
       "fixture-input-private",
     ];
     const starting = createServiceChildRelayAdapter({
+      ...relayDefaults,
       command: privateValues[0]!,
       args: [privateValues[1]!],
       cwd: privateValues[2],
       env: { FIXTURE_VALUE: privateValues[3] },
       input: privateValues[4],
-      stdinMode: "pipe-closed",
-      oomScoreWrapperSelected: false,
     });
     const {
       start: { generation },
@@ -95,10 +95,7 @@ it.each(["lineage", "signal"] as const)(
       const results = await outcomes;
       const [root, extinction] = results;
       expect(root).toMatchObject({ status: "fulfilled", value: { code: 23, signal: null } });
-      expect(extinction).toMatchObject({ status: "rejected" });
-      if (extinction.status !== "rejected") {
-        throw new Error("Missing extinction rejection");
-      }
+      assert(extinction.status === "rejected", "Missing extinction rejection");
       const written = writeDiagnosticStabilityBundleForFailureSync(
         "gateway.stop_close_failed",
         extinction.reason,
@@ -107,13 +104,9 @@ it.each(["lineage", "signal"] as const)(
           shutdownStep: "gateway-server-close",
         },
       );
-      if (written.status !== "written") {
-        throw new Error("Failed to write fixture bundle");
-      }
+      assert(written.status === "written", "Failed to write fixture bundle");
       const readback = readDiagnosticStabilityBundleFileSync(written.path);
-      if (readback.status !== "found") {
-        throw new Error("Failed to read fixture bundle");
-      }
+      assert(readback.status === "found", "Failed to read fixture bundle");
       const errors = readback.bundle.evidence?.shutdown?.errors;
       expect(errors?.[0]?.message).toContain("hard deadline");
       expect(errors?.[0]?.message).toContain(`"lineageEof":${failure === "lineage"}`);

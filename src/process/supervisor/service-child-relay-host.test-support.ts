@@ -10,7 +10,6 @@ import {
 } from "./service-child-protocol.js";
 import { createServiceChildRelayAdapter as startServiceChildRelayAdapter } from "./service-child-relay-host.js";
 
-// Direct factory assertions await readiness; startup regressions use the split factory.
 export async function createServiceChildRelayAdapter(
   params: Parameters<typeof startServiceChildRelayAdapter>[0],
 ) {
@@ -20,9 +19,7 @@ export async function createServiceChildRelayAdapter(
 }
 
 export function createWritableRelayChild(
-  write: DuplexOptions["write"] = (_chunk, _encoding, done) => {
-    done();
-  },
+  write: DuplexOptions["write"] = (_chunk, _encoding, done) => done(),
 ) {
   const stub = createStubChild();
   const stdout = new PassThrough();
@@ -112,12 +109,12 @@ export async function createRelayFixture(
     });
   }
   const endOutput = () => {
-    if (platform === "win32") {
-      emit({ type: "output-end", stream: "stdout" });
-      emit({ type: "output-end", stream: "stderr" });
-    } else {
-      stub.child.stdout?.emit("end");
-      stub.child.stderr?.emit("end");
+    for (const stream of ["stdout", "stderr"] as const) {
+      if (platform === "win32") {
+        emit({ type: "output-end", stream });
+      } else {
+        stub.child[stream]?.emit("end");
+      }
     }
   };
   const completeRoot = () => {

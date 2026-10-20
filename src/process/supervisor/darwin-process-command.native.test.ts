@@ -3,28 +3,20 @@ import { once } from "node:events";
 import os from "node:os";
 import { Worker } from "node:worker_threads";
 import { expect, it } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { readDarwinProcessCommand } from "./darwin-process-command.js";
 
 it.runIf(process.platform === "darwin")(
   "inspects exact child arguments and selected environment on the main thread and a Worker",
   async ({ signal }) => {
     const args = ["/app with spaces/openclaw.mjs", "", '"quoted"', "工作"];
-    const argv = [
-      process.execPath,
-      "--eval",
-      "process.on('message', () => process.exit(0)); process.send('ready');",
-      "--",
-      ...args,
-    ];
-    const expected = {
-      argv,
-      executable: process.execPath,
-      serviceMarker: "native-inspection-fixture",
-    };
+    const script = "process.on('message', () => process.exit(0)); process.send('ready');";
+    const argv = [process.execPath, "--eval", script, "--", ...args];
+    const expected = { argv, executable: process.execPath, serviceMarker: "fixture" };
     const child = spawn(process.execPath, argv.slice(1), {
       env: {
         ...process.env,
-        OPENCLAW_SERVICE_MARKER: "native-inspection-fixture",
+        OPENCLAW_SERVICE_MARKER: "fixture",
         UNRELATED_PRIVATE_VALUE: "must-not-escape",
       },
       stdio: ["ignore", "ignore", "pipe", "ipc"],
@@ -33,12 +25,11 @@ it.runIf(process.platform === "darwin")(
     void closed.catch(() => {});
     let worker: Worker | undefined;
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         once(child, "message", { signal }),
-        closed.then(() => {
-          throw new Error("Inspection fixture exited before readiness");
-        }),
-      ]);
+        closed,
+        "Inspection fixture exited before readiness",
+      );
       const translated = process.arch === "x64" && os.cpus()[0]?.model.includes("Apple");
       const inspect = () => readDarwinProcessCommand(child.pid!, "same");
       if (translated) {
@@ -52,7 +43,7 @@ it.runIf(process.platform === "darwin")(
       (async () => {
         if (!process.versions.bun) { (await import(workerData.loader)).register(); }
         const { readDarwinProcessCommand } = await import(workerData.module);
-        try { parentPort.postMessage({ command: readDarwinProcessCommand(workerData.pid, workerData.owner) }); }
+        try { parentPort.postMessage({ command: readDarwinProcessCommand(workerData.pid, "same") }); }
         catch (error) { parentPort.postMessage({ error: error.message }); }
       })().catch(error => { throw error; });
     `,
@@ -63,7 +54,6 @@ it.runIf(process.platform === "darwin")(
             loader: import.meta.resolve("tsx/esm/api"),
             module: new URL("./darwin-process-command.ts", import.meta.url).href,
             pid: child.pid,
-            owner: "same",
           },
         },
       );

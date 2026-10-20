@@ -1,7 +1,7 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
-import { relayPeer } from "./service-child-relay-host.fixture.test-support.js";
+import { relayDefaults, relayPeer } from "./service-child-relay-host.fixture.test-support.js";
 import { createServiceChildRelayAdapter } from "./service-child-relay-host.js";
 import { createWritableRelayChild } from "./service-child-relay-host.test-support.js";
 import type { ProcessExtinctionResult } from "./types.js";
@@ -22,7 +22,6 @@ it.skipIf(process.platform === "win32").each([
 ])(
   "joins a failed authority close without an unhandled rejection ($fault, root observed=$rootObserved)",
   async ({ rootObserved, fault }) => {
-    // The failed poll below belongs to the process-group ownership contract.
     mockProcessPlatform("darwin");
     let failWrite = false;
     const stub = createWritableRelayChild((_chunk, _encoding, callback) => {
@@ -32,10 +31,9 @@ it.skipIf(process.platform === "win32").each([
     mocks.spawn.mockReturnValue(stub.child);
     let cleanup: Promise<ProcessExtinctionResult> | undefined;
     const starting = createServiceChildRelayAdapter({
+      ...relayDefaults,
       command: "synthetic-child",
-      args: [],
       stdinMode: "pipe-open",
-      oomScoreWrapperSelected: false,
       onSpawnCleanup: (promise) => {
         cleanup = promise;
       },
@@ -70,7 +68,6 @@ it.skipIf(process.platform === "win32").each([
       await nextTurn();
       await nextTurn();
       expect(unhandled).not.toHaveBeenCalled();
-      // The Gateway-side join retains failure as a value and cannot reject the process.
       await expect(Promise.allSettled([cleanup, adapter.waitForExtinction()])).resolves.toEqual([
         { status: "rejected", reason: failure },
         { status: "rejected", reason: failure },
