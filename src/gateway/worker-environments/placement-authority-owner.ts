@@ -155,7 +155,7 @@ export function withLocalPlacementTurn(
   }
   const current = owner.placements.get(sessionId)?.placement;
   if (!placement) {
-    return current;
+    return current ? structuredClone(current) : undefined;
   }
   if (
     placement.state === "local" ||
@@ -164,7 +164,7 @@ export function withLocalPlacementTurn(
   ) {
     const claim = current?.turnClaim;
     if (!claim || (claim.owner === "local" && claim.ownerEpoch === null)) {
-      return { ...placement, turnClaim: claim ?? null };
+      return { ...placement, turnClaim: claim ? { ...claim } : null };
     }
   }
   return placement;

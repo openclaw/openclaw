@@ -7,6 +7,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import {
   placementAuthorityOwnerFor,
   subscribePlacementChanges,
+  withLocalPlacementTurn,
   withLocalPlacementTurns,
 } from "./placement-authority-owner.js";
 import { createPlacementLifecycleWorkerOps } from "./placement-lifecycle-store.js";
@@ -349,7 +350,13 @@ export function createWorkerSessionPlacementStore(
       if (!result) {
         throw new Error("Worker placement environment owner source is unavailable");
       }
-      return result.placement;
+      return result.placement
+        ? withLocalPlacementTurn(
+            placementAuthorityOwnerFor(context.admission.identity),
+            result.placement.sessionId,
+            result.placement,
+          )
+        : undefined;
     },
 
     async readRecoveryCandidates() {
