@@ -31,6 +31,8 @@ type FailureProgressHarness = {
   normalDeliveryResult: SlackSendResult;
   startSlackStreamMock: unknown;
   stopSlackStreamMock: unknown;
+  deleteSlackMessageMock: unknown;
+  streamMessageId: string;
   statusReactionControllerMock: { setError: unknown };
   collectNativeTaskUpdates: () => unknown[];
 };
@@ -48,6 +50,8 @@ export function registerSlackFailureProgressTests({
   normalDeliveryResult,
   startSlackStreamMock,
   stopSlackStreamMock,
+  deleteSlackMessageMock,
+  streamMessageId,
   statusReactionControllerMock,
   collectNativeTaskUpdates,
 }: FailureProgressHarness) {
@@ -166,11 +170,17 @@ export function registerSlackFailureProgressTests({
       expect(startSlackStreamMock).toHaveBeenCalled();
       expect(stopSlackStreamMock).toHaveBeenCalled();
       if (usefulReply) {
+        expect(deleteSlackMessageMock).not.toHaveBeenCalled();
         expect(deliverRepliesMock).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ replies: [{ text: "Backend unavailable", isError: true }] }),
         );
         expect(statusReactionControllerMock.setError).toHaveBeenCalledOnce();
       } else {
+        expect(deleteSlackMessageMock).toHaveBeenCalledExactlyOnceWith(
+          "C123",
+          streamMessageId,
+          expect.objectContaining({ client: expect.any(Object) }),
+        );
         expect(deliverRepliesMock).not.toHaveBeenCalled();
         expect(collectNativeTaskUpdates()).not.toContainEqual(
           expect.objectContaining({ status: "error" }),

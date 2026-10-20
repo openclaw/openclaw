@@ -71,6 +71,7 @@ const startSlackStreamMock = vi.fn(async (_input?: unknown) => ({
 }));
 const stopSlackStreamMock = vi.fn(async (_params?: unknown) => ({}) as { messageId?: string });
 const emitSlackMessageSentHooksMock = vi.fn(() => {});
+const deleteSlackMessageMock = vi.fn(async () => {});
 const reactSlackMessageMock = vi.fn(async () => {});
 const removeSlackReactionMock = vi.fn(async () => {});
 const logVerboseMock = vi.fn();
@@ -561,6 +562,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
 }));
 
 vi.mock("../../actions.js", () => ({
+  deleteSlackMessage: deleteSlackMessageMock,
   reactSlackMessage: reactSlackMessageMock,
   removeSlackReaction: removeSlackReactionMock,
 }));
@@ -832,6 +834,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     appendSlackStreamMock.mockReset();
     startSlackStreamMock.mockReset();
     stopSlackStreamMock.mockReset();
+    deleteSlackMessageMock.mockReset();
     reactSlackMessageMock.mockReset();
     removeSlackReactionMock.mockReset();
     logVerboseMock.mockReset();
@@ -1600,6 +1603,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     normalDeliveryResult,
     startSlackStreamMock,
     stopSlackStreamMock,
+    deleteSlackMessageMock,
+    streamMessageId: STREAM_MESSAGE_TS,
     statusReactionControllerMock,
     collectNativeTaskUpdates,
     setScenario({ outcome, sequence, events, error, nativeStreaming = false }) {

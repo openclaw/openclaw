@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { deleteSlackMessage } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
 import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
 import {
@@ -229,9 +230,13 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     };
   };
 
-  const finishStream = async (chunks?: AnyChunk[]) => {
+  const finishStream = async (chunks?: AnyChunk[], discardProgressOnly = false) => {
     const session = state.streamSession;
     if (session && !session.stopped) {
+      const discard =
+        discardProgressOnly &&
+        state.nativeProgressStreamThreadTs !== undefined &&
+        !session.pendingText;
       try {
         try {
           await stopSlackStream({
@@ -239,7 +244,16 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
             ...(chunks?.length ? { chunks } : {}),
             ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
           });
-          state.observedReplyDelivery ||= session.delivered;
+          if (discard && session.streamer.ts) {
+            // Stopping native task updates leaves their message in Slack.
+            // A silent failure must remove a progress-only message, just as
+            // draft progress cleanup does, without deleting a real reply.
+            await deleteSlackMessage(session.channel, session.streamer.ts, { client: slackClient });
+            state.streamSession = null;
+            state.observedReplyDelivery = false;
+          } else {
+            state.observedReplyDelivery ||= session.delivered;
+          }
         } catch (error) {
           if (!(error instanceof SlackStreamNotDeliveredError)) {
             throw error;
