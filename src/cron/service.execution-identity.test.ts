@@ -11,7 +11,6 @@ import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
 import { cronTestDeps, cronTestInput } from "./service.fixture-builders.test-support.js";
-import type { CronService } from "./service.js";
 import { createCronServiceWithStateForTest } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
@@ -24,18 +23,14 @@ it.each([
   "scheduled cron keeps terminal receipt inspection linked only when collection is $name",
   async ({ cfg, enabled }) => {
     const fixture = await createOpenClawTestState({ label: "cron-execution-identity" });
-    const owned: { cron?: CronService; clearSink?: () => void } = {};
-    onTestFinished(async () => {
-      owned.cron?.stop();
-      await owned.cron?.waitForIdle();
-      owned.clearSink?.();
-      await fixture.cleanup();
-    });
+    // Finished hooks run LIFO: drain cron, detach the sink, then close the fixture.
+    onTestFinished(fixture.cleanup);
     const admissions: ExecutionIdentityAdmissionWork[] = [];
-    owned.clearSink = configureExecutionIdentityAdmissionSink((work) => {
+    const clearSink = configureExecutionIdentityAdmissionSink((work) => {
       admissions.push(work);
       return true;
     });
+    onTestFinished(clearSink);
     const clock = { now: Date.now() };
     const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async (params) => {
       for (const stage of ["trigger", "payload"]) {
@@ -57,26 +52,19 @@ it.each([
       }
       return { status: "ok" };
     });
-    const service = createCronServiceWithStateForTest(
-      cronTestDeps({
-        storePath: fixture.statePath("cron", "jobs.json"),
-        defaultAgentId: "main",
-        nowMs: () => clock.now,
-        runIsolatedAgentJob,
-      }),
-    );
-    const { cron } = service;
-    owned.cron = cron;
-    const job = await cron.add(
-      cronTestInput({
-        name: "identity-linked scheduled run",
-        agentId: "main",
-        payload: { kind: "agentTurn", message: "record one scheduled execution" },
-        delivery: { mode: "none" },
-      }),
-    );
+    const deps = cronTestDeps({
+      storePath: fixture.statePath("cron", "jobs.json"),
+      nowMs: () => clock.now,
+      runIsolatedAgentJob,
+    });
+    const { cron, state } = createCronServiceWithStateForTest(deps);
+    onTestFinished(async () => {
+      cron.stop();
+      await cron.waitForIdle();
+    });
+    const job = await cron.add(cronTestInput({ agentId: "main", delivery: { mode: "none" } }));
     clock.now = job.state.nextRunAtMs!;
-    await onTimer(service.state);
+    await onTimer(state);
     expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
     expect((await cron.readJob(job.id))?.state.lastRunStatus).toBe("ok");
 
@@ -91,7 +79,8 @@ it.each([
     const [context, payloadContext] = admissions.map((work) =>
       processExecutionIdentityAdmissionWorkInDatabase(work, { database }),
     );
-    expect(context.contextId).not.toBe(payloadContext.contextId);
+    const { contextId, executionId } = context;
+    expect(contextId).not.toBe(payloadContext.contextId);
     expect(
       database.db
         .prepare(
@@ -100,14 +89,7 @@ it.each([
              JOIN cron_run_receipts r ON b.owner_kind = 'cron' AND b.owner_id = r.receipt_id`,
         )
         .all(),
-    ).toEqual([
-      {
-        context_id: context.contextId,
-        execution_id: context.executionId,
-        job_id: job.id,
-        status: "ok",
-      },
-    ]);
+    ).toEqual([{ context_id: contextId, execution_id: executionId, job_id: job.id, status: "ok" }]);
     const inspection = presentExecutionDecisionReceiptsInDatabase(database.db, {
       schema: { cronRunReceipts: true, executionOwnerLifecycleBindings: bindingTable },
       context,
@@ -116,8 +98,8 @@ it.each([
     });
     expect(inspection.decisions).toContainEqual(
       expect.objectContaining({
-        contextId: context.contextId,
-        executionId: context.executionId,
+        contextId,
+        executionId,
         decision: { outcome: "not-applicable", reasonCode: "cron_run_ok" },
         source: expect.objectContaining({ owner: "cron_run_receipts" }),
       }),

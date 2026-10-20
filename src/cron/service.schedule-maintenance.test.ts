@@ -5,7 +5,6 @@ import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.test-
 import type { CronJob } from "./types.js";
 
 const now = Date.parse("2026-05-05T12:00:00Z");
-const nextSlot = now + 60 * 60_000;
 const badFuture = Date.parse("2026-05-12T16:00:00Z");
 const startedAt = Date.parse("2026-03-01T12:00:00Z");
 
@@ -26,7 +25,8 @@ function checkMaintenance(
   expect(
     recomputeNextRunsForMaintenance(state, { recomputeExpired, deferredNotifications: [] }),
   ).toBe(changed);
-  expect(job.state).toMatchObject({ nextRunAtMs, scheduleErrorCount: undefined });
+  expect(job.state.nextRunAtMs).toBe(nextRunAtMs);
+  expect(job.state.scheduleErrorCount).toBeUndefined();
   return { job, state };
 }
 
@@ -73,7 +73,7 @@ it.each([
     },
   },
 ])("repairs $name", ({ state }) => {
-  checkMaintenance({ state }, nextSlot, { changed: true });
+  checkMaintenance({ state }, now + 60 * 60_000, { changed: true });
 });
 
 it.each([

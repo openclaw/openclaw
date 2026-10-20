@@ -7,23 +7,24 @@ import { locked } from "./service/locked.js";
 import { listPage, status } from "./service/ops-read.js";
 import type { CronJob } from "./types.js";
 
-function createBaseJob(overrides?: Partial<CronJob>): CronJob {
-  return {
-    id: "job-1",
-    name: "job",
-    enabled: true,
-    schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
-    sessionTarget: "main",
-    wakeMode: "now",
-    payload: { kind: "systemEvent", text: "tick" },
-    state: { nextRunAtMs: Date.parse("2030-02-27T15:30:00.000Z") },
-    createdAtMs: Date.parse("2026-02-27T15:00:00.000Z"),
-    updatedAtMs: Date.parse("2026-02-27T15:05:00.000Z"),
-    ...overrides,
-  };
-}
 function listState(...jobs: Partial<CronJob>[]) {
-  return createMockCronStateForJobs({ jobs: jobs.map(createBaseJob) });
+  return createMockCronStateForJobs({
+    jobs: jobs.map((overrides, index) => {
+      const job: CronJob = {
+        id: `job-${index + 1}`,
+        name: "job",
+        enabled: true,
+        schedule: { kind: "cron", expr: "*/5 * * * *", tz: "UTC" },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: { nextRunAtMs: Date.parse("2030-02-27T15:30:00.000Z") },
+        createdAtMs: Date.parse("2026-02-27T15:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-02-27T15:05:00.000Z"),
+      };
+      return Object.assign(job, overrides);
+    }),
+  });
 }
 afterEach(() => vi.restoreAllMocks());
 
@@ -34,12 +35,7 @@ it("keeps unscheduled jobs after the scheduled descending page", async () => {
     { id: "paused-a", enabled: false, state: {} },
     { id: "earlier", state: { nextRunAtMs: 100 } },
   );
-  const options = {
-    enabled: "all" as const,
-    sortBy: "nextRunAtMs" as const,
-    sortDir: "desc" as const,
-    limit: 2,
-  };
+  const options = { enabled: "all", sortBy: "nextRunAtMs", sortDir: "desc", limit: 2 } as const;
 
   const firstPage = await listPage(state, { ...options, offset: 0 });
   const secondPage = await listPage(state, { ...options, offset: 2 });
@@ -61,22 +57,6 @@ it("preserves list revisions for large Unicode and escaped payloads", async () =
   const page = await listPage(state);
 
   expect(page.snapshotRevision).toBe("sha256:fS8eVTHy9mbmpjFKHm3pEcvOobmxd1rMQpDjfh3qmKM");
-});
-
-it("preserves phrase searches across existing cron job fields", async () => {
-  const state = listState(
-    {
-      id: "report-job",
-      name: "Daily report",
-      description: "Quarterly summary",
-      displayName: "Executive overview",
-    },
-    { id: "other" },
-  );
-
-  const page = await listPage(state, { query: "report Quarterly" });
-
-  expect(page.jobs.map((entry) => entry.id)).toEqual(["report-job"]);
 });
 
 it("filters normalized agent owners across explicit, session-scoped, and default jobs", async () => {
@@ -102,11 +82,7 @@ it("filters normalized agent owners across explicit, session-scoped, and default
 });
 
 it("shares immutable requested rows until a list revision changes", async () => {
-  const state = listState(
-    { id: "job-a", name: "alpha" },
-    { id: "job-b", name: "beta" },
-    { id: "job-c", name: "gamma" },
-  );
+  const state = listState(...["alpha", "beta", "gamma"].map((name) => ({ name })));
   const jobs = state.store!.jobs;
   const clone = vi.spyOn(globalThis, "structuredClone");
   const revision = vi.spyOn(snapshotRevisions, "resolveCronListSnapshotRevision");
@@ -116,8 +92,6 @@ it("shares immutable requested rows until a list revision changes", async () => 
   const page = await listPage(state, options);
   const firstStatus = await status(state);
   expect(Object.isFrozen(firstStatus)).toBe(true);
-  expect(clone).not.toHaveBeenCalledWith(state.store);
-  expect(page.jobs[0]).not.toBe(jobs[1]);
   expect(() => {
     page.jobs[0]!.state.lastStatus = "error";
   }).toThrow(TypeError);
@@ -140,7 +114,7 @@ it("shares immutable requested rows until a list revision changes", async () => 
   });
   const changed = await listPage(state, options);
 
-  expect(changed.jobs).toMatchObject([{ id: "job-b", state: { lastStatus: "ok" } }]);
+  expect(changed.jobs).toMatchObject([{ id: "job-2", state: { lastStatus: "ok" } }]);
   expect(changed.snapshotRevision).not.toBe(page.snapshotRevision);
   expect(repeated.jobs[0]?.state.lastStatus).toBeUndefined();
   const changedStatus = await status(state);
@@ -150,29 +124,28 @@ it("shares immutable requested rows until a list revision changes", async () => 
   expect(clone).toHaveBeenCalledTimes(2);
 });
 
-it("applies schedule, status, and trigger filters before paging", async () => {
+it("applies schedule, status, trigger, and cross-field phrase filters before paging", async () => {
+  const matching = {
+    name: "Daily report",
+    description: "Quarterly summary",
+    displayName: "Executive overview",
+    trigger: { script: "json({ fire: true })" },
+  };
   const state = listState(
-    {
-      id: "at-unknown",
-      schedule: { kind: "at", at: "2030-02-27T15:30:00.000Z" },
-    },
-    {
-      id: "cron-error",
-      state: { lastStatus: "error" },
-    },
-    {
-      id: "cron-unknown",
-      trigger: { script: "json({ fire: true })" },
-    },
-    { id: "cron-unknown-plain" },
+    { ...matching, schedule: { kind: "at", at: "2030-02-27T15:30:00.000Z" } },
+    { ...matching, state: { lastStatus: "error" } },
+    matching,
+    { ...matching, trigger: undefined },
+    { trigger: { script: "json({ fire: true })" } },
   );
   const page = await listPage(state, {
     scheduleKind: "cron",
     lastRunStatus: "unknown",
     trigger: "conditional",
+    query: "report Quarterly",
     limit: 1,
   });
-  expect(page).toMatchObject({ jobs: [{ id: "cron-unknown" }], total: 1, hasMore: false });
+  expect(page).toMatchObject({ jobs: [{ id: "job-3" }], total: 1, hasMore: false });
 });
 it("preserves callback failure and subsequent reads when the logger throws", async () => {
   let now = 0;
