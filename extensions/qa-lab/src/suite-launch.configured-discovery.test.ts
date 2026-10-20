@@ -23,6 +23,29 @@ import { runQaSuite } from "./suite-launch.runtime.js";
 const tempDirs = createTempDirHarness();
 const makeTempRepo = tempDirs.makeTempDir;
 
+async function runSelection(partitioned: boolean, selection: Parameters<typeof runQaSuite>[0]) {
+  await runQaSuite({
+    repoRoot: await makeTempRepo("qa-suite-discovery-route-"),
+    outputDir: ".artifacts/discovery",
+    providerMode: "live-frontier",
+    scenarioIds: [
+      "runtime-tool-web-search",
+      ...(partitioned ? ["runtime-tool-sessions-spawn"] : []),
+    ],
+    ...selection,
+  });
+}
+function expectRoutes(primaryModel: string, alternateModel: string, configured = false) {
+  for (const [params] of runQaFlowSuite.mock.calls) {
+    expect(params).toMatchObject({ primaryModel, alternateModel });
+    expect(params?.forcedRuntime).toBe(configured ? "codex" : undefined);
+    expect(params?.runtimeSelection).toBe(configured ? "configured" : undefined);
+    if (configured) {
+      expect(params).toMatchObject({ providerMode: "live-frontier", concurrency: 1 });
+    }
+  }
+}
+
 describe("qa suite configured discovery routing", () => {
   beforeEach(() => {
     runPluginCommandWithTimeout.mockReset();
@@ -64,29 +87,12 @@ describe("qa suite configured discovery routing", () => {
   it.each([false, true])(
     "prepares configured discovery identically for singleton and partitioned runs (partitioned=%s)",
     async (partitioned) => {
-      const repoRoot = await makeTempRepo("qa-suite-discovery-route-");
-      await runQaSuite({
-        repoRoot,
-        outputDir: ".artifacts/discovery",
-        providerMode: "live-frontier",
+      await runSelection(partitioned, {
         primaryModel: "openai/gpt-5.5",
         alternateModel: "openai/gpt-5.5",
-        scenarioIds: [
-          "runtime-tool-web-search",
-          ...(partitioned ? ["runtime-tool-sessions-spawn"] : []),
-        ],
       });
       expect(runQaFlowSuite).toHaveBeenCalledTimes(partitioned ? 2 : 1);
-      for (const [params] of runQaFlowSuite.mock.calls) {
-        expect(params).toMatchObject({
-          providerMode: "live-frontier",
-          primaryModel: "openai/gpt-5.5",
-          alternateModel: "openai/gpt-5.5",
-          forcedRuntime: "codex",
-          runtimeSelection: "configured",
-          concurrency: 1,
-        });
-      }
+      expectRoutes("openai/gpt-5.5", "openai/gpt-5.5", true);
     },
   );
 
@@ -95,26 +101,13 @@ describe("qa suite configured discovery routing", () => {
       "keeps defaulted discovery models on the general route: %j",
       async (selection) => {
         vi.spyOn(liveFrontierProviderDefinition, "defaultModel").mockReturnValue("openai/gpt-5.5");
-        const repoRoot = await makeTempRepo("qa-suite-default-route-");
-        await runQaSuite({
-          repoRoot,
-          outputDir: ".artifacts/default",
-          providerMode: "live-frontier",
+        await runSelection(partitioned, {
           ...selection,
-          scenarioIds: [
-            "runtime-tool-web-search",
-            ...(partitioned ? ["runtime-tool-sessions-spawn"] : []),
-          ],
           concurrency: 2,
           workerStartStaggerMs: 0,
         });
         expect(runQaFlowSuite).toHaveBeenCalledTimes(1);
-        for (const [params] of runQaFlowSuite.mock.calls) {
-          expect(params?.primaryModel).toBe("openai/gpt-5.5");
-          expect(params?.alternateModel).toBe("openai/gpt-5.5");
-          expect(params?.forcedRuntime).toBeUndefined();
-          expect(params?.runtimeSelection).toBeUndefined();
-        }
+        expectRoutes("openai/gpt-5.5", "openai/gpt-5.5");
       },
     );
   });
@@ -126,23 +119,13 @@ describe("qa suite configured discovery routing", () => {
     ["openai/gpt-5.5", "openai/gpt-5.6-luna"],
     ["openai/gpt-5.6-luna", "openai/gpt-5.5"],
   ])("preserves general model routes for %s / %s", async (primaryModel, alternateModel) => {
-    const repoRoot = await makeTempRepo("qa-suite-general-route-");
-    await runQaSuite({
-      repoRoot,
-      outputDir: ".artifacts/general",
-      providerMode: "live-frontier",
+    await runSelection(true, {
       primaryModel,
       alternateModel,
-      scenarioIds: ["runtime-tool-web-search", "runtime-tool-sessions-spawn"],
       concurrency: 1,
       workerStartStaggerMs: 0,
     });
     expect(runQaFlowSuite).toHaveBeenCalled();
-    for (const [params] of runQaFlowSuite.mock.calls) {
-      expect(params?.primaryModel).toBe(primaryModel);
-      expect(params?.alternateModel).toBe(alternateModel);
-      expect(params?.forcedRuntime).toBeUndefined();
-      expect(params?.runtimeSelection).toBeUndefined();
-    }
+    expectRoutes(primaryModel, alternateModel);
   });
 });

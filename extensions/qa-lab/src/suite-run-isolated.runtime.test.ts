@@ -13,32 +13,37 @@ import * as suite from "./suite.js";
 
 vi.mock("./lab-server.js", () => ({ startQaLabServer: vi.fn() }));
 
+async function runIsolated(params: Parameters<typeof runQaSuite>[0]) {
+  const runScenario = vi
+    .spyOn(suite, "runQaSuiteScenarioDefinitionForRuntime")
+    .mockImplementation(async (_env, scenario) => ({
+      name: scenario.title,
+      status: "pass",
+      steps: [],
+    }));
+  const outcome = await runQaSuite({
+    repoRoot: createCleanupTestContext().repoRoot,
+    outputDir: "output",
+    providerMode: "mock-openai",
+    workerStartStaggerMs: 0,
+    startLab: async () => createCleanupTestLab(),
+    ...params,
+  });
+  return { ...outcome, runScenario };
+}
+
 describe("implicit QA suite isolated runtimes", () => {
   it.each([undefined, false])(
     "publishes isolated Control UI only when enabled (override=%s)",
     async (controlUiEnabled) => {
-      const context = createCleanupTestContext();
       const scenarios = ["first", "second"].map((id) =>
         makeQaSuiteTestScenario(id, { surface: "control-ui" }),
       );
-      const runScenario = vi
-        .spyOn(suite, "runQaSuiteScenarioDefinitionForRuntime")
-        .mockImplementation(async (_env, scenario) => ({
-          name: scenario.title,
-          status: "pass",
-          steps: [],
-        }));
-
-      const { result } = await runQaSuite({
-        repoRoot: context.repoRoot,
-        outputDir: "output",
-        providerMode: "mock-openai",
+      const { result, runScenario } = await runIsolated({
         scenarioIds: scenarios.map(({ id }) => id),
         scenarioDefinitions: scenarios,
         concurrency: 2,
-        workerStartStaggerMs: 0,
         controlUiEnabled,
-        startLab: async () => createCleanupTestLab(),
       });
 
       expect(result.scenarios.map(({ status }) => status)).toEqual(["pass", "pass"]);
@@ -57,58 +62,41 @@ describe("implicit QA suite isolated runtimes", () => {
     },
   );
 
-  it.each([{ forcedRuntime: undefined, expectedPins: ["codex", "openclaw", undefined] }] as const)(
-    "preserves scenario runtimes with global override $forcedRuntime",
-    async ({ forcedRuntime, expectedPins }) => {
-      const context = createCleanupTestContext();
-      const scenarios = (["codex", "openclaw", undefined] as const).map((runtime) => {
-        const scenario = makeQaSuiteTestScenario(runtime ?? "unpinned");
-        if (scenario.execution.kind !== "flow") {
-          throw new Error("expected flow scenario");
-        }
-        scenario.execution.runtime = runtime;
-        return scenario;
-      });
-      vi.spyOn(scenarioCatalog, "readQaBootstrapScenarioCatalog").mockReturnValue({
-        agentIdentityMarkdown: "test",
-        kickoffTask: "test",
-        scenarios,
-      });
-      const runScenario = vi
-        .spyOn(suite, "runQaSuiteScenarioDefinitionForRuntime")
-        .mockImplementation(async (_env, scenario) => ({
-          name: scenario.title,
-          status: "pass",
-          steps: [],
-        }));
+  it("preserves scenario runtimes without a global override", async () => {
+    const expectedPins = ["codex", "openclaw", undefined];
+    const scenarios = (["codex", "openclaw", undefined] as const).map((runtime) => {
+      const scenario = makeQaSuiteTestScenario(runtime ?? "unpinned");
+      if (scenario.execution.kind !== "flow") {
+        throw new Error("expected flow scenario");
+      }
+      scenario.execution.runtime = runtime;
+      return scenario;
+    });
+    vi.spyOn(scenarioCatalog, "readQaBootstrapScenarioCatalog").mockReturnValue({
+      agentIdentityMarkdown: "test",
+      kickoffTask: "test",
+      scenarios,
+    });
+    const { result, runScenario } = await runIsolated({
+      scenarioIds: [],
+      concurrency: 3,
+    });
 
-      const { result } = await runQaSuite({
-        repoRoot: context.repoRoot,
-        outputDir: "output",
-        providerMode: "mock-openai",
-        scenarioIds: [],
-        concurrency: 3,
-        workerStartStaggerMs: 0,
-        forcedRuntime,
-        startLab: async () => createCleanupTestLab(),
-      });
-
-      expect(result.scenarios.map(({ status }) => status)).toEqual(["pass", "pass", "pass"]);
-      expect(mocks.startQaGatewayChild).toHaveBeenCalledTimes(3);
-      expect(mocks.startQaGatewayChild.mock.calls.map(([params]) => params)).toEqual(
-        expect.arrayContaining(
-          expectedPins.map((runtime) => expect.objectContaining({ forcedRuntime: runtime })),
-        ),
-      );
-      expect(
-        runScenario.mock.calls
-          .map(([env, scenario]) => [scenario.id, env.runtimeId] as const)
-          .toSorted(([left], [right]) => left.localeCompare(right)),
-      ).toEqual([
-        ["codex", expectedPins[0] ?? "openclaw"],
-        ["openclaw", expectedPins[1] ?? "openclaw"],
-        ["unpinned", expectedPins[2] ?? "openclaw"],
-      ]);
-    },
-  );
+    expect(result.scenarios.map(({ status }) => status)).toEqual(["pass", "pass", "pass"]);
+    expect(mocks.startQaGatewayChild).toHaveBeenCalledTimes(3);
+    expect(mocks.startQaGatewayChild.mock.calls.map(([params]) => params)).toEqual(
+      expect.arrayContaining(
+        expectedPins.map((runtime) => expect.objectContaining({ forcedRuntime: runtime })),
+      ),
+    );
+    expect(
+      runScenario.mock.calls
+        .map(([env, scenario]) => [scenario.id, env.runtimeId] as const)
+        .toSorted(([left], [right]) => left.localeCompare(right)),
+    ).toEqual([
+      ["codex", expectedPins[0] ?? "openclaw"],
+      ["openclaw", expectedPins[1] ?? "openclaw"],
+      ["unpinned", expectedPins[2] ?? "openclaw"],
+    ]);
+  });
 });

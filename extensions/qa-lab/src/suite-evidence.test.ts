@@ -21,15 +21,17 @@ const launch: QaEvidenceIdentity = {
   proofClass: "fixture-only",
 };
 
-async function setup() {
+async function setup(capture = false) {
   const outputDir = await tempDirs.makeTempDir("qa-flow-occurrences-");
-  const scenario = makeQaSuiteTestScenario("same-label");
-  const selectedScenarios = [scenario, scenario];
-  const parent = createQaEvidenceInvocation({
-    scenarios: selectedScenarios,
-    channel: "qa-channel",
-    launch,
-  });
+  const scenario = makeQaSuiteTestScenario(capture ? "captured" : "same-label");
+  const selectedScenarios = capture ? [scenario] : [scenario, scenario];
+  const anchors = capture
+    ? undefined
+    : createQaEvidenceInvocation({
+        scenarios: selectedScenarios,
+        channel: "qa-channel",
+        launch,
+      }).anchors;
   const context: Parameters<typeof createQaSuiteEvidenceInvocation>[1] = {
     outputDir,
     repoRoot: outputDir,
@@ -38,25 +40,21 @@ async function setup() {
     providerMode: "mock-openai",
     transportId: "qa-channel",
   };
-  const evidence = await createQaSuiteEvidenceInvocation(
-    { evidenceAnchors: parent.anchors },
+  return createQaSuiteEvidenceInvocation(
+    capture ? undefined : { evidenceAnchors: anchors },
     context,
   );
-  return { outputDir, evidence, context };
+}
+
+type Evidence = Awaited<ReturnType<typeof setup>>;
+function effectiveStatuses(evidence: Evidence) {
+  return getEffectiveQaEvidenceEntries(evidence.snapshot()).map(({ result }) => result.status);
 }
 
 describe("flow occurrence artifacts", () => {
   it("carries simulated Bun capture into prepared receipts", async () => {
     using _ = mockBunVersion("1.3.14");
-    const outputDir = await tempDirs.makeTempDir("qa-captured-launch-");
-    const evidence = await createQaSuiteEvidenceInvocation(undefined, {
-      repoRoot: outputDir,
-      outputDir,
-      selectedScenarios: [makeQaSuiteTestScenario("captured")],
-      primaryModel: "mock-openai/test",
-      providerMode: "mock-openai",
-      transportId: "qa-channel",
-    });
+    const evidence = await setup(true);
     const id = evidence.invocation.begin(0);
     await evidence.record(0, id, { name: "captured", status: "pass", steps: [] });
     const occurrence = evidence.snapshot().occurrences.find((item) => item.id === id)!;
@@ -66,30 +64,26 @@ describe("flow occurrence artifacts", () => {
     ]);
   });
 
-  it.each(["fail"] as const)("keeps whole-attempt selection when a retry is %s", async (status) => {
-    const { evidence } = await setup();
+  it("keeps whole-attempt selection when a retry fails", async () => {
+    const evidence = await setup();
     const first = evidence.invocation.begin(0);
     await evidence.record(0, first, { name: "first", status: "fail", steps: [] });
     const second = evidence.invocation.begin(0, first);
     await evidence.record(
       0,
       second,
-      { name: "second", status, steps: [] },
-      {
-        selectedId: first,
-      },
+      { name: "second", status: "fail", steps: [] },
+      { selectedId: first },
     );
     expect(evidence.snapshot().entries).toHaveLength(2);
-    expect(
-      getEffectiveQaEvidenceEntries(evidence.snapshot()).map(({ result }) => result.status),
-    ).toEqual([status]);
+    expect(effectiveStatuses(evidence)).toEqual(["fail"]);
     expect(
       projectQaEvidenceScenarioOutcomes(evidence.snapshot()).map(({ status: result }) => result),
-    ).toEqual([status, null]);
+    ).toEqual(["fail", null]);
   });
 
   it("retains a child pass beside a zero-claim parent failure", async () => {
-    const { evidence } = await setup();
+    const evidence = await setup();
     const child = evidence.invocation.begin(0);
     await evidence.record(0, child, { name: "child", status: "pass", steps: [] });
     const parent = evidence.invocation.begin(0);
@@ -99,9 +93,7 @@ describe("flow occurrence artifacts", () => {
       { name: "parent", status: "fail", steps: [] },
       { diagnostic: true },
     );
-    expect(
-      getEffectiveQaEvidenceEntries(evidence.snapshot()).map(({ result }) => result.status),
-    ).toEqual(["pass", "fail"]);
+    expect(effectiveStatuses(evidence)).toEqual(["pass", "fail"]);
     expect(evidence.snapshot().entries[1]?.coverage).toEqual([]);
     expect(projectQaEvidenceScenarioOutcomes(evidence.snapshot())[0]).toMatchObject({
       occurrenceId: parent,
