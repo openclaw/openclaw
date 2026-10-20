@@ -12,60 +12,57 @@ const item: CommandPaletteItem = {
   action: "session:agent:main:fixture",
   session: { key: "agent:main:fixture", kind: "direct", updatedAt: 1 },
 };
+type Agent = Parameters<typeof CommandPaletteResult>[0]["agent"];
+function renderResult(overrides: Partial<CommandPaletteItem>, query: string, agent?: Agent) {
+  const props = { item: { ...item, ...overrides }, query, agent };
+  return mountSolid(() => <CommandPaletteResult {...props} />).container;
+}
+
 it.each([
   ["İstanbul needle", "NEEDLE", "needle"],
   ["Literal [a+b] query", "[a+b]", "[a+b]"],
   ["<img src=x onerror=alert(1)> needle", "<img", "<img"],
 ])("highlights literal text safely in %s", (label, query, expected) => {
-  const { container } = mountSolid(() => (
-    <CommandPaletteResult item={{ ...item, label }} query={query} />
-  ));
+  const container = renderResult({ label }, query);
   expect(container.querySelector("mark")?.textContent).toBe(expected);
   expect(container.querySelector(".cmd-palette__item-title")?.textContent?.trim()).toBe(label);
   expect(container.querySelector(".cmd-palette__item-title img")).toBeNull();
 });
 
-it.each<[string, boolean, string, string, string[], [string, string][], string]>([
+it.each<[string, string, [string, string][], string, boolean?, string[]?]>([
   [
-    "passive Markdown",
-    false,
     "**Bold *needle***, ~~old~~, `config` [guide](https://example.com) ![diagram](https://example.com/image.png)\n\n| A | B |\n| --- | --- |\n| one | two |",
     "needle",
-    ["guide", "diagram"],
     [
       ["strong em mark", "needle"],
       ["s", "old"],
       ["code", "config"],
     ],
     "a, img, table, pre, p",
+    false,
+    ["guide", "diagram"],
   ],
   [
-    "escaped markup",
-    false,
     "<img src=x onerror=alert(1)> **&lt;script&gt;**",
     "<img",
-    [],
     [
       ["mark", "<img"],
       ["strong", "<script>"],
     ],
     "img, script",
   ],
-  ["literal catalog copy", true, "**Literal** description", "Literal", [], [], "strong"],
+  ["**Literal** description", "Literal", [], "strong", true],
 ])(
   "renders safe %s descriptions",
-  (_name, catalog, description, query, contents, nodes, forbidden) => {
-    const { container } = mountSolid(() => (
-      <CommandPaletteResult
-        item={{
-          ...item,
-          session: catalog ? undefined : item.session,
-          category: catalog ? "skills" : "messages",
-          description,
-        }}
-        query={query}
-      />
-    ));
+  (description, query, nodes, forbidden, catalog = false, contents = []) => {
+    const container = renderResult(
+      {
+        session: catalog ? undefined : item.session,
+        category: catalog ? "skills" : "messages",
+        description,
+      },
+      query,
+    );
     const snippet = container.querySelector(".cmd-palette__item-desc")!;
     for (const [selector, text] of nodes) {
       expect(snippet.querySelector(selector)?.textContent).toBe(text);
@@ -82,23 +79,13 @@ it.each<[string, boolean, string, string, string[], [string, string][], string]>
 
 it.each([
   ["See ![A &amp; B](https://example.com/image.png).", "&", "See A & B."],
-  [
-    "See [**ex**ample](https://example.com/docs).",
-    "example",
-    "See example (https://example.com/docs).",
-  ],
+  ["See [**ex**ample](https://example.co).", "example", "See example (https://example.co)."],
   ["See [guide](https://example.com/café).", "café", "See guide (https://example.com/café)."],
-  [
-    "See ![diagram](https://例え.テスト/図.png).",
-    "テスト",
-    "See diagram (https://例え.テスト/図.png).",
-  ],
+  ["See ![diagram](https://例.テスト/図).", "テスト", "See diagram (https://例.テスト/図)."],
   ["See <https://example.com/caf%C3%A9>.", "%C3%A9", "See https://example.com/caf%C3%A9."],
   ["See [**example guide**](https://example.com/docs).", "example", "See example guide."],
 ])("keeps a passive match cue for %s", (description, query, expected) => {
-  const { container } = mountSolid(() => (
-    <CommandPaletteResult item={{ ...item, description }} query={query} />
-  ));
+  const container = renderResult({ description }, query);
   const snippet = container.querySelector(".cmd-palette__item-desc")!;
   expect(snippet.textContent).toBe(expected);
   expect(snippet.querySelector("mark")?.textContent?.toLowerCase()).toBe(query.toLowerCase());
@@ -106,29 +93,26 @@ it.each([
 });
 
 it.each([true, false])("uses only explicit session ownership: %s", (hasOwner) => {
-  const { container } = mountSolid(() => (
-    <CommandPaletteResult
-      item={{
-        ...item,
-        session: {
-          ...item.session!,
-          createdActor: { type: "human", id: "creator", label: "Former owner" },
-          owner: hasOwner
-            ? {
-                actor: {
-                  type: "human",
-                  id: "owner",
-                  label: "Current owner",
-                  identity: { type: "profile", id: "owner" },
-                },
-              }
-            : undefined,
-        },
-      }}
-      query="needle"
-      agent={hasOwner ? { id: "main", name: "Assistant" } : { id: "main" }}
-    />
-  ));
+  const container = renderResult(
+    {
+      session: {
+        ...item.session!,
+        createdActor: { type: "human", id: "creator", label: "Former owner" },
+        owner: hasOwner
+          ? {
+              actor: {
+                type: "human",
+                id: "owner",
+                label: "Current owner",
+                identity: { type: "profile", id: "owner" },
+              },
+            }
+          : undefined,
+      },
+    },
+    "needle",
+    hasOwner ? { id: "main", name: "Assistant" } : { id: "main" },
+  );
   expect(container.textContent).not.toContain("Former owner");
   if (hasOwner) {
     expect(container.textContent).toContain("Owned by Current owner");

@@ -49,13 +49,9 @@ describe("sidebar session preferences", () => {
     expect(loadStoredSidebarSessionStatusFilter()).toBe("active");
   });
 
-  it("stores snoozed, archived, and all filters", () => {
-    storeSidebarSessionStatusFilter("snoozed");
-    expect(loadStoredSidebarSessionStatusFilter()).toBe("snoozed");
-    storeSidebarSessionStatusFilter("archived");
-    expect(loadStoredSidebarSessionStatusFilter()).toBe("archived");
-    storeSidebarSessionStatusFilter("all");
-    expect(loadStoredSidebarSessionStatusFilter()).toBe("all");
+  it.each(["snoozed", "archived", "all"] as const)("stores the %s filter", (filter) => {
+    storeSidebarSessionStatusFilter(filter);
+    expect(loadStoredSidebarSessionStatusFilter()).toBe(filter);
   });
 
   it("isolates owner and involving-me filters by gateway and authenticated user", () => {
@@ -89,16 +85,13 @@ describe("sidebar session preferences", () => {
     expect(() => storeOwner(null, true)).not.toThrow();
   });
 
-  it("round-trips updated and people modes", () => {
-    expect(storeSidebarSessionSortMode("updated", undefined)).toBe("updated");
-    expect(loadStoredSidebarSessionSortMode()).toBe("updated");
-    expect(storeSidebarSessionSortMode("people", true)).toBe("people");
-    expect(loadStoredSidebarSessionSortMode()).toBe("people");
-  });
-
-  it("stores created instead of a people sort the gateway denied", () => {
-    expect(storeSidebarSessionSortMode("people", false)).toBe("created");
-    expect(loadStoredSidebarSessionSortMode()).toBe("created");
+  it.each([
+    ["updated", undefined, "updated"],
+    ["people", true, "people"],
+    ["people", false, "created"],
+  ] as const)("persists %s with people capability %s as %s", (mode, capability, expected) => {
+    expect(storeSidebarSessionSortMode(mode, capability)).toBe(expected);
+    expect(loadStoredSidebarSessionSortMode()).toBe(expected);
   });
 
   it("defaults Coding to compact while Online remains expanded", () => {
