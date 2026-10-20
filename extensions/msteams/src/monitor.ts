@@ -584,22 +584,15 @@ export async function monitorMSTeamsProvider(opts: MonitorMSTeamsOpts): Promise<
   log.info(`msteams provider started on Gateway route ${configuredPath}`);
   publishMSTeamsReady(opts.statusSink);
 
-  let shutdownTask: Promise<void> | undefined;
-  const shutdown = () => {
-    shutdownTask ??= (async () => {
-      await webhook.close();
-      for (const unregister of unregisterRoutes.splice(0)) {
-        unregister();
-      }
-      await ingress.stop();
-      publishMSTeamsStopped(opts.statusSink);
-    })();
-    return shutdownTask;
-  };
   try {
-    await waitUntilAbort(opts.abortSignal, shutdown);
+    await waitUntilAbort(opts.abortSignal);
   } finally {
-    await shutdown();
+    await webhook.close();
+    for (const unregister of unregisterRoutes) {
+      unregister();
+    }
+    await ingress.stop();
+    publishMSTeamsStopped(opts.statusSink);
   }
 }
 
@@ -658,19 +651,9 @@ function adaptSdkContext(ctx: unknown, app: MSTeamsApp): MSTeamsTurnContext {
     isThreadable ? sdkCtx.reply!(activity) : sdkCtx.send!(activity);
   return Object.assign(Object.create(Object.getPrototypeOf(ctx)), ctx, {
     sendActivity,
-    sendActivities: async (activities: unknown[]) => {
-      const results: unknown[] = [];
-      for (const a of activities) {
-        results.push(await sendActivity(a));
-      }
-      return results;
-    },
     updateActivity: async (activity: { id?: string; [key: string]: unknown }) => {
       const activityId = activity.id ?? "";
       return activityApi.conversations.activities(conversationId).update(activityId, activity);
-    },
-    deleteActivity: async (activityId: string) => {
-      return activityApi.conversations.activities(conversationId).delete(activityId);
     },
     getTeamDetails,
     stream: sdkCtx.stream,

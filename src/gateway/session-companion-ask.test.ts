@@ -142,6 +142,7 @@ async function invokeAsk(
       sessionCompanion: companion,
       getRuntimeConfig: () => cfg,
       getCommittedRuntimeConfig,
+      loadGatewayModelCatalog: async () => [],
     },
     respond,
   } as never);
@@ -323,6 +324,57 @@ describe("session companion embedded invocation", () => {
     } finally {
       companion.dispose();
     }
+  });
+
+  it("answers with the question's chosen model, reasoning, and speed instead of the utility route", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: "test/main",
+          models: { "test/main": {}, "test/model-a": {}, "test/model-c": {} },
+          utilityModel: { primary: "test/model-a", fallbacks: ["test/model-b"] },
+        },
+      },
+    };
+    resolveSelection.mockImplementation(({ modelRef }) => ({
+      provider: "test",
+      modelId: modelRef?.split("/")[1] ?? "model-a",
+    }));
+    const companion = createCompanion(cfg);
+    expect(companion.state(question).defaultModel).toBe("test/model-a");
+    const chosen = await invokeAsk(
+      companion,
+      { question: "Which file?", model: "test/model-c", thinkingLevel: "high", fastMode: true },
+      "chosen-model-connection",
+      cfg,
+    );
+    expect(chosen).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ answer: expect.any(String) }),
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({
+      model: "model-c",
+      thinkLevel: "high",
+      fastMode: true,
+      modelFallbacksOverride: [],
+    });
+
+    const outside = await invokeAsk(
+      companion,
+      { question: "Which file?", model: "test/model-z" },
+      "outside-model-connection",
+      cfg,
+    );
+    expect(outside).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("model-z"),
+      }),
+    );
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
   });
 
   it("passes a selected-text comment to the model without persisting it as a file", async () => {

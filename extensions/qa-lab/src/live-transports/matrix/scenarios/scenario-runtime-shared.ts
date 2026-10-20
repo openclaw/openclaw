@@ -22,15 +22,13 @@ import type {
 
 export type MatrixQaActorId = "driver" | "observer";
 
-export type MatrixQaSyncState = Partial<Record<MatrixQaActorId, string>>;
 type MatrixQaSyncStreams = Partial<Record<MatrixQaActorId, MatrixQaRoomObserver>>;
 type MatrixQaActorSyncParams = {
   accessToken: string;
   actorId: MatrixQaActorId;
   baseUrl: string;
   observedEvents: MatrixQaObservedEvent[];
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaSyncStreams;
+  syncStreams: MatrixQaSyncStreams;
 };
 
 export type MatrixQaScenarioContext = {
@@ -70,8 +68,7 @@ export type MatrixQaScenarioContext = {
   sutAccountId?: string;
   sutDeviceId?: string;
   sutPassword?: string;
-  syncState: MatrixQaSyncState;
-  syncStreams?: MatrixQaSyncStreams;
+  syncStreams: MatrixQaSyncStreams;
   sutUserId: string;
   timeoutMs: number;
   topology: MatrixQaProvisionedTopology;
@@ -149,9 +146,7 @@ export function buildMatrixReplyArtifact(
   event: MatrixQaObservedEvent,
   token?: string,
 ): MatrixQaReplyArtifact {
-  const replyBody = event.body?.trim();
   return {
-    bodyPreview: truncateMatrixQaPreview(replyBody),
     eventId: event.eventId,
     mentions: event.mentions,
     relatesTo: event.relatesTo,
@@ -212,16 +207,14 @@ export function createMatrixQaScenarioClient(params: {
   actorId?: MatrixQaActorId;
   baseUrl: string;
   observedEvents?: MatrixQaObservedEvent[];
-  syncState?: MatrixQaSyncState;
   syncStreams?: MatrixQaSyncStreams;
 }) {
   const syncObserver =
-    params.actorId && params.observedEvents && params.syncState && params.syncStreams
+    params.actorId && params.observedEvents && params.syncStreams
       ? (params.syncStreams[params.actorId] ??= createMatrixQaRoomObserver({
           accessToken: params.accessToken,
           baseUrl: params.baseUrl,
           observedEvents: params.observedEvents,
-          since: params.syncState[params.actorId],
         }))
       : undefined;
   return createMatrixQaClient({
@@ -244,17 +237,12 @@ export function resolveMatrixQaActorSyncParams(
     actorId,
     baseUrl: context.baseUrl,
     observedEvents: context.observedEvents,
-    syncState: context.syncState,
     syncStreams: context.syncStreams,
   };
 }
 
 async function primeMatrixQaActorCursor(params: MatrixQaActorSyncParams) {
   const client = createMatrixQaScenarioClient(params);
-  const existingSince = params.syncState[params.actorId];
-  if (existingSince) {
-    return { client, startSince: existingSince };
-  }
   const startSince = await client.primeRoom();
   if (!startSince) {
     throw new Error(`Matrix ${params.actorId} /sync prime did not return a next_batch cursor`);
@@ -266,27 +254,13 @@ export async function primeMatrixQaDriverScenarioClient(context: MatrixQaScenari
   return await primeMatrixQaActorCursor(resolveMatrixQaActorSyncParams(context, "driver"));
 }
 
-export function advanceMatrixQaActorCursor(params: {
-  actorId: MatrixQaActorId;
-  syncState: MatrixQaSyncState;
-  nextSince?: string;
-  startSince: string;
-}) {
-  const since = params.nextSince ?? params.startSince;
-  if (since) {
-    params.syncState[params.actorId] = since;
-  }
-}
-
 type MatrixQaScenarioClient = ReturnType<typeof createMatrixQaScenarioClient>;
 
 export async function assertNoSutReplyWindow(params: {
-  actorId: MatrixQaActorId;
   client: MatrixQaScenarioClient;
   context: MatrixQaScenarioContext;
   roomId: string;
   since?: string;
-  startSince: string;
   unexpectedLines?: string[];
   unexpectedMessage: string;
 }) {
@@ -310,12 +284,6 @@ export async function assertNoSutReplyWindow(params: {
       ].join("\n"),
     );
   }
-  advanceMatrixQaActorCursor({
-    actorId: params.actorId,
-    syncState: params.context.syncState,
-    nextSince: result.since,
-    startSince: params.startSince,
-  });
   return {
     noReplyWindowMs,
     since: result.since,
@@ -358,12 +326,6 @@ export async function runConfigurableTopLevelScenario(
     roomId: params.roomId,
     since: startSince,
     timeoutMs: params.timeoutMs,
-  });
-  advanceMatrixQaActorCursor({
-    actorId: params.actorId,
-    syncState: params.syncState,
-    nextSince: matched.since,
-    startSince,
   });
   return {
     body,
@@ -413,12 +375,6 @@ export async function waitForMembershipEvent(
     since: startSince,
     timeoutMs: params.timeoutMs,
   });
-  advanceMatrixQaActorCursor({
-    actorId: params.actorId,
-    syncState: params.syncState,
-    nextSince: matched.since,
-    startSince,
-  });
   return matched.event;
 }
 
@@ -441,14 +397,6 @@ export async function runTopologyScopedTopLevelScenario(params: {
   });
   assertTopLevelReplyArtifact(`reply in ${params.roomKey}`, result.reply);
   return {
-    artifacts: {
-      actorUserId,
-      driverEventId: result.driverEventId,
-      reply: result.reply,
-      roomKey: params.roomKey,
-      token: result.token,
-      triggerBody: result.body,
-    },
     details: [
       `room key: ${params.roomKey}`,
       `room id: ${roomId}`,
@@ -510,20 +458,7 @@ export async function runNoReplyExpectedScenario(
   if (!observedTriggerEvent) {
     throw new Error("Matrix no-reply observation did not observe the trigger event");
   }
-  advanceMatrixQaActorCursor({
-    actorId: params.actorId,
-    syncState: params.syncState,
-    nextSince: result.since,
-    startSince,
-  });
   return {
-    artifacts: {
-      actorUserId: params.actorUserId,
-      driverEventId: triggerEventId,
-      expectedNoReplyWindowMs: params.timeoutMs,
-      token: params.token,
-      triggerBody: params.body,
-    },
     details: [
       `trigger event: ${triggerEventId}`,
       `trigger sender: ${params.actorUserId}`,

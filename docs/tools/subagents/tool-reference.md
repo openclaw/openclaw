@@ -256,7 +256,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Optional managed-worktree name. Requires `worktree: true` and `runtime: "subagent"`.
 </ParamField>
 <ParamField path="worktreeBaseRef" type="string">
-  Optional git base ref for the managed worktree. Requires `worktree: true` and `runtime: "subagent"`.
+  Optional git base ref for the managed worktree. Omit to use the fetched or cached default branch from `origin`, or the primary checkout's current `HEAD` commit when no `origin` remote is configured. An unavailable configured `origin` never falls back to local `HEAD`. Requires `worktree: true` and `runtime: "subagent"`.
 </ParamField>
 
 <Warning>

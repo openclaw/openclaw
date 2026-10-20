@@ -1,4 +1,4 @@
-import { modelRequestBodyState } from "@openclaw/ai/internal/openai";
+import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";

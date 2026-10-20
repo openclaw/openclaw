@@ -112,6 +112,7 @@ function createMemoryEmbeddingOptions(overrides?: {
   provider?: string;
   model?: string;
   baseUrl?: string;
+  outputDimensionality?: number;
 }) {
   return {
     config: {
@@ -135,7 +136,7 @@ function createMemoryEmbeddingOptions(overrides?: {
         "x-deployment": "tenant-a",
       },
     },
-    outputDimensionality: 3,
+    outputDimensionality: overrides?.outputDimensionality ?? 3,
   };
 }
 
@@ -275,7 +276,12 @@ function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration
 async function createMemoryEmbeddingOwnerForServer(
   baseUrl: string,
   database: DatabaseSync,
-  overrides?: { provider: string; model: string; config: OpenClawConfig },
+  overrides?: {
+    provider?: string;
+    model?: string;
+    config?: OpenClawConfig;
+    outputDimensionality?: number;
+  },
 ) {
   const options = { ...createMemoryEmbeddingOptions({ baseUrl, ...overrides }), ...overrides };
   const created = await createEmbeddingProvider(options);
@@ -569,6 +575,31 @@ describe("memory-core embedding batch recovery over real transport", () => {
         operation: "batch",
       });
       expect(server.requests).toHaveLength(1);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("does not retry or split when the endpoint ignores requested dimensions", async () => {
+    // The fixture server always answers with three dimensions.
+    const server = await startEmbeddingServer();
+    const database = new DatabaseSync(":memory:");
+    try {
+      const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
+        server.baseUrl,
+        database,
+        { outputDimensionality: 2 },
+      );
+      await expect(
+        owner.embedChunksInBatches(distinctCandidates(4), generation, 8000),
+      ).rejects.toMatchObject({
+        code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+        operation: "batch",
+        message: expect.stringContaining(
+          "expected 2 dimensions, got 3 at index 0; the endpoint did not honor the requested dimensions",
+        ),
+      });
+      expect(server.requests.map((request) => request.body.dimensions)).toEqual([2]);
     } finally {
       database.close();
     }

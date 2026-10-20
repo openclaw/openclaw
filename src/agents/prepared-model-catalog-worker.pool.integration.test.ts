@@ -177,7 +177,7 @@ describe("Gateway catalog worker pool", () => {
         failedTasks.push({ activeTasks: message.activeTasks, pendingTasks: message.pendingTasks });
       }
     };
-    const catalogFailures: Array<{ error: Error; modelFactsChanged?: boolean }> = [];
+    const catalogFailures: Array<{ phase: "catalog-failed"; modelFactsChanged?: boolean }> = [];
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
       if (event.phase === "catalog-failed") {
         catalogFailures.push(event);
@@ -244,10 +244,13 @@ describe("Gateway catalog worker pool", () => {
       await expect(queuedCatalog).rejects.toThrow("superseded");
       vi.useRealTimers();
       const originalError = await renewal.catch((error: unknown) => error);
-      expect(originalError).toBe(catalogFailures[0]!.error);
       expect(catalogFailures[0]).toMatchObject({ modelFactsChanged: false });
       expect(originalError).toBe(await queuedAuth.catch((error: unknown) => error));
-      expect(originalError).toMatchObject({ message: "worker exited with code 1" });
+      expect(originalError).toMatchObject({
+        message: expect.stringMatching(
+          /^worker exited with code 1 \[task=preparedModelCatalog\.task /,
+        ),
+      });
       taskChannel.unsubscribe(recordFailure);
       expect(failedTasks).toEqual([
         { activeTasks: 1, pendingTasks: 1 },
@@ -312,10 +315,10 @@ describe("Gateway catalog worker pool", () => {
       const release = createDeferredCore();
       const resume = () => release.resolve();
       signal.addEventListener("abort", resume, { once: true });
-      const failures: Error[] = [];
+      const failures: string[] = [];
       const unregister = registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "catalog-failed") {
-          failures.push(event.error);
+          failures.push(event.phase);
         }
       });
       let renewal: ReturnType<typeof loadCompletedFullCatalog> | undefined;
@@ -502,10 +505,10 @@ describe("Gateway catalog worker pool", () => {
     async (reason, { signal }) => {
       const fixture = await createFleetFixture(undefined, true);
       await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
-      const failures: Error[] = [];
+      const failures: string[] = [];
       const unregister = registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "catalog-failed") {
-          failures.push(event.error);
+          failures.push(event.phase);
         }
       });
       const entered = observeCatalogEntry(fixture.marker, fixture.snapshots[0]!.agentDir);

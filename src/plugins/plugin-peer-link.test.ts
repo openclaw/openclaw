@@ -310,7 +310,7 @@ describe("plugin peer links", () => {
       const result = await relinkOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot, logger: {} });
 
       const linkPath = path.join(packageDir, "node_modules", "openclaw");
-      expect(result).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 0 });
+      expect(result).toEqual({ repaired: 1 });
       expectHostLink(linkPath);
     },
   );
@@ -326,12 +326,12 @@ describe("plugin peer links", () => {
       if (mode === "repair") {
         expect(
           await relinkOpenClawPeerDependenciesInManagedNpmRoot({ ...options, logger: {} }),
-        ).toEqual({ checked: 1, attempted: 1, repaired: 1, skipped: 1 });
+        ).toEqual({ repaired: 1 });
         expect(failures[0]?.error).toBeInstanceOf(SyntaxError);
         expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);
       } else {
         const result = await auditOpenClawPeerDependenciesInManagedNpmRoot(options);
-        expect(result).toMatchObject({ checked: 1, broken: 1 });
+        expect(result.issues).toHaveLength(1);
         expect(result.issues[0]?.packageName).toBe("peer-plugin");
         expect(fs.existsSync(linkPath)).toBe(false);
       }
@@ -395,7 +395,7 @@ describe("plugin peer links", () => {
           ? { onPackageReadError }
           : { logger: { warn: (message: string) => warnings.push(message) } }),
       });
-      expect(result).toMatchObject({ repaired: 0, skipped: 1 });
+      expect(result.repaired).toBe(0);
       if (boundary === "manifest") {
         expect(onPackageReadError.mock.calls[0]?.[1]).toBe(packageDir);
         expect(fs.lstatSync(linkPath).isDirectory()).toBe(true);

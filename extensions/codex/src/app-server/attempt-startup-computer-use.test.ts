@@ -195,6 +195,7 @@ async function statusProbe(
   elapsedByMethod: Record<string, number>,
   overrides: NonNullable<CodexPluginConfig["computerUse"]> = {},
 ) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   let elapsedMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
   vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);

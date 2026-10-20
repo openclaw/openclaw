@@ -5,7 +5,7 @@ import type {
   SessionsGoalMutationResult,
   SessionsGoalUpdateParams,
 } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
-import { registerListener } from "../../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
@@ -54,11 +54,9 @@ type GoalOperation = {
 
 class GoalOperationOwner {
   private readonly operations = new Map<string, GoalOperation>();
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
 
-  subscribe(listener: () => void): () => void {
-    return registerListener(this.listeners, listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
   get(signature: string): GoalOperation | undefined {
     return this.operations.get(signature);
@@ -86,11 +84,7 @@ class GoalOperationOwner {
     this.publish();
   }
 
-  private publish(): void {
-    for (const listener of this.listeners) {
-      listener();
-    }
-  }
+  private readonly publish = this.listeners.publish;
 }
 
 const goalOperations = new WeakMap<ChatHost, GoalOperationOwner>();

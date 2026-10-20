@@ -209,6 +209,7 @@ export function renderSessionSection(params: {
         host().sessionOrganizer.sidebarSectionDropTarget?.sectionId === section().id &&
           `sidebar-recent-sessions__group--section-drop-${host().sessionOrganizer.sidebarSectionDropTarget?.position}`,
         {
+          "sidebar-recent-sessions__group--headless": !section().renderHeader,
           "sidebar-recent-sessions__group--collapsed": collapsed(),
           "sidebar-recent-sessions__group--dragging":
             host().sessionOrganizer.draggingSidebarSection === section().id,

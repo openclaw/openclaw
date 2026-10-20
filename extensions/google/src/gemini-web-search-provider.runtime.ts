@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   createProviderHttpError,
   formatProviderHttpErrorMessage,
@@ -265,17 +265,7 @@ export async function executeGeminiSearch(
   const model = resolveGeminiModel(geminiConfig);
   const baseUrl = resolveGeminiBaseUrl(geminiConfig);
   const operatorHeaders = resolveGeminiWebSearchHeaders(geminiConfig);
-  const headersCacheKey = operatorHeaders
-    ? createHash("sha256")
-        .update(
-          JSON.stringify(
-            Object.entries(operatorHeaders).toSorted(([left], [right]) =>
-              left.localeCompare(right),
-            ),
-          ),
-        )
-        .digest("hex")
-    : undefined;
+  const headersCacheKey = sha256Hex(JSON.stringify([apiKey, operatorHeaders]));
   const cacheKey = buildSearchCacheKey([
     "gemini",
     query,

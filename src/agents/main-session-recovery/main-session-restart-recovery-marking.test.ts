@@ -424,10 +424,48 @@ it("recovers an orphan after its owner releases retained run metadata", async ()
       expect(loadSessionEntry({ sessionKey })?.abortedLastRun).toBe(false);
       releaseQueue?.("abandoned");
       await expect(markStartup()).resolves.toEqual({ marked: 1, skipped: 0 });
-      expect(loadSessionEntry({ sessionKey })?.abortedLastRun).toBe(true);
+      expect(loadSessionEntry({ sessionKey })).toMatchObject({
+        abortedLastRun: true,
+        restartRecoveryDeliverySourceRunId: runId,
+      });
+      expect(loadSessionEntry({ sessionKey })?.lifecycleRunId).toBeUndefined();
     } finally {
       releaseQueue?.("abandoned");
       clearAgentRunContext(runId, lifecycleGeneration);
+    }
+  });
+});
+
+it("preserves an explicit original source without selecting an ambiguous startup cohort", async () => {
+  await withOpenClawTestState({ label: "recovery-source-cohort" }, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
+    const runs = [
+      { runId: "first", lifecycleGeneration: "previous-process" },
+      { runId: "second", lifecycleGeneration: "previous-process" },
+    ];
+    for (const sourceRunId of [undefined, "original"] as const) {
+      const sessionKey = `agent:main:${sourceRunId ?? "ambiguous"}`;
+      await replaceSessionEntry(
+        { sessionKey },
+        {
+          sessionId: sessionKey,
+          updatedAt: 1,
+          lifecycleRunId: sourceRunId ? "second" : undefined,
+          restartRecoveryRuns: runs,
+          restartRecoveryDeliverySourceRunId: sourceRunId,
+        },
+      );
+    }
+    expect(await markStartupOrphanedMainSessionsForRecovery({ stateDir: state.stateDir })).toEqual({
+      marked: 2,
+      skipped: 0,
+    });
+    for (const sourceRunId of [undefined, "original"] as const) {
+      const entry = loadSessionEntry({ sessionKey: `agent:main:${sourceRunId ?? "ambiguous"}` });
+      expect(entry?.restartRecoveryDeliverySourceRunId).toBe(sourceRunId);
+      expect(entry?.restartRecoveryRuns).toEqual(runs);
+      expect(entry?.lifecycleRunId).toBeUndefined();
+      expect(entry?.abortedLastRun).toBe(true);
     }
   });
 });

@@ -26,7 +26,7 @@ import {
   resolveToolSections,
 } from "../../lib/agents/tool-catalog.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
@@ -147,10 +147,14 @@ export function AgentTools(
   const agentTools = () => config().entry?.tools ?? {};
   const globalTools = () => config().globalTools ?? {};
   const profile = () => agentTools().profile ?? globalTools().profile ?? "full";
-  const profileOptions = createMemo(() =>
-    resolveToolProfileOptions(params.readData().toolsCatalogResult),
-  );
-  const toolSections = createMemo(() => resolveToolSections(params.readData().toolsCatalogResult));
+  const profileOptions = createMemo(() => {
+    i18nRevision();
+    return resolveToolProfileOptions(params.readData().toolsCatalogResult);
+  });
+  const toolSections = createMemo(() => {
+    i18nRevision();
+    return resolveToolSections(params.readData().toolsCatalogResult);
+  });
   const profileSource = () =>
     agentTools().profile
       ? t("agentTools.profileSourceAgent")
@@ -581,7 +585,7 @@ export function AgentTools(
                             previewStatus(),
                           ),
                         );
-                        const previewLabel = createMemo(() => {
+                        const previewLabel = () => {
                           const reason = unverifiedReason();
                           if (reason) {
                             return reason;
@@ -594,7 +598,7 @@ export function AgentTools(
                                   source: renderEffectiveToolBadge(entry),
                                 })
                               : availability().reason || availability().summary;
-                        });
+                        };
                         return (
                           <details
                             ref={(element) => (details = element)}

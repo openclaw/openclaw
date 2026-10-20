@@ -10,7 +10,6 @@ type ActiveManagedProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loop
 
 /** Active proxy handle; its owner must stop it when the proxy scope ends. */
 export type ActiveManagedProxyRegistration = {
-  proxyUrl: ActiveManagedProxyUrl;
   stopped: boolean;
 };
 
@@ -82,7 +81,7 @@ export function registerActiveManagedProxyUrl(
   activeProxyUrl = normalizedProxyUrl;
   activeProxyLoopbackMode = loopbackMode;
   activeProxyTlsOptions = proxyTls;
-  return { proxyUrl: activeProxyUrl, stopped: false };
+  return { stopped: false };
 }
 
 /** Stops the active proxy registration and clears its process-wide state. */

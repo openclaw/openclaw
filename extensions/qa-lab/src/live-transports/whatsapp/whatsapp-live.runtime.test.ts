@@ -113,7 +113,6 @@ function getWhatsAppScenario(id: string): Scenario {
     ...implementation,
     id,
     timeoutMs: scenario.execution.timeoutMs ?? 60_000,
-    title: scenario.title,
   };
 }
 

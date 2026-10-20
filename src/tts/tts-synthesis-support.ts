@@ -1,6 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString as readTtsResultString } from "@openclaw/normalization-core/string-coerce";
-import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig, ResolvedTtsPersona, TtsProvider } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -111,7 +110,7 @@ type TtsRequestSetup = {
   config: ResolvedTtsConfig;
   persona?: ResolvedTtsPersona;
   providers: VoiceProviderCandidate[];
-  prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
+  providerRegistry: TtsProviderRegistry;
 };
 
 type AcquiredTtsRequest =
@@ -137,9 +136,6 @@ export async function acquireTtsRequest(
       error: `Text too long (${params.text.length} chars, max ${config.maxTextLength})`,
     };
   }
-  // Bind before provider work can reload the snapshot; fallback follows a known runtime
-  // owner without letting an unrelated global snapshot replace explicit scoped config.
-  const readRuntimeConfig = createRuntimeConfigReader(cfg);
   const prefs = readTtsPrefs(prefsPath);
   const persona = resolveTtsPersonaFromPrefs(config, prefs);
   const queries = await acquirePluginCapabilityProviders({ key: "speechProviders", cfg });
@@ -164,52 +160,30 @@ export async function acquireTtsRequest(
         !overrideProvider && !preferredProvider ? config.provider : undefined,
         ...catalog.map((provider) => provider.id),
       ];
-      const prepareView = async (
-        queryConfig: OpenClawConfig,
-        providers: SpeechProviderPlugin[],
-      ) => {
-        const lookups = new Map<string, SpeechProviderPlugin | undefined>();
-        const requested = new Set(
-          [...requestedInputs, ...providers.map((provider) => provider.id)].flatMap((id) => {
-            const normalized = normalizeSpeechProviderId(id);
-            return normalized ? [normalized] : [];
-          }),
-        );
-        for (const providerId of requested) {
-          const provider = await queries.resolveProvider({ providerId, cfg: queryConfig });
-          lookups.set(providerId, provider);
-          const canonical = normalizeSpeechProviderId(provider?.id);
-          if (canonical) {
-            requested.add(canonical);
-          }
+      const providers = await queries.resolveProviders({ cfg });
+      const lookups = new Map<string, SpeechProviderPlugin | undefined>();
+      const requested = new Set(
+        [...requestedInputs, ...providers.map((provider) => provider.id)].flatMap((id) => {
+          const normalized = normalizeSpeechProviderId(id);
+          return normalized ? [normalized] : [];
+        }),
+      );
+      for (const providerId of requested) {
+        const provider = await queries.resolveProvider({ providerId, cfg });
+        lookups.set(providerId, provider);
+        const canonical = normalizeSpeechProviderId(provider?.id);
+        if (canonical) {
+          requested.add(canonical);
         }
-        return createSpeechProviderRegistry({
+      }
+      // One request keeps its prepared selections; reloads apply to the next request.
+      const providerRegistry: TtsProviderRegistry = {
+        ...createSpeechProviderRegistry({
           getProvider: (providerId) => lookups.get(providerId),
           listProviders: () => providers,
-        });
+        }),
+        runtimeConfig: cfg,
       };
-      const prepareProviderRegistry = async (): Promise<TtsProviderRegistry> => {
-        const inputView = await prepareView(cfg, await queries.resolveProviders({ cfg }));
-        const runtimeConfig = readRuntimeConfig();
-        const runtimeView =
-          runtimeConfig === cfg
-            ? inputView
-            : await prepareView(
-                runtimeConfig,
-                await queries.resolveProviders({ cfg: runtimeConfig }),
-              );
-        // Policy helpers use the request config or the applicable config prepared for this phase.
-        const selectRegistry = (queryConfig: OpenClawConfig | undefined) =>
-          queryConfig === cfg ? inputView : runtimeView;
-        return {
-          runtimeConfig,
-          getSpeechProvider: (id, queryConfig) => selectRegistry(queryConfig).getSpeechProvider(id),
-          canonicalizeSpeechProviderId: (id, queryConfig) =>
-            selectRegistry(queryConfig).canonicalizeSpeechProviderId(id),
-          listSpeechProviders: (queryConfig) => selectRegistry(queryConfig).listSpeechProviders(),
-        };
-      };
-      const providerRegistry = await prepareProviderRegistry();
       const userProvider =
         preferredProvider ??
         (await resolveTtsProviderAsync(config, prefsPath, providerRegistry, prefs));
@@ -222,7 +196,7 @@ export async function acquireTtsRequest(
         providers: params.disableFallback
           ? [resolvePrimaryTtsProviderCandidate(provider, cfg, providerRegistry)]
           : resolveTtsProviderCandidates(provider, cfg, providerRegistry),
-        prepareProviderRegistry,
+        providerRegistry,
       };
     });
     return { setup, run: queries.run, release: queries.release };
@@ -283,7 +257,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
   timeoutMs?: number;
   target: SpeechSynthesisTarget;
   logLabel: string;
-  prepareProviderRegistry: () => Promise<TtsProviderRegistry>;
+  providerRegistry: TtsProviderRegistry;
   selectOperation: (params: {
     provider: TtsProvider;
     resolvedProvider: ReadySpeechProvider;
@@ -324,7 +298,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
     attemptedProviders.push(provider);
     const providerStart = Date.now();
     try {
-      const providerRegistry = await params.prepareProviderRegistry();
+      const providerRegistry = params.providerRegistry;
       const target = params.target;
       const resolveReadyProvider = async (): Promise<TtsProviderReadyResolution> => {
         const candidateProvider = providerRegistry.getSpeechProvider(provider, cfg);

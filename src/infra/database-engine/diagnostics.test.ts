@@ -130,6 +130,50 @@ describe("physical store diagnostics", () => {
     },
   );
 
+  it("admits retained legacy state without requiring first-use schema migrations", async () => {
+    const input = fixture();
+    input.family = "state";
+    input.descriptor = await loadStatePortDescriptor();
+    {
+      using db = openNodeSqliteDatabase(input.path!);
+      for (const schema of [input.descriptor, ...(input.descriptor.fragments ?? [])]) {
+        db.exec(schema.sqlite);
+      }
+      db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+      db.prepare("INSERT INTO schema_meta VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)").run(
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+      db.prepare(
+        "INSERT INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)",
+      ).run(String(OPENCLAW_STATE_SCHEMA_VERSION));
+      // Published installs retain fleet rows after tenant-container retirement.
+      db.exec(`CREATE TABLE fleet_cells (
+          tenant_id TEXT NOT NULL PRIMARY KEY,
+          created_at_ms INTEGER NOT NULL,
+          image TEXT NOT NULL,
+          runtime TEXT NOT NULL,
+          host_port INTEGER NOT NULL,
+          container_name TEXT NOT NULL,
+          data_dir TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO fleet_cells VALUES
+          ('retired', 17, 'legacy-image', 'docker', 18789, 'legacy-container', '/retired/data');
+        ALTER TABLE agent_deletion_journal DROP COLUMN phase;
+        INSERT INTO agent_deletion_journal
+          (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
+        VALUES ('retired', '/retired/agent', '/retired/workspace', '/retired/sessions', 17)`);
+    }
+    const before = fs.readFileSync(input.path!);
+    const result = await inspectDatabaseStore(input);
+    expect(result.schema).toMatchObject({
+      version: OPENCLAW_STATE_SCHEMA_VERSION,
+      expectedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      pending: 0,
+    });
+    expect(result.issues).toEqual([]);
+    expect(fs.readFileSync(input.path!)).toEqual(before);
+  });
+
   it("distinguishes a configured PostgreSQL engine from a physical SQLite store", async () => {
     const input = fixture();
     createStore(input, 2);

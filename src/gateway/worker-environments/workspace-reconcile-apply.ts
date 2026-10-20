@@ -22,7 +22,6 @@ import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 import {
   applyWorkspaceDirectoryChanges,
-  assertActualWorkspaceManifest,
   ConcurrentWorkspacePathError,
   createWorkspaceManifestVerifier,
   manifestNodes,
@@ -152,7 +151,7 @@ export async function applyStagedWorkerWorkspace(params: {
         buildCacheInputs,
       });
       const finalPreflight = preparedPreflight ?? (await inspectPaths());
-      await assertActualWorkspaceManifest({
+      const verifyLocalStable = createWorkspaceManifestVerifier({
         root,
         expectedRef: actual.manifestRef,
         baseCommit: actual.manifest.baseCommit,
@@ -160,6 +159,7 @@ export async function applyStagedWorkerWorkspace(params: {
         includePaths,
         buildCacheInputs,
       });
+      await verifyLocalStable();
       const conflictPaths = retainedConflictPaths(finalPreflight, preflight.applyPaths);
       params.assertCurrent?.();
       await reconcile.publish?.({ ...actual, conflictPaths });
@@ -168,14 +168,7 @@ export async function applyStagedWorkerWorkspace(params: {
       return {
         ...actual,
         conflictPaths,
-        verifyLocalStable: createWorkspaceManifestVerifier({
-          root,
-          expectedRef: actual.manifestRef,
-          baseCommit: actual.manifest.baseCommit,
-          preserveDirectories,
-          includePaths,
-          buildCacheInputs,
-        }),
+        verifyLocalStable,
       };
     };
     if (changed.size === 0) {

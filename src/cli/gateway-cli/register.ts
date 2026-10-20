@@ -3,15 +3,13 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "../../commands/health.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
 import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
-import { defaultRuntime, ExitError } from "../../runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
-import { formatCliJsonFailure, rethrowExpectedCliError } from "../failure-output.js";
 import {
   addGatewayClientOptions,
   callGatewayFromCliWithTransport,
@@ -22,7 +20,9 @@ import { formatHelpExamples } from "../help-format.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { setCommandJsonMode } from "../program/json-mode.js";
 import type { GatewayDiscoverOpts } from "./discover.js";
+import { gatewayAction } from "./gateway-action.js";
 import { isGatewayMachineOutput } from "./output-mode.js";
+import { addGatewayLockRecoveryCommand } from "./register-recover-lock.js";
 import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js";
 import { addGatewayRunCommand } from "./run-command.js";
 import { normalizeStabilityBundleTarget } from "./stability-bundle-target.js";
@@ -63,42 +63,6 @@ function parseGatewayCallParams(value = "{}"): unknown {
   }
 }
 
-function gatewayAction(action: Parameters<Command["action"]>[0], label?: string) {
-  return async function (this: Command, ...args: Parameters<typeof action>) {
-    const json = Boolean(this.opts<{ json?: boolean }>().json);
-    // JSON mode preserves structured gateway errors for automation callers.
-    try {
-      await action.apply(this, args);
-    } catch (err) {
-      // Completed output must reach CLI finalization without a second failure envelope.
-      if (err instanceof ExitError) {
-        throw err;
-      }
-      if (!json) {
-        rethrowExpectedCliError(err);
-      }
-      if (json) {
-        const {
-          formatGatewayAuthErrorJson,
-          formatGatewayClientRequestErrorJson,
-          formatGatewayTransportErrorJson,
-        } = await import("../../gateway/call.js");
-        defaultRuntime.writeJson(
-          formatGatewayAuthErrorJson(err) ??
-            formatGatewayClientRequestErrorJson(err) ??
-            formatGatewayTransportErrorJson(err) ??
-            formatCliJsonFailure(err),
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-      const message = formatErrorMessage(err);
-      defaultRuntime.error(label ? `${label}: ${message}` : message);
-      defaultRuntime.exit(1);
-    }
-  };
-}
-
 function parseDaysOption(raw: unknown): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
     return Math.max(1, Math.floor(raw));
@@ -108,9 +72,7 @@ function parseDaysOption(raw: unknown): number {
     if (parsed !== undefined) {
       return parsed;
     }
-    // A present-but-unparseable value (including an explicit empty one) is
-    // operator error; the main RPC path rejects malformed --timeout the same
-    // way instead of silently defaulting.
+    // A present but malformed value is operator error, like an invalid --timeout.
     throw new Error(`Invalid --days. Use a positive integer, e.g. --days 30. Received: "${raw}".`);
   }
   return 30;
@@ -270,6 +232,7 @@ export function registerGatewayCli(program: Command) {
     statusDescription: "Show gateway service status + check connectivity/capability",
   });
   addGatewayRestartHandoffCommands(gateway);
+  addGatewayLockRecoveryCommand(gateway);
   setCommandJsonMode(gateway, "output", ({ argv }) => isGatewayMachineOutput(argv));
 
   gateway

@@ -169,10 +169,6 @@ export async function runWhatsAppScenario(environment: WhatsAppQaScenarioEnviron
         run,
       });
       return {
-        id: scenario.id,
-        title: scenario.title,
-        posture: implementation.posture,
-        status: "pass" as const,
         ...result,
         details:
           attempt === 1 ? result.details : `${result.details}; driver reconnected ${attempt - 1}x`,

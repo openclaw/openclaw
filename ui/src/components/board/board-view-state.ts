@@ -346,12 +346,10 @@ export function createBoardViewState(
     widgetAppView: async (name, revision) =>
       (await props.callbacks?.widgetAppView?.(name, revision)) ?? {
         status: "stale",
-        error: "MCP App view unavailable",
       },
     refreshWidgetAppView: async (name, revision) =>
       (await props.callbacks?.refreshWidgetAppView?.(name, revision)) ?? {
         status: "stale",
-        error: "MCP App view unavailable",
       },
   };
 

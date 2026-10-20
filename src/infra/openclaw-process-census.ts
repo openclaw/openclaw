@@ -29,12 +29,12 @@ const workerEntrypoints = Object.values(runtimeProcessEntrypoints).flatMap((entr
 ]);
 
 function isStandardSystemdUserManager(command: ProcessCommand | undefined): boolean {
+  const argv = command && "argv" in command ? command.argv : [];
   return (
-    command !== undefined &&
-    "argv" in command &&
-    command.argv.length === 2 &&
-    command.argv[1] === "--user" &&
-    (command.argv[0] === "/usr/lib/systemd/systemd" || command.argv[0] === "/lib/systemd/systemd")
+    argv.length <= 3 &&
+    argv[1] === "--user" &&
+    argv.slice(2).every((arg) => /^--deserialize=\d+$/u.test(arg)) &&
+    (argv[0] === "/usr/lib/systemd/systemd" || argv[0] === "/lib/systemd/systemd")
   );
 }
 
@@ -73,7 +73,6 @@ function classifyProcessArtifactCustody(
   command: ProcessCommand | undefined,
   pid: number,
   cwd: string | undefined,
-  parentCommand: ProcessCommand | undefined,
 ): ArtifactCustody {
   if (!command) {
     return { kind: "unknown", reason: "process command is unavailable" };
@@ -122,15 +121,13 @@ function classifyProcessArtifactCustody(
       ? identity.reason
       : undefined;
   if (!cwd || !path.isAbsolute(cwd)) {
-    const inspectorUid = process.getuid?.();
+    // Unrelated commands do not own runtimes merely because cwd is unreadable.
+    // Explicit artifact references above still preserve their custody.
     if (
-      cwd === undefined &&
       identity.kind === "other" &&
       typeof position !== "number" &&
       position.kind === "not-runtime" &&
-      (command.owner === "different" ||
-        (command.uid !== undefined && inspectorUid !== undefined && command.uid !== inspectorUid) ||
-        isStandardSystemdLoginProcess(command, parentCommand, inspectorUid))
+      references.length === 0
     ) {
       return { kind: "not-holder" };
     }
@@ -188,8 +185,14 @@ type HandoffReferences = {
   artifactPaths: readonly string[];
   windowsUserSid?: string;
   drivers?: readonly { pid: number; startIdentity: string }[];
+  familyExited?: boolean;
 };
-type CensusResult = { matchingPids: number[]; unverifiedPids: number[]; error?: string };
+type CensusResult = {
+  matchingPids: number[];
+  unverifiedPids: number[];
+  warnings?: string[];
+  error?: string;
+};
 type CensusProcess = { pid: number; state: string; command?: { ppid: number } & ProcessCommand };
 
 function classifyWindowsHandoffAncestry(
@@ -213,29 +216,24 @@ function classifyWindowsHandoffAncestry(
   while (child.startIdentity && !visited.has(child.pid)) {
     const childStart = child.startIdentity;
     visited.add(child.pid);
+    // Recorded parentage survives a replacement in the live PID table.
     if (
       drivers.some(
-        ({ pid, startIdentity }) => pid === child.pid && startIdentity === child.startIdentity,
+        ({ pid, startIdentity }) =>
+          (pid === child.pid && startIdentity === childStart) ||
+          (pid === child.parentPid &&
+            /^\d+$/.test(startIdentity) &&
+            BigInt(startIdentity) <= BigInt(childStart)),
       )
     ) {
       return "descendant";
     }
-    const parent = byPid.get(child.parentPid ?? 0);
-    const driver = drivers.find(
-      ({ pid, startIdentity }) =>
-        pid === child.parentPid &&
-        /^\d+$/.test(startIdentity) &&
-        BigInt(startIdentity) <= BigInt(childStart),
-    );
-    if (driver) {
-      return !parent || parent.startIdentity === driver.startIdentity ? "descendant" : "unknown";
-    }
     if (child.parentPid === 0 || child.parentPid === 4) {
       return "unrelated";
     }
-    // Persisted Windows identities have millisecond resolution; equal births
-    // cannot exclude a child created in the same clock tick.
-    if (!parent?.startIdentity || BigInt(parent.startIdentity) > BigInt(child.startIdentity)) {
+    const parent = byPid.get(child.parentPid ?? 0);
+    // A missing or reused intermediate parent cannot disprove surviving descendants.
+    if (!parent?.startIdentity || BigInt(parent.startIdentity) > BigInt(childStart)) {
       break;
     }
     child = parent;
@@ -276,7 +274,11 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
       };
     }) ?? [
       ...readProcessGroupMembers(handoff ? 15_000 : 1_000, {
-        readDarwinCommand: readDarwinProcessCommand,
+        // Handoff matches read argv and cwd only; a launcher needs an argv entrypoint,
+        // so the service marker cannot change the outcome. Skip that environment read.
+        readDarwinCommand: handoff
+          ? (pid, owner) => readDarwinProcessCommand(pid, owner, { serviceMarker: false })
+          : readDarwinProcessCommand,
       }),
     ];
     const byPid = new Map(processes.map((entry) => [entry.pid, entry]));
@@ -365,14 +367,26 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
         }
         const observation = nativeByPid.get(pid);
         const cwd = directories.get(pid);
-        const texts = [...(argv ?? []), observation?.commandLine ?? "", cwd ?? ""];
-        if (texts.some((value) => matches.test(normalize(value)))) {
+        const texts = [
+          ...(argv ?? []),
+          observation?.commandLine ?? "",
+          observation?.executable ?? "",
+          cwd ?? "",
+        ];
+        const identity = classifyOpenClawArgv(argv ?? [observation?.executable ?? ""], {
+          pid,
+          cwd: cwd ?? "",
+          serviceMarker: command && "argv" in command ? command.serviceMarker : undefined,
+          additionalEntrypoints: workerEntrypoints,
+        });
+        if (texts.some((value) => matches.test(normalize(value))) || identity.kind === "openclaw") {
           result.matchingPids.push(pid);
           continue;
         }
-        const ancestry =
-          observation &&
-          classifyWindowsHandoffAncestry(observation, nativeByPid, handoff.drivers ?? []);
+        const ancestry = handoff.familyExited
+          ? "unrelated"
+          : observation &&
+            classifyWindowsHandoffAncestry(observation, nativeByPid, handoff.drivers ?? []);
         if (ancestry === "descendant") {
           result.matchingPids.push(pid);
           continue;
@@ -400,19 +414,14 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
           )
         ) {
           result.unverifiedPids.push(pid);
-          if (windows) {
-            result.error =
-              "Please run update repair as the same Windows account that started the update.";
-          }
+          const image = observation?.executable ?? argv?.[0];
+          warnings.push(
+            `Could not verify handoff ancestry for PID ${pid} (${image ? (windows ? path.win32 : path).basename(image) : "image unavailable"}).`,
+          );
         }
         continue;
       }
-      const custody = classifyProcessArtifactCustody(
-        command,
-        pid,
-        directories.get(pid),
-        byPid.get(command?.ppid ?? 0)?.command,
-      );
+      const custody = classifyProcessArtifactCustody(command, pid, directories.get(pid));
       if (custody.kind === "not-holder") {
         continue;
       }
@@ -441,7 +450,7 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
         : "Host process census is incomplete; verify process-inspection permissions and retry update repair.";
   }
   return handoff
-    ? result
+    ? { ...result, ...(warnings.length ? { warnings } : {}) }
     : result.error
       ? { error: result.error }
       : {

@@ -1,4 +1,5 @@
 import type { AgentSideConnection, PromptRequest, SessionUpdate } from "@agentclientprotocol/sdk";
+import { enqueueKeyedTask } from "../plugin-sdk/keyed-async-queue.js";
 import { getAvailableCommands } from "./commands.js";
 import type { AcpEventLedger, AcpEventLedgerReplay } from "./event-ledger.js";
 
@@ -206,25 +207,20 @@ export class AcpTranslatorSessionUpdates {
     }
     // Shutdown blocks new work, but already-queued mutations must still settle.
     const ledgerSessionId = resolveLedgerSessionId(session);
-    const previous = this.ledgerMutationTails.get(ledgerSessionId) ?? Promise.resolve();
-    const pending = previous.then(async () => {
-      try {
-        await mutation();
-      } catch (err) {
-        this.options.log(
-          `event ledger ${kind} record failed for ${session.sessionId}: ${String(err)}`,
-        );
-        await this.markLedgerIncomplete(session);
-      }
+    return enqueueKeyedTask({
+      tails: this.ledgerMutationTails,
+      key: ledgerSessionId,
+      task: async () => {
+        try {
+          await mutation();
+        } catch (err) {
+          this.options.log(
+            `event ledger ${kind} record failed for ${session.sessionId}: ${String(err)}`,
+          );
+          await this.markLedgerIncomplete(session);
+        }
+      },
     });
-    const tail = pending.catch(() => {});
-    this.ledgerMutationTails.set(ledgerSessionId, tail);
-    void tail.then(() => {
-      if (this.ledgerMutationTails.get(ledgerSessionId) === tail) {
-        this.ledgerMutationTails.delete(ledgerSessionId);
-      }
-    });
-    return pending;
   }
 
   private async markLedgerIncomplete(session: AcpTranslatorSessionRef): Promise<void> {

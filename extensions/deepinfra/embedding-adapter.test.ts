@@ -10,10 +10,7 @@ vi.mock("./embedding-provider.js", () => ({
   DEFAULT_DEEPINFRA_EMBEDDING_MODEL: "BAAI/bge-m3",
 }));
 
-import {
-  buildDeepInfraEmbeddingAdapter,
-  deepinfraEmbeddingProviderAdapter,
-} from "./embedding-adapter.js";
+import { deepinfraEmbeddingProviderAdapter } from "./embedding-adapter.js";
 
 const memoryProvider: MemoryEmbeddingProvider = {
   id: "deepinfra",
@@ -53,18 +50,6 @@ describe("DeepInfra generic embedding adapter", () => {
       authProviderId: "deepinfra",
       create: expect.any(Function),
     });
-  });
-
-  it("keeps the discovered embedding model as the dynamic adapter default", async () => {
-    const adapter = buildDeepInfraEmbeddingAdapter({
-      embedModels: [{ id: "BAAI/discovered-model" }] as never,
-    });
-
-    expect(adapter.defaultModel).toBe("BAAI/discovered-model");
-    await adapter.create({ config: {}, model: "BAAI/discovered-model" });
-    expect(mocks.createDeepInfraEmbeddingProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ defaultModel: "BAAI/discovered-model" }),
-    );
   });
 
   it.each([undefined, "https://API.DEEPINFRA.COM:443/v1/openai/"])(

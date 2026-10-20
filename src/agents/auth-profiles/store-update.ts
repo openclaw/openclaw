@@ -46,7 +46,14 @@ import {
 } from "./persisted.js";
 import { withPersonalAuthProfileStore } from "./personal-store.js";
 import type { LoadAuthProfileStoreOptions } from "./runtime-read.js";
-import { assertPersonalAuthProfileRuntime, getWorkerAuthProfileWrites } from "./runtime-scope.js";
+import {
+  assertPersonalAuthProfileRuntime,
+  getScopedAuthProfileEnv,
+  getScopedSharedAuthStore,
+  getWorkerAuthProfileWrites,
+  isEnvOnlyAuthProfileRuntime,
+  resolveRuntimeAuthProfileAgentDir,
+} from "./runtime-scope.js";
 import {
   getRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   invalidateRuntimeAuthProfileStoreSnapshotsForOwner,
@@ -507,10 +514,6 @@ export function createAuthProfileStoreUpdater(
   >["listRuntimeExternalAuthProfiles"],
   host: {
     applyScopedAuthReadThrough: (store: AuthProfileStore) => AuthProfileStore;
-    getScopedAuthProfileEnv: () => NodeJS.ProcessEnv | undefined;
-    getScopedSharedAuthStore: () => AuthProfileStore | undefined;
-    resolveRuntimeAuthProfileAgentDir: (agentDir?: string) => string | undefined;
-    isEnvOnlyAuthProfileRuntime: () => boolean;
     load: (
       agentDir: string | undefined,
       options: LoadAuthProfileStoreOptions,
@@ -525,12 +528,7 @@ export function createAuthProfileStoreUpdater(
     ) => void;
   },
 ) {
-  const {
-    applyScopedAuthReadThrough,
-    getScopedAuthProfileEnv,
-    getScopedSharedAuthStore,
-    resolveRuntimeAuthProfileAgentDir,
-  } = host;
+  const { applyScopedAuthReadThrough } = host;
   /** Update under the write lock; null on contention or changed inherited read facts. */
   return async function updateAuthProfileStoreWithLock(params: {
     agentDir?: string;
@@ -546,7 +544,7 @@ export function createAuthProfileStoreUpdater(
     ) => boolean;
   }): Promise<AuthProfileStore | null> {
     const agentDir = resolveRuntimeAuthProfileAgentDir(params.agentDir);
-    const envOnly = host.isEnvOnlyAuthProfileRuntime();
+    const envOnly = isEnvOnlyAuthProfileRuntime();
     try {
       if (params.profileId && isUserModelAuthProfileId(params.profileId)) {
         assertPersonalAuthProfileRuntime();

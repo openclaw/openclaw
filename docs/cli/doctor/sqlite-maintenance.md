@@ -260,7 +260,11 @@ an import for that verified history.
 
 Doctor also discovers primary conversation transcripts omitted from the legacy
 registry, including timestamp-prefixed filenames. It verifies the session header,
-file identity, and logical owner before importing. Known historical generations
+file identity, and logical owner before importing. A renamed or copied file keeps
+its header's session identity; Doctor records a filename mismatch warning and
+preserves the original bytes. If multiple files claim that identity, Doctor keeps
+them separate in the protected archive and reports the conflict without merging
+their histories. Known historical generations
 remain attached to their existing session without changing its current generation
 or settings. History with no registry owner is recovered as an archived session
 only when its agent owner is unambiguous.

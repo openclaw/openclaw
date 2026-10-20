@@ -159,6 +159,7 @@ export function retainSessionEntryWorkerPublication(params: {
       transcriptPublication?: readonly SessionTranscriptAuthorityReceipt[],
       entryPostimages?: ReadonlyMap<string, SessionEntry>,
       conversationReceipts?: readonly ConversationPublication[],
+      fullEntryPostimages?: ReadonlyMap<string, SessionEntry>,
     ) {
       if (pending) {
         return;
@@ -170,6 +171,7 @@ export function retainSessionEntryWorkerPublication(params: {
       owner.sharingUnchanged = new Set(sharingUnchangedKeys);
       owner.generationUnchanged = new Set(generationUnchangedKeys);
       owner.entryPostimages = entryPostimages;
+      owner.fullEntryPostimages = fullEntryPostimages;
       pending = true;
       for (const sessionKey of keys) {
         const key = `${identityKey}\0${sessionKey}`;
@@ -186,6 +188,7 @@ export function retainSessionEntryWorkerPublication(params: {
       participantProjections?: PendingSessionEntryPublication["participantProjections"],
       entryPostimages?: ReadonlyMap<string, SessionEntry>,
       authorityChanged = true,
+      fullEntryPostimages?: ReadonlyMap<string, SessionEntry>,
     ): void {
       if (pending) {
         return;
@@ -199,6 +202,8 @@ export function retainSessionEntryWorkerPublication(params: {
         generationUnchangedKeys,
         undefined,
         entryPostimages,
+        undefined,
+        fullEntryPostimages,
       );
     },
     settleChanges<T>(
@@ -258,6 +263,7 @@ export function retainSessionEntryWorkerPublication(params: {
               []) {
               publishRetainedSessionEntryPredicate(read, record.value.entry, true, {
                 preserveMatchingEntry: true,
+                fullEntry: record.value.fullEntry,
               });
             }
             continue;
@@ -271,6 +277,7 @@ export function retainSessionEntryWorkerPublication(params: {
               record.sessionKey,
               facts,
               entry,
+              record.value.fullEntry,
             );
           } else {
             publishRetainedSessionEntryChange(
@@ -282,6 +289,7 @@ export function retainSessionEntryWorkerPublication(params: {
                 : undefined,
               true,
               entry,
+              record.value.fullEntry,
             );
           }
           const change = { ...changes[index]!, facts };
@@ -386,6 +394,7 @@ export function retainSessionEntryWorkerPublication(params: {
               known,
               {
                 preserveMatchingEntry: true,
+                fullEntry: replacement?.fullEntries?.get(sessionKey),
               },
             );
           }
@@ -450,6 +459,7 @@ export function retainSessionEntryWorkerPublication(params: {
               read,
               entry,
               known && !replacement?.unavailableParticipantKeys?.includes(sessionKey),
+              { fullEntry: replacement?.fullEntries?.get(sessionKey) },
             );
           }
           recordAcquiringSessionEntry(

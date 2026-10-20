@@ -563,6 +563,9 @@ async function readState(service: SessionCompanionService, sessionKey: string, a
     { context: { sessionCompanion: service } },
   );
   expect(response.ok, response.error?.message).toBe(true);
+  if (!response.payload) {
+    throw new Error("sessions.companion.state returned no payload");
+  }
   return response.payload;
 }
 
@@ -582,7 +585,7 @@ test("sessions.delete isolates Side chat for the same global key and session ID 
   const deleted = await directSessionReq("sessions.delete", { key: "global", agentId: "work" });
   expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
   expect(await readState(service, "global", "main")).toEqual(mainBefore);
-  expect(await readState(service, "global", "work")).toEqual({ exchanges: [] });
+  expect((await readState(service, "global", "work")).exchanges).toEqual([]);
 });
 
 test("a delayed deletion event cannot erase Side chat for a newer generation", async () => {
@@ -601,13 +604,13 @@ test("a delayed deletion event cannot erase Side chat for a newer generation", a
     stop();
   }
   expect(deletion).toBeDefined();
-  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
+  expect((await readState(service, sessionKey)).exchanges).toEqual([]);
   const recreated = await directSessionReq("sessions.patch", {
     key: sessionKey,
     label: "Recreated session",
   });
   expect(recreated.ok, recreated.error?.message).toBe(true);
-  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
+  expect((await readState(service, sessionKey)).exchanges).toEqual([]);
   await ask(service, sessionKey, "New generation question?");
   const newState = await readState(service, sessionKey);
   expect(newState?.exchanges.map((exchange) => exchange.question)).toEqual([
@@ -643,5 +646,5 @@ test("sessions.delete cancels a prepared Side chat ask before its late answer", 
   expect(run.mock.calls[0]?.[1].runParams.abortSignal?.aborted).toBe(true);
   pending.resolve("Late answer from the deleted session.");
   await expect(failure).resolves.toMatchObject({ reason: "context-unavailable" });
-  expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
+  expect((await readState(service, sessionKey)).exchanges).toEqual([]);
 });

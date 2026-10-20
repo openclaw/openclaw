@@ -153,6 +153,13 @@ GGUFs and legacy EmbeddingGemma cache paths. One slot bounds llama.cpp's large
 embedding output buffer to one input; the context bound avoids reserving a custom
 model's full training context for short memory chunks.
 
+`memory.search.outputDimensionality` truncates local embedding vectors before
+L2 normalization, preserving the requested size in the index identity. Use a
+GGUF model that supports dimensionality reduction. Without this setting, vectors
+retain their native size; requesting a larger size than the model returns fails.
+If an existing index contains native-size vectors despite a smaller configured
+size, rebuild it with `openclaw memory index --force --agent <id>`.
+
 Existing context, batch, and slot settings in the embedding section, `[*]`, or
 the managed service's arguments or environment remain authoritative. OpenClaw adds
 the context bound only when no slot count or per-slot context is configured,
@@ -474,6 +481,10 @@ Local memory embeddings require managed mode:
 
 For automated embedding-only setup, configure local memory and explicitly consent
 to downloading the embedding model and verified llama.cpp runtime:
+
+This unattended option is not available in v2026.10.5. If your installation
+rejects `--llama-cpp-embedding-only`, use the [interactive embedding-only
+setup](/plugins/llama-cpp#set-up-only-local-embeddings) instead.
 
 ```bash
 openclaw config set memory.search.provider local

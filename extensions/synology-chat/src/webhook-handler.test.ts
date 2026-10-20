@@ -392,7 +392,6 @@ describe("createWebhookHandler", () => {
       body: "Hello from json",
       from: "123",
       senderName: "json-user",
-      provider: "synology-chat",
       chatType: "direct",
       commandAuthorized: true,
       chatUserId: "123",

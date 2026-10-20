@@ -118,22 +118,103 @@ describePosix("explicit prior-CI admin landing", () => {
     },
   );
 
-  it("refuses a generic protection 404 without treating hidden GraphQL rules as absent", () => {
-    const f = preExistingCandidate();
-    f.save({ ...f.state(), restPolicy: "not-found" });
-    const result = f.verifyPriorCi(f.path);
-    expectResult(f, result, "classic branch-protection policy is unavailable");
-    expect(result.output).toContain("ordinary green-CI landing");
-    expect(result.output).toContain(
-      "does not establish environment approval or production deployment authority",
-    );
-    expect(f.state().calls.some((call) => call.includes("graphql"))).toBe(false);
-    expect(() => f.record()).toThrow();
-  });
-
-  it.each(["review", "security", "new attempt"])("delegation cannot waive %s", (fault) => {
+  it("lands attributed CI with a maintainer writer without classic-policy visibility", () => {
     const f = preExistingCandidate();
     const state = delegate(f);
+    f.save({ ...state, restPolicy: "not-found" });
+    const result = f.adminPriorCi(f.path);
+    expectResult(f, result, undefined, 1);
+    expect(f.record()).toMatchObject({ phase: "complete", route: "admin", head: f.head });
+    expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
+    expect(
+      f.state().calls.some((call) => call.some((arg) => arg.endsWith("/branches/main/protection"))),
+    ).toBe(false);
+    expect(f.state().comments[0]?.body).toContain("No current-head CI success is claimed");
+  });
+
+  it.each([
+    { kind: "check", state: "failure", required: true, padding: 0, admitted: false },
+    { kind: "status", state: "pending", required: true, padding: 0, admitted: false },
+    { kind: "check", state: "failure", required: true, padding: 100, admitted: false },
+    { kind: "check", state: "failure", required: false, padding: 0, admitted: true },
+    {
+      kind: "check",
+      state: "success",
+      required: true,
+      padding: 0,
+      admitted: true,
+      previousFailure: true,
+    },
+  ] as const)(
+    "honors native $kind required=$required $state checks after $padding optional contexts",
+    ({ kind, state: checkState, required, padding, admitted, ...options }) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      state.restPolicy = "not-found";
+      state.quotaAt = "checks";
+      state.priorCi.nativeChecks = [
+        { name: "Classic required check", kind, required, state: checkState, ...options },
+      ];
+      state.priorCi.nativeOptionalCount = padding;
+      f.save(state);
+      const result = f.adminPriorCi(f.path);
+      expectResult(f, result, admitted ? undefined : /other required checks/, admitted ? 1 : 0);
+      if (admitted) {
+        expect(f.record().phase).toBe("complete");
+      } else {
+        expect(() => f.record()).toThrow();
+      }
+    },
+  );
+
+  it.each(["missing", "unrestricted-publisher"])(
+    "requires the native marked publisher when its REST result is %s",
+    (fault) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      state.quotaAt = "checks";
+      state.priorCi.nativeChecks = [
+        { name: "Security Review", kind: "check", required: true, state: "success" },
+      ];
+      state.priorCi.missingCheck = "Security Review";
+      if (fault === "missing") {
+        state.priorCi.nativeMissingResult = true;
+        state.restContexts = ["openclaw/ci-gate"];
+      } else {
+        state.restRequiredApp = null;
+        state.priorCi.nativeResultApp = 999;
+      }
+      f.save(state);
+      expectResult(f, f.adminPriorCi(f.path), /other required checks/);
+      expect(() => f.record()).toThrow();
+    },
+  );
+
+  it.each(["head", "commit", "total", "cursor"])(
+    "refuses native required-check pagination with %s drift",
+    (fault) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      state.quotaAt = "checks";
+      state.priorCi.nativeChecks = [
+        { name: "Classic required check", kind: "check", required: true, state: "success" },
+      ];
+      state.priorCi.nativeOptionalCount = 100;
+      state.priorCi.nativePageFault = fault;
+      f.save(state);
+      expectResult(
+        f,
+        f.adminPriorCi(f.path),
+        /prepared head|current enforced reviews|inventory|pagination/,
+      );
+      expect(() => f.record()).toThrow();
+    },
+  );
+
+  it.each(["review", "security", "new attempt", "head"])("delegation cannot waive %s", (fault) => {
+    const f = preExistingCandidate();
+    const state = delegate(f);
+    state.restPolicy = "not-found";
     if (fault === "review") {
       state.priorCi.reviewDecision = "REVIEW_REQUIRED";
     }
@@ -142,6 +223,9 @@ describePosix("explicit prior-CI admin landing", () => {
     }
     if (fault === "new attempt") {
       state.priorCi.latestAttempt++;
+    }
+    if (fault === "head") {
+      state.pr.headRefOid = f.base;
     }
     f.save(state);
     const result = f.verifyPriorCi(f.path);

@@ -306,9 +306,7 @@ describe("gateway telemetry maintenance", () => {
     expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(maintenanceState.getRuntimeConfig, {
-      surface: "gateway",
-    });
+    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(maintenanceState.getRuntimeConfig);
     expect(logHealth.error).not.toHaveBeenCalled();
     expect(generateSecureIntMock).toHaveBeenNthCalledWith(2, 5 * 60_000);
 

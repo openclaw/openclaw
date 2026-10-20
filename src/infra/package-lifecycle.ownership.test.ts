@@ -37,7 +37,6 @@ const missing = (...files: string[]) =>
 const uncertainty = (cause?: unknown) => ({
   name: "PackageLifecycleOwnershipError",
   packageRoot,
-  lockPath: lock,
   ...(cause ? { cause } : {}),
 });
 const identity = (file: string) =>
@@ -557,7 +556,7 @@ it.each(["publication", "create", "read", "dispose"] as const)(
     } else {
       await expect(completion).rejects.toMatchObject(
         phase === "read"
-          ? { name: "PackageLifecycleOwnershipError", cause: failure, lockPath: lock }
+          ? { name: "PackageLifecycleOwnershipError", cause: failure }
           : { name: "FsSafeError", code: "invalid-path", cause: failure },
       );
     }

@@ -306,8 +306,8 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     const { readConfigSnapshotForEngineSelection } =
       await import("../commands/config-preflight-snapshot.js");
     const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
-    const { formatInvalidConfigRepairHint, finishConfigValidationForCli } =
-      await import("./config-cli-validation.js");
+    const { finishConfigValidationForCli } = await import("./config-cli-validation.js");
+    const { formatInvalidConfigRepairHint } = await import("./config-recovery-hints.js");
     const selected = await readConfigSnapshotForEngineSelection();
     const snapshot =
       isConfigReadFailure(selected) ||
@@ -342,6 +342,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       if (opts.json) {
         writeRuntimeJson(runtime, {
           ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortPath}`),
+          repairHint: formatInvalidConfigRepairHint(snapshot, "to repair, then retry."),
           valid: false,
           path: outputPath,
           issues,

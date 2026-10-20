@@ -556,6 +556,7 @@ export async function markAuthProfileFailure(params: {
   agentDir?: string;
   runId?: string;
   modelId?: string;
+  retryAfterMs?: number;
 }): Promise<void> {
   const { store, profileId, reason, agentDir, modelId } = params;
   const profile = store.profiles[profileId];
@@ -591,6 +592,7 @@ export async function markAuthProfileFailure(params: {
         observedAt,
         reason,
         modelId,
+        retryAfterMs: params.retryAfterMs,
         whamResult,
         probeEligible: shouldProbeWham,
       });

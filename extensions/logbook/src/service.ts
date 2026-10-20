@@ -73,7 +73,6 @@ export class LogbookService {
   private store: LogbookStore | null = null;
   private readonly operations = new Set<Promise<unknown>>();
   private stopping: Promise<void> | undefined;
-  private starting: Promise<void> | undefined;
   private analysisInFlight = false;
   private capturePaused = false;
   private captureFailures = 0;
@@ -99,42 +98,36 @@ export class LogbookService {
   ) {}
 
   async start(): Promise<void> {
-    if (this.starting || this.stopping) {
-      throw new Error("Logbook service cannot be started again");
-    }
-    this.starting = this.trackOperation(async () => {
-      const store = await LogbookStore.open(this.deps.dataDir, this.deps.workerModuleUrl);
-      this.store = store;
-      try {
-        if (this.deps.scheduler.signal.aborted) {
-          return;
-        }
-        // Batches interrupted by a gateway restart go back to pending.
-        await store.resetRunningBatches();
-        if (this.deps.scheduler.signal.aborted) {
-          return;
-        }
-        await this.pruneStore(store);
-        if (this.deps.scheduler.signal.aborted) {
-          return;
-        }
-        for (const [id, everyMs, run] of [
-          ["capture", this.config.captureIntervalSeconds * 1000, () => this.captureTick()],
-          ["analysis", ANALYSIS_TICK_MS, () => this.analysisTick()],
-          ["prune", PRUNE_TICK_MS, () => this.prune()],
-        ] as const) {
-          this.deps.scheduler.schedule({ id, delayMs: everyMs, everyMs, run });
-        }
-        this.deps.logger.info(
-          `logbook: started (capture every ${this.config.captureIntervalSeconds}s, analysis window ${this.config.analysisIntervalMinutes}m, data ${this.deps.dataDir})`,
-        );
-      } catch (error) {
-        this.store = null;
-        await store.close();
-        throw error;
+    const store = await LogbookStore.open(this.deps.dataDir, this.deps.workerModuleUrl);
+    this.store = store;
+    try {
+      if (this.deps.scheduler.signal.aborted) {
+        return;
       }
-    });
-    await this.starting;
+      // Batches interrupted by a gateway restart go back to pending.
+      await store.resetRunningBatches();
+      if (this.deps.scheduler.signal.aborted) {
+        return;
+      }
+      await this.pruneStore(store);
+      if (this.deps.scheduler.signal.aborted) {
+        return;
+      }
+      for (const [id, everyMs, run] of [
+        ["capture", this.config.captureIntervalSeconds * 1000, () => this.captureTick()],
+        ["analysis", ANALYSIS_TICK_MS, () => this.analysisTick()],
+        ["prune", PRUNE_TICK_MS, () => this.prune()],
+      ] as const) {
+        this.deps.scheduler.schedule({ id, delayMs: everyMs, everyMs, run });
+      }
+      this.deps.logger.info(
+        `logbook: started (capture every ${this.config.captureIntervalSeconds}s, analysis window ${this.config.analysisIntervalMinutes}m, data ${this.deps.dataDir})`,
+      );
+    } catch (error) {
+      this.store = null;
+      await store.close();
+      throw error;
+    }
   }
 
   stop(): Promise<void> {

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -26,6 +27,26 @@ const nativeWatchFs: {
     listener: fs.WatchListener<string>,
   ): fs.FSWatcher;
 } = fs;
+class SilentWatch extends EventEmitter implements fs.FSWatcher {
+  close() {}
+  ref() {
+    return this;
+  }
+  unref() {
+    return this;
+  }
+}
+// Node builds Linux recursive watches from nested fs.watch calls, and Node 24 accepts
+// a missing recursive root with a watch that never reports. Stub recursive handles
+// that way on every runtime so the spy counts only the observer's registrations.
+function spyOnNativeWatch() {
+  const watch = fs.watch;
+  return vi
+    .spyOn(nativeWatchFs, "watch")
+    .mockImplementation((filename, options, listener) =>
+      options.recursive ? new SilentWatch() : watch(filename, options, listener),
+    );
+}
 const subscriptions: Array<{ close(): void }> = [];
 afterEach(() => {
   for (const subscription of subscriptions.splice(0)) {
@@ -91,7 +112,7 @@ describe("process-owned directory observation", () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(0);
     const directory = tempDirs.make("owned-directory-recursive-");
-    const watch = vi.spyOn(nativeWatchFs, "watch");
+    const watch = spyOnNativeWatch();
     const frequent = vi.fn();
     const quiet = vi.fn();
     subscriptions.push(observeOwnedDirectory(directory, frequent, { recursive: true }));
@@ -121,7 +142,7 @@ describe("process-owned directory observation", () => {
     const grouped = path.join(workspace, ".agents", "skills");
     fs.mkdirSync(skills);
     fs.mkdirSync(grouped, { recursive: true });
-    const watch = vi.spyOn(nativeWatchFs, "watch");
+    const watch = spyOnNativeWatch();
     const changed = vi.fn();
     const groupedChanged = vi.fn();
     subscriptions.push(
@@ -243,7 +264,7 @@ describe("process-owned directory observation", () => {
   it("ignores ancestor activity while observing missing subtree creation and replacement", () => {
     const root = tempDirs.make("owned-directory-ancestor-");
     const agents = path.join(root, "agents");
-    const watch = vi.spyOn(nativeWatchFs, "watch");
+    const watch = spyOnNativeWatch();
     const opened = () =>
       watch.mock.results.flatMap((result, index) =>
         result.type === "return"

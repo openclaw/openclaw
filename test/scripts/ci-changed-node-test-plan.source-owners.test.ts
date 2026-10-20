@@ -673,8 +673,22 @@ describe("CI changed Node test plan", () => {
       expected: [
         "src/gateway/server.agent-execution-shutdown.test.ts",
         "src/gateway/server.agent-late-admission.test.ts",
+        "test/gateway-session-end-shutdown.e2e.test.ts",
       ],
     })),
+    // Child-process E2Es: the import graph reaches only the test-instance helper.
+    {
+      changedPath: "src/gateway/server-startup-observers.ts",
+      expected: ["test/gateway-background-process-restart.e2e.test.ts"],
+    },
+    {
+      changedPath: "src/process/command-queue.capacity-groups.ts",
+      expected: ["test/gateway-hook-concurrency.e2e.test.ts"],
+    },
+    {
+      changedPath: "node-runtime-recovery.mjs",
+      expected: ["test/scripts/node-runtime-recovery.built-cli.e2e.test.ts"],
+    },
     {
       changedPath: "src/auto-reply/reply/abort.test.ts",
       expected: ["test/scripts/tsgo-core-test-shards.test.ts"],

@@ -531,7 +531,6 @@ export async function deliverCompletionDirect(params: {
         terminal: true,
         disposition: "permanent_failure",
         error: `text completion direct delivery was incomplete; automatic retry would duplicate sent chunks: ${summarizeDeliveryError(err)}`,
-        ...(mediaUrls.length > 0 ? { missingMediaUrls: mediaUrls } : {}),
       };
     }
     if (err instanceof SourceOwnerChangedError) {

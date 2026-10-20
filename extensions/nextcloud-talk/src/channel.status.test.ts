@@ -1,14 +1,25 @@
-// Nextcloud Talk tests cover channel.status plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { inspectNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
 import { nextcloudTalkPlugin } from "./channel.js";
 import type { CoreConfig } from "./types.js";
 
+function talkConfig(config: NonNullable<CoreConfig["channels"]>["nextcloud-talk"]): CoreConfig {
+  return { channels: { "nextcloud-talk": config } };
+}
+
 describe("nextcloud-talk channel status", () => {
+  let directory: string;
+  let apiPasswordFile: string;
+  beforeEach(() => {
+    directory = fs.mkdtempSync(path.join(os.tmpdir(), "nextcloud-talk-status-"));
+    apiPasswordFile = path.join(directory, "api-password");
+  });
+  afterEach(() => fs.rmSync(directory, { recursive: true, force: true }));
+
   it.each([
     { botSecret: "bot-secret", baseUrl: "https://cloud.example.com", configured: true },
     {
@@ -19,13 +30,9 @@ describe("nextcloud-talk channel status", () => {
     { botSecret: undefined, baseUrl: "https://cloud.example.com", configured: false },
     { botSecret: "bot-secret", baseUrl: undefined, configured: false },
   ])("inspects webhook configuration as configured=$configured", async (entry) => {
-    const cfg = {
-      channels: {
-        "nextcloud-talk": {
-          accounts: { work: { botSecret: entry.botSecret, baseUrl: entry.baseUrl } },
-        },
-      },
-    } satisfies CoreConfig;
+    const cfg = talkConfig({
+      accounts: { work: { botSecret: entry.botSecret, baseUrl: entry.baseUrl } },
+    });
     const account = inspectNextcloudTalkAccount({ cfg, accountId: "work" });
     expect(await nextcloudTalkPlugin.config.isConfigured?.(account, cfg)).toBe(entry.configured);
     expect(account).toMatchObject({
@@ -73,48 +80,35 @@ describe("nextcloud-talk channel status", () => {
   });
 
   it("keeps API credential inspection off runtime resolution", async () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nextcloud-talk-status-"));
-    const apiPasswordFile = path.join(directory, "api-password");
-    const cfg = {
-      channels: {
-        "nextcloud-talk": {
-          baseUrl: "https://cloud.example.com",
-          botSecret: "bot-secret",
-          apiUser: "bot",
-          apiPasswordFile,
-        },
-      },
-    } satisfies CoreConfig;
+    const cfg = talkConfig({
+      baseUrl: "https://cloud.example.com",
+      botSecret: "bot-secret",
+      apiUser: "bot",
+      apiPasswordFile,
+    });
+    const account = nextcloudTalkPlugin.config.resolveAccount(cfg, "default");
+    expect(account.apiCredentialStatus).toBeUndefined();
+    expect(account.credentialDiagnostics).toBeUndefined();
 
-    try {
-      const account = nextcloudTalkPlugin.config.resolveAccount(cfg, "default");
-      expect(account.apiCredentialStatus).toBeUndefined();
-      expect(account.credentialDiagnostics).toBeUndefined();
-
-      fs.writeFileSync(apiPasswordFile, "api-password\n", "utf8");
-      const inspected = (await nextcloudTalkPlugin.config.inspectAccount?.(
-        cfg,
-        "default",
-      )) as typeof account;
-      expect(inspected).toMatchObject({
-        configured: true,
-        apiCredentialStatus: "available",
-        secretSource: "config",
-        mode: "webhook",
-        baseUrl: "[set]",
-      });
-      expect(nextcloudTalkPlugin.config.describeAccount?.(inspected, cfg)).toMatchObject({
-        configured: true,
-        apiCredentialStatus: "available",
-      });
-    } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
+    fs.writeFileSync(apiPasswordFile, "api-password\n", "utf8");
+    const inspected = (await nextcloudTalkPlugin.config.inspectAccount?.(
+      cfg,
+      "default",
+    )) as typeof account;
+    expect(inspected).toMatchObject({
+      configured: true,
+      apiCredentialStatus: "available",
+      secretSource: "config",
+      mode: "webhook",
+      baseUrl: "[set]",
+    });
+    expect(nextcloudTalkPlugin.config.describeAccount?.(inspected, cfg)).toMatchObject({
+      configured: true,
+      apiCredentialStatus: "available",
+    });
   });
 
   it("reports an unavailable API password ref without using a lower-priority file", async () => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "nextcloud-talk-api-ref-"));
-    const apiPasswordFile = path.join(directory, "api-password");
     fs.writeFileSync(apiPasswordFile, "lower-priority-password\n", "utf8");
     const accountConfig = {
       baseUrl: "https://cloud.example.com",
@@ -123,24 +117,15 @@ describe("nextcloud-talk channel status", () => {
       apiPassword: { source: "env", provider: "default", id: "MISSING_TALK_API_PASSWORD" },
       apiPasswordFile,
     } as const;
-    const cfg = {
-      channels: { "nextcloud-talk": { accounts: { work: accountConfig } } },
-    } satisfies CoreConfig;
-
-    try {
-      expect(() => resolveNextcloudTalkApiCredentials(accountConfig)).toThrow(
-        /unresolved SecretRef/,
-      );
-      const inspected = await nextcloudTalkPlugin.config.inspectAccount?.(cfg, "work");
-      expect(inspected).toMatchObject({
-        accountId: "work",
-        configured: true,
-        tokenStatus: "available",
-        apiCredentialStatus: "configured_unavailable",
-      });
-      expect(JSON.stringify(inspected)).not.toContain("lower-priority-password");
-    } finally {
-      fs.rmSync(directory, { recursive: true, force: true });
-    }
+    const cfg = talkConfig({ accounts: { work: accountConfig } });
+    expect(() => resolveNextcloudTalkApiCredentials(accountConfig)).toThrow(/unresolved SecretRef/);
+    const inspected = await nextcloudTalkPlugin.config.inspectAccount?.(cfg, "work");
+    expect(inspected).toMatchObject({
+      accountId: "work",
+      configured: true,
+      tokenStatus: "available",
+      apiCredentialStatus: "configured_unavailable",
+    });
+    expect(JSON.stringify(inspected)).not.toContain("lower-priority-password");
   });
 });

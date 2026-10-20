@@ -12,7 +12,6 @@ import { resolveTelegramDmAllow } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
-import type { TelegramResolvedGroupConfig } from "./bot-handlers.types.js";
 import { resolveTelegramMessageTurnSettings } from "./bot-message.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import {
@@ -32,6 +31,7 @@ import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
+import type { TelegramGroupConfigResolver } from "./group-config-helpers.js";
 import {
   buildTelegramNativeCommandOwnerContext,
   resolveTelegramCommandIngressAuthorization,
@@ -78,11 +78,7 @@ export type TelegramCommandExecutorParams = {
   accountId: string;
   mediaMaxBytes?: number;
   resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
-  resolveTelegramGroupConfig: (
-    chatId: string | number,
-    messageThreadId: number | undefined,
-    cfg: OpenClawConfig,
-  ) => TelegramResolvedGroupConfig;
+  resolveTelegramGroupConfig: TelegramGroupConfigResolver;
   opts: Pick<
     TelegramBotOptions,
     | "token"

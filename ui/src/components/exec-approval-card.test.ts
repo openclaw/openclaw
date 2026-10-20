@@ -9,6 +9,7 @@ import {
   type ExecApprovalRequest,
 } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
+import { projectSessionApprovalReplay } from "../pages/chat/session-approval-projection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import {
@@ -92,6 +93,140 @@ describe("exec approval card", () => {
     const card = renderCard(approval({ pluginSeverity: "error" }));
     expect(card?.classList.contains("exec-approval-card--severity-danger")).toBe(true);
   });
+
+  it.each(["add", "update"] as const)(
+    "presents a native %s watcher proposal without hiding execution details",
+    (operation) => {
+      const request = parseApprovalRequestedEvent("exec.approval.requested", {
+        id: "stream-approval",
+        createdAtMs: 1,
+        expiresAtMs: 61_000,
+        request: {
+          command: "tail -F app.log",
+          host: "sandbox",
+          ask: "always",
+          warningText: "Runs after this turn and restarts automatically until stopped.",
+          allowedDecisions: ["allow-once", "deny"],
+          streamProposal: { jobId: "watcher-1", name: "Watch application errors", operation },
+        },
+      });
+      expect(request).not.toBeNull();
+      const card = renderCard(request!);
+      expect(card?.querySelector(".exec-approval-title")?.textContent).toBe(
+        "Watch application errors",
+      );
+      expect(card?.querySelector(".exec-approval-command")?.textContent).toBe("tail -F app.log");
+      expect(card?.textContent).toContain(
+        "Runs after this turn and restarts automatically until stopped.",
+      );
+      expect(card?.querySelector(".exec-approval-summary")?.textContent).toContain(
+        "Runs in your sandbox after you leave this chat, until stopped.",
+      );
+      expect(card?.textContent).toContain(
+        operation === "add" ? "Start watching" : "Save watcher change",
+      );
+      expect(card?.textContent).toContain("Cancel");
+      expect(card?.textContent).not.toContain("Approved by you");
+    },
+  );
+
+  it.each(["live exec event", "session replay"])(
+    "shows the full exec warning before decisions from %s",
+    (transport) => {
+      const warningText =
+        'Create persistent stream "Log watcher"? It keeps running after this conversation ends. ' +
+        "Approve once authorizes this saved watcher and its automatic restarts until disabled or deleted. " +
+        'Each output starts the task "Summarize <script>logs</script>".';
+      const command = "/usr/bin/python3 /workspace/watch-logs.py";
+      const sessionKey = "agent:main:session-1";
+      const allowedDecisions = ["allow-once", "deny"] as const;
+      const common = {
+        id: "cron-stream:warning",
+        createdAtMs: 1,
+        expiresAtMs: Date.now() + 60_000,
+      };
+      const request =
+        transport === "live exec event"
+          ? parseApprovalRequestedEvent("exec.approval.requested", {
+              ...common,
+              request: { command, sessionKey, warningText, allowedDecisions },
+            })
+          : projectSessionApprovalReplay(
+              {
+                sessionKey,
+                updatedAtMs: 2,
+                truncated: false,
+                approvals: [
+                  {
+                    ...common,
+                    status: "pending",
+                    urlPath: "/approve/cron-stream%3Awarning",
+                    presentation: {
+                      kind: "exec",
+                      commandText: command,
+                      warningText,
+                      allowedDecisions,
+                    },
+                  },
+                ],
+              },
+              sessionKey,
+            )[0];
+      if (!request) {
+        throw new Error("Exec approval was not parsed");
+      }
+
+      for (const surface of ["inline", "sidebar"] as const) {
+        const view = mountSolid(
+          () =>
+            surface === "inline"
+              ? createComponent(ExecApprovalCard, {
+                  props: {
+                    approval: request,
+                    connected: true,
+                    busy: false,
+                    canGrant: true,
+                    error: null,
+                    variant: "inline",
+                    onDecision: vi.fn(),
+                  },
+                })
+              : createComponent(SidebarApprovalRow, {
+                  approval: request,
+                  connected: true,
+                  busy: false,
+                  canGrant: true,
+                  error: null,
+                  onDecision: vi.fn(),
+                }),
+          { container },
+        );
+        try {
+          const note = Array.from(container.querySelectorAll('[role="note"]')).find(
+            (element) => element.textContent?.trim() === warningText,
+          );
+          const buttons = Array.from(container.querySelectorAll("button"));
+          expect(note, surface).toBeDefined();
+          expect(note?.closest("details")).toBeNull();
+          expect(container.querySelector("script")).toBeNull();
+          expect(buttons.map((button) => button.textContent?.trim())).toEqual([
+            "Allow once",
+            "Deny",
+          ]);
+          expect(
+            Boolean(
+              note &&
+              buttons[0] &&
+              note.compareDocumentPosition(buttons[0]) & Node.DOCUMENT_POSITION_FOLLOWING,
+            ),
+            surface,
+          ).toBe(true);
+        } finally {
+          view.unmount();
+        }
+      }
+    },
+  );
 
   it("expires a mounted sidebar approval and disables its decisions", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });

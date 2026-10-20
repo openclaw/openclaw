@@ -404,12 +404,15 @@ vi.mock("./models-config.providers.implicit.js", () => ({
     preparedModelRuntimeMocks.prepareStaticCatalog(...args),
 }));
 
+// mock-isolation: lifecycle fixtures own registry results without evaluating plugin runtimes.
 vi.mock("./runtime-plugins.js", () => ({
   acquireAgentRuntimePluginRegistry: async (...args: unknown[]) => {
     const registry = preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args);
     return { registry, primaryRegistry: registry };
   },
   loadAgentRuntimePluginRegistryHandle: (...args: unknown[]) =>
+    preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args),
+  loadAgentRuntimePluginRegistryHandleAsync: async (...args: unknown[]) =>
     preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle(...args),
 }));
 

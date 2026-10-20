@@ -260,6 +260,12 @@ inter-session replies still use the bounded lifecycle preview.
 
 Sessions keep their addresses when execution moves between the Gateway, a paired device, and a cloud worker. An OpenClaw worker can send to an authorized parent, child, or sibling using its exact session key, including a target running on the Gateway. The Gateway validates the current session identities, visibility, and any per-agent send-only policy before admitting the target turn; target placement does not grant messaging access. Targets outside both the configured visibility scope and an authorized send-only rule, archived targets, and replaced targets remain denied.
 
+Children remain reachable when their parent rotates to a new session ID under the
+same key and its recorded predecessor chain still connects to their original
+parent. The current parent's communication policy applies. If that lineage no
+longer connects, re-spawn the child. Resets that retain the parent's session ID
+keep the existing child link.
+
 An explicit `agents.entries.<agentId>.tools.agentToAgent.send` list can authorize
 `sessions_send` to selected agents without exposing their sessions to list,
 history, search, status, or session-control tools. Omission keeps normal global

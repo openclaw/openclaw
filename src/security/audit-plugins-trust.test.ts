@@ -324,6 +324,14 @@ describe("security audit install metadata findings", () => {
           "Hook install records missing integrity:\n- test-hooks",
           "Detected hook install metadata drift:\n- test-hooks (recorded 2.0.0, installed 2.1.0)",
         ]);
+        expect(findings.map(({ remediation }) => remediation)).toEqual([
+          "Pin install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
+          "Reinstall or update plugins to refresh install metadata with resolved integrity hashes.",
+          "Run `openclaw plugins update --all` (or reinstall affected plugins) to refresh install metadata.",
+          "Pin hook install specs to exact versions (for example, `@scope/pkg@1.2.3`) for higher supply-chain stability.",
+          "Reinstall or update hooks to refresh install metadata with resolved integrity hashes.",
+          "Run `openclaw hooks update --all` (or reinstall affected hooks) to refresh install metadata.",
+        ]);
       },
     );
   });

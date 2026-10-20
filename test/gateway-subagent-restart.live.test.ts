@@ -721,7 +721,9 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
             });
             return settled!;
           },
-          { timeout: 30_000 },
+          // This is the third unclean boot within the crash-loop window, so the
+          // breaker pauses restart settlement until that window drains.
+          { timeout: 360_000, interval: 1_000 },
         );
         const orphanProviderDispatches = workerRequests(
           provider.requests,

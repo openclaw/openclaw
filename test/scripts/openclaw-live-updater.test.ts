@@ -701,6 +701,7 @@ describe("openclaw live updater", () => {
 
     expect(
       parseGatewayLogAudit(output, since, sourceRoot, [
+        path.join(root, "extensions/example"),
         path.join(foreign, "extensions/configured"),
         plugin,
       ]),

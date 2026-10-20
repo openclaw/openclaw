@@ -21,7 +21,6 @@ export type ChatRunStartupState =
       state: "status";
       runId: string;
       phase: "retrying" | "fallback";
-      message: string;
       retryAt?: number;
       seq: number;
     }

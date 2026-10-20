@@ -1821,7 +1821,7 @@ describe("handleSendChat", () => {
         const approval = structuredClone(host.waitingApprovalStatuses?.get(`approval-${runId}`));
         const compaction = structuredClone(host.compactionStatus);
         expect(tool).toMatchObject({ runId, toolCallId: `tool-${runId}`, name: "exec" });
-        expect(approval).toMatchObject({ runId, approvalId: `approval-${runId}` });
+        expect(approval).toMatchObject({ runId });
         expect(compaction).toMatchObject({ runId, phase: "active" });
         await waitForFast(() => expect(host.chatToolMessages).toContainEqual(tool.message));
         const assertIncomingActivity = () => {

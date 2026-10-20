@@ -168,6 +168,9 @@ export function createLocaleFinalizerHarness() {
         headBranch: String(publisherStep.with?.["head-branch"]),
       });
       const root = fixture.worktree;
+      // actions/checkout disables GC; detached maintenance would race the Git owner's lock scan.
+      runGit(root, ["config", "gc.auto", "0"]);
+      runGit(root, ["config", "maintenance.auto", "false"]);
       // Synthetic local transport does not need compression of the large warm TM.
       runGit(root, ["config", "core.compression", "0"]);
       const providerLog = path.join(directory, "finalizer-provider-requests");

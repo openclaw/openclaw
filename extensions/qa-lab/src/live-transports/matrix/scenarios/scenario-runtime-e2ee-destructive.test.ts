@@ -177,7 +177,6 @@ it("awaits target room sync before sending", async () => {
   mocks.waitForMatrixSyncStoreWithCursor.mockResolvedValue({
     cursor: "saved-cursor",
     pathname: "/tmp/unused-sync-store",
-    source: "sqlite",
     stateKey: "saved",
   });
   const context = createMatrixQaE2eeTestContext({
@@ -202,29 +201,48 @@ it("awaits target room sync before sending", async () => {
     expect.objectContaining({ accountId: "sut", accountConfig: { enabled: true } }),
   );
 });
-it("finds account metadata stored in account-local SQLite", async () => {
-  const stateDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-storage-"));
-  try {
-    const accountRoot = path.join(stateDir, "matrix", "accounts", "stored-key", "server", "token");
-    createPluginStateSyncKeyedStoreForTests(
-      "matrix",
-      storageMetadataRuntime.openMatrixStorageMetaStoreOptions(accountRoot),
-    ).register("current", { deviceId: "DEVICE", userId: "@owner:matrix-qa.test" });
-    resetPluginStateStoreForTests();
-
-    await expect(
-      mutateMatrixQaCliStateLoss({
+it.each(["deviceId", "userId"] as const)(
+  "selects SQLite account metadata without deleting a different %s",
+  async (field) => {
+    const stateDir = await mkdtemp(path.join(os.tmpdir(), "matrix-qa-storage-"));
+    try {
+      const accountRoot = path.join(stateDir, "matrix", "accounts", "zz-target", "server", "token");
+      const otherRoot = path.join(stateDir, "matrix", "accounts", "aa-other", "server", "token");
+      const otherMetadata = {
         deviceId: "DEVICE",
-        preserveRecoveryKey: false,
-        runtime: { stateDir },
         userId: "@owner:matrix-qa.test",
-      }),
-    ).resolves.toMatchObject({ accountRoot });
-  } finally {
-    resetPluginStateStoreForTests();
-    await rm(stateDir, { force: true, recursive: true });
-  }
-});
+        [field]: "OTHER",
+      };
+      createPluginStateSyncKeyedStoreForTests(
+        "matrix",
+        storageMetadataRuntime.openMatrixStorageMetaStoreOptions(accountRoot),
+      ).register("current", { deviceId: "DEVICE", userId: "@owner:matrix-qa.test" });
+      createPluginStateSyncKeyedStoreForTests(
+        "matrix",
+        storageMetadataRuntime.openMatrixStorageMetaStoreOptions(otherRoot),
+      ).register("current", otherMetadata);
+      resetPluginStateStoreForTests();
+
+      await expect(
+        mutateMatrixQaCliStateLoss({
+          deviceId: "DEVICE",
+          preserveRecoveryKey: false,
+          runtime: { stateDir },
+          userId: "@owner:matrix-qa.test",
+        }),
+      ).resolves.toMatchObject({ accountRoot });
+      expect(
+        createPluginStateSyncKeyedStoreForTests(
+          "matrix",
+          storageMetadataRuntime.openMatrixStorageMetaStoreOptions(otherRoot),
+        ).lookup("current"),
+      ).toEqual(otherMetadata);
+    } finally {
+      resetPluginStateStoreForTests();
+      await rm(stateDir, { force: true, recursive: true });
+    }
+  },
+);
 
 it.each([
   { name: "external key", run: runMatrixQaE2eeStateLossExternalRecoveryKeyScenario },
@@ -255,6 +273,64 @@ it.each([
   mocks.createMatrixQaRecoveryCliRuntime.mockRejectedValueOnce(failure);
   await expect(run(createMatrixQaE2eeTestContext({ gatewayRuntimeEnv: {} }))).rejects.toBe(failure);
   expect(cleanupOrder).toEqual(["owner:stop", "owner:delete:RECOVERY"]);
+});
+
+it("checks deleted-device status before releasing its disposable recovery runtime", async () => {
+  const cleanupOrder: string[] = [];
+  const owner = {
+    ...createDisposableOwner("owner", cleanupOrder),
+    listOwnDevices: vi.fn(async () => []),
+  };
+  const dispose = vi.fn(async () => {
+    cleanupOrder.push("cli:dispose");
+  });
+  mocks.createMatrixQaClient.mockReturnValue({
+    registerWithToken: async () => account("owner", "OWNER"),
+    createPrivateRoom: async () => "!owner:matrix-qa.test",
+  });
+  mocks.createMatrixQaE2eeScenarioClient.mockResolvedValue(owner);
+  mocks.loginMatrixQaRecoveryDevice.mockResolvedValue({
+    accessToken: "recovery-token",
+    deviceId: "RECOVERY",
+    userId: "@owner:matrix-qa.test",
+  });
+  mocks.createMatrixQaRecoveryCliRuntime.mockResolvedValue({ dispose });
+  mocks.runMatrixQaCliJson
+    .mockReset()
+    .mockResolvedValueOnce({
+      payload: { success: true, backup: { matchesDecryptionKey: true } },
+      result: { exitCode: 0 },
+    })
+    .mockResolvedValueOnce({ payload: { error: "M_UNKNOWN_TOKEN" }, result: { exitCode: 1 } })
+    .mockResolvedValueOnce({ payload: { serverDeviceKnown: false }, result: { exitCode: 0 } });
+
+  const result = await runMatrixQaE2eeServerDeviceDeletedLocalStateIntactScenario(
+    createMatrixQaE2eeTestContext({ gatewayRuntimeEnv: {} }),
+  );
+
+  expect(result.details).toContain("deleted device: RECOVERY");
+  expect(result.details).toContain("default status exit code: 1");
+  expect(result.details).toContain("degraded status exit code: 0");
+  expect(result.details).toContain("device present on server: no");
+  expect(mocks.runMatrixQaCliJson.mock.calls.slice(1).map(([call]) => call.args)).toEqual([
+    ["matrix", "verify", "status", "--account", "deleted-device", "--json"],
+    [
+      "matrix",
+      "verify",
+      "status",
+      "--account",
+      "deleted-device",
+      "--allow-degraded-local-state",
+      "--json",
+    ],
+  ]);
+  expect(cleanupOrder).toEqual([
+    "owner:delete:RECOVERY",
+    "owner:stop",
+    "cli:dispose",
+    "owner:stop",
+    "owner:delete:RECOVERY",
+  ]);
 });
 
 it("uses disposable source and target owners without reading observer credentials", async () => {
@@ -306,10 +382,8 @@ it("uses disposable source and target owners without reading observer credential
   expect(mocks.runMatrixQaCliJson).toHaveBeenCalledWith(
     expect.objectContaining({ stdin: "source-recovery-key\n" }),
   );
-  expect(result.artifacts).toMatchObject({
-    restoreExitCode: 1,
-    targetRecoveryDeviceId: "TARGET-RECOVERY-DEVICE",
-  });
+  expect(result.details).toContain("restore exit code: 1");
+  expect(result.details).toContain("restore error: bad MAC");
   expect(cleanupOrder).toEqual([
     "cli:dispose",
     "target:delete:TARGET-RECOVERY-DEVICE",

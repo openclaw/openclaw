@@ -51,9 +51,9 @@ vi.mock("../../auto-reply/reply/agent-runner-execution.js", async (importOrigina
   executeAgentTurn: runtime.execute,
 }));
 
-function createControlUiRequestClient() {
+function createRequestClients() {
   const profile = ensureGatewayOwnerProfile("Gateway Owner");
-  return {
+  const client = {
     ...createOperatorWsClient({
       connId: "prestart-owner",
       clientInfo: { id: "openclaw-control-ui", mode: "webchat" },
@@ -71,6 +71,45 @@ function createControlUiRequestClient() {
       operatorRoleActor: { kind: "system" as const },
     },
   };
+  const clients = new Set<GatewayClient & { connId: string }>([client]);
+  return {
+    client,
+    clients,
+    getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
+      new Set(
+        [...clients].filter((entry) => !filter || filter(entry)).map((entry) => entry.connId),
+      ),
+  };
+}
+
+function expectSingleUserInput(storePath: string, sessionKey: string, text: string) {
+  const scope = { agentId: "main", sessionKey, storePath };
+  const entry = expectDefined(loadSessionEntry(scope), "session");
+  const events = loadTranscriptEventsSync({ ...scope, sessionId: entry.sessionId });
+  expect(
+    events.filter(
+      (event) =>
+        isRecord(event) &&
+        isRecord(event.message) &&
+        event.message.role === "user" &&
+        extractTextFromChatContent(event.message.content) === text,
+    ),
+  ).toHaveLength(1);
+}
+
+function clearFixture(storePath: string, sessionKey?: string) {
+  if (sessionKey) {
+    clearSessionQueues(
+      [sessionKey],
+      captureSessionTarget({ storeScope: storePath, sessionKey, agentId: "main" }),
+    );
+  }
+}
+
+function resetFixture(clients: Set<GatewayClient & { connId: string }>) {
+  clients.clear();
+  dispatchInboundMessageMock.mockReset();
+  runtime.execute.mockReset();
 }
 
 test.for(["accepted", "unavailable", "rejected"] as const)(
@@ -80,11 +119,11 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
     const workspace = await initializeRepository(tempDirs.make("openclaw-prestart-steer-"), "repo");
     testState.agentConfig = { workspace };
     const { storePath } = await createSessionStoreDir();
-    const preparingWorkspace = createDeferred();
+    const preparing = createDeferred();
     const releaseWorkspace = createDeferred();
-    const releaseInitialRun = createDeferred();
-    const releaseInitialBackend = createDeferred();
-    const initialRuntimeStarted = createDeferred();
+    const releaseRun = createDeferred();
+    const attachBackend = createDeferred();
+    const runtimeStarted = createDeferred();
     const inputQueued = createDeferred();
     const steerAccepted = createDeferred();
     const steerDeclined = createDeferred();
@@ -93,22 +132,23 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
     const followupStarted = createDeferred();
     const releaseFollowup = createDeferred();
     const queuedSettled = createDeferred();
-    const inputDispatchSettled = createDeferred();
+    const dispatchSettled = createDeferred();
     const steerRunId = "prestart-steer-input";
     const steerText = "Steer: include the regression proof.";
     const consumed: Array<{ runId: string; text: string }> = [];
-    const terminalBeforeConsumption: boolean[] = [];
-    let initialOperation: ReplyOperation | undefined;
+    const earlyTerminals: boolean[] = [];
+    const expectUnconsumed = () => {
+      expect(consumed).toEqual([]);
+      expect(earlyTerminals).toEqual([]);
+    };
+    let operation: ReplyOperation | undefined;
     let sessionKey: string | undefined;
     let clock = 0;
     const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
     const logGateway = { ...createSubsystemLogger("test/gateway"), info: vi.fn() };
-    const clients = new Set<GatewayClient & { connId: string }>();
+    const { client, clients, getClientConnIds } = createRequestClients();
     const context = {
-      getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
-        new Set(
-          [...clients].filter((client) => !filter || filter(client)).map((client) => client.connId),
-        ),
+      getClientConnIds,
       logGateway,
       getSessionEventSubscriberConnIds: () => new Set(["custody-observer"]),
       broadcastToConnIds: vi.fn((event: string, payload: unknown) => {
@@ -119,39 +159,28 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
           payload.reason === "agent.input.settled" &&
           isRpcSourceQueued(rpcSourceTesting.get(steerRunId))
         ) {
-          inputDispatchSettled.resolve();
+          dispatchSettled.resolve();
         }
       }),
       broadcast: vi.fn((event: string, payload: unknown) => {
         if (
           event === "chat" &&
-          typeof payload === "object" &&
-          payload !== null &&
-          "runId" in payload &&
+          isRecord(payload) &&
           payload.runId === steerRunId &&
-          "state" in payload &&
           (payload.state === "final" || payload.state === "error" || payload.state === "aborted")
         ) {
-          terminalBeforeConsumption.push(consumed.length === 0);
+          earlyTerminals.push(consumed.length === 0);
           steerTerminal.resolve();
         }
       }),
     };
-    const requestOptions = {
-      context,
-      client: createControlUiRequestClient(),
-    };
-    clients.add(requestOptions.client);
+    const request = { context, client };
     // Read through the public handler with the same live custody and physical session.
     const readInputCustody = async () => {
       const response = await directSessionReq<{
         pendingInputs: ChatPendingInputsPage;
         inputReceipts: ChatInputReceipts;
-      }>(
-        "chat.history",
-        { agentId: "main", sessionKey, inputRunIds: [steerRunId] },
-        requestOptions,
-      );
+      }>("chat.history", { agentId: "main", sessionKey, inputRunIds: [steerRunId] }, request);
       expect(response.ok, JSON.stringify(response.error)).toBe(true);
       const history = expectDefined(response.payload, "input history");
       return {
@@ -166,26 +195,40 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         queuedCount: history.pendingInputs.queuedCount,
       };
     };
+    const pendingCustody = async (queued = false, soft = false) => {
+      const custody = await readInputCustody();
+      const check = soft ? expect.soft : expect;
+      if (!queued) {
+        check(custody.input).not.toHaveProperty("queued");
+      }
+      check(custody.receipt).toEqual({
+        runId: steerRunId,
+        state: "pending",
+        ...(queued ? { queued: true } : {}),
+      });
+      check(custody.queuedCount).toBe(queued ? 1 : 0);
+      return custody;
+    };
     const createWorktree = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
     const worktreeSpy = vi
       .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
       .mockImplementation(async function (this: ManagedWorktreeService, params) {
-        preparingWorkspace.resolve();
+        preparing.resolve();
         await releaseWorkspace.promise;
         return createWorktree(this, params);
       });
     runtime.execute.mockImplementation(async ({ followupRun, opts, replyOperation }) => {
       const runId = expectDefined(opts?.runId, "runtime run ID");
-      if (!initialOperation) {
-        initialOperation = expectDefined(replyOperation, "initial reply admission");
-        initialRuntimeStarted.resolve();
-        await releaseInitialBackend.promise;
-        initialOperation.attachBackend({
+      if (!operation) {
+        operation = expectDefined(replyOperation, "initial reply admission");
+        runtimeStarted.resolve();
+        await attachBackend.promise;
+        operation.attachBackend({
           kind: "embedded",
           runId,
           supportsTranscriptCommitWait: true,
           terminalReplyExpectation: followupRun.run.terminalReplyExpectation,
-          toolAuthorityFingerprint: initialOperation.bindToolAuthorityRoute(followupRun.run),
+          toolAuthorityFingerprint: operation.bindToolAuthorityRoute(followupRun.run),
           cancel: () => {},
           messageInjectionV2: {
             version: 2,
@@ -210,7 +253,7 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
             },
           },
         });
-        await releaseInitialRun.promise;
+        await releaseRun.promise;
       } else {
         opts?.onAgentRunStart?.(runId);
         await expectDefined(
@@ -252,12 +295,12 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
           worktreeName: "prestart",
           message: "Implement the original task.",
         },
-        requestOptions,
+        request,
       );
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       const createdSession = expectDefined(created.payload, "created session response");
       sessionKey = createdSession.key;
-      await withinTest(preparingWorkspace.promise, signal);
+      await withinTest(preparing.promise, signal);
       expect(
         loadSessionEntry({ agentId: "main", sessionKey, storePath })?.pendingWorktree,
       ).toBeDefined();
@@ -271,69 +314,51 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
           queueMode: "steer",
           idempotencyKey: steerRunId,
         },
-        requestOptions,
+        request,
       );
       expect(sent).toMatchObject({ ok: true, payload: { runId: steerRunId, status: "started" } });
       const steerEntry = expectDefined(
         rpcSourceTesting.get(steerRunId),
         "steer source registration",
       );
-      expect(terminalBeforeConsumption).toEqual([]);
+      expect(earlyTerminals).toEqual([]);
       // The source is reserved, but workspace preparation has not deferred it to the queue.
       expect(steerEntry.input.custody.enqueued).not.toBe(true);
-      const staged = await readInputCustody();
+      const staged = await pendingCustody();
       expect(staged.input).toMatchObject({ state: "queued", runId: steerRunId });
-      expect(staged.input).not.toHaveProperty("queued");
-      expect(staged.receipt).toEqual({ runId: steerRunId, state: "pending" });
-      expect(staged.queuedCount).toBe(0);
       clock = 15_800;
       releaseWorkspace.resolve();
       await withinTest(inputQueued.promise, signal);
       // Steering can park before reply preparation reaches the runtime.
-      await withinTest(initialRuntimeStarted.promise, signal);
+      await withinTest(runtimeStarted.promise, signal);
       expect(isRpcSourceQueued(rpcSourceTesting.get(steerRunId))).toBe(true);
-      expect(initialOperation?.phase).toBe("running");
-      expect(consumed).toEqual([]);
-      const parked = await readInputCustody();
-      expect.soft(parked.input).not.toHaveProperty("queued");
-      expect.soft(parked.receipt).toEqual({ runId: steerRunId, state: "pending" });
-      expect.soft(parked.queuedCount).toBe(0);
-      releaseInitialBackend.resolve();
+      expect(operation?.phase).toBe("running");
+      expectUnconsumed();
+      await pendingCustody(false, true);
+      attachBackend.resolve();
+      await withinTest((injection === "accepted" ? steerAccepted : steerDeclined).promise, signal);
+      expectUnconsumed();
+      expect(rpcSourceTesting.get(steerRunId)).toBe(steerEntry);
+      expect(isRpcSourceQueued(steerEntry)).toBe(true);
       if (injection === "accepted") {
-        await withinTest(steerAccepted.promise, signal);
-        expect(terminalBeforeConsumption).toEqual([]);
-        expect(consumed).toEqual([]);
         // Accepted steering retains cancellation custody but is not a follow-up queue item.
-        expect(rpcSourceTesting.get(steerRunId)).toBe(steerEntry);
-        expect(isRpcSourceQueued(steerEntry)).toBe(true);
-        const accepted = await readInputCustody();
-        expect.soft(accepted.input).not.toHaveProperty("queued");
-        expect.soft(accepted.receipt).toEqual({ runId: steerRunId, state: "pending" });
-        expect.soft(accepted.queuedCount).toBe(0);
+        await pendingCustody(false, true);
         releaseSteerCommit.resolve();
         await withinTest(steerTerminal.promise, signal);
         expect(consumed).toEqual([
           { runId: createdSession.runId, text: expect.stringContaining(steerText) },
         ]);
-        expect(terminalBeforeConsumption).toEqual([false]);
+        expect(earlyTerminals).toEqual([false]);
         expect(runtime.execute).toHaveBeenCalledOnce();
       } else {
-        await withinTest(steerDeclined.promise, signal);
-        expect(rpcSourceTesting.get(steerRunId)).toBe(steerEntry);
-        expect(terminalBeforeConsumption).toEqual([]);
-        expect(consumed).toEqual([]);
-        expect(isRpcSourceQueued(rpcSourceTesting.get(steerRunId))).toBe(true);
         // The real dispatch finalizer publishes this change before the parent can reply.
-        await withinTest(inputDispatchSettled.promise, signal);
-        const fallback = await readInputCustody();
+        await withinTest(dispatchSettled.promise, signal);
+        const fallback = await pendingCustody(true);
         expect(fallback.input).toMatchObject({ runId: steerRunId, state: "queued", queued: true });
-        expect(fallback.receipt).toEqual({ runId: steerRunId, state: "pending", queued: true });
-        expect(fallback.queuedCount).toBe(1);
         expect(runtime.execute).toHaveBeenCalledOnce();
-        expect(consumed).toEqual([]);
-        expect(terminalBeforeConsumption).toEqual([]);
-        expectDefined(initialOperation, "initial run owner").complete();
-        releaseInitialRun.resolve();
+        expectUnconsumed();
+        expectDefined(operation, "initial run owner").complete();
+        releaseRun.resolve();
         await withinTest(followupStarted.promise, signal);
         expect(runtime.execute).toHaveBeenCalledTimes(2);
         expect(consumed).toEqual([
@@ -341,10 +366,10 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         ]);
         expect(consumed[0]?.runId).not.toBe(createdSession.runId);
         expect(consumed[0]?.runId).toBe(steerRunId);
-        expect(terminalBeforeConsumption).toEqual([]);
+        expect(earlyTerminals).toEqual([]);
         releaseFollowup.resolve();
         await withinTest(queuedSettled.promise, signal);
-        expect(terminalBeforeConsumption).toEqual([false]);
+        expect(earlyTerminals).toEqual([false]);
         expect(context.broadcast).toHaveBeenCalledWith(
           "chat",
           expect.objectContaining({ runId: steerRunId, state: "final" }),
@@ -356,61 +381,32 @@ test.for(["accepted", "unavailable", "rejected"] as const)(
         message.startsWith("slow chat send"),
       );
       // Independent requests can finish in either order; each keeps its own disposition.
-      expect(slowSends).toHaveLength(injection === "accepted" ? 1 : 2);
+      const stages = injection === "accepted" ? ["steer"] : ["queued", "startup"];
+      expect(slowSends).toHaveLength(stages.length);
       expect(slowSends).toEqual(
-        expect.arrayContaining([
-          [
-            expect.stringContaining(
-              `slow chat send 15800ms stage=${injection === "accepted" ? "steer" : "queued"} ack=0ms`,
-            ),
-          ],
-          ...(injection === "accepted"
-            ? []
-            : [[expect.stringContaining("slow chat send 15800ms stage=startup ack=0ms")]]),
-        ]),
+        expect.arrayContaining(
+          stages.map((stage) => [
+            expect.stringContaining(`slow chat send 15800ms stage=${stage} ack=0ms`),
+          ]),
+        ),
       );
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
-      const entry = expectDefined(
-        loadSessionEntry({ agentId: "main", sessionKey, storePath }),
-        "session",
-      );
-      const messages = loadTranscriptEventsSync({
-        agentId: "main",
-        sessionKey,
-        sessionId: entry.sessionId,
-        storePath,
-      });
-      expect(
-        messages.filter(
-          (event) =>
-            isRecord(event) &&
-            isRecord(event.message) &&
-            event.message.role === "user" &&
-            extractTextFromChatContent(event.message.content) === steerText,
-        ),
-      ).toHaveLength(1);
+      expectSingleUserInput(storePath, sessionKey, steerText);
     } finally {
       const released = captureSessionControllerSettlement({
         scope: storePath,
         identities: [sessionKey],
       });
       releaseWorkspace.resolve();
-      releaseInitialBackend.resolve();
+      attachBackend.resolve();
       releaseSteerCommit.resolve();
       releaseFollowup.resolve();
-      if (sessionKey) {
-        clearSessionQueues(
-          [sessionKey],
-          captureSessionTarget({ storeScope: storePath, sessionKey, agentId: "main" }),
-        );
-      }
-      initialOperation?.complete();
-      releaseInitialRun.resolve();
+      clearFixture(storePath, sessionKey);
+      operation?.complete();
+      releaseRun.resolve();
       await released;
-      clients.clear();
       worktreeSpy.mockRestore();
-      dispatchInboundMessageMock.mockReset();
-      runtime.execute.mockReset();
+      resetFixture(clients);
       if (sessionKey) {
         const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
         if (owned) {
@@ -442,16 +438,13 @@ test("queues a fresh follow-up while stopped preparation still owns the reply sl
   const followupFinished = createDeferred();
   const followupRunId = "after-stopped-preparation";
   const followupText = "Continue with the new request.";
-  let initialOperation: ReplyOperation | undefined;
+  let operation: ReplyOperation | undefined;
   let stopping: ReturnType<typeof directSessionReq> | undefined;
   let sessionKey: string | undefined;
   const consumed: string[] = [];
-  const clients = new Set<GatewayClient & { connId: string }>();
+  const { client, clients, getClientConnIds } = createRequestClients();
   const context = {
-    getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
-      new Set(
-        [...clients].filter((client) => !filter || filter(client)).map((client) => client.connId),
-      ),
+    getClientConnIds,
     broadcast: vi.fn((event: string, payload: unknown) => {
       if (
         event === "chat" &&
@@ -463,19 +456,18 @@ test("queues a fresh follow-up while stopped preparation still owns the reply sl
       }
     }),
   };
-  const requestOptions = { client: createControlUiRequestClient(), context };
-  clients.add(requestOptions.client);
+  const request = { client, context };
   runtime.execute.mockImplementation(async ({ followupRun, opts, replyOperation }) => {
     const runId = expectDefined(opts?.runId, "runtime run ID");
-    if (!initialOperation) {
-      initialOperation = expectDefined(replyOperation, "initial reply owner");
-      initialOperation.abortSignal.addEventListener("abort", () => initialAborted.resolve(), {
+    if (!operation) {
+      operation = expectDefined(replyOperation, "initial reply owner");
+      operation.abortSignal.addEventListener("abort", () => initialAborted.resolve(), {
         once: true,
       });
       preparationStarted.resolve();
       // Model execution has not begun; asynchronous workspace setup still owns the attempt.
       await releasePreparation.promise;
-      initialOperation.abortSignal.throwIfAborted();
+      operation.abortSignal.throwIfAborted();
     } else {
       opts?.onAgentRunStart?.(runId);
       await expectDefined(
@@ -501,27 +493,27 @@ test("queues a fresh follow-up while stopped preparation still owns the reply sl
     const created = await directSessionReq<{ key: string; runId: string }>(
       "sessions.create",
       { agentId: "main", message: "Prepare the initial request." },
-      requestOptions,
+      request,
     );
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     const session = expectDefined(created.payload, "created session");
     sessionKey = session.key;
     await withinTest(preparationStarted.promise, signal);
-    stopping = directSessionReq("chat.abort", { sessionKey, runId: session.runId }, requestOptions);
+    stopping = directSessionReq("chat.abort", { sessionKey, runId: session.runId }, request);
     await withinTest(initialAborted.promise, signal);
-    expect(initialOperation?.abortSignal.aborted).toBe(true);
-    expect(getSessionControllerOperation(sessionKey)).toBe(initialOperation);
+    expect(operation?.abortSignal.aborted).toBe(true);
+    expect(getSessionControllerOperation(sessionKey)).toBe(operation);
     const sent = await directSessionReq(
       "chat.send",
       { sessionKey, message: followupText, idempotencyKey: followupRunId },
-      requestOptions,
+      request,
     );
     expect(sent).toMatchObject({ ok: true, payload: { runId: followupRunId, status: "started" } });
     await withinTest(followupDispatched.promise, signal);
     expect(consumed).toEqual([]);
     expect(isRpcSourceQueued(rpcSourceTesting.get(followupRunId))).toBe(true);
     expect(runtime.execute).toHaveBeenCalledOnce();
-    expect(getSessionControllerOperation(sessionKey)).toBe(initialOperation);
+    expect(getSessionControllerOperation(sessionKey)).toBe(operation);
     releasePreparation.resolve();
     const stopped = await withinTest(stopping, signal);
     expect(stopped.ok, JSON.stringify(stopped.error)).toBe(true);
@@ -529,42 +521,17 @@ test("queues a fresh follow-up while stopped preparation still owns the reply sl
     await withinTest(followupFinished.promise, signal);
     expect(consumed).toEqual([expect.stringContaining(followupText)]);
     expect(runtime.execute).toHaveBeenCalledTimes(2);
-    expect(initialOperation?.result).toMatchObject({ kind: "aborted", code: "aborted_by_user" });
-    const entry = expectDefined(
-      loadSessionEntry({ agentId: "main", sessionKey, storePath }),
-      "session",
-    );
-    const messages = loadTranscriptEventsSync({
-      agentId: "main",
-      sessionKey,
-      sessionId: entry.sessionId,
-      storePath,
-    });
-    expect(
-      messages.filter(
-        (event) =>
-          isRecord(event) &&
-          isRecord(event.message) &&
-          event.message.role === "user" &&
-          extractTextFromChatContent(event.message.content) === followupText,
-      ),
-    ).toHaveLength(1);
+    expect(operation?.result).toMatchObject({ kind: "aborted", code: "aborted_by_user" });
+    expectSingleUserInput(storePath, sessionKey, followupText);
   } finally {
     const released = captureSessionControllerSettlement({
       scope: storePath,
       identities: [sessionKey],
     });
     releasePreparation.resolve();
-    if (sessionKey) {
-      clearSessionQueues(
-        [sessionKey],
-        captureSessionTarget({ storeScope: storePath, sessionKey, agentId: "main" }),
-      );
-    }
+    clearFixture(storePath, sessionKey);
     await Promise.all([released, stopping]);
-    clients.clear();
-    dispatchInboundMessageMock.mockReset();
-    runtime.execute.mockReset();
+    resetFixture(clients);
     testState.agentConfig = undefined;
   }
 });

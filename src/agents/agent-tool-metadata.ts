@@ -16,6 +16,7 @@ import {
   getInternalToolExecutionPreparer,
 } from "./runtime/internal-hooks.js";
 import { resolveCoreToolExecutionLocation } from "./tool-catalog.js";
+import { copyAgentToolReplaySafety } from "./tool-replay-safety.js";
 import { copyToolTerminalPresentation } from "./tool-terminal-presentation.js";
 
 export type AgentToolActionDescriptor = Readonly<{
@@ -112,6 +113,7 @@ export function copyBeforeToolCallWrapperMetadata(
     ToolActionMetadata.set(target, state);
   }
   copyAgentToolAvailability(source, target);
+  copyAgentToolReplaySafety(source, target);
 }
 
 /** Bind the broad family at final assembly from private, process-stable owner metadata. */

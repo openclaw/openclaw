@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For } from "solid-js";
+import { For } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import {
@@ -202,7 +202,7 @@ function EngineSection(props: MemoryViewProps) {
     />
   );
   const available = () => props.engineOptions.length > 0;
-  const options = createMemo(() => [
+  const options = () => [
     ...props.engineOptions.map((option) => ({
       value: option.id,
       label: option.available
@@ -210,7 +210,7 @@ function EngineSection(props: MemoryViewProps) {
         : `${option.label} (${t("memoryPage.engine.unavailable")})`,
     })),
     { value: MEMORY_ENGINE_OFF, label: t("memoryPage.engine.off") },
-  ]);
+  ];
   return (
     <SettingsSection
       title={t("memoryPage.engine.title")}

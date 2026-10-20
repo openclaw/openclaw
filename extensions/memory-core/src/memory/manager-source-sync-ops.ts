@@ -137,7 +137,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     const existingRows = await this.database.readSourceState({
       source: "memory",
     });
-    const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
+    const existingByPath = new Map(existingRows.map((row) => [row.path, row]));
     const activePaths = new Set(fileEntries.map((entry) => entry.path));
     if (params.progress) {
       params.progress.total += fileEntries.length;
@@ -152,7 +152,13 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
 
     const indexItems: MemoryIndexWorkItem[] = [];
     for (const entry of fileEntries) {
-      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+      const existing = existingByPath.get(entry.path);
+      if (
+        !params.needsFullReindex &&
+        existing?.hash === entry.hash &&
+        existing.mtime === entry.mtimeMs &&
+        existing.size === entry.size
+      ) {
         this.advanceSyncProgress(params.progress);
         continue;
       }

@@ -6,10 +6,9 @@ import type {
 } from "../config/config.js";
 import { readConfigFileSnapshotForWrite } from "../config/config.js";
 import { assertDeferredPluginMigrationConfigEditAllowed } from "../config/deferred-plugin-migration-config.js";
-import { configFailureHeading, isConfigReadFailure } from "../config/io.invalid-config.js";
+import { configFailureHeading } from "../config/io.invalid-config.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
 import { renderConfigValidationIssueLines } from "../config/issue-location.js";
-import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import type { ConfigValidationIssue } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -41,27 +40,12 @@ import {
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { shortenHomePath } from "../utils.js";
-import { formatCliCommand } from "./command-format.js";
 import type { ConfigMutationOptions, ConfigSetOperation } from "./config-cli-input.js";
 import { getAtPath } from "./config-cli-path.js";
-import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
+import { formatInvalidConfigRepairHint } from "./config-recovery-hints.js";
 import type { ConfigSetDryRunError, ConfigSetDryRunResult } from "./config-set-dryrun.js";
 import { writeInvalidConfigCliJson } from "./config-validation-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
-
-function formatInvalidConfigRepairHint(
-  snapshot: Pick<
-    ConfigFileSnapshot,
-    "valid" | "issues" | "warnings" | "legacyIssues" | "readError"
-  >,
-  doctorMessage: string,
-): string {
-  return isConfigReadFailure(snapshot)
-    ? "Resolve the read error shown above, then retry."
-    : isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
-      ? formatPluginPackagingRuntimeOutputRecoveryHint()
-      : `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${doctorMessage}`;
-}
 
 export function ensureValidConfigSnapshotForCli(
   snapshot: ConfigFileSnapshot,
@@ -108,8 +92,6 @@ export async function loadValidConfigForWrite(
     },
   };
 }
-
-export { formatInvalidConfigRepairHint };
 
 export async function finishConfigValidationForCli(
   read: ReadConfigFileSnapshotWithPluginMetadataResult,

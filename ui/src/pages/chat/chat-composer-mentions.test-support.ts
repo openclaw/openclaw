@@ -7,6 +7,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { NewSessionAttachmentDraft } from "../new-session/attachment-draft.ts";
 /* @vitest-environment jsdom */
 import {
@@ -66,6 +67,10 @@ export function composerFixture(
   const context = composerContext({
     client,
     phase: "connected",
+    hello: gatewayHelloForMethods(
+      ["sessions.create", "users.mentionable"],
+      ["operator.sessions.write"],
+    ),
     selfUser: { id: "sender-one", identity: { type: "profile", id: "sender-one" } },
   });
   const attachmentDraft = new NewSessionAttachmentDraft(

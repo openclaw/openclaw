@@ -17,14 +17,6 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 const ensureService = service.ensureCodexComputerUseServiceApp;
 const resolveServiceSource = service.resolveCodexComputerUseServiceAppSourcePath;
 type InspectService = NonNullable<Parameters<typeof ensureService>[0]["inspectServiceApp"]>;
-const CLIENT_PATH = path.join(
-  "Contents",
-  "SharedSupport",
-  "SkyComputerUseClient.app",
-  "Contents",
-  "MacOS",
-  "SkyComputerUseClient",
-);
 
 describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refresh", (artifact) => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -35,6 +27,7 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
   });
 
   it("refreshes the managed artifacts before startup", async () => {
+    const inspection = { platform: "darwin" as const, inspectServiceApp: inspectServiceFixture };
     const root = tempDirs.make("openclaw-computer-use-startup-");
     const agentDir = path.join(root, "agent");
     const codexHome = path.join(agentDir, "codex-home");
@@ -44,28 +37,21 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
     const targetService = path.join(codexHome, "computer-use", "Codex Computer Use.app");
     const marketplace = path.join(appBundlePath, "plugins", "openai-bundled");
     const pluginRoot = path.join(marketplace, "plugins", "computer-use");
-    const cachePath = path.join(
-      codexHome,
-      "plugins",
-      "cache",
-      "openai-bundled",
-      "computer-use",
-      "1.0.857",
-    );
+    const cachePath = path.join(codexHome, "plugins/cache/openai-bundled/computer-use/1.0.857");
     const priorService = artifact === "service" ? "old-service" : "new-service";
     await writeServiceFixture(sourceService, "new-service");
     await writeServiceFixture(targetService, priorService);
     const sourceIdentity = await inspectServiceFixture(sourceService);
     await fs.mkdir(path.join(marketplace, ".agents", "plugins"), { recursive: true });
     await fs.mkdir(path.join(pluginRoot, ".codex-plugin"), { recursive: true });
-    await fs.writeFile(
-      path.join(marketplace, ".agents", "plugins", "marketplace.json"),
-      JSON.stringify({ name: "openai-bundled", plugins: [{ name: "computer-use" }] }),
-    );
-    await fs.writeFile(
-      path.join(pluginRoot, ".codex-plugin", "plugin.json"),
-      JSON.stringify({ name: "computer-use", version: "1.0.857" }),
-    );
+    await writeJson(path.join(marketplace, ".agents/plugins/marketplace.json"), {
+      name: "openai-bundled",
+      plugins: [{ name: "computer-use" }],
+    });
+    await writeJson(path.join(pluginRoot, ".codex-plugin/plugin.json"), {
+      name: "computer-use",
+      version: "1.0.857",
+    });
     await fs.writeFile(path.join(pluginRoot, "generation.txt"), "new-cache");
     await fs.cp(pluginRoot, cachePath, { recursive: true });
     await fs.writeFile(path.join(cachePath, "generation.txt"), "old-cache");
@@ -80,23 +66,20 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
       },
     ]);
     vi.spyOn(service, "resolveCodexComputerUseServiceAppSourcePath").mockImplementation((params) =>
-      resolveServiceSource({
-        ...params,
-        platform: "darwin",
-        inspectServiceApp: inspectServiceFixture,
-      }),
+      resolveServiceSource({ ...params, ...inspection }),
     );
     vi.spyOn(service, "ensureCodexComputerUseServiceApp").mockImplementation((params) =>
       ensureService({
         ...params,
-        platform: "darwin",
-        inspectServiceApp: inspectServiceFixture,
+        ...inspection,
         copyServiceApp: (source, target) => fs.cp(source, target, { recursive: true }),
       }),
     );
 
-    const selected = { epoch: 1, fingerprint: "desktop-original" };
-    vi.spyOn(generation, "waitForCodexDesktopGeneration").mockResolvedValue(selected);
+    vi.spyOn(generation, "waitForCodexDesktopGeneration").mockResolvedValue({
+      epoch: 1,
+      fingerprint: "desktop-original",
+    });
 
     let initializations = 0;
     const harness = createClientHarness({
@@ -143,10 +126,12 @@ describe.each(["service", "cache"])("createIsolatedCodexAppServerClient %s refre
   });
 });
 
+async function writeJson(file: string, value: unknown) {
+  await fs.writeFile(file, JSON.stringify(value));
+}
+
 async function writeServiceFixture(appPath: string, identity: string): Promise<void> {
-  const clientPath = path.join(appPath, CLIENT_PATH);
-  await fs.mkdir(path.dirname(clientPath), { recursive: true });
-  await fs.writeFile(clientPath, "client", { mode: 0o755 });
+  await fs.mkdir(path.join(appPath, "Contents"), { recursive: true });
   await fs.writeFile(path.join(appPath, "Contents", "Info.plist"), identity);
 }
 

@@ -234,7 +234,6 @@ export async function runSlackScenario(
     const label = run.kind === "approval" ? run.approvalKind : `Codex ${run.appServerMethod}`;
     return {
       details: `${label} approval resolved ${run.decision} in ${approval.rttMs}ms`,
-      artifacts: { approval: approval.artifact },
       ...buildLiveTransportRttResult(approval, "approval-request-to-resolution"),
     };
   }

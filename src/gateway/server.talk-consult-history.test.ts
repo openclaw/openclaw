@@ -557,6 +557,9 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
     assistantMessage(modelReply),
   ];
   runEmbeddedAgent.mockImplementation(async (params) => {
+    const recorder = expectDefined(params.userTurnTranscriptRecorder, "consult input recorder");
+    await recorder.persistApproved();
+    expect(recorder.hasPersisted()).toBe(true);
     await params.onAgentEvent?.({
       stream: "lifecycle",
       data: { phase: "start" },

@@ -5,11 +5,8 @@ import {
 } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 
-type TwitchTokenSource = "env" | "config" | "none";
-
 export type TwitchTokenResolution = {
   token: string;
-  source: TwitchTokenSource;
 };
 
 function normalizeTwitchToken(raw?: string | null): string | undefined {
@@ -45,7 +42,7 @@ export function resolveTwitchToken(
   }
 
   if (token) {
-    return { token, source: "config" };
+    return { token };
   }
 
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
@@ -53,8 +50,8 @@ export function resolveTwitchToken(
     ? normalizeTwitchToken(opts.envToken ?? process.env.OPENCLAW_TWITCH_ACCESS_TOKEN)
     : undefined;
   if (envToken) {
-    return { token: envToken, source: "env" };
+    return { token: envToken };
   }
 
-  return { token: "", source: "none" };
+  return { token: "" };
 }

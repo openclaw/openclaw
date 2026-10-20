@@ -45,6 +45,19 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+Candidate pnpm installs use a project-local virtual dependency graph while
+reusing the configured package store. This also applies when pnpm uses hoisted
+links: pnpm 12 can otherwise materialize unpatched package bytes from a global
+graph despite recording a patch hash. After source exposure changes dependency
+topology, the updater refreshes bundled plugin links before final candidate
+validation. The refresh links the packages it finds in each plugin's
+`node_modules`. A link whose target is missing produces a warning and is skipped
+when the plugin declares that package optional; any other broken link or
+filesystem error stops preflight. The refresh does not check for dependencies
+that were never installed.
+These preparation changes require the installed updater to contain the fix;
+staging a newer candidate cannot change an older updater's initial install.
+
 Managed update helpers route diagnostic logs to stderr so debug logging cannot
 interrupt their control handshake. This applies to the installed updater; a newer
 candidate cannot change an older updater's pre-activation handshake.
@@ -71,6 +84,15 @@ next update's admission can record the failed outcome without waiting for the
 inactivity grace period. Live or unverifiable drivers and retained recovery
 continue to preserve their ownership.
 
+Handoff repair uses recorded boot sessions and process creation times to exclude
+prior-boot families and unrelated processes with reused parent PIDs. On Windows,
+a legacy handoff without a boot identity also qualifies as prior-boot when its
+durable write is more than five minutes before the current boot started. Unverified
+descendants and incomplete process censuses block settlement to prevent overlapping
+updaters. Positive handoff descendants, OpenClaw identities, and retained-runtime
+path holders also block repair. This does not relax Doctor's artifact-custody
+checks or remove retained recovery data.
+
 If the retained verifier cannot authenticate to the restarted Gateway, it stops
 retrying that rejection. Local HTTP readiness and runtime version/build identity
 can verify activation instead, with an RPC authentication warning recorded in
@@ -87,6 +109,14 @@ other maintenance writes can continue without requiring the database files to
 stop changing for a private copy. Inspection without that admission still uses
 an artifact-preserving copy and refuses an inconsistent source. This is
 candidate-side behavior; the installed updater runs first with its shipped checks.
+
+During update finalization, disposable plugin source copies and private SQLite
+inspection snapshots use the candidate helper's absolute `TMPDIR` (including
+when an older installed updater starts that helper). Normal Gateway cache
+placement is unchanged. Installed plugin projects, retained native admissions,
+and recovery or migration backups remain with their existing durable owners;
+`TMPDIR` does not relocate those writes or remove the need for free space on the
+installation and state filesystems.
 
 ### Migration integrity checks
 
@@ -376,6 +406,13 @@ reports retain these closed reason codes while redacting private diagnostics.
 Other package failures keep the `global-install-failed` reason. These diagnostics
 do not change refusal, backup, or rollback behavior and require an updated driver.
 
+Generated failure reports name recognized candidate startup causes, including
+plugin loading, port conflicts, schema migration, native-module compatibility,
+readiness timeouts, and process signals. Plugin names appear only when they belong
+to the shipped public catalog. Config errors retain schema field names and fixed
+validation kinds; user-defined map keys become `<id>` and unknown keys become
+`<key>`. Arbitrary error text and rejected values stay out of public reports.
+
 Control UI updates use a verified helper to stop and restart the managed Gateway.
 On macOS, the helper carries its live update ownership into LaunchAgent activation;
 ordinary commands inside the Gateway still cannot stop their own service. If an
@@ -641,6 +678,8 @@ This lets validation run while the serving Gateway keeps its configured ports.
 It preserves non-secret Gateway auth settings such as `gateway.auth.rateLimit`
 for policy checks, while using a temporary token and disabling Tailscale identity
 authentication.
+Doctor omits the onboarding URL warning derived from that temporary loopback
+binding during rehearsal; other findings remain visible.
 The activated Gateway retains your normal listener settings. Candidate startup
 progress is emitted only when the driving updater announces support, so older
 updaters, including 2026.9.5 and 2026.9.6, retain actual startup errors instead of
@@ -678,10 +717,20 @@ Cancellation may use up to the same allowance to settle accepted work before
 releasing its ownership.
 Update-history writes retry a timed-out commit admission at most three times,
 releasing the SQLite writer between attempts. Ordinary progress that still cannot
-be recorded produces a warning and validation continues. Required recovery and
+be recorded, including a worker queue-capacity refusal before dispatch, produces
+a warning and validation continues. Snapshot progress keeps one write in flight
+and coalesces pending observations to the latest progress. Required recovery and
 terminal records report a failure instead of retrying forever. These limits apply
 when the newer installed updater runs; staging it cannot change an older driver's
 already-running progress writer.
+
+If the `2026.10.4` updater stops with `candidate-snapshot-failed` and
+`SQLite worker queue capacity reached`, staging a newer candidate does not replace
+that progress writer. Preserve a verified state backup and follow the
+[manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+to install a release containing the fix, stopping and starting the Gateway through
+its actual service owner. Keep the same account, installation prefix, profile,
+and state paths; do not delete databases or disable consistency checks.
 
 Runtime retention looks for hoisted dependencies within the package manager's
 owning installation. Missing optional peers do not cause it to copy unrelated
@@ -1272,6 +1321,13 @@ openclaw update repair
 openclaw update status
 ```
 
+Standalone repair reports the `repairing` phase while Doctor and plugin maintenance
+run. Its `finalize:*` history steps identify the current operation.
+Before maintenance, repair marks confirmed dead drivers as abandoned while
+preserving their history. Completing maintenance is acknowledged separately, so a
+later repair failure does not leave those exited drivers recorded as running.
+Runs with retained recovery custody stay with their recovery owner.
+
 For an inactive legacy row older than 30 minutes, repair verifies that the
 running Gateway matches the installed version and build, then clears the stale
 run without maintenance or a service restart. A new explicit `openclaw update`
@@ -1287,6 +1343,14 @@ run, phase, driver PID, host, start and last-activity ages, and observed livenes
 Wait for that update to finish, or stop the named driver on its host and rerun
 repair after it exits. See [Update repair](/cli/update/repair-and-recovery#update-repair)
 for maintenance and recovery behavior.
+
+An empty update history does not mean the installation is free. If
+`openclaw update` reports that another update executor owns the installation and
+names cancelled update custody, an earlier cancelled updater exited without
+releasing it. Run `openclaw update repair`; it settles that custody once the
+updater and its descendants are proven gone, and otherwise reports the blocker,
+exits with code 2, and leaves the next update blocked. See
+[Update repair](/cli/update/repair-and-recovery#update-repair).
 
 OpenClaw 2026.9.2 does not reject a new CLI update because an older running row
 exists: its [admission path](https://github.com/openclaw/openclaw/blob/v2026.9.2/src/cli/update-cli/update-command-run.ts#L77)
@@ -1337,6 +1401,11 @@ openclaw doctor
 ```
 
 Migrates config, audits DM policies, and checks gateway health. Doctor also compares active official plugins with the OpenClaw package the managed service will load after restart. Resolve any plugin restart-readiness warning before continuing. Details: [Doctor](/gateway/doctor)
+
+On Linux, `openclaw doctor --fix` can reclaim abandoned updater runtimes even
+after a systemd user-manager re-exec. The manager's `--deserialize` argument and
+its protected `(sd-pam)` child do not count as runtime holders. Actual runtime
+references and unverified processes still preserve the affected artifacts.
 
 On Windows, `openclaw doctor --fix` can also retry abandoned backup scratch
 cleanup after an older release reported `EPERM` while renaming to an

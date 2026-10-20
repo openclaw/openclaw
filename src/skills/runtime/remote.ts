@@ -338,17 +338,10 @@ export async function refreshRemoteNodeBins(params: RemoteNodeBinRefreshParams):
       // before starting another probe so they stay coalesced.
       continue;
     }
-    const inflight: RemoteBinProbeInflight = {
-      ...owner,
-      promise: Promise.resolve(),
-    };
     const run = refreshRemoteNodeBinsUncoalesced(params).finally(() => {
-      if (remoteBinProbeInflight.get(params.nodeId) === inflight) {
-        remoteBinProbeInflight.delete(params.nodeId);
-      }
+      remoteBinProbeInflight.delete(params.nodeId);
     });
-    inflight.promise = run;
-    remoteBinProbeInflight.set(params.nodeId, inflight);
+    remoteBinProbeInflight.set(params.nodeId, { ...owner, promise: run });
     await run;
     return;
   }

@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStallFlightRecorder } from "./diagnostic-stall-flight-recorder.js";
 
@@ -76,6 +77,7 @@ function profile(start: number, name: string, url = "node:timers") {
 
 function fixture() {
   let time = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => time);
   const warn = vi.fn();
   const handles = [0, 1, 2].map((index) => ({
     stop: vi.fn(() =>
@@ -87,7 +89,7 @@ function fixture() {
     [Symbol.dispose]: vi.fn(),
   }));
   native.start.mockImplementation(() => handles[native.start.mock.calls.length - 1]);
-  const recorder = createStallFlightRecorder(warn, () => time);
+  const recorder = createStallFlightRecorder(warn);
   recorders.push(recorder);
   return { recorder, handles, warn, at: (value: number) => (time = value) };
 }

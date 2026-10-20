@@ -128,7 +128,7 @@ it.each([
     status: "delivered",
     yielded: false,
     siblings: 2,
-    retained: true,
+    retained: false,
   },
   { name: "failed delivery", status: "failed", yielded: false, siblings: 1, retained: true },
   { name: "suspended delivery", status: "suspended", yielded: false, siblings: 1, retained: true },

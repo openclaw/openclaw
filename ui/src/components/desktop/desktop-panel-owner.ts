@@ -28,6 +28,7 @@ import {
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { DesktopSessionOwner } from "./desktop-session-owner.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
+import { createDesktopHostSetupOwner } from "./host-desktop-setup.ts";
 
 registerDesktopEnglish();
 
@@ -56,10 +57,13 @@ export function createDesktopPanel(
   let credentialAuth: "vnc-password" | "ard-account" | undefined;
   let pendingConnection: PendingDesktopConnection | null = null;
   let operation = 0;
+  const recheck = () => void refreshEnvironments(undefined, undefined, true);
+  const hostSetup = createDesktopHostSetupOwner(host, notify, recheck);
   let controlTakeoverRecoveryUsed = false;
   // Automatic resolution follows the session; an explicit choice owns its pop-out target.
   let selection: "pending" | "resolved" | "explicit" | "picker" = "pending";
   const usesAutomaticSource = () => selection === "pending" || selection === "resolved";
+  const automaticPicker = () => usesAutomaticSource() && host.embedded && host.sessionKey !== null;
   const sessionSource = new DesktopSessionOwner(
     host,
     notify,
@@ -266,6 +270,7 @@ export function createDesktopPanel(
     sizingMode = "fit";
     canResize = false;
     disconnectedReason = null;
+    hostSetup.clear();
     notify();
     sessionSource.clearDesktopSource();
   }
@@ -327,6 +332,7 @@ export function createDesktopPanel(
       const inventory = await inventoryRequest.result;
       if (inventory && inventoryRequest.isCurrent()) {
         requestedSource = inventory.selectedSource;
+        hostSetup.set(automaticPicker() ? (inventory.hostSetup ?? null) : null);
         environments = inventory.environments;
         notify();
         refreshed = true;
@@ -351,7 +357,7 @@ export function createDesktopPanel(
         notify();
         await connectEnvironment(requestedSource, host.documentControl);
       } else if (host.requestedSource !== null || host.sessionKey !== null) {
-        noticeText = t("desktop.sourceUnavailable");
+        noticeText = hostSetup.view() ? null : t("desktop.sourceUnavailable");
         notify();
       }
     }
@@ -404,6 +410,7 @@ export function createDesktopPanel(
       sizingMode = "fit";
     }
     canResize = false;
+    hostSetup.clear();
     const environment = environments.find((candidate) => candidate.id === environmentId);
     desktopApps = [...(environment?.worker?.desktopApps ?? [])];
     disconnectConnection(currentId === environmentId);
@@ -639,9 +646,10 @@ export function createDesktopPanel(
           noticeText,
           availability: sessionSource.desktopAvailability,
           picker: {
-            automatic: usesAutomaticSource() && host.embedded && host.sessionKey !== null,
+            automatic: automaticPicker(),
             environments,
-            onRefresh: () => void refreshEnvironments(undefined, undefined, true),
+            hostSetup: hostSetup.view(),
+            onRefresh: recheck,
             onConnect: (environmentId: string) => {
               selection = "explicit";
               notify();

@@ -86,7 +86,8 @@ describe("exec shell snapshots", () => {
     env: NodeJS.ProcessEnv,
     command = 'printf "%s" "$PNPM_HOME"',
   ) {
-    const shellArgs = getShellConfig(shell).args;
+    setTestEnvValue("SHELL", shell);
+    const shellArgs = getShellConfig().args;
     const wrapped = await maybeWrapCommandWithShellSnapshot({
       command,
       shell,
@@ -118,6 +119,7 @@ describe("exec shell snapshots", () => {
       "OPENCLAW_EXEC_SHELL_SNAPSHOT",
       "PNPM_HOME",
       "ZDOTDIR",
+      "SHELL",
     ]);
   });
 
@@ -294,10 +296,11 @@ describe("exec shell snapshots", () => {
 
     const env = runtimeEnv(home, stateDir);
     const command = "echo fallback";
+    setTestEnvValue("SHELL", bash);
     const wrapped = await maybeWrapCommandWithShellSnapshot({
       command,
       shell: bash,
-      shellArgs: getShellConfig(bash).args,
+      shellArgs: getShellConfig().args,
       cwd,
       env,
     });
@@ -332,7 +335,8 @@ describe("exec shell snapshots", () => {
       HOME: home,
       OPENCLAW_STATE_DIR: stateDir,
     };
-    const shellArgs = getShellConfig(zsh).args;
+    setTestEnvValue("SHELL", zsh);
+    const shellArgs = getShellConfig().args;
     const wrapped = await maybeWrapCommandWithShellSnapshot({
       command: "oc_snap_zsh_fn; printf ' '; oc_snap_zsh_alias",
       shell: zsh,
@@ -375,7 +379,8 @@ describe("exec shell snapshots", () => {
       OPENCLAW_STATE_DIR: stateDir,
       ZDOTDIR: zdotdir,
     };
-    const shellArgs = getShellConfig(zsh).args;
+    setTestEnvValue("SHELL", zsh);
+    const shellArgs = getShellConfig().args;
     const wrapped = await maybeWrapCommandWithShellSnapshot({
       command: "oc_snap_zdot_alias",
       shell: zsh,

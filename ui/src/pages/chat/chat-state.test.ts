@@ -2602,8 +2602,6 @@ describe("chat state render lifecycle", () => {
 
     handlePageGatewayEvent(state, lifecycleEvent("waiting-approval", state.sessionKey));
     expect(state.waitingApprovalStatuses.get("approval-1")).toEqual({
-      approvalId: "approval-1",
-      toolCallId: "tool-approval-1",
       runId: "engine-run-1",
     });
 

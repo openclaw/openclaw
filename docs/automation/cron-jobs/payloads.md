@@ -60,7 +60,11 @@ New jobs that can run tools always store an explicit tool policy. A job created 
 `--tools` (or with `*`) stores `*`: each run uses the owner session's current tool policy,
 including its group, agent, sandbox, and runtime restrictions. An agent that requests a
 finite list is capped to the tools available to its creating turn and cannot widen the
-stored list. `automations edit --clear-tools` restores `*`. Existing jobs that predate an
+stored list. If a requested name, group, or pattern matches no captured tool, agent-created
+jobs and agent tool-cap edits fail with that entry in the error instead of saving a partial
+list. This includes Codex app tools that the creator runtime cannot carry. Use a supported
+tool name and runtime, or explicitly remove the unavailable entry.
+`automations edit --clear-tools` restores `*`. Existing jobs that predate an
 explicit tool policy retain their current behavior until their tool policy is explicitly
 edited or the job is recreated. Agent-created script payloads, condition triggers, and jobs
 whose creator captured Codex app authority store the creating turn's tools instead: scripts

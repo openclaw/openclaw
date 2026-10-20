@@ -8,12 +8,8 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import {
-  resolveSidebarLayoutForBoard,
-  sidebarRegionCallbacks,
-} from "./chat-pane-sidebar-layout.ts";
+import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import "./components/chat-sidebar-region.runtime.tsx";
 import {
   closeSlot,
@@ -457,72 +453,6 @@ describe("chat pane sidebar layout", () => {
       "companion",
     ]);
     expect(layout.columns[0]?.activePanelId).toBe("companion");
-  });
-
-  it("persists tab selection without changing the chosen main content", () => {
-    const stored = promoteSidebarPanel(
-      openSlot(openSlot({ columns: [] }, "terminal"), "dashboard"),
-      "dashboard",
-    );
-    const rendered = resolveSidebarLayoutForBoard({
-      board: board(),
-      layout: stored,
-      paneWidth: 1_400,
-    });
-    const updateSidebarLayout = vi.fn();
-    const updateSidebarActivePanel = vi.fn();
-    const state = {
-      sidebarLayout: stored,
-      updateSidebarLayout,
-      updateSidebarActivePanel,
-    } as unknown as ChatPageHost;
-
-    sidebarRegionCallbacks({
-      state,
-      layout: rendered,
-      closePanelSlot: vi.fn(),
-      openPanelSlot: vi.fn(),
-      forgetDiscussionUrl: vi.fn(),
-      resizePanel: vi.fn(),
-      setPanelOpen: vi.fn(),
-    }).activatePanel("terminal");
-
-    expect(updateSidebarLayout).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mainPanelId: "dashboard",
-        columns: [expect.objectContaining({ activePanelId: "terminal" })],
-      }),
-    );
-    expect(updateSidebarActivePanel).toHaveBeenCalledWith("terminal");
-  });
-
-  it("closes dashboard presentation through its owner without minimizing unrelated tabs", () => {
-    const layout = resolveSidebarLayoutForBoard({
-      board: board(),
-      layout: { columns: [] },
-      paneWidth: 1_400,
-    });
-    const setPanelOpen = vi.fn();
-    const closePanelSlot = vi.fn();
-    const state = {
-      sidebarLayout: layout,
-      updateSidebarLayout: vi.fn(),
-      updateSidebarActivePanel: vi.fn(),
-    } as unknown as ChatPageHost;
-
-    sidebarRegionCallbacks({
-      state,
-      layout,
-      closePanelSlot,
-      openPanelSlot: vi.fn(),
-      forgetDiscussionUrl: vi.fn(),
-      resizePanel: vi.fn(),
-      setPanelOpen,
-    }).closeSlot("dashboard");
-
-    expect(closePanelSlot).toHaveBeenCalledWith("dashboard");
-    expect(setPanelOpen).not.toHaveBeenCalled();
-    expect(state.updateSidebarLayout).not.toHaveBeenCalled();
   });
 
   it("keeps an empty dashboard open and only removes it when dashboard support is unavailable", () => {
