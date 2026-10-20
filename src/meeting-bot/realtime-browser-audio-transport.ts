@@ -137,7 +137,6 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
             fail(new Error("Meeting browser audio capture lost its session."));
             return;
           }
-          consecutiveInputErrors = 0;
           if (typeof result.base64 === "string" && result.base64) {
             if (result.base64.length > 65_536) {
               throw new Error("Meeting browser audio exceeded its input buffer.");
@@ -150,6 +149,8 @@ export async function createBrowserMeetingRealtimeAudioTransport(params: {
               params.audioFormat === "pcm16-24khz" ? pcm : convertPcmToMulaw8k(pcm, 24_000);
             onAudio(audio);
           }
+          // Count only a pull whose audio reached the model as a success.
+          consecutiveInputErrors = 0;
           if (!stopped) {
             timer = setTimeout(() => void pull(), 50);
           }

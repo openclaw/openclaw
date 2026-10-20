@@ -146,4 +146,38 @@ describe("isolated meeting browser audio transport", () => {
     expect(fixture.nativeTransport.stop).toHaveBeenCalledOnce();
     await transport.stop();
   });
+
+  it("ends the call when pulled audio keeps failing to reach the model", async () => {
+    vi.useFakeTimers();
+    const fixture = setup();
+    const transport = await fixture.create();
+    const fatal = vi.fn();
+    transport.onFatal(fatal);
+    // A browser request that succeeds is not enough: unusable audio still counts as a failure.
+    const incomplete = { isolated: true, base64: Buffer.from([1]).toString("base64") };
+    transport.startInput(vi.fn());
+    await setImmediate();
+    fixture.resolvePull(incomplete);
+    await vi.advanceTimersByTimeAsync(50);
+    fixture.resolvePull(incomplete);
+    await setImmediate();
+    expect(fatal).toHaveBeenCalledOnce();
+    await transport.stop();
+
+    const next = setup();
+    const nextTransport = await next.create();
+    const nextFatal = vi.fn();
+    nextTransport.onFatal(nextFatal);
+    nextTransport.startInput(() => {
+      throw new Error("model input rejected");
+    });
+    await setImmediate();
+    const audio = { isolated: true, base64: Buffer.from([3, 0]).toString("base64") };
+    next.resolvePull(audio);
+    await vi.advanceTimersByTimeAsync(50);
+    next.resolvePull(audio);
+    await setImmediate();
+    expect(nextFatal).toHaveBeenCalledOnce();
+    await nextTransport.stop();
+  });
 });
