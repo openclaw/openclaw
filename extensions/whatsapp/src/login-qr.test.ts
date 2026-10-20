@@ -1,3 +1,4 @@
+import { setImmediate as waitForNextTask, setTimeout as waitMs } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getActiveWebListener } from "./active-listener.js";
@@ -14,30 +15,18 @@ import {
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
-  const createWaSocketLocal = vi.fn();
-  const waitForWaConnectionLocal = vi.fn();
   const formatError = vi.fn((err: unknown) => `formatted:${String(err)}`);
-  const getStatusCode = vi.fn(
-    (err: unknown) =>
-      (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-      (err as { status?: number })?.status ??
-      (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode,
-  );
-  const readWebAuthExistsForDecisionLocal = vi.fn(async () => ({
-    outcome: "stable" as const,
-    exists: false,
-  }));
-  const readWebSelfIdLocal = vi.fn(() => ({ e164: null, jid: null, lid: null }));
-  const logoutWebLocal = vi.fn(async () => true);
   return {
     ...actual,
-    createWaSocket: createWaSocketLocal,
-    waitForWaConnection: waitForWaConnectionLocal,
+    createWaSocket: vi.fn(),
+    waitForWaConnection: vi.fn(),
     formatError,
-    getStatusCode,
-    readWebAuthExistsForDecision: readWebAuthExistsForDecisionLocal,
-    readWebSelfId: readWebSelfIdLocal,
-    logoutWeb: logoutWebLocal,
+    readWebAuthExistsForDecision: vi.fn(async () => ({
+      outcome: "stable" as const,
+      exists: false,
+    })),
+    readWebSelfId: vi.fn(() => ({ e164: null, jid: null, lid: null })),
+    logoutWeb: vi.fn(async () => true),
   };
 });
 
@@ -56,16 +45,27 @@ const readWebSelfIdMock = vi.mocked(readWebSelfId);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
 const logoutWebMock = vi.mocked(logoutWeb);
 const renderQrPngDataUrlMock = vi.mocked(renderQrPngDataUrl);
-const scanQrMessage = "Scan this QR in WhatsApp → Linked Devices.";
 const linkedResult = { connected: true, message: "✅ Linked! WhatsApp is ready." };
 const noActiveResult = { connected: false, message: "No active WhatsApp login in progress." };
 const refreshedQrMessage = "QR refreshed. Scan the latest code in WhatsApp → Linked Devices.";
 const cleanupFailureMessage =
   "WhatsApp login failed: existing auth could not be cleared. Remove or fix the configured WhatsApp auth directory, then retry login.";
 
-function encodedQr(qr: string) {
-  return `data:image/png;base64,encoded:${qr}`;
+function revocableAuthority() {
+  let active = true;
+  return {
+    revoke: () => {
+      active = false;
+    },
+    check: vi.fn(async () => {
+      if (!active) {
+        throw new Error("plugin tool host authority is no longer active");
+      }
+    }),
+  };
 }
+
+const encodedQr = (qr: string) => `data:image/png;base64,encoded:${qr}`;
 
 function qrSocket(qr?: string, next?: { qr: string; delayMs: number }) {
   return async (
@@ -84,16 +84,8 @@ function qrSocket(qr?: string, next?: { qr: string; delayMs: number }) {
   };
 }
 
-function queueQrSocket(qr: string) {
-  createWaSocketMock.mockImplementationOnce(qrSocket(qr));
-}
-
-function queueRotatingQrSocket(firstQr: string, secondQr: string, delayMs: number) {
-  createWaSocketMock.mockImplementationOnce(qrSocket(firstQr, { qr: secondQr, delayMs }));
-}
-
-function queueSilentSocket() {
-  createWaSocketMock.mockImplementationOnce(qrSocket());
+function queueQrSocket(qr?: string, next?: { qr: string; delayMs: number }) {
+  createWaSocketMock.mockImplementationOnce(qrSocket(qr, next));
 }
 
 function startQr(accountId?: string, options: Parameters<typeof startWebLoginWithQr>[0] = {}) {
@@ -107,7 +99,7 @@ function waitForQr(qrDataUrl: string | undefined, accountId?: string, timeoutMs 
 function expectScanQrResult(result: unknown, qr = "qr-data") {
   expect(result).toEqual({
     qrDataUrl: encodedQr(qr),
-    message: scanQrMessage,
+    message: "Scan this QR in WhatsApp → Linked Devices.",
   });
 }
 
@@ -119,25 +111,11 @@ function expectQrRefreshResult(result: unknown, qr: string) {
   });
 }
 
-function waitForever() {
-  return new Promise<never>(() => {});
-}
+const waitForever = () => new Promise<never>(() => {});
 
 async function flushTasks() {
   await Promise.resolve();
   await Promise.resolve();
-}
-
-async function waitForNextTask() {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
-async function waitMs(ms: number) {
-  await new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 async function waitForQrRenderCallCount(count: number) {
@@ -173,7 +151,7 @@ describe("login-qr", () => {
 
   it("returns a replacement QR when status 408 happens before the first QR", async () => {
     const accountId = "timeout-before-first-qr";
-    queueSilentSocket();
+    queueQrSocket();
     queueQrSocket("qr-after-timeout");
     waitForWaConnectionMock
       .mockRejectedValueOnce({ output: { statusCode: 408 } })
@@ -199,10 +177,7 @@ describe("login-qr", () => {
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
     process.on("unhandledRejection", onUnhandledRejection);
-    const resultPromise = startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId: "qr-timeout-during-socket-startup",
-    });
+    const resultPromise = startQr("qr-timeout-during-socket-startup");
     try {
       await socketStarting.promise;
       await vi.advanceTimersByTimeAsync(5000);
@@ -232,11 +207,7 @@ describe("login-qr", () => {
       })
       .mockImplementation(waitForever);
 
-    const start = await startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId,
-      beforeCredentialPersistence,
-    });
+    const start = await startQr(accountId, { beforeCredentialPersistence });
     expect(start.qrDataUrl).toBe(encodedQr("qr-data"));
 
     const result = await waitForQr(start.qrDataUrl, accountId);
@@ -277,12 +248,7 @@ describe("login-qr", () => {
       exists: true,
     });
 
-    const result = await startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId,
-      force: true,
-      beforeCredentialPersistence,
-    });
+    const result = await startQr(accountId, { force: true, beforeCredentialPersistence });
 
     expectScanQrResult(result);
     expect(logoutWebMock).toHaveBeenCalledWith({
@@ -299,23 +265,17 @@ describe("login-qr", () => {
   });
 
   it("transfers credential writes to the exact active login instance", async () => {
-    let hostActive = true;
+    const authority = revocableAuthority();
     let accountCurrent = true;
     const assertCredentialPersistenceCurrent = () => {
       if (!accountCurrent) {
         throw new Error("account changed");
       }
     };
-    const beforeCredentialPersistence = vi.fn(async () => {
-      if (!hostActive) {
-        throw new Error("plugin tool host authority is no longer active");
-      }
-    });
+    const beforeCredentialPersistence = authority.check;
     waitForWaConnectionMock.mockImplementation(waitForever);
 
-    const start = await startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId: "active-operation-authority",
+    const start = await startQr("active-operation-authority", {
       beforeCredentialPersistence,
       assertCredentialPersistenceCurrent,
     });
@@ -324,7 +284,7 @@ describe("login-qr", () => {
     expect(operationGuard).toEqual(expect.any(Function));
     expect(operationGuard).not.toBe(beforeCredentialPersistence);
 
-    hostActive = false;
+    authority.revoke();
     await expect(operationGuard?.()).resolves.toBeUndefined();
 
     accountCurrent = false;
@@ -371,26 +331,17 @@ describe("login-qr", () => {
   it("revalidates authority after auth inspection and before forced credential cleanup", async () => {
     const accountId = "revoked-force-fresh-qr";
     const authState = Promise.withResolvers<{ outcome: "stable"; exists: true }>();
-    let active = true;
-    const beforeCredentialPersistence = vi.fn(async () => {
-      if (!active) {
-        throw new Error("plugin tool host authority is no longer active");
-      }
-    });
+    const authority = revocableAuthority();
+    const beforeCredentialPersistence = authority.check;
     readWebAuthExistsForDecisionMock.mockReturnValueOnce(authState.promise);
     logoutWebMock.mockImplementationOnce(async (options) => {
       await options.beforeCredentialPersistence?.();
       return true;
     });
 
-    const resultPromise = startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId,
-      force: true,
-      beforeCredentialPersistence,
-    });
+    const resultPromise = startQr(accountId, { force: true, beforeCredentialPersistence });
     await vi.waitFor(() => expect(readWebAuthExistsForDecisionMock).toHaveBeenCalledOnce());
-    active = false;
+    authority.revoke();
     authState.resolve({ outcome: "stable", exists: true });
 
     await expect(resultPromise).resolves.toEqual({
@@ -410,20 +361,12 @@ describe("login-qr", () => {
       await socketReleased.promise;
       return { ws: { close: vi.fn() } } as never;
     });
-    let active = true;
-    const beforeCredentialPersistence = vi.fn(async () => {
-      if (!active) {
-        throw new Error("plugin tool host authority is no longer active");
-      }
-    });
+    const authority = revocableAuthority();
+    const beforeCredentialPersistence = authority.check;
 
-    const resultPromise = startWebLoginWithQr({
-      timeoutMs: 5000,
-      accountId: "revoked-before-transfer",
-      beforeCredentialPersistence,
-    });
+    const resultPromise = startQr("revoked-before-transfer", { beforeCredentialPersistence });
     await socketStarting.promise;
-    active = false;
+    authority.revoke();
     socketReleased.resolve();
 
     await expect(resultPromise).resolves.toEqual({
@@ -464,7 +407,7 @@ describe("login-qr", () => {
 
   it("does not start a fresh QR when existing auth cleanup is skipped", async () => {
     const accountId = "skipped-cleanup-qr";
-    queueSilentSocket();
+    queueQrSocket();
     waitForWaConnectionMock.mockRejectedValueOnce({
       output: { statusCode: 401 },
     });
@@ -580,7 +523,7 @@ describe("login-qr", () => {
   });
 
   it("reports a recovered linked session when saved auth has no active listener", async () => {
-    queueSilentSocket();
+    queueQrSocket();
     waitForWaConnectionMock.mockResolvedValueOnce(undefined);
     readWebSelfIdMock.mockReturnValueOnce({ e164: "+5511977000000", jid: null, lid: null });
     readWebAuthExistsForDecisionMock.mockResolvedValue({ outcome: "stable", exists: true });
@@ -645,7 +588,7 @@ describe("login-qr", () => {
   it("returns a terminal login result before a stale QR refresh", async () => {
     const accountId = "connected-before-refresh";
     const login = Promise.withResolvers<void>();
-    queueRotatingQrSocket("qr-data", "qr-data-2", 20);
+    queueQrSocket("qr-data", { qr: "qr-data-2", delayMs: 20 });
     waitForWaConnectionMock.mockReturnValueOnce(login.promise);
     readWebAuthExistsForDecisionMock
       .mockResolvedValueOnce({ outcome: "stable", exists: false })
@@ -786,7 +729,7 @@ describe("login-qr", () => {
   });
 
   it("returns the same rotated QR to concurrent waiters that share the same current image", async () => {
-    queueRotatingQrSocket("qr-data", "qr-data-2", 100);
+    queueQrSocket("qr-data", { qr: "qr-data-2", delayMs: 100 });
     waitForWaConnectionMock.mockImplementation(waitForever);
 
     const start = await startQr(concurrentAccountId);

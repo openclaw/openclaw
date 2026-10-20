@@ -2,11 +2,10 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 
 const runtime = createRuntimeSpies();
-const WEB_LOGOUT_TEST_TIMEOUT_MS = 15_000;
 
 describe("web logout", () => {
   let fixtureRoot = "";
@@ -24,25 +23,17 @@ describe("web logout", () => {
     await fsPromises.rm(fixtureRoot, { recursive: true, force: true });
   });
 
-  const makeCaseDir = async (external = false) => {
-    const dir = path.join(
-      fixtureRoot,
-      external ? "external" : "oauth/whatsapp",
-      `case-${caseId++}`,
-    );
+  const createAuthCase = async (files: Record<string, string> = {}, external = false) => {
+    const parent = external ? "external" : "oauth/whatsapp";
+    const dir = path.join(fixtureRoot, parent, `case-${caseId++}`);
     await fsPromises.mkdir(dir, { recursive: true });
-    return dir;
-  };
-
-  const createAuthCase = async (files: Record<string, string>, external = false) => {
-    const authDir = await makeCaseDir(external);
     await Promise.all(
       Object.entries(files).map(async ([name, contents]) => {
-        await fsPromises.mkdir(path.dirname(path.join(authDir, name)), { recursive: true });
-        await fsPromises.writeFile(path.join(authDir, name), contents, "utf-8");
+        await fsPromises.mkdir(path.dirname(path.join(dir, name)), { recursive: true });
+        await fsPromises.writeFile(path.join(dir, name), contents, "utf-8");
       }),
     );
-    return authDir;
+    return dir;
   };
 
   const expectPreserved = async (authDir: string, targetDir: string, files: string[]) => {
@@ -53,11 +44,8 @@ describe("web logout", () => {
   };
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_OAUTH_DIR", path.join(fixtureRoot, "oauth"));
     vi.clearAllMocks();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
   });
 
   it("removes oauth.json too when not using legacy auth dir", async () => {
@@ -66,15 +54,12 @@ describe("web logout", () => {
       "oauth.json": '{"token":true}',
       "session-abc.json": "{}",
     });
-    const result = await logoutWeb({ authDir, runtime });
-    expect(result).toBe(true);
+    expect(await logoutWeb({ authDir, runtime })).toBe(true);
     expect(fs.existsSync(authDir)).toBe(false);
   });
 
-  it("no-ops when nothing to delete", { timeout: WEB_LOGOUT_TEST_TIMEOUT_MS }, async () => {
-    const authDir = await makeCaseDir();
-    const result = await logoutWeb({ authDir, runtime });
-    expect(result).toBe(false);
+  it("no-ops when nothing to delete", { timeout: 15_000 }, async () => {
+    expect(await logoutWeb({ authDir: await createAuthCase(), runtime })).toBe(false);
     expect(runtime.log).toHaveBeenCalled();
   });
 

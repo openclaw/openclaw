@@ -9,62 +9,41 @@ import { renderQrTerminal } from "./qr-terminal.js";
 import { createWaSocket, formatError, waitForWaConnection } from "./session.js";
 
 const rmMock = vi.spyOn(fs, "rm");
+const runtime = createRuntimeSpies();
 const testState = vi.hoisted(() => ({
   authDir: `${(process.env.TMPDIR ?? "/tmp").replace(/\/+$/, "")}/openclaw-wa-creds-${process.pid}-${Math.random().toString(16).slice(2)}`,
 }));
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return {
-    ...actual,
-    captureRuntimeConfigAsyncReader: () => async () => ({
-      channels: {
-        whatsapp: {
-          accounts: {
-            default: { enabled: true, authDir: testState.authDir },
-          },
+vi.mock(import("openclaw/plugin-sdk/runtime-config-snapshot"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  captureRuntimeConfigAsyncReader: () => async () => ({
+    channels: {
+      whatsapp: {
+        accounts: {
+          default: { enabled: true, authDir: testState.authDir },
         },
       },
-    }),
-  };
-});
+    },
+  }),
+}));
 
-vi.mock("./session.js", async () => {
-  const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
-  const sockA = { ws: { close: vi.fn() } };
-  const sockB = { ws: { close: vi.fn() } };
-  const createWaSocketLocal = vi.fn(async () =>
-    createWaSocketLocal.mock.calls.length <= 1 ? sockA : sockB,
-  );
-  const waitForWaConnectionLocal = vi.fn();
-  const formatErrorLocal = vi.fn((err: unknown) => `formatted:${String(err)}`);
-  const getStatusCode = vi.fn(
-    (err: unknown) =>
-      (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-      (err as { status?: number })?.status ??
-      (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode,
-  );
-  return {
-    ...actual,
-    createWaSocket: createWaSocketLocal,
-    waitForWaConnection: waitForWaConnectionLocal,
-    formatError: formatErrorLocal,
-    getStatusCode,
-    readWebAuthExistsForDecision: vi.fn(async () => ({
-      outcome: "stable" as const,
-      exists: true,
-    })),
-    logoutWeb: vi.fn(async (params: { authDir?: string }) => {
-      await fs.rm(params.authDir ?? testState.authDir, {
-        recursive: true,
-        force: true,
-      });
-      return true;
-    }),
-  };
-});
+vi.mock("./session.js", async () => ({
+  ...(await vi.importActual<typeof import("./session.js")>("./session.js")),
+  createWaSocket: vi.fn(async () => ({ ws: { close: vi.fn() } })),
+  waitForWaConnection: vi.fn(),
+  formatError: vi.fn((err: unknown) => `formatted:${String(err)}`),
+  readWebAuthExistsForDecision: vi.fn(async () => ({
+    outcome: "stable" as const,
+    exists: true,
+  })),
+  logoutWeb: vi.fn(async (params: { authDir?: string }) => {
+    await fs.rm(params.authDir ?? testState.authDir, {
+      recursive: true,
+      force: true,
+    });
+    return true;
+  }),
+}));
 
 vi.mock("./qr-terminal.js", () => ({
   renderQrTerminal: vi.fn(async (qr: string) => `terminal:${qr}\n`),
@@ -72,7 +51,6 @@ vi.mock("./qr-terminal.js", () => ({
 
 const createWaSocketMock = vi.mocked(createWaSocket);
 const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
-const formatErrorMock = vi.mocked(formatError);
 const renderQrTerminalMock = vi.mocked(renderQrTerminal);
 
 async function flushTasks() {
@@ -89,7 +67,6 @@ describe("loginWeb coverage", () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     waitForWaConnectionMock.mockReset().mockResolvedValue(undefined);
-    formatErrorMock.mockReset().mockImplementation((err: unknown) => `formatted:${String(err)}`);
   });
   afterEach(() => {
     vi.runOnlyPendingTimers();
@@ -100,11 +77,8 @@ describe("loginWeb coverage", () => {
   });
 
   it("routes QR output through runtime for initial and restart sockets", async () => {
-    waitForWaConnectionMock
-      .mockRejectedValueOnce({ error: { output: { statusCode: 515 } } })
-      .mockResolvedValueOnce(undefined);
+    waitForWaConnectionMock.mockRejectedValueOnce({ error: { output: { statusCode: 515 } } });
 
-    const runtime = createRuntimeSpies();
     await loginWeb(false, waitForWaConnectionMock as never, runtime);
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
@@ -116,10 +90,17 @@ describe("loginWeb coverage", () => {
     const stdoutDescriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
     Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
     try {
-      initialOpts?.onQr?.("initial-qr");
-      await flushTasks();
-      restartOpts?.onQr?.("restart-qr");
-      await flushTasks();
+      for (const [opts, qr, prefix] of [
+        [initialOpts, "initial-qr", ""],
+        [restartOpts, "restart-qr", "\x1b[2J\x1b[H"],
+      ] as const) {
+        opts?.onQr?.(qr);
+        await flushTasks();
+        expect(runtime.log).toHaveBeenCalledWith(
+          `${prefix}Open the WhatsApp app, go to Linked Devices, then scan this QR:\nterminal:${qr}`,
+        );
+        expect(renderQrTerminalMock).toHaveBeenCalledWith(qr, { small: true });
+      }
     } finally {
       if (stdoutDescriptor) {
         Object.defineProperty(process.stdout, "isTTY", stdoutDescriptor);
@@ -128,14 +109,6 @@ describe("loginWeb coverage", () => {
       }
     }
 
-    expect(runtime.log).toHaveBeenCalledWith(
-      "Open the WhatsApp app, go to Linked Devices, then scan this QR:\nterminal:initial-qr",
-    );
-    expect(runtime.log).toHaveBeenCalledWith(
-      "\x1b[2J\x1b[HOpen the WhatsApp app, go to Linked Devices, then scan this QR:\nterminal:restart-qr",
-    );
-    expect(renderQrTerminalMock).toHaveBeenCalledWith("initial-qr", { small: true });
-    expect(renderQrTerminalMock).toHaveBeenCalledWith("restart-qr", { small: true });
     const firstSock = await createWaSocketMock.mock.results[0]?.value;
     expect(firstSock.ws.close).toHaveBeenCalled();
     vi.runAllTimers();
@@ -144,13 +117,8 @@ describe("loginWeb coverage", () => {
   });
 
   it("clears stale creds and continues login when logged out", async () => {
-    waitForWaConnectionMock
-      .mockRejectedValueOnce({
-        output: { statusCode: 401 },
-      })
-      .mockResolvedValueOnce(undefined);
+    waitForWaConnectionMock.mockRejectedValueOnce({ output: { statusCode: 401 } });
 
-    const runtime = createRuntimeSpies();
     await loginWeb(false, waitForWaConnectionMock as never, runtime);
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
@@ -166,13 +134,12 @@ describe("loginWeb coverage", () => {
 
   it("formats and rethrows generic errors", async () => {
     waitForWaConnectionMock.mockRejectedValueOnce(new Error("boom"));
-    const runtime = createRuntimeSpies();
     await expect(loginWeb(false, waitForWaConnectionMock as never, runtime)).rejects.toThrow(
       "formatted:Error: boom",
     );
     expect(runtimeMessageCalls(runtime.error)).toEqual([
       "WhatsApp Web connection ended before fully opening. formatted:Error: boom",
     ]);
-    expect(formatErrorMock).toHaveBeenCalled();
+    expect(formatError).toHaveBeenCalled();
   });
 });

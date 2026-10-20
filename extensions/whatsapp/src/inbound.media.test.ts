@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -7,7 +8,7 @@ import type { proto } from "baileys";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   mockExtractMessageContent,
   mockGetContentType,
@@ -46,45 +47,41 @@ function createInMemoryKeyedStore<T>() {
       store(key, value, opts);
       return true;
     },
-    async lookup(key: string) {
-      return entries.get(key)?.value;
-    },
+    lookup: async (key: string) => entries.get(key)?.value,
     async consume(key: string) {
       const value = entries.get(key)?.value;
       entries.delete(key);
       return value;
     },
-    async delete(key: string) {
-      return entries.delete(key);
-    },
-    async entries() {
-      return Array.from(entries.values());
-    },
-    async clear() {
-      entries.clear();
-    },
+    delete: async (key: string) => entries.delete(key),
+    entries: async () => Array.from(entries.values()),
+    clear: async () => entries.clear(),
   };
 }
 
-const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
-const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
+const readAllowFromStoreMock = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+const upsertPairingRequestMock = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true }),
+);
 const saveMediaStreamSpy = vi.fn();
 const downloadMediaMessageMock = vi.hoisted(() => vi.fn());
 const observedConsoleWarnings = vi.hoisted(() => vi.fn());
-let currentMockSocket:
-  | {
-      ev: import("node:events").EventEmitter;
-      ws: { close: ReturnType<typeof vi.fn> };
-      sendPresenceUpdate: ReturnType<typeof vi.fn>;
-      sendMessage: ReturnType<typeof vi.fn>;
-      readMessages: ReturnType<typeof vi.fn>;
-      groupFetchAllParticipating: ReturnType<typeof vi.fn>;
-      updateMediaMessage: ReturnType<typeof vi.fn>;
-      getMediaHost: () => string;
-      logger: Record<string, never>;
-      user: { id: string };
-    }
-  | undefined;
+function createMockSocket() {
+  const { EventEmitter } = require("node:events") as typeof import("node:events");
+  return {
+    ev: new EventEmitter(),
+    ws: { close: vi.fn() },
+    sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
+    sendMessage: vi.fn().mockResolvedValue(undefined),
+    readMessages: vi.fn().mockResolvedValue(undefined),
+    groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
+    updateMediaMessage: vi.fn(),
+    getMediaHost: () => "media-conn.example",
+    logger: {},
+    user: { id: "me@s.whatsapp.net" },
+  };
+}
+let currentMockSocket: ReturnType<typeof createMockSocket> | undefined;
 
 vi.mock("openclaw/plugin-sdk/logging-core", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/logging-core")>(
@@ -113,52 +110,31 @@ vi.mock("openclaw/plugin-sdk/logging-core", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async () => {
-  const actual = await vi.importActual<
-    typeof import("openclaw/plugin-sdk/runtime-config-snapshot")
-  >("openclaw/plugin-sdk/runtime-config-snapshot");
-  return {
-    ...actual,
-    readRuntimeConfig: vi.fn().mockReturnValue({
-      channels: {
-        whatsapp: {
-          allowFrom: ["*"], // Allow all in tests
-        },
+vi.mock(import("openclaw/plugin-sdk/runtime-config-snapshot"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  readRuntimeConfig: vi.fn().mockReturnValue({
+    channels: {
+      whatsapp: {
+        allowFrom: ["*"],
       },
-      messages: {
-        messagePrefix: undefined,
-        responsePrefix: undefined,
-      },
-    }),
-  };
-});
+    },
+    messages: {
+      messagePrefix: undefined,
+      responsePrefix: undefined,
+    },
+  }),
+}));
 
-vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/conversation-runtime")>(
-    "openclaw/plugin-sdk/conversation-runtime",
-  );
-  return {
-    ...actual,
-    readChannelAllowFromStore(...args: unknown[]) {
-      return readAllowFromStoreMock(...args);
-    },
-    upsertChannelPairingRequest(...args: unknown[]) {
-      return upsertPairingRequestMock(...args);
-    },
-  };
-});
+vi.mock(import("openclaw/plugin-sdk/conversation-runtime"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  readChannelAllowFromStore: readAllowFromStoreMock,
+  upsertChannelPairingRequest: upsertPairingRequestMock,
+}));
 
-vi.mock("openclaw/plugin-sdk/channel-pairing", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-pairing")>(
-    "openclaw/plugin-sdk/channel-pairing",
-  );
-  return {
-    ...actual,
-    readChannelAllowFromStore(...args: unknown[]) {
-      return readAllowFromStoreMock(...args);
-    },
-  };
-});
+vi.mock(import("openclaw/plugin-sdk/channel-pairing"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  readChannelAllowFromStore: readAllowFromStoreMock,
+}));
 
 vi.mock("openclaw/plugin-sdk/media-store", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-store")>(
@@ -200,8 +176,7 @@ vi.mock("./runtime.js", async () => {
 });
 
 const HOME = path.join(os.tmpdir(), `openclaw-inbound-media-${crypto.randomUUID()}`);
-const ORIGINAL_HOME = process.env.HOME;
-process.env.HOME = HOME;
+vi.stubEnv("HOME", HOME);
 
 vi.mock("baileys", async () => {
   const actual = await vi.importActual<typeof import("baileys")>("baileys");
@@ -212,7 +187,6 @@ vi.mock("baileys", async () => {
   );
   return {
     ...actual,
-    DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
     downloadMediaMessage: downloadMediaMessageMock.mockImplementation(() =>
       Readable.from([jpegBuffer]),
     ),
@@ -227,24 +201,9 @@ vi.mock("baileys", async () => {
 
 vi.mock("./session.js", async () => {
   const actual = await vi.importActual<typeof import("./session.js")>("./session.js");
-  const { EventEmitter } = require("node:events");
   return {
     ...actual,
-    createWaSocket: vi.fn().mockImplementation(async () => {
-      currentMockSocket ??= {
-        ev: new EventEmitter(),
-        ws: { close: vi.fn() },
-        sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
-        sendMessage: vi.fn().mockResolvedValue(undefined),
-        readMessages: vi.fn().mockResolvedValue(undefined),
-        groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
-        updateMediaMessage: vi.fn(),
-        getMediaHost: () => "media-conn.example",
-        logger: {},
-        user: { id: "me@s.whatsapp.net" },
-      };
-      return currentMockSocket;
-    }),
+    createWaSocket: vi.fn(async () => (currentMockSocket ??= createMockSocket())),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
     getStatusCode: vi.fn(() => 200),
   };
@@ -273,52 +232,39 @@ async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
 
 function latestSaveMediaStreamCall() {
   const call = saveMediaStreamSpy.mock.calls[saveMediaStreamSpy.mock.calls.length - 1];
-  if (!call) {
-    throw new Error("expected saveMediaStream call");
-  }
+  assert(call, "expected saveMediaStream call");
   return call;
 }
 
 function requireMediaPath(value: unknown): string {
-  if (typeof value !== "string" || value.length === 0) {
-    throw new Error("expected inbound media path");
-  }
+  assert(typeof value === "string" && value.length > 0, "expected inbound media path");
   return value;
 }
 
 // The async file transport's flush promise is not exposed through the plugin SDK.
 async function waitForLogLine(messageId: string, signal: AbortSignal): Promise<string> {
-  try {
-    for (;;) {
-      signal.throwIfAborted();
-      const content = await withinTest(
-        fs.readFile(LOG_PATH, "utf8").catch((error: unknown) => {
-          if (extractErrorCode(error) === "ENOENT") {
-            return "";
-          }
-          throw error;
-        }),
-        signal,
+  for (;;) {
+    signal.throwIfAborted();
+    const content = await withinTest(
+      fs.readFile(LOG_PATH, "utf8").catch((error: unknown) => {
+        if (extractErrorCode(error) === "ENOENT") {
+          return "";
+        }
+        throw error;
+      }),
+      signal,
+    );
+    const matchingLine = content
+      .split("\n")
+      .find(
+        (line) =>
+          line.includes("WhatsApp inbound media materialization failed") &&
+          line.includes(messageId),
       );
-      const matchingLine = content
-        .split("\n")
-        .find(
-          (line) =>
-            line.includes("WhatsApp inbound media materialization failed") &&
-            line.includes(messageId),
-        );
-      if (matchingLine) {
-        return matchingLine;
-      }
-      await waitForLogTick(10, undefined, { signal });
+    if (matchingLine) {
+      return matchingLine;
     }
-  } catch (error) {
-    if (signal.aborted) {
-      throw new Error(`Timed out waiting for the media failure log for ${messageId}`, {
-        cause: error,
-      });
-    }
-    throw error;
+    await waitForLogTick(10, undefined, { signal });
   }
 }
 
@@ -330,9 +276,7 @@ async function createBaileysMediaHttpError(statusCode: number, details: string):
     const { getHttpStream } = await vi.importActual<typeof import("baileys")>("baileys");
     await getHttpStream("https://media.example/private");
   } catch (error) {
-    if (!(error instanceof Error)) {
-      throw new Error("expected Baileys to reject media downloads with an Error", { cause: error });
-    }
+    assert(error instanceof Error, "expected Baileys to reject media downloads with an Error");
     error.message = `${error.message} ${details}`;
     return error;
   } finally {
@@ -346,7 +290,7 @@ function quotedReply(text: string, contextInfo: proto.IContextInfo): proto.IMess
   return { extendedTextMessage: { text, contextInfo } };
 }
 
-function expectExcluded(text: string | undefined, values: string[]) {
+function expectExcluded(text: string | undefined, values: readonly string[]) {
   for (const value of values) {
     expect(text).not.toContain(value);
   }
@@ -355,7 +299,7 @@ function expectExcluded(text: string | undefined, values: string[]) {
 async function expectFailureDiagnostics(
   messageId: string,
   stage: "direct" | "quoted",
-  excluded: string[],
+  excluded: readonly string[],
   signal: AbortSignal,
 ) {
   const diagnostic = await waitForLogLine(messageId, signal);
@@ -380,17 +324,9 @@ async function expectFailureDiagnostics(
 }
 
 describe("web inbound media saves with extension", () => {
-  async function getMockSocket() {
-    return (await createWaSocket(false, false)) as unknown as {
-      ev: import("node:events").EventEmitter;
-    };
-  }
-
-  function startMediaMonitor(
-    onMessage: Parameters<typeof monitorWebInbox>[0]["onMessage"],
-    mediaMaxMb?: number,
-  ) {
-    return monitorWebInbox({
+  async function startMediaCase(mediaMaxMb?: number) {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
       cfg: { channels: { whatsapp: { allowFrom: ["*"] } } },
       verbose: false,
       onMessage,
@@ -398,26 +334,20 @@ describe("web inbound media saves with extension", () => {
       authDir: path.join(HOME, "wa-auth"),
       ...(mediaMaxMb === undefined ? {} : { mediaMaxMb }),
     });
-  }
-
-  async function startMediaCase(mediaMaxMb?: number) {
-    const onMessage = vi.fn();
-    const listener = await startMediaMonitor(onMessage, mediaMaxMb);
-    const sock = await getMockSocket();
-    const send = (
-      id: string,
-      message: proto.IMessage,
-      messageTimestamp: number,
-      remoteJid = "111@s.whatsapp.net",
-    ) =>
+    onTestFinished(() => listener.close());
+    const sock = await createWaSocket(false, false);
+    const send = (id: string, message: proto.IMessage, remoteJid = "111@s.whatsapp.net") =>
       sock.ev.emit("messages.upsert", {
         type: "notify",
-        messages: [{ key: { id, fromMe: false, remoteJid }, message, messageTimestamp }],
+        messages: [
+          { key: { id, fromMe: false, remoteJid }, message, messageTimestamp: 1_700_000_000 },
+        ],
       });
-    return { onMessage, listener, send };
+    return { onMessage, send };
   }
 
   beforeEach(() => {
+    vi.stubEnv("HOME", HOME);
     vi.useRealTimers();
     currentMockSocket = undefined;
     downloadMediaMessageMock.mockClear();
@@ -445,30 +375,26 @@ describe("web inbound media saves with extension", () => {
     setLoggerOverride(null);
     await fs.rm(LOG_PATH, { force: true });
     await fs.rm(HOME, { recursive: true, force: true });
-    if (ORIGINAL_HOME === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = ORIGINAL_HOME;
-    }
+    vi.unstubAllEnvs();
   });
 
   it("stores image extension and keeps document filename", async () => {
-    const { onMessage, listener, send } = await startMediaCase();
+    const { onMessage, send } = await startMediaCase(1);
 
-    send("img1", imageMessage(), 1_700_000_001);
+    send("img1", imageMessage());
 
     const first = await waitForMessage(onMessage);
     const mediaPath = requireMediaPath(first.payload.media?.path);
     expect(path.extname(mediaPath)).toBe(".jpg");
     const stat = await fs.stat(mediaPath);
     expect(stat.size).toBeGreaterThan(0);
+    expect(latestSaveMediaStreamCall()[3]).toBe(1024 * 1024);
 
     onMessage.mockClear();
     const fileName = "invoice.pdf";
     send(
       "doc1",
       { documentMessage: { mimetype: "application/pdf", fileName } },
-      1_700_000_004,
       "333@s.whatsapp.net",
     );
 
@@ -477,12 +403,10 @@ describe("web inbound media saves with extension", () => {
     expect(saveMediaStreamSpy).toHaveBeenCalled();
     const lastCall = latestSaveMediaStreamCall();
     expect(lastCall[4]).toBe(fileName);
-
-    await listener.close();
   });
 
   it("stores quoted image media from reply context", async () => {
-    const { onMessage, listener, send } = await startMediaCase();
+    const { onMessage, send } = await startMediaCase();
 
     send(
       "quote-img-reply",
@@ -492,7 +416,6 @@ describe("web inbound media saves with extension", () => {
         mentionedJid: ["me@s.whatsapp.net"],
         quotedMessage: imageMessage(),
       }),
-      1_700_000_005,
       "111@g.us",
     );
 
@@ -507,12 +430,10 @@ describe("web inbound media saves with extension", () => {
     expect(
       lookupInboundMessageMeta("default", "111@g.us", "quote-img-reply")?.media,
     ).toBeUndefined();
-
-    await listener.close();
   });
 
   it("preserves self-authored quoted media through the real Baileys reupload boundary", async () => {
-    const { onMessage, listener, send } = await startMediaCase();
+    const { onMessage, send } = await startMediaCase();
 
     send(
       "quote-own-image",
@@ -521,7 +442,6 @@ describe("web inbound media saves with extension", () => {
         participant: "me@s.whatsapp.net",
         quotedMessage: imageMessage(),
       }),
-      1_700_000_007,
     );
 
     await waitForMessage(onMessage);
@@ -540,21 +460,17 @@ describe("web inbound media saves with extension", () => {
       ? retry.content.find((node) => node.tag === "rmr")
       : undefined;
     expect(retryNode?.attrs.from_me).toBe("true");
-
-    await listener.close();
   });
 
   it("delivers incoming video notes as normal video media", async () => {
-    const { onMessage, listener, send } = await startMediaCase();
+    const { onMessage, send } = await startMediaCase();
 
-    send("video-note-1", { ptvMessage: { mimetype: "video/mp4" } }, 1_700_000_008);
+    send("video-note-1", { ptvMessage: { mimetype: "video/mp4" } });
 
     const inbound = await waitForMessage(onMessage);
     expect(inbound.payload.media).toMatchObject({ kind: "video", type: "video/mp4" });
     expect(inbound.payload.media?.path).toBeTruthy();
     expect(downloadMediaMessageMock).toHaveBeenCalled();
-
-    await listener.close();
   });
 
   it.for([
@@ -565,7 +481,7 @@ describe("web inbound media saves with extension", () => {
     { urlHost: "custom-cdn.example", fetchHost: "custom-cdn.example" },
   ])(
     "downloads a sticker whose url is on $urlHost from $fetchHost",
-    async ({ urlHost, fetchHost, bareUrl }, { onTestFinished }) => {
+    async ({ urlHost, fetchHost, bareUrl }) => {
       const { downloadMediaMessage, getMediaKeys } =
         await vi.importActual<typeof import("baileys")>("baileys");
       downloadMediaMessageMock.mockImplementationOnce(downloadMediaMessage);
@@ -588,21 +504,16 @@ describe("web inbound media saves with extension", () => {
         );
       onTestFinished(() => fetchSpy.mockRestore());
 
-      const { onMessage, listener, send } = await startMediaCase();
-      onTestFinished(() => listener.close());
+      const { onMessage, send } = await startMediaCase();
 
-      send(
-        `sticker-${urlHost}`,
-        {
-          stickerMessage: {
-            url: bareUrl ? `https://${urlHost}` : `https://${urlHost}${directPath}`,
-            directPath,
-            mediaKey,
-            mimetype: "image/webp",
-          },
+      send(`sticker-${urlHost}`, {
+        stickerMessage: {
+          url: bareUrl ? `https://${urlHost}` : `https://${urlHost}${directPath}`,
+          directPath,
+          mediaKey,
+          mimetype: "image/webp",
         },
-        1_700_000_012,
-      );
+      });
 
       const inbound = await waitForMessage(onMessage);
       expect(fetchSpy.mock.calls.map(([input]) => resolveRequestUrl(input))).toEqual([fetchUrl]);
@@ -613,13 +524,13 @@ describe("web inbound media saves with extension", () => {
   );
 
   it("delivers native polls and preserves their questions when quoted", async () => {
-    const { onMessage, listener, send } = await startMediaCase();
+    const { onMessage, send } = await startMediaCase();
     const poll = {
       name: "Lunch?",
       options: [{ optionName: "Pizza" }, { optionName: "Sushi" }],
     };
 
-    send("poll-1", { pollCreationMessageV3: poll }, 1_700_000_009);
+    send("poll-1", { pollCreationMessageV3: poll });
 
     expect((await waitForMessage(onMessage)).payload.body).toBe("Lunch?\n- Pizza\n- Sushi");
     onMessage.mockClear();
@@ -631,60 +542,22 @@ describe("web inbound media saves with extension", () => {
         participant: "111@s.whatsapp.net",
         quotedMessage: { pollCreationMessageV3: poll },
       }),
-      1_700_000_010,
     );
 
     expect((await waitForMessage(onMessage)).quote).toMatchObject({
       id: "poll-1",
       body: "Lunch?\n- Pizza\n- Sushi",
     });
-
-    await listener.close();
   });
 
-  it("passes mediaMaxMb to saveMediaStream", async () => {
-    const { onMessage, listener, send } = await startMediaCase(1);
-    send("img3", imageMessage(), 1_700_000_003, "222@s.whatsapp.net");
-
-    await waitForMessage(onMessage);
-    expect(saveMediaStreamSpy).toHaveBeenCalled();
-    const lastCall = latestSaveMediaStreamCall();
-    expect(lastCall[3]).toBe(1 * 1024 * 1024);
-
-    await listener.close();
-  });
-
-  it("keeps a failed image fact with an unavailable notice", async ({ signal, onTestFinished }) => {
-    downloadMediaMessageMock.mockRejectedValueOnce(
-      await createBaileysMediaHttpError(
-        410,
-        `expired media reference +15551234567 111@s.whatsapp.net 789@hosted.lid 42@c.us Authorization: Bearer ${DIRECT_SYNTHETIC_BEARER} ${DEPLOYMENT_REDACTION_SENTINEL}`,
-      ),
-    );
-    const { onMessage, listener, send } = await startMediaCase();
-    onTestFinished(() => listener.close());
-
-    send("img-failed", imageMessage(), 1_700_000_006);
-
-    const inbound = await waitForMessage(onMessage);
-    expect(inbound.payload.body).toBe("[whatsapp attachment unavailable]");
-    expect(inbound.payload.commandBody).toBe("");
-    expect(inbound.payload.media).toEqual({
-      path: undefined,
-      type: "image/jpeg",
-      fileName: undefined,
-      kind: "image",
-    });
-    expect(inbound.payload.channelStructuredContext).toContainEqual({
-      label: "WhatsApp media",
-      source: "whatsapp",
-      type: "media",
-      payload: { contentType: "image/jpeg", kind: "image" },
-    });
-    await expectFailureDiagnostics(
-      "img-failed",
-      "direct",
-      [
+  it.for([
+    {
+      stage: "direct",
+      id: "img-failed",
+      body: "[whatsapp attachment unavailable]",
+      command: "",
+      details: `expired media reference +15551234567 111@s.whatsapp.net 789@hosted.lid 42@c.us Authorization: Bearer ${DIRECT_SYNTHETIC_BEARER} ${DEPLOYMENT_REDACTION_SENTINEL}`,
+      excluded: [
         "expired media reference",
         "media.example/private",
         "+15551234567",
@@ -694,44 +567,54 @@ describe("web inbound media saves with extension", () => {
         DIRECT_SYNTHETIC_BEARER,
         DEPLOYMENT_REDACTION_SENTINEL,
       ],
-      signal,
-    );
-  });
-
-  it("logs quoted media failures without verbose logging", async ({ signal, onTestFinished }) => {
-    downloadMediaMessageMock.mockRejectedValueOnce(
-      await createBaileysMediaHttpError(
-        410,
-        `quoted media reference expired 7@hosted 88@newsletter api_key=${QUOTED_SYNTHETIC_API_KEY} ${DEPLOYMENT_REDACTION_SENTINEL}`,
-      ),
-    );
-    const { onMessage, listener, send } = await startMediaCase();
-    onTestFinished(() => listener.close());
-
-    send(
-      "quoted-failed",
-      quotedReply("inspect this", {
-        stanzaId: "quoted-image-failed",
-        participant: "222@s.whatsapp.net",
-        quotedMessage: imageMessage(),
-      }),
-      1_700_000_011,
-    );
-
-    const inbound = await waitForMessage(onMessage);
-    expect(inbound.payload.body).toBe("inspect this\n\n[whatsapp quoted attachment unavailable]");
-    expect(inbound.payload.commandBody).toBe("inspect this");
-    await expectFailureDiagnostics(
-      "quoted-failed",
-      "quoted",
-      [
+    },
+    {
+      stage: "quoted",
+      id: "quoted-failed",
+      body: "inspect this\n\n[whatsapp quoted attachment unavailable]",
+      command: "inspect this",
+      details: `quoted media reference expired 7@hosted 88@newsletter api_key=${QUOTED_SYNTHETIC_API_KEY} ${DEPLOYMENT_REDACTION_SENTINEL}`,
+      excluded: [
         "quoted media reference expired",
         "7@hosted",
         "88@newsletter",
         QUOTED_SYNTHETIC_API_KEY,
         DEPLOYMENT_REDACTION_SENTINEL,
       ],
-      signal,
-    );
-  });
+    },
+  ] as const)(
+    "preserves $stage failed media and redacts diagnostics",
+    async (scenario, { signal }) => {
+      downloadMediaMessageMock.mockRejectedValueOnce(
+        await createBaileysMediaHttpError(410, scenario.details),
+      );
+      const { onMessage, send } = await startMediaCase();
+      const message =
+        scenario.stage === "direct"
+          ? imageMessage()
+          : quotedReply("inspect this", {
+              stanzaId: "quoted-image-failed",
+              participant: "222@s.whatsapp.net",
+              quotedMessage: imageMessage(),
+            });
+      send(scenario.id, message);
+      const inbound = await waitForMessage(onMessage);
+      expect(inbound.payload).toMatchObject({ body: scenario.body, commandBody: scenario.command });
+      if (scenario.stage === "direct") {
+        expect(inbound.payload.media).toEqual({
+          path: undefined,
+          type: "image/jpeg",
+          fileName: undefined,
+          kind: "image",
+        });
+        expect(inbound.payload.channelStructuredContext).toContainEqual({
+          label: "WhatsApp media",
+          source: "whatsapp",
+          type: "media",
+          payload: { contentType: "image/jpeg", kind: "image" },
+        });
+      }
+      await expectFailureDiagnostics(scenario.id, scenario.stage, scenario.excluded, signal);
+    },
+  );
 });
