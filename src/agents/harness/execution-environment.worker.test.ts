@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../../config/types.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { assertAgentHarnessExecutionEnvironment } from "./execution-environment.js";
@@ -19,6 +20,18 @@ const sandbox = { mode: "all" as const };
 const check = (params: Parameters<typeof assertAgentHarnessExecutionEnvironment>[1]) =>
   expect(assertAgentHarnessExecutionEnvironment(harness, params));
 
+async function createSession(
+  sessionId: string,
+  config: OpenClawConfig,
+  entry: Parameters<typeof upsertSessionEntryCore>[1] = {},
+) {
+  const scope = { agentId: "main", sessionKey: `agent:main:${sessionId}` };
+  const update = (value: Parameters<typeof upsertSessionEntryCore>[1]) =>
+    upsertSessionEntryCore(scope, value);
+  await update({ sessionId, updatedAt: 1, sandboxMode: "off", permissionMode: "full", ...entry });
+  return { update, params: { ...scope, sessionId, permissionMode: "full" as const, config } };
+}
+
 async function withoutMainThreadSql(run: () => Promise<void>) {
   const calls = observeMainThreadSql();
   try {
@@ -32,27 +45,18 @@ async function withoutMainThreadSql(run: () => Promise<void>) {
 it("reads native consent in the worker and observes a committed revocation", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const sessionKey = "agent:main:native-consent";
-    const scope = { agentId: "main", sessionKey };
-    const params = {
-      sessionKey,
-      sessionId: "native-consent",
-      agentId: "main",
-      permissionMode: "full" as const,
-      config: { agents: { defaults: { sandbox } } },
-    };
-    await upsertSessionEntryCore(scope, {
-      sessionId: params.sessionId,
-      updatedAt: 1,
-      sandboxMode: "off",
-      permissionMode: "full",
-      agentRuntimeOverride: harness.id,
-      nativeRuntimeConsent: harness.id,
-    });
+    const { params, update } = await createSession(
+      "native-consent",
+      { agents: { defaults: { sandbox } } },
+      {
+        agentRuntimeOverride: harness.id,
+        nativeRuntimeConsent: harness.id,
+      },
+    );
     await withoutMainThreadSql(async () => {
       await check(params).resolves.toBe(true);
     });
-    await upsertSessionEntryCore(scope, {
+    await update({
       sandboxMode: undefined,
       nativeRuntimeConsent: undefined,
     });
@@ -71,27 +75,15 @@ it("evaluates agent-scoped remembered consent each turn without copying it into 
       },
     };
     setRuntimeConfigSnapshot(config);
-    const scope = { agentId: "main", sessionKey: "agent:main:remembered-native" };
-    const params = {
-      ...scope,
-      sessionId: "remembered-native",
-      permissionMode: "full" as const,
-      config,
-    };
-    await upsertSessionEntryCore(scope, {
-      sessionId: params.sessionId,
-      updatedAt: 1,
-      sandboxMode: "off",
-      permissionMode: "full",
-    });
+    const { params, update } = await createSession("remembered-native", config);
     await check(params).resolves.toBe(true);
     for (const overrides of [{ toolsAllow: ["read"] }, { disableTools: true }]) {
       await check({ ...params, ...overrides }).resolves.not.toBe(true);
     }
     await check({ ...params, permissionMode: "guarded" }).rejects.toThrow("requires Full access");
-    await upsertSessionEntryCore(scope, { sandboxMode: undefined });
+    await update({ sandboxMode: undefined });
     await check(params).rejects.toThrow("outside the sandbox");
-    await upsertSessionEntryCore(scope, { sandboxMode: "off" });
+    await update({ sandboxMode: "off" });
     config.agents.entries.main.nativeRuntimeConsent = [];
     await check(params).resolves.toBe(false);
   });

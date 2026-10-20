@@ -34,30 +34,26 @@ export function createTurnBoundary(
   };
 }
 
-export function appendTurnMessage(
+export const appendTurnMessage = (
   target: Parameters<typeof appendTranscriptMessage>[0],
   role: "user" | "assistant",
   content: string,
   now: number,
   parentId?: string,
-) {
-  return appendTranscriptMessage(target, { message: { role, content }, now, parentId });
-}
+) => appendTranscriptMessage(target, { message: { role, content }, now, parentId });
 
-export function createTurnFacts(
+export const createTurnFacts = (
   boundary: TranscriptTurnBoundary,
   sessionTarget?: ContextEngineTurnAttemptFacts["sessionTarget"],
-): ContextEngineTurnAttemptFacts {
-  return {
-    boundary,
-    sessionTarget,
-    sessionIdUsed: boundary.admission.sessionId,
-    sessionKey: boundary.admission.sessionKey,
-    promptError: false,
-    aborted: false,
-    yieldAborted: false,
-  };
-}
+): ContextEngineTurnAttemptFacts => ({
+  boundary,
+  sessionTarget,
+  sessionIdUsed: boundary.admission.sessionId,
+  sessionKey: boundary.admission.sessionKey,
+  promptError: false,
+  aborted: false,
+  yieldAborted: false,
+});
 
 export function createTurnEngine<T extends NonNullable<ContextEngine["commitTurn"]>>(
   commitTurn: T,
@@ -67,14 +63,12 @@ export function createTurnEngine<T extends NonNullable<ContextEngine["commitTurn
     info: {
       id: "test",
       name: "Test",
-      ...(durable
+      transcriptSemantics: durable
         ? {
-            transcriptSemantics: {
-              currentTurnFence: "before-current-turn-entry-v1" as const,
-              turnAdvancementIdempotency: "atomic-idempotent-v1" as const,
-            },
+            currentTurnFence: "before-current-turn-entry-v1" as const,
+            turnAdvancementIdempotency: "atomic-idempotent-v1" as const,
           }
-        : {}),
+        : undefined,
     },
     ingest: async () => ({ ingested: true }),
     assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
@@ -83,20 +77,17 @@ export function createTurnEngine<T extends NonNullable<ContextEngine["commitTurn
   } satisfies ContextEngine;
 }
 
-export function createTurnLease(engine: ContextEngine) {
-  return {
+export const createTurnLease = (engine: ContextEngine) =>
+  ({
     engine,
     effectiveEngine: engine,
     effectiveEngineId: "test",
-    effectiveEnginePluginId: undefined,
     degraded: false,
     disposed: false,
-    degradedReason: undefined,
     selectForHost: vi.fn(),
     degradeBeforeStart: vi.fn(),
     begin: vi.fn(),
     onDispose: vi.fn(),
     deferDisposalUntil: vi.fn(),
     dispose: vi.fn(async () => undefined),
-  } satisfies ContextEngineLogicalTurnLease;
-}
+  }) satisfies ContextEngineLogicalTurnLease;

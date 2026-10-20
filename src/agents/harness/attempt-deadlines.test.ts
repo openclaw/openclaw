@@ -41,9 +41,15 @@ describe("agent harness attempt deadlines", () => {
     expect(onTimeout).toHaveBeenCalledExactlyOnceWith({ kind, elapsedMs: timeoutMs, timeoutMs });
   }
 
-  it.each(["timer", "clock"] as const)("expires the admitted execution budget via %s", (expiry) => {
+  it.each([
+    ["timer", 0],
+    ["clock", 0],
+    ["timer", 90_000],
+    ["timer", -90_000],
+  ] as const)("expires via %s across a %ims clock jump", (expiry, jumpMs) => {
     vi.advanceTimersByTime(20_000);
-    const { controller, onTimeout, onDeadlineChanged } = createController(60_000, 0);
+    vi.setSystemTime(20_000 + jumpMs);
+    const { controller, onTimeout, onDeadlineChanged } = createController(60_000, 0, 0);
     expect(controller.ownsExecutionWait()).toBe(true);
     expect(onDeadlineChanged).toHaveBeenCalledWith({ kind: "bounded", deadlineAtMs: 60_000 });
 
@@ -57,6 +63,8 @@ describe("agent harness attempt deadlines", () => {
 
     vi.advanceTimersByTime(39_999);
     expect(onTimeout).not.toHaveBeenCalled();
+    vi.setSystemTime(Date.now() + jumpMs);
+    expect(controller.ownsExecutionWait()).toBe(true);
     vi.advanceTimersByTime(1);
 
     expectTimeout(onTimeout, "execution");
@@ -67,15 +75,10 @@ describe("agent harness attempt deadlines", () => {
   });
 
   it.each([
-    { label: "native receipt", timeout: 60_000, now: 59_000, receipt: 59_000 },
-    { label: "blocked projection", timeout: 600_000, now: 90_000, receipt: 30_000 },
-    {
-      label: "unlimited execution",
-      timeout: MAX_TIMER_TIMEOUT_MS,
-      now: 49 * 60 * 60_000,
-      receipt: 49 * 60 * 60_000,
-    },
-  ])("bounds settlement from the original $label", ({ timeout, now, receipt }) => {
+    ["native receipt", 60_000, 59_000, 59_000],
+    ["blocked projection", 600_000, 90_000, 30_000],
+    ["unlimited execution", MAX_TIMER_TIMEOUT_MS, 49 * 60 * 60_000, 49 * 60 * 60_000],
+  ] as const)("bounds settlement from the original %s", (_label, timeout, now, receipt) => {
     const { controller, onTimeout, onDeadlineChanged } = createController(timeout);
     if (timeout === MAX_TIMER_TIMEOUT_MS) {
       expect(onDeadlineChanged).toHaveBeenCalledExactlyOnceWith({ kind: "unlimited" });
@@ -101,44 +104,25 @@ describe("agent harness attempt deadlines", () => {
     expect(onDeadlineChanged).toHaveBeenCalledTimes(2);
   });
 
-  it.each([90_000, -90_000])("preserves the admitted budget across a %ims clock jump", (jumpMs) => {
-    vi.advanceTimersByTime(20_000);
-    vi.setSystemTime(20_000 + jumpMs);
-    const { controller, onTimeout, onDeadlineChanged } = createController(60_000, 0, 0);
-    expect(onDeadlineChanged).toHaveBeenCalledWith({ kind: "bounded", deadlineAtMs: 60_000 });
-    expect(controller.ownsExecutionWait()).toBe(true);
-    vi.advanceTimersByTime(39_999);
-    expect(onTimeout).not.toHaveBeenCalled();
-    vi.setSystemTime(Date.now() + jumpMs);
-    expect(controller.ownsExecutionWait()).toBe(true);
-    vi.advanceTimersByTime(1);
-    expectTimeout(onTimeout, "execution");
-    expect(controller.ownsExecutionWait()).toBe(false);
-  });
-
-  it.each(["abort", "dispose"] as const)("cannot revive a deadline after %s", (closure) => {
-    const { controller, abort, onTimeout, onDeadlineChanged } = createController();
-    controller.beginSettlement(Date.now());
-    if (closure === "abort") {
-      abort.abort("cancelled");
-    } else {
-      controller.dispose();
-    }
-    controller.beginSettlement(Date.now());
-    vi.advanceTimersByTime(SETTLEMENT_TIMEOUT_MS + 60_000);
-    expect(controller.ownsExecutionWait()).toBe(false);
-    expect(onTimeout).not.toHaveBeenCalled();
-    expect(onDeadlineChanged).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not schedule work for an already-aborted attempt", () => {
-    const abort = new AbortController();
-    abort.abort("cancelled");
-    const { controller, onTimeout, onDeadlineChanged } = createController(60_000, 0, 0, abort);
-    controller.beginSettlement(0);
-    vi.advanceTimersByTime(SETTLEMENT_TIMEOUT_MS);
-    expect(controller.ownsExecutionWait()).toBe(false);
-    expect(onTimeout).not.toHaveBeenCalled();
-    expect(onDeadlineChanged).not.toHaveBeenCalled();
-  });
+  it.each(["abort", "dispose", "already aborted"] as const)(
+    "cannot revive a deadline after %s",
+    (closure) => {
+      const abort = new AbortController();
+      if (closure === "already aborted") {
+        abort.abort("cancelled");
+      }
+      const { controller, onTimeout, onDeadlineChanged } = createController(60_000, 0, 0, abort);
+      controller.beginSettlement(0);
+      if (closure === "abort") {
+        abort.abort("cancelled");
+      } else if (closure === "dispose") {
+        controller.dispose();
+      }
+      controller.beginSettlement(Date.now());
+      vi.advanceTimersByTime(SETTLEMENT_TIMEOUT_MS + 60_000);
+      expect(controller.ownsExecutionWait()).toBe(false);
+      expect(onTimeout).not.toHaveBeenCalled();
+      expect(onDeadlineChanged).toHaveBeenCalledTimes(closure === "already aborted" ? 0 : 2);
+    },
+  );
 });
