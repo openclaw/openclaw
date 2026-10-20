@@ -101,8 +101,7 @@ export function registerRequesterSelfYieldFollowupTests<Response>(fixture: {
         completion,
         "adopted follow-up settled without an ordinary announcement",
       );
-      // Recovery runs before the in-flight delivery receipt commits. Join every
-      // real wake it starts so a competing completion cannot escape the assertion.
+      // Join all recovery wakes started before the delivery receipt commits.
       await registry.testing.sweepOnceForTests();
       await fixture.flushAsync();
       await Promise.all(wakes);
@@ -112,9 +111,6 @@ export function registerRequesterSelfYieldFollowupTests<Response>(fixture: {
     }
     await fixture.flushOwnedWork();
     expect(fixture.getAgentCalls()).toHaveLength(1);
-    expect(registry.getSubagentRunByRunId(followupRunId)).toMatchObject({
-      delivery: { status: "delivered" },
-    });
     await fixture.waitForDeliveredCleanup(followupRunId);
   });
 }

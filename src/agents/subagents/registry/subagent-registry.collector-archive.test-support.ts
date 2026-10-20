@@ -43,10 +43,7 @@ export function registerCollectorArchiveTests({
     async (scope) => {
       const mod = getRegistry();
       const now = Date.now();
-      for (const [suffix, archiveAtMs] of [
-        ["one", now - 1],
-        ["two", now + 1_000],
-      ] as const) {
+      for (const suffix of ["one", "two"]) {
         const requesterSessionKey = scope === "agent" ? "global" : `agent:main:requester-${suffix}`;
         await mod.addSubagentRunForTests(
           collectorRun(suffix, now, {
@@ -55,7 +52,7 @@ export function registerCollectorArchiveTests({
             requesterAgentId: scope === "agent" ? suffix : "main",
             cleanup: "delete",
             cleanupCompletedAt: now - 4_000,
-            archiveAtMs,
+            archiveAtMs: suffix === "one" ? now - 1 : now + 1_000,
             groupId: "swarm:shared-group-id",
           }),
         );
@@ -114,26 +111,20 @@ export function registerCollectorArchiveTests({
       if (phase === "sweep") {
         expect(getActiveGatewayRootWorkCount()).toBe(1);
       }
-      if (phase === "collector replacement") {
-        await mod.addSubagentRunForTests(
-          collectorRun("collector-after-await", now, {
-            runId,
-            createdAt: now,
-            endedAt: now,
-            groupId: "swarm:cleanup-race",
-          }),
-        );
-      } else {
-        await mod.addSubagentRunForTests({
-          runId: "run-collector-after-await",
-          childSessionKey: "agent:main:subagent:collector-after-await",
-          childSessionIdentity: identity("collector-after-await"),
-          task: "incomplete collector registered during cleanup",
-          createdAt: now,
-          collect: true,
-          groupId: "swarm:cleanup-race",
-        });
-      }
+      const after = {
+        runId: "run-collector-after-await",
+        childSessionKey: "agent:main:subagent:collector-after-await",
+        childSessionIdentity: identity("collector-after-await"),
+        task: "collector-after-await",
+        createdAt: now,
+        collect: true,
+        groupId: "swarm:cleanup-race",
+      };
+      await mod.addSubagentRunForTests(
+        phase === "collector replacement"
+          ? makeCompletedCollectorRun({ ...after, runId, endedAt: now, archiveAtMs: now - 1 })
+          : after,
+      );
       releaseDelete?.();
       await sweep;
       if (phase === "sweep") {

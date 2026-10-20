@@ -6,7 +6,7 @@ import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type KilledRunOverrides = SubagentRunRecordOverrides &
-  Required<Pick<SubagentRunRecord, "task" | "createdAt">>;
+  Pick<SubagentRunRecord, "task" | "createdAt">;
 type QueuedRunOverrides = Omit<SubagentRunRecordOverrides, "queuedLaunch"> & {
   queuedLaunch?: Partial<NonNullable<SubagentRunRecord["queuedLaunch"]>>;
 };
@@ -14,11 +14,9 @@ type SuspendedDeliveryRunOverrides = Omit<
   SubagentRunRecordOverrides,
   "startedAt" | "outcome" | "expectsCompletionMessage" | "delivery"
 > &
-  Required<
-    Pick<
-      SubagentRunRecord,
-      "childSessionKey" | "requesterSessionKey" | "requesterDisplayKey" | "task" | "createdAt"
-    >
+  Pick<
+    SubagentRunRecord,
+    "childSessionKey" | "requesterSessionKey" | "requesterDisplayKey" | "task" | "createdAt"
   > & {
     endedAt: number;
     delivery: Partial<NonNullable<SubagentRunRecord["delivery"]>>;
@@ -53,9 +51,6 @@ export const makeQueuedRun = ({
   return createSubagentRunRecord({
     childSessionKey,
     requesterSessionKey,
-    requesterDisplayKey: "main",
-    task: overrides.runId,
-    cleanup: "keep",
     collect: true,
     execution: { status: "queued" },
     completion: { required: false },

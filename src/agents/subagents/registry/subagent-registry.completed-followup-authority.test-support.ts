@@ -54,8 +54,8 @@ export function registerCompletedFollowupAuthorityTests({
           );
           client.internal = { operatorRunAuthority: source.authority };
           return {
+            ...source,
             revoked,
-            source,
             run: <T>(work: () => T) =>
               withPluginRuntimeGatewayRequestScope(
                 { client, context, resolveGatewayContext, isWebchatConnect: () => false },
@@ -71,8 +71,8 @@ export function registerCompletedFollowupAuthorityTests({
               registration("child", { requesterAgentId: "main", requesterTurnRunId: "parent" }),
             ),
           );
-          original.source.release();
-          expect(original.source.authority.assertCurrent).not.toThrow();
+          original.release();
+          expect(original.authority.assertCurrent).not.toThrow();
           const entry = expectDefined(subagentRuns.get("child"), "completed child");
           await updateRun(entry.runId, (draft) => {
             draft.execution = { status: "terminal", endedAt: 1, outcome: { status: "ok" } };
@@ -92,7 +92,7 @@ export function registerCompletedFollowupAuthorityTests({
               }),
             ),
           ).toBe(true);
-          followup.source.release();
+          followup.release();
           const retained = expectDefined(subagentRuns.get(entry.runId), "pending completed result");
           const successor = expectDefined(subagentRuns.get("successor"), "followup child");
           const stored = loadSubagentRegistryFromSqlite();
@@ -116,8 +116,8 @@ export function registerCompletedFollowupAuthorityTests({
                   ?.source,
             );
           // Suppressing old session effects must not retire its pending result's custody.
-          expect(completionSource(retained)).toBe(original.source.authority.source);
-          expect(completionSource(successor)).toBe(followup.source.authority.source);
+          expect(completionSource(retained)).toBe(original.authority.source);
+          expect(completionSource(successor)).toBe(followup.authority.source);
           const revokeOriginal = revokedOwner === "original";
           (revokeOriginal ? original.revoked : followup.revoked).abort(
             new Error("operator revoked"),
@@ -126,17 +126,17 @@ export function registerCompletedFollowupAuthorityTests({
             /authority/,
           );
           expect(completionSource(revokeOriginal ? successor : retained)).toBe(
-            revokeOriginal ? followup.source.authority.source : original.source.authority.source,
+            revokeOriginal ? followup.authority.source : original.authority.source,
           );
           await releaseSubagentRun(entry.runId);
           await releaseSubagentRun(successor.runId);
-          expect(original.source.authority.assertCurrent).toThrow();
+          expect(original.authority.assertCurrent).toThrow();
           expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
             /authority/,
           );
         } finally {
-          original.source.release();
-          followup?.source.release();
+          original.release();
+          followup?.release();
           await resetSubagentRegistryForTests({ persist: false });
         }
       });
