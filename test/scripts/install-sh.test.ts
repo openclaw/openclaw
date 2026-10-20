@@ -95,17 +95,6 @@ describe("install.sh", () => {
     expect(output.match(/Support: https:\/\/community\.openclaw\.ai\//g)).toHaveLength(2);
   });
 
-  it("keeps npm-version diagnostics on stderr alongside support", () => {
-    const result = runInstallShell(
-      `source "${SCRIPT_PATH}"\ninstaller_npm_version_error fixture-npm`,
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe("");
-    expect(result.stderr).toBe(
-      "Unable to determine npm version from fixture-npm; no package changes were made.\nSupport: https://community.openclaw.ai/\n",
-    );
-  });
-
   it("re-execs a streamed installer on Darwin Bash 5.3+ without leaving a temp file", (context) => {
     const bash = findDarwinReexecBash();
     if (!bash) {
@@ -995,7 +984,7 @@ NODE
     const args = join(tmp, "args");
     const npmRoot = join(tmp, "lib", "node_modules");
     writeNpmLifecycleFixture(npm);
-    const run = (version: string, keepGuard: string) =>
+    const run = (version: string, keepGuard: string, versionStatus = "0") =>
       runInstallShell(
         [
           `source ${JSON.stringify(SCRIPT_PATH)}`,
@@ -1008,10 +997,17 @@ NODE
           NPM_FAKE_PACKAGE_DIR: join(npmRoot, "openclaw"),
           NPM_FAKE_ROOT: npmRoot,
           NPM_FAKE_VERSION: version,
+          NPM_FAKE_VERSION_STATUS: versionStatus,
         },
       );
     expect(run("invalid", "0").status).not.toBe(0);
     expect(run("npm 12.0.0 warning", "0").status).not.toBe(0);
+    const unreadableVersion = run("", "0", "23");
+    expect(unreadableVersion.status).toBe(1);
+    expect(unreadableVersion.stdout).toBe("");
+    expect(unreadableVersion.stderr).toBe(
+      `Unable to determine npm version from ${npm}; no package changes were made.\nSupport: https://community.openclaw.ai/\n`,
+    );
     expect(existsSync(args)).toBe(false);
     expect(run("12.0.0", "1").status).not.toBe(0);
   });
