@@ -71,11 +71,7 @@ async function startMirror(config: OpenClawConfig, catalog?: SessionCatalogProvi
 }
 
 it("isolates a cold Beam credential without disabling unrelated configured credentials", async () => {
-  const config = configWithToken({
-    source: "env",
-    provider: "default",
-    id: "BEAM_MISSING_TOKEN",
-  });
+  const config = configWithToken({ source: "env", provider: "default", id: "BEAM_MISSING_TOKEN" });
   config.models = {
     providers: {
       example: {

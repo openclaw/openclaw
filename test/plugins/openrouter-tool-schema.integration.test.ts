@@ -19,8 +19,6 @@ const makeRoute = (
   ...makeProviderModel("openai-completions", "openrouter", "openai/gpt-5.4-mini", {
     baseUrl: publicUrl,
     reasoning: false,
-    contextWindow: 8192,
-    maxTokens: 1024,
   }),
   name,
   native: false,

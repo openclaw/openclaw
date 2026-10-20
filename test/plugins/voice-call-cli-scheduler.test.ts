@@ -63,8 +63,7 @@ it.each([
       connectionDetails: { url: "ws://127.0.0.1:18789" },
     }),
   );
-  const clock = createGatewaySchedulerClock();
-  const root = createTestGatewayScheduler(clock.clock);
+  const root = createTestGatewayScheduler(createGatewaySchedulerClock().clock);
   const host = new LegacyPluginSdkResourceHost();
   host.bindScheduler(root);
   const builder = createRuntimeTestRegistry(createPluginRuntimeMock());
@@ -109,13 +108,13 @@ it.each([
       handler("SIGTERM");
     }
   };
-  const stdout = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: unknown) => {
+  const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     output += String(chunk);
     if (output.includes(scenario.output)) {
       printed.resolve();
     }
     return true;
-  }) as typeof process.stdout.write);
+  });
   try {
     host.run(() => voiceCallPlugin.register(api));
     await host.run(() =>
@@ -134,7 +133,6 @@ it.each([
       (error: unknown) => printed.reject(error),
     );
     await printed.promise;
-    expect(output).toContain(scenario.output);
     expect(initiateCall).toHaveBeenCalledWith(scenario.to, undefined, scenario.options);
     expect(mocks.createRuntime).toHaveBeenCalledOnce();
     expect(scheduler?.signal.aborted).toBe(false);

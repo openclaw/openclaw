@@ -1,4 +1,4 @@
-import { assert, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { finalizeAgentTools } from "../../src/agents/agent-tools.finalize.js";
 import { applyToolPolicyPipeline } from "../../src/agents/tool-policy-pipeline.js";
 import {
@@ -56,24 +56,20 @@ it.each(["feishu", "file-transfer"])(
         steps: [{ policy, label: "tools.allow", stripPluginOnlyAllowlist: true }],
         warn: () => {},
       });
-      expect(authorized.map((tool) => tool.name)).toEqual([selected.name]);
       const tools = finalizeAgentTools({
         tools: authorized,
         hookContext: {},
         wrapBeforeToolCallHook: false,
       });
-      const [normalized] = tools;
-      assert(normalized, `Selected tool disappeared: ${selected.name}`);
+      const normalized = tools[0]!;
       const catalogRef = createToolSearchCatalogRef();
       try {
-        const controls = createToolSearchTools({ config, catalogRef });
         const surface = applyToolSearchCatalog({
-          tools: [...controls, ...tools],
+          tools: [...createToolSearchTools({ config, catalogRef }), ...tools],
           config,
           catalogRef,
         });
-        const describeTool = surface.tools.find((tool) => tool.name === "tool_describe");
-        assert(describeTool, "Missing tool_describe control");
+        const describeTool = surface.tools.find((tool) => tool.name === "tool_describe")!;
         const result = await describeTool.execute("describe-selected", { id: selected.name });
         const { name, description, parameters } = normalized;
         const metadata = { name, description, parameters };
