@@ -1,20 +1,13 @@
 import { gzipSync } from "node:zlib";
 import { Header } from "tar";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { scanPluginNpmArtifactSecurity } from "../../scripts/plugin-npm-security-scan.mts";
 
 function tarEntry(path: string, value: string): Buffer {
   const content = Buffer.from(value, "utf8");
   const header = Buffer.alloc(512);
-  new Header({
-    path,
-    mode: 0o644,
-    uid: 0,
-    gid: 0,
-    size: content.length,
-    mtime: new Date(0),
-    type: "File",
-  }).encode(header);
+  const entry = new Header({ path, mode: 0o644, size: content.length, mtime: new Date(0) });
+  entry.encode(header);
   const padding = Buffer.alloc((512 - (content.length % 512)) % 512);
   return Buffer.concat([header, content, padding]);
 }
@@ -55,57 +48,54 @@ function expectUnsafe(
   );
 }
 
-describe("plugin npm artifact security scan", () => {
-  it("rejects fixtures only when npm includes them in the tarball", () => {
-    expect(() => scan({ "src/fixtures/example.ts": SPAWN_SOURCE })).toThrow(
-      "artifact contains test or fixture files",
-    );
-  });
+it("rejects fixtures only when npm includes them in the tarball", () => {
+  expect(() => scan({ "src/fixtures/example.ts": SPAWN_SOURCE })).toThrow(
+    "artifact contains test or fixture files",
+  );
+});
 
-  it("leaves vendored dependency tests to dependency security evidence", () => {
-    const result = scan({
-      "node_modules/dependency/test/fixture.js": SPAWN_SOURCE,
-      "src/index.ts": "export const value = 1;\n",
-    });
-    expect(result.scannedFiles).toBe(1);
-    expect(result.criticalFindingCount).toBe(0);
+it("leaves vendored dependency tests to dependency security evidence", () => {
+  const result = scan({
+    "node_modules/dependency/test/fixture.js": SPAWN_SOURCE,
+    "src/index.ts": "export const value = 1;\n",
   });
+  expect(result).toMatchObject({ scannedFiles: 1, criticalFindingCount: 0 });
+});
 
-  it("scans production code from bundled dependencies", () => {
-    expectUnsafe({ "node_modules/dependency/index.js": SPAWN_SOURCE });
-  });
+it("scans production code from bundled dependencies", () => {
+  expectUnsafe({ "node_modules/dependency/index.js": SPAWN_SOURCE });
+});
 
-  it("scans extensionless and directories.bin executables", () => {
-    for (const [path, manifest] of [
-      ["payload", {}],
-      ["tools/generate.txt", { directories: { bin: "tools" } }],
-    ] as const) {
-      expectUnsafe({ [path]: SPAWN_SOURCE }, "@openclaw/example", manifest);
-    }
-  });
+it("scans extensionless and directories.bin executables", () => {
+  for (const [path, manifest] of [
+    ["payload", {}],
+    ["tools/generate.txt", { directories: { bin: "tools" } }],
+  ] as const) {
+    expectUnsafe({ [path]: SPAWN_SOURCE }, "@openclaw/example", manifest);
+  }
+});
 
-  it("does not carry source allowances into a dist artifact", () => {
-    expectUnsafe(
-      { "dist/daemon.js": SPAWN_SOURCE, "src/index.ts": "export const value = 1;\n" },
-      "@openclaw/signal",
-    );
-  });
+it("does not carry source allowances into a dist artifact", () => {
+  expectUnsafe(
+    { "dist/daemon.js": SPAWN_SOURCE, "src/index.ts": "export const value = 1;\n" },
+    "@openclaw/signal",
+  );
+});
 
-  it("classifies reviewed findings by their file layout", () => {
-    const result = scan(
-      {
-        "dist/.setup/index.mjs": "export const value = 1;\n",
-        "dist/mcp-proxy.mjs": SPAWN_SOURCE,
-      },
-      "@openclaw/acpx",
-    );
-    expect(result.criticalFindingCount).toBe(1);
-  });
+it("classifies reviewed findings by their file layout", () => {
+  const result = scan(
+    {
+      "dist/.setup/index.mjs": "export const value = 1;\n",
+      "dist/mcp-proxy.mjs": SPAWN_SOURCE,
+    },
+    "@openclaw/acpx",
+  );
+  expect(result.criticalFindingCount).toBe(1);
+});
 
-  it("rejects changed bytes at the reviewed iMessage setup helper path", () => {
-    expectUnsafe(
-      { "dist/.setup/sanitize-outbound-3MLljgtY.mjs": BUNDLED_HELPER_EXEC_SOURCE },
-      "@openclaw/imessage",
-    );
-  });
+it("rejects changed bytes at the reviewed iMessage setup helper path", () => {
+  expectUnsafe(
+    { "dist/.setup/sanitize-outbound-3MLljgtY.mjs": BUNDLED_HELPER_EXEC_SOURCE },
+    "@openclaw/imessage",
+  );
 });

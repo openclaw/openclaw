@@ -1,4 +1,3 @@
-import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -7,26 +6,25 @@ import {
   packageNameFromSpecifier,
 } from "../../scripts/lib/plugin-package-dependencies.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile } from "../helpers/temp-repo.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function writePackageJson(root: string, pluginId: string, packageJson: unknown): void {
-  const pluginDir = join(root, pluginId);
-  mkdirSync(pluginDir, { recursive: true });
-  writeFileSync(join(pluginDir, "package.json"), `${JSON.stringify(packageJson, null, 2)}\n`);
-}
-
 describe("scripts/lib/plugin-package-dependencies.mts", () => {
   it("extracts dependency package names from bare import specifiers", () => {
-    expect(packageNameFromSpecifier("@scope/pkg/subpath")).toBe("@scope/pkg");
-    expect(packageNameFromSpecifier("plain-pkg/subpath")).toBe("plain-pkg");
-    expect(packageNameFromSpecifier("@scope")).toBeNull();
-    expect(packageNameFromSpecifier("@scope/")).toBeNull();
-    expect(packageNameFromSpecifier("bun:sqlite")).toBeNull();
-    expect(packageNameFromSpecifier("node:fs")).toBeNull();
-    expect(packageNameFromSpecifier("./local")).toBeNull();
-    expect(packageNameFromSpecifier("/absolute")).toBeNull();
-    expect(packageNameFromSpecifier("#internal")).toBeNull();
+    expect(
+      [
+        "@scope/pkg/subpath",
+        "plain-pkg/subpath",
+        "@scope",
+        "@scope/",
+        "bun:sqlite",
+        "node:fs",
+        "./local",
+        "/absolute",
+        "#internal",
+      ].map(packageNameFromSpecifier),
+    ).toEqual(["@scope/pkg", "plain-pkg", null, null, null, null, null, null, null]);
   });
 
   it("collects only runtime dependency specs from package manifests", () => {
@@ -44,13 +42,15 @@ describe("scripts/lib/plugin-package-dependencies.mts", () => {
 
   it("collects bundled plugin dependency owners and conflicts deterministically", () => {
     const root = tempDirs.make("openclaw-plugin-dependencies-");
-    writePackageJson(root, "alpha", {
+    const write = (id: string, value: unknown) =>
+      writeJsonFile(join(root, id, "package.json"), value);
+    write("alpha", {
       dependencies: { shared: "^1.0.0" },
       optionalDependencies: { optional: "^2.0.0" },
     });
-    writePackageJson(root, "beta", { dependencies: { shared: "^1.0.0" } });
-    writePackageJson(root, "gamma", { dependencies: { shared: "^1.1.0" } });
-    writePackageJson(root, "external", {
+    write("beta", { dependencies: { shared: "^1.0.0" } });
+    write("gamma", { dependencies: { shared: "^1.1.0" } });
+    write("external", {
       dependencies: { shared: "^9.0.0" },
       openclaw: { build: { bundledDist: false } },
     });
