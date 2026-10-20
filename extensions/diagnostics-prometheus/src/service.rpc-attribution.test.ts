@@ -10,9 +10,7 @@ const sidebar = {
   filter: "general",
 } as const;
 
-it("counts trusted baseline retirements and successful base misses with bounded labels", ({
-  metrics,
-}) => {
+it("counts trusted baseline retirements and first-response base misses", ({ metrics }) => {
   for (const cause of [
     "projection-revision",
     "config",
@@ -32,11 +30,7 @@ it("counts trusted baseline retirements and successful base misses with bounded 
     const event = {
       ...response,
       method: "sessions.list",
-      sessionsList: {
-        ...sidebar,
-        rowsOutcome: "full-with-base",
-        baseMissReason: reason,
-      },
+      sessionsList: { ...sidebar, rowsOutcome: "full-with-base", baseMissReason: reason },
     } as const;
     metrics.record(event);
     metrics.record(event, untrusted);
@@ -49,13 +43,8 @@ it("counts trusted baseline retirements and successful base misses with bounded 
 });
 
 it("accounts for session response bytes by sidebar row outcome", ({ metrics }) => {
-  for (const rowsOutcome of [
-    "delta",
-    "unchanged",
-    "full-no-base",
-    "full-with-base",
-    "not-sidebar",
-  ] as const) {
+  const outcomes = ["delta", "unchanged", "full-no-base", "full-with-base", "not-sidebar"] as const;
+  for (const rowsOutcome of outcomes) {
     const event = {
       ...response,
       method: "sessions.list",
@@ -78,9 +67,7 @@ it("accounts for session response bytes by sidebar row outcome", ({ metrics }) =
   );
 });
 
-it("accounts for chat history requests and bytes by bounded request and response shape", ({
-  metrics,
-}) => {
+it("attributes chat history requests and response bytes", ({ metrics }) => {
   for (const query of [
     { shape: "cursor", limitBucket: "<=20", outcome: "delta", source: "wire" },
     { shape: "older", limitBucket: "<=80", outcome: "page", source: "wire" },
@@ -98,9 +85,9 @@ it("accounts for chat history requests and bytes by bounded request and response
     metrics.record({ ...event, firstResponse: false, responseBytes: 42 });
     const labels = `client_kind="openclaw-control-ui",limit_bucket="${query.limitBucket}",outcome="${query.outcome}",shape="${query.shape}",source="${query.source}"`;
     expectMetrics(metrics.render())(`
-          openclaw_chat_history_requests_total{${labels}} 1
-          openclaw_chat_history_response_bytes_total{${labels}} 1276
-        `);
+      openclaw_chat_history_requests_total{${labels}} 1
+      openclaw_chat_history_response_bytes_total{${labels}} 1276
+    `);
   }
   expect(metrics.render()).toContain(
     'openclaw_gateway_rpc_response_bytes_sum{method="chat.history"} 5104\n',

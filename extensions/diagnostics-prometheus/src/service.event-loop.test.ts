@@ -1,9 +1,9 @@
 import { describe, expect, vi } from "vitest";
+import type { DiagnosticEventPayload } from "../api.js";
 import {
   metricsTest as it,
   expectMetrics,
   expectExcludes,
-  baseEvent,
   createMetricsHarness,
   untrusted,
   withMetricsServer,
@@ -24,6 +24,19 @@ const memory = {
   externalBytes: 200,
   arrayBuffersBytes: 100,
 };
+type Memory = Extract<DiagnosticEventPayload, { type: "diagnostic.memory.sample" }>["memory"];
+type WorkerHeap = NonNullable<Memory["workerHeaps"]>[number];
+function memorySample(fields: Partial<Memory> = {}) {
+  return { type: "diagnostic.memory.sample" as const, memory: { ...memory, ...fields } };
+}
+function heap(
+  script: string,
+  heapUsed: number,
+  heapTotal: number,
+  fields: Omit<WorkerHeap, "script" | "heapUsed" | "heapTotal"> = {},
+) {
+  return { script, heapUsed, heapTotal, ...fields };
+}
 
 describe("diagnostics-prometheus runtime metrics", () => {
   it("counts attributed main-thread stalls by task and reports bounded-buffer losses", ({
@@ -88,36 +101,28 @@ describe("diagnostics-prometheus runtime metrics", () => {
         durationMs,
       });
     }
-    metrics.record({
-      type: "diagnostic.memory.sample",
-      memory: {
-        ...memory,
+    metrics.record(
+      memorySample({
         anonymousRssBytes: 700,
         anonymousSwapBytes: 0,
         workerHeaps: [
-          {
-            script: "code-mode-node.worker.js",
+          heap("code-mode-node.worker.js", 900, 1000, {
             workerSlot: 1,
-            heapUsed: 900,
-            heapTotal: 1000,
             heapSizeLimitBytes: 1024,
             external: 300,
             arrayBuffers: 100,
-          },
-          {
-            script: "code-mode-node.worker.js",
+          }),
+          heap("code-mode-node.worker.js", 100, 200, {
             workerSlot: 2,
-            heapUsed: 100,
-            heapTotal: 200,
             heapSizeLimitBytes: 1024,
             external: 50,
             arrayBuffers: 20,
-          },
+          }),
           // Slot overflow still contributes to script totals; native-only samples lack buffers.
-          { script: "code-mode-node.worker.js", heapUsed: 10, heapTotal: 20, external: 50 },
+          heap("code-mode-node.worker.js", 10, 20, { external: 50 }),
         ],
-      },
-    });
+      }),
+    );
     const before = metrics.render();
     expectMetrics(before)(`
       openclaw_process_anonymous_memory_bytes{kind="rss"} 700
@@ -140,23 +145,18 @@ describe("diagnostics-prometheus runtime metrics", () => {
       `);
     }
     // Retirement or stale sampling removes gauges; slot reuse keeps cumulative GC counts.
-    metrics.record({
-      type: "diagnostic.memory.sample",
-      memory: {
-        ...memory,
+    metrics.record(
+      memorySample({
         workerHeaps: [
-          {
-            script: "code-mode-node.worker.js",
+          heap("code-mode-node.worker.js", 50, 100, {
             workerSlot: 1,
-            heapUsed: 50,
-            heapTotal: 100,
             external: 0,
             arrayBuffers: 0,
-          },
-          { script: "sqlite-store.worker.js", heapUsed: 10, heapTotal: 20, external: 25 },
+          }),
+          heap("sqlite-store.worker.js", 10, 20, { external: 25 }),
         ],
-      },
-    });
+      }),
+    );
     const after = metrics.render();
     expect(after).not.toContain("openclaw_process_anonymous_memory_bytes");
     expect(after).toContain('openclaw_code_mode_worker_heap_bytes{kind="used",slot="1"} 50\n');
@@ -184,7 +184,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
     expect(after).toContain(
       'openclaw_gc_duration_seconds_count{kind="mark_sweep_compact",reason="forced",slot="1",thread="code-mode-node.worker.js"} 2\n',
     );
-    metrics.record({ type: "diagnostic.memory.sample", memory });
+    metrics.record(memorySample());
     expectExcludes(
       metrics.render(),
       "openclaw_code_mode_worker_heap_bytes",
@@ -197,22 +197,17 @@ describe("diagnostics-prometheus runtime metrics", () => {
   it("exports cumulative worker traffic without recounting repeated memory samples", ({
     metrics,
   }) => {
-    const sample = {
-      ...baseEvent(),
-      type: "diagnostic.memory.sample" as const,
-      memory: {
-        ...memory,
-        workerMessages: [
-          {
-            kind: "sqlite_reply" as const,
-            direction: "from_worker" as const,
-            messages: 4,
-            payloadBytes: 1234,
-            unmeasuredMessages: 2,
-          },
-        ],
-      },
-    };
+    const sample = memorySample({
+      workerMessages: [
+        {
+          kind: "sqlite_reply" as const,
+          direction: "from_worker" as const,
+          messages: 4,
+          payloadBytes: 1234,
+          unmeasuredMessages: 2,
+        },
+      ],
+    });
     metrics.record(sample, untrusted);
     expect(metrics.render()).not.toContain("openclaw_worker_messages_total");
     metrics.record(sample);
@@ -230,10 +225,8 @@ describe("diagnostics-prometheus runtime metrics", () => {
   });
 
   it("exports isolate and native memory plus bounded successful spawn counts", ({ metrics }) => {
-    metrics.record({
-      type: "diagnostic.memory.sample",
-      memory: {
-        ...memory,
+    metrics.record(
+      memorySample({
         heapSpaces: ["old_space", "future_v8_space"].map((space_name) => ({
           space_name,
           space_used_size: 101,
@@ -253,32 +246,26 @@ describe("diagnostics-prometheus runtime metrics", () => {
           },
         ],
         workerHeaps: [
-          {
-            script: "sqlite-store.worker.js",
-            heapUsed: 100,
-            heapTotal: 200,
+          heap("sqlite-store.worker.js", 100, 200, {
             heapSpaces: [
               { space_name: "old_space", space_used_size: 60 },
               { space_name: "code_space", space_used_size: 40 },
             ],
-          },
-          {
-            script: "sqlite-store.worker.js",
-            heapUsed: 150,
-            heapTotal: 200,
+          }),
+          heap("sqlite-store.worker.js", 150, 200, {
             heapSpaces: [
               { space_name: "old_space", space_used_size: 120 },
               { space_name: "code_space", space_used_size: 30 },
               { space_name: "future_v8_space", space_used_size: 0 },
             ],
-          },
+          }),
         ],
         workerMemoryMissing: [
           { script: "sqlite-store.worker.js", threadId: 3, reason: "pending" },
           { script: "other", threadId: 4, reason: "unavailable" },
         ],
-      },
-    });
+      }),
+    );
     for (const count of [2, 3]) {
       metrics.record({
         type: "diagnostic.child_process.spawn",
@@ -361,23 +348,18 @@ describe("diagnostics-prometheus runtime metrics", () => {
       openclaw_worker_started_total{script="sqlite-store.worker.js"} 5
       openclaw_worker_retired_total{reason="idle_timeout",script="sqlite-store.worker.js"} 2
     `);
-    const retiredSample = {
-      ...baseEvent(),
-      type: "diagnostic.memory.sample" as const,
-      memory: {
-        ...memory,
-        workerCount: 1,
-        workerHeapSampledCount: 1,
-        workerHeaps: [{ script: "other", heapUsed: 50, heapTotal: 100 }],
-        workerLifecycle: [
-          {
-            script: "sqlite-store.worker.js",
-            started: 5,
-            retired: [{ reason: "idle_timeout", count: 2 }],
-          },
-        ],
-      },
-    };
+    const retiredSample = memorySample({
+      workerCount: 1,
+      workerHeapSampledCount: 1,
+      workerHeaps: [heap("other", 50, 100)],
+      workerLifecycle: [
+        {
+          script: "sqlite-store.worker.js",
+          started: 5,
+          retired: [{ reason: "idle_timeout", count: 2 }],
+        },
+      ],
+    });
     metrics.record(retiredSample, untrusted);
     expect(metrics.render()).toBe(rendered);
     metrics.record(retiredSample);
@@ -461,11 +443,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
       );
       metrics.record({ type: "diagnostic.gc", durationMs: 99_000 }, untrusted);
       metrics.record(
-        {
-          type: "gateway.event_loop.sample",
-          intervalMs: 99_000,
-          delayMaxMs: 99_000,
-        },
+        { type: "gateway.event_loop.sample", intervalMs: 99_000, delayMaxMs: 99_000 },
         untrusted,
       );
       const second = await scrape();

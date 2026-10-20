@@ -1,4 +1,6 @@
+import { once } from "node:events";
 import { createServer } from "node:http";
+import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import type {
@@ -64,13 +66,13 @@ export function createMetricsHarness(
     },
     reportExporterHealth: noop,
   };
-  const context: OpenClawPluginServiceContext = {
-    config,
-    stateDir: "/tmp/openclaw-prometheus-test",
-    logger: { info: noop, warn: noop, error: noop, debug: noop },
-    internalDiagnostics,
-  };
-  const start = () => exporter.service.start(context);
+  const start = () =>
+    exporter.service.start({
+      config,
+      stateDir: "/tmp/openclaw-prometheus-test",
+      logger: { info: noop, warn: noop, error: noop, debug: noop },
+      internalDiagnostics,
+    });
   start();
   return {
     handler: exporter.handler,
@@ -106,10 +108,8 @@ export async function withMetricsServer(
     void metrics.handler(req, res);
   });
   try {
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
     const address = server.address();
     if (!address || typeof address === "string") {
       throw new Error("expected TCP server address");
@@ -118,10 +118,9 @@ export async function withMetricsServer(
   } finally {
     try {
       if (server.listening) {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-          server.closeIdleConnections();
-        });
+        const closing = promisify(server.close.bind(server))();
+        server.closeIdleConnections();
+        await closing;
       }
     } finally {
       metrics.stop();
