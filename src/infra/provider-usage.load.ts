@@ -9,6 +9,10 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveFetch } from "./fetch.js";
 import { resolveProxyFetchFromEnv } from "./net/proxy-fetch.js";
+import {
+  fetchWithRuntimeDispatcherOrMockedGlobal,
+  type DispatcherAwareRequestInit,
+} from "./net/runtime-fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
 import {
   PROVIDER_USAGE_TIMEOUT_MS,
@@ -34,6 +38,27 @@ type UsageSummaryOptions = {
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
 };
+
+/** Preserves dispatcher support when provider usage wraps Node's ambient fetch. */
+export function createProviderUsageFetchFn(
+  fetchFn: typeof fetch,
+  signal: AbortSignal,
+  useRuntimeDispatcherFallback: boolean,
+): typeof fetch {
+  return (input, init) => {
+    signal.throwIfAborted();
+    const callerSignal =
+      init?.signal === undefined && input instanceof Request ? input.signal : init?.signal;
+    const requestInit: DispatcherAwareRequestInit = {
+      ...init,
+      signal: callerSignal ? AbortSignal.any([signal, callerSignal]) : signal,
+    };
+    if (useRuntimeDispatcherFallback && requestInit.dispatcher) {
+      return fetchWithRuntimeDispatcherOrMockedGlobal(input, requestInit);
+    }
+    return fetchFn(input, requestInit);
+  };
+}
 
 /** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
@@ -70,12 +95,12 @@ export async function loadProviderUsageSummary(
       providers: descriptors.map(({ provider }) => failureSnapshot(provider, "Timeout")),
     };
   }
-  const fetchFn = opts.fetch
-    ? resolveFetch(opts.fetch)
-    : (resolveProxyFetchFromEnv(env) ?? resolveFetch());
+  const proxyFetch = opts.fetch ? undefined : resolveProxyFetchFromEnv(env);
+  const fetchFn = opts.fetch ? resolveFetch(opts.fetch) : (proxyFetch ?? resolveFetch());
   if (!fetchFn) {
     throw new Error("fetch is not available");
   }
+  const useRuntimeDispatcherFallback = !opts.fetch && proxyFetch === undefined;
   let authStore: Promise<AuthProfileStore> | undefined;
   const getAuthStore = () =>
     opts.authStore ??
@@ -129,17 +154,7 @@ export async function loadProviderUsageSummary(
               email: auth.email,
               timeoutMs,
               signal,
-              fetchFn: (input, init) => {
-                signal.throwIfAborted();
-                const callerSignal =
-                  init?.signal === undefined && input instanceof Request
-                    ? input.signal
-                    : init?.signal;
-                return fetchFn(input, {
-                  ...init,
-                  signal: callerSignal ? AbortSignal.any([signal, callerSignal]) : signal,
-                });
-              },
+              fetchFn: createProviderUsageFetchFn(fetchFn, signal, useRuntimeDispatcherFallback),
             },
           });
           return (
