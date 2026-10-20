@@ -960,6 +960,7 @@ describe("Codex diagnostics confirmation", () => {
           config: {},
           agentDir: path.join(diagnosticsStateDir, "agents", target.agentId, "agent"),
           assertCurrent: expect.any(Function),
+          assertDispatchCurrentAsync: expect.any(Function),
           authProfileId: `openai:${target.agentId}`,
           sessionId: target.sessionId,
           sessionKey: target.sessionKey,

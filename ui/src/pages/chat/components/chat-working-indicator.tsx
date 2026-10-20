@@ -5,7 +5,7 @@ import type {
   ThemeWorkingIndicator,
 } from "../../../../../packages/gateway-protocol/src/theme.ts";
 import { currentThemeBranding, subscribeThemeBranding } from "../../../app/theme-branding.ts";
-import "../../../components/elapsed-time.tsx";
+import { ElapsedTime } from "../../../components/elapsed-time.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ThemeBrandIcon } from "../../../components/theme-brand-icon.tsx";
 import "../../../components/working-phrase.ts";
@@ -152,10 +152,7 @@ function WorkingStatus(props: WorkingProps & { branding: ThemeBranding }) {
           <Show when={props.options.startupLabel || props.options.outputTokens != null}>
             <span aria-hidden="true">·</span>
           </Show>
-          <openclaw-elapsed-time
-            class="chat-working-indicator__elapsed"
-            prop:startMs={props.part.startedAt}
-          />
+          <ElapsedTime class="chat-working-indicator__elapsed" startMs={props.part.startedAt} />
         </Show>
         <Show when={props.options.outputTokens == null && working()}>
           <openclaw-working-phrase

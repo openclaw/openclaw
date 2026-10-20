@@ -4,6 +4,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
+import { captureSqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import { runSqliteReadOnlyWorker } from "../../infra/sqlite-readonly-worker.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
@@ -29,6 +30,7 @@ import { mergePersistedAuthProfileState } from "./persisted.js";
 import { runtimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import { receiveAuthProfileUpdateValue } from "./store-update-transfer.js";
+import type { AuthProfileReadSource } from "./store.worker-contract.js";
 import type {
   AuthProfileStore,
   AuthProfileRowRead,
@@ -75,10 +77,12 @@ export function prepareAgentAuthProfileRowsRead(options: {
   source?: "runtime" | "canonical";
 }): {
   identity: string | undefined;
+  source: AuthProfileReadSource;
   captureCredentialAuthority: (
-    profileId: string,
+    profileId: string | undefined,
   ) => ReturnType<typeof captureAuthProfileCredentialAuthority> | undefined;
   read: () => Promise<AuthProfileRowRead>;
+  track: <T>(operation: Promise<T>) => Promise<T>;
   assertCurrent: () => void;
   dispose: () => Promise<void>;
 } {
@@ -107,7 +111,7 @@ export function prepareAgentAuthProfileRowsRead(options: {
     identity = undefined;
   }
   const controller = new AbortController();
-  const pending = new Set<Promise<AuthProfileRowRead>>();
+  const pending = new Set<Promise<unknown>>();
   let closed = false;
   let revoked = false;
   let closing: Promise<void> | undefined;
@@ -231,17 +235,24 @@ export function prepareAgentAuthProfileRowsRead(options: {
           options.source,
         )
       : { read: readRows };
-  const read = (): Promise<AuthProfileRowRead> => {
-    if (closed) {
-      return Promise.reject(new Error("Auth profile read owner closed"));
-    }
-    const operation = cachedReader.read();
+  const track = <T>(operation: Promise<T>): Promise<T> => {
     pending.add(operation);
     void operation.finally(() => pending.delete(operation)).catch(() => undefined);
     return operation;
   };
+  let source: AuthProfileReadSource | undefined;
   return {
     identity: identity && `${identity.key}:${identity.birthtime ?? ""}`,
+    get source() {
+      return (source ??= {
+        kind: "agent",
+        databasePath,
+        agentId,
+        identity: identity?.key,
+        schema:
+          identity && !postgres ? captureSqliteAuthSchema(databasePath, identity.key) : undefined,
+      });
+    },
     captureCredentialAuthority(profileId) {
       if (!captured.ok) {
         throw captured.error;
@@ -254,7 +265,11 @@ export function prepareAgentAuthProfileRowsRead(options: {
           )
         : undefined;
     },
-    read,
+    read: () =>
+      closed
+        ? Promise.reject(new Error("Auth profile read owner closed"))
+        : track(cachedReader.read()),
+    track,
     assertCurrent,
     dispose,
   };
@@ -319,19 +334,22 @@ function receiveAuthProfileReadRows(
     if (previous) {
       throw new Error("Auth profile read requested an invalid field transfer");
     }
-    const value = receiveAuthProfileUpdateValue(port);
-    if (
-      !isRecord(value) ||
-      !isInspection(value.store) ||
-      !isInspection(value.state) ||
-      typeof value.cacheable !== "boolean"
-    ) {
-      throw new Error("Auth profile reader returned invalid inspection rows");
-    }
-    return { store: value.store, state: value.state, cacheable: value.cacheable };
+    return decodeAuthProfileReadRows(receiveAuthProfileUpdateValue(port));
   } finally {
     port.close();
   }
+}
+
+function decodeAuthProfileReadRows(value: unknown): AuthProfileRowRead {
+  if (
+    !isRecord(value) ||
+    !isInspection(value.store) ||
+    !isInspection(value.state) ||
+    typeof value.cacheable !== "boolean"
+  ) {
+    throw new Error("Auth profile reader returned invalid inspection rows");
+  }
+  return { store: value.store, state: value.state, cacheable: value.cacheable };
 }
 
 /** Shared auth reads reuse the canonical actor and never request a writable open. */
@@ -340,7 +358,14 @@ export async function readSharedAuthProfileRows(
   artifactPreserving = isArtifactPreservingStateRead(),
   source: "runtime" | "canonical" = "runtime",
 ): Promise<AuthProfileRowRead> {
-  const read = () => readSharedAuthProfileRowsUncached(context, artifactPreserving);
+  const read = async () =>
+    (
+      await readAuthProfileSources(
+        context,
+        [{ kind: "shared-state", databasePath: context.admission.databasePath }],
+        { artifactPreserving },
+      )
+    )?.get(context.admission.databasePath) ?? missing;
   if (
     !isMainThread ||
     artifactPreserving ||
@@ -362,28 +387,37 @@ export async function readSharedAuthProfileRows(
     .read();
 }
 
-async function readSharedAuthProfileRowsUncached(
+/** One current worker read for all captured sources, without borrowing cached credential rows. */
+export async function readAuthProfileSources(
   context: OpenClawStateWorkerContext,
-  artifactPreserving: boolean,
-): Promise<AuthProfileRowRead> {
-  let rows: AuthProfileRowRead | undefined;
+  sources: AuthProfileReadSource[],
+  options: { artifactPreserving?: boolean; assertCurrent?: () => void } = {},
+): Promise<Map<string, AuthProfileRowRead> | undefined> {
+  let rows: Map<string, AuthProfileRowRead> | undefined;
   const assertCurrent = () => {
     context.admission.assertCurrent();
     context.maintenanceScope?.assertAdmission();
+    options.assertCurrent?.();
   };
   const result = await runOpenClawStateWorkerOperation(
     context,
     async (scope) => {
       await scope.execute({
-        type: "authProfiles.read",
-        input: { artifactPreserving },
+        type: "authProfiles.readSources",
+        input: { artifactPreserving: options.artifactPreserving ?? false, sources },
       });
       return true;
     },
     {
       existingOnly: true,
+      assertCurrent,
       createAdmission: () => ({
-        nativeLocations: [context.admission.databasePath],
+        nativeLocations: [
+          ...new Set([
+            context.admission.databasePath,
+            ...sources.map((source) => source.databasePath),
+          ]),
+        ],
         admission: createSqliteWorkerOperationAdmission((request, grant) => {
           const facts = request.facts;
           if (!isRecord(facts) || !(facts.port instanceof MessagePort)) {
@@ -391,10 +425,19 @@ async function readSharedAuthProfileRowsUncached(
           }
           try {
             assertCurrent();
-            if (request.stage !== "prepare" || facts.kind !== "auth-store-read" || rows) {
+            if (request.stage !== "prepare" || facts.kind !== "auth-sources-read" || rows) {
               throw new Error("Auth profile read requested an invalid field transfer");
             }
-            rows = receiveAuthProfileReadRows(facts.port, rows);
+            const value = receiveAuthProfileUpdateValue(facts.port);
+            if (!isRecord(value)) {
+              throw new Error("Auth profile read returned no source rows");
+            }
+            rows = new Map(
+              sources.map((source) => [
+                source.databasePath,
+                decodeAuthProfileReadRows(value[source.databasePath]),
+              ]),
+            );
             assertCurrent();
             if (!grant()) {
               throw new Error("Auth profile read authority expired");
@@ -410,7 +453,7 @@ async function readSharedAuthProfileRowsUncached(
   if (result && !rows) {
     throw new Error("Auth profile read completed without its rows");
   }
-  return rows ?? missing;
+  return rows;
 }
 
 /** Read one selected account on the canonical actor; redaction remains caller-owned. */

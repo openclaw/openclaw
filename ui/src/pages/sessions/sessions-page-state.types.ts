@@ -4,6 +4,11 @@ import type { SessionsProps } from "./view-types.ts";
 
 export type SessionsPageState = Pick<
   SessionsProps,
+  | "sortColumn"
+  | "sortDir"
+  | "groupBy"
+  | "page"
+  | "pageSize"
   | "result"
   | "loading"
   | "refreshing"

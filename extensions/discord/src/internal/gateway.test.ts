@@ -380,13 +380,7 @@ describe("GatewayPlugin", () => {
       gateway.send(presenceUpdate(PresenceUpdateStatus.Online, index));
     }
 
-    expect(gateway.getRateLimitStatus()).toEqual({
-      remainingEvents: 0,
-      resetTime: 60_000,
-      currentEventCount: 120,
-      queuedEvents: 120,
-      droppedEvents: 2,
-    });
+    expect(send).toHaveBeenCalledTimes(120);
     expect(warningSpy).toHaveBeenCalledTimes(1);
     expect(warningSpy).toHaveBeenCalledWith(
       "Gateway outbound queue overflow policy=drop-oldest droppedEvents=1 queuedEvents=120 maxQueuedEvents=120",
@@ -418,13 +412,11 @@ describe("GatewayPlugin", () => {
       op: GatewayOpcodes.Heartbeat,
       d: 1,
     });
-    expect(gateway.getRateLimitStatus()).toEqual({
-      remainingEvents: 0,
-      resetTime: 60_000,
-      currentEventCount: 121,
-      queuedEvents: 1,
-      droppedEvents: 0,
-    });
+    vi.advanceTimersByTime(60_000);
+    expect(send).toHaveBeenCalledTimes(122);
+    expect(JSON.parse(send.mock.calls.at(-1)?.[0] as string)).toEqual(
+      presenceUpdate(PresenceUpdateStatus.Idle),
+    );
   });
 
   it("rejects gateway payloads that exceed Discord's size limit", () => {

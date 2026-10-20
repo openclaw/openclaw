@@ -28,12 +28,19 @@ import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-t
 import "./assistant-panel-solid.tsx";
 import "./assistant-panel-content.ts";
 
-vi.mock("./home-session.runtime.ts", () => {
-  if (!customElements.get("openclaw-home-session")) {
-    customElements.define("openclaw-home-session", class extends HTMLElement {});
-  }
-  return {};
-});
+type HomeProps = Parameters<typeof import("./home-session-solid.tsx").HomeSession>[0];
+type TestHome = HTMLElement & HomeProps;
+
+// mock-isolation: The parent panel owns orchestration; Home is an opaque renderer.
+vi.mock("./home-session-solid.tsx", () => ({
+  HomeSession(props: HomeProps) {
+    const host = document.createElement("openclaw-home-session");
+    for (const key of ["sessionKey", "agentId", "workContext"] as const) {
+      Object.defineProperty(host, key, { get: () => props[key] });
+    }
+    return host;
+  },
+}));
 
 type TestAssistantPanel = HTMLElementTagNameMap["openclaw-assistant-panel"];
 
@@ -89,7 +96,7 @@ async function click(panel: TestAssistantPanel, selector: string) {
   await panel.updateComplete;
 }
 function home(panel: ParentNode) {
-  return panel.querySelector("openclaw-home-session");
+  return panel.querySelector<TestHome>("openclaw-home-session");
 }
 async function toggle(panel: TestAssistantPanel, event: string, detail?: object) {
   window.dispatchEvent(new CustomEvent(event, { detail }));

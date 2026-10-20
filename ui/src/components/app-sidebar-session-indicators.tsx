@@ -9,6 +9,7 @@ import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalog
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { sidebarSessionMetaId, sidebarSessionStateId } from "./app-sidebar-session-types.ts";
+import { ElapsedTime } from "./elapsed-time.tsx";
 import { describeSessionState } from "./session-leading-indicator.ts";
 import { Icon } from "./solid/icon.tsx";
 import {
@@ -18,7 +19,6 @@ import {
   SessionRowBadges,
 } from "./solid/session-presentation.tsx";
 import { EMPTY_VIEWER_IDENTITIES } from "./viewer-facepile.ts";
-import "./elapsed-time.tsx";
 import "./tooltip.ts";
 /** Compose independently owned session state and context indicators. */
 export function renderSidebarSessionIndicators(
@@ -197,17 +197,12 @@ export function renderSidebarSessionIndicators(
           })
         ) : currentSession.runtimeMs != null ? (
           currentSession.hasActiveRun ? (
-            <openclaw-elapsed-time
-              prop:startMs={currentSession.runtimeSampledAt! - currentSession.runtimeMs}
-            />
+            <ElapsedTime startMs={currentSession.runtimeSampledAt! - currentSession.runtimeMs} />
           ) : (
             (formatDurationCompact(currentSession.runtimeMs) ?? "0ms")
           )
         ) : (
-          <openclaw-elapsed-time
-            prop:startMs={readSession().startedAt!}
-            prop:endMs={readSession().endedAt ?? null}
-          />
+          <ElapsedTime startMs={readSession().startedAt!} endMs={readSession().endedAt ?? null} />
         )}
       </span>
     ) : undefined;

@@ -132,6 +132,8 @@ it("skips fresh-shadow legacy inspection and data repair but backfills later imp
     recallColumns: /PRAGMA table_info\(memory_index_chunks\)/iu,
     sourceIdentity: /PRAGMA main\.table_xinfo\(memory_index_sources\)/iu,
     retiredIndex: /DROP INDEX IF EXISTS idx_memory_index_chunks_path;/iu,
+    strictMigration: /PRAGMA (?:main\.)?table_list\b/iu,
+    ftsObjects: /SELECT type, name, sql FROM sqlite_schema/iu,
   };
   const legacySql: string[] = [];
   const dataRepairSql: string[] = [];

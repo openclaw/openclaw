@@ -17,14 +17,12 @@ const channelsAddCommandMock = vi.hoisted(() =>
   vi.fn<typeof import("../commands/channels.js").channelsAddCommand>(async () => undefined),
 );
 const channelsLogsCommandMock = vi.hoisted(() =>
-  vi.fn(async (_options: { channel?: string }, _runtime: unknown) => undefined),
+  vi.fn(async (_options: { channel?: string }) => undefined),
 );
 const channelsDeadLettersMocks = vi.hoisted(() => ({
-  channelsDeadLettersListCommand: vi.fn(
-    async (_options: { account?: string }, _runtime: unknown) => undefined,
-  ),
+  channelsDeadLettersListCommand: vi.fn(async (_options: { account?: string }) => undefined),
   channelsDeadLettersResubmitCommand: vi.fn(
-    async (_eventId: string, _options: { account?: string }, _runtime: unknown) => undefined,
+    async (_eventId: string, _options: { account?: string }) => undefined,
   ),
 }));
 const channelsResolveCommandMock = vi.hoisted(() => vi.fn(async () => undefined));
