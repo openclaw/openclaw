@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import {
-  chatMessage,
   exactButton,
   newChatPage,
   chatSessionListResponse,
@@ -20,16 +19,12 @@ suite.define(() => {
       agentId: "main",
       kind: "direct",
       sessionId: "synthetic-provider-review",
-      label: "Project cleanup",
       updatedAt: Date.now(),
       snapshotAt: Date.now(),
     };
     const errorMessage =
       "This request was blocked by our safety systems. Reason: Potentially unintended activity.";
     const gateway = await installMockGateway(page, {
-      historyMessages: [
-        chatMessage("assistant", "I will inspect the selected project before making changes."),
-      ],
       methodResponses: {
         "sessions.list": chatSessionListResponse([row]),
       },
@@ -53,19 +48,16 @@ suite.define(() => {
       .getByText("Couldn't finish this reply. Check the conversation before trying again.")
       .waitFor();
     await failure.locator("summary").click();
-    await failure.getByLabel("Error details", { exact: true }).waitFor();
-    expect(await failure.getByLabel("Error details", { exact: true }).textContent()).toContain(
-      errorMessage,
-    );
+    const details = failure.getByLabel("Error details", { exact: true });
+    await details.waitFor();
+    expect(await details.textContent()).toContain(errorMessage);
 
     const providerReview = {
       id: "synthetic-review-one",
       runId: stoppedRunId,
       canContinue: true,
-      explanation:
-        "The proposed cleanup included files outside the project you selected. Those files may contain unrelated work. Confirm that the agent should limit changes to the selected project and preserve other files.",
-      continuationMessage:
-        "Continue only inside the selected project. Preserve all other files and review each proposed deletion first.",
+      explanation: "Cleanup reached outside the selected project.",
+      continuationMessage: "Continue only inside the selected project.",
     };
     const pausedAt = Date.now();
     const paused = {

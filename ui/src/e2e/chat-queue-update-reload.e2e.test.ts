@@ -12,6 +12,7 @@ import {
   createControlUiE2eContextOptions,
 } from "./control-ui-e2e-suite.test-support.ts";
 import { openSidebarPages } from "./sidebar-customization.test-support.ts";
+type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
 const suite = createControlUiE2eSuite({
   name: "Queued correction update recovery",
   trackBrowserContexts: true,
@@ -31,11 +32,7 @@ async function installQueueGateway(page: Page, names = ["original", "second"]) {
   });
 }
 
-async function stageCorrection(
-  page: Page,
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-  editSelector: string,
-) {
+async function stageCorrection(page: Page, gateway: Gateway, editSelector: string) {
   const composer = page.locator(`.chat-pane-cache__pane--active ${composerSelector}`);
   await composer.waitFor({ state: "visible", timeout: 15000 });
   const originalPathname = new URL(page.url()).pathname;
@@ -51,10 +48,16 @@ async function stageCorrection(
   return { composer, edit, originalPathname };
 }
 
-async function rejectStaleBuild(
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-  gatewayBuildId: string,
-) {
+function expectSession(pane: Locator, sessionKey: string) {
+  return expect
+    .poll(() =>
+      pane.evaluate((element) => (element as HTMLElement & { sessionKey: string }).sessionKey),
+    )
+    .toBe(sessionKey);
+}
+
+async function reviewStaleBuild(page: Page, gateway: Gateway, build: string) {
+  const automaticReload = page.waitForEvent("domcontentloaded");
   await gateway.setOnline(false);
   await gateway.deferNext("connect");
   const previous = (await gateway.getRequests("connect")).length;
@@ -63,17 +66,28 @@ async function rejectStaleBuild(
   await gateway.rejectDeferred("connect", {
     code: "UNAVAILABLE",
     message: "protocol mismatch: Control UI updated; reload this page to continue",
-    details: { code: "PROTOCOL_MISMATCH", gatewayBuildId, reloadRequired: true },
+    details: { code: "PROTOCOL_MISMATCH", gatewayBuildId: build, reloadRequired: true },
     retryable: false,
   });
+  const refresh = page.getByRole("button", { name: /Server updated/u });
+  const dialog = page.locator('openclaw-modal-dialog[label="Unsent Incognito draft"]');
+  const outcome = await Promise.race([
+    automaticReload.then(() => "reloaded" as const),
+    (async () => {
+      await refresh.click();
+      await exactButton(page, "Review private draft").click();
+      await dialog.waitFor();
+      return "held" as const;
+    })(),
+  ]);
+  return { refresh, dialog, outcome };
 }
 
-function expectSession(pane: Locator, sessionKey: string) {
-  return expect
-    .poll(() =>
-      pane.evaluate((element) => (element as HTMLElement & { sessionKey: string }).sessionKey),
-    )
-    .toBe(sessionKey);
+async function visitSession(page: Page, name: string) {
+  await page
+    .locator(`[data-session-key="agent:main:${name}"] a.sidebar-recent-session__link`)
+    .click();
+  await page.waitForURL((url) => url.pathname.endsWith(`/${name}`));
 }
 
 suite.define(() => {
@@ -111,10 +125,7 @@ suite.define(() => {
           .locator(".agent-chat__composer-combobox textarea")
           .click();
       }
-      await page
-        .locator('[data-session-key="agent:main:other"] a.sidebar-recent-session__link')
-        .click();
-      await page.waitForURL((url) => url.pathname.endsWith("/other"));
+      await visitSession(page, "other");
       // Reconnect can hide the edit before navigation replaces the active pane.
       await expectSession(page.locator(activePane), "agent:main:other");
       await expect
@@ -129,10 +140,7 @@ suite.define(() => {
           .nth(1)
           .locator(".agent-chat__composer-combobox textarea")
           .click();
-        await page
-          .locator('[data-session-key="agent:main:second"] a.sidebar-recent-session__link')
-          .click();
-        await page.waitForURL((url) => url.pathname.endsWith("/second"));
+        await visitSession(page, "second");
         await expectSession(page.locator(activePane), "agent:main:second");
       }
       if (narrow) {
@@ -211,10 +219,7 @@ suite.define(() => {
       );
       await gateway.setOnline(true);
       for (const name of ["other", "second", "third"]) {
-        await page
-          .locator(`[data-session-key="agent:main:${name}"] a.sidebar-recent-session__link`)
-          .click();
-        await page.waitForURL((url) => url.pathname.endsWith(`/${name}`));
+        await visitSession(page, name);
         await page
           .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
           .waitFor();
@@ -302,20 +307,12 @@ suite.define(() => {
     page.on("domcontentloaded", () => {
       reloads += 1;
     });
-    const automaticReload = page.waitForEvent("domcontentloaded");
-    await rejectStaleBuild(gateway, "qa832-replacement-build");
-    const refresh = page.getByRole("button", { name: /Server updated/u });
-    const dialog = page.locator('openclaw-modal-dialog[label="Unsent Incognito draft"]');
-    const recovery = await Promise.race([
-      automaticReload.then(() => "reloaded" as const),
-      (async () => {
-        await refresh.click();
-        await exactButton(page, "Review private draft").click();
-        await dialog.waitFor();
-        return "held" as const;
-      })(),
-    ]);
-    if (recovery === "reloaded") {
+    const { refresh, dialog, outcome } = await reviewStaleBuild(
+      page,
+      gateway,
+      "qa832-replacement-build",
+    );
+    if (outcome === "reloaded") {
       await privatePane.locator(composer).waitFor();
       expect(
         await privatePane.locator(composer).inputValue(),
@@ -377,18 +374,11 @@ suite.define(() => {
           .click();
         await page.getByRole("heading", { name: "Typography", exact: true }).waitFor();
       }
-      const automaticReload = page.waitForEvent("domcontentloaded");
-      await rejectStaleBuild(gateway, "private-new-session-build");
-      const dialog = page.locator('openclaw-modal-dialog[label="Unsent Incognito draft"]');
-      const outcome = await Promise.race([
-        automaticReload.then(() => "reloaded" as const),
-        (async () => {
-          await page.getByRole("button", { name: /Server updated/u }).click();
-          await exactButton(page, "Review private draft").click();
-          await dialog.waitFor();
-          return "held" as const;
-        })(),
-      ]);
+      const { dialog, outcome } = await reviewStaleBuild(
+        page,
+        gateway,
+        "private-new-session-build",
+      );
       expect(outcome, "a private New Session draft must hold automatic document replacement").toBe(
         "held",
       );
