@@ -134,9 +134,7 @@ describe("createEmbeddedAttemptSessionSettleTracker", () => {
     });
     await expect(tracker.abortActiveSession()).rejects.toThrow("native abort failed");
     const cleanupScope = createAgentCleanupScope();
-    await cleanupScope.run(async () => {
-      await tracker.buildAbortSettlePromise();
-    });
+    await cleanupScope.run(async () => tracker.buildAbortSettlePromise());
     expect(cleanupScope.outcome).toBe("uncertain");
   });
   it("waits for both prompt and abort settlement during cleanup", async () => {
@@ -167,9 +165,7 @@ describe("createEmbeddedAttemptSessionSettleTracker", () => {
   });
 
   it("settles rejected prompt work without leaking it into later cleanup", async () => {
-    const tracker = createEmbeddedAttemptSessionSettleTracker({
-      abort: async () => undefined,
-    });
+    const tracker = createEmbeddedAttemptSessionSettleTracker({ abort: async () => undefined });
     void tracker.trackPromptSettlePromise(Promise.reject(new Error("prompt failed")));
 
     await expect(tracker.buildAbortSettlePromise()).resolves.toBeUndefined();

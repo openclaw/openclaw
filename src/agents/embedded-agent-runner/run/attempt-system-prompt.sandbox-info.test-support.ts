@@ -1,4 +1,3 @@
-// Shared real prompt/admission fixture for reporting and registered-session publication tests.
 import { vi, type MockInstance } from "vitest";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -10,13 +9,15 @@ import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { ExecElevatedDefaults } from "../../bash-tools.exec-types.js";
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
-import type { SandboxContext } from "../../sandbox/types.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import * as sandboxInfo from "../sandbox-info.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { prepareEmbeddedAttemptSystemPrompt } from "./attempt-system-prompt-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
+
+type PromptAttempt = Parameters<typeof prepareEmbeddedAttemptSystemPrompt>[0]["attempt"] &
+  Pick<EmbeddedRunAttemptParams, "workspaceDir" | "authStorage" | "modelRegistry">;
 
 export type ElevationCase = {
   name: string;
@@ -29,7 +30,7 @@ export async function withPromptFixture(
   testCase: ElevationCase,
   consume: (fixture: {
     prepare: () => ReturnType<typeof prepareEmbeddedAttemptSystemPrompt>;
-    attempt: EmbeddedRunAttemptParams;
+    attempt: PromptAttempt;
     admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
     abort: AbortController;
     tools: ReturnType<typeof createStubTool>[];
@@ -85,22 +86,17 @@ export async function withPromptFixture(
         abortSignal: abort.signal,
         sessionId: "prompt-elevation",
         sessionKey,
-        sessionFile: sessionKey,
         workspaceDir,
-        prompt: "Explain this synthetic fixture",
         promptMode: "full",
         runId: "prompt-elevation",
-        timeoutMs: 60_000,
-        thinkLevel: "off",
         bashElevated: testCase.elevated,
-        authProfileStore: { version: 1, profiles: {} },
         get authStorage(): never {
           throw new Error("Prompt fixture unexpectedly accessed auth storage");
         },
         get modelRegistry(): never {
           throw new Error("Prompt fixture unexpectedly accessed model registry");
         },
-      } satisfies EmbeddedRunAttemptParams;
+      } satisfies PromptAttempt;
       const tools = [createStubTool("exec")];
       const params = {
         attempt,
@@ -116,8 +112,6 @@ export async function withPromptFixture(
         setup: createAttemptSetupFixture({
           effectiveCwd: workspaceDir,
           effectiveWorkspace: workspaceDir,
-          resolvedWorkspace: workspaceDir,
-          sessionPermissionRoot: workspaceDir,
           sandboxSessionKey: sessionKey,
           sandboxReport: { mode: "all", sandboxed: true },
           sandbox: createSandboxTestContext({
@@ -125,9 +119,7 @@ export async function withPromptFixture(
               sessionKey,
               workspaceDir,
               agentWorkspaceDir: workspaceDir,
-              ...(testCase.required
-                ? ({ required: true } satisfies Pick<SandboxContext, "required">)
-                : {}),
+              ...(testCase.required ? { required: true } : {}),
             },
           }),
           getProviderRuntimeHandle: () => ({
