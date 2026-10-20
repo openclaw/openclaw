@@ -22,34 +22,22 @@ function childStore(extra: Partial<SessionEntry> = {}): Record<string, SessionEn
   return { [key]: { sessionId: "child", updatedAt: 1, ...lineage, ...extra } };
 }
 
+function patchChild(store: Record<string, SessionEntry>, patch: Partial<SessionsPatchParams>) {
+  return runPatch({ store, storeKey: key, patch: { key, expectedSessionId: "child", ...patch } });
+}
+
 describe("persistent sidebar roots", () => {
   test("promotes and pins atomically without changing lineage or execution authority", async () => {
     const store = childStore();
-    const promoted = expectPatchOk(
-      await runPatch({
-        store,
-        storeKey: key,
-        patch: { key, sidebarRoot: true, pinned: true, expectedSessionId: "child" },
-      }),
-    );
+    const promoted = expectPatchOk(await patchChild(store, { sidebarRoot: true, pinned: true }));
     expect(promoted).toMatchObject({ ...lineage, sidebarRoot: true, pinnedAt: expect.any(Number) });
     const snoozedUntil = Date.now() + 60_000;
-    expect(
-      expectPatchOk(
-        await runPatch({
-          store,
-          storeKey: key,
-          patch: { key, snoozedUntil, expectedSessionId: "child" },
-        }),
-      ),
-    ).toMatchObject({ ...lineage, sidebarRoot: true, snoozedUntil });
-    const nested = expectPatchOk(
-      await runPatch({
-        store,
-        storeKey: key,
-        patch: { key, sidebarRoot: false, expectedSessionId: "child" },
-      }),
-    );
+    expect(expectPatchOk(await patchChild(store, { snoozedUntil }))).toMatchObject({
+      ...lineage,
+      sidebarRoot: true,
+      snoozedUntil,
+    });
+    const nested = expectPatchOk(await patchChild(store, { sidebarRoot: false }));
     expect(nested).toMatchObject(lineage);
     for (const field of ["sidebarRoot", "pinnedAt", "snoozedUntil", "snoozedAt"]) {
       expect(nested).not.toHaveProperty(field);
@@ -63,15 +51,10 @@ describe("persistent sidebar roots", () => {
   test("keeps promotion across archive and restore", async () => {
     const store = childStore({ sidebarRoot: true, pinnedAt: 10 });
     for (const archived of [true, false]) {
-      expect(
-        expectPatchOk(
-          await runPatch({
-            store,
-            storeKey: key,
-            patch: { key, archived, expectedSessionId: "child" },
-          }),
-        ),
-      ).toMatchObject({ ...lineage, sidebarRoot: true });
+      expect(expectPatchOk(await patchChild(store, { archived }))).toMatchObject({
+        ...lineage,
+        sidebarRoot: true,
+      });
     }
   });
 

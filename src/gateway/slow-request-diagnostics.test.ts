@@ -13,8 +13,12 @@ import {
 import { startSlowRequestDiagnostics } from "./slow-request-diagnostics.js";
 
 let previousDiagnostics: boolean;
+let clock = 0;
 beforeEach(() => {
   previousDiagnostics = areDiagnosticsEnabledForProcess();
+  setDiagnosticsEnabledForProcess(true);
+  clock = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => clock);
 });
 afterEach(() => {
   setDiagnosticsEnabledForProcess(previousDiagnostics);
@@ -23,8 +27,7 @@ afterEach(() => {
 
 test.each(["disabled", "muted", "fast", "slow"])("slow request diagnostics: %s", (mode) => {
   setDiagnosticsEnabledForProcess(mode !== "disabled");
-  let clock = 0;
-  const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+  const now = vi.mocked(performance.now);
   const log = { isEnabled: () => mode !== "muted", warn: vi.fn() };
   {
     using diagnostics = startSlowRequestDiagnostics(log, "slow request", "test", "setup");
@@ -38,9 +41,6 @@ test.each(["disabled", "muted", "fast", "slow"])("slow request diagnostics: %s",
 });
 
 test("failed requests sum repeated waits and keep their trace even when the sink throws", () => {
-  setDiagnosticsEnabledForProcess(true);
-  let clock = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => clock);
   const trace = createDiagnosticTraceContext();
   const warn = vi.fn(() => {
     expect(getActiveDiagnosticTraceContext()).toBe(trace);
@@ -72,8 +72,6 @@ test("failed requests sum repeated waits and keep their trace even when the sink
 
 test("subscribers can measure fast stages without enabling logs or exposing request details", () => {
   setDiagnosticsEnabledForProcess(false);
-  let clock = 0;
-  vi.spyOn(performance, "now").mockImplementation(() => clock);
   const events: unknown[] = [];
   const listener = (event: unknown) => events.push(event);
   const stages = channel("openclaw.gateway.request.stages");

@@ -90,22 +90,17 @@ describe("subagent completion blocked Gateway E2E", () => {
             },
           },
         });
-        const sessionEntry = expectDefined(
-          loadExactSessionEntryReadOnly({
-            agentId: "main",
-            storePath: testState.sessionStorePath,
-            sessionKey: subagent.childSessionKey,
-          })?.entry,
-          "persisted child session",
-        );
-        const requester = expectDefined(
-          loadExactSessionEntryReadOnly({
-            agentId: "main",
-            storePath: testState.sessionStorePath,
-            sessionKey: subagent.requesterSessionKey,
-          })?.entry,
-          "persisted requester session",
-        );
+        const readEntry = (sessionKey: string) =>
+          expectDefined(
+            loadExactSessionEntryReadOnly({
+              agentId: "main",
+              storePath: testState.sessionStorePath,
+              sessionKey,
+            })?.entry,
+            `persisted session ${sessionKey}`,
+          );
+        const sessionEntry = readEntry(subagent.childSessionKey);
+        const requester = readEntry(subagent.requesterSessionKey);
         const runtime = expectDefined(getGatewayRecoveryRuntime(), "live Gateway runtime");
         const context = expectDefined(
           getGatewayContextResolver(runtime)?.(),

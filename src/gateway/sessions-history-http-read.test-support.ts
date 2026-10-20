@@ -66,15 +66,18 @@ export function registerMemorySessionHistoryTests(
         agentId: AGENT_ID,
         path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: AGENT_ID }),
       };
-      expect(memorySessionActorOwners.read(location)).toBeUndefined();
-      try {
-        const missing = await fetchSessionHistory(harness.port, sessionKey);
-        expect(missing.status).toBe(404);
-        expectErrorResponse(await missing.json(), {
+      const expectMissing = async () => {
+        const response = await fetchSessionHistory(harness.port, sessionKey);
+        expect(response.status).toBe(404);
+        expectErrorResponse(await response.json(), {
           type: "not_found",
           message: `Session not found: ${sessionKey}`,
         });
         expect(memorySessionActorOwners.read(location)).toBeUndefined();
+      };
+      expect(memorySessionActorOwners.read(location)).toBeUndefined();
+      try {
+        await expectMissing();
 
         const authority = { assertCurrent() {}, authorize() {} };
         const created = await withSessionActorStorage(
@@ -124,14 +127,8 @@ export function registerMemorySessionHistoryTests(
             return snapshot;
           });
         try {
-          const closed = await fetchSessionHistory(harness.port, sessionKey);
-          expect(closed.status).toBe(404);
-          expectErrorResponse(await closed.json(), {
-            type: "not_found",
-            message: `Session not found: ${sessionKey}`,
-          });
+          await expectMissing();
           expect(snapshotSpy).toHaveBeenCalledOnce();
-          expect(memorySessionActorOwners.read(location)).toBeUndefined();
         } finally {
           snapshotSpy.mockRestore();
         }

@@ -5,13 +5,13 @@ import {
   registerSubagentCompletionToolHandoff,
 } from "./subagent-completion-tool-handoff.js";
 
-const registration = {
+const identity = {
   sourceSessionKey: "agent:main:subagent:child",
   sourceSessionId: "child-session",
   targetSessionKey: "agent:main:main",
   targetSessionId: "requester-session",
-  idempotencyKey: "announce-1",
 } as const;
+const registration = { ...identity, idempotencyKey: "announce-1" };
 
 function consume(handoffId: string | undefined, overrides: Record<string, unknown> = {}) {
   return consumeSubagentCompletionToolHandoff({
@@ -24,15 +24,19 @@ function consume(handoffId: string | undefined, overrides: Record<string, unknow
   });
 }
 
+function registerBatch(sourceSessionKeys: string[], isCurrent = () => true) {
+  return registerSubagentCompletionToolHandoff({
+    ...registration,
+    settleBatch: { sourceSessionKeys, isCurrent },
+  });
+}
+
 describe("subagent completion tool handoff", () => {
   it("consumes the exact capability once and binds it to the admitted route", () => {
     const handoffId = registerSubagentCompletionToolHandoff(registration);
     expect(consume(handoffId)).toEqual({
       kind: "subagent-completion",
-      sourceSessionKey: registration.sourceSessionKey,
-      sourceSessionId: registration.sourceSessionId,
-      targetSessionKey: registration.targetSessionKey,
-      targetSessionId: registration.targetSessionId,
+      ...identity,
       provider: "openai",
       model: "glm-4.5",
     });
@@ -59,13 +63,7 @@ describe("subagent completion tool handoff", () => {
 
   it("revalidates the settle owner's authority before consuming a capability", () => {
     let current = true;
-    const handoffId = registerSubagentCompletionToolHandoff({
-      ...registration,
-      settleBatch: {
-        sourceSessionKeys: [registration.sourceSessionKey],
-        isCurrent: () => current,
-      },
-    });
+    const handoffId = registerBatch([registration.sourceSessionKey], () => current);
     expect(handoffId).toBeDefined();
     expect(consume(handoffId)).toBeUndefined();
     current = false;
@@ -75,13 +73,7 @@ describe("subagent completion tool handoff", () => {
 
   it("binds an accepted replay source only within the registered settle cohort", () => {
     const acceptedSource = "agent:main:subagent:sibling";
-    const handoffId = registerSubagentCompletionToolHandoff({
-      ...registration,
-      settleBatch: {
-        sourceSessionKeys: [registration.sourceSessionKey, acceptedSource],
-        isCurrent: () => true,
-      },
-    });
+    const handoffId = registerBatch([registration.sourceSessionKey, acceptedSource]);
     expect(
       consume(handoffId, {
         sourceTool: "subagent_settle",
