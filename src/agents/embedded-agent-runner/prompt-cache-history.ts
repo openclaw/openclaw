@@ -1,6 +1,6 @@
+import { hash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
-import { sha256Base64Url } from "../../infra/crypto-digest.js";
 import type { Message } from "../../llm/types.js";
 
 const MAX_HISTORY_DIFF_FIELDS = 8;
@@ -9,8 +9,9 @@ const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw"]);
 
 export type PromptHistoryFingerprint = {
   role: string;
-  identity: string;
-  details: string[][];
+  identityLength: number;
+  layout: string;
+  packed: string;
   stringBlock?: WeakRef<PromptStringFingerprint>;
 };
 
@@ -33,18 +34,18 @@ function fingerprintValue(value: unknown): string {
     if (cached) {
       return cached;
     }
-    const digest = sha256Base64Url(stableStringify(value));
+    const digest = `j${hash("sha256", stableStringify(value), "latin1")}`;
     immutableValueFingerprints.set(value, digest);
     return digest;
   }
-  return sha256Base64Url(stableStringify(value));
+  return `j${hash("sha256", stableStringify(value), "latin1")}`;
 }
 
 function fingerprintText(value: string): string {
   // UTF-8 replaces lone surrogates; escape those without serializing ordinary prompt text.
   return value.isWellFormed()
-    ? `text:${sha256Base64Url(value)}`
-    : `escaped:${sha256Base64Url(stableStringify(value))}`;
+    ? `t${hash("sha256", value, "latin1")}`
+    : `e${hash("sha256", stableStringify(value), "latin1")}`;
 }
 
 function fingerprintRecord(record: object, omit?: ReadonlySet<string>): RecordFingerprint {
@@ -84,7 +85,7 @@ function fingerprintRecord(record: object, omit?: ReadonlySet<string>): RecordFi
     return previous;
   }
   const fingerprint = {
-    digest: sha256Base64Url(stableStringify(Object.fromEntries(fields!))),
+    digest: hash("sha256", stableStringify(Object.fromEntries(fields!)), "latin1"),
     fields: fields!,
     primitives,
   };
@@ -98,7 +99,12 @@ export function fingerprintMessage(
 ): PromptHistoryFingerprint {
   const cached = messageFingerprints.get(message);
   if (cached) {
-    if (previous?.identity === cached.identity) {
+    if (
+      previous &&
+      (previous === cached ||
+        (previous.identityLength === cached.identityLength &&
+          previous.packed.startsWith(cached.packed.slice(0, cached.identityLength))))
+    ) {
       messageFingerprints.set(message, previous);
       return previous;
     }
@@ -124,23 +130,18 @@ export function fingerprintMessage(
     blocks = fingerprints.map(({ digest }) => digest);
   }
   const envelope = fingerprintRecord(message, MESSAGE_ENVELOPE_OMITTED_FIELDS);
-  const identity = JSON.stringify([
-    envelope.digest,
-    typeof content === "string" ? "string" : "blocks",
-    blocks,
-  ]);
-  if (previous?.identity === identity) {
+  const identity = [typeof content === "string" ? "t" : "b", envelope.digest, ...blocks].join("");
+  if (previous?.identityLength === identity.length && previous.packed.startsWith(identity)) {
     return previous;
   }
+  const records = [envelope, ...fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS)];
   const fingerprint: PromptHistoryFingerprint = {
     role: message.role,
-    identity,
-    // Idle baselines retain compact hashes; field Maps are only needed on divergence.
-    details: [envelope, ...fingerprints.slice(0, MAX_HISTORY_DIFF_FIELDS)].map(({ fields }) => {
-      const packed = Array.from(fields.values());
-      packed.unshift(JSON.stringify(Array.from(fields.keys())));
-      return packed;
-    }),
+    identityLength: identity.length,
+    // Flat Latin-1 strings retain full SHA-256 bytes without per-hash objects.
+    // The identity prefix precedes fixed-width, domain-tagged field hashes.
+    layout: JSON.stringify(records.map(({ fields }) => Array.from(fields.keys()))),
+    packed: [identity, ...records.flatMap(({ fields }) => Array.from(fields.values()))].join(""),
     stringBlock,
   };
   if (isOwnedTranscriptPayload(message)) {

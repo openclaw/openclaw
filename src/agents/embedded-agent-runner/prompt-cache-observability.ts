@@ -144,19 +144,27 @@ const HISTORY_BLOCK_FIELDS = new Set([
 ]);
 
 function unpackHistoryFingerprint(fingerprint: PromptHistoryFingerprint) {
-  const [, contentKind, blocks]: [string, "string" | "blocks", string[]] = JSON.parse(
-    fingerprint.identity,
+  // One kind byte and a 32-byte envelope digest precede the ordered content hashes.
+  // Text and field hashes also carry a one-byte domain tag.
+  const contentKind = fingerprint.packed[0] === "t" ? "string" : "blocks";
+  const blocks: string[] = [];
+  const width = contentKind === "string" ? 33 : 32;
+  for (let offset = 33; offset < fingerprint.identityLength; offset += width) {
+    blocks.push(fingerprint.packed.slice(offset, offset + width));
+  }
+  const layout: string[][] = JSON.parse(fingerprint.layout);
+  let offset = fingerprint.identityLength;
+  const fields = layout.map(
+    (keys) =>
+      new Map(
+        keys.map((key) => {
+          const digest = fingerprint.packed.slice(offset, offset + 33);
+          offset += 33;
+          return [key, digest];
+        }),
+      ),
   );
-  const fields = fingerprint.details.map(([layout, ...digests]) => {
-    const keys: string[] = JSON.parse(layout!);
-    return new Map(keys.map((key, index) => [key, digests[index]!]));
-  });
-  return {
-    contentKind,
-    blocks,
-    envelopeFields: fields[0]!,
-    blockFields: fields.slice(1),
-  };
+  return { contentKind, blocks, envelopeFields: fields[0]!, blockFields: fields.slice(1) };
 }
 
 function describeHistoryChange(
@@ -523,20 +531,14 @@ export function beginPromptCacheObservation(
   const history = params.messages.map((message, index) =>
     fingerprintMessage(message, previous?.history[index]),
   );
-  // Worker transfer duplicates strings. Share layouts and repeated field hashes
-  // within this history; the temporary index does not outlive preparation.
-  const sharedFields = new Map<string, string>();
+  // Worker transfer copies layout strings; share them only within this history.
+  const layouts = new Map<string, string>();
   for (const fingerprint of history) {
-    for (const fields of fingerprint.details) {
-      for (let index = 0; index < fields.length; index++) {
-        const value = fields[index]!;
-        const shared = sharedFields.get(value);
-        if (shared !== undefined) {
-          fields[index] = shared;
-        } else {
-          sharedFields.set(value, value);
-        }
-      }
+    const shared = layouts.get(fingerprint.layout);
+    if (shared !== undefined) {
+      fingerprint.layout = shared;
+    } else {
+      layouts.set(fingerprint.layout, fingerprint.layout);
     }
   }
   const changes = previous

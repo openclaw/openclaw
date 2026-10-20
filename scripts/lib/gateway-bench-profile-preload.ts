@@ -126,6 +126,18 @@ if (isMainThread) {
             );
           }
         }
+        if (message.clearPromptCacheObservations) {
+          const { clearPromptCacheObservations } =
+            await import("../../src/agents/embedded-agent-runner/prompt-cache-observability.js");
+          clearPromptCacheObservations();
+        }
+        if (message.collectGarbage) {
+          if (!inspectorConnected) {
+            inspector.connect();
+            inspectorConnected = true;
+          }
+          await inspector.post("HeapProfiler.collectGarbage");
+        }
         if (message.sessionCensus) {
           // Match the source runtime's module identities; count-only queries never retain instances.
           const [{ SessionManager }, { AgentSession }, { Agent }] = await Promise.all([
@@ -139,18 +151,6 @@ if (isMainThread) {
             AgentSession: queryObjects(AgentSession, { format: "count" }),
             Agent: queryObjects(Agent, { format: "count" }),
           };
-        }
-        if (message.clearPromptCacheObservations) {
-          const { clearPromptCacheObservations } =
-            await import("../../src/agents/embedded-agent-runner/prompt-cache-observability.js");
-          clearPromptCacheObservations();
-        }
-        if (message.collectGarbage) {
-          if (!inspectorConnected) {
-            inspector.connect();
-            inspectorConnected = true;
-          }
-          await inspector.post("HeapProfiler.collectGarbage");
         }
         const resources = message.initial
           ? initialResources

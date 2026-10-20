@@ -313,6 +313,8 @@ async function sendGatewayBenchCommand(
   command: GatewayBenchCommand,
 ): Promise<GatewayProfileReply> {
   const { kind, action } = command;
+  // Constructor census scans the full heap three times, unlike a resource sample.
+  const timeoutMs = command.kind === "resource-usage" && command.sessionCensus ? 120_000 : 30_000;
   return await new Promise<GatewayProfileReply>((resolve, reject) => {
     const finish = (result: Error | GatewayProfileReply) => {
       clearTimeout(timer);
@@ -341,8 +343,8 @@ async function sendGatewayBenchCommand(
     const onDisconnect = () =>
       finish(new Error(`Gateway disconnected during ${kind} profile ${action}`));
     const timer = setTimeout(
-      () => finish(new Error(`Gateway ${kind} profile ${action} timed out after 30000ms`)),
-      30_000,
+      () => finish(new Error(`Gateway ${kind} profile ${action} timed out after ${timeoutMs}ms`)),
+      timeoutMs,
     );
     child.on("message", onMessage);
     child.once("exit", onExit);

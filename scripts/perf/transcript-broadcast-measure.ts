@@ -2994,6 +2994,7 @@ try {
       collectGarbage: true,
       sessionCensus: true,
     });
+    console.log(`FINGERPRINT_RETENTION_BEFORE ${JSON.stringify(before)}`);
     const census = before.sessionCensus;
     if (!census || census.SessionManager || census.AgentSession || census.Agent) {
       throw new Error("Fingerprint retention requires all session runtime objects to be disposed");
