@@ -1,10 +1,10 @@
 import type { Model } from "@openclaw/llm-core";
-import type { Mock } from "vitest";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import { configureAiTransportHost, type AiTransportHost } from "../host.js";
 import { anthropicModel } from "../provider-transport-parity.test-support.js";
 
 export type AnthropicMessagesModel = Model<"anthropic-messages">;
+type Wire = Record<string, unknown>;
 
 function resolveTestEndpointClass(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
@@ -14,51 +14,41 @@ function resolveTestEndpointClass(baseUrl?: string): string {
   try {
     const url = new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`);
     const hostname = url.hostname.toLowerCase();
-    if (hostname === "api.anthropic.com") {
-      return "anthropic-public";
-    }
-    if (hostname === "openrouter.ai") {
-      return "openrouter";
-    }
-    if (hostname === "api.xiaomimimo.com" || hostname.endsWith(".xiaomimimo.com")) {
-      return "xiaomi-native";
-    }
-    return "custom";
+    const known = new Map([
+      ["api.anthropic.com", "anthropic-public"],
+      ["openrouter.ai", "openrouter"],
+    ]);
+    return (
+      known.get(hostname) ?? (hostname.endsWith(".xiaomimimo.com") ? "xiaomi-native" : "custom")
+    );
   } catch {
     return "invalid";
   }
 }
 
-export function serializeSseEvents(events: Record<string, unknown>[]): string {
+export function serializeSseEvents(events: Wire[]): string {
   return events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
 }
 
-export function createSseResponse(events: Record<string, unknown>[] = []): Response {
+export function createSseResponse(events: Wire[] = []): Response {
   return new Response(serializeSseEvents(events), {
     status: 200,
     headers: { "content-type": "text/event-stream" },
   });
 }
 
-export function anthropicMessageStart(message: Record<string, unknown>) {
-  return { type: "message_start", message };
-}
+export const anthropicMessageStart = (message: Wire) => ({ type: "message_start", message });
+const event = <T extends Wire>(type: string, fields: T) => ({ type, ...fields });
 
-export function anthropicMessageDelta(
-  delta: Record<string, unknown>,
-  usage?: Record<string, unknown>,
-) {
-  // Undefined usage is omitted on the wire, as in stop-reason-only proxy events.
-  return { type: "message_delta", delta, usage };
-}
+// Undefined usage is omitted on the wire, as in stop-reason-only proxy events.
+export const anthropicMessageDelta = (delta: Wire, usage?: Wire) =>
+  event("message_delta", { delta, usage });
 
-export function anthropicContentBlockStart(index: number, content_block: Record<string, unknown>) {
-  return { type: "content_block_start", index, content_block };
-}
+export const anthropicContentBlockStart = (index: number, content_block: Wire) =>
+  event("content_block_start", { index, content_block });
 
-export function anthropicContentBlockDelta(index: number, delta: Record<string, unknown>) {
-  return { type: "content_block_delta", index, delta };
-}
+export const anthropicContentBlockDelta = (index: number, delta: Wire) =>
+  event("content_block_delta", { index, delta });
 
 export function makeAnthropicTransportModel(
   overrides: Partial<AnthropicMessagesModel> = {},

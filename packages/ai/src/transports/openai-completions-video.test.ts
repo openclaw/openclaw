@@ -1,10 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import {
   PROVIDER_CONTEXT_HANDOFF,
   PROVIDER_MODEL_INPUT,
   type ProviderContext,
-  type ProviderModel,
   type ProviderStreamOptions,
 } from "../provider-types.js";
 import {
@@ -30,77 +29,68 @@ const omittedVideo = {
   text: "(video omitted: provider does not support video input)",
 };
 
-async function captureVideoRequest(entryPoint: EntryPoint, input?: ProviderModel["input"]) {
-  const previousHost = getAiTransportHost();
-  let request: Request | undefined;
-  configureAiTransportHost({
-    ...previousHost,
-    buildModelFetch: () => async (url, init) => {
-      request = new Request(url, init);
-      return new Response(
-        `data: ${JSON.stringify(makeCompletionsChunk({ content: "clip received" }, "stop"))}\n\ndata: [DONE]\n\n`,
-        { headers: { "content-type": "text/event-stream" } },
-      );
-    },
-  });
-  const model = makeCompletionsModel({
-    provider: "custom-local",
-    baseUrl: "http://127.0.0.1:1234/v1",
-    reasoning: false,
-    input: ["text", "image"],
-    contextWindow: 64_000,
-    maxTokens: 8_192,
-  });
-  const context: Context = {
-    messages: [{ role: "user", content: "canonical turn", timestamp: 1 }],
-  };
-  const providerContext: ProviderContext = {
-    messages: [{ role: "user", content: [{ ...prompt }, { ...video }], timestamp: 1 }],
-  };
-  const handoff = vi.fn(async () => providerContext);
-  const options = {
-    apiKey: "test-key",
-    maxTokens: 8_192,
-    [PROVIDER_CONTEXT_HANDOFF]: handoff,
-    [PROVIDER_MODEL_INPUT]: input,
-  } satisfies ProviderStreamOptions;
-  try {
-    const stream = entryPoints[entryPoint](model, context, options);
-    if (stream instanceof Promise) {
-      throw new Error("Completions streams must be returned synchronously");
-    }
-    const result = await stream.result();
-    expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "text", text: "clip received" }]);
-    expect(handoff).toHaveBeenCalledOnce();
-    expect(model.input).toEqual(["text", "image"]);
-    expect(context.messages[0]?.content).toBe("canonical turn");
-    if (!request) {
-      throw new Error("Expected a completions request");
-    }
-    return await request.json();
-  } finally {
-    configureAiTransportHost(previousHost);
-  }
-}
-
-describe("native video at the completions boundary", () => {
-  it.each([
-    ["direct", true],
-    ["simple", true],
-    ["managed", true],
-    ["managed", false],
-  ] satisfies [EntryPoint, boolean][])(
-    "sends %s video (supported=%s)",
-    async (entryPoint, supported) => {
-      const body = await captureVideoRequest(
-        entryPoint,
-        supported ? ["text", "image", "video"] : undefined,
-      );
+it.each([
+  ["direct", true],
+  ["simple", true],
+  ["managed", true],
+  ["managed", false],
+] satisfies [EntryPoint, boolean][])(
+  "sends %s video (supported=%s)",
+  async (entryPoint, supported) => {
+    const previousHost = getAiTransportHost();
+    let request: Request | undefined;
+    configureAiTransportHost({
+      ...previousHost,
+      buildModelFetch: () => async (url, init) => {
+        request = new Request(url, init);
+        return new Response(
+          `data: ${JSON.stringify(makeCompletionsChunk({ content: "clip received" }, "stop"))}\n\ndata: [DONE]\n\n`,
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      },
+    });
+    const model = makeCompletionsModel({
+      provider: "custom-local",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      reasoning: false,
+      input: ["text", "image"],
+      contextWindow: 64_000,
+      maxTokens: 8_192,
+    });
+    const context: Context = {
+      messages: [{ role: "user", content: "canonical turn", timestamp: 1 }],
+    };
+    const providerContext: ProviderContext = {
+      messages: [{ role: "user", content: [{ ...prompt }, { ...video }], timestamp: 1 }],
+    };
+    const handoff = vi.fn(async () => providerContext);
+    const options = {
+      apiKey: "test-key",
+      maxTokens: 8_192,
+      [PROVIDER_CONTEXT_HANDOFF]: handoff,
+      [PROVIDER_MODEL_INPUT]: supported ? ["text", "image", "video"] : undefined,
+    } satisfies ProviderStreamOptions;
+    try {
+      const stream = entryPoints[entryPoint](model, context, options);
+      if (stream instanceof Promise) {
+        throw new Error("Completions streams must be returned synchronously");
+      }
+      const result = await stream.result();
+      expect(result.stopReason).toBe("stop");
+      expect(result.content).toEqual([{ type: "text", text: "clip received" }]);
+      expect(handoff).toHaveBeenCalledOnce();
+      expect(model.input).toEqual(["text", "image"]);
+      expect(context.messages[0]?.content).toBe("canonical turn");
+      if (!request) {
+        throw new Error("Expected a completions request");
+      }
+      const body = await request.json();
       expect(body.messages).toEqual([
         { role: "user", content: [prompt, supported ? videoUrl : omittedVideo] },
       ]);
       expect(body.max_completion_tokens).toBe(8_192);
-    },
-  );
-});
+    } finally {
+      configureAiTransportHost(previousHost);
+    }
+  },
+);

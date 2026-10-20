@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import {
   anthropicModel,
@@ -11,8 +11,6 @@ import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-
 
 registerParityHostLifecycle();
 const encoder = new TextEncoder();
-const sseResponse = (body: BodyInit) =>
-  new Response(body, { headers: { "content-type": "text/event-stream" } });
 function frame(events = anthropicEvents, newline = "\n", blankLine = newline) {
   return events
     .map(
@@ -21,11 +19,29 @@ function frame(events = anthropicEvents, newline = "\n", blankLine = newline) {
     )
     .join("");
 }
+function chunks(parts: string[], beforeNext = () => {}) {
+  let index = 0;
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(source) {
+        if (index > 0) {
+          beforeNext();
+        }
+        source.enqueue(encoder.encode(parts[index++]));
+        if (index === parts.length) {
+          source.close();
+        }
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
 
-async function runResponse(response: Response, signal?: AbortSignal) {
+async function runResponse(body: BodyInit, signal?: AbortSignal) {
   configureAiTransportHost({
     ...getAiTransportHost(),
-    buildModelFetch: () => async () => response,
+    buildModelFetch: () => async () =>
+      new Response(body, { headers: { "content-type": "text/event-stream" } }),
   });
   const stream = await createAnthropicMessagesTransportStreamFn()(anthropicModel, context, {
     apiKey: "test-key",
@@ -34,73 +50,46 @@ async function runResponse(response: Response, signal?: AbortSignal) {
   return stream.result();
 }
 
-describe("Anthropic SSE framing", () => {
-  it.each([
-    ["\n", "\n"],
-    ["\r\n", "\r\n"],
-    ["\r", "\r"],
-    ["\n", "\r\n"],
-    ["\r\n", "\n"],
-  ])("parses fragmented %j/%j framing", async (newline, blankLine) => {
+it.each([
+  ["\n", "\n"],
+  ["\r\n", "\r\n"],
+  ["\r", "\r"],
+  ["\n", "\r\n"],
+  ["\r\n", "\n"],
+])("parses fragmented %j/%j framing", async (newline, blankLine) => {
+  const result = await runResponse(chunks([...frame(anthropicEvents, newline, blankLine)]));
+  expect(result.stopReason).toBe("stop");
+  expect(
+    result.content.filter((block) => block.type === "text").map((block) => block.text),
+  ).toEqual(["Hello world"]);
+});
+
+it.each([false, true])("handles an undelimited EOF event (malformed=%s)", async (malformed) => {
+  const body = frame().trimEnd();
+  const result = await runResponse(malformed ? body.slice(0, -1) : body);
+  expect(result.stopReason).toBe(malformed ? "error" : "stop");
+  if (malformed) {
+    expect(result.errorMessage).toContain("malformed_streaming_fragment");
+  }
+});
+
+it("consumes complete CR frames before requesting more input", async () => {
+  const prefix = frame(anthropicEvents.slice(0, -2), "\r");
+  const terminal = frame(anthropicEvents.slice(-2), "\r");
+  const controller = new AbortController();
+  const activity = vi.fn();
+  const unsubscribe = onLlmRequestActivity(controller.signal, activity);
+  let consumedBeforeNextRead = 0;
+  try {
     const result = await runResponse(
-      sseResponse(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            for (const chunk of frame(anthropicEvents, newline, blankLine)) {
-              controller.enqueue(encoder.encode(chunk));
-            }
-            controller.close();
-          },
-        }),
-      ),
+      chunks([prefix, terminal], () => {
+        consumedBeforeNextRead = activity.mock.calls.length;
+      }),
+      controller.signal,
     );
+    expect(consumedBeforeNextRead).toBe(8);
     expect(result.stopReason).toBe("stop");
-    expect(
-      result.content.filter((block) => block.type === "text").map((block) => block.text),
-    ).toEqual(["Hello world"]);
-  });
-
-  it.each([false, true])("handles an undelimited EOF event (malformed=%s)", async (malformed) => {
-    const body = frame().trimEnd();
-    const result = await runResponse(sseResponse(malformed ? body.slice(0, -1) : body));
-    expect(result.stopReason).toBe(malformed ? "error" : "stop");
-    if (malformed) {
-      expect(result.errorMessage).toContain("malformed_streaming_fragment");
-    }
-  });
-
-  it("consumes complete CR frames before requesting more input", async () => {
-    const prefix = frame(anthropicEvents.slice(0, -2), "\r");
-    const terminal = frame(anthropicEvents.slice(-2), "\r");
-    const controller = new AbortController();
-    const activity = vi.fn();
-    const unsubscribe = onLlmRequestActivity(controller.signal, activity);
-    let pulls = 0;
-    let consumedBeforeNextRead = 0;
-    try {
-      const result = await runResponse(
-        sseResponse(
-          new ReadableStream<Uint8Array>(
-            {
-              pull(source) {
-                if (pulls++ === 0) {
-                  source.enqueue(encoder.encode(prefix));
-                } else {
-                  consumedBeforeNextRead = activity.mock.calls.length;
-                  source.enqueue(encoder.encode(terminal));
-                  source.close();
-                }
-              },
-            },
-            { highWaterMark: 0 },
-          ),
-        ),
-        controller.signal,
-      );
-      expect(consumedBeforeNextRead).toBe(8);
-      expect(result.stopReason).toBe("stop");
-    } finally {
-      unsubscribe();
-    }
-  });
+  } finally {
+    unsubscribe();
+  }
 });

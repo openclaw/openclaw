@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import {
   applyAnthropicPayloadPolicyToParams,
@@ -11,91 +11,78 @@ import {
 const model = { provider: "anthropic", api: "anthropic-messages", contextWindow: 200_000 };
 const direct = { ...model, id: "claude-sonnet-4-6", baseUrl: "https://api.anthropic.com/v1" };
 
-describe("resolveAnthropicEphemeralCacheControl", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
-
-  it.each([
-    ["https://us-east5-aiplatform.googleapis.com", { type: "ephemeral", ttl: "1h" }],
-    ["https://proxy.example.test/vertex", { type: "ephemeral" }],
-  ] as const)("gates env-configured long retention for %s", (baseUrl, expected) => {
-    vi.stubEnv("OPENCLAW_CACHE_RETENTION", "long");
-    expect(resolveAnthropicEphemeralCacheControl(baseUrl, undefined)).toEqual(expected);
-  });
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
-describe("Anthropic compaction authentication eligibility", () => {
-  it("uses the same host-resolved credential shape as the transport", () => {
-    const host = getAiTransportHost();
-    configureAiTransportHost({ ...host, resolveSecretSentinel: () => "test-sk-ant-oat-fixture" });
-    try {
-      expect(
-        resolveAnthropicServerCompactionPlan(
-          model,
-          { anthropicServerCompaction: true },
-          "credential-sentinel",
-        ),
-      ).toEqual({ enabled: false });
-    } finally {
-      configureAiTransportHost(host);
-    }
-  });
+it.each([
+  ["https://us-east5-aiplatform.googleapis.com", { type: "ephemeral", ttl: "1h" }],
+  ["https://proxy.example.test/vertex", { type: "ephemeral" }],
+] as const)("gates env-configured long retention for %s", (baseUrl, expected) => {
+  vi.stubEnv("OPENCLAW_CACHE_RETENTION", "long");
+  expect(resolveAnthropicEphemeralCacheControl(baseUrl, undefined)).toEqual(expected);
 });
-
-describe("Anthropic server compaction default", () => {
-  it.each([
-    { name: "OAuth credentials", model: direct, apiKey: "test-sk-ant-oat-fixture" },
-    { name: "a proxy host", model: { ...direct, baseUrl: "https://proxy.example.test/v1" } },
-  ])("stays off for $name", ({ model: requestModel, apiKey = "test-api-key" }) => {
-    expect(resolveAnthropicServerCompactionPlan(requestModel, {}, apiKey)).toEqual({
-      enabled: false,
-    });
-  });
-
-  it("triggers inside a configured input cap", () => {
+it("uses the same host-resolved credential shape as the transport", () => {
+  const host = getAiTransportHost();
+  configureAiTransportHost({ ...host, resolveSecretSentinel: () => "test-sk-ant-oat-fixture" });
+  try {
     expect(
       resolveAnthropicServerCompactionPlan(
-        { ...direct, contextWindow: 1_000_000, contextTokens: 200_000 },
-        {},
-        "test-api-key",
+        model,
+        { anthropicServerCompaction: true },
+        "credential-sentinel",
       ),
-    ).toEqual({ enabled: true, threshold: 140_000 });
+    ).toEqual({ enabled: false });
+  } finally {
+    configureAiTransportHost(host);
+  }
+});
+it.each([
+  { name: "OAuth credentials", model: direct, apiKey: "test-sk-ant-oat-fixture" },
+  { name: "a proxy host", model: { ...direct, baseUrl: "https://proxy.example.test/v1" } },
+])("stays off for $name", ({ model: requestModel, apiKey = "test-api-key" }) => {
+  expect(resolveAnthropicServerCompactionPlan(requestModel, {}, apiKey)).toEqual({
+    enabled: false,
   });
 });
 
-describe("Anthropic tool-clearing policy", () => {
-  it("requires resolved authentication before disabling client pruning", () => {
-    expect(isAnthropicServerToolClearingEnabled(model, "  ")).toBe(false);
-  });
+it("triggers inside a configured input cap", () => {
+  expect(
+    resolveAnthropicServerCompactionPlan(
+      { ...direct, contextWindow: 1_000_000, contextTokens: 200_000 },
+      {},
+      "test-api-key",
+    ),
+  ).toEqual({ enabled: true, threshold: 140_000 });
+});
+it("requires resolved authentication before disabling client pruning", () => {
+  expect(isAnthropicServerToolClearingEnabled(model, "  ")).toBe(false);
+});
 
-  it.each([
-    {
-      tools: { allow: ["look*"], deny: ["exec*"] },
-      excluded: ["exec_retired", "other_retired", "search"],
-    },
-    { tools: { deny: ["exec*"] }, excluded: ["exec_retired"] },
-  ])("applies pruning filters to exposed and historical tools: $tools", ({ tools, excluded }) => {
-    const payload: Record<string, unknown> = {
-      tools: [{ name: "lookup" }, { name: "search" }],
-      messages: [
-        {
-          role: "assistant",
-          content: ["exec", "other", "lookup"].map((name) => ({
-            type: "tool_use",
-            id: `old_${name}`,
-            name: `${name}_retired`,
-            input: {},
-          })),
-        },
-      ],
-    };
-    const policy = resolveAnthropicPayloadPolicy({ ...model, cacheTtlPruning: { tools } });
-    applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
-    expect(payload.context_management).toEqual({
-      edits: [
-        expect.objectContaining({ type: "clear_tool_uses_20250919", exclude_tools: excluded }),
-      ],
-    });
+it.each([
+  {
+    tools: { allow: ["look*"], deny: ["exec*"] },
+    excluded: ["exec_retired", "other_retired", "search"],
+  },
+  { tools: { deny: ["exec*"] }, excluded: ["exec_retired"] },
+])("applies pruning filters to exposed and historical tools: $tools", ({ tools, excluded }) => {
+  const payload: Record<string, unknown> = {
+    tools: [{ name: "lookup" }, { name: "search" }],
+    messages: [
+      {
+        role: "assistant",
+        content: ["exec", "other", "lookup"].map((name) => ({
+          type: "tool_use",
+          id: `old_${name}`,
+          name: `${name}_retired`,
+          input: {},
+        })),
+      },
+    ],
+  };
+  const policy = resolveAnthropicPayloadPolicy({ ...model, cacheTtlPruning: { tools } });
+  applyAnthropicPayloadPolicyToParams(payload, policy, new Set());
+  expect(payload.context_management).toEqual({
+    edits: [expect.objectContaining({ type: "clear_tool_uses_20250919", exclude_tools: excluded })],
   });
 });
