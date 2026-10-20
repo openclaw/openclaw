@@ -106,15 +106,13 @@ it("keeps an uncommitted reasoning preview when other picker props refresh", () 
     onThinkingSelect,
   });
   const view = mountSolid(ChatEffortPicker, options(false), host);
-  const paint = (active: boolean) => view.update(options(active));
-  paint(false);
   openPicker();
   const slider = host.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
   slider.value = "2";
   slider.dispatchEvent(new Event("input", { bubbles: true }));
   flush();
   expect(slider.getAttribute("aria-valuetext")).toBe("Ultra");
-  paint(true);
+  view.update(options(true));
   expect(host.querySelector("[data-chat-thinking-slider]")).toBe(slider);
   expect(slider.value).toBe("2");
   expect(slider.getAttribute("aria-valuetext")).toBe("Ultra");

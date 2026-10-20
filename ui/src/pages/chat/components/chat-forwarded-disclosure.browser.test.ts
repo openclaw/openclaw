@@ -68,12 +68,12 @@ function fixture(
   root = createMessageGroupHarness(host);
   const group: MessageGroup = {
     kind: "group",
-    key: "forwarded",
     role,
-    timestamp: 0,
-    visibleContent: "text",
-    senderSession: { sessionKey: "agent:research:main" },
     isStreaming: false,
+    visibleContent: "text",
+    key: "forwarded",
+    timestamp: 0,
+    senderSession: { sessionKey: "agent:research:main" },
     messages: [longText, longText, "First line.\nSecond line.", "One.\nTwo.\nThree."].map(
       (content, i) => message(content, `message-${i}`, role),
     ),
@@ -143,8 +143,10 @@ it.each([
     }
     const link = query<HTMLAnchorElement>(".chat-reply-attribution a");
     expect(link).not.toBeNull();
-    expect(getComputedStyle(link).backgroundColor).toBe("rgba(0, 0, 0, 0)");
-    expect(getComputedStyle(link).borderTopWidth).toBe("0px");
+    expect(getComputedStyle(link)).toMatchObject({
+      backgroundColor: "rgba(0, 0, 0, 0)",
+      borderTopWidth: "0px",
+    });
     const label = query(".session-label", link);
     expect(label.textContent).toBe("research");
     expect(getComputedStyle(label, "::first-letter").textTransform).toBe("uppercase");
@@ -210,14 +212,8 @@ it.each([
   async ({ loaded, width }) => {
     const { page } = await import("vitest/browser");
     await page.viewport(width, 800);
-    avatarUrl = URL.createObjectURL(
-      new Blob(
-        [
-          '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"><rect width="18" height="18" fill="blue"/></svg>',
-        ],
-        { type: "image/svg+xml" },
-      ),
-    );
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18"/>';
+    avatarUrl = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" }));
     if (!loaded) {
       URL.revokeObjectURL(avatarUrl);
     }

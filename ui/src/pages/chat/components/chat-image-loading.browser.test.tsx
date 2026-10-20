@@ -48,12 +48,8 @@ function ImageContent(props: ImageFixtureProps) {
   return (
     <>
       <MessageImages images={props.images} options={props.options} />
-      <Show when={props.withDocument}>
-        <CompactAttachmentCard kind="document" label="notes.pdf" />
-      </Show>
-      <Show when={props.nextMessage}>
-        <p data-next-message>Next message</p>
-      </Show>
+      {props.withDocument && <CompactAttachmentCard kind="document" label="notes.pdf" />}
+      {props.nextMessage && <p data-next-message>Next message</p>}
     </>
   );
 }
@@ -87,6 +83,16 @@ function drawImages(container: HTMLElement, props: ImageFixtureProps) {
 function unmountImages(container: HTMLElement) {
   views.get(container)?.dispose();
   views.delete(container);
+}
+function ownedImages(container: HTMLElement, props: ImageFixtureProps) {
+  const draw = () =>
+    drawImages(container, {
+      ...props,
+      options: { ...props.options, mediaOwner: draw },
+    });
+  subscribers.push(draw);
+  draw();
+  return draw;
 }
 
 afterEach(() => {
@@ -216,10 +222,7 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     vi.stubGlobal("fetch", fetch);
     const images = ["First", "Clipped"].map((alt) => fullImage({ alt }));
     const onOpenImage = vi.fn<NonNullable<ImageRenderOptions["onOpenImage"]>>();
-    const draw = () =>
-      drawImages(container, { images, options: { mediaOwner: draw, onOpenImage } });
-    subscribers.push(draw);
-    draw();
+    ownedImages(container, { images, options: { onOpenImage } });
     await vi.waitFor(() => expect(container.querySelectorAll("img")).toHaveLength(1));
     expect(fetch).toHaveBeenCalledOnce();
     const frames = container.querySelectorAll<HTMLElement>(".chat-image-frame");
@@ -310,29 +313,21 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
       const container = mount(500);
       const { response } = deferredFetch();
       const source = `/tmp/openclaw/${crypto.randomUUID()}.png`;
+      const localImage = { url: source, width: 1200, height: 800 };
       const images =
         kind === "attachment"
           ? projectMessageMedia({}, [
               {
                 type: "attachment",
-                attachment: {
-                  kind: "image",
-                  url: source,
-                  label: "Local image",
-                  width: 1200,
-                  height: 800,
-                },
+                attachment: { ...localImage, kind: "image", label: "Local image" },
               },
             ]).images
-          : [{ url: source, alt: "Local image", width: 1200, height: 800 }];
-      const draw = () =>
-        drawImages(container, {
-          images,
-          options: { sessionKey: "image-proof", agentId: "main", mediaOwner: draw },
-          nextMessage: true,
-        });
-      subscribers.push(draw);
-      draw();
+          : [{ ...localImage, alt: "Local image" }];
+      const draw = ownedImages(container, {
+        images,
+        options: { sessionKey: "image-proof", agentId: "main" },
+        nextMessage: true,
+      });
       const before = geometry(container);
       expect(before.height).toBeCloseTo(400 / 1.5, 1);
       expect(frame(container).textContent?.trim()).toBe("");
@@ -510,16 +505,13 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
         width: imageWidth,
         height: imageHeight,
       }));
-      const draw = () =>
-        drawImages(container, {
-          images,
-          options: { sessionKey: "unavailable-geometry", agentId: "main", mediaOwner: draw },
-          role,
-          withDocument,
-          nextMessage: true,
-        });
-      subscribers.push(draw);
-      draw();
+      ownedImages(container, {
+        images,
+        options: { sessionKey: "unavailable-geometry", agentId: "main" },
+        role,
+        withDocument,
+        nextMessage: true,
+      });
       await waitForFast(() =>
         expect(
           container.querySelectorAll(".chat-assistant-attachment-card--blocked button"),
