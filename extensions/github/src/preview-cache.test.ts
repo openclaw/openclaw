@@ -1,7 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadControlUiGitHubPreview } from "./preview.js";
+import { loadControlUiGitHubPreview as loadPreview } from "./preview.js";
 import {
   githubJson,
   managedIdentity,
@@ -11,6 +11,17 @@ import {
   publicRepository,
   requestUrl,
 } from "./preview.test-support.js";
+
+const avatarDataUrl = "data:image/png;base64,iVBORw==";
+function trailers(...authors: [string, number][]) {
+  const message = authors
+    .map(
+      ([name, id]) =>
+        `Co-authored-by: ${name} <${id}+${name.toLowerCase()}@users.noreply.github.com>`,
+    )
+    .join("\n");
+  return [{ commit: { message } }];
+}
 
 describe("GitHub preview decoration cache", () => {
   afterEach(() => {
@@ -47,7 +58,7 @@ describe("GitHub preview decoration cache", () => {
         const identities = [managedIdentity("first"), managedIdentity("second")];
         const previews = await Promise.all(
           [1, 2, 3, 4].map((number) =>
-            loadControlUiGitHubPreview(previewTarget(number), identities[number % 2], transport),
+            loadPreview(previewTarget(number), identities[number % 2], transport),
           ),
         );
         expect(previews.map((preview) => preview.title)).toEqual([
@@ -56,12 +67,10 @@ describe("GitHub preview decoration cache", () => {
           "Bearer token-second",
           "Bearer token-first",
         ]);
-        expect(
-          previews.every((preview) => preview.avatarDataUrl === "data:image/png;base64,iVBORw=="),
-        ).toBe(true);
+        expect(previews.every((preview) => preview.avatarDataUrl === avatarDataUrl)).toBe(true);
         expect(avatarReads).toBe(1);
         expect(avatarHeaders).toEqual([undefined]);
-        await loadControlUiGitHubPreview(previewTarget(5), identities[0], transport);
+        await loadPreview(previewTarget(5), identities[0], transport);
         expect(avatarReads).toBe(1);
       },
     );
@@ -103,10 +112,8 @@ describe("GitHub preview decoration cache", () => {
           : githubJson(previewPayload());
       });
       const settled = vi.fn();
-      const older = loadControlUiGitHubPreview(previewTarget(1), undefined, fetchMock).then(
-        settled,
-      );
-      const newer = loadControlUiGitHubPreview(previewTarget(2), undefined, fetchMock);
+      const older = loadPreview(previewTarget(1), undefined, fetchMock).then(settled);
+      const newer = loadPreview(previewTarget(2), undefined, fetchMock);
       try {
         await avatarStarted.promise;
         metadata.resolve(githubJson(previewPayload()));
@@ -119,7 +126,7 @@ describe("GitHub preview decoration cache", () => {
         expect(settled.mock.calls[0]?.[0].avatarDataUrl).toBeUndefined();
         expect(deadlines[1]!.signal.aborted).toBe(false);
         avatar.resolve(pngResponse());
-        expect((await newer).avatarDataUrl).toBe("data:image/png;base64,iVBORw==");
+        expect((await newer).avatarDataUrl).toBe(avatarDataUrl);
         expect(avatarReads).toBe(1);
       } finally {
         metadata.resolve(githubJson(previewPayload()));
@@ -144,10 +151,9 @@ describe("GitHub preview decoration cache", () => {
         }),
       );
     });
-    const load = (number: number) =>
-      loadControlUiGitHubPreview(previewTarget(number), undefined, fetchMock, true);
+    const load = (number: number) => loadPreview(previewTarget(number), undefined, fetchMock, true);
     expect((await load(1)).avatarDataUrl).toBeUndefined();
-    expect((await load(1)).avatarDataUrl).toBe("data:image/png;base64,iVBORw==");
+    expect((await load(1)).avatarDataUrl).toBe(avatarDataUrl);
     expect(avatarReads).toBe(2);
     for (let number = 2; number <= 201; number += 1) {
       await load(number);
@@ -189,18 +195,7 @@ describe("GitHub preview decoration cache", () => {
         }
         const response = githubJson(
           url.includes("/commits")
-            ? [
-                {
-                  commit: {
-                    message: [
-                      "Co-authored-by: Ada <20+ada@users.noreply.github.com>",
-                      "Co-authored-by: Mira <7+mira@users.noreply.github.com>",
-                      "Co-authored-by: Alan <31+alan@users.noreply.github.com>",
-                      "Co-authored-by: Grace <99+grace@users.noreply.github.com>",
-                    ].join("\n"),
-                  },
-                },
-              ]
+            ? trailers(["Ada", 20], ["Mira", 7], ["Alan", 31], ["Grace", 99])
             : previewPayload(),
         );
         response.headers.set("etag", url.includes("/commits") ? '"commits"' : '"item"');
@@ -208,7 +203,7 @@ describe("GitHub preview decoration cache", () => {
       });
       const target = previewTarget(940005, kind);
       const identity = managedIdentity(`decoration-age-${kind}`);
-      const load = () => loadControlUiGitHubPreview(target, identity, fetchMock, true);
+      const load = () => loadPreview(target, identity, fetchMock, true);
       const first = await load();
       const coldReads = kind === "pull" ? 4 : 1;
       expect(avatarReads).toBe(coldReads);
@@ -272,7 +267,7 @@ describe("GitHub preview decoration cache", () => {
       }
       const response = githubJson(
         isCommits
-          ? [{ commit: { message: "Co-authored-by: Ada <20+ada@users.noreply.github.com>" } }]
+          ? trailers(["Ada", 20])
           : previewPayload({
               title: `Version ${itemVersion}`,
               user: { login, avatar_url: "https://avatars.githubusercontent.com/u/58493" },
@@ -283,7 +278,7 @@ describe("GitHub preview decoration cache", () => {
     });
     const target = previewTarget(940006, "pull");
     const identity = managedIdentity("independent-decoration");
-    const load = () => loadControlUiGitHubPreview(target, identity, fetchMock, true);
+    const load = () => loadPreview(target, identity, fetchMock, true);
     const first = await load();
     expect(avatarUrls.splice(0)).toEqual([
       "https://avatars.githubusercontent.com/u/58493?s=64",
