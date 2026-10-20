@@ -32,8 +32,8 @@ export function registerCompletedFollowupAuthorityTests({
 }) {
   it.each(["original", "successor"] as const)(
     "keeps completed-result and followup custody independent when the %s source is revoked",
-    async (revokedOwner) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    (revokedOwner) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
         const context = createContext();
         const resolveGatewayContext = () => context;
@@ -139,7 +139,6 @@ export function registerCompletedFollowupAuthorityTests({
           followup?.release();
           await resetSubagentRegistryForTests({ persist: false });
         }
-      });
-    },
+      }),
   );
 }

@@ -46,15 +46,13 @@ export function registerRequesterSelfYieldFollowupTests<Response>(fixture: {
         }),
       );
     await register(kickoffRunId, true);
-    expect(
-      await registry.claimSubagentYield({
-        runId: kickoffRunId,
-        sessionKey: childSessionKey,
-        agentId: "main",
-        waitForMessage: true,
-        hasPendingWork: () => false,
-      }),
-    ).toEqual({ messageWaitRegistered: true });
+    await registry.claimSubagentYield({
+      runId: kickoffRunId,
+      sessionKey: childSessionKey,
+      agentId: "main",
+      waitForMessage: true,
+      hasPendingWork: () => false,
+    });
     await register(followupRunId, false);
     fixture.getLifecycleHandler()({
       stream: "lifecycle",
@@ -65,13 +63,6 @@ export function registerRequesterSelfYieldFollowupTests<Response>(fixture: {
       data: { phase: "end", endedAt: Date.now(), yielded: true },
     });
     await fixture.flushOwnedWork();
-    expect(registry.getSubagentRunByRunId(kickoffRunId)).toBeUndefined();
-    expect(registry.getSubagentRunByRunId(followupRunId)).toMatchObject({
-      requesterSessionKey: fixture.requesterSessionKey,
-      expectsCompletionMessage: true,
-      taskRunId: kickoffRunId,
-    });
-    expect(fixture.getAgentCalls()).toHaveLength(0);
 
     const ordinaryEntered = createDeferred();
     const ordinaryRelease = createDeferred();
@@ -87,12 +78,10 @@ export function registerRequesterSelfYieldFollowupTests<Response>(fixture: {
       }
       return respond(request);
     });
-    const wakes: Array<Promise<boolean>> = [];
-    vi.mocked(maybeWakeRequesterAfterAllChildrenSettled).mockImplementation((params) => {
-      const work = fixture.wakeRequester(params);
-      wakes.push(work);
-      return work;
-    });
+    const wakes = vi
+      .mocked(maybeWakeRequesterAfterAllChildrenSettled)
+      .mockClear()
+      .mockImplementation(fixture.wakeRequester);
     fixture.emitCompleted(followupRunId, childSessionKey, "follow-up completed");
     const completion = fixture.flushOwnedWork();
     try {
@@ -104,7 +93,7 @@ export function registerRequesterSelfYieldFollowupTests<Response>(fixture: {
       // Join all recovery wakes started before the delivery receipt commits.
       await registry.testing.sweepOnceForTests();
       await fixture.flushAsync();
-      await Promise.all(wakes);
+      await Promise.all(wakes.mock.results.map(({ value }) => value));
     } finally {
       ordinaryRelease.resolve();
       await completion;

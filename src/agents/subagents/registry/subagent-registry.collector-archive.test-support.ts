@@ -4,29 +4,14 @@ import {
   createSessionEntry,
   waitForFast,
   type SubagentRegistryHarness,
+  type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
-import { makeCompletedCollectorRun } from "./subagent-registry.run-fixtures.test-support.js";
 
 const identity = (suffix: string) => ({
   sessionId: `session-${suffix}`,
   lifecycleRevision: `revision-${suffix}`,
 });
-const collectorRun = (
-  suffix: string,
-  now: number,
-  overrides: Partial<Parameters<typeof makeCompletedCollectorRun>[0]> = {},
-) =>
-  makeCompletedCollectorRun({
-    runId: `run-${suffix}`,
-    childSessionKey: `agent:main:subagent:${suffix}`,
-    childSessionIdentity: identity(suffix),
-    task: suffix,
-    createdAt: now - 10_000,
-    endedAt: now - 5_000,
-    archiveAtMs: now - 1,
-    ...overrides,
-  });
 
 export function registerCollectorArchiveTests({
   getRegistry,
@@ -38,24 +23,44 @@ export function registerCollectorArchiveTests({
   >;
   mocks: Pick<ReturnType<typeof createSubagentRegistryMockState>, "entries" | "callGateway">;
 }): void {
+  const fixture = () => {
+    const mod = getRegistry();
+    const now = Date.now();
+    const add = (suffix: string, overrides: Partial<SubagentRunRecordOverrides> = {}) =>
+      mod.addSubagentRunForTests({
+        runId: `run-${suffix}`,
+        childSessionKey: `agent:main:subagent:${suffix}`,
+        childSessionIdentity: identity(suffix),
+        task: suffix,
+        createdAt: now,
+        ...overrides,
+      });
+    const completed = (suffix: string, overrides: Partial<SubagentRunRecordOverrides> = {}) =>
+      add(suffix, {
+        collect: true,
+        collectorCompletion: { status: "done" },
+        createdAt: now - 10_000,
+        endedAt: now - 5_000,
+        archiveAtMs: now - 1,
+        ...overrides,
+      });
+    return { mod, now, add, completed };
+  };
   it.each(["session", "agent"])(
     "keeps collector archive groups scoped to their requester %s",
     async (scope) => {
-      const mod = getRegistry();
-      const now = Date.now();
+      const { mod, now, completed } = fixture();
       for (const suffix of ["one", "two"]) {
         const requesterSessionKey = scope === "agent" ? "global" : `agent:main:requester-${suffix}`;
-        await mod.addSubagentRunForTests(
-          collectorRun(suffix, now, {
-            childSessionKey: `agent:${suffix}:subagent:collector`,
-            requesterSessionKey,
-            requesterAgentId: scope === "agent" ? suffix : "main",
-            cleanup: "delete",
-            cleanupCompletedAt: now - 4_000,
-            archiveAtMs: suffix === "one" ? now - 1 : now + 1_000,
-            groupId: "swarm:shared-group-id",
-          }),
-        );
+        await completed(suffix, {
+          childSessionKey: `agent:${suffix}:subagent:collector`,
+          requesterSessionKey,
+          requesterAgentId: scope === "agent" ? suffix : "main",
+          cleanup: "delete",
+          cleanupCompletedAt: now - 4_000,
+          archiveAtMs: suffix === "one" ? now - 1 : now + 1_000,
+          groupId: "swarm:shared-group-id",
+        });
       }
 
       await mod.testing.sweepOnceForTests();
@@ -68,8 +73,7 @@ export function registerCollectorArchiveTests({
   it.each(["sweep", "collector cleanup", "collector replacement"] as const)(
     "revalidates collector ownership after awaited %s work",
     async (phase) => {
-      const mod = getRegistry();
-      const now = Date.now();
+      const { mod, now, add, completed } = fixture();
       const runId = "run-collector-before-await";
       const childSessionKey = "agent:main:subagent:collector-before-await";
       const blockerKey =
@@ -89,11 +93,9 @@ export function registerCollectorArchiveTests({
         });
       });
       if (phase === "sweep") {
-        await mod.addSubagentRunForTests({
-          runId: "run-archive-blocker",
+        await add("archive-blocker", {
           childSessionKey: blockerKey,
           childSessionIdentity: identity("blocker"),
-          task: "hold the sweep before collector archival",
           cleanup: "delete",
           createdAt: now - 10_000,
           endedAt: now - 5_000,
@@ -101,30 +103,24 @@ export function registerCollectorArchiveTests({
           archiveAtMs: now - 1,
         });
       }
-      await mod.addSubagentRunForTests(
-        collectorRun("collector-before-await", now, {
-          groupId: "swarm:cleanup-race",
-        }),
-      );
+      await completed("collector-before-await", { groupId: "swarm:cleanup-race" });
       const sweep = mod.testing.runSweeperTickForTests();
       await waitForFast(() => expect(releaseDelete).toBeTypeOf("function"));
       if (phase === "sweep") {
         expect(getActiveGatewayRootWorkCount()).toBe(1);
       }
-      const after = {
-        runId: "run-collector-after-await",
-        childSessionKey: "agent:main:subagent:collector-after-await",
-        childSessionIdentity: identity("collector-after-await"),
-        task: "collector-after-await",
-        createdAt: now,
+      await add("collector-after-await", {
         collect: true,
         groupId: "swarm:cleanup-race",
-      };
-      await mod.addSubagentRunForTests(
-        phase === "collector replacement"
-          ? makeCompletedCollectorRun({ ...after, runId, endedAt: now, archiveAtMs: now - 1 })
-          : after,
-      );
+        ...(phase === "collector replacement"
+          ? {
+              runId,
+              endedAt: now,
+              archiveAtMs: now - 1,
+              collectorCompletion: { status: "done" as const },
+            }
+          : {}),
+      });
       releaseDelete?.();
       await sweep;
       if (phase === "sweep") {

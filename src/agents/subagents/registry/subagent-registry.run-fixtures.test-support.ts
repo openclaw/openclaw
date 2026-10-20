@@ -2,6 +2,7 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { loadPendingFinalDeliveryPayload } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -81,16 +82,13 @@ export const makeSuspendedDeliveryRun = ({
     createdAt: overrides.createdAt,
     attemptCount: 3,
     lastError: "gateway request timeout for agent",
-    payload: {
-      requesterSessionKey: overrides.requesterSessionKey,
-      requesterDisplayKey: overrides.requesterDisplayKey,
-      childSessionKey: overrides.childSessionKey,
-      childRunId: overrides.runId,
-      task: overrides.task,
-      endedAt: overrides.endedAt,
-      outcome: { status: "ok" },
-      expectsCompletionMessage: true,
-    },
+    payload: loadPendingFinalDeliveryPayload(
+      createSubagentRunRecord({
+        ...overrides,
+        outcome: { status: "ok" },
+        expectsCompletionMessage: true,
+      }),
+    ),
     suspendedReason: "expiry",
     ...deliveryOverrides,
   },

@@ -1,4 +1,4 @@
-import { onTestFinished, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
@@ -34,28 +34,14 @@ export function createLifecycleAgentCallWaits(
       if (getAgentCallCount() >= expectedCount) {
         return;
       }
-      const pending = mod.listSubagentRunsForRequester(requesterSessionKey).map((run) => ({
-        runId: run.runId,
-        execution: run.execution,
-        delivery: run.delivery,
-        requesterSettleWake: run.requesterSettleWake,
-      }));
-      throw new Error(
-        `expected ${expectedCount} agent call(s), got ${getAgentCallCount()}: ${JSON.stringify(pending)}`,
-      );
+      throw new Error(`expected ${expectedCount} agent call(s), got ${getAgentCallCount()}`);
     },
     async waitForCleanupHandledFalse(runId: string) {
       // RPC entry may precede persistence; join without advancing retry time.
       await pendingRootWork;
       const run = findRun(requesterSessionKey, runId);
-      if (
-        run?.cleanupHandled === false &&
-        run.delivery?.status === "pending" &&
-        run.delivery.payload
-      ) {
-        return;
-      }
-      throw new Error(`run ${runId} did not reach deferred cleanup after producer settlement`);
+      expect(run).toMatchObject({ cleanupHandled: false, delivery: { status: "pending" } });
+      expect(Boolean(run?.delivery?.payload)).toBe(true);
     },
     async settle() {
       try {
@@ -106,18 +92,11 @@ export function createLifecycleWaits(requesterSessionKey: string) {
     );
   };
 
-  const waitForFrozenResult = (runId: string, matches: (resultText: string) => boolean) =>
-    waitForRun(
-      runId,
-      (run) => typeof run.completion?.resultText === "string" && matches(run.completion.resultText),
-    );
-
   return {
     flushAsync,
     waitForRun,
     waitForDeliveredCleanup,
-    waitForFrozenResult,
     waitForFrozenResultText: (runId: string, expectedText: string) =>
-      waitForFrozenResult(runId, (resultText) => resultText === expectedText),
+      waitForRun(runId, (run) => run.completion?.resultText === expectedText),
   };
 }
