@@ -465,10 +465,11 @@ describe("prepared Docker publication", () => {
     });
     expect(fixture.manifest.artifactName).toBe(dockerReleaseArtifactName(sourceSha, "1"));
     expect(fixture.manifest.producer.runAttempt).toBe("2");
-    expect(fixture.manifest.architectures.map((entry) => entry.producer.runAttempt)).toEqual([
-      "1",
-      "2",
-    ]);
+    expect(
+      fixture.manifest.architectures.map(
+        (entry: { producer: { runAttempt: string } }) => entry.producer.runAttempt,
+      ),
+    ).toEqual(["1", "2"]);
     expect((await verifyPrepared(fixture)).manifest).toBe(fixture.manifest);
   });
 
