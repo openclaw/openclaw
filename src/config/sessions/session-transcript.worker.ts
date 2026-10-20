@@ -599,7 +599,17 @@ serveOwnedWorkerTasks(
       }
       if (request.kind === "session-entries") {
         const { prepareSessionMemoryEntries } = await import("./session-memory-entry.worker.js");
-        return { entries: await prepareSessionMemoryEntries(request.entries) };
+        if (!channel) {
+          throw new Error("Session exports require their host delivery channel");
+        }
+        channel.consumeInput();
+        await prepareSessionMemoryEntries(request.entries, async (index, value) => {
+          control.throwIfCancelled();
+          const response = await channel.request({ kind: "session-entries", index, value });
+          response.consumed();
+          control.throwIfCancelled();
+        });
+        return { entries: [] };
       }
       return await runWithSessionTranscriptReadFence(
         request.admission,
