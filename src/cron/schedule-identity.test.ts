@@ -4,19 +4,14 @@ import { cronSchedulingInputsEqual, tryCronScheduleIdentity } from "./schedule-i
 describe("tryCronScheduleIdentity", () => {
   it("preserves meaningful whitespace in on-exit command identity", () => {
     const command = " printf %s hello\\ ";
-    const job = { schedule: { kind: "on-exit", command } };
+    const makeJob = (text: string) => ({ schedule: { kind: "on-exit", command: text } });
+    const job = makeJob(command);
     expect(tryCronScheduleIdentity(job)).toBeDefined();
     expect(cronSchedulingInputsEqual(job, structuredClone(job))).toBe(true);
     for (const changedCommand of [command.trimStart(), command.trimEnd()]) {
-      expect(
-        cronSchedulingInputsEqual(job, {
-          schedule: { kind: "on-exit", command: changedCommand },
-        }),
-      ).toBe(false);
+      expect(cronSchedulingInputsEqual(job, makeJob(changedCommand))).toBe(false);
     }
-    expect(
-      tryCronScheduleIdentity({ schedule: { kind: "on-exit", command: " \t " } }),
-    ).toBeUndefined();
+    expect(tryCronScheduleIdentity(makeJob(" \t "))).toBeUndefined();
   });
 
   it("normalizes numeric schedule strings like execution does", () => {
@@ -42,23 +37,13 @@ describe("tryCronScheduleIdentity", () => {
   });
 
   it("normalizes pacing bounds and treats changes as scheduling input changes", () => {
-    const schedule = { kind: "every" as const, everyMs: 60_000, anchorMs: 123 };
-
-    expect(
-      cronSchedulingInputsEqual(
-        { schedule, pacing: { min: "60m", max: "4h" } },
-        { schedule, pacing: { min: "1h", max: "240m" } },
-      ),
-    ).toBe(true);
-    expect(
-      cronSchedulingInputsEqual(
-        { schedule, pacing: { min: "1h" } },
-        { schedule, pacing: { min: "2h" } },
-      ),
-    ).toBe(false);
-    expect(cronSchedulingInputsEqual({ schedule, pacing: { min: "1h" } }, { schedule })).toBe(
-      false,
-    );
+    const job = (min?: string, max?: string) => ({
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 123 },
+      pacing: min ? { min, max } : undefined,
+    });
+    expect(cronSchedulingInputsEqual(job("60m", "4h"), job("1h", "240m"))).toBe(true);
+    expect(cronSchedulingInputsEqual(job("1h"), job("2h"))).toBe(false);
+    expect(cronSchedulingInputsEqual(job("1h"), job())).toBe(false);
   });
 
   it("tracks trigger presence without depending on trigger script text", () => {

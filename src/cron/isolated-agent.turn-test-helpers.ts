@@ -1,4 +1,3 @@
-/** Reusable turn-level fixtures for isolated cron agent regression tests. */
 import "./isolated-agent.mocks.js";
 import path from "node:path";
 import { vi } from "vitest";
@@ -11,7 +10,7 @@ import {
   makeCfg,
   makeJob,
   withTempCronHome as withTempHome,
-  writeSessionStoreEntries,
+  writeSessionStore,
 } from "./isolated-agent.test-harness.js";
 import type { CronJob } from "./types.js";
 
@@ -28,18 +27,14 @@ export function makeDeps(): CliDeps {
   };
 }
 
-function mockEmbeddedTexts(texts: string[]) {
+export function mockEmbeddedOk() {
   vi.mocked(runEmbeddedAgent).mockResolvedValue({
-    payloads: texts.map((text) => ({ text })),
+    payloads: [{ text: "ok" }],
     meta: {
       durationMs: 5,
       agentMeta: { sessionId: "s", provider: "p", model: "m" },
     },
   });
-}
-
-export function mockEmbeddedOk() {
-  mockEmbeddedTexts(["ok"]);
 }
 
 export async function readCronSessionEntry(storePath: string, key: string) {
@@ -51,12 +46,8 @@ export const DEFAULT_MESSAGE = "do it";
 type RunCronTurnOptions = {
   cfgOverrides?: Parameters<typeof makeCfg>[2];
   deps?: CliDeps;
-  delivery?: CronJob["delivery"];
   jobPayload?: CronJob["payload"];
-  message?: string;
-  mockTexts?: string[] | null;
   sessionKey?: string;
-  storeEntries?: Record<string, Record<string, unknown>>;
   storePath?: string;
 };
 
@@ -65,21 +56,10 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
   const cfg = makeCfg(home, storePath, options.cfgOverrides);
   setRuntimeConfigSnapshot(cfg);
   if (!options.storePath) {
-    await writeSessionStoreEntries(home, {
-      "agent:main:main": {
-        sessionId: "main-session",
-        updatedAt: Date.now(),
-        delivery: { kind: "internal" },
-      },
-      ...options.storeEntries,
-    });
+    await writeSessionStore(home, { delivery: { kind: "internal" } });
   }
   const deps = options.deps ?? makeDeps();
-  if (options.mockTexts === null) {
-    vi.mocked(runEmbeddedAgent).mockClear();
-  } else {
-    mockEmbeddedTexts(options.mockTexts ?? ["ok"]);
-  }
+  mockEmbeddedOk();
 
   const jobPayload: CronJob["payload"] = options.jobPayload ?? {
     kind: "agentTurn",
@@ -89,12 +69,8 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
     deliveryAttemptFence: null,
     cfg,
     deps,
-    job: {
-      ...makeJob(jobPayload),
-      delivery: options.delivery ?? { mode: "none" },
-    },
-    message:
-      options.message ?? (jobPayload.kind === "agentTurn" ? jobPayload.message : DEFAULT_MESSAGE),
+    job: { ...makeJob(jobPayload), delivery: { mode: "none" } },
+    message: jobPayload.kind === "agentTurn" ? jobPayload.message : DEFAULT_MESSAGE,
     sessionKey: options.sessionKey ?? "cron:job-1",
     lane: "cron",
   });

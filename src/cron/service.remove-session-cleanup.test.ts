@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { SessionsDeleteParams } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   applySessionEntryLifecycleMutation,
   loadExactSessionEntry,
-  replaceSessionEntry as replaceSessionEntryCore,
+  replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
   resolveSqliteScope,
@@ -25,26 +26,13 @@ const gatewayTestState = vi.hoisted(() => ({
   targetBySessionKey: new Map<string, { agentId: string; storePath: string }>(),
 }));
 
-vi.mock("../gateway/call.js", () => ({
-  callGateway: gatewayTestState.callGateway,
-}));
+vi.mock("../gateway/call.js", () => ({ callGateway: gatewayTestState.callGateway }));
 
 gatewayTestState.callGateway.mockImplementation(
-  async (request: {
-    params: {
-      key: string;
-      expectedSessionId: string;
-      expectedLifecycleRevision?: string;
-      expectedSessionUpdatedAt?: number;
-    };
-  }) => {
-    const { key, expectedSessionId, expectedLifecycleRevision, expectedSessionUpdatedAt } =
-      request.params;
+  async ({ params }: { params: SessionsDeleteParams }) => {
+    const { key, expectedSessionId, expectedLifecycleRevision, expectedSessionUpdatedAt } = params;
     const target = gatewayTestState.targetBySessionKey.get(key)!;
-    const existing = loadExactSessionEntry({
-      storePath: target.storePath,
-      sessionKey: key,
-    })?.entry;
+    const existing = loadExactSessionEntry({ ...target, sessionKey: key })?.entry;
     if (
       !existing ||
       existing.sessionId !== expectedSessionId ||
@@ -54,8 +42,7 @@ gatewayTestState.callGateway.mockImplementation(
       return { deleted: false };
     }
     const result = await applySessionEntryLifecycleMutation({
-      agentId: target.agentId,
-      storePath: target.storePath,
+      ...target,
       removals: [
         {
           sessionKey: key,
@@ -71,18 +58,6 @@ gatewayTestState.callGateway.mockImplementation(
   },
 );
 
-function replaceSessionEntry(...args: Parameters<typeof replaceSessionEntryCore>) {
-  const target = args[0];
-  if (!target.agentId || !target.storePath) {
-    throw new Error("cron cleanup tests require an explicit agent and session store");
-  }
-  gatewayTestState.targetBySessionKey.set(target.sessionKey, {
-    agentId: target.agentId,
-    storePath: target.storePath,
-  });
-  return replaceSessionEntryCore(...args);
-}
-
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-remove-session-cleanup-",
   fakeTimers: false,
@@ -93,9 +68,12 @@ afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
 });
 
-async function createFixture() {
+type JobOptions = Partial<Parameters<CronService["add"]>[0]>;
+
+async function setup(initialSession?: string, options: JobOptions = {}) {
   const { storePath } = await makeStorePath();
   const sessionStorePath = path.join(path.dirname(storePath), "sessions.json");
+  const target = { agentId: "main", storePath: sessionStorePath };
   const createCron = () =>
     new CronService({
       scheduler: createTestGatewayScheduler(),
@@ -108,21 +86,23 @@ async function createFixture() {
       requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-  const read = (sessionKey: string) =>
-    loadExactSessionEntry({ storePath: sessionStorePath, sessionKey });
-  const write = (sessionKey: string, sessionId: string) =>
-    replaceSessionEntry(
-      { agentId: "main", storePath: sessionStorePath, sessionKey },
-      { sessionId, updatedAt: Date.now() },
-    );
-  return { cron: createCron(), createCron, sessionStorePath, read, write };
+  const read = (sessionKey: string) => loadExactSessionEntry({ ...target, sessionKey });
+  const write = (sessionKey: string, sessionId: string) => {
+    gatewayTestState.targetBySessionKey.set(sessionKey, target);
+    return replaceSessionEntry({ ...target, sessionKey }, { sessionId, updatedAt: Date.now() });
+  };
+  const cron = createCron();
+  const jobId = `cleanup-${initialSession ?? options.sessionTarget ?? "never-ran"}`;
+  const job = await addJob(cron, jobId, options);
+  const sessionKey = `agent:main:cron:${job.id}`;
+  if (initialSession) {
+    await write(sessionKey, initialSession);
+  }
+  const scope = resolveSqliteScope({ ...target, sessionKey });
+  return { cron, job, sessionKey, createCron, scope, read, write };
 }
 
-function addJob(
-  cron: CronService,
-  id: string,
-  overrides: Partial<Parameters<CronService["add"]>[0]> = {},
-) {
+function addJob(cron: CronService, id: string, overrides: JobOptions = {}) {
   return cron.add({
     id,
     name: id,
@@ -147,14 +127,8 @@ describe("CronService.remove session cleanup", () => {
   });
 
   it("does not materialize a session database when the deleted job never ran", async () => {
-    const { cron, sessionStorePath } = await createFixture();
-    const job = await addJob(cron, "never-ran", { enabled: false });
-    const sessionKey = `agent:main:cron:${job.id}`;
-    const databasePath = resolveSqliteScope({
-      agentId: "main",
-      sessionKey,
-      storePath: sessionStorePath,
-    }).path!;
+    const { cron, job, scope } = await setup(undefined, { enabled: false });
+    const databasePath = scope.path!;
 
     expect(fs.existsSync(databasePath)).toBe(false);
 
@@ -167,37 +141,28 @@ describe("CronService.remove session cleanup", () => {
   });
 
   it("removes only the deleted isolated job's base session", async () => {
-    const { cron, read, write } = await createFixture();
-    const job = await addJob(cron, "deleted-job");
-    const baseSessionKey = `agent:main:cron:${job.id}`;
-    const runSessionKey = `${baseSessionKey}:run:retained-run`;
+    const { cron, job, sessionKey, read, write } = await setup("base-session");
+    const runSessionKey = `${sessionKey}:run:retained-run`;
     const otherSessionKey = "agent:main:cron:other-job";
-    await write(baseSessionKey, "base-session");
     await write(runSessionKey, "run-session");
     await write(otherSessionKey, "other-session");
 
     await expect(cron.remove(job.id)).resolves.toEqual({ ok: true, removed: true });
 
-    expect(read(baseSessionKey)).toBe(undefined);
-    expect(read(runSessionKey)).toMatchObject({ entry: { sessionId: "run-session" } });
-    expect(read(otherSessionKey)).toMatchObject({ entry: { sessionId: "other-session" } });
+    expect([read(sessionKey), read(runSessionKey), read(otherSessionKey)]).toMatchObject([
+      undefined,
+      { entry: { sessionId: "run-session" } },
+      { entry: { sessionId: "other-session" } },
+    ]);
   });
 
   it("releases the cron lock before waiting for the session lifecycle writer", async () => {
-    const { cron, read, write, sessionStorePath } = await createFixture();
-    const job = await addJob(cron, "contended-session-writer");
-    const sessionKey = `agent:main:cron:${job.id}`;
-    await write(sessionKey, "contended-session");
+    const { cron, job, sessionKey, read, scope } = await setup("contended-session");
 
     const writerEntered = createDeferred();
     const releaseWriter = createDeferred();
-    const resolvedSessionScope = resolveSqliteScope({
-      agentId: "main",
-      sessionKey,
-      storePath: sessionStorePath,
-    });
     const heldWriter = runExclusiveSqliteSessionWrite(
-      resolvedSessionScope,
+      scope,
       async () => {
         writerEntered.resolve();
         await releaseWriter.promise;
@@ -207,18 +172,10 @@ describe("CronService.remove session cleanup", () => {
     await writerEntered.promise;
 
     const removal = cron.remove(job.id);
-    let unrelatedAdded = false;
-    const unrelatedAdd = addJob(cron, "unrelated-during-session-cleanup", {
-      name: "unrelated during session cleanup",
-      schedule: { kind: "every", everyMs: 120_000 },
-      payload: { kind: "agentTurn", message: "unrelated" },
-    }).then(() => {
-      unrelatedAdded = true;
-    });
+    const unrelatedAdd = addJob(cron, "unrelated-during-session-cleanup");
 
     try {
-      await unrelatedAdd;
-      expect(unrelatedAdded).toBe(true);
+      await expect(unrelatedAdd).resolves.toMatchObject({ id: "unrelated-during-session-cleanup" });
     } finally {
       releaseWriter.resolve();
       await heldWriter;
@@ -229,10 +186,7 @@ describe("CronService.remove session cleanup", () => {
   });
 
   it("reports failed session cleanup after removal and preserves the session for retry", async () => {
-    const { cron, read, write } = await createFixture();
-    const job = await addJob(cron, "cleanup-transport-failure", { enabled: false });
-    const sessionKey = `agent:main:cron:${job.id}`;
-    await write(sessionKey, "transport-session");
+    const { cron, job, sessionKey, read } = await setup("transport-session", { enabled: false });
     gatewayTestState.callGateway.mockRejectedValueOnce(new Error("Gateway disconnected"));
 
     await expect(cron.remove(job.id)).rejects.toThrow("Gateway disconnected");
@@ -242,26 +196,18 @@ describe("CronService.remove session cleanup", () => {
   });
 
   it("removes a base session recreated by an already-admitted run", async ({ signal }) => {
-    const { cron, read, write } = await createFixture();
-    const job = await addJob(cron, "active-deleted-job");
-    const sessionKey = `agent:main:cron:${job.id}`;
+    const { cron, job, sessionKey, read, write } = await setup("active-session");
     const marker = markCronJobActive(job.id);
 
-    await write(sessionKey, "active-session");
-
     const cleanupRegistration = vi.spyOn(cronCleanup, "registerPendingCronSessionCleanup");
-    onTestFinished(() => {
-      cleanupRegistration.mockRestore();
-    });
+    onTestFinished(() => cleanupRegistration.mockRestore());
     await expect(cron.remove(job.id)).resolves.toEqual({
       ok: true,
       removed: true,
       activeRunCancellationRequested: true,
       sessionCleanup: "pending",
     });
-    expect(read(sessionKey)).toMatchObject({
-      entry: { sessionId: "active-session" },
-    });
+    expect(read(sessionKey)).toMatchObject({ entry: { sessionId: "active-session" } });
     await write(sessionKey, "late-session");
     const cleanupDone = cleanupRegistration.mock.calls.find(
       ([, registeredJobId]) => registeredJobId === job.id,
@@ -272,51 +218,35 @@ describe("CronService.remove session cleanup", () => {
     cleanupInFlight = cleanupDone;
     clearCronJobActive(job.id, marker);
 
-    // The cron owner releases pending cleanup after the real lifecycle mutation settles.
     await racePromiseWithAbortSignal(cleanupDone, signal);
     expect(read(sessionKey)).toBeUndefined();
   });
 
   it("fences same-id replacement across services sharing one store", async () => {
-    const { cron: removingCron, createCron, read, write } = await createFixture();
+    const { cron, job, sessionKey, createCron, read, write } = await setup("original-session");
     const replacementCron = createCron();
-    const original = await addJob(removingCron, "cross-service-reused-id", {
-      name: "original job",
-      payload: { kind: "agentTurn", message: "original" },
-    });
-    const sessionKey = `agent:main:cron:${original.id}`;
-    const originalMarker = markCronJobActive(original.id);
-    await write(sessionKey, "original-session");
+    const originalMarker = markCronJobActive(job.id);
 
-    await removingCron.remove(original.id);
+    await cron.remove(job.id);
     let replacementAdded = false;
-    const replacementPromise = addJob(replacementCron, original.id, {
-      name: "replacement job",
-      schedule: { kind: "every", everyMs: 120_000 },
-      payload: { kind: "agentTurn", message: "replacement" },
-    }).then((job) => {
+    const replacementPromise = addJob(replacementCron, job.id).then(() => {
       replacementAdded = true;
-      return job;
     });
     await replacementCron.status();
     expect(replacementAdded).toBe(false);
 
-    clearCronJobActive(original.id, originalMarker);
+    clearCronJobActive(job.id, originalMarker);
     await replacementPromise;
     expect(read(sessionKey)).toBeUndefined();
     await write(sessionKey, "replacement-session");
 
     await Promise.resolve();
     await Promise.resolve();
-    expect(read(sessionKey)).toMatchObject({
-      entry: { sessionId: "replacement-session" },
-    });
+    expect(read(sessionKey)).toMatchObject({ entry: { sessionId: "replacement-session" } });
   });
 
   it("does not delete a shared main session", async () => {
-    const { cron, read, write } = await createFixture();
-    const job = await addJob(cron, "main-session-job", {
-      name: "main session job",
+    const { cron, job, read, write } = await setup(undefined, {
       sessionTarget: "main",
       payload: { kind: "systemEvent", text: "work" },
     });
@@ -325,8 +255,6 @@ describe("CronService.remove session cleanup", () => {
 
     await cron.remove(job.id);
 
-    expect(read(sessionKey)).toMatchObject({
-      entry: { sessionId: "main-session" },
-    });
+    expect(read(sessionKey)).toMatchObject({ entry: { sessionId: "main-session" } });
   });
 });
