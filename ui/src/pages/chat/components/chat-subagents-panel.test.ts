@@ -69,7 +69,9 @@ it("retains detail while hidden and applies a show request after its complete sc
     () => createComponent(ChatSubagentsPanel, { sessionKey: "agent:main:parent" }),
     { wrapper: provider.wrapper },
   );
-  const panel = view.container.querySelector<ChatSubagentsPanel>("openclaw-chat-subagents-panel")!;
+  const panel = view.container.querySelector<
+    HTMLElementTagNameMap["openclaw-chat-subagents-panel"]
+  >("openclaw-chat-subagents-panel")!;
   const pane = () => panel.querySelector("openclaw-chat-pane");
   const setPresented = async (presented: boolean) => {
     panel.presented = presented;

@@ -100,6 +100,18 @@ it("retires an interrupted run after missing its live terminal", async () => {
         lastRunId: "run-interrupted",
         status: "killed",
       },
+      pendingInputs: {
+        items: [
+          {
+            id: "input-interrupted",
+            runId: "queued-input",
+            acceptedAt: 1,
+            state: "interrupted",
+            message: message("user", "Open a PR to fix it"),
+          },
+        ],
+        total: 1,
+      },
     });
   await loadChatHistory(state);
   expect(state.chatRunId).toBe("run-interrupted");
@@ -136,7 +148,13 @@ it("restores tools, preamble time, and usage from the active snapshot", async ()
       progressText: "Checking the workspace",
     }),
     toolEvent("call-restored"),
-    { ...event(3, "usage", { outputTokens: 695 }), ts: 1100 },
+    {
+      ...event(3, "usage", {
+        outputTokens: 695,
+        context: { totalTokens: 1500, contextWindow: 8000 },
+      }),
+      ts: 1100,
+    },
   ];
   const state = createState(history);
   await loadWithTools(state);

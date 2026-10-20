@@ -198,7 +198,7 @@ it.each(["sidebar", "dashboard"] as const)(
           if (sidebar) {
             assignSessionOwner(scope, {
               owner: { type: "human", id: profiles[i % profiles.length]!.id },
-              assignedBy: actor,
+              assignedBy: profileActor(profiles[0]!.id),
               assignedAt: 1_800_000_000_000,
             });
             for (const profile of profiles) {

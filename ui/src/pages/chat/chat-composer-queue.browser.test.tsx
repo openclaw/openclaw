@@ -35,7 +35,7 @@ async function drawQueue(editingId: string | null = null) {
   );
   flush();
   const row = container.querySelector<HTMLElement>('[data-chat-queue-item="first"]')!;
-  const q = <T extends HTMLElement = HTMLElement>(selector: string) =>
+  const q = <T extends HTMLElement = HTMLElement>(selector: string): T =>
     row.querySelector<T>(selector)!;
   return { container, onEdit, q, row, trigger: q<HTMLButtonElement>(".chat-queue__more") };
 }

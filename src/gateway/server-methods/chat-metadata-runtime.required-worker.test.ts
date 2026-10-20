@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { onTestFinished, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import type { ChatMetadataResponse } from "../../../ui/src/lib/chat/chat-metadata-cache.ts";
 import {
   beginChatMetadataPublication,
@@ -26,18 +26,9 @@ const models = ["worker-model", "other-model"].map((id) => ({
   unavailableReason: "missing-auth",
 }));
 
-async function workerHarness(cfg = config, catalog = models) {
-  const harness = createChatMetadataHarness(cfg);
-  onTestFinished(() => harness.runtime.stop());
-  harness.buildProjection.mockResolvedValue({ modelCatalog: catalog, models: catalog });
-  await harness.refresh();
-  return harness;
-}
-
 test("does not retain startup worker policy across a command-only refresh", async () => {
   const cfg = structuredClone(config);
   const harness = createChatMetadataHarness(cfg);
-  onTestFinished(() => harness.runtime.stop());
   const scope = { agentId: "main", sessionKey: "agent:main:main" };
   const client = createTestGatewayClient(async (method, params) => {
     if (method === "chat.startup") {
@@ -50,54 +41,98 @@ test("does not retain startup worker policy across a command-only refresh", asyn
       ifRevision: typeof ifRevision === "string" ? ifRevision : undefined,
     });
   });
-  await harness.refresh();
-  await harness.read();
-  const startup = await client.request<ChatMetadataResponse>("chat.startup", scope);
-  const published = beginChatMetadataPublication(client, scope).publish(startup);
-  expect(published.requiredWorkerInferenceProfileId).toBe("dedicated");
-  delete cfg.cloudWorkers!.requiredProfile;
-  const refreshed = await revalidateChatMetadata(client, scope);
-  expect(refreshed.commands).toEqual(published.commands);
-  expect(refreshed.requiredWorkerInferenceProfileId).toBeUndefined();
+  try {
+    await harness.refresh();
+    await harness.read();
+    const startup = await client.request<ChatMetadataResponse>("chat.startup", scope);
+    const published = beginChatMetadataPublication(client, scope).publish(startup);
+    expect(published.requiredWorkerInferenceProfileId).toBe("dedicated");
+    delete cfg.cloudWorkers!.requiredProfile;
+    const refreshed = await revalidateChatMetadata(client, scope);
+    expect(refreshed.commands).toEqual(published.commands);
+    expect(refreshed.requiredWorkerInferenceProfileId).toBeUndefined();
+  } finally {
+    await harness.runtime.stop();
+  }
 });
 
 test("required worker chat metadata admits cold main and bookmarked sessions without Gateway auth", async () => {
-  const harness = await workerHarness();
-  for (const scope of [
-    { agentId: "main", sessionKey: "agent:main:main" },
-    { agentId: "main", sessionKey: "agent:main:bookmark", sessionEntry: { sessionId: "saved" } },
-  ]) {
-    const metadata = await harness.runtime.read(scope);
-    expect(metadata.models?.[0]).not.toHaveProperty("unavailableReason");
-    expect(metadata.models?.[0]).not.toHaveProperty("available");
-    expect(metadata.models?.[1]).toEqual(models[1]);
-    expect((await harness.startup(scope))?.metadata).toMatchObject({
-      requiredWorkerInferenceProfileId: "dedicated",
-    });
+  const harness = createChatMetadataHarness(config);
+  harness.buildProjection.mockResolvedValue({ modelCatalog: models, models });
+  try {
+    await harness.runtime.refresh();
+    for (const scope of [
+      { agentId: "main", sessionKey: "agent:main:main" },
+      { agentId: "main", sessionKey: "agent:main:bookmark", sessionEntry: { sessionId: "saved" } },
+    ]) {
+      const metadata = await harness.runtime.read(scope);
+      expect(metadata.models?.[0]).not.toHaveProperty("unavailableReason");
+      expect(metadata.models?.[0]).not.toHaveProperty("available");
+      expect(metadata.models?.[1]).toEqual(models[1]);
+      expect((await harness.runtime.readStartup(scope))?.metadata).toMatchObject({
+        requiredWorkerInferenceProfileId: "dedicated",
+      });
+    }
+    expect((await harness.runtime.read({ agentId: "main" })).models).toEqual(models);
+    expect(
+      (
+        await harness.runtime.read({
+          agentId: "main",
+          sessionKey: "agent:main:pinned",
+          sessionEntry: { agentRuntimeOverride: "codex" },
+        })
+      ).models,
+    ).toEqual(models);
+    expect(models[0]).toHaveProperty("unavailableReason", "missing-auth");
+  } finally {
+    await harness.runtime.stop();
   }
-  expect((await harness.read()).models).toEqual(models);
-  expect(
-    (
-      await harness.read({
-        sessionKey: "agent:main:pinned",
-        sessionEntry: { agentRuntimeOverride: "codex" },
-      })
-    ).models,
-  ).toEqual(models);
-  expect(models[0]).toHaveProperty("unavailableReason", "missing-auth");
 });
 
-test("keeps Gateway credentials when the required worker has no device", async () => {
-  const cfg = structuredClone(config);
-  cfg.cloudWorkers!.profiles!.dedicated!.settings!.device = "";
-  const harness = await workerHarness(cfg);
-  expect((await harness.read({ sessionKey: "agent:main:main" })).models).toEqual(models);
-});
+test.each(["missing", "gateway", "invalid-provider", "no-device", "optional"])(
+  "keeps Gateway credentials when required worker intent is not usable (%s)",
+  async (kind) => {
+    const cfg = structuredClone(config);
+    if (kind === "missing") {
+      cfg.cloudWorkers!.profiles = {};
+    }
+    if (kind === "gateway") {
+      cfg.cloudWorkers!.profiles!.dedicated!.settings!.inference = "gateway";
+    }
+    if (kind === "invalid-provider") {
+      cfg.cloudWorkers!.profiles!.dedicated!.provider = "external";
+    }
+    if (kind === "no-device") {
+      cfg.cloudWorkers!.profiles!.dedicated!.settings!.device = "";
+    }
+    if (kind === "optional") {
+      delete cfg.cloudWorkers!.requiredProfile;
+    }
+    const harness = createChatMetadataHarness(cfg);
+    harness.buildProjection.mockResolvedValue({ modelCatalog: models, models });
+    try {
+      await harness.runtime.refresh();
+      expect(
+        (await harness.runtime.read({ agentId: "main", sessionKey: "agent:main:main" })).models,
+      ).toEqual(models);
+    } finally {
+      await harness.runtime.stop();
+    }
+  },
+);
 
 test("scopes worker metadata to the saved selection and preserves non-auth availability", async () => {
+  const harness = createChatMetadataHarness(config);
   const cooldown = models.map((model) => ({ ...model, unavailableReason: "cooldown" }));
-  const harness = await workerHarness(config, cooldown);
-  expect((await harness.read({ sessionKey: "agent:main:main" })).models).toEqual(cooldown);
+  harness.buildProjection.mockResolvedValue({ modelCatalog: cooldown, models: cooldown });
+  try {
+    await harness.runtime.refresh();
+    expect(
+      (await harness.runtime.read({ agentId: "main", sessionKey: "agent:main:main" })).models,
+    ).toEqual(cooldown);
+  } finally {
+    await harness.runtime.stop();
+  }
 });
 
 test.each([
@@ -106,8 +141,19 @@ test.each([
   { agentRuntimeOverride: "openclaw" },
   { agentHarnessId: "codex", modelSelectionLocked: true, agentRuntimeOverride: "openclaw" },
 ])("retains upstream availability for explicit runtime selection %j", async (sessionEntry) => {
-  const harness = await workerHarness();
-  const result = await harness.read({ sessionKey: "agent:main:saved", sessionEntry });
-  // Required placement does not override explicit runtime/account choices.
-  expect(result.models).toEqual(models);
+  const harness = createChatMetadataHarness(config);
+  harness.buildProjection.mockResolvedValue({ modelCatalog: models, models });
+  try {
+    await harness.runtime.refresh();
+    const result = await harness.runtime.read({
+      agentId: "main",
+      sessionKey: "agent:main:saved",
+      sessionEntry,
+    });
+    // Required placement is intent, not a grant for explicit runtime/account choices.
+    // Preserve the clients-stack overlay's explicit-selection checks.
+    expect(result.models).toEqual(models);
+  } finally {
+    await harness.runtime.stop();
+  }
 });

@@ -599,7 +599,9 @@ test.each([false, true])("settled kill retains cleanup revocation (reset: %s)", 
     expect(stored.killReconciliation).toMatchObject({ killedAt: claim.requestedAt });
     expect(stored.execution.suppressSessionEffects === true).toBe(reset);
   });
-  await sweepAndExpectSession(reset ? successor : { ...successor, endedAt: lateEndedAt });
+  await sweepAndExpectSession(
+    reset ? successor : { ...expectDefined(successor, "retained session"), endedAt: lateEndedAt },
+  );
 });
 
 test("reset persists suppression after a rejected cleanup write", async () => {

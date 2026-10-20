@@ -44,7 +44,7 @@ function selectSession(state: Fixture["state"], key: string, extra: Row = {}) {
 }
 const queries =
   (root: HTMLElement) =>
-  <T extends HTMLElement = HTMLElement>(selector: string) =>
+  <T extends HTMLElement = HTMLElement>(selector: string): T | null =>
     root.querySelector<T>(selector);
 function composerView(pane: Fixture["pane"]) {
   const root = createComposerContainer();

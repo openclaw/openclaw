@@ -15,7 +15,7 @@ let attachment: ChatAttachment;
 let created: Blob[];
 let revoked: string[];
 let moduleReady: ReturnType<typeof createDeferred<VideoPosterModule>>;
-let importStarted: ReturnType<typeof createDeferred>;
+let importStarted: ReturnType<typeof createDeferred<void>>;
 let posterReady: ReturnType<typeof createDeferred<Blob | null>>;
 let request: ReturnType<typeof vi.fn<VideoPosterModule["requestVideoPoster"]>>;
 let pending: ReturnType<typeof getChatAttachmentVideoPosterUrl>;
@@ -38,7 +38,7 @@ beforeEach(() => {
     },
   );
   moduleReady = createDeferred<VideoPosterModule>();
-  importStarted = createDeferred();
+  importStarted = createDeferred<void>();
   posterReady = createDeferred<Blob | null>();
   request = vi.fn<VideoPosterModule["requestVideoPoster"]>(() => posterReady.promise);
   vi.doMock("../../lib/media/video-poster.ts", () => {

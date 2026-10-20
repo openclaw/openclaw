@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -78,6 +78,8 @@ it("places inline approval above the composer and enforces its grant projection"
 
   const render = async (approvalCanGrant: boolean, approvalErrors?: Map<string, string>) => {
     const container = renderChatView({ ...approvalProps, approvalCanGrant, approvalErrors });
+    document.body.append(container);
+    onTestFinished(() => container.remove());
     await expectDefined(
       container.querySelector<SolidBridgeElement<object>>("openclaw-exec-approval-card"),
       "inline approval host",

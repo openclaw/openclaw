@@ -104,5 +104,6 @@ it("evicts least recently used views under byte pressure and releases all accoun
   );
   expect(cache.get("oversized").rows).toBeUndefined();
   expect(cache.get("hot").rows).toBe(rows);
+  await flushReports();
   expect(retirements).toEqual(["view-evicted", "view-evicted"]);
 });

@@ -12,7 +12,12 @@ afterEach(() => {
 });
 
 function fixture() {
-  const host = makeChatHost({ sessionKey: "main", chatRunId: "run-1", chatStream: "" });
+  const host = makeChatHost({
+    sessionKey: "main",
+    chatRunId: "run-1",
+    chatStream: "",
+    chatRunStartup: null,
+  });
   const receive = (
     state: ChatEventPayload["state"],
     event: Omit<ChatEventPayload, "state" | "sessionKey" | "runId"> = {},

@@ -182,7 +182,9 @@ it.each(["options", "result", "selection-rejection"])(
       old.reject(selectionRejected(first.idempotencyKey, "Old selection rejected."));
     } else {
       old.resolve(
-        discovering ? pendingOptions : { requestId, status: "published", publisher: personal },
+        discovering
+          ? pendingOptions
+          : { ...interrupted.result, requestId, status: "published", publisher: personal },
       );
     }
     await Promise.resolve();

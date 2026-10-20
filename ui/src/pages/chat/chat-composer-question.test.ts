@@ -17,7 +17,7 @@ it.each([true, false])(
   "restores the composer after question takeover (open=%s)",
   async (progressOpen) => {
     const container = document.body.appendChild(createComposerContainer());
-    const q = <T extends HTMLElement = HTMLElement>(selector: string) =>
+    const q = <T extends HTMLElement = HTMLElement>(selector: string): T =>
       container.querySelector<T>(selector)!;
     const prompt = questionPrompt("question-swap", "Choose a release target");
     const composer = props({

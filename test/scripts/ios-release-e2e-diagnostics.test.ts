@@ -17,7 +17,9 @@ import {
   summarizeIOSBuildTiming,
 } from "../../scripts/lib/ios-release-e2e-diagnostics.js";
 
-beforeEach(() => execFile.mockReset());
+beforeEach(() => {
+  execFile.mockReset();
+});
 
 test("retains build task timings without exporting script names or raw build output", () => {
   expect(

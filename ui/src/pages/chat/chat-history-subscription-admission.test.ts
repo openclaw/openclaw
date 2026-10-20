@@ -25,7 +25,9 @@ it.each<[string, boolean]>([
   const succeeds = retry || change === "upgraded";
   if (retry) {
     vi.useFakeTimers();
-    onTestFinished(() => vi.useRealTimers());
+    onTestFinished(() => {
+      vi.useRealTimers();
+    });
   }
   const cached = retry ? [{ role: "assistant", content: "Cached conversation" }] : [];
   const completed = [...cached, { role: "assistant", content: "Completed before admission." }];

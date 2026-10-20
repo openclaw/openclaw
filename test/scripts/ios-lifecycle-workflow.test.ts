@@ -110,7 +110,7 @@ it("iOS cache reads main-tier products and publishes only after successful sched
   const noWrite = { preflightOutputs: { cache_mode: "restore", cache_write_allowed: "false" } };
   expect(selected(save, noWrite)).toBe(false);
   for (const overrides of [
-    { eventName: "pull_request" },
+    { eventName: "pull_request" as const },
     { ref: "refs/heads/feature" },
     noWrite,
     { failed: true },

@@ -92,7 +92,7 @@ function automation(id: string, jobId = "daily", source = sessionKey) {
 function query<T extends HTMLElement = HTMLElement>(
   selector: string,
   root: ParentNode = container,
-) {
+): T | null {
   return root.querySelector<T>(selector);
 }
 

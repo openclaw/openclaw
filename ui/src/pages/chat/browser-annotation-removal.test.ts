@@ -6,6 +6,7 @@ import { removeBrowserAnnotationWithUndo } from "./browser-annotation-removal.ts
 
 // mock-isolation: Observe Undo without registering a toast host or retaining attachment URLs.
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
+// mock-isolation: Observe release without retaining shared attachment blobs and object URLs.
 vi.mock("./attachment-payload-store.ts", () => ({ releaseChatAttachmentPayload: vi.fn() }));
 const releasePayload = vi.mocked(releaseChatAttachmentPayload);
 const labels = {

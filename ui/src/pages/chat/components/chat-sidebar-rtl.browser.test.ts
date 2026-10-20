@@ -51,14 +51,15 @@ describe.runIf(browserMode)("chat sidebar markdown direction", () => {
       const quote = style("blockquote");
       expect(quote).toMatchObject({ [`border${start}Width`]: "3px", [`border${end}Width`]: "0px" });
       const list = style("ul");
-      expect(Number.parseFloat(list[`padding${start}`])).toBeGreaterThan(0);
-      expect(Number.parseFloat(list[`padding${end}`])).toBe(0);
+      expect(
+        Number.parseFloat(list[start === "Right" ? "paddingRight" : "paddingLeft"]),
+      ).toBeGreaterThan(0);
+      expect(Number.parseFloat(list[end === "Right" ? "paddingRight" : "paddingLeft"])).toBe(0);
       // Only inline-end is overridden; the opposite margin retains the UA default.
       const checkbox = style(".task-list-item-checkbox");
-      expect(Number.parseFloat(checkbox[`margin${end}`])).toBeCloseTo(
-        Number.parseFloat(checkbox.fontSize) * 0.4,
-        0,
-      );
+      expect(
+        Number.parseFloat(checkbox[end === "Right" ? "marginRight" : "marginLeft"]),
+      ).toBeCloseTo(Number.parseFloat(checkbox.fontSize) * 0.4, 0);
     },
   );
 
