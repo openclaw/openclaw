@@ -69,6 +69,12 @@ declare module "@solidjs/web" {
       "openclaw-link-reader-panel": DockElementAttributes;
       "openclaw-appearance-background": HTMLAttributes<HTMLElement>;
       "openclaw-config-page": HTMLAttributes<HTMLElement>;
+      "openclaw-sidebar-update-card": HTMLAttributes<HTMLElement>;
+      "openclaw-native-chrome-setup": HTMLAttributes<HTMLElement>;
+      "openclaw-theme-brand-icon": HTMLAttributes<HTMLElement>;
+      "openclaw-mcp-app-resources": HTMLAttributes<HTMLElement>;
+      "openclaw-mcp-app-context-strip": HTMLAttributes<HTMLElement>;
+      "openclaw-mcp-app-panel": HTMLAttributes<HTMLElement>;
       "openclaw-meeting-capture-settings": HTMLAttributes<HTMLElement>;
       "openclaw-session-storage-settings": HTMLAttributes<HTMLElement>;
       "openclaw-talk-settings": HTMLAttributes<HTMLElement>;

@@ -152,8 +152,9 @@ work.
 ## PostgreSQL memory search
 
 The built-in `memory-core` plugin can index and search a PostgreSQL agent database.
-SQLite remains the default. PostgreSQL memory search is experimental: text ranking
-is engine-local, so result ordering and scores can differ from SQLite. Hybrid
+SQLite remains the default. PostgreSQL memory search is supported on the
+[qualified runtime](/gateway/postgresql#support-matrix). Text ranking is
+engine-local, so result ordering and scores can differ from SQLite. Hybrid
 search retains the same vector/text weights.
 
 Install `unaccent` in the selected PostgreSQL database for full text, `pg_trgm`

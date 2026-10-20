@@ -427,13 +427,7 @@ function SettingsSegmentedButtons<T extends string>(props: SettingsSegmentedProp
                 "btn btn--sm": variant() === "accent",
               },
             ]}
-            aria-pressed={
-              props.mode === "buttons" && props.ariaPressed === false
-                ? undefined
-                : option().value === props.value
-                  ? "true"
-                  : "false"
-            }
+            aria-pressed={option().value === props.value ? "true" : "false"}
             aria-label={option().ariaLabel}
             data-compact-label={option().compactLabel}
             data-test-id={option().testId}

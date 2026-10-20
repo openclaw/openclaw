@@ -5,6 +5,7 @@ import { createAbortError as createNamedAbortError } from "../infra/abort-signal
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import type { ManagedRunStdin } from "../process/supervisor/types.js";
+import { sleep } from "../utils/sleep.js";
 import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
@@ -214,26 +215,10 @@ function createAbortError(reason: unknown): Error {
   return createNamedAbortError(typeof reason === "string" ? reason : "Aborted");
 }
 
-async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) {
-    throw createAbortError(signal.reason);
-  }
-  await new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", onAbort);
-    };
-    const onResolve = () => {
-      cleanup();
-      resolve();
-    };
-    const onAbort = () => {
-      cleanup();
-      reject(createAbortError(signal?.reason));
-    };
-    // An active poll must outlive the child's last handle so one-shot callers receive its result.
-    const timer = setTimeout(onResolve, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
+function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void> {
+  // Shared sleeps retain their timer so one-shot callers still receive the child's result.
+  return sleep(ms, signal).catch((error: unknown) => {
+    throw signal?.aborted ? createAbortError(signal.reason) : error;
   });
 }
 

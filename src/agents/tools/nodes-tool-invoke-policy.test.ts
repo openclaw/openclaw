@@ -8,20 +8,20 @@ const mocks = vi.hoisted(() => ({
   resolveAgentNodeId: vi.fn(async () => "node-1"),
 }));
 
-vi.mock("./gateway.js", () => ({ callGatewayTool: mocks.callGatewayTool }));
+vi.mock("./gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway.js")>()),
+  callGatewayTool: mocks.callGatewayTool,
+  readGatewayCallOptions: () => ({}),
+}));
 vi.mock("./nodes-utils.js", () => ({ resolveAgentNodeId: mocks.resolveAgentNodeId }));
 vi.mock("../../gateway/node-plugin-tool-snapshot.js", () => ({
   listConnectedNodePluginTools: mocks.listConnectedNodePluginTools,
 }));
 
-const { executeNodeCommandAction } = await import("./nodes-tool-commands.js");
+const { createNodesTool } = await import("./nodes-tool.js");
 
 async function execute(action: "device_status" | "invoke", input: Record<string, unknown>) {
-  return executeNodeCommandAction({
-    action,
-    input: { node: "macbook", ...input },
-    gatewayOpts: {},
-  });
+  return createNodesTool().execute("invoke-fixture", { action, node: "macbook", ...input });
 }
 
 async function invoke(command: string) {

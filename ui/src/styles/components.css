@@ -3339,20 +3339,6 @@ td.data-table-key-col {
   display: contents;
 }
 
-.agent-select__option[data-create-agent] {
-  position: relative;
-}
-
-.agent-select__option[data-create-agent] .agent-select__separator {
-  position: absolute;
-  inset: -4px 4px auto;
-  margin: 0;
-}
-
-.agent-select__option[data-create-agent]:has(.agent-select__separator) {
-  margin-top: 8px;
-}
-
 .agent-select__label {
   flex: 0 1 auto;
 }
@@ -3373,8 +3359,7 @@ td.data-table-key-col {
 }
 
 .agent-select__chevron svg,
-.agent-select__avatar--icon svg,
-.agent-select__footer-icon svg {
+.agent-select__avatar--icon svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -3480,12 +3465,6 @@ td.data-table-key-col {
   color: var(--accent);
 }
 
-.agent-select__separator {
-  height: 1px;
-  margin: 6px 4px;
-  background: var(--border);
-}
-
 .agent-select__option-copy {
   display: grid;
   flex: 1;
@@ -3510,7 +3489,6 @@ td.data-table-key-col {
   white-space: nowrap;
 }
 
-.agent-select__footer-icon,
 .provider-brand-icon {
   display: inline-flex;
   align-items: center;
