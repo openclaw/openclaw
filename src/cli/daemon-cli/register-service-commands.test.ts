@@ -6,6 +6,7 @@ import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
 import { ensureConfigReady } from "../program/config-guard.js";
 import { registerPreActionHooks } from "../program/preaction.js";
+import { requireMockCallArg } from "./lifecycle.test-helpers.js";
 import { addGatewayServiceCommands } from "./register-service-commands.js";
 import { registerDaemonCli } from "./register.js";
 
@@ -44,7 +45,7 @@ vi.mock("./lifecycle.runtime.js", () => ({
   runDaemonUninstall: (opts: unknown) => runDaemonUninstall(opts),
 }));
 
-function createGatewayParentLikeCommand() {
+function gatewayCommand() {
   const gateway = new Command().name("gateway");
   // Mirror overlapping root gateway options that conflict with service subcommand options.
   gateway.option("--port <port>", "Port for the gateway WebSocket");
@@ -58,11 +59,7 @@ function createGatewayParentLikeCommand() {
 
 function expectSingleDaemonCall(mockFn: ReturnType<typeof vi.fn>) {
   expect(mockFn).toHaveBeenCalledTimes(1);
-  const opts = mockFn.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-  if (opts === undefined) {
-    throw new Error("expected daemon call options");
-  }
-  return opts;
+  return requireMockCallArg(mockFn, "daemon");
 }
 
 function setRestartRouteEnv(env: Record<string, string | undefined>) {
@@ -100,13 +97,7 @@ describe("addGatewayServiceCommands", () => {
   beforeEach(() => {
     restartRouteEnvSnapshot = captureEnv(RESTART_ROUTE_ENV_KEYS);
     setRestartRouteEnv({});
-    runDaemonInstall.mockClear();
-    runDaemonRestart.mockClear();
-    runDaemonStart.mockClear();
-    runDaemonStatus.mockClear();
-    runDaemonStop.mockClear();
-    runDaemonUninstall.mockClear();
-    vi.mocked(ensureConfigReady).mockClear();
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
@@ -161,72 +152,48 @@ describe("addGatewayServiceCommands", () => {
   );
 
   it.each([
+    { name: "Windows gateway", argv: ["restart", "--json"], expected: { safe: true, json: true } },
+    { name: "outside service", env: {}, expected: { safe: false } },
     {
-      name: "uses safe restart for a plain Windows Gateway service restart",
-      argv: ["restart", "--json"],
-      expected: { safe: true, json: true },
-    },
-    {
-      name: "keeps a plain restart non-safe outside a service process",
-      env: {},
-      argv: ["restart"],
+      name: "node service",
+      env: { ...gatewayServiceEnv, OPENCLAW_SERVICE_KIND: "node" },
       expected: { safe: false },
     },
+    { name: "Linux gateway", platform: "linux" as const, expected: { safe: false } },
     {
-      name: "keeps a plain restart non-safe inside a node service",
-      env: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "node" },
-      argv: ["restart"],
-      expected: { safe: false },
-    },
-    {
-      name: "keeps a plain Gateway service restart non-safe outside Windows",
-      platform: "linux" as const,
-      argv: ["restart"],
-      expected: { safe: false },
-    },
-    {
-      name: "honors normalized external supervisor mode before routing",
+      name: "normalized external mode",
       env: { ...gatewayServiceEnv, OPENCLAW_SUPERVISOR_MODE: "  ExTeRnAl  " },
-      argv: ["restart"],
       expected: { safe: false },
     },
     {
-      name: "preserves explicit safe restart under external supervision",
+      name: "explicit safe under external supervision",
       env: { ...gatewayServiceEnv, OPENCLAW_SUPERVISOR_MODE: "external" },
       argv: ["restart", "--safe"],
       expected: { safe: true },
     },
+    { name: "leaf --force", argv: ["restart", "--force"], expected: { safe: false, force: true } },
     {
-      name: "preserves leaf force instead of adding implicit safe mode",
-      argv: ["restart", "--force"],
-      expected: { safe: false, force: true },
-    },
-    {
-      name: "preserves inherited force instead of adding implicit safe mode",
+      name: "inherited --force",
       argv: ["--force", "restart"],
       expected: { safe: false, force: true },
     },
+    { name: "--wait", argv: ["restart", "--wait", "30s"], expected: { safe: false, wait: "30s" } },
     {
-      name: "preserves wait instead of adding implicit safe mode",
-      argv: ["restart", "--wait", "30s"],
-      expected: { safe: false, wait: "30s" },
-    },
-    {
-      name: "preserves definition control instead of adding implicit safe mode",
+      name: "--preserve-definition",
       argv: ["restart", "--preserve-definition"],
       expected: { safe: false, preserveDefinition: true },
     },
     {
-      name: "preserves skip-deferral validation instead of adding implicit safe mode",
+      name: "--skip-deferral",
       argv: ["restart", "--skip-deferral"],
       expected: { safe: false, skipDeferral: true },
     },
-  ])("$name", async ({ platform, env, argv, expected }) => {
+  ])("restart routing: $name", async ({ platform, env, argv, expected }) => {
     mockProcessPlatform(platform ?? "win32");
     setRestartRouteEnv(env ?? gatewayServiceEnv);
-    const gateway = createGatewayParentLikeCommand().enablePositionalOptions();
+    const gateway = gatewayCommand().enablePositionalOptions();
 
-    await gateway.parseAsync(argv, { from: "user" });
+    await gateway.parseAsync(argv ?? ["restart"], { from: "user" });
 
     expect(expectSingleDaemonCall(runDaemonRestart)).toMatchObject(expected);
   });
@@ -239,7 +206,7 @@ describe("addGatewayServiceCommands", () => {
   });
 
   it("inherits an explicit parent port instead of a status leaf default", async () => {
-    const gateway = createGatewayParentLikeCommand().enablePositionalOptions();
+    const gateway = gatewayCommand().enablePositionalOptions();
     const status = gateway.commands.find((command) => command.name() === "status")!;
     status.setOptionValueWithSource("port", "19003", "default");
 
@@ -252,7 +219,7 @@ describe("addGatewayServiceCommands", () => {
   });
 
   it("routes local runtime intent status without requesting the diagnostic graph", async () => {
-    const gateway = createGatewayParentLikeCommand().enablePositionalOptions();
+    const gateway = gatewayCommand().enablePositionalOptions();
     await gateway.parseAsync(["status", "--runtime-intent-only", "--json"], { from: "user" });
     expect(expectSingleDaemonCall(runDaemonStatus)).toMatchObject({
       runtimeIntentOnly: true,

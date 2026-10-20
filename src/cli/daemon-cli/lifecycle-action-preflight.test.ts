@@ -1,10 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { readConfigFileSnapshot, resetConfigRuntimeState } from "../../config/config.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { resetConfigRuntimeState } from "../../config/config.js";
 import { resetDatabaseEngineSelectionForTest } from "../../infra/database-engine/context.test-support.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
-import { getServiceActionPreflightFailure } from "./lifecycle-action-preflight.js";
+import { getServiceActionPreflightFailure as preflight } from "./lifecycle-action-preflight.js";
 
 afterEach(() => {
   resetDatabaseEngineSelectionForTest();
@@ -12,7 +12,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-async function withIsolatedLifecycleState(
+async function withState(
   run: (params: { agentDir: string; configPath: string }) => Promise<void>,
 ): Promise<void> {
   await withTestDir({ prefix: "openclaw-lifecycle-action-preflight-" }, async (root) => {
@@ -36,102 +36,89 @@ async function writeJson(file: string, value: unknown) {
   await fs.writeFile(file, JSON.stringify(value));
 }
 
-describe("getServiceActionPreflightFailure", () => {
-  it("reports an unresolved candidate database without opening fallback state before restart", async () => {
-    await withIsolatedLifecycleState(async ({ configPath }) => {
-      await writeJson(configPath, {
-        database: {
-          engine: "postgres",
-          postgres: {
-            connection: { source: "env", provider: "default", id: "MISSING_RESTART_DSN" },
-          },
+it("reports an unresolved candidate database without opening fallback state before restart", async () => {
+  await withState(async ({ configPath }) => {
+    await writeJson(configPath, {
+      database: {
+        engine: "postgres",
+        postgres: {
+          connection: { source: "env", provider: "default", id: "MISSING_RESTART_DSN" },
         },
-        plugins: { enabled: false },
-      });
-      delete process.env.MISSING_RESTART_DSN;
-      resetDatabaseEngineSelectionForTest();
-      expect(await getServiceActionPreflightFailure("restart")).toMatchObject({
-        message: expect.stringContaining("SecretRef is unresolved"),
-      });
+      },
+      plugins: { enabled: false },
+    });
+    delete process.env.MISSING_RESTART_DSN;
+    resetDatabaseEngineSelectionForTest();
+    expect(await preflight("restart")).toMatchObject({
+      message: expect.stringContaining("SecretRef is unresolved"),
     });
   });
+});
 
-  it.each(["start", "stop"] as const)(
-    "allows %s when a legacy credential file exists",
-    async (action) => {
-      await withIsolatedLifecycleState(async ({ agentDir }) => {
-        await fs.writeFile(path.join(agentDir, "auth-profiles.json"), "{}\n");
+it.each(["start", "stop"] as const)("allows %s with legacy credentials", async (action) => {
+  await withState(async ({ agentDir }) => {
+    await fs.writeFile(path.join(agentDir, "auth-profiles.json"), "{}\n");
 
-        await expect(getServiceActionPreflightFailure(action)).resolves.toBeNull();
-      });
-    },
-  );
+    await expect(preflight(action)).resolves.toBeNull();
+  });
+});
 
-  it("validates plugins only for actions that start the service", async () => {
-    await withIsolatedLifecycleState(async ({ configPath }) => {
-      const pluginRoot = path.join(path.dirname(configPath), "migration-fixture");
-      await fs.mkdir(pluginRoot);
-      await fs.writeFile(path.join(pluginRoot, "index.js"), "export default {};\n");
-      await writeJson(path.join(pluginRoot, "package.json"), {
-        name: "migration-fixture",
-        version: "2.0.0",
-        openclaw: { extensions: ["./index.js"] },
-      });
-      await writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
-        id: "migration-fixture",
-        configSchema: {
-          type: "object",
-          required: ["current"],
-          properties: { current: { type: "boolean" } },
-          additionalProperties: false,
-        },
-      });
-      const config = {
-        plugins: {
-          allow: ["migration-fixture"],
-          load: { paths: [pluginRoot] },
-          entries: { "migration-fixture": { enabled: true, config: { legacy: true } } },
-        },
-      };
-      await writeJson(configPath, config);
+it("validates plugins only for actions that start the service", async () => {
+  await withState(async ({ configPath }) => {
+    const pluginRoot = path.join(path.dirname(configPath), "migration-fixture");
+    await fs.mkdir(pluginRoot);
+    await fs.writeFile(path.join(pluginRoot, "index.js"), "export default {};\n");
+    await writeJson(path.join(pluginRoot, "openclaw.plugin.json"), {
+      id: "migration-fixture",
+      configSchema: {
+        type: "object",
+        required: ["current"],
+        properties: { current: { type: "boolean" } },
+        additionalProperties: false,
+      },
+    });
+    const config = {
+      plugins: {
+        allow: ["migration-fixture"],
+        load: { paths: [pluginRoot] },
+        entries: { "migration-fixture": { enabled: true, config: { legacy: true } } },
+      },
+    };
+    await writeJson(configPath, config);
+    resetConfigRuntimeState();
+    expect(await preflight("start")).toMatchObject({
+      message: expect.stringContaining("plugins.entries.migration-fixture"),
+    });
+    expect(await preflight("restart")).not.toBeNull();
+    expect(await preflight("stop")).toBeNull();
+    expect(await preflight("uninstall")).toBeNull();
+
+    await writeJson(configPath, { ...config, meta: { lastTouchedVersion: "9999.1.1" } });
+    resetConfigRuntimeState();
+    expect((await preflight("stop"))?.message).toContain(
+      "Config was last written by OpenClaw 9999.1.1",
+    );
+  });
+});
+
+it.each(["start", "stop", "uninstall"] as const)(
+  "reports invalid config before %s",
+  async (action) => {
+    await withState(async ({ configPath }) => {
+      await fs.writeFile(
+        configPath,
+        '{\n  meta: { lastTouchedVersion: "9999.1.1" },\n  gateway: { mode: "nope" },\n}\n',
+      );
       resetConfigRuntimeState();
-      const snapshot = await readConfigFileSnapshot({ observe: false });
-      expect(snapshot.valid).toBe(false);
-      expect(
-        snapshot.issues.some((issue) => issue.path.startsWith("plugins.entries.migration-fixture")),
-      ).toBe(true);
-      expect(await getServiceActionPreflightFailure("start")).not.toBeNull();
-      expect(await getServiceActionPreflightFailure("restart")).not.toBeNull();
-      expect(await getServiceActionPreflightFailure("stop")).toBeNull();
-      expect(await getServiceActionPreflightFailure("uninstall")).toBeNull();
 
-      await writeJson(configPath, { ...config, meta: { lastTouchedVersion: "9999.1.1" } });
-      resetConfigRuntimeState();
-      expect((await getServiceActionPreflightFailure("stop"))?.message).toContain(
-        "Config was last written by OpenClaw 9999.1.1",
+      const failure = await preflight(action);
+
+      expect(failure?.message).toContain(
+        'openclaw.json:3 — gateway.mode: Invalid input (allowed: "local", "remote"), got: "nope"',
+      );
+      expect(failure?.message).toContain(
+        "Config was last written by OpenClaw 9999.1.1, but you are running",
       );
     });
-  });
-
-  it.each(["start", "stop", "uninstall"] as const)(
-    "renders actionable invalid-config diagnostics before %s",
-    async (action) => {
-      await withIsolatedLifecycleState(async ({ configPath }) => {
-        await fs.writeFile(
-          configPath,
-          '{\n  meta: { lastTouchedVersion: "9999.1.1" },\n  gateway: { mode: "nope" },\n}\n',
-        );
-        resetConfigRuntimeState();
-
-        const failure = await getServiceActionPreflightFailure(action);
-
-        expect(failure?.message).toContain(
-          'openclaw.json:3 — gateway.mode: Invalid input (allowed: "local", "remote"), got: "nope"',
-        );
-        expect(failure?.message).toContain(
-          "Config was last written by OpenClaw 9999.1.1, but you are running",
-        );
-      });
-    },
-  );
-});
+  },
+);
