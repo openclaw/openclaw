@@ -59,6 +59,7 @@ async function withServer(
   run: (manager: CallManager, url: string) => Promise<void>,
   config = createConfig(),
   storePath = createTestStorePath(),
+  cleanup = finalizeTestManagerCalls,
 ) {
   const manager = new CallManager(config, storePath);
   const server = new VoiceCallWebhookServer(
@@ -75,7 +76,7 @@ async function withServer(
     try {
       await server.stop();
     } finally {
-      await finalizeTestManagerCalls(manager);
+      await cleanup(manager);
     }
   }
 }
@@ -168,33 +169,25 @@ describe("Mock webhook caller facts over HTTP and SQLite", () => {
   ) {
     const config = createConfig({ provider: "mock", inboundPolicy: "open", ...overrides });
     const provider = new MockProvider();
-    const manager = new CallManager(config, storePath);
-    const server = new VoiceCallWebhookServer(
-      createTestPluginServiceScheduler(),
-      config,
-      manager,
+    await withServer(
       provider,
-    );
-    try {
-      const url = await server.start();
-      await manager.initialize(provider, url);
-      await run({
-        manager,
-        provider,
-        send: async (payload) => {
-          const response = await fetch(url, {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(payload),
-          });
-          await response.text();
-          expect(response.status, "mock webhook HTTP status").toBe(200);
-        },
-      });
-    } finally {
-      try {
-        await server.stop();
-      } finally {
+      async (manager, url) =>
+        run({
+          manager,
+          provider,
+          send: async (payload) => {
+            const response = await fetch(url, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            await response.text();
+            expect(response.status, "mock webhook HTTP status").toBe(200);
+          },
+        }),
+      config,
+      storePath,
+      async (manager) => {
         try {
           if (!preserveActive) {
             await finalizeTestManagerCalls(manager);
@@ -202,8 +195,8 @@ describe("Mock webhook caller facts over HTTP and SQLite", () => {
         } finally {
           await manager.stop();
         }
-      }
-    }
+      },
+    );
   }
 
   it("restores all four admitted event types before any synthetic finalization", async () => {
