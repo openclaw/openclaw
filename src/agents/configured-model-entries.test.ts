@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectConfiguredCatalogModels,
   resolveConfiguredModelEntries,
@@ -20,12 +21,22 @@ function model(id: string, overrides: Partial<ModelDefinitionConfig> = {}): Mode
 }
 
 type ResolveOptions = Omit<Parameters<typeof resolveConfiguredModelEntries>[0], "cfg">;
-function resolveDefaults(defaults: AgentDefaultsConfig, options: ResolveOptions = {}) {
+function resolveDefaults(
+  defaults: AgentDefaultsConfig,
+  options: ResolveOptions = {},
+  providers: NonNullable<OpenClawConfig["models"]>["providers"] = {},
+) {
   return resolveConfiguredModelEntries({
-    cfg: { agents: { defaults }, models: { providers: {} } },
+    cfg: { agents: { defaults }, models: { providers } },
     allowPluginNormalization: false,
     ...options,
   });
+}
+
+const configuredTags = new Set(["default", "configured"]);
+const canonical: ResolveOptions = { canonicalizeRef: (ref) => ({ ...ref, provider: "current" }) };
+function metadata(entries: ReturnType<typeof resolveConfiguredModelEntries>["entries"]) {
+  return entries.map(({ key, aliases, tags }) => [key, aliases, tags]);
 }
 
 describe("resolveConfiguredModelEntries", () => {
@@ -46,7 +57,7 @@ describe("resolveConfiguredModelEntries", () => {
           ollama: {
             baseUrl: "http://127.0.0.1:11434",
             api: "ollama",
-            models: [model("qwen3:8bb", { name: "Typo", baseUrl: "http://other-server:11434" })],
+            models: [model("qwen3:8bb", { baseUrl: "http://other-server:11434" })],
           },
         },
       },
@@ -61,29 +72,18 @@ describe("resolveConfiguredModelEntries", () => {
   it.each([undefined, [], ["openclaw"]])(
     "inherits picker choices and lets an agent replace them with %j",
     (pickerRuntimes) => {
+      const key = "openai/gpt-5.6-sol";
+      const defaults = { model: key, models: { [key]: { pickerRuntimes: ["codex", "codex"] } } };
+      const override = {
+        alias: "Work",
+        ...(pickerRuntimes === undefined ? {} : { pickerRuntimes }),
+      };
       const { byKey } = resolveConfiguredModelEntries({
         agentId: "ops",
         allowPluginNormalization: false,
-        cfg: {
-          agents: {
-            defaults: {
-              model: "openai/gpt-5.6-sol",
-              models: { "openai/gpt-5.6-sol": { pickerRuntimes: ["codex", "codex"] } },
-            },
-            entries: {
-              ops: {
-                models: {
-                  "openai/gpt-5.6-sol": {
-                    alias: "Work",
-                    ...(pickerRuntimes === undefined ? {} : { pickerRuntimes }),
-                  },
-                },
-              },
-            },
-          },
-        },
+        cfg: { agents: { defaults, entries: { ops: { models: { [key]: override } } } } },
       });
-      expect(byKey.get("openai/gpt-5.6-sol")?.pickerRuntimes).toEqual(pickerRuntimes ?? ["codex"]);
+      expect(byKey.get(key)?.pickerRuntimes).toEqual(pickerRuntimes ?? ["codex"]);
     },
   );
 
@@ -96,74 +96,36 @@ describe("resolveConfiguredModelEntries", () => {
       },
     });
 
-    expect(entries.map((entry) => entry.key)).toEqual(["codex/gpt-5.5", "codex/gpt-5.4-mini"]);
-    expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
-    expect(entries[0]?.aliases).toEqual(["Codex"]);
-    expect(entries[1]?.tags).toEqual(new Set(["fallback#1", "configured"]));
+    expect(metadata(entries)).toEqual([
+      ["codex/gpt-5.5", ["Codex"], configuredTags],
+      ["codex/gpt-5.4-mini", [], new Set(["fallback#1", "configured"])],
+    ]);
   });
 
   it("normalizes retired nested Gemini ids in configured provider rows", () => {
-    const { entries } = resolveConfiguredModelEntries({
-      allowPluginNormalization: false,
-      cfg: {
-        agents: {
-          defaults: {
-            model: { primary: "kilocode/google/gemini-3-pro-preview" },
-            models: {
-              "kilocode/google/gemini-3-pro-preview": { alias: "Kilo Gemini" },
-            },
-          },
-        },
-        models: {
-          providers: {
-            kilocode: {
-              api: "openai-completions",
-              baseUrl: "https://kilocode.test/v1",
-              models: [
-                model("google/gemini-3-pro-preview", {
-                  name: "Gemini 3 Pro",
-                  reasoning: true,
-                  input: ["text", "image"],
-                  contextWindow: 1_048_576,
-                  maxTokens: 65_536,
-                }),
-              ],
-            },
-          },
-        },
-      },
-    });
-
-    expect(entries.map((entry) => entry.key)).toEqual(["kilocode/google/gemini-3.1-pro-preview"]);
-    expect(entries[0]?.aliases).toEqual(["Kilo Gemini"]);
-    expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
-  });
-  it("treats provider wildcard defaults as selectors, not configured model rows", () => {
-    const { entries } = resolveDefaults({
-      model: "openai/gpt-5.5",
-      models: {
-        "openai/*": {},
-        "openai/gpt-5.5": { alias: "Primary" },
-      },
-    });
-
-    expect(entries.map((entry) => entry.key)).toEqual(["openai/gpt-5.5"]);
-    expect(entries[0]?.aliases).toEqual(["Primary"]);
-    expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
-  });
-
-  it("preserves aliases and roles when provider references are canonicalized", () => {
+    const key = "kilocode/google/gemini-3-pro-preview";
     const { entries } = resolveDefaults(
+      { model: { primary: key }, models: { [key]: { alias: "Kilo Gemini" } } },
+      {},
       {
-        model: "legacy/model",
-        models: { "legacy/model": { alias: "Work" } },
-      },
-      {
-        canonicalizeRef: (ref) => ({ ...ref, provider: "current" }),
+        kilocode: {
+          api: "openai-completions",
+          baseUrl: "https://kilocode.test/v1",
+          models: [model("google/gemini-3-pro-preview")],
+        },
       },
     );
-    expect(entries.map((entry) => entry.key)).toEqual(["current/model"]);
-    expect(entries[0]?.aliases).toEqual(["Work"]);
-    expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
+
+    expect(metadata(entries)).toEqual([
+      ["kilocode/google/gemini-3.1-pro-preview", ["Kilo Gemini"], configuredTags],
+    ]);
+  });
+  it.each([
+    ["openai/gpt-5.5", "Primary", { "openai/*": {} }, {}, "openai/gpt-5.5"],
+    ["legacy/model", "Work", {}, canonical, "current/model"],
+  ] as const)("preserves configured metadata for %s", (ref, alias, selectors, options, key) => {
+    const defaults = { model: ref, models: { [ref]: { alias }, ...selectors } };
+    const { entries } = resolveDefaults(defaults, options);
+    expect(metadata(entries)).toEqual([[key, [alias], configuredTags]]);
   });
 });

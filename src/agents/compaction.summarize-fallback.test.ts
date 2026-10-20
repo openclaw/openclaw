@@ -8,17 +8,15 @@ const agentSessionMocks = vi.hoisted(() => ({
   generateSummary: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-sessions", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/agent-sessions")>(
-    "openclaw/plugin-sdk/agent-sessions",
-  );
-  return { ...actual, generateSummary: agentSessionMocks.generateSummary };
-});
+vi.mock("openclaw/plugin-sdk/agent-sessions", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-sessions")>()),
+  generateSummary: agentSessionMocks.generateSummary,
+}));
 
-vi.mock("./sessions/index.js", async () => {
-  const actual = await vi.importActual<typeof import("./sessions/index.js")>("./sessions/index.js");
-  return { ...actual, generateSummary: agentSessionMocks.generateSummary };
-});
+vi.mock("./sessions/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./sessions/index.js")>()),
+  generateSummary: agentSessionMocks.generateSummary,
+}));
 
 const testModel = {
   id: "test",
@@ -39,8 +37,7 @@ function summarizeHello(signal = new AbortController().signal): Promise<string> 
 }
 
 async function finish(assertion: Promise<unknown>, calls: number) {
-  // The async clock drain yields native turns. Observe failures immediately,
-  // then rethrow only after the drain finishes.
+  // Observe failures before yielding to the async clock drain.
   void assertion.catch(() => undefined);
   await vi.runAllTimersAsync();
   await assertion;
@@ -50,10 +47,7 @@ async function finish(assertion: Promise<unknown>, calls: number) {
 describe("compaction summarization fallback", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    agentSessionMocks.generateSummary.mockReset();
-    agentSessionMocks.generateSummary.mockRejectedValue(
-      new Error("Summarization failed: fetch failed"),
-    );
+    agentSessionMocks.generateSummary.mockReset().mockRejectedValue(new Error("fetch failed"));
   });
 
   afterEach(() => {
@@ -79,8 +73,7 @@ describe("compaction summarization fallback", () => {
     agentSessionMocks.generateSummary.mockRejectedValueOnce(new Error("transient rate limit"));
 
     const startedAt = Date.now();
-    const promise = summarizeHello(controller.signal);
-    const rejection = expect(promise).rejects.toThrow("aborted");
+    const rejection = expect(summarizeHello(controller.signal)).rejects.toThrow("aborted");
     setTimeout(() => controller.abort(), 50);
     await finish(rejection, 1);
     // Well under the 500ms minimum backoff — the abort interrupted the sleep.
