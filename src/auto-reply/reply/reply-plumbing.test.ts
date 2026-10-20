@@ -1,4 +1,4 @@
-import { assert, afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -7,15 +7,12 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import type { TemplateContext } from "../templating.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { applyReplyThreading } from "./reply-payloads-base.js";
 import { formatRunLabel, resolveSubagentLabel } from "./subagents-utils.js";
 
 describe("buildThreadingToolContext", () => {
-  afterEach(() => {
-    resetPluginRuntimeStateForTest();
-  });
+  afterEach(resetPluginRuntimeStateForTest);
 
   it("uses the recipient id for other channels", () => {
     const result = buildThreadingToolContext({
@@ -46,72 +43,53 @@ describe("buildThreadingToolContext", () => {
         },
       ]),
     );
-    const sessionCtx = {
-      Provider: "googlechat",
-      To: "googlechat:spaces/AAA",
-      MessageSidFull: "spaces/AAA/messages/msg-1",
-      ReplyToId: "spaces/AAA/threads/short",
-      ReplyToIdFull: "spaces/AAA/threads/full",
-    } as TemplateContext;
-
     const result = buildThreadingToolContext({
-      sessionCtx,
+      sessionCtx: {
+        Provider: "googlechat",
+        To: "googlechat:spaces/AAA",
+        MessageSidFull: "spaces/AAA/messages/msg-1",
+        ReplyToId: "spaces/AAA/threads/short",
+        ReplyToIdFull: "spaces/AAA/threads/full",
+      },
       config: { channels: { googlechat: { replyToMode: "all" } } } as OpenClawConfig,
       hasRepliedRef: undefined,
     });
 
-    expect([result.currentChannelId, result.currentThreadTs, result.currentMessageId]).toEqual([
-      "spaces/AAA",
-      "spaces/AAA/threads/full",
-      undefined,
-    ]);
+    expect(result).toMatchObject({
+      currentChannelId: "spaces/AAA",
+      currentThreadTs: "spaces/AAA/threads/full",
+      currentMessageId: undefined,
+    });
   });
 });
 
-describe("applyReplyThreading auto-threading", () => {
-  type ThreadingCase = [
-    string,
-    string,
-    Omit<Parameters<typeof applyReplyThreading>[0], "payloads" | "currentMessageId">,
-    { replyToId?: string; replyToTag?: boolean; text?: string },
-  ];
-  it.each<ThreadingCase>([
-    [
-      "deny implicit",
-      "Hello",
-      { replyToMode: "batched", replyThreading: { implicitCurrentMessage: "deny" } },
-      { replyToId: undefined },
-    ],
-    ["Slack off", "A", { replyToMode: "off", replyToChannel: "slack" }, { replyToId: undefined }],
-    [
-      "Telegram explicit",
-      "[[reply_to_current]]A",
-      { replyToMode: "off", replyToChannel: "telegram" },
-      { replyToId: "42", replyToTag: true },
-    ],
-    [
-      "explicit id",
-      "[[reply_to:mm-post-xyz789]] threaded reply",
-      { replyToMode: "all" },
-      { replyToId: "mm-post-xyz789", text: "threaded reply" },
-    ],
-  ])("%s", (_name, text, options, expected) => {
-    const result = applyReplyThreading({
-      payloads: [{ text }],
-      currentMessageId: "42",
-      ...options,
-    });
-    expect(result).toHaveLength(1);
-    const payload = result[0];
-    assert(payload);
-    expect(payload.replyToId).toBe(expected.replyToId);
-    if (expected.replyToTag !== undefined) {
-      expect(payload.replyToTag).toBe(expected.replyToTag);
-    }
-    if (expected.text !== undefined) {
-      expect(payload.text).toBe(expected.text);
-    }
-  });
+it.each([
+  [
+    "deny implicit",
+    "Hello",
+    { replyToMode: "batched", replyThreading: { implicitCurrentMessage: "deny" } },
+    { replyToId: undefined },
+  ],
+  ["Slack off", "A", { replyToMode: "off", replyToChannel: "slack" }, { replyToId: undefined }],
+  [
+    "Telegram explicit",
+    "[[reply_to_current]]A",
+    { replyToMode: "off", replyToChannel: "telegram" },
+    { replyToId: "42", replyToTag: true },
+  ],
+  [
+    "explicit id",
+    "[[reply_to:mm-post-xyz789]] threaded reply",
+    { replyToMode: "all" },
+    { replyToId: "mm-post-xyz789", text: "threaded reply" },
+  ],
+] as const)("applyReplyThreading: %s", (_name, text, options, expected) => {
+  const result = applyReplyThreading({
+    payloads: [{ text }],
+    currentMessageId: "42",
+    ...options,
+  }).map((payload) => Object.assign({ replyToId: payload.replyToId }, payload));
+  expect(result).toEqual([expect.objectContaining(expected)]);
 });
 
 const baseRun: SubagentRunRecord = {
@@ -135,23 +113,16 @@ describe("subagents utils", () => {
   });
 
   it("formats run labels with truncation", () => {
-    const formatted = formatRunLabel({ ...baseRun, label: "x".repeat(100) }, { maxLength: 10 });
-    expect(formatted.startsWith("x".repeat(10))).toBe(true);
-    expect(formatted.endsWith("…")).toBe(true);
+    expect(formatRunLabel({ ...baseRun, label: "xxxx" }, { maxLength: 3 })).toBe("xxx…");
   });
 
   it("sanitizes leaked internal runtime context from formatted run labels", () => {
-    const run = {
-      ...baseRun,
-      label: [
-        "OpenClaw runtime context (internal):",
-        "This context is runtime-generated, not user-authored. Keep internal details private.",
-        "",
-        "[Internal task completion event]",
-        "source: subagent",
-      ].join("\n"),
-    };
-
-    expect(formatRunLabel(run)).toBe("subagent");
+    expect(
+      formatRunLabel({
+        ...baseRun,
+        label:
+          "OpenClaw runtime context (internal):\nThis context is runtime-generated, not user-authored. Keep internal details private.\n\n[Internal task completion event]\nsource: subagent",
+      }),
+    ).toBe("subagent");
   });
 });

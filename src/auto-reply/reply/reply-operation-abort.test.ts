@@ -52,46 +52,30 @@ describe("reply-operation-abort", () => {
     expect(resolveReplyOperationAbortReason(replyOp)).toBeUndefined();
   });
 
-  it("preserves owner-recorded supersession over a concurrent restart error", () => {
-    const error = createAgentRunRestartAbortError();
+  it.each([
+    ["superseded", "aborted_for_supersession", createAgentRunRestartAbortError],
+    ["restart", "aborted_for_restart", createAgentRunSupersededAbortError],
+  ] as const)("preserves owner-recorded %s over a conflicting error", (reason, code, error) => {
     // SAFETY: These are the only operation fields read by the termination classifiers.
-    const replyOp = {
-      result: { kind: "aborted", code: "aborted_for_supersession" },
-    } as unknown as ReplyOperation;
-    expect(isReplyOperationSuperseded(replyOp)).toBe(true);
-    expectTermination(error, undefined, "superseded", replyOp);
+    const replyOp = { result: { kind: "aborted", code } } as unknown as ReplyOperation;
+    if (reason === "superseded") {
+      expect(isReplyOperationSuperseded(replyOp)).toBe(true);
+    }
+    expectTermination(error(), undefined, reason, replyOp);
   });
 
-  it("preserves owner-recorded restart over a concurrent superseded error", () => {
-    const error = createAgentRunSupersededAbortError();
-    // SAFETY: These are the only operation fields read by the termination classifiers.
-    const replyOp = {
-      result: { kind: "aborted", code: "aborted_for_restart" },
-    } as unknown as ReplyOperation;
-    expectTermination(error, undefined, "restart", replyOp);
+  it.each([
+    ["user", new Error("caller cancelled")],
+    ["superseded", createAgentRunSupersededAbortError()],
+  ] as const)("preserves caller %s over an error-level restart", (reason, signalReason) => {
+    expectTermination(createAgentRunRestartAbortError(), AbortSignal.abort(signalReason), reason);
   });
 
-  it("preserves caller cancellation over an error-level restart without an operation", () => {
-    const error = createAgentRunRestartAbortError();
-    expectTermination(error, AbortSignal.abort(new Error("caller cancelled")), "user");
-  });
-
-  it("preserves typed caller supersession over a conflicting error marker without an operation", () => {
-    expectTermination(
-      createAgentRunRestartAbortError(),
-      AbortSignal.abort(createAgentRunSupersededAbortError()),
-      "superseded",
-    );
-  });
-
-  it("resolves restart for restart abort error", () => {
-    const error = createAgentRunRestartAbortError();
-    expect(resolveReplyOperationAbortReason(undefined, error)).toBe("restart");
-  });
-
-  it("resolves user for direct agent abort error", () => {
-    const error = createAgentRunDirectAbortError();
-    expect(resolveReplyOperationAbortReason(undefined, error)).toBe("user");
+  it.each([
+    ["restart", createAgentRunRestartAbortError],
+    ["user", createAgentRunDirectAbortError],
+  ] as const)("resolves %s from an abort error", (reason, error) => {
+    expect(resolveReplyOperationAbortReason(undefined, error())).toBe(reason);
   });
 });
 
