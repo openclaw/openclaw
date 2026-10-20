@@ -36,7 +36,6 @@ it.each([false, true])("binds the supplied inventory to scoped facts (empty scop
     const plugin = writePlugin({
       id,
       dir: path.join(root, id),
-      filename: "index.cjs",
       registration: `api.registerProvider({ id: "${id}", label: "${id}", auth: [] });`,
     });
     const workspaceDir = path.join(root, "workspace");
@@ -72,7 +71,6 @@ it("pins supplied inventory without relabeling a conflicting explicit source", (
       writePlugin({
         id,
         dir: path.join(root, label),
-        filename: "index.cjs",
         registration: `api.registerProvider({ id: "inventory-owner", label: ${JSON.stringify(label)}, auth: [] });`,
       }),
     );

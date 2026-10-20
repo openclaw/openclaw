@@ -50,6 +50,15 @@ const bundleFiles: Record<string, Record<string, string | object>> = {
     ".cursor-plugin/plugin.json": { name: "Cursor Skills" },
     ".cursor/commands/review.md": skill,
   },
+  "claude-mcp-url": {
+    ".claude-plugin/plugin.json": { name: "Claude MCP URL" },
+    ".mcp.json": {
+      mcpServers: {
+        remoteProbe: { transport: "streamable-http", url: "http://127.0.0.1:8787/mcp" },
+        incompleteProbe: { transport: "streamable-http" },
+      },
+    },
+  },
 };
 
 afterEach(resetPluginLoaderTestStateForTest);
@@ -60,10 +69,15 @@ it.each([
   ["claude-skills", "claude", ["skills", "commands", "settings"]],
   ["claude-mcp", "claude", ["mcpServers"]],
   ["cursor-skills", "cursor", ["skills", "commands"]],
+  ["claude-mcp-url", "claude", ["mcpServers"]],
 ] as const)(
   "loads supported %s bundle surfaces without a runtime entry",
   (id, format, capabilities) => {
-    const { plugin, warns } = loadBundle(id, bundleFiles[id]);
+    const { plugin, warns } = loadBundle(
+      id,
+      bundleFiles[id],
+      id === "claude-mcp-url" ? { OPENCLAW_HOME: makePluginLoaderTempDir() } : undefined,
+    );
     expect(plugin).toMatchObject({
       status: "loaded",
       format: "bundle",
@@ -71,28 +85,9 @@ it.each([
       bundleCapabilities: capabilities,
     });
     expect(warns("bundle capability detected but not wired")).toBe(false);
+    if (id === "claude-mcp-url") {
+      expect(warns("unsupported transports or incomplete configs", "incompleteProbe")).toBe(true);
+      expect(warns("remoteProbe")).toBe(false);
+    }
   },
 );
-
-it("accepts bundle HTTP MCP and warns only for incomplete configs", () => {
-  const pluginId = "claude-mcp-url";
-  const { plugin, warns } = loadBundle(
-    pluginId,
-    {
-      ".claude-plugin/plugin.json": { name: "Claude MCP URL" },
-      ".mcp.json": {
-        mcpServers: {
-          remoteProbe: { transport: "streamable-http", url: "http://127.0.0.1:8787/mcp" },
-          incompleteProbe: { transport: "streamable-http" },
-        },
-      },
-    },
-    { OPENCLAW_HOME: makePluginLoaderTempDir() },
-  );
-  expect(plugin).toMatchObject({
-    status: "loaded",
-    bundleCapabilities: ["mcpServers"],
-  });
-  expect(warns("unsupported transports or incomplete configs", "incompleteProbe")).toBe(true);
-  expect(warns("remoteProbe")).toBe(false);
-});

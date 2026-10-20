@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { startLazyPluginServiceModule } from "./lazy-service-module.js";
@@ -30,11 +31,7 @@ it("starts the default module and returns its stop hook", async () => {
   });
 
   expect(lifecycle.start).toHaveBeenCalledTimes(1);
-  if (!handle) {
-    throw new Error("Expected lazy plugin service handle");
-  }
-  expect(handle.stop).toBeTypeOf("function");
-  await handle.stop();
+  await expectDefined(handle, "lazy service handle").stop();
   expect(lifecycle.stop).toHaveBeenCalledTimes(1);
 });
 
