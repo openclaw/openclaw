@@ -4,23 +4,28 @@ import { createComponent, createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { ensureCustomElementDefined } from "../../../app/lazy-custom-element.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
 import { questionPanelIn } from "./chat-question-card.test-support.ts";
 import type { ChatQuestionCard, QuestionPanelProps } from "./chat-question-card.ts";
 
-const mountedViews: ReturnType<typeof mountSolid>[] = [];
-
 afterEach(() => {
-  for (const view of mountedViews) {
-    view.unmount();
-  }
-  mountedViews.length = 0;
+  cleanupSolid();
   document.body.replaceChildren();
   vi.doUnmock("./chat-question-panel.tsx");
   vi.restoreAllMocks();
 });
+
+function question(text: string, defaultAnswers?: string[]) {
+  return {
+    questionId: "answer",
+    header: "Answer",
+    question: text,
+    options: [],
+    ...(defaultAnswers ? { presentation: "form" as const, defaultAnswers } : {}),
+  };
+}
 
 it("defers the question controls, retries failed loading, and mounts only the current connected request", async () => {
   const initialLoad = createDeferred();
@@ -38,7 +43,7 @@ it("defers the question controls, retries failed loading, and mounts only the cu
   });
   const container = document.body.appendChild(document.createElement("div"));
   let updatePanel!: (value: QuestionPanelProps | null) => void;
-  const currentView = mountSolid(
+  mountSolid(
     () => {
       const [panel, setPanel] = createSignal<QuestionPanelProps | null>(null);
       updatePanel = setPanel;
@@ -50,7 +55,6 @@ it("defers the question controls, retries failed loading, and mounts only the cu
     },
     { container },
   );
-  mountedViews.push(currentView);
   flush();
   expect(customElements.get("openclaw-chat-question-panel")).toBeUndefined();
   expect(load).not.toHaveBeenCalled();
@@ -60,9 +64,7 @@ it("defers the question controls, retries failed loading, and mounts only the cu
     model: {
       requestKey: "old-request",
       title: "Question",
-      questions: [
-        { questionId: "answer", header: "Answer", question: "Old question", options: [] },
-      ],
+      questions: [question("Old question")],
       collapsed: false,
       disabled: false,
       drafts: new Map(),
@@ -97,16 +99,7 @@ it("defers the question controls, retries failed loading, and mounts only the cu
     model: {
       ...props.model,
       requestKey: "current-request",
-      questions: [
-        {
-          questionId: "answer",
-          header: "Answer",
-          question: "Current question",
-          options: [],
-          presentation: "form",
-          defaultAnswers: ["  current value  "],
-        },
-      ],
+      questions: [question("Current question", ["  current value  "])],
       drafts: new Map(),
     },
   };
@@ -114,10 +107,9 @@ it("defers the question controls, retries failed loading, and mounts only the cu
   flush();
   await card.updateComplete;
   const removed = document.body.appendChild(document.createElement("div"));
-  const removedView = mountSolid(() => createComponent(ComposerQuestionDock, { panel: props }), {
+  mountSolid(() => createComponent(ComposerQuestionDock, { panel: props }), {
     container: removed,
   });
-  mountedViews.push(removedView);
   flush();
   const removedCard = removed.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
   await removedCard.updateComplete;

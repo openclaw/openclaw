@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { message } from "./chat-position-rail.test-support.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
   installTranscriptDomMocks,
@@ -8,14 +9,12 @@ import {
   threadProps,
 } from "./chat-transcript.test-support.ts";
 
-function message(id: string, role: string, content: unknown, seq: number, runId?: string) {
-  return {
-    role,
-    content,
-    timestamp: seq * 1_000,
-    __openclaw: { id, seq, ...(runId ? { runId } : {}) },
-  };
+function toolResult(id: string, text: string, seq: number, toolCallId = "read-1") {
+  return { ...message(id, "toolResult", text, seq, "run-1"), toolName: "read", toolCallId };
 }
+const imageContent = [
+  { type: "image", source: { type: "base64", media_type: "image/png", data: "AA==" } },
+];
 
 function withPositionIndex(
   props: Parameters<typeof projectChatTranscript>[0],
@@ -39,18 +38,9 @@ describe("chat position projection", () => {
     const messages = [
       message("question", "user", "Inspect the design", 1),
       message("commentary", "assistant", "Checking the files", 2, "run-1"),
-      {
-        ...message("tool", "toolResult", "File contents", 3, "run-1"),
-        toolName: "read",
-        toolCallId: "read-1",
-      },
+      toolResult("tool", "File contents", 3),
       message("answer", "assistant", "The design is ready", 4, "run-1"),
-      message(
-        "attachment",
-        "user",
-        [{ type: "image", source: { type: "base64", media_type: "image/png", data: "AA==" } }],
-        5,
-      ),
+      message("attachment", "user", imageContent, 5),
     ];
     const props = threadProps("rail-projection", "agent:main:projection", messages);
     withPositionIndex(props, (read) => {
@@ -66,20 +56,12 @@ describe("chat position projection", () => {
     const messages = [
       message("question", "user", "Inspect the design", 1),
       { ...message("final", "assistant", "Design ready", 2, "run-1"), phase: "final_answer" },
-      {
-        ...message("tool-1", "toolResult", "File contents", 3, "run-1"),
-        toolName: "read",
-        toolCallId: "read-1",
-      },
+      toolResult("tool-1", "File contents", 3),
       {
         ...message("tail", "assistant", "Checking the saved result", 4, "run-1"),
         phase: "commentary",
       },
-      {
-        ...message("tool-2", "toolResult", "Saved", 5, "run-1"),
-        toolName: "read",
-        toolCallId: "read-2",
-      },
+      toolResult("tool-2", "Saved", 5, "read-2"),
     ];
     const props = {
       ...threadProps("rail-folded", "agent:main:dashboard:audit", messages),
@@ -116,9 +98,7 @@ describe("chat position projection", () => {
     },
     {
       name: "image-only response",
-      content: [
-        { type: "image", source: { type: "base64", media_type: "image/png", data: "AA==" } },
-      ],
+      content: imageContent,
       stopReason: "stop",
       assistantMarkers: 1,
     },

@@ -19,14 +19,40 @@ const options = [
   })),
 ];
 
-async function mountQuestion(question: QuestionPanelProps["model"]["questions"][number]) {
+type Question = QuestionPanelProps["model"]["questions"][number];
+const keydown = (target: HTMLElement, key: string, modifiers: KeyboardEventInit = {}) => {
+  const event = new KeyboardEvent("keydown", {
+    key,
+    bubbles: true,
+    cancelable: true,
+    ...modifiers,
+  });
+  target.dispatchEvent(event);
+  return event;
+};
+const badges = (container: HTMLElement) =>
+  Array.from(container.querySelectorAll("kbd"), (badge) => badge.textContent?.trim());
+function required(container: HTMLElement, selector: string) {
+  const element = container.querySelector<HTMLElement>(selector);
+  assert(element);
+  return element;
+}
+async function mountQuestion(question: Partial<Question>) {
   const container = document.body.appendChild(document.createElement("div"));
   const onSubmit = vi.fn();
   const props: QuestionPanelProps = {
     model: {
       requestKey: "canonical-keyboard",
       title: "Choose a format",
-      questions: [question],
+      questions: [
+        {
+          questionId: "format",
+          header: "Format",
+          question: "Which format?",
+          options: [],
+          ...question,
+        },
+      ],
       collapsed: false,
       disabled: false,
       drafts: new Map(),
@@ -35,8 +61,7 @@ async function mountQuestion(question: QuestionPanelProps["model"]["questions"][
   };
   mountSolid(() => createComponent(ComposerQuestionDock, { panel: props }), { container });
   const panel = await questionPanelIn(container);
-  const group = container.querySelector<HTMLElement>(".chat-question-panel");
-  assert(group);
+  const group = required(container, ".chat-question-panel");
   return { container, panel, group, onSubmit };
 }
 
@@ -53,25 +78,15 @@ it.each([
   "submits selected answers from $selector with $modifier+Enter",
   async ({ selector, modifier }) => {
     const { container, panel, group, onSubmit } = await mountQuestion({
-      questionId: "format",
-      header: "Format",
-      question: "Which format?",
       options: options.slice(0, 2),
       multiSelect: selector.includes("checkbox"),
       isOther: true,
     });
     group.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
     await panel.updateComplete;
-    const target = container.querySelector<HTMLElement>(selector);
-    assert(target);
+    const target = required(container, selector);
     target.focus();
-    const event = new KeyboardEvent("keydown", {
-      key: "Enter",
-      [modifier]: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    target.dispatchEvent(event);
+    const event = keydown(target, "Enter", { [modifier]: true });
     expect(event.defaultPrevented).toBe(true);
     expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: ["  detailed-id  "] });
   },
@@ -84,41 +99,25 @@ it.each([
   { key: "ArrowRight", value: "  detailed-id  " },
 ])("submits the canonical option value selected with $key", async ({ key, value }) => {
   const { container, panel, group, onSubmit } = await mountQuestion({
-    questionId: "format",
-    header: "Format",
-    question: "Which format?",
     presentation: "form",
     options,
   });
-  expect(
-    Array.from(container.querySelectorAll("kbd"), (badge) => badge.textContent?.trim()),
-  ).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+  expect(badges(container)).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
   const target =
     key === "ArrowRight" ? container.querySelector<HTMLElement>('[role="radio"]') : group;
   assert(target);
   target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
   await panel.updateComplete;
-  const submit = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance");
-  assert(submit);
-  submit.click();
+  required(container, ".chat-question-panel__advance").click();
   expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: [value] });
 });
 
 it.each([false, true])("respects allowEmpty=%s for shortcut submission", async (allowEmpty) => {
   const { group, onSubmit } = await mountQuestion({
-    questionId: "format",
-    header: "Format",
-    question: "Which format?",
     options: [],
     allowEmpty,
   });
-  const event = new KeyboardEvent("keydown", {
-    key: "Enter",
-    ctrlKey: true,
-    bubbles: true,
-    cancelable: true,
-  });
-  group.dispatchEvent(event);
+  const event = keydown(group, "Enter", { ctrlKey: true });
   expect(event.defaultPrevented).toBe(allowEmpty);
   expect(onSubmit.mock.calls).toEqual(allowEmpty ? [[{ format: [] }]] : []);
 });
@@ -139,17 +138,10 @@ it("keeps native activation on links, file pickers, and action buttons", async (
     ".chat-question-panel__collapse",
     ".chat-question-panel__advance",
   ]) {
-    const target = container.querySelector<HTMLElement>(selector);
-    assert(target);
+    const target = required(container, selector);
     target.focus();
     for (const keys of [{}, { ctrlKey: true }, { metaKey: true }]) {
-      const event = new KeyboardEvent("keydown", {
-        key: "Enter",
-        ...keys,
-        bubbles: true,
-        cancelable: true,
-      });
-      target.dispatchEvent(event);
+      const event = keydown(target, "Enter", keys);
       expect(event.defaultPrevented, selector).toBe(false);
       expect(onSubmit).not.toHaveBeenCalled();
     }
@@ -171,15 +163,12 @@ it("numbers only visible implicit resources and cannot restore a hidden option w
       { label: "Kept", value: "kept", resourceUri: "parts://kept" },
     ],
   });
-  expect(
-    Array.from(container.querySelectorAll("kbd"), (badge) => badge.textContent?.trim()),
-  ).toEqual(["1"]);
+  expect(badges(container)).toEqual(["1"]);
   group.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
   await panel.updateComplete;
   expect(container.querySelector(".chat-question-panel__option")).toBeNull();
   for (const key of ["1", "2"]) {
-    const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
-    group.dispatchEvent(event);
+    const event = keydown(group, key);
     expect(event.defaultPrevented).toBe(false);
   }
   group.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
@@ -190,9 +179,6 @@ it.each([8, 9])(
   "offers an Other shortcut only within the nine-key range (%d options)",
   async (count) => {
     const { container, panel, group } = await mountQuestion({
-      questionId: "format",
-      header: "Format",
-      question: "Which format?",
       isOther: true,
       options: options.slice(0, count),
     });

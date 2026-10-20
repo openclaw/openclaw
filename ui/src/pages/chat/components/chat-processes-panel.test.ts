@@ -11,45 +11,63 @@ import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts
 import "./chat-details-session.tsx";
 import "./chat-processes-panel.tsx";
 
+function process(overrides: Partial<SessionsProcessesListResult["processes"][number]> = {}) {
+  return {
+    processId: "build",
+    instanceId: "build-instance",
+    name: "Build app",
+    status: "running" as const,
+    startedAt: 1,
+    tail: "Compiling",
+    truncated: false,
+    canStop: false,
+    ...overrides,
+  };
+}
+
+function mountProcesses(
+  request: Parameters<typeof createTestGatewayClient>[0],
+  methods = ["sessions.processes.list", "sessions.processes.stop"],
+) {
+  vi.useFakeTimers();
+  const connection = createGatewayHarness(createTestGatewayClient(request));
+  connection.publish({ hello: gatewayHelloForMethods(methods) });
+  const sessions = createTestSessionCapability(connection.gateway);
+  const provider = createApplicationContextProvider(createContext(connection.gateway, sessions));
+  onTestFinished(() => {
+    provider.remove();
+    sessions.dispose();
+    disposeSidebarContextLifecycles();
+    vi.useRealTimers();
+  });
+  return {
+    connection,
+    mount(element: HTMLElement) {
+      provider.append(element);
+      document.body.append(provider);
+    },
+  };
+}
+
+async function settle(element: { updateComplete: Promise<unknown> }, ms: number) {
+  await element.updateComplete;
+  await vi.advanceTimersByTimeAsync(ms);
+}
+
 it.each([false, true])(
   "distinguishes a retired process from an incomplete list (truncated: %s)",
   async (truncated) => {
-    vi.useFakeTimers();
     let result: SessionsProcessesListResult = {
       sessionId: "parent-session",
       truncated: false,
-      processes: [
-        {
-          processId: "build",
-          instanceId: "build-instance",
-          name: "Build app",
-          status: "running",
-          startedAt: 1,
-          tail: "Compiling",
-          truncated: false,
-          canStop: false,
-        },
-      ],
+      processes: [process()],
     };
-    const client = createTestGatewayClient(() => result);
-    const connection = createGatewayHarness(client);
-    connection.publish({
-      hello: gatewayHelloForMethods(["sessions.processes.list", "sessions.processes.stop"]),
-    });
-    const sessions = createTestSessionCapability(connection.gateway);
-    const provider = createApplicationContextProvider(createContext(connection.gateway, sessions));
+    const { connection, mount } = mountProcesses(() => result);
     const panel = document.createElement("openclaw-chat-processes-panel");
     panel.sessionKey = "agent:main:parent";
-    provider.append(panel);
-    document.body.append(provider);
-    onTestFinished(() => {
-      provider.remove();
-      sessions.dispose();
-      disposeSidebarContextLifecycles();
-      vi.useRealTimers();
-    });
-    await panel.updateComplete;
-    await vi.advanceTimersByTimeAsync(0);
+    mount(panel);
+
+    await settle(panel, 0);
     await panel.updateComplete;
     panel.querySelector<HTMLButtonElement>(".chat-processes__open")!.click();
     await panel.updateComplete;
@@ -71,7 +89,6 @@ it.each([false, true])(
 );
 
 it("retires stop authority immediately and reads the complete replacement scope", async () => {
-  vi.useFakeTimers();
   const request = vi.fn((method: string, params?: unknown) => {
     if (method === "sessions.processes.stop") {
       return { requested: true };
@@ -80,41 +97,15 @@ it("retires stop authority immediately and reads the complete replacement scope"
     return {
       sessionId: target?.key === "global" ? "worker-session" : "parent-session",
       truncated: false,
-      processes:
-        target?.key === "global"
-          ? []
-          : [
-              {
-                processId: "build",
-                instanceId: "build-instance",
-                name: "Build app",
-                status: "running",
-                startedAt: 1,
-                tail: "Compiling",
-                truncated: false,
-                canStop: true,
-              },
-            ],
+      processes: target?.key === "global" ? [] : [process({ canStop: true })],
     } satisfies SessionsProcessesListResult;
   });
-  const connection = createGatewayHarness(createTestGatewayClient(request));
-  connection.publish({
-    hello: gatewayHelloForMethods(["sessions.processes.list", "sessions.processes.stop"]),
-  });
-  const sessions = createTestSessionCapability(connection.gateway);
-  const provider = createApplicationContextProvider(createContext(connection.gateway, sessions));
+  const { mount } = mountProcesses(request);
   const panel = document.createElement("openclaw-chat-processes-panel");
   panel.sessionKey = "agent:main:parent";
-  provider.append(panel);
-  document.body.append(provider);
-  onTestFinished(() => {
-    provider.remove();
-    sessions.dispose();
-    disposeSidebarContextLifecycles();
-    vi.useRealTimers();
-  });
-  await panel.updateComplete;
-  await vi.advanceTimersByTimeAsync(0);
+  mount(panel);
+
+  await settle(panel, 0);
   const stop = panel.querySelector<HTMLButtonElement>(".chat-processes__stop")!;
   expect(stop.disabled).toBe(false);
 
@@ -122,8 +113,7 @@ it("retires stop authority immediately and reads the complete replacement scope"
   panel.agentId = "worker";
   stop.click();
   expect(request.mock.calls.filter(([method]) => method === "sessions.processes.stop")).toEqual([]);
-  await panel.updateComplete;
-  await vi.advanceTimersByTimeAsync(0);
+  await settle(panel, 0);
   expect(request.mock.calls.filter(([method]) => method === "sessions.processes.list")).toEqual([
     ["sessions.processes.list", { key: "agent:main:parent", agentId: "main" }],
     ["sessions.processes.list", { key: "global", agentId: "worker" }],
@@ -131,31 +121,16 @@ it("retires stop authority immediately and reads the complete replacement scope"
 });
 
 it("keeps details process observation through refreshes and follows its presented scope", async () => {
-  vi.useFakeTimers();
   const request = vi.fn((method: string, params?: unknown) => {
     expect(method).toBe("sessions.processes.list");
     const target = asOptionalRecord(params);
     return {
       sessionId: target?.key === "global" ? "worker-session" : "parent-session",
       truncated: false,
-      processes: [
-        {
-          processId: "build",
-          instanceId: "build-instance",
-          name: target?.agentId === "worker" ? "Worker build" : "Main build",
-          status: "running",
-          startedAt: 1,
-          tail: "Compiling",
-          truncated: false,
-          canStop: false,
-        },
-      ],
+      processes: [process({ name: target?.agentId === "worker" ? "Worker build" : "Main build" })],
     } satisfies SessionsProcessesListResult;
   });
-  const connection = createGatewayHarness(createTestGatewayClient(request));
-  connection.publish({ hello: gatewayHelloForMethods(["sessions.processes.list"]) });
-  const sessions = createTestSessionCapability(connection.gateway);
-  const provider = createApplicationContextProvider(createContext(connection.gateway, sessions));
+  const { mount } = mountProcesses(request, ["sessions.processes.list"]);
   const details = document.createElement("openclaw-chat-details-session");
   details.props = {
     sessionKey: "agent:main:parent",
@@ -165,16 +140,8 @@ it("keeps details process observation through refreshes and follows its presente
     onOpenProcesses: () => {},
   };
   details.presented = true;
-  provider.append(details);
-  document.body.append(provider);
-  onTestFinished(() => {
-    provider.remove();
-    sessions.dispose();
-    disposeSidebarContextLifecycles();
-    vi.useRealTimers();
-  });
-  await details.updateComplete;
-  await vi.advanceTimersByTimeAsync(0);
+  mount(details);
+  await settle(details, 0);
   const row = details.querySelector(".chat-details__process");
   expect(row?.textContent).toContain("Main build");
   expect(request.mock.calls).toEqual([
@@ -182,14 +149,12 @@ it("keeps details process observation through refreshes and follows its presente
   ]);
 
   details.props = { ...details.props!, messages: [] };
-  await details.updateComplete;
-  await vi.advanceTimersByTimeAsync(0);
+  await settle(details, 0);
   expect(details.querySelector(".chat-details__process")).toBe(row);
   expect(request).toHaveBeenCalledOnce();
 
   details.props = { ...details.props!, sessionKey: "global", currentAgentId: "worker" };
-  await details.updateComplete;
-  await vi.advanceTimersByTimeAsync(0);
+  await settle(details, 0);
   expect(request.mock.calls).toEqual([
     ["sessions.processes.list", { key: "agent:main:parent", agentId: "main" }],
     ["sessions.processes.list", { key: "global", agentId: "worker" }],
@@ -198,13 +163,11 @@ it("keeps details process observation through refreshes and follows its presente
 
   details.presented = false;
   details.props = { ...details.props!, sessionKey: "agent:main:parent", currentAgentId: "main" };
-  await details.updateComplete;
-  await vi.advanceTimersByTimeAsync(5_000);
+  await settle(details, 5_000);
   expect(request).toHaveBeenCalledTimes(2);
 
   details.presented = true;
-  await details.updateComplete;
-  await vi.advanceTimersByTimeAsync(0);
+  await settle(details, 0);
   expect(request.mock.calls.at(-1)).toEqual([
     "sessions.processes.list",
     { key: "agent:main:parent", agentId: "main" },
