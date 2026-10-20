@@ -1,15 +1,10 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { text } from "node:stream/consumers";
 import { expect, it } from "vitest";
-import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   activateSelfRemovingControl,
-  captureUiProof,
-  captureUiProofEnabled,
   controlUiSessionUrl,
   installMockGateway,
   openSessionMenuSubmenu,
@@ -56,9 +51,6 @@ suite.define(() => {
       await suite.withPage(
         {
           viewport: { width: 1280, height: 900 },
-          ...(captureUiProofEnabled
-            ? { recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } } }
-            : {}),
         },
         async ({ context, page }) => {
           await context.grantPermissions(["clipboard-read", "clipboard-write"], {
@@ -91,7 +83,6 @@ suite.define(() => {
               state: "visible",
             });
           }
-          await captureUiProof(suite, page, `${action}-transcript.png`);
           const unattributed = thread.locator(".chat-group.user").filter({
             has: page.getByText("Please review the checklist.", { exact: true }),
           });
@@ -126,38 +117,12 @@ suite.define(() => {
               name: "Conversation as Markdown",
               exact: true,
             });
-            if (captureUiProofEnabled) {
-              await waitForControlUiProofSurface(
-                page.locator("openclaw-session-menu .session-menu__panel"),
-                [page.getByRole("menuitem", { name: "Copy details", exact: true })],
-              );
-            }
-            await captureUiProof(
-              suite,
-              page,
-              "copy-menu.png",
-              page.getByRole("menu", { name: "Copy details", exact: true }),
-              [copy],
-            );
             await copy.click({ trial: true });
             await activateSelfRemovingControl(copy);
             await expect.poll(() => page.locator(".app-toast").textContent()).toContain("Copied");
             markdown = await page.evaluate(() => navigator.clipboard.readText());
           }
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-          if (captureUiProofEnabled) {
-            await writeFile(path.join(suite.artifactDir, `${action}.md`), markdown);
-            const preview = await context.newPage();
-            await preview.goto(`data:text/plain;charset=utf-8,${encodeURIComponent(markdown)}`);
-            await captureUiProof(
-              suite,
-              preview,
-              `${action}-markdown.png`,
-              preview.locator("body"),
-              [preview.locator("pre")],
-            );
-            await preview.close();
-          }
           expect(markdown.match(/^## .+$/gm)).toEqual([
             "## Message",
             "## Alex",
