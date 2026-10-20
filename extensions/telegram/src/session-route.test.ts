@@ -43,60 +43,53 @@ describe("telegram session route", () => {
       currentSessionKey: "agent:main:main:thread:12345:99",
     });
 
-    expect(route?.sessionKey).toBe("agent:main:main");
-    expect(route?.baseSessionKey).toBe("agent:main:main");
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:main",
+      baseSessionKey: "agent:main:main",
+      recipientSessionExact: true,
+    });
     expect(route?.threadId).toBeUndefined();
-    expect(route?.recipientSessionExact).toBe(true);
   });
 
   it.each([
-    { defaultAccount: undefined, expected: "agent:main:telegram:work:direct:12345" },
-    { defaultAccount: "work", expected: "agent:main:main" },
-  ])(
-    "classifies direct sessions with defaultAccount=$defaultAccount",
-    async ({ defaultAccount, expected }) => {
-      const route = await resolveRoute("12345", {
-        cfg: {
-          channels: { telegram: { defaultAccount, accounts: { work: {}, personal: {} } } },
-        },
-        accountId: "work",
-      });
+    [undefined, "agent:main:telegram:work:direct:12345"],
+    ["work", "agent:main:main"],
+  ])("classifies direct sessions with defaultAccount=%s", async (defaultAccount, expected) => {
+    const route = await resolveRoute("12345", {
+      cfg: {
+        channels: { telegram: { defaultAccount, accounts: { work: {}, personal: {} } } },
+      },
+      accountId: "work",
+    });
+    expect(route).toMatchObject({
+      sessionKey: expected,
+      baseSessionKey: expected,
+      recipientSessionExact: true,
+    });
+  });
 
-      expect(route?.sessionKey).toBe(expected);
-      expect(route?.baseSessionKey).toBe(expected);
-      expect(route?.recipientSessionExact).toBe(true);
-    },
-  );
-
-  it("keeps direct-message and forum topics with the same id in distinct group routes", async () => {
-    const direct = await resolveRoute("-100:direct-topic:99");
-    const forum = await resolveRoute("-100:topic:99");
-    expect(direct).toMatchObject({
-      sessionKey: "agent:main:telegram:group:-100:direct-topic:99",
-      from: "telegram:group:-100:direct-topic:99",
-      to: "telegram:-100:direct-topic:99",
+  it.each(["direct-topic", "topic"])("keeps %s group routes distinct", async (scope) => {
+    const target = `-100:${scope}:99`;
+    expect(await resolveRoute(target)).toMatchObject({
+      sessionKey: `agent:main:telegram:group:${target}`,
+      from: `telegram:group:${target}`,
+      to: `telegram:${target}`,
       threadId: 99,
     });
-    expect(forum?.sessionKey).toBe("agent:main:telegram:group:-100:topic:99");
   });
 
   it.each([
     ["-1001:Topic:77", "77", "-1001:topic:77"],
     ["-1001:direct-topic:77", "direct-topic:77", "-1001:direct-topic:77"],
-  ])("round-trips registered session topic %s", (rawId, threadId, target) => {
+  ])("round-trips registered session topic %s", (rawId, expectedThread, target) => {
     const conversation = messaging.resolveSessionConversation!({ kind: "group", rawId });
     expect(conversation).toMatchObject({
       id: "-1001",
-      threadId,
+      threadId: expectedThread,
       parentConversationCandidates: ["-1001"],
     });
-    expect(
-      messaging.resolveSessionTarget!({
-        kind: "group",
-        id: conversation!.id,
-        threadId: conversation!.threadId,
-      }),
-    ).toBe(target);
+    const { id, threadId } = conversation!;
+    expect(messaging.resolveSessionTarget!({ kind: "group", id, threadId })).toBe(target);
   });
 
   it("keeps topicless sessions and username targets outside topic parsing", () => {
@@ -124,7 +117,6 @@ describe("telegram session route", () => {
       resolvedTarget: { to: "@team", kind: "group", source: "directory" },
     });
 
-    expect(route?.peer.kind).toBe("group");
-    expect(route?.recipientSessionExact).toBe(false);
+    expect(route).toMatchObject({ peer: { kind: "group" }, recipientSessionExact: false });
   });
 });

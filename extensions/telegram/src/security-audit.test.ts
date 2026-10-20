@@ -27,33 +27,24 @@ function audit(config: ResolvedTelegramAccount["config"], commands?: OpenClawCon
   });
 }
 
-function expectFindingSeverity(
-  findings: Awaited<ReturnType<typeof collectTelegramSecurityAuditFindings>>,
-  checkId: string,
-  severity: string,
-): void {
-  const finding = findings.find((entry) => entry.checkId === checkId);
-  expect(finding?.severity).toBe(severity);
-}
-
 describe("Telegram security audit findings", () => {
   beforeEach(() => {
     readChannelAllowFromStoreMock.mockReset();
     readChannelAllowFromStoreMock.mockResolvedValue([]);
   });
 
-  it("flags group commands without a sender allowlist", async () => {
-    const findings = await audit({ groups: { "-100123": {} } });
-    expectFindingSeverity(findings, "channels.telegram.groups.allowFrom.missing", "critical");
-  });
-
-  it("warns when allowFrom entries are non-numeric legacy @username configs", async () => {
-    const findings = await audit({
-      groupAllowFrom: ["@TrustedOperator"],
-      groups: { "-100123": {} },
-    });
-
-    expectFindingSeverity(findings, "channels.telegram.allowFrom.invalid_entries", "warn");
+  it.each<[ResolvedTelegramAccount["config"], string, string]>([
+    [{ groups: { "-100123": {} } }, "groups.allowFrom.missing", "critical"],
+    [
+      { groups: { "-100123": {} }, groupAllowFrom: ["@TrustedOperator"] },
+      "allowFrom.invalid_entries",
+      "warn",
+    ],
+  ])("audits group policy %j", async (config, suffix, severity) => {
+    const findings = await audit(config);
+    expect(
+      findings.find(({ checkId }) => checkId === `channels.telegram.${suffix}`)?.severity,
+    ).toBe(severity);
   });
 
   it.each([undefined, { text: false }])(
@@ -64,7 +55,9 @@ describe("Telegram security audit findings", () => {
         commands,
       );
       expect(findings).toHaveLength(1);
-      expectFindingSeverity(findings, "channels.telegram.allowFrom.invalid_entries", "warn");
+      expect(findings).toMatchObject([
+        { checkId: "channels.telegram.allowFrom.invalid_entries", severity: "warn" },
+      ]);
       expect(readChannelAllowFromStoreMock).not.toHaveBeenCalled();
     },
   );

@@ -12,6 +12,25 @@ const fallbackCases = [
   ["read ECONNRESET", undefined, undefined],
 ] as const;
 
+function attempt(kind: "rich" | "html", message: string, plainText: string, limit?: number) {
+  const error = new Error(message);
+  const warn = vi.fn();
+  const sendFormatted = vi.fn(async () => {
+    throw error;
+  });
+  const sendPlain = vi.fn(async () => "plain");
+  const run = withTelegramPlainFallback({
+    kind,
+    context: "test send",
+    plainText,
+    limit,
+    warn,
+    sendFormatted,
+    sendPlain,
+  });
+  return { error, warn, sendFormatted, sendPlain, run };
+}
+
 describe("withTelegramPlainFallback", () => {
   it.each(
     (["rich", "html"] as const).flatMap((kind) =>
@@ -23,22 +42,13 @@ describe("withTelegramPlainFallback", () => {
       })),
     ),
   )("classifies $kind $message consistently", async (testCase) => {
-    const error = new Error(testCase.message);
-    const warn = vi.fn();
-    const sendFormatted = vi.fn(async () => {
-      throw error;
-    });
-    const sendPlain = vi.fn(async () => "plain");
+    const { error, warn, sendFormatted, sendPlain, run } = attempt(
+      testCase.kind,
+      testCase.message,
+      "fallback body",
+      8,
+    );
     const trigger = testCase.kind === "rich" ? testCase.richTrigger : testCase.htmlTrigger;
-    const run = withTelegramPlainFallback({
-      kind: testCase.kind,
-      context: "test send",
-      plainText: "fallback body",
-      warn,
-      limit: 8,
-      sendFormatted,
-      sendPlain,
-    });
     expect(sendFormatted).toHaveBeenCalledTimes(1);
 
     if (!trigger) {
@@ -64,22 +74,8 @@ describe("withTelegramPlainFallback", () => {
     { kind: "rich" as const, message: "Bad Request: rich message must be non-empty" },
     { kind: "html" as const, message: "Bad Request: message text is empty" },
   ])("rethrows $kind failures when plain text is empty", async ({ kind, message }) => {
-    const error = new Error(message);
-    const warn = vi.fn();
-    const sendPlain = vi.fn(async () => "plain");
-
-    await expect(
-      withTelegramPlainFallback({
-        kind,
-        context: "test send",
-        plainText: " \n",
-        warn,
-        sendFormatted: async () => {
-          throw error;
-        },
-        sendPlain,
-      }),
-    ).rejects.toBe(error);
+    const { error, warn, sendPlain, run } = attempt(kind, message, " \n");
+    await expect(run).rejects.toBe(error);
     expect(sendPlain).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
   });
