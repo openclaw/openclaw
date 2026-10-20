@@ -1,8 +1,5 @@
-// Covers the in-repo private-key scanner that replaced the network-dependent
-// pre-commit detect-private-key hook in the CI security-fast job.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,10 +8,12 @@ import {
   PRIVATE_KEY_MARKERS,
   PRIVATE_KEY_SCAN_EXCLUDE,
 } from "../../scripts/detect-private-keys.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = fileURLToPath(
   new URL("../../scripts/detect-private-keys.mts", import.meta.url),
 );
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runScanner(cwd: string, args: string[] = [], scriptPath = SCRIPT_PATH) {
   return spawnSync(process.execPath, [scriptPath, ...args], { cwd, encoding: "utf8" });
@@ -42,17 +41,8 @@ describe("detect-private-keys markers", () => {
 });
 
 describe("detect-private-keys CLI", () => {
-  let repoDir: string | undefined;
-
-  afterEach(() => {
-    if (repoDir) {
-      fs.rmSync(repoDir, { recursive: true, force: true });
-      repoDir = undefined;
-    }
-  });
-
   function createTrackedRepo(files: Record<string, string>) {
-    repoDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "detect-private-keys-")));
+    const repoDir = fs.realpathSync(tempDirs.make("detect-private-keys-"));
     for (const [file, content] of Object.entries(files)) {
       fs.writeFileSync(path.join(repoDir, file), content);
     }
@@ -73,11 +63,10 @@ describe("detect-private-keys CLI", () => {
     });
     // Pull-request CI runs a `git show` copy of the base-ref scanner from
     // outside the candidate tree, so the file must work without siblings.
-    const standaloneCopy = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "dpk-copy-")), "s.mts");
+    const standaloneCopy = path.join(tempDirs.make("dpk-copy-"), "s.mts");
     fs.copyFileSync(SCRIPT_PATH, standaloneCopy);
 
     const result = runScanner(cwd, [], standaloneCopy);
-    fs.rmSync(path.dirname(standaloneCopy), { recursive: true, force: true });
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("Private key found: leaked.pem (BEGIN RSA PRIVATE KEY)");
@@ -104,8 +93,7 @@ describe("detect-private-keys CLI", () => {
 
     const result = runScanner(cwd, ["missing.txt"]);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("ENOENT");
+    expect(result).toMatchObject({ status: 1, stderr: expect.stringContaining("ENOENT") });
     expect(result.stderr).toContain("[detect-private-keys] FAILED (exit 1)");
   });
 });

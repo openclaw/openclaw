@@ -8,6 +8,9 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const pinnedBun = { command: "/pinned/bin/bun" };
+const unavailable = { reason: "unavailable" };
+const deps = () => ({ resolvePinnedBun: vi.fn(() => pinnedBun), notice: vi.fn() });
 
 describe("development tool selection", () => {
   it.each([
@@ -21,8 +24,7 @@ describe("development tool selection", () => {
     ["lint", { CI: "true" }, false],
     ["lint", { OPENCLAW_LINT_TOOL: "bun" }, true],
   ] as const)("selects %s for %j", (kind, env, bun) => {
-    const resolvePinnedBun = vi.fn(() => ({ command: "/pinned/bin/bun" }));
-    const notice = vi.fn();
+    const { resolvePinnedBun, notice } = deps();
     const tool = resolveDevTool(kind, env, { resolvePinnedBun, notice });
     expect(tool.command === "/pinned/bin/bun").toBe(bun);
     expect(resolvePinnedBun).toHaveBeenCalledTimes(bun ? 1 : 0);
@@ -30,44 +32,24 @@ describe("development tool selection", () => {
   });
 
   it("runs the built-in lint command with the pinned runtime on PATH", () => {
-    const tool = resolveDevTool(
-      "lint",
-      { OPENCLAW_LINT_TOOL: "bun", PATH: "/usr/bin" },
-      {
-        resolvePinnedBun: () => ({ command: "/pinned/bin/bun" }),
-        notice: vi.fn(),
-      },
-    );
+    const tool = resolveDevTool("lint", { OPENCLAW_LINT_TOOL: "bun", PATH: "/usr/bin" }, deps());
     expect(tool.args).toEqual(["lint"]);
     expect(tool.env.PATH?.split(/[:;]/u)[0]).toBe("/pinned/bin");
     expect(tool.env.npm_lifecycle_event).toBe("lint");
   });
 
   it("fails an unavailable explicit Bun request instead of silently changing tools", () => {
-    const notice = vi.fn();
+    const { notice } = deps();
+    const unavailableDeps = { resolvePinnedBun: () => unavailable, notice };
     expect(() =>
-      resolveDevTool(
-        "format",
-        { OPENCLAW_FORMAT_TOOL: "bun" },
-        {
-          resolvePinnedBun: () => ({ reason: "unavailable" }),
-          notice,
-        },
-      ),
+      resolveDevTool("format", { OPENCLAW_FORMAT_TOOL: "bun" }, unavailableDeps),
     ).toThrow("OPENCLAW_FORMAT_TOOL=bun: unavailable");
     expect(notice).not.toHaveBeenCalled();
   });
 
   it("falls back to oxfmt with a notice when the local pinned fork is unavailable", () => {
     const notice = vi.fn();
-    const tool = resolveDevTool(
-      "format",
-      {},
-      {
-        resolvePinnedBun: () => ({ reason: "unavailable" }),
-        notice,
-      },
-    );
+    const tool = resolveDevTool("format", {}, { resolvePinnedBun: () => unavailable, notice });
     expect(tool.command).toBe(process.execPath);
     expect(tool.args).toEqual([path.resolve("node_modules/oxfmt/bin/oxfmt")]);
     expect(notice).toHaveBeenCalledExactlyOnceWith("[openclaw] unavailable; using oxfmt.");

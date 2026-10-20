@@ -38,6 +38,7 @@ describe("release model config", () => {
   const env = { RELEASE_TEST: "1" };
   const logPath = join(root, "config.log");
   const success = { exitCode: 0, stdout: "", stderr: "" };
+  const baseUrl = "https://example.com/v1";
 
   beforeEach(() => {
     command.mockReset().mockResolvedValue(success);
@@ -67,63 +68,37 @@ describe("release model config", () => {
       invocation.args.slice(adapter === "packaged" ? 1 : 0),
     );
   }
+  function configSet(key: string, value: unknown, ...flags: string[]) {
+    return ["config", "set", key, JSON.stringify(value), "--strict-json", ...flags];
+  }
 
   it.each([
-    { adapter: "packaged", extensionId: "anthropic", overrides: {}, expectedOverride: null },
-    {
-      adapter: "installed",
-      extensionId: "openai",
-      overrides: { baseUrl: "https://example.com/v1", timeoutSeconds: 600 },
-      expectedOverride: {
-        baseUrl: "https://example.com/v1",
-        agentRuntime: { id: "openclaw" },
-        models: [],
-        timeoutSeconds: 600,
-      },
-    },
-    {
-      adapter: "packaged",
-      extensionId: "minimax",
-      overrides: { baseUrl: "https://example.com/v1" },
-      expectedOverride: { baseUrl: "https://example.com/v1", models: [] },
-    },
-    {
-      adapter: "packaged",
-      extensionId: "browser",
-      overrides: { timeoutSeconds: 700 },
-      expectedOverride: { models: [], timeoutSeconds: 700 },
-    },
+    ["packaged", "anthropic", {}, null],
+    [
+      "installed",
+      "openai",
+      { baseUrl, timeoutSeconds: 600 },
+      { baseUrl, agentRuntime: { id: "openclaw" }, models: [], timeoutSeconds: 600 },
+    ],
+    ["packaged", "minimax", { baseUrl }, { baseUrl, models: [] }],
+    ["packaged", "browser", { timeoutSeconds: 700 }, { models: [], timeoutSeconds: 700 }],
   ] as const)(
-    "keeps the exact ordered $extensionId commands through $adapter",
-    async ({ adapter, extensionId, overrides, expectedOverride }) => {
+    "keeps the exact ordered commands through %s for %s",
+    async (adapter, extensionId, overrides, expectedOverride) => {
       await run(createProvider({ extensionId, ...overrides }), adapter);
       expect(calledArgs(adapter)).toEqual([
         ["models", "set", "test/model"],
         ...(expectedOverride
-          ? [
-              [
-                "config",
-                "set",
-                `models.providers.${extensionId}`,
-                JSON.stringify(expectedOverride),
-                "--strict-json",
-                "--merge",
-              ],
-            ]
+          ? [configSet(`models.providers.${extensionId}`, expectedOverride, "--merge")]
           : []),
-        [
-          "config",
-          "set",
+        configSet(
           "plugins.allow",
-          JSON.stringify(
-            extensionId === "browser"
-              ? ["browser", "acpx", "bonjour", "device-pair", "talk-voice"]
-              : [extensionId, "acpx", "bonjour", "browser", "device-pair", "talk-voice"],
-          ),
-          "--strict-json",
-        ],
-        ["config", "set", "plugins.slots.memory", '"none"', "--strict-json"],
-        ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
+          extensionId === "browser"
+            ? ["browser", "acpx", "bonjour", "device-pair", "talk-voice"]
+            : [extensionId, "acpx", "bonjour", "browser", "device-pair", "talk-voice"],
+        ),
+        configSet("plugins.slots.memory", "none"),
+        configSet("agents.defaults.skipBootstrap", true),
         ["config", "set", "tools.profile", "minimal"],
       ]);
       for (const [invocation, options] of command.mock.calls) {
@@ -138,15 +113,15 @@ describe("release model config", () => {
 
   it("does not inspect later config after models set fails", async () => {
     const error = new Error("models set failed");
-    const baseUrl = vi.fn(() => {
+    const readBaseUrl = vi.fn(() => {
       throw new Error("later config must remain unread");
     });
     const providerConfig = createProvider();
-    Object.defineProperty(providerConfig, "baseUrl", { get: baseUrl });
+    Object.defineProperty(providerConfig, "baseUrl", { get: readBaseUrl });
     command.mockRejectedValueOnce(error);
 
     await expect(run(providerConfig)).rejects.toBe(error);
     expect(calledArgs()).toEqual([["models", "set", "test/model"]]);
-    expect(baseUrl).not.toHaveBeenCalled();
+    expect(readBaseUrl).not.toHaveBeenCalled();
   });
 });

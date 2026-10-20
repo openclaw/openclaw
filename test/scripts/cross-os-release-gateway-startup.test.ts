@@ -21,6 +21,39 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const emit = (stream: ChildProcess["stdout"], text: string) =>
+  stream?.emit("data", Buffer.from(text));
+
+function makeLane(rootDir: string, name: string, gatewayPort: number): LaneState {
+  return {
+    name,
+    rootDir,
+    prefixDir: rootDir,
+    homeDir: rootDir,
+    stateDir: rootDir,
+    appDataDir: rootDir,
+    gatewayPort,
+    phaseTimings: [],
+  };
+}
+
+function makeChild() {
+  const child = new ChildProcess();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  let exitCode: number | null = null;
+  // The external fixture owns settlement; ChildProcess exposes a read-only projection.
+  Object.defineProperty(child, "exitCode", { get: () => exitCode });
+  const finish = (code: number, stderr = "") => {
+    if (exitCode !== null) {
+      return;
+    }
+    exitCode = code;
+    emit(child.stderr, stderr);
+    child.emit("close", code, null);
+  };
+  return { child, finish };
+}
 
 it.each([
   "reported-refusal",
@@ -37,44 +70,26 @@ it.each([
     createListener: createServer,
   });
   const oldPort = occupied.claim.port;
-  const lane: LaneState = {
-    name: "fresh",
-    rootDir,
-    prefixDir: rootDir,
-    homeDir: rootDir,
-    stateDir: rootDir,
-    appDataDir: rootDir,
-    gatewayPort: oldPort,
-    phaseTimings: [],
-  };
+  const lane = makeLane(rootDir, "fresh", oldPort);
   const configPath = join(rootDir, "openclaw.json");
+  const env = { OPENCLAW_CONFIG_PATH: configPath };
+  const readConfig = (): { gateway: { port: number } } =>
+    JSON.parse(readFileSync(configPath, "utf8"));
+  const writePort = (port: number) =>
+    writeFileSync(configPath, JSON.stringify({ gateway: { port } }));
   const gatewayLogPath = join(rootDir, "gateway.log");
   const configWrites: number[] = [];
   const launches: number[] = [];
   const closeChildren: Array<() => void> = [];
-  writeFileSync(configPath, JSON.stringify({ gateway: { port: oldPort } }));
+  writePort(oldPort);
   const refusal = (port: number) =>
     `Port ${port} is busy but no listener PID could be determined. Run openclaw gateway status --deep to inspect the listener.\n`;
   writeFileSync(gatewayLogPath, scenario === "stale-refusal" ? refusal(oldPort) : "");
-  // The CLI is the external boundary. Keep real launch capture, config commands,
-  // port reservation, log offsets, and packaged readiness/recovery in the harness.
+  // Mock only the CLI: launch capture, config, ports, log offsets and recovery stay real.
   vi.mocked(spawn).mockImplementation((_command, args) => {
     const cliArgs = Array.isArray(args) ? args.slice(1) : [];
-    const child = new ChildProcess();
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
-    let observedExit: number | null = null;
-    // ChildProcess exposes a read-only exit projection; the external fixture owns settlement.
-    Object.defineProperty(child, "exitCode", { get: () => observedExit });
-    const finish = (code: number) => {
-      observedExit = code;
-      child.emit("close", code, null);
-    };
-    closeChildren.push(() => {
-      if (observedExit === null) {
-        finish(0);
-      }
-    });
+    const { child, finish } = makeChild();
+    closeChildren.push(() => finish(0));
     let exitCode: number | undefined = 0;
     let stdout = "";
     let stderr = "";
@@ -100,39 +115,31 @@ it.each([
       configWrites.push(port);
       exitCode = scenario === "config-failure" ? 1 : 0;
       if (exitCode === 0) {
-        writeFileSync(configPath, JSON.stringify({ gateway: { port } }));
+        writePort(port);
       }
     } else if (cliArgs.includes("--help")) {
       stdout = "--require-rpc";
     } else {
       expect(cliArgs.slice(0, 2)).toEqual(["gateway", "status"]);
-      const configured = JSON.parse(readFileSync(configPath, "utf8")) as {
-        gateway: { port: number };
-      };
       // A relaunch is not ready until the same port is persisted for status,
       // dashboard, and agent commands that consume the lane's configuration.
-      expect(configured.gateway.port).toBe(launches.at(-1));
+      expect(readConfig().gateway.port).toBe(launches.at(-1));
     }
     if (exitCode !== undefined) {
       const code = exitCode;
       queueMicrotask(() => {
-        child.stdout?.emit("data", Buffer.from(stdout));
-        child.stderr?.emit("data", Buffer.from(stderr));
-        finish(code);
+        emit(child.stdout, stdout);
+        finish(code, stderr);
       });
     }
     return child;
   });
   const holder: { current: GatewayHandle | null } = { current: null };
   try {
-    holder.current = await startGateway({
-      lane,
-      env: { OPENCLAW_CONFIG_PATH: configPath },
-      logPath: gatewayLogPath,
-    });
+    holder.current = await startGateway({ lane, env, logPath: gatewayLogPath });
     const ready = waitForGateway({
       lane,
-      env: { OPENCLAW_CONFIG_PATH: configPath },
+      env,
       gatewayHolder: holder,
       gatewayLogPath,
       logPath: join(rootDir, "status.log"),
@@ -146,7 +153,7 @@ it.each([
       await expect(ready).rejects.toThrow("Failed to configure replacement Gateway port");
       expect(launches).toEqual([oldPort]);
       expect(configWrites).toHaveLength(1);
-      expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({ gateway: { port: oldPort } });
+      expect(readConfig()).toEqual({ gateway: { port: oldPort } });
     } else {
       if (scenario === "repeated-refusal") {
         await expect(ready).rejects.toThrow("Gateway exited before becoming ready");
@@ -156,9 +163,7 @@ it.each([
       const expectedPort = scenario === "migration" ? oldPort : lane.gatewayPort;
       expect(launches).toEqual([oldPort, expectedPort]);
       expect(configWrites).toEqual(scenario === "migration" ? [] : [expectedPort]);
-      expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
-        gateway: { port: expectedPort },
-      });
+      expect(readConfig()).toEqual({ gateway: { port: expectedPort } });
       if (scenario !== "migration") {
         expect(expectedPort).not.toBe(oldPort);
         const replacement = await reserveTestPortListener({
@@ -187,45 +192,21 @@ it.each([0, 1, null])(
   "observes Windows managed start through the lifecycle command allowance (exit %s)",
   async (startExit) => {
     const rootDir = tempDirs.make("cross-os-managed-start-");
-    const lane: LaneState = {
-      name: "installer-fresh",
-      rootDir,
-      prefixDir: rootDir,
-      homeDir: rootDir,
-      stateDir: rootDir,
-      appDataDir: rootDir,
-      gatewayPort: 18789,
-      phaseTimings: [],
-    };
+    const lane = makeLane(rootDir, "installer-fresh", 18789);
     const platform = mockProcessPlatform("win32");
     vi.useFakeTimers({
       toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
     });
-    let notifyStart!: () => void;
-    const started = new Promise<void>((resolve) => {
-      notifyStart = resolve;
-    });
+    const { promise: started, resolve: notifyStart } = Promise.withResolvers<void>();
     let finishStart: (() => void) | undefined;
     let startedAt = 0;
     let killedAt = 0;
     let statusChecks = 0;
-    // Model only the external CLI/taskkill boundary. The lifecycle driver,
-    // invocation adapter, process deadline, logs, and RPC status gates stay real.
+    // Mock only CLI/taskkill; lifecycle, deadlines, logs and RPC status stay real.
     vi.mocked(spawn).mockImplementation((_command, args) => {
       const argv = Array.isArray(args) ? args : [];
-      const child = new ChildProcess();
+      const { child, finish } = makeChild();
       Object.defineProperty(child, "pid", { value: 4242 });
-      child.stdout = new PassThrough();
-      child.stderr = new PassThrough();
-      let exited = false;
-      const finish = (code: number, stderr = "") => {
-        if (exited) {
-          return;
-        }
-        exited = true;
-        child.stderr?.emit("data", Buffer.from(stderr));
-        child.emit("close", code, null);
-      };
       if (argv[1] === "start") {
         startedAt = Date.now();
         finishStart = () => finish(1);
@@ -236,13 +217,13 @@ it.each([0, 1, null])(
           );
         }
         queueMicrotask(() => {
-          child.stdout?.emit("data", Buffer.from("Started Scheduled Task: OpenClaw Gateway\n"));
+          emit(child.stdout, "Started Scheduled Task: OpenClaw Gateway\n");
           notifyStart();
         });
       } else {
         queueMicrotask(() => {
           if (argv.includes("--help")) {
-            child.stdout?.emit("data", Buffer.from("--require-rpc --force"));
+            emit(child.stdout, "--require-rpc --force");
           } else if (argv[1] === "status") {
             expect(argv).toContain("--require-rpc");
             statusChecks += 1;

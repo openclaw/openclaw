@@ -10,6 +10,7 @@ import { installPackageSpec } from "../../scripts/lib/cross-os-release-checks/in
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => mocks.runCommand.mockReset());
+const success = { exitCode: 0, stdout: "", stderr: "" };
 
 function fixture() {
   const rootDir = tempDirs.make("cross-os-npm-diagnostics-");
@@ -31,6 +32,8 @@ function fixture() {
     packageSpec: "openclaw@2026.7.1-2",
     logPath: join(rootDir, "install.log"),
     logsDir,
+    writeLog: (content: string, file = "2026-08-29T00_00_00_000Z-debug-0.log") =>
+      writeFileSync(join(logsDir, file), content),
   };
 }
 
@@ -46,8 +49,7 @@ describe("cross-OS npm diagnostic capture", () => {
     const params = fixture();
     const secret = "credential-sentinel-must-never-be-exported";
     mocks.runCommand.mockImplementation(async () => {
-      writeFileSync(
-        join(params.logsDir, "2026-08-29T00_00_00_000Z-debug-0.log"),
+      params.writeLog(
         [
           `0 verbose title npm install https://user:${secret}@registry.test/package.tgz`,
           `1 http fetch GET 200 https://registry.test/?token=${secret} 123ms (cache miss)`,
@@ -60,7 +62,7 @@ describe("cross-OS npm diagnostic capture", () => {
           `10 verbose title npm ${secret}`,
         ].join("\n"),
       );
-      return { exitCode: 0, stdout: "installed", stderr: "" };
+      return { ...success, stdout: "installed" };
     });
 
     await installPackageSpec(params);
@@ -84,8 +86,7 @@ describe("cross-OS npm diagnostic capture", () => {
     const params = fixture();
     const failure = new Error("install failed");
     mocks.runCommand.mockImplementation(async () => {
-      writeFileSync(
-        join(params.logsDir, "2026-08-29T00_00_00_000Z-debug-0.log"),
+      params.writeLog(
         "0 error code ETIMEDOUT\n1 error password=credential-sentinel\n2 verbose exit 1\n",
       );
       throw failure;
@@ -100,18 +101,15 @@ describe("cross-OS npm diagnostic capture", () => {
 
   it("ignores stale process logs and bounds the retained tail and process count", async () => {
     const params = fixture();
-    writeFileSync(join(params.logsDir, "stale-debug-0.log"), "0 error code EACCES\n");
+    params.writeLog("0 error code EACCES\n", "stale-debug-0.log");
     mocks.runCommand.mockImplementation(async () => {
       for (let index = 0; index < 12; index++) {
-        writeFileSync(
-          join(
-            params.logsDir,
-            `2026-08-29T00_00_${String(index).padStart(2, "0")}_000Z-debug-0.log`,
-          ),
+        params.writeLog(
           `0 error code ENOSPC\n${"credential-sentinel\n".repeat(20_000)}1 error code EPERM\n`,
+          `2026-08-29T00_00_${String(index).padStart(2, "0")}_000Z-debug-0.log`,
         );
       }
-      return { exitCode: 0, stdout: "", stderr: "" };
+      return success;
     });
 
     await installPackageSpec(params);
@@ -121,7 +119,7 @@ describe("cross-OS npm diagnostic capture", () => {
     expect(
       result.logs.every(
         (log: { truncated: boolean; errorCodes: string[] }) =>
-          log.truncated && log.errorCodes.join() === "EPERM",
+          log.truncated && log.errorCodes.join(",") === "EPERM",
       ),
     ).toBe(true);
     expect(Buffer.byteLength(readFileSync(params.logPath, "utf8"))).toBeLessThan(16 * 1024);
@@ -131,7 +129,7 @@ describe("cross-OS npm diagnostic capture", () => {
     const params = fixture();
     params.env.npm_config_logs_dir = join(params.lane.rootDir, "not-a-directory");
     writeFileSync(params.env.npm_config_logs_dir, "not a directory");
-    mocks.runCommand.mockResolvedValue({ exitCode: 0, stdout: "", stderr: "" });
+    mocks.runCommand.mockResolvedValue(success);
 
     await expect(installPackageSpec(params)).resolves.toBeUndefined();
     expect(diagnostics(params.logPath)).toMatchObject({ logs: [] });
@@ -143,12 +141,12 @@ describe("cross-OS npm diagnostic capture", () => {
     mocks.runCommand
       .mockImplementationOnce(async () => {
         writeFileSync(npmLogPath, "0 error code EPERM\n");
-        return { exitCode: 0, stdout: "", stderr: "" };
+        return success;
       })
       .mockImplementationOnce(async () => {
         appendFileSync(npmLogPath, "1 error code ETIMEDOUT\n");
         writeFileSync(npmLogPath.replace("debug-0", "debug-1"), "2 verbose exit 1\n");
-        return { exitCode: 0, stdout: "", stderr: "" };
+        return success;
       });
 
     await installPackageSpec(params);
