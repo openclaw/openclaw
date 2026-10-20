@@ -1,5 +1,6 @@
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
 import { expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import type { Context } from "../types.js";
 import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
@@ -34,14 +35,8 @@ const context: Context = {
       stopReason: "toolUse",
       timestamp: 1,
     },
-    ...["  amber-17\n", "violet-29"].map((text, index) => ({
-      role: "toolResult" as const,
-      toolCallId: index === 0 ? "call_notes" : "call_readme",
-      toolName: "read",
-      content: [{ type: "text" as const, text }],
-      isError: false,
-      timestamp: index + 2,
-    })),
+    makeTextToolResult("call_notes", "read", "  amber-17\n", false, 2),
+    makeTextToolResult("call_readme", "read", "violet-29", false, 3),
     { role: "user", content: "Continue.", timestamp: 4 },
   ],
 };
@@ -53,17 +48,29 @@ function replay(compat: Partial<NonNullable<typeof model.compat>>, requestContex
     requestContext === context ? { toolChoice: "auto" } : undefined,
   );
 }
-it.each([
-  {},
-  { strictMessageKeys: true, requiresStringContent: true },
-  { requiresThinkingAsText: true, requiresAssistantAfterToolResult: true },
-])("keeps two read identities without tool protocol (%j)", (compat) => {
-  const before = structuredClone(context);
-  const payload = replay(compat);
+it.each<[Partial<NonNullable<typeof model.compat>>, boolean]>([
+  [{}, false],
+  [{ strictMessageKeys: true, requiresStringContent: true }, false],
+  [{ requiresThinkingAsText: true, requiresAssistantAfterToolResult: true }, false],
+  [{ requiresAssistantAfterToolResult: true }, true],
+])("replays two read identities (%j, images=%s)", (compat, images) => {
+  const input = images ? structuredClone(context) : context;
+  if (images) {
+    for (const message of input.messages) {
+      if (message.role === "toolResult") {
+        message.content.push({ type: "image", mimeType: "image/png", data: message.toolCallId });
+      }
+    }
+  }
+  const before = structuredClone(input);
+  const payload = replay(compat, input);
   expect(payload).not.toHaveProperty("tools");
   expect(payload).not.toHaveProperty("tool_choice");
   const messages = payload.messages as ChatCompletionMessageParam[];
-  expect(messages.map((message) => message.role)).toEqual(["system", "assistant", "user"]);
+  expect(messages.map((message) => message.role)).toEqual(
+    images ? ["system", "assistant", "user", "user"] : ["system", "assistant", "user"],
+  );
+  expect(messages.at(-1)).toMatchObject({ role: "user", content: "Continue." });
   for (const message of messages) {
     expect(message).not.toHaveProperty("tool_calls");
     expect(message).not.toHaveProperty("tool_call_id");
@@ -81,7 +88,18 @@ it.each([
   if (compat.requiresThinkingAsText) {
     expect(text).toContain("Check both files.");
   }
-  expect(context).toEqual(before);
+  if (images) {
+    expect(messages[2]).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "Image(s) from tool result #1 (read):" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,call_notes" } },
+        { type: "text", text: "Image(s) from tool result #2 (read):" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,call_readme" } },
+      ],
+    });
+  }
+  expect(input).toEqual(before);
 });
 
 it("preserves explicit tools and protocol replay for direct provider requests", () => {
@@ -106,31 +124,4 @@ it("preserves explicit tools and protocol replay for direct provider requests", 
       { role: "user" },
     ],
   });
-});
-
-it("keeps tool-result images and their ownership after text replay", () => {
-  const images = structuredClone(context);
-  for (const message of images.messages) {
-    if (message.role === "toolResult") {
-      message.content.push({ type: "image", mimeType: "image/png", data: message.toolCallId });
-    }
-  }
-  const payload = replay({ requiresAssistantAfterToolResult: true }, images);
-  expect(payload.messages).toMatchObject([
-    { role: "system" },
-    {
-      role: "assistant",
-      content: expect.stringContaining("[tool result id=call_readme name=read]"),
-    },
-    {
-      role: "user",
-      content: [
-        { type: "text", text: "Image(s) from tool result #1 (read):" },
-        { type: "image_url", image_url: { url: "data:image/png;base64,call_notes" } },
-        { type: "text", text: "Image(s) from tool result #2 (read):" },
-        { type: "image_url", image_url: { url: "data:image/png;base64,call_readme" } },
-      ],
-    },
-    { role: "user", content: "Continue." },
-  ]);
 });

@@ -1,22 +1,20 @@
 import { expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { registerParityHostLifecycle } from "../provider-transport-parity.test-support.js";
 import { streamOpenAICompletions } from "../providers/openai-completions.js";
-import type { Context } from "../types.js";
+import type { Context, Tool } from "../types.js";
 import { isContextOverflow } from "../utils/overflow.js";
 import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
+registerParityHostLifecycle();
 
-function makeTools(): Context["tools"] {
-  return [
-    {
-      name: "count",
-      description: "Increment the counter",
-      parameters: { type: "object", properties: {} },
-    },
-  ];
-}
+const makeTool = (): Tool => ({
+  name: "count",
+  description: "Increment the counter",
+  parameters: { type: "object", properties: {} },
+});
 
 async function runToolTurn(params: {
   remainingTokens: number;
@@ -27,19 +25,17 @@ async function runToolTurn(params: {
   mode?: "managed" | "direct" | "native";
   options?: Pick<OpenAICompletionsOptions, "maxTokens" | "toolChoice">;
 }) {
-  const previousHost = getAiTransportHost();
   const maxTokensField = params.maxTokensField ?? "max_tokens";
   const options = { apiKey: "synthetic-test-key", ...params.options };
   const context: Context = {
     messages: [{ role: "user", content: "x".repeat(3_200), timestamp: 1 }],
-    tools: params.tools === false ? undefined : makeTools(),
+    tools: params.tools === false ? undefined : [makeTool()],
   };
   const model = makeCompletionsModel({
     provider: params.mode === "native" ? "openai" : "compatible-proxy",
     baseUrl: params.mode === "native" ? "https://api.openai.com/v1" : "http://localhost:8000/v1",
     reasoning: false,
     maxTokens: params.modelMaxTokens ?? 4_096,
-    contextWindow: 100_000,
     compat: { maxTokensField, supportsStrictMode: false, supportsTools: params.supportsTools },
   });
   // Measure only the tool fixture; expected output floors below are fixed independently.
@@ -55,15 +51,11 @@ async function runToolTurn(params: {
       { headers: { "content-type": "text/event-stream" } },
     );
   });
-  configureAiTransportHost({ ...previousHost, buildModelFetch: () => fetch });
-  try {
-    const stream = await (params.mode === "direct"
-      ? streamOpenAICompletions(model, context, options)
-      : createOpenAICompletionsTransportStreamFn()(model, context, options));
-    return { result: await stream.result(), request, fetch, contextTokens: model.contextTokens };
-  } finally {
-    configureAiTransportHost(previousHost);
-  }
+  configureAiTransportHost({ ...getAiTransportHost(), buildModelFetch: () => fetch });
+  const stream = await (params.mode === "direct"
+    ? streamOpenAICompletions(model, context, options)
+    : createOpenAICompletionsTransportStreamFn()(model, context, options));
+  return { result: await stream.result(), request, fetch, contextTokens: model.contextTokens };
 }
 
 async function expectAccepted(

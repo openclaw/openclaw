@@ -5,25 +5,24 @@ import { anthropicModel } from "../provider-transport-parity.test-support.js";
 
 export type AnthropicMessagesModel = Model<"anthropic-messages">;
 type Wire = Record<string, unknown>;
+const endpoints = new Map([
+  ["api.anthropic.com", "anthropic-public"],
+  ["openrouter.ai", "openrouter"],
+]);
 
 function resolveTestEndpointClass(baseUrl?: string): string {
   const trimmed = baseUrl?.trim();
   if (!trimmed) {
     return "default";
   }
-  try {
-    const url = new URL(trimmed.includes("://") ? trimmed : `https://${trimmed}`);
-    const hostname = url.hostname.toLowerCase();
-    const known = new Map([
-      ["api.anthropic.com", "anthropic-public"],
-      ["openrouter.ai", "openrouter"],
-    ]);
-    return (
-      known.get(hostname) ?? (hostname.endsWith(".xiaomimimo.com") ? "xiaomi-native" : "custom")
-    );
-  } catch {
+  const url = URL.parse(trimmed.includes("://") ? trimmed : `https://${trimmed}`);
+  if (!url) {
     return "invalid";
   }
+  const hostname = url.hostname.toLowerCase();
+  return (
+    endpoints.get(hostname) ?? (hostname.endsWith(".xiaomimimo.com") ? "xiaomi-native" : "custom")
+  );
 }
 
 export function serializeSseEvents(events: Wire[]): string {
@@ -32,7 +31,6 @@ export function serializeSseEvents(events: Wire[]): string {
 
 export function createSseResponse(events: Wire[] = []): Response {
   return new Response(serializeSseEvents(events), {
-    status: 200,
     headers: { "content-type": "text/event-stream" },
   });
 }
@@ -40,7 +38,6 @@ export function createSseResponse(events: Wire[] = []): Response {
 export const anthropicMessageStart = (message: Wire) => ({ type: "message_start", message });
 const event = <T extends Wire>(type: string, fields: T) => ({ type, ...fields });
 
-// Undefined usage is omitted on the wire, as in stop-reason-only proxy events.
 export const anthropicMessageDelta = (delta: Wire, usage?: Wire) =>
   event("message_delta", { delta, usage });
 
@@ -53,16 +50,9 @@ export const anthropicContentBlockDelta = (index: number, delta: Wire) =>
 export function makeAnthropicTransportModel(
   overrides: Partial<AnthropicMessagesModel> = {},
 ): AnthropicMessagesModel {
-  return {
-    ...anthropicModel,
-    input: ["text"],
-    cost: { ...anthropicModel.cost },
-    maxTokens: 8192,
-    ...overrides,
-  };
+  return Object.assign(structuredClone(anthropicModel), { maxTokens: 8192 }, overrides);
 }
 
-/** Route Anthropic transport requests to a fetch mock that answers with an empty turn by default. */
 export function installAnthropicTransportTestHost(params: {
   coreTransportHost: AiTransportHost;
   buildModelFetch: Mock;

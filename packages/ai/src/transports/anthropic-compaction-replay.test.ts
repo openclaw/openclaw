@@ -1,6 +1,5 @@
 import type { AssistantMessage, Context } from "@openclaw/llm-core";
 import { expect, it } from "vitest";
-import { createZeroUsage } from "../usage.test-support.js";
 import {
   buildAnthropicReplayPlan,
   createCompactionCapture,
@@ -8,6 +7,7 @@ import {
   suppressAnthropicCompaction,
 } from "./anthropic-compaction-replay.js";
 import { makeAnthropicTransportModel } from "./anthropic-transport-stream.test-support.js";
+import { createAssistantOutput } from "./assistant-output.js";
 
 const model = makeAnthropicTransportModel({ baseUrl: "https://api.anthropic.com/v1" });
 const replayOptions = {
@@ -18,13 +18,8 @@ const replayOptions = {
 
 function assistant(texts: string[]): AssistantMessage {
   return {
-    role: "assistant",
+    ...createAssistantOutput(model),
     content: texts.map((text) => ({ type: "text" as const, text })),
-    api: "anthropic-messages",
-    provider: "anthropic",
-    model: model.id,
-    usage: createZeroUsage(),
-    stopReason: "stop",
     timestamp: 1,
   };
 }

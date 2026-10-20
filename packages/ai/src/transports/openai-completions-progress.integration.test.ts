@@ -3,6 +3,7 @@ import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import { reserveTestPortListener } from "../../../../src/test-utils/port-claims.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
+import { collectStream } from "./openai-completions-suite.test-support.js";
 import { createOpenAICompletionsTransportStreamFn } from "./openai-completions-transport.js";
 import { makeCompletionsChunk, makeCompletionsModel } from "./openai-completions.test-support.js";
 
@@ -78,19 +79,10 @@ it.each([
     { messages: [{ role: "user", content: "Reply OK", timestamp: 1 }] },
     { apiKey: "synthetic-test-key", signal: abort.signal },
   );
-  let text = "";
-  const completion = (async () => {
-    try {
-      for await (const event of stream) {
-        if (event.type === "text_delta") {
-          text += event.delta;
-        }
-      }
-    } catch (error) {
-      return error;
-    }
-    return undefined;
-  })();
+  const completion = collectStream(stream).then(
+    ({ text }) => text,
+    (error: unknown) => error,
+  );
   const response = await request.promise;
   const send = async (elapsed: number, usage: Partial<typeof baselineUsage> = {}) => {
     await vi.advanceTimersByTimeAsync(elapsed);
@@ -118,8 +110,7 @@ it.each([
     if (advance) {
       await send(41, increase);
       response.end(`${sse(makeCompletionsChunk({ content: "OK" }, "stop"))}data: [DONE]\n\n`);
-      expect(await completion).toBeUndefined();
-      expect(text).toBe("OK");
+      expect(await completion).toBe("OK");
       expect(onTimeout).not.toHaveBeenCalled();
       expect(activity).toEqual([true, false, false, true, false, false, false, true]);
     } else {

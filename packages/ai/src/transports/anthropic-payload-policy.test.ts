@@ -1,5 +1,6 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { registerParityHostLifecycle } from "../provider-transport-parity.test-support.js";
 import {
   applyAnthropicPayloadPolicyToParams,
   isAnthropicServerToolClearingEnabled,
@@ -11,9 +12,7 @@ import {
 const model = { provider: "anthropic", api: "anthropic-messages", contextWindow: 200_000 };
 const direct = { ...model, id: "claude-sonnet-4-6", baseUrl: "https://api.anthropic.com/v1" };
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+registerParityHostLifecycle();
 
 it.each([
   ["https://us-east5-aiplatform.googleapis.com", { type: "ephemeral", ttl: "1h" }],
@@ -23,19 +22,17 @@ it.each([
   expect(resolveAnthropicEphemeralCacheControl(baseUrl, undefined)).toEqual(expected);
 });
 it("uses the same host-resolved credential shape as the transport", () => {
-  const host = getAiTransportHost();
-  configureAiTransportHost({ ...host, resolveSecretSentinel: () => "test-sk-ant-oat-fixture" });
-  try {
-    expect(
-      resolveAnthropicServerCompactionPlan(
-        model,
-        { anthropicServerCompaction: true },
-        "credential-sentinel",
-      ),
-    ).toEqual({ enabled: false });
-  } finally {
-    configureAiTransportHost(host);
-  }
+  configureAiTransportHost({
+    ...getAiTransportHost(),
+    resolveSecretSentinel: () => "test-sk-ant-oat-fixture",
+  });
+  expect(
+    resolveAnthropicServerCompactionPlan(
+      model,
+      { anthropicServerCompaction: true },
+      "credential-sentinel",
+    ),
+  ).toEqual({ enabled: false });
 });
 it.each([
   { name: "OAuth credentials", model: direct, apiKey: "test-sk-ant-oat-fixture" },
