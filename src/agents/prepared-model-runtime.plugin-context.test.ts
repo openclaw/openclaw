@@ -3,6 +3,7 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -16,14 +17,11 @@ describe("prepared model runtime plugin metadata ownership", () => {
   afterEach(clearPluginMetadataLifecycleCaches);
 
   it("carries admitted activation decisions from activated config into a selected runtime", () => {
-    const config = { plugins: { entries: { synthetic: { config: { mode: "initial" } } } } };
-    const activatedConfig = {
-      plugins: {
-        entries: {
-          synthetic: { ...structuredClone(config.plugins.entries.synthetic), enabled: true },
-        },
-      },
+    const config: OpenClawConfig = {
+      plugins: { entries: { synthetic: { config: { mode: "initial" } } } },
     };
+    const activatedConfig = structuredClone(config);
+    activatedConfig.plugins!.entries!.synthetic!.enabled = true;
     const env = { OPENCLAW_ACTIVATION_TEST: "initial" };
     const workspaceDir = "/tmp/prepared-activation-workspace";
     const metadataSnapshot = createPluginMetadataSnapshot({

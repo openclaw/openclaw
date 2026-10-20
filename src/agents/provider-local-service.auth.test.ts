@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   closeHttpServer,
   listenLoopback,
@@ -83,6 +83,8 @@ async function createFixture() {
   return {
     state,
     model,
+    acquire: (key?: string, target = model) =>
+      ensureModelProviderLocalService(target, key ? headers(key) : undefined),
     async close() {
       await stopManagedProviderLocalServices();
       await closeHttpServer(server);
@@ -91,26 +93,22 @@ async function createFixture() {
 }
 
 describe("local service credential authority", () => {
-  const fixtures: Awaited<ReturnType<typeof createFixture>>[] = [];
+  let fixture: Awaited<ReturnType<typeof createFixture>>;
+  beforeEach(async () => {
+    fixture = await createFixture();
+  });
   afterEach(async () => {
     vi.restoreAllMocks();
-    for (const fixture of fixtures.splice(0)) {
-      await fixture.close();
-    }
+    await fixture.close();
   });
-  const fixture = async () => {
-    const result = await createFixture();
-    fixtures.push(result);
-    return result;
-  };
 
   it.each(["initial", "start", "stop", "retry"] as const)(
     "makes no credential-bearing health requests after revocation during %s",
     async (phase) => {
-      const { state, model } = await fixture();
+      const { state, acquire } = fixture;
       let previousPid: number | undefined;
       if (phase === "stop") {
-        const lease = await ensureModelProviderLocalService(model);
+        const lease = await acquire();
         previousPid = currentPid();
         expect(previousPid).toBeDefined();
         lease?.release();
@@ -138,9 +136,7 @@ describe("local service credential authority", () => {
       } else {
         state.revokeOn = phase;
       }
-      await expect(ensureModelProviderLocalService(model, headers("fixture-key"))).rejects.toThrow(
-        retired,
-      );
+      await expect(acquire("fixture-key")).rejects.toThrow(retired);
       expect(state).toMatchObject({ current: false, revokedProbes: 0 });
       if (phase === "initial") {
         expect(state.probes).toEqual([]);
@@ -156,21 +152,19 @@ describe("local service credential authority", () => {
   );
 
   it("keeps another caller's healthy process and lease when a credential is revoked", async () => {
-    const { state, model } = await fixture();
-    const firstLease = await ensureModelProviderLocalService(model);
+    const { state, model, acquire } = fixture;
+    const firstLease = await acquire();
     const pid = currentPid();
     expect(pid).toBeDefined();
     const probes = state.probes.length;
     const revokedModel = attachProviderAuthAuthority(model, () => {
       throw new Error(retired);
     });
-    await expect(
-      ensureModelProviderLocalService(revokedModel, headers("retired-key")),
-    ).rejects.toThrow(retired);
+    await expect(acquire("retired-key", revokedModel)).rejects.toThrow(retired);
     expect(state.probes).toHaveLength(probes);
     expect(currentPid()).toBe(pid);
     expect(isPidAlive(pid!)).toBe(true);
-    const secondLease = await ensureModelProviderLocalService(model);
+    const secondLease = await acquire();
     expect(secondLease).toBeDefined();
     firstLease?.release();
     expect(isPidAlive(pid!)).toBe(true);
@@ -178,7 +172,7 @@ describe("local service credential authority", () => {
   });
 
   it("settles shared startup before admitting an independently healthy caller", async () => {
-    const { state, model } = await fixture();
+    const { state, model, acquire } = fixture;
     const readinessEntered = createDeferredCore();
     const readinessReleased = createDeferredCore();
     const secondProbe = createDeferredCore();
@@ -200,11 +194,11 @@ describe("local service credential authority", () => {
       }
       return false;
     };
-    const first = ensureModelProviderLocalService(model, headers("startup-key"));
+    const first = acquire("startup-key");
     const firstRejected = expect(first).rejects.toThrow(retired);
     await readinessEntered.promise;
     const independent = attachProviderAuthAuthority(model, () => {});
-    const second = ensureModelProviderLocalService(independent, headers("independent-key"));
+    const second = acquire("independent-key", independent);
     const settled = Promise.allSettled([first, second]);
     await secondProbe.promise;
     state.current = false;
@@ -218,7 +212,7 @@ describe("local service credential authority", () => {
   it.each([false, true])(
     "revalidates every health redirect while preserving a live credential (revoke=%s)",
     async (revoke) => {
-      const { state, model } = await fixture();
+      const { state, acquire } = fixture;
       state.onProbe = (request, response) => {
         if (request.url === "/v1/models") {
           state.current = !revoke;
@@ -227,7 +221,7 @@ describe("local service credential authority", () => {
         response.end("ok");
         return true;
       };
-      const acquisition = ensureModelProviderLocalService(model, headers("redirect-key"));
+      const acquisition = acquire("redirect-key");
       if (revoke) {
         await expect(acquisition).rejects.toThrow(retired);
         expect(state.probes).toEqual(["Bearer redirect-key"]);
@@ -242,8 +236,8 @@ describe("local service credential authority", () => {
   );
 
   it("rejects after deferred reconciliation without sending a model request or losing another lease", async () => {
-    const { state, model } = await fixture();
-    const firstLease = await ensureModelProviderLocalService(model);
+    const { state, model, acquire } = fixture;
+    const firstLease = await acquire();
     const pid = currentPid();
     const entered = createDeferredCore();
     const reconciled = createDeferredCore();

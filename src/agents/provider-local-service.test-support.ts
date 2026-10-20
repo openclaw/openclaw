@@ -7,25 +7,23 @@ import { stopManagedProviderLocalServices } from "./provider-local-service.js";
 const ONE_SHOT_HOST_READY_TIMEOUT_MS = 30_000;
 const ONE_SHOT_HOST_EXIT_TIMEOUT_MS = 5_000;
 export const ONE_SHOT_HOST_READY_KIND = "ready-for-exit";
+type HostExit = { code: number | null; signal: NodeJS.Signals | null };
 
 export async function waitForReadyOneShotHostExit(
   child: ChildProcess,
   readStderr: () => string,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+): Promise<HostExit> {
   await new Promise<void>((resolve, reject) => {
-    const cleanup = () => {
+    const finish = (error?: Error) => {
       clearTimeout(timeout);
       child.off("message", onMessage);
       child.off("error", onError);
       child.off("exit", onExit);
-    };
-    const finish = (error?: Error) => {
-      cleanup();
       if (error) {
         reject(error);
-      } else {
-        resolve();
+        return;
       }
+      resolve();
     };
     const onMessage = (message: unknown) => {
       if (
@@ -37,16 +35,16 @@ export async function waitForReadyOneShotHostExit(
       }
     };
     const onError = (error: Error) => finish(error);
-    const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+    const onExit = (code: number | null, signal: NodeJS.Signals | null) =>
       finish(
         new Error(
           `one-shot host exited before readiness (code=${String(code)} signal=${String(signal)})${readStderr()}`,
         ),
       );
-    };
-    const timeout = setTimeout(() => {
-      finish(new Error(`one-shot host did not become ready${readStderr()}`));
-    }, ONE_SHOT_HOST_READY_TIMEOUT_MS);
+    const timeout = setTimeout(
+      () => finish(new Error(`one-shot host did not become ready${readStderr()}`)),
+      ONE_SHOT_HOST_READY_TIMEOUT_MS,
+    );
 
     child.on("message", onMessage);
     child.on("error", onError);
@@ -63,7 +61,7 @@ export async function waitForReadyOneShotHostExit(
 async function waitForOneShotHostExit(
   child: ChildProcess,
   readStderr: () => string,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+): Promise<HostExit> {
   if (child.exitCode !== null || child.signalCode !== null) {
     return { code: child.exitCode, signal: child.signalCode };
   }
