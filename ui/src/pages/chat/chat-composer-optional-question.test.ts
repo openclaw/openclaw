@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-
 import { createComponent, createRoot, createSignal, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -10,20 +9,29 @@ import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { ChatQuestionPanel } from "./components/chat-question-panel.tsx";
 
 afterEach(() => resetComposerFixture());
-
+const question = (itemId: string, options?: string[]) => ({
+  itemId,
+  questions: [{ title: `Which ${itemId}?`, ...(options ? { options } : {}) }],
+});
 function questionReader(props: ReturnType<typeof createComposerProps>) {
   return createRoot((dispose) => {
     onTestFinished(dispose);
     const [current, refresh] = createSignal(props, { equals: false });
     const panel = createComposerQuestionPanel(current, getChatComposerState(props.paneId));
-    return () => {
+    return (collapsed?: boolean, text?: string) => {
       refresh(props);
       flush();
-      return panel();
+      const value = panel();
+      if (collapsed !== undefined) {
+        expect(value?.model.collapsed).toBe(collapsed);
+      }
+      if (text) {
+        expect(value?.model.questions[0]?.question).toBe(text);
+      }
+      return value;
     };
   });
 }
-
 function optionalQuestion(draft = "Keep writing", withOptions = true) {
   const textarea = document.body.appendChild(document.createElement("textarea"));
   const props = createComposerProps({ draft });
@@ -37,15 +45,10 @@ function optionalQuestion(draft = "Keep writing", withOptions = true) {
         {
           role: "assistant",
           content: "Which audience?",
-          openclawAsyncDelivery: {
-            itemId: "audience",
-            questions: [
-              {
-                title: "Which audience?",
-                ...(withOptions ? { options: ["Everyone", "Engineers"] } : {}),
-              },
-            ],
-          },
+          openclawAsyncDelivery: question(
+            "audience",
+            withOptions ? ["Everyone", "Engineers"] : undefined,
+          ),
         },
       ],
     },
@@ -54,7 +57,7 @@ function optionalQuestion(draft = "Keep writing", withOptions = true) {
 }
 
 it.each(["draft", "focus"])(
-  "keeps a new optional question compact around existing composer %s without closing an explicit expansion",
+  "keeps optional questions compact while editing via %s",
   async (editing) => {
     const { textarea, props, questions } = optionalQuestion(
       editing === "draft" ? "Keep writing" : "",
@@ -62,15 +65,14 @@ it.each(["draft", "focus"])(
     if (editing === "focus") {
       textarea.focus();
     }
-    // The persistence adapter can initialize an untouched draft before the dock renders.
+    // Persistence can initialize an untouched draft before the dock renders.
     questions.drafts.set("audience", {
       answers: new Map([["0", { selected: new Set(["Everyone"]), freeText: "" }]]),
     });
     const readPanel = questionReader(props);
-    let panel = readPanel()!;
-    expect(panel.model).toMatchObject({ nonBlocking: true, collapsed: true, autoFocus: false });
-    const container = document.createElement("div");
-    document.body.append(container);
+    let panel = readPanel(true)!;
+    expect(panel.model).toMatchObject({ nonBlocking: true, autoFocus: false });
+    const container = document.body.appendChild(document.createElement("div"));
     const view = mountSolid(() => createComponent(ChatQuestionPanel, { props: panel }), {
       container,
     });
@@ -83,66 +85,41 @@ it.each(["draft", "focus"])(
       expect(document.activeElement).toBe(textarea);
     }
 
-    // Durability becoming ready or a reconnect changes the callback scope, not
-    // the operator's disclosure choice for this still-pending question.
+    // Owner readiness/reconnect must not reset the operator's disclosure choice.
     questions.scope += ":owner-ready";
-    panel = readPanel()!;
-    expect(panel.model.collapsed).toBe(true);
+    readPanel(true);
     if (editing === "focus") {
       expect(document.activeElement).toBe(textarea);
     }
-
     const submit = questions.submit;
     questions.submit = undefined;
     expect(readPanel()).toBeNull();
     questions.scope += ":reconnected";
     questions.submit = submit;
-    panel = readPanel()!;
-    expect(panel.model.collapsed).toBe(true);
-
+    panel = readPanel(true)!;
     panel.onCollapsedChange?.(false);
-    panel = readPanel()!;
-    expect(panel.model.collapsed).toBe(false);
+    panel = readPanel(false)!;
     textarea.focus();
     questions.scope += ":reconnected";
-    expect(readPanel()!.model.collapsed).toBe(false);
-
-    const other = document.createElement("button");
-    document.body.append(other);
-    other.focus();
+    readPanel(false);
+    document.body.appendChild(document.createElement("button")).focus();
     panel.onCollapsedChange?.(true);
     await Promise.resolve();
     expect(document.activeElement).toBe(textarea);
   },
 );
 
-it("keeps an unseen queued optional question compact when the previous request leaves", () => {
+it("keeps unseen queued questions compact but expands explicit navigation", () => {
   const { textarea, props, questions } = optionalQuestion("Keep writing", false);
   textarea.focus();
   const readPanel = questionReader(props);
-  expect(readPanel()!.model.collapsed).toBe(true);
-
-  questions.pending.push({
-    itemId: "format",
-    questions: [{ title: "Which format?" }],
-  });
-  let panel = readPanel()!;
-  expect(panel.model.questions[0]?.question).toBe("Which audience?");
-  expect(panel.model.collapsed).toBe(true);
-
+  readPanel(true);
+  questions.pending.push(question("format"));
+  readPanel(true, "Which audience?");
   questions.pending.shift();
-  panel = readPanel()!;
-  expect(panel.model.questions[0]?.question).toBe("Which format?");
-  expect(panel.model.collapsed).toBe(true);
+  readPanel(true, "Which format?");
   expect(document.activeElement).toBe(textarea);
-
-  // Explicit navigation is an intentional expansion, not an automatic arrival.
-  questions.pending.push({
-    itemId: "tone",
-    questions: [{ title: "Which tone?" }],
-  });
+  questions.pending.push(question("tone"));
   readPanel()!.onNextRequest?.();
-  panel = readPanel()!;
-  expect(panel.model.questions[0]?.question).toBe("Which tone?");
-  expect(panel.model.collapsed).toBe(false);
+  readPanel(false, "Which tone?");
 });

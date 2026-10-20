@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
-
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import {
   createComposerContainer,
   createComposerQuestionPrompt as questionPrompt,
@@ -14,104 +13,90 @@ import { questionPanelIn } from "./components/chat-question-card.test-support.ts
 
 afterEach(() => resetComposerFixture());
 
-describe("composer question takeover", () => {
-  it.each([true, false])(
-    "swaps the expanded question with the composer and restores its draft, focus, and progress (open=%s)",
-    async (progressOpen) => {
-      const container = createComposerContainer();
-      document.body.append(container);
-      const prompt = questionPrompt("question-swap", "Choose a release target");
-      const composerProps = props({
-        paneId: `question-swap-pane-${progressOpen}`,
-        collapseTaskProgress: progressOpen,
-        progressCard: {
-          sessionKey: "queue-test",
-          revision: 1,
-          updatedAt: Date.now(),
-          markdown: "Release preparation",
-          steps: [{ step: "Choose a target", status: "in_progress" }],
-        },
-        sessionKey: "queue-test",
-        draft: "Keep this draft",
-        gatewayQuestionPrompts: [],
-        composerControls: createComposerControlsFixture(),
-      });
-      composerProps.onDraftChange = (next) => {
-        composerProps.draft = next;
-      };
-      const draw = () => renderComposerInto(container, composerProps);
-
-      draw();
-      const progress = container.querySelector<HTMLDetailsElement>(
-        ".session-progress-card--composer",
-      )!;
-      progress.querySelector("summary")!.click();
-      expect(progress.open).toBe(progressOpen);
-      const progressWrapper = progress.closest<HTMLElement>(".agent-chat__progress-float")!;
-      const expectRestored = () => {
-        const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-        expect(container.querySelector(".session-progress-card--composer")).toBe(progress);
-        expect(progressWrapper.hidden).toBe(false);
-        expect(progress.open).toBe(progressOpen);
-        expect(textarea.value).toBe("Host updated this draft while the question was open");
-        expect(document.activeElement).toBe(textarea);
-      };
-      expect(progressWrapper.hidden).toBe(false);
-      const initialTextarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-      initialTextarea.focus();
-      expect(document.activeElement).toBe(initialTextarea);
-      initialTextarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-      initialTextarea.value = "Keep this draft while composing";
-      initialTextarea.dispatchEvent(
-        new InputEvent("input", { bubbles: true, inputType: "insertCompositionText" }),
-      );
-
-      composerProps.gatewayQuestionPrompts = [prompt];
-      draw();
-      let panel = await questionPanelIn(container);
-      expect(
-        container.querySelector(
-          ".agent-chat__input, .agent-chat__composer-footer, .agent-chat__typing-indicator--outside",
-        ),
-      ).toBeNull();
-      expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
-      expect(composerProps.draft).toBe("Keep this draft while composing");
-      expect(progressWrapper.hidden).toBe(true);
-      expect(progress.open).toBe(progressOpen);
-
-      composerProps.draft = "Host updated this draft while the question was open";
-
-      panel.props!.onCollapsedChange!(true);
-      draw();
-      await Promise.resolve();
-      expectRestored();
-
-      panel = await questionPanelIn(container);
-      panel.props!.onCollapsedChange!(false);
-      draw();
-      await questionPanelIn(container);
-      expect(container.querySelector(".agent-chat__input")).toBeNull();
-      expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
-
-      expect(progressWrapper.hidden).toBe(true);
-      prompt.status = "answered";
-      draw();
-      await Promise.resolve();
-      expectRestored();
-      expect(container.querySelector("openclaw-chat-question-panel")).toBeNull();
-
-      container.remove();
-    },
-  );
-
-  it("hides the pending progress slot during question takeover", () => {
-    const view = renderComposer({
+it.each([true, false])(
+  "restores the composer after question takeover (open=%s)",
+  async (progressOpen) => {
+    const container = document.body.appendChild(createComposerContainer());
+    const q = <T extends HTMLElement = HTMLElement>(selector: string) =>
+      container.querySelector<T>(selector)!;
+    const prompt = questionPrompt("question-swap", "Choose a release target");
+    const composer = props({
+      collapseTaskProgress: progressOpen,
       sessionKey: "queue-test",
-      progressCardInitialLoading: true,
-      gatewayQuestionPrompts: [questionPrompt("loading-progress", "Continue?")],
+      draft: "Keep this draft",
+      gatewayQuestionPrompts: [],
+      composerControls: createComposerControlsFixture(),
+      progressCard: {
+        sessionKey: "queue-test",
+        revision: 1,
+        updatedAt: Date.now(),
+        markdown: "Release preparation",
+        steps: [{ step: "Choose a target", status: "in_progress" }],
+      },
     });
-    const slot = view.container.querySelector<HTMLElement>(".agent-chat__progress-float--loading")!;
-    expect(slot.hidden).toBe(true);
-    expect(view.container.querySelector(".agent-chat__input")).toBeNull();
+    const draw = () => renderComposerInto(container, composer);
+    draw();
+    const progress = q<HTMLDetailsElement>(".session-progress-card--composer");
+    progress.querySelector("summary")!.click();
+    const wrapper = progress.closest<HTMLElement>(".agent-chat__progress-float")!;
+    const updatedDraft = "Host updated this draft while the question was open";
+    const expectRestored = () => {
+      const input = q<HTMLTextAreaElement>("textarea");
+      expect(q(".session-progress-card--composer")).toBe(progress);
+      expect(wrapper.hidden).toBe(false);
+      expect(progress.open).toBe(progressOpen);
+      expect(input.value).toBe(updatedDraft);
+      expect(document.activeElement).toBe(input);
+    };
+    expect(progress.open).toBe(progressOpen);
+    expect(wrapper.hidden).toBe(false);
+    const input = q<HTMLTextAreaElement>("textarea");
+    input.focus();
+    expect(document.activeElement).toBe(input);
+    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    input.value = "Keep this draft while composing";
+    input.dispatchEvent(
+      new InputEvent("input", { bubbles: true, inputType: "insertCompositionText" }),
+    );
+
+    composer.gatewayQuestionPrompts = [prompt];
+    draw();
+    let panel = await questionPanelIn(container);
+    expect(
+      q(".agent-chat__input, .agent-chat__composer-footer, .agent-chat__typing-indicator--outside"),
+    ).toBeNull();
+    expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
+    expect(composer.draft).toBe("Keep this draft while composing");
+    expect(wrapper.hidden).toBe(true);
+    expect(progress.open).toBe(progressOpen);
+    composer.draft = updatedDraft;
+    panel.props!.onCollapsedChange!(true);
+    draw();
+    await Promise.resolve();
+    expectRestored();
+    panel = await questionPanelIn(container);
+    panel.props!.onCollapsedChange!(false);
+    draw();
+    await questionPanelIn(container);
+    expect(q(".agent-chat__input")).toBeNull();
+    expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
+    expect(wrapper.hidden).toBe(true);
+    prompt.status = "answered";
+    draw();
+    await Promise.resolve();
+    expectRestored();
+    expect(q("openclaw-chat-question-panel")).toBeNull();
+  },
+);
+
+it("hides pending progress during question takeover", () => {
+  const { container } = renderComposer({
+    sessionKey: "queue-test",
+    progressCardInitialLoading: true,
+    gatewayQuestionPrompts: [questionPrompt("loading-progress", "Continue?")],
   });
+  expect(container.querySelector(".agent-chat__progress-float--loading")).toMatchObject({
+    hidden: true,
+  });
+  expect(container.querySelector(".agent-chat__input")).toBeNull();
 });
