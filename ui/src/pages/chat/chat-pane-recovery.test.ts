@@ -117,6 +117,22 @@ function advertiseSessionRecovery(pane: TestChatPane) {
   }
 }
 
+const recovered = {
+  ok: true as const,
+  key: "agent:main:current",
+  sessionId: "recovered-session",
+  continuation: { status: "started" as const, runId: "recovery-run" },
+};
+
+function recoveryFixture(recover: SessionCapability["recover"]) {
+  const sessions = createSessionCapabilityFixture({ recover });
+  const fixture = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
+  const navigate = vi.fn();
+  fixture.pane.onPaneSessionChange = navigate;
+  advertiseSessionRecovery(fixture.pane);
+  return { ...fixture, sessions, navigate };
+}
+
 describe("chat pane session recovery", () => {
   it("unlocks the composer when shared session state settles the exact local run", () => {
     const { pane, state } = createTestChatPane({
@@ -244,14 +260,7 @@ describe("chat pane session recovery", () => {
 
   it("resumes a tombstoned session without replacing its identity or draft", async () => {
     const created = createDeferred<Awaited<ReturnType<SessionCapability["recover"]>>>();
-    const sessions = {
-      recover: vi.fn(() => created.promise),
-    } as unknown as SessionCapability;
-    const client = {} as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-    advertiseSessionRecovery(pane);
+    const { pane, state, sessions, navigate } = recoveryFixture(vi.fn(() => created.promise));
     state.chatMessage = "Keep my follow-up draft";
     const attachments = [
       { id: "draft-image", mimeType: "image/png", dataUrl: "data:image/png;base64,AAAA" },
@@ -276,12 +285,7 @@ describe("chat pane session recovery", () => {
       busy: true,
       busyLabel: "Resuming…",
     });
-    created.resolve({
-      ok: true,
-      key: "agent:main:current",
-      sessionId: "recovered-session",
-      continuation: { status: "started", runId: "recovery-run" },
-    });
+    created.resolve(recovered);
 
     await expect(pending).resolves.toBe(true);
 
@@ -300,23 +304,12 @@ describe("chat pane session recovery", () => {
 
   it("reuses the recovered session after a same-client reconnect", async () => {
     const created = createDeferred<Awaited<ReturnType<SessionCapability["recover"]>>>();
-    const recovered = {
-      ok: true as const,
-      key: "agent:main:current",
-      sessionId: "recovered-session",
-      continuation: { status: "started" as const, runId: "recovery-run" },
-    };
-    const sessions = {
-      recover: vi
+    const { pane, state, sessions, navigate } = recoveryFixture(
+      vi
         .fn<SessionCapability["recover"]>()
         .mockImplementationOnce(() => created.promise)
         .mockResolvedValueOnce(recovered),
-    } as unknown as SessionCapability;
-    const client = {} as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-    advertiseSessionRecovery(pane);
+    );
 
     const pending = pane.recoverSession();
     await vi.waitFor(() => expect(sessions.recover).toHaveBeenCalledOnce());
@@ -337,33 +330,18 @@ describe("chat pane session recovery", () => {
   });
 
   it("keeps the recovery action available when continuation launch is rejected", async () => {
-    const successor = {
-      ok: true as const,
-      key: "agent:main:current",
-      sessionId: "recovered-session",
-    };
-    const sessions = {
-      recover: vi
+    const { pane, state, sessions, navigate } = recoveryFixture(
+      vi
         .fn<SessionCapability["recover"]>()
         .mockResolvedValueOnce({
-          ...successor,
+          ...recovered,
           continuation: {
             status: "rejected",
             error: { code: "UNAVAILABLE", message: "Continuation was not started." },
           },
         })
-        .mockResolvedValueOnce({
-          ...successor,
-          continuation: { status: "started", runId: "recovery-run" },
-        }),
-    } as unknown as SessionCapability;
-    const { pane, state } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions,
-    });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-    advertiseSessionRecovery(pane);
+        .mockResolvedValueOnce(recovered),
+    );
 
     await expect(pane.recoverSession()).resolves.toBe(false);
     expect(state.chatError).toBe("Continuation was not started.");
@@ -376,8 +354,8 @@ describe("chat pane session recovery", () => {
   });
 
   it("offers a new session only after this recovery cycle cannot safely resume tools", async () => {
-    const sessions = {
-      recover: vi
+    const { pane, state, sessions, navigate } = recoveryFixture(
+      vi
         .fn<SessionCapability["recover"]>()
         .mockResolvedValueOnce({
           ok: true,
@@ -398,11 +376,7 @@ describe("chat pane session recovery", () => {
           sessionId: "replacement-session",
           continuation: { status: "started", runId: "replacement-run" },
         }),
-    } as unknown as SessionCapability;
-    const { pane, state } = createTestChatPane({ client: {} as GatewayBrowserClient, sessions });
-    const navigate = vi.fn();
-    pane.onPaneSessionChange = navigate;
-    advertiseSessionRecovery(pane);
+    );
 
     await expect(pane.recoverSession()).resolves.toBe(false);
     expect(pane.restartRecoveryComposerBanner()?.actionLabel).toBe("Resume in new session");

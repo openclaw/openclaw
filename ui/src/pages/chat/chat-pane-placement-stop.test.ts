@@ -100,6 +100,45 @@ function startReclaim(pane: ReturnType<typeof createTestChatPane>["pane"], row: 
   return pane.changeHeaderPlacement(row, "reclaim");
 }
 
+function stopFixture(
+  handler: Parameters<typeof dialogs.mockRequest>[0] = async () => ({ ok: true }),
+  scopes = ["operator.admin"],
+  methods = ["sessions.reclaim"],
+  reconcile = false,
+) {
+  const request = dialogs.mockRequest(handler);
+  const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
+  const fixture = createTestChatPane({
+    client: createGatewayBrowserClientFixture({ request }),
+    sessions: createSessionCapabilityFixture(reconcile ? { reconcileMutation } : {}),
+  });
+  fixture.pane.context.gateway.snapshot.hello = gatewayHelloForMethods(methods, scopes);
+  return { ...fixture, request, reconcileMutation };
+}
+
+function requestedDevice(pane: ReturnType<typeof createTestChatPane>["pane"]) {
+  const session = {
+    ...activePlacementSession(),
+    placement: startupPlacements[0],
+  } satisfies GatewaySessionRow;
+  vi.mocked(pane.context.placementStartup.get).mockReturnValue({
+    sessionKey: session.key,
+    phase: "requested",
+    startedAt: 1,
+    targetKind: "device",
+  });
+  return session;
+}
+
+function placementFor(pane: ReturnType<typeof createTestChatPane>["pane"], row: GatewaySessionRow) {
+  return resolveChatPanePlacement({
+    gatewaySnapshot: pane.context.gateway.snapshot,
+    movingKey: null,
+    reclaimingKey: pane.headerPresentation.placementReclaimingKey,
+    row,
+  });
+}
+
 describe("chat pane startup worker copy", () => {
   it("retains the startup retry callback across renders and resolves the current pane session", () => {
     const context = createInitializationContext();
@@ -223,13 +262,10 @@ describe("chat pane worker stop", () => {
   );
 
   it("disables offline Stop while keeping Continue enabled, then restores ordinary actions", () => {
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.move", "sessions.reclaim"],
+    const { pane } = stopFixture(
+      undefined,
       ["operator.read", "operator.write"],
+      ["sessions.move", "sessions.reclaim"],
     );
     const offline = {
       ...offlineDeviceSession(),
@@ -244,14 +280,7 @@ describe("chat pane worker stop", () => {
       },
     };
 
-    expect(
-      resolveChatPanePlacement({
-        gatewaySnapshot: pane.context.gateway.snapshot,
-        movingKey: null,
-        reclaimingKey: null,
-        row: offline,
-      }),
-    ).toEqual({
+    expect(placementFor(pane, offline)).toEqual({
       moving: false,
       restarting: false,
       moveDisabledReason: undefined,
@@ -259,14 +288,7 @@ describe("chat pane worker stop", () => {
         "Reconnect the device to stop and sync its workspace, or Continue on Gateway.",
       recoveryDisabledReason: "This Gateway does not support this session action.",
     });
-    expect(
-      resolveChatPanePlacement({
-        gatewaySnapshot: pane.context.gateway.snapshot,
-        movingKey: null,
-        reclaimingKey: null,
-        row: available,
-      }),
-    ).toEqual({
+    expect(placementFor(pane, available)).toEqual({
       moving: false,
       restarting: false,
       moveDisabledReason: undefined,
@@ -276,48 +298,26 @@ describe("chat pane worker stop", () => {
   });
 
   it("requires restoring an archived repository session before worker dispatch", () => {
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.dispatch"],
+    const { pane } = stopFixture(
+      undefined,
       ["operator.read", "operator.write"],
+      ["sessions.dispatch"],
     );
 
     expect(
-      resolveChatPanePlacement({
-        gatewaySnapshot: pane.context.gateway.snapshot,
-        movingKey: null,
-        reclaimingKey: null,
-        row: {
-          key: "agent:main:archived-repository",
-          kind: "direct",
-          updatedAt: 0,
-          archived: true,
-          repositoryWorkspaceId: "repository-workspace-1",
-          placement: {
-            state: "local",
-            generation: 1,
-            createdAtMs: 1,
-            updatedAtMs: 1,
-            stateChangedAtMs: 1,
-          },
-        },
+      placementFor(pane, {
+        key: "agent:main:archived-repository",
+        kind: "direct",
+        updatedAt: 0,
+        archived: true,
+        repositoryWorkspaceId: "repository-workspace-1",
+        placement: { state: "local", ...placementTiming },
       }).recoveryDisabledReason,
     ).toBe("This session is archived. Unarchive it to continue the conversation.");
   });
 
   it("does not issue reclaim for an offline device placement", async () => {
-    const request = dialogs.mockRequest(async () => ({ ok: true }));
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.reclaim"],
-      ["operator.read", "operator.write"],
-    );
+    const { pane, request } = stopFixture(undefined, ["operator.read", "operator.write"]);
 
     await startReclaim(pane, { ...offlineDeviceSession(), hasActiveRun: false });
 
@@ -325,92 +325,60 @@ describe("chat pane worker stop", () => {
     expect(document.body.querySelector("dialog[open]")).toBeNull();
   });
 
-  it.each([{ runner: "device", startupPhase: "failed" }] as const)(
-    "reclaims an active $runner placement with conflicting $startupPhase intent after the operator confirms",
-    async ({ runner, startupPhase }) => {
-      vi.stubGlobal(
-        "confirm",
-        vi.fn(() => {
-          throw new Error("native confirm must not be used");
-        }),
-      );
-      const request = dialogs.mockRequest(async () => ({ ok: true }));
-      const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
-      const { pane } = createTestChatPane({
-        client: createGatewayBrowserClientFixture({ request }),
-        sessions: createSessionCapabilityFixture({ reconcileMutation }),
-      });
-      pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-        ["sessions.reclaim"],
-        ["operator.read", "operator.write"],
-      );
-      const session = activePlacementSession();
-      if (runner === "device") {
-        session.placement.runner = { kind: "device", status: "available" };
-      }
-      vi.mocked(pane.context.placementStartup.get).mockReturnValue({
-        sessionKey: session.key,
-        phase: startupPhase,
-        startedAt: 1,
-        targetKind: runner === "device" ? "profile" : "device",
-      });
-
-      const reclaim = dialogs.track(startReclaim(pane, session));
-      const actions = await waitForConfirmDialogActions();
-      const actionText = actions.textContent;
-      const confirmation = document.body.querySelector("openclaw-modal-dialog")?.textContent;
-      const pausesBeforeConfirmation = vi.mocked(pane.context.placementStartup.pause).mock.calls
-        .length;
-      answerConfirmDialog(actions, "confirm");
-      await reclaim;
-
-      expect(actionText).toContain(runner === "device" ? "Stop device worker" : "Stop worker");
-      expect(confirmation).toContain(`Stop the ${runner} worker for "${session.key}"?`);
-      expect(pausesBeforeConfirmation).toBe(0);
-      expect(request).toHaveBeenCalledWith(
-        "sessions.reclaim",
-        { key: session.key, agentId: "main" },
-        { timeoutMs: null },
-      );
-      expect(pane.context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
-        session.key,
-        "Worker stop requested. Review the initial message before retrying.",
-        expect.objectContaining({
-          readSessionPlacementRecovery: expect.any(Function),
-          pauseSessionPlacementRecovery: expect.any(Function),
-        }),
-      );
-      expect(pane.context.placementStartup.pause).toHaveBeenCalledBefore(request);
-      expect(reconcileMutation).toHaveBeenCalledWith("main");
-    },
-  );
-
-  it("does not reclaim when the operator cancels", async () => {
-    const request = dialogs.mockRequest(async () => ({ ok: true }));
-    const { pane } = createTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.reclaim"],
-      ["operator.admin"],
+  it("reclaims an active device placement with conflicting failed intent after the operator confirms", async () => {
+    vi.stubGlobal(
+      "confirm",
+      vi.fn(() => {
+        throw new Error("native confirm must not be used");
+      }),
     );
-    const session = {
-      ...activePlacementSession(),
-      placement: {
-        state: "requested",
-        generation: 1,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        stateChangedAtMs: 1,
-      },
-    } satisfies GatewaySessionRow;
+    const { pane, request, reconcileMutation } = stopFixture(
+      undefined,
+      ["operator.read", "operator.write"],
+      ["sessions.reclaim"],
+      true,
+    );
+    const session = activePlacementSession();
+    session.placement.runner = { kind: "device", status: "available" };
     vi.mocked(pane.context.placementStartup.get).mockReturnValue({
       sessionKey: session.key,
-      phase: "requested",
+      phase: "failed",
       startedAt: 1,
-      targetKind: "device",
+      targetKind: "profile",
     });
+
+    const reclaim = dialogs.track(startReclaim(pane, session));
+    const actions = await waitForConfirmDialogActions();
+    const actionText = actions.textContent;
+    const confirmation = document.body.querySelector("openclaw-modal-dialog")?.textContent;
+    const pausesBeforeConfirmation = vi.mocked(pane.context.placementStartup.pause).mock.calls
+      .length;
+    answerConfirmDialog(actions, "confirm");
+    await reclaim;
+
+    expect(actionText).toContain("Stop device worker");
+    expect(confirmation).toContain(`Stop the device worker for "${session.key}"?`);
+    expect(pausesBeforeConfirmation).toBe(0);
+    expect(request).toHaveBeenCalledWith(
+      "sessions.reclaim",
+      { key: session.key, agentId: "main" },
+      { timeoutMs: null },
+    );
+    expect(pane.context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
+      session.key,
+      "Worker stop requested. Review the initial message before retrying.",
+      expect.objectContaining({
+        readSessionPlacementRecovery: expect.any(Function),
+        pauseSessionPlacementRecovery: expect.any(Function),
+      }),
+    );
+    expect(pane.context.placementStartup.pause).toHaveBeenCalledBefore(request);
+    expect(reconcileMutation).toHaveBeenCalledWith("main");
+  });
+
+  it("does not reclaim when the operator cancels", async () => {
+    const { pane, request } = stopFixture();
+    const session = requestedDevice(pane);
 
     const reclaim = dialogs.track(startReclaim(pane, session));
     const actions = await waitForConfirmDialogActions();
@@ -422,31 +390,8 @@ describe("chat pane worker stop", () => {
   });
 
   it("does not reclaim after the connection changes while confirmation is open", async () => {
-    const request = dialogs.mockRequest(async () => ({ ok: true }));
-    const { pane, state } = createTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.reclaim"],
-      ["operator.admin"],
-    );
-    const session = {
-      ...activePlacementSession(),
-      placement: {
-        state: "requested",
-        generation: 1,
-        createdAtMs: 1,
-        updatedAtMs: 1,
-        stateChangedAtMs: 1,
-      },
-    } satisfies GatewaySessionRow;
-    vi.mocked(pane.context.placementStartup.get).mockReturnValue({
-      sessionKey: session.key,
-      phase: "requested",
-      startedAt: 1,
-      targetKind: "device",
-    });
+    const { pane, state, request } = stopFixture();
+    const session = requestedDevice(pane);
 
     const reclaim = dialogs.track(startReclaim(pane, session));
     const actions = await waitForConfirmDialogActions();
@@ -461,17 +406,9 @@ describe("chat pane worker stop", () => {
   });
 
   it("publishes a reclaim failure for the current presentation", async () => {
-    const request = dialogs.mockRequest(async () => {
+    const { pane, state } = stopFixture(async () => {
       throw new Error("reclaim failed");
     });
-    const { pane, state } = createTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.reclaim"],
-      ["operator.admin"],
-    );
     const session = activePlacementSession();
 
     const reclaim = dialogs.track(startReclaim(pane, session));
@@ -485,15 +422,7 @@ describe("chat pane worker stop", () => {
 
   it("does not publish a reclaim failure after leaving and returning", async () => {
     const response = createDeferred<{ ok: true }>();
-    const request = dialogs.mockRequest(() => response.promise);
-    const { pane, state } = createTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.reclaim"],
-      ["operator.admin"],
-    );
+    const { pane, state, request } = stopFixture(() => response.promise);
     const session = activePlacementSession();
 
     try {
@@ -515,16 +444,7 @@ describe("chat pane worker stop", () => {
 
   it("keeps reclaim progress with its session when the pane switches rows", async () => {
     const response = createDeferred<{ ok: true }>();
-    const request = dialogs.mockRequest(() => response.promise);
-    const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
-    const { pane, state } = createTestChatPane({
-      client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture({ reconcileMutation }),
-    });
-    pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
-      ["sessions.reclaim"],
-      ["operator.admin"],
-    );
+    const { pane, state } = stopFixture(() => response.promise, undefined, undefined, true);
     const sessionA = activePlacementSession("agent:main:cloud-a");
     const sessionB = {
       ...sessionA,
@@ -545,18 +465,8 @@ describe("chat pane worker stop", () => {
       );
 
       state.sessionKey = sessionB.key;
-      const placementA = resolveChatPanePlacement({
-        gatewaySnapshot: pane.context.gateway.snapshot,
-        movingKey: null,
-        reclaimingKey: pane.headerPresentation.placementReclaimingKey,
-        row: sessionA,
-      });
-      const placementB = resolveChatPanePlacement({
-        gatewaySnapshot: pane.context.gateway.snapshot,
-        movingKey: null,
-        reclaimingKey: pane.headerPresentation.placementReclaimingKey,
-        row: sessionB,
-      });
+      const placementA = placementFor(pane, sessionA);
+      const placementB = placementFor(pane, sessionB);
       expect(placementA.reclaimDisabledReason).toBe(t("common.loading"));
       expect(placementB.reclaimDisabledReason).toBeUndefined();
 

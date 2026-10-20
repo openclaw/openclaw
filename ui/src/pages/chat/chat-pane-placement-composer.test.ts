@@ -44,40 +44,26 @@ function presentation(
 }
 
 describe("chat placement composer presentation", () => {
-  it.each([["provisioning", "setup", undefined]] as const)(
-    "projects %s placement into a %s composer",
-    (state, kind, busyMessage) => {
-      const result = presentation(placementSession(state));
+  it("projects provisioning placement into a setup composer", () => {
+    expect(presentation(placementSession("provisioning"))).toMatchObject({
+      state: { kind: "setup" },
+      blocksSend: false,
+      busyMessage: null,
+    });
+  });
 
-      expect(result.state.kind).toBe(kind);
-      expect(result.blocksSend).toBe(false);
-      expect(result.busyMessage).toBe(busyMessage ?? null);
-    },
-  );
-
-  it.each([
-    {
-      name: "current required worker inference",
-      required: "coding",
-      profile: "coding",
-      inference: "worker",
-      hidden: true,
-    },
-  ] as const)(
-    "changes only the sync hint for $name",
-    ({ required, profile, inference, hidden }) => {
-      const row = placementSession("active");
-      Object.assign(row.placement!, { profileId: profile, inference });
-      const original = presentation(row, { workspaceResultReconciling: true });
-      const result = presentation(row, {
-        workspaceResultReconciling: true,
-        requiredWorkerInferenceProfileId: required,
-      });
-      expect(result).toEqual({ ...original, busyMessage: hidden ? null : original.busyMessage });
-      expect(result.blocksSend).toBe(false);
-      expect(result.state.kind).toBe("busy");
-    },
-  );
+  it("changes only the sync hint for current required worker inference", () => {
+    const row = placementSession("active");
+    Object.assign(row.placement!, { profileId: "coding", inference: "worker" });
+    const original = presentation(row, { workspaceResultReconciling: true });
+    const result = presentation(row, {
+      workspaceResultReconciling: true,
+      requiredWorkerInferenceProfileId: "coding",
+    });
+    expect(result).toEqual({ ...original, busyMessage: null });
+    expect(result.blocksSend).toBe(false);
+    expect(result.state.kind).toBe("busy");
+  });
 
   it.each([
     { state: "syncing", operation: "placementMove", message: "Finishing session move…" },
@@ -104,65 +90,49 @@ describe("chat placement composer presentation", () => {
     expect(result.busyMessage).toBe(message);
   });
 
-  it.each(["local"] as const)(
-    "blocks a repository-only session with %s placement and offers worker dispatch",
-    (placementState) => {
-      const onRecover = vi.fn();
-      const row: GatewaySessionRow = {
-        key: "agent:main:repository",
-        kind: "direct",
-        updatedAt: 0,
-        repositoryWorkspaceId: "repository-workspace-1",
-        ...(placementState
-          ? {
-              placement: {
-                state: placementState,
-                generation: 1,
-                createdAtMs: 1,
-                updatedAtMs: 1,
-                stateChangedAtMs: 1,
-              },
-            }
-          : {}),
-      };
+  it("blocks a repository-only session with local placement and offers worker dispatch", () => {
+    const onRecover = vi.fn();
+    const row: GatewaySessionRow = {
+      ...placementSession("local"),
+      key: "agent:main:repository",
+      repositoryWorkspaceId: "repository-workspace-1",
+      placement: {
+        state: "local",
+        generation: 1,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        stateChangedAtMs: 1,
+      },
+    };
 
-      const result = presentation(row, { onRecover });
+    const result = presentation(row, { onRecover });
 
-      expect(result.state).toEqual({ kind: "dispatch-required" });
-      expect(result.blocksSend).toBe(true);
-      expect(result.disabledBanner).toMatchObject({
-        title: "Repository worker required",
-        actionLabel: "Choose worker…",
-      });
-      assert(result.disabledBanner?.onAction);
-      result.disabledBanner.onAction();
-      expect(onRecover).toHaveBeenCalledOnce();
-    },
-  );
+    expect(result).toMatchObject({
+      state: { kind: "dispatch-required" },
+      blocksSend: true,
+      disabledBanner: { title: "Repository worker required", actionLabel: "Choose worker…" },
+    });
+    expect(result.state).toEqual({ kind: "dispatch-required" });
+    assert(result.disabledBanner?.onAction);
+    result.disabledBanner.onAction();
+    expect(onRecover).toHaveBeenCalledOnce();
+  });
 
-  it.each(["stop-first"] as const)(
-    "projects failed %s recovery into an actionable composer banner",
-    (recoveryAction) => {
-      const onRecover = vi.fn();
-      const onReclaim = vi.fn();
-      const row = placementSession("failed", recoveryAction);
-      if (row.placement?.state === "failed" && recoveryAction === "stop-first") {
-        row.placement.profileId = "coding";
-      }
-      const result = presentation(row, {
-        onRecover,
-        onReclaim,
-      });
+  it("projects failed stop-first recovery into an actionable composer banner", () => {
+    const onReclaim = vi.fn();
+    const row = placementSession("failed", "stop-first");
+    Object.assign(row.placement!, { profileId: "coding" });
+    const result = presentation(row, { onReclaim });
 
-      expect(result.state).toEqual({ kind: "failed", recoveryAction });
-      expect(result.blocksSend).toBe(true);
-      expect(result.disabledBanner?.title).toBe("Runner failed");
-      expect(result.disabledBanner?.actionLabel).toBe("Stop cloud worker…");
-      assert(result.disabledBanner?.onAction);
-      result.disabledBanner.onAction();
-      expect(onReclaim).toHaveBeenCalledOnce();
-    },
-  );
+    expect(result.state).toEqual({ kind: "failed", recoveryAction: "stop-first" });
+    expect(result).toMatchObject({
+      blocksSend: true,
+      disabledBanner: { title: "Runner failed", actionLabel: "Stop cloud worker…" },
+    });
+    assert(result.disabledBanner?.onAction);
+    result.disabledBanner.onAction();
+    expect(onReclaim).toHaveBeenCalledOnce();
+  });
 
   it("requires recovery authority even when a failed worker retains its profile", () => {
     const row = placementSession("failed");

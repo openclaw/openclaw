@@ -34,41 +34,45 @@ function permissionPicker(state: ChatPageHost, selectedSession: GatewaySessionRo
   }).permissionPicker;
 }
 
+function permissionSession(
+  key: string,
+  overrides: Partial<GatewaySessionRow> = {},
+): GatewaySessionRow {
+  return {
+    key,
+    agentId: "main",
+    kind: "direct",
+    permissionMode: "workspace",
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+function sessionList(...sessions: GatewaySessionRow[]) {
+  return { ...createSessionsListResult(), sessions };
+}
+
+function expectPicker(trigger: HTMLButtonElement, mode: string, disabled: boolean) {
+  expect(trigger.getAttribute("aria-label")).toContain(
+    t(`chat.permissionControls.modes.${mode}.label`),
+  );
+  expect(trigger.disabled).toBe(disabled);
+}
+
+function expectErrors(state: ChatPageHost, error: string | null) {
+  expect(state).toMatchObject({ chatError: error, lastError: error });
+}
+
 describe("chat permission failure ownership", () => {
   it.each([
-    {
-      source: "primary list",
-      persistedMode: "full",
-      foregroundAgent: "main",
-      recovery: "immediate",
-    },
-    {
-      source: "observed row with another agent selected",
-      persistedMode: "guarded",
-      foregroundAgent: "research",
-      recovery: "immediate",
-    },
-    {
-      source: "later scoped recovery",
-      persistedMode: "guarded",
-      foregroundAgent: "research",
-      recovery: "affected",
-    },
-    {
-      source: "later identical observed row",
-      persistedMode: "workspace",
-      foregroundAgent: "research",
-      recovery: "identical",
-    },
-    {
-      source: "unrelated foreground refresh",
-      persistedMode: "guarded",
-      foregroundAgent: "research",
-      recovery: "unrelated",
-    },
+    ["primary list", "full", "main", "immediate"],
+    ["observed row with another agent selected", "guarded", "research", "immediate"],
+    ["later scoped recovery", "guarded", "research", "affected"],
+    ["later identical observed row", "workspace", "research", "identical"],
+    ["unrelated foreground refresh", "guarded", "research", "unrelated"],
   ] as const)(
-    "reconciles the permission picker after application fails ($source)",
-    async ({ persistedMode, foregroundAgent, recovery }) => {
+    "reconciles the permission picker after application fails (%s)",
+    async (_source, persistedMode, foregroundAgent, recovery) => {
       const pending = createDeferred<Record<string, never>>();
       let permissionMode: GatewaySessionRow["permissionMode"] = "workspace";
       let recoveryUnavailable = false;
@@ -91,13 +95,9 @@ describe("chat permission failure ownership", () => {
             if (params.agentId === "main" && recoveryUnavailable) {
               throw new Error("Permission read unavailable");
             }
-            return {
-              ...createSessionsListResult(),
-              sessions:
-                params.agentId === "main"
-                  ? [{ ...selectedSession, permissionMode }]
-                  : [otherSession],
-            };
+            return sessionList(
+              params.agentId === "main" ? { ...selectedSession, permissionMode } : otherSession,
+            );
           },
         },
       });
@@ -105,7 +105,7 @@ describe("chat permission failure ownership", () => {
       const observation = host.sessions.observeRow(
         { key: selectedSession.key, agentId: "main" },
         (row) => {
-          state.sessionsResult = { ...createSessionsListResult(), sessions: row ? [row] : [] };
+          state.sessionsResult = sessionList(...(row ? [row] : []));
           state.sessionsResultAgentId = "main";
         },
       );
@@ -138,11 +138,8 @@ describe("chat permission failure ownership", () => {
         const trigger = container.querySelector<HTMLButtonElement>(
           "[data-chat-permission-select]",
         )!;
-        expect(trigger.getAttribute("aria-label")).toContain(
-          t("chat.permissionControls.modes.full.label"),
-        );
+        expectPicker(trigger, "full", true);
         expect(trigger.getAttribute("aria-label")).not.toContain("Applying permissions");
-        expect(trigger.disabled).toBe(true);
         void controls.onSelect("guarded");
         expect(
           host.request.mock.calls.filter(([method]) => method === "sessions.patch"),
@@ -166,10 +163,7 @@ describe("chat permission failure ownership", () => {
         expect(state.chatError).toContain("Failed to update permissions");
         if (recovery !== "immediate") {
           draw();
-          expect(trigger.getAttribute("aria-label")).toContain(
-            t("chat.permissionControls.modes.full.label"),
-          );
-          expect(trigger.disabled).toBe(false);
+          expectPicker(trigger, "full", false);
           recoveryUnavailable = false;
           if (recovery === "affected") {
             await host.sessions.reconcileMutation("main");
@@ -187,12 +181,7 @@ describe("chat permission failure ownership", () => {
           foregroundAgent === "main" ? selectedSession.key : otherSession.key,
         ]);
         draw();
-        expect(trigger.getAttribute("aria-label")).toContain(
-          t(
-            `chat.permissionControls.modes.${recovery === "unrelated" ? "full" : persistedMode}.label`,
-          ),
-        );
-        expect(trigger.disabled).toBe(false);
+        expectPicker(trigger, recovery === "unrelated" ? "full" : persistedMode, false);
         expect(host.sessions.canonicalListRevision).toBe(
           revision + (foregroundAgent === "main" || recovery === "unrelated" ? 1 : 0),
         );
@@ -208,16 +197,11 @@ describe("chat permission failure ownership", () => {
   it.each(["current", "before recovery", "during recovery", "newer selection"] as const)(
     "keeps permission errors with their captured incarnation (%s)",
     async (replacement) => {
-      const original: GatewaySessionRow = {
-        key: "agent:main:permission-incarnation",
-        agentId: "main",
-        kind: "direct",
+      const original = permissionSession("agent:main:permission-incarnation", {
         sessionId: "permission-incarnation-a",
-        permissionMode: "workspace",
-        updatedAt: 1,
-      };
+      });
       let current = original;
-      const list = () => ({ ...createSessionsListResult(), sessions: [current] });
+      const list = () => sessionList(current);
       const patchReply = createDeferred<unknown>();
       const patchIssued = createDeferred();
       const recoveryReply = createDeferred<ReturnType<typeof list>>();
@@ -244,7 +228,7 @@ describe("chat permission failure ownership", () => {
           },
           "sessions.list": (params: { agentId?: string }) => {
             if (params.agentId === "research") {
-              return { ...createSessionsListResult(), sessions: [] };
+              return sessionList();
             }
             if (holdRecovery) {
               holdRecovery = false;
@@ -327,8 +311,7 @@ describe("chat permission failure ownership", () => {
           expect(state.lastError).toBe(state.chatError);
         } else {
           const error = replacement === "newer selection" ? null : successorError;
-          expect(state.chatError).toBe(error);
-          expect(state.lastError).toBe(error);
+          expectErrors(state, error);
         }
         expect(current.permissionMode).toBe(
           replacement === "current"
@@ -353,21 +336,14 @@ describe("chat permission failure ownership", () => {
   it("retires a permission error when scoped recovery discovers its successor", async () => {
     installTranscriptDomMocks();
     onTestFinished(resetTranscriptTestDom);
-    const primary: GatewaySessionRow = {
-      key: "agent:main:primary",
-      agentId: "main",
-      kind: "direct",
+    const primary = permissionSession("agent:main:primary", {
       sessionId: "primary-session",
-      updatedAt: 1,
-    };
-    const original: GatewaySessionRow = {
-      key: "agent:research:permission-recovery",
+      permissionMode: undefined,
+    });
+    const original = permissionSession("agent:research:permission-recovery", {
       agentId: "research",
-      kind: "direct",
       sessionId: "permission-recovery-a",
-      permissionMode: "workspace",
-      updatedAt: 1,
-    };
+    });
     const successor = { ...original, sessionId: "permission-recovery-b", updatedAt: 2 };
     const descriptorReply = createDeferred<{ session: GatewaySessionRow }>();
     let recovering = false;
@@ -378,10 +354,7 @@ describe("chat permission failure ownership", () => {
       },
       "sessions.list": (_method, raw) => {
         const params = asOptionalRecord(raw);
-        return {
-          ...createSessionsListResult(),
-          sessions: params?.agentId === "research" ? [successor] : [primary],
-        };
+        return sessionList(params?.agentId === "research" ? successor : primary);
       },
       "sessions.describe": () => (recovering ? descriptorReply.promise : { session: original }),
     });
@@ -398,8 +371,7 @@ describe("chat permission failure ownership", () => {
       await selection;
       expect(sessions.state.agentId).toBe("main");
       expect(selectedChatSessionRow(state)?.sessionId).not.toBe(original.sessionId);
-      expect(state.chatError).toBeNull();
-      expect(state.lastError).toBeNull();
+      expectErrors(state, null);
     } finally {
       descriptorReply.resolve({ session: successor });
       await selection;
@@ -414,15 +386,12 @@ describe("chat permission failure ownership", () => {
     "empty draft",
   ] as const)("keeps permission ownership for %s", async (scenario) => {
     const alias = scenario === "configured main alias";
-    const row: GatewaySessionRow = {
-      key: alias ? "agent:main:home" : "agent:main:permission-draft",
-      agentId: "main",
-      kind: "direct",
+    const row = permissionSession(alias ? "agent:main:home" : "agent:main:permission-draft", {
       sessionId: alias ? "configured-main-session" : undefined,
-      permissionMode: "workspace",
-    };
+      updatedAt: undefined,
+    });
     let rows = scenario === "empty draft" ? [] : [row];
-    const list = () => ({ ...createSessionsListResult(), sessions: rows });
+    const list = () => sessionList(...rows);
     const host = makeChatHost({
       sessionKey: alias ? "main" : row.key,
       agentsList: { defaultId: "main", mainKey: alias ? "home" : "main", agents: [{ id: "main" }] },
@@ -453,8 +422,7 @@ describe("chat permission failure ownership", () => {
       );
       if (scenario === "retired identity-less row") {
         expect(selectedChatSessionRow(state)).toBeUndefined();
-        expect(state.chatError).toBeNull();
-        expect(state.lastError).toBeNull();
+        expectErrors(state, null);
       } else {
         expect(state.chatError).toContain("Permission update rejected");
         expect(state.lastError).toBe(state.chatError);
