@@ -150,14 +150,23 @@ export function detectOpenAICompletionsCompat(
         ? (model.compat as { supportsStore?: boolean })
         : undefined,
   });
-  const { provider, id: modelId, baseUrl, reasoning } = model;
   const {
+    provider,
+    modelId,
+    reasoning,
+    baseUrl,
     endpointClass,
     knownProviderFamily,
     supportsNativeStreamingUsageCompat,
     supportsOpenAICompletionsStreamingUsageCompat,
     usesExplicitProxyLikeEndpoint,
-  } = capabilities;
+  } = {
+    provider: model.provider,
+    modelId: model.id,
+    reasoning: model.reasoning,
+    baseUrl: model.baseUrl,
+    ...capabilities,
+  };
   const isDefaultRoute = endpointClass === "default";
   const usesConfiguredNonOpenAIEndpoint =
     endpointClass !== "default" && endpointClass !== "openai-public";
