@@ -82,6 +82,14 @@ function fixture(shadow = false) {
 function card() {
   return document.querySelector<HTMLElement>(".link-hovercard");
 }
+function expectNoPreview(request: ReturnType<typeof fixture>["request"]) {
+  expect(request).not.toHaveBeenCalled();
+  expect(card()).toBeNull();
+}
+function focus(anchor: HTMLAnchorElement) {
+  anchor.focus();
+  anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+}
 async function hover(anchor: HTMLElement) {
   await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
@@ -103,15 +111,12 @@ describe("generic link hovercards", () => {
     );
     const [signIn, pull, issue] = view.pane.querySelectorAll<HTMLAnchorElement>("a");
     await hover(signIn!);
-    signIn!.focus();
-    signIn!.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    focus(signIn!);
     await vi.advanceTimersByTimeAsync(300);
     await prefetchLinkReader(signIn!, new AbortController().signal);
     expect(view.request).not.toHaveBeenCalled();
     expect(document.querySelector(".link-hovercard, .link-reader-hovercard")).toBeNull();
-    expect(signIn!.href).toBe(login);
-    expect(signIn!.target).toBe("_blank");
-    expect(signIn!.textContent).toBe("Sign in");
+    expect(signIn).toMatchObject({ href: login, target: "_blank", textContent: "Sign in" });
     for (const anchor of [pull!, issue!]) {
       view.request.mockResolvedValue({
         url: anchor.href,
@@ -140,8 +145,7 @@ describe("generic link hovercards", () => {
     const view = fixture();
     view.anchor.href = href;
     await hover(view.anchor);
-    expect(view.request).not.toHaveBeenCalled();
-    expect(card()).toBeNull();
+    expectNoPreview(view.request);
     expect(view.anchor.href).toBe(href);
   });
 
@@ -167,13 +171,10 @@ describe("generic link hovercards", () => {
     );
     const signIn = view.pane.querySelector<HTMLAnchorElement>(".wizard-step__external-link")!;
     await hover(signIn);
-    signIn.focus();
-    signIn.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    focus(signIn);
     await vi.advanceTimersByTimeAsync(1);
-    expect(view.request).not.toHaveBeenCalled();
-    expect(card()).toBeNull();
-    expect(signIn.href).toBe(authorizationUrl);
-    expect(signIn.target).toBe("_blank");
+    expectNoPreview(view.request);
+    expect(signIn).toMatchObject({ href: authorizationUrl, target: "_blank" });
     await hover(view.anchor);
     expect(card()?.textContent).toContain("Field guide");
   });
@@ -196,8 +197,7 @@ describe("generic link hovercards", () => {
       },
     ];
     await hover(anchor);
-    expect(request).not.toHaveBeenCalled();
-    expect(card()).toBeNull();
+    expectNoPreview(request);
   });
 
   it("does not unlock plugin loading hints after a public page succeeds", async () => {
@@ -219,8 +219,7 @@ describe("generic link hovercards", () => {
     view.anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
     view.anchor.dispatchEvent(new MouseEvent("pointerout", { bubbles: true }));
     await vi.advanceTimersByTimeAsync(300);
-    expect(view.request).not.toHaveBeenCalled();
-    expect(card()).toBeNull();
+    expectNoPreview(view.request);
     expect(view.anchor.hasAttribute("aria-haspopup")).toBe(false);
     await hover(view.anchor);
     expect(card()?.textContent).toContain("Field guide");
@@ -240,7 +239,7 @@ describe("generic link hovercards", () => {
     expect(view.request).toHaveBeenCalledOnce();
   });
 
-  it.each(["config", "client", "scope", "href", "removed", "hidden", "file"])(
+  it.each(["config", "client", "scope", "href", "removed", "hidden", "file"] as const)(
     "retires pending metadata when %s changes",
     async (change) => {
       const view = fixture();
@@ -248,27 +247,17 @@ describe("generic link hovercards", () => {
       view.request.mockReturnValue(pending.promise);
       await hover(view.anchor);
       expect(card()).not.toBeNull();
-      if (change === "config") {
-        view.context.config.current.automaticallyFetchFavicons = false;
-      }
-      if (change === "client") {
-        view.context.gateway.snapshot.client = { ...view.client };
-      }
-      if (change === "scope") {
-        view.client.recoveryScope = "next";
-      }
-      if (change === "href") {
-        view.anchor.href = "https://example.org/other";
-      }
-      if (change === "removed") {
-        view.pane.remove();
-      }
-      if (change === "hidden") {
-        view.pane.hidden = true;
-      }
-      if (change === "file") {
-        view.anchor.setAttribute("data-file-path", "/guide");
-      }
+      const changes = {
+        config: () =>
+          Object.assign(view.context.config.current, { automaticallyFetchFavicons: false }),
+        client: () => Object.assign(view.context.gateway.snapshot, { client: { ...view.client } }),
+        scope: () => Object.assign(view.client, { recoveryScope: "next" }),
+        href: () => Object.assign(view.anchor, { href: "https://example.org/other" }),
+        removed: () => view.pane.remove(),
+        hidden: () => Object.assign(view.pane, { hidden: true }),
+        file: () => view.anchor.setAttribute("data-file-path", "/guide"),
+      };
+      changes[change]();
       if (change !== "file") {
         view.notify();
       }

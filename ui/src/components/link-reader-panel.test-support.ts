@@ -1,4 +1,4 @@
-import { expect } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
 import type {
   ControlUiLinkReaderDocument,
   ControlUiLinkReaderDescriptor,
@@ -7,8 +7,26 @@ import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid as waitForFast } from "../test-helpers/solid-settle.ts";
+import { createStorageMock } from "../test-helpers/storage.ts";
 import { LINK_READER_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import "./link-reader-panel.tsx";
+
+export function installPanelFixture() {
+  beforeEach(() => {
+    vi.stubGlobal("localStorage", createStorageMock());
+    // Section selection owns loading; suppress viewport preloads.
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class extends IntersectionObserver {
+        override observe() {}
+      },
+    );
+  });
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.unstubAllGlobals();
+  });
+}
 
 export type Panel = HTMLElementTagNameMap["openclaw-link-reader-panel"];
 export type DetailRequest<T = ControlUiLinkReaderDocument> = (
@@ -33,21 +51,17 @@ export function item(number = 1): ControlUiLinkReaderDocument {
   return {
     url: itemUrl(number),
     title: "Item " + number,
-    author: "reporter",
     badge: { label: "Open", tone: "positive" },
     createdAt: "2026-09-01T12:00:00Z",
-    updatedAt: "2026-09-02T12:00:00Z",
     body: "**Description**",
     comments: [
       {
         id: "comment-4",
         url: itemUrl(number) + "#comment-4",
         author: "reviewer",
-        createdAt: "2026-09-02T12:00:00Z",
         body: "Comment text",
       },
     ],
-    commentsTotal: 1,
   };
 }
 export function requestedItem(params: unknown): ControlUiLinkReaderDocument {

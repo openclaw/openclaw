@@ -1,17 +1,22 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import { canonicalLobsterLook, lobsterLookStyle, renderLobsterSvg } from "./lobster-pet-look.ts";
 import { LOBSTER_PET_PALETTES } from "./lobster-pet-palettes.ts";
 
 const container = document.createElement("div");
-const paletteFor = (id: string) =>
-  expectDefined(
-    LOBSTER_PET_PALETTES.find((entry) => entry.id === id),
-    id,
+const lookFor = (id: string) =>
+  canonicalLobsterLook(
+    expectDefined(
+      LOBSTER_PET_PALETTES.find((entry) => entry.id === id),
+      id,
+    ),
   );
-const pathFor = (selector: string) =>
-  expectDefined(container.querySelector<SVGPathElement>(selector), selector);
+const query = <T extends Element>(selector: string, root: ParentNode = container) =>
+  expectDefined(root.querySelector<T>(selector), selector);
 const matrixValues = ({ a, b, c, d, e, f }: DOMMatrix) => [a, b, c, d, e, f];
+const isWave = (animation: Animation) =>
+  (animation as CSSAnimation).animationName === "lobster-pet-wave";
+beforeEach(() => document.body.append(container));
 afterEach(() => {
   container.remove();
   container.removeAttribute("class");
@@ -26,12 +31,10 @@ function sampleOutline(path: SVGPathElement, steps: number): DOMPoint[] {
 }
 
 it("wraps Clawnstantine's sash to the shell edge with the highlight inset", () => {
-  const palette = paletteFor("clawnstantine");
-  document.body.append(container);
-  container.replaceChildren(renderLobsterSvg(canonicalLobsterLook(palette), { standalone: true }));
-  const dome = pathFor(".lob-standard-dome");
-  const sash = pathFor('.lob-clawnstantine > path[fill="#e5bc62"]');
-  const highlight = pathFor('.lob-clawnstantine > path[stroke="#fff0bc"]');
+  container.replaceChildren(renderLobsterSvg(lookFor("clawnstantine"), { standalone: true }));
+  const dome = query<SVGPathElement>(".lob-standard-dome");
+  const sash = query<SVGPathElement>('.lob-clawnstantine > path[fill="#e5bc62"]');
+  const highlight = query<SVGPathElement>('.lob-clawnstantine > path[stroke="#fff0bc"]');
   const shellOutline = sampleOutline(dome, 512);
   const distanceToShell = (point: DOMPoint) =>
     Math.min(...shellOutline.map((edge) => Math.hypot(point.x - edge.x, point.y - edge.y)));
@@ -47,13 +50,9 @@ it("wraps Clawnstantine's sash to the shell edge with the highlight inset", () =
 
   const radius = Number(highlight.getAttribute("stroke-width")) / 2;
   for (const point of sampleOutline(highlight, 64)) {
-    for (const [dx, dy] of [
-      [radius, 0],
-      [-radius, 0],
-      [0, radius],
-      [0, -radius],
-    ] as const) {
-      expect(sash.isPointInFill(new DOMPoint(point.x + dx, point.y + dy))).toBe(true);
+    for (const offset of [radius, -radius]) {
+      expect(sash.isPointInFill(new DOMPoint(point.x + offset, point.y))).toBe(true);
+      expect(sash.isPointInFill(new DOMPoint(point.x, point.y + offset))).toBe(true);
     }
   }
 });
@@ -64,26 +63,17 @@ it.each([
   ["leonardodepinchy", ".lob-leonardodepinchy__brush"],
   ["alexandergrahamshell", ".lob-telephone-receiver"],
 ] as const)("keeps %s’s prop attached through claw sizes and wave poses", (id, propSelector) => {
-  const palette = paletteFor(id);
-  document.body.append(container);
+  const canonical = lookFor(id);
   container.className = `lobster-pet lobster-pet--palette-${id} lobster-pet--act-wave`;
   for (const clawSize of ["dainty", "regular", "mighty"] as const) {
-    const look = { ...canonicalLobsterLook(palette), clawSize };
+    const look = { ...canonical, clawSize };
     container.style.cssText = lobsterLookStyle(look);
     container.replaceChildren(renderLobsterSvg(look));
-    const claw = expectDefined(container.querySelector<SVGGElement>(".lob-claw--r"), "right claw");
-    const hand = expectDefined(
-      claw.querySelector<SVGPathElement>(`path:not(${propSelector})`),
-      "hand",
-    );
+    const claw = query<SVGGElement>(".lob-claw--r");
+    const hand = query<SVGPathElement>(`path:not(${propSelector})`, claw);
     const prop = container.querySelectorAll<SVGPathElement>(propSelector);
     expect(prop.length).toBeGreaterThan(0);
-    const wave = expectDefined(
-      claw
-        .getAnimations()
-        .find((animation) => (animation as CSSAnimation).animationName === "lobster-pet-wave"),
-      "wave animation",
-    );
+    const wave = expectDefined(claw.getAnimations().find(isWave), "wave animation");
     wave.pause();
     const poses = new Set<string>();
     for (const time of [0, 280, 560, 840]) {
@@ -97,17 +87,16 @@ it.each([
     }
     expect(poses.size).toBeGreaterThan(1);
   }
-  container.replaceChildren(renderLobsterSvg(canonicalLobsterLook(palette), { bindle: true }));
+  container.replaceChildren(renderLobsterSvg(canonical, { bindle: true }));
   expect(container.querySelector(propSelector)).not.toBeNull();
   expect(container.querySelector(".lob-bindle")).toBeNull();
-  container.replaceChildren(renderLobsterSvg(canonicalLobsterLook(palette), { shell: true }));
+  container.replaceChildren(renderLobsterSvg(canonical, { shell: true }));
   expect(container.querySelector(propSelector)).toBeNull();
 });
 
 it("keeps the moving-in bag for unoccupied claws", () => {
   for (const id of ["crimson", "blue"]) {
-    const palette = paletteFor(id);
-    container.replaceChildren(renderLobsterSvg(canonicalLobsterLook(palette), { bindle: true }));
+    container.replaceChildren(renderLobsterSvg(lookFor(id), { bindle: true }));
     expect(container.querySelector(".lob-bindle")).not.toBeNull();
   }
 });

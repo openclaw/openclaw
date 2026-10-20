@@ -4,11 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as dex from "./lobster-dex.ts";
 
 beforeEach(() => {
-  // getSafeLocalStorage only accepts an own value property under Vitest, so
-  // tests opt in by stubbing jsdom's storage onto globalThis.
+  // Vitest storage must be an own value property for getSafeLocalStorage.
   vi.stubGlobal("localStorage", window.localStorage);
 });
-
 afterEach(() => {
   localStorage.clear();
   vi.unstubAllGlobals();
