@@ -15,7 +15,9 @@ import {
   SESSION_MUTATION_TEST_METHODS,
 } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { createMessageGroupHarness } from "./components/chat-message-native.test-support.tsx";
 import { createMessageGroup } from "./components/chat-message.test-support.ts";
@@ -179,37 +181,75 @@ it.each(["identity change", "retirement", "stop"] as const)(
   },
 );
 
-it("keeps rename and reactions after hello until the canonical session list arrives", async () => {
-  const h = await setup();
-  const retained = h.sessions.presentation.result;
-  assert(retained);
-  const retainedRow = retained.sessions[0];
-  assert(retainedRow);
-  const canonical = sessionsResult([{ ...retainedRow, label: "Reconnected title" }]);
-  const pendingList = createDeferred<typeof canonical>();
-  onTestFinished(() => pendingList.resolve(canonical));
-  const request = h.current().request.getMockImplementation();
-  assert(request);
-  const reconnectList = vi.fn(() => pendingList.promise);
-  h.current().request.mockImplementation((method, params) =>
-    method === "sessions.list" ? reconnectList() : request(method, params),
-  );
-  h.disconnect();
-  h.reconnect();
-  await waitForSolid(() => expect(reconnectList).toHaveBeenCalled());
-  expect(h.gateway.snapshot.phase).toBe("connected");
-  expect(h.sessions.state.result).toBeNull();
-  h.draw();
-  expect(h.header.querySelector('button[title="Rename session"]')).not.toBeNull();
-  expect(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(1);
+it.each(["descriptor", "startup"] as const)(
+  "keeps rename and reactions through a provisional %s publication until the canonical list arrives",
+  async (publication) => {
+    const h = await setup();
+    const retained = h.sessions.presentation.result;
+    assert(retained);
+    const retainedRow = retained.sessions[0];
+    assert(retainedRow);
+    const canonical = sessionsResult([
+      { ...retainedRow, label: "Reconnected title", archived: true },
+    ]);
+    const provisional: GatewaySessionRow = {
+      key: retainedRow.key,
+      sessionId: retainedRow.sessionId,
+      kind: "direct",
+      label: "Provisional title",
+    };
+    const pendingList = createDeferred<typeof canonical>();
+    onTestFinished(() => pendingList.resolve(canonical));
+    const request = h.current().request.getMockImplementation();
+    assert(request);
+    const reconnectList = vi.fn(() => pendingList.promise);
+    h.current().request.mockImplementation((method, params) => {
+      if (method === "sessions.list") {
+        return reconnectList();
+      }
+      if (method === "chat.startup") {
+        return Promise.resolve({
+          messages: [],
+          sessionId: provisional.sessionId,
+          sessionInfo: provisional,
+        });
+      }
+      return request(method, params);
+    });
+    h.disconnect();
+    h.reconnect();
+    await waitForSolid(() => expect(reconnectList).toHaveBeenCalled());
+    expect(h.gateway.snapshot.phase).toBe("connected");
+    expect(h.sessions.state.result).toBeNull();
+    const revision = h.sessions.canonicalListRevision;
+    if (publication === "startup") {
+      await refreshPageChat(h.state, {
+        historyLoad: loadChatHistory(h.state, { startup: true }),
+        awaitHistory: true,
+        scheduleScroll: false,
+      });
+    } else {
+      expect(h.sessions.reconcile(provisional, undefined, { resultAgentId: "main" })).toBe(true);
+    }
+    expect(h.sessions.state.result?.sessions[0]?.label).toBe("Provisional title");
+    expect(h.sessions.canonicalListRevision).toBe(revision);
+    expect(h.sessions.presentation.result).toBe(retained);
+    h.draw();
+    expect(h.header.textContent).toContain("Original title");
+    expect(h.header.querySelector('button[title="Rename session"]')).not.toBeNull();
+    expect(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(1);
 
-  pendingList.resolve(canonical);
-  await waitForSolid(() =>
-    expect(selectedChatSessionRow(h.state)?.label).toBe("Reconnected title"),
-  );
-  h.draw();
-  expect(h.header.textContent).toContain("Reconnected title");
-});
+    pendingList.resolve(canonical);
+    await waitForSolid(() =>
+      expect(selectedChatSessionRow(h.state)?.label).toBe("Reconnected title"),
+    );
+    h.draw();
+    expect(h.header.textContent).toContain("Reconnected title");
+    expect(selectedChatSessionRow(h.state)?.archived).toBe(true);
+    expect(h.header.querySelector('button[title="Rename session"]')).not.toBeNull();
+    expect(h.messages.querySelectorAll(".chat-reaction-action")).toHaveLength(0);
+  },
+);
 
 it("queues a header rename and rendered reaction through the shared outbox", async () => {
   const h = await setup();
