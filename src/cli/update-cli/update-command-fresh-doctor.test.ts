@@ -34,6 +34,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import {
   createChangedPostCoreUpdateOptions,
@@ -103,9 +104,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: { error: vi.fn(), log: vi.fn() },
-}));
+vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn(), log: vi.fn() } }));
 
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
@@ -128,6 +127,10 @@ function complete(overrides: Partial<Parameters<typeof completePostCorePluginUpd
   return completePostCorePluginUpdate({ ...updateOptions, ...overrides });
 }
 
+function completeUnchanged(overrides: Parameters<typeof complete>[0] = {}) {
+  return complete({ pluginUpdate: { ...pluginUpdate, changed: false }, ...overrides });
+}
+
 const doctorArgs = [
   "/opt/openclaw/dist/index.js",
   "doctor",
@@ -141,25 +144,13 @@ const validateArgs = ["/opt/openclaw/dist/index.js", "config", "validate", "--js
 const validConfigSnapshot = {
   exists: true,
   valid: true as const,
-  parsed: {},
   config: {},
-  runtimeConfig: {},
   sourceConfig: {},
-  warnings: [],
-  issues: [],
-  legacyIssues: [],
 };
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let restoreTempRoot = () => {};
-const readinessExit = {
-  code: 0,
-  signal: null,
-  killed: false,
-  termination: "exit",
-  outputLimitExceeded: undefined,
-  stderr: "",
-} as const;
+const readinessExit = createCommandResult();
 const signaledReadiness = { termination: "signal", signal: "SIGTERM", killed: true } as const;
 
 afterEach(() => {
@@ -411,10 +402,7 @@ describe("post-plugin update readiness", () => {
         stdout: supported ? "  --full-integrity-check  Check all indexes\n" : "  --fix  Repair\n",
         stderr: "",
       });
-      await complete({
-        opts: { ...updateOptions.opts, fullIntegrityCheck },
-        timeoutMs,
-      });
+      await complete({ opts: { ...updateOptions.opts, fullIntegrityCheck }, timeoutMs });
 
       expect(mocks.command.mock.calls.map(([, args]) => args)).toEqual([
         [...doctorArgs, ...(fullIntegrityCheck && supported ? ["--full-integrity-check"] : [])],
@@ -525,10 +513,7 @@ describe("post-plugin update readiness", () => {
       });
       const beforeDoctor = vi.fn(async () => undefined);
 
-      await complete({
-        pluginUpdate: { ...pluginUpdate, changed: false },
-        beforeDoctor,
-      });
+      await completeUnchanged({ beforeDoctor });
 
       expect(beforeDoctor).toHaveBeenCalledOnce();
       expect(beforeDoctor.mock.invocationCallOrder[0]).toBeLessThan(
@@ -568,9 +553,7 @@ describe("post-plugin update readiness", () => {
           }
           return { stdout: "", stderr: "" };
         });
-        const result = await complete({
-          pluginUpdate: { ...pluginUpdate, changed },
-        });
+        const result = await complete({ pluginUpdate: { ...pluginUpdate, changed } });
         expect(result.configSnapshot).toMatchObject({ exists: created, valid: !created });
         if (created) {
           expect(result.pluginUpdate).toMatchObject({
@@ -622,20 +605,14 @@ describe("post-plugin update readiness", () => {
     vi.mocked(defaultRuntime.log).mockClear();
     vi.mocked(defaultRuntime.error).mockClear();
 
-    const { pluginUpdate: result } = await complete({
-      pluginUpdate: { ...pluginUpdate, changed: false },
-    });
+    const { pluginUpdate: result } = await completeUnchanged();
 
     expect(result).toMatchObject({
       status: "error",
       reason: "post-plugin-config-validation-execution-failed",
-      warnings: [
-        expect.objectContaining({
-          message: "Config validation could not complete; refusing to restart.",
-        }),
-      ],
+      warnings: [{ message: "Config validation could not complete; refusing to restart." }],
       failureFacts: [
-        expect.objectContaining({ code: "post-plugin-config-validation-execution-failed" }),
+        { code: "post-plugin-config-validation-execution-failed" },
         ...(failure.stdout === "" || failure.name === "launch"
           ? []
           : [expect.objectContaining({ code: "command-failed" })]),
@@ -659,18 +636,16 @@ describe("post-plugin update readiness", () => {
         mocks.resolveEntrypoint.mockResolvedValue(undefined);
         mocks.readConfig.mockResolvedValue({ ...validConfigSnapshot, valid: false });
       }
-      const { pluginUpdate: result } = await complete({
-        beforeDoctor,
-      });
+      const { pluginUpdate: result } = await complete({ beforeDoctor });
       expect(result).toMatchObject({
         status: "error",
         reason: "post-plugin-doctor-execution-failed",
         warnings: [
-          expect.objectContaining({
+          {
             reason: expect.stringContaining(
               missing ? "entrypoint not found" : "Gateway owner changed",
             ),
-          }),
+          },
         ],
       });
       if (missing) {
@@ -781,9 +756,7 @@ describe("post-plugin update readiness", () => {
       mocks.readConfig.mockImplementation(configOwner.readConfigFileSnapshot);
       const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
-        const result = await complete({
-          pluginUpdate: { ...pluginUpdate, changed: false },
-        });
+        const result = await completeUnchanged();
         expect(result.pluginUpdate.status).toBe("ok");
         expect(warning).not.toHaveBeenCalledWith(
           expect.stringContaining("config was written by version 9999.1.0"),
@@ -820,9 +793,7 @@ describe("post-plugin update readiness", () => {
         await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
       mocks.readConfig.mockImplementation(configOwner.readConfigFileSnapshot);
 
-      const result = await complete({
-        pluginUpdate: { ...pluginUpdate, changed: false },
-      });
+      const result = await completeUnchanged();
 
       expect(result.pluginUpdate.status).toBe("ok");
       expect(result.configSnapshot.config.gateway?.mode).toBe("local");
@@ -1003,11 +974,7 @@ describe("post-plugin update readiness", () => {
       vi.mocked(defaultRuntime.log).mockClear();
       vi.mocked(defaultRuntime.error).mockClear();
 
-      const result = await complete({
-        runId: run.runId,
-        pluginUpdate: { ...pluginUpdate, changed: false },
-        beforeDoctor,
-      });
+      const result = await completeUnchanged({ runId: run.runId, beforeDoctor });
 
       expect(result.pluginUpdate.status).toBe("ok");
       expect(result.pluginUpdate.doctorLint).toMatchObject({ exitCode: 0, termination: "exit" });

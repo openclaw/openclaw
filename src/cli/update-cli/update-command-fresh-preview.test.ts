@@ -150,9 +150,7 @@ describe("update command admission with fresh state", () => {
     await withTriageTerminal(true, async () => {
       await expect(
         updateCommand({ admission: "installed", tag: "2026.9.2", restart: false }),
-      ).rejects.toMatchObject({
-        code: 0,
-      });
+      ).rejects.toMatchObject({ code: 0 });
     });
     expect(leases).toEqual(["absent"]);
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
@@ -356,7 +354,6 @@ describe("update command admission with fresh state", () => {
       expect(leaseAtPublication).toBe(fault === "release-failure" ? "current" : "absent");
       expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
       expectJson({ status: fault === "healthy" ? "ok" : "error" });
-      assert(admittedRun);
       expect(getUpdateRun(admittedRun.runId, { env: admittedRun.env })?.status).toBe(
         fault === "healthy" ? "succeeded" : "failed",
       );
@@ -442,9 +439,7 @@ describe("update command admission with fresh state", () => {
       version: "2026.9.2",
     });
 
-    await expect(runUpdate({ admission: "installed" })).rejects.toMatchObject({
-      code: 1,
-    });
+    await expect(runUpdate({ admission: "installed" })).rejects.toMatchObject({ code: 1 });
 
     expect(
       vi.mocked(updateCheck.resolveNpmChannelTag).mock.calls.map(([params]) => params.channel),

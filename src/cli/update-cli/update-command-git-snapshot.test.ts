@@ -7,6 +7,7 @@ import type { UpdateStepProgress } from "../../infra/update-runner-types.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { writeOpenClawPackageFixture } from "./update-cli-package.test-support.js";
 import { updateGitInstall } from "./update-command-git.js";
 
@@ -72,14 +73,12 @@ it.each([
         totalBytes: 1024 ** 3,
       }));
       const runCommand = processRunner.runCommandWithTimeout;
-      const candidateCommand = vi.fn(() => ({
-        stdout: "",
-        stderr: "synthetic stop before candidate package commands",
-        code: 1,
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      }));
+      const candidateCommand = vi.fn(() =>
+        createCommandResult({
+          stderr: "synthetic stop before candidate package commands",
+          code: 1,
+        }),
+      );
       vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation((argv, options) =>
         argv[0] === "git" ? runCommand(argv, options) : Promise.resolve(candidateCommand()),
       );
@@ -97,6 +96,7 @@ it.each([
       );
       vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
       const originalArgv = process.argv;
+      const capacityStep = { name: "snapshot-space-preflight", exitCode: 1 };
       process.argv = [process.execPath, path.join(root, "openclaw.mjs")];
       try {
         const outcome = await updateGitInstall({
@@ -132,9 +132,7 @@ it.each([
             "error" in outcome ? outcome.error : undefined,
           );
           expect(errors).toContain(reportingError);
-          expect(onStepComplete).toHaveBeenCalledWith(
-            expect.objectContaining({ name: "snapshot-space-preflight", exitCode: 1 }),
-          );
+          expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(capacityStep));
           expect(errors).toContainEqual(
             expect.objectContaining({
               exitCode: 1,
@@ -162,12 +160,7 @@ it.each([
               : { status: "error", reason: "snapshot-capacity-insufficient" },
           );
           if (!noOp) {
-            expect(result.steps).toContainEqual(
-              expect.objectContaining({
-                name: "snapshot-space-preflight",
-                exitCode: 1,
-              }),
-            );
+            expect(result.steps).toContainEqual(expect.objectContaining(capacityStep));
           }
         }
         expect(capacity.mock.calls.length === 0).toBe(noOp);

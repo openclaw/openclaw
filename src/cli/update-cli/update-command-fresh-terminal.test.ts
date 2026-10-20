@@ -29,20 +29,7 @@ import { UnreportedUpdateAdmissionOutcome, UpdateCommandFailure } from "./update
 import * as commandRun from "./update-command-run.js";
 import { updateCommand } from "./update-command.js";
 
-const promptConfirm = vi.hoisted(() => vi.fn(async () => false));
-vi.mock("@clack/prompts", async (original) => ({
-  ...(await original<typeof import("@clack/prompts")>()),
-  confirm: promptConfirm,
-}));
-
 const { fixture, dirs } = installFreshUpdateFixture();
-const inheritedRunIds = ["  1c5a25f3-f46a-408b-a87f-a0f0d1f80ee7  ", " \t "] as const;
-
-function expectFreshStatePreserved() {
-  expect(fs.existsSync(fixture.databasePath)).toBe(false);
-  expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-  expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
-}
 
 describe("fresh update terminal reporting", () => {
   it.each(["healthy", "release", "no-enter"] as const)(
@@ -52,7 +39,7 @@ describe("fresh update terminal reporting", () => {
       const detachedRoot = dirs.make("openclaw-detached-refusal-");
       vi.spyOn(os, "tmpdir").mockReturnValue(detachedRoot);
       const doctor = vi.spyOn(packageUpdate, "runPackageUpdateDoctor");
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inheritedRunIds[0]);
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", "  1c5a25f3-f46a-408b-a87f-a0f0d1f80ee7  ");
       vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockImplementationOnce(async () => {
         if (cleanup === "release") {
           const db = new DatabaseSync(
@@ -101,13 +88,13 @@ describe("fresh update terminal reporting", () => {
       );
       expect(observations).toEqual([cleanup === "release" ? "current" : "absent"]);
       expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "error",
-          reason:
-            cleanup === "release" ? "update-admission-cleanup-failed" : "target-metadata-preflight",
-        }),
-      );
+      const output = vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0];
+      assert(isRecord(output) && typeof output.reportPath === "string");
+      expect(output).toMatchObject({
+        status: "error",
+        reason:
+          cleanup === "release" ? "update-admission-cleanup-failed" : "target-metadata-preflight",
+      });
       expect(execute).toHaveBeenCalledOnce();
       if (cleanup === "no-enter") {
         expect(enter).not.toHaveBeenCalled();
@@ -117,27 +104,22 @@ describe("fresh update terminal reporting", () => {
           result: {
             status: "error",
             reason: "target-metadata-preflight",
-            failedStep: {
-              failureFacts: [expect.objectContaining({ code: "target-registry-metadata" })],
-            },
+            failedStep: { failureFacts: [{ code: "target-registry-metadata" }] },
           },
         });
       } else {
         expect(enter).toHaveBeenCalled();
         expect(failure).toMatchObject({ code: 1 });
       }
-      const output = vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0];
-      assert(isRecord(output) && typeof output.reportPath === "string");
       expect(output.reportPath.startsWith(detachedRoot + path.sep)).toBe(cleanup !== "no-enter");
       expect(fs.existsSync(path.join(process.env.OPENCLAW_STATE_DIR!, "update-reports"))).toBe(
         cleanup === "no-enter",
       );
       if (cleanup === "release") {
-        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-          expect.objectContaining({
-            recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-          }),
-        );
+        expect(output.recovery).toEqual({
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+        });
       }
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
       expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
@@ -145,7 +127,7 @@ describe("fresh update terminal reporting", () => {
       expect(defaultRuntime.error).toHaveBeenCalledWith(
         expect.stringContaining("registry unavailable"),
       );
-      expectFreshStatePreserved();
+      expect(fs.readdirSync(fixture.root)).toEqual(["package.json"]);
     },
   );
 
