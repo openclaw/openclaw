@@ -190,26 +190,6 @@ function resolveConfiguredStatusModelRef(params: {
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
-function resolveProviderlessPersistedStatusModelRef(params: {
-  defaultProvider: string;
-  provider?: unknown;
-  model?: unknown;
-}): { provider: string; model: string } | null {
-  const provider = normalizeOptionalString(params.provider);
-  const model = normalizeOptionalString(params.model);
-  if (
-    !model ||
-    provider ||
-    model.includes("/") ||
-    normalizeLowercaseStringOrEmpty(model) === "openrouter:auto"
-  ) {
-    return null;
-  }
-  // Status rows report the persisted session text. Shared ref parsing still
-  // canonicalizes provider-local aliases, which would rewrite this display.
-  return { provider: params.defaultProvider, model };
-}
-
 function resolveStatusModelLookupRef(params: {
   provider?: unknown;
   model?: unknown;
@@ -246,19 +226,19 @@ function resolveSessionModelRef(
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
 ): { provider: string; model: string } {
   const defaultProvider = resolved.provider || DEFAULT_PROVIDER;
-  const providerlessPersisted =
-    resolveProviderlessPersistedStatusModelRef({
-      defaultProvider,
-      provider: entry?.providerOverride,
-      model: entry?.modelOverride,
-    }) ??
-    resolveProviderlessPersistedStatusModelRef({
-      defaultProvider,
-      provider: entry?.modelProvider,
-      model: entry?.model,
-    });
-  if (providerlessPersisted) {
-    return providerlessPersisted;
+  const overrideModel = normalizeOptionalString(entry?.modelOverride);
+  const provider = normalizeOptionalString(
+    overrideModel ? entry?.providerOverride : entry?.modelProvider,
+  );
+  const model = overrideModel ?? normalizeOptionalString(entry?.model);
+  if (
+    model &&
+    !provider &&
+    !model.includes("/") &&
+    normalizeLowercaseStringOrEmpty(model) !== "openrouter:auto"
+  ) {
+    // Preserve the selected model's persisted spelling, not an older runtime model's alias.
+    return { provider: defaultProvider, model };
   }
   return (
     // Persisted selected model or overrides describe the active session, not just current config.
