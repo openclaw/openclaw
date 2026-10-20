@@ -1,4 +1,3 @@
-// Slack tests cover resolve users plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSlackUserAllowlist } from "./resolve-users.js";
 
@@ -11,6 +10,14 @@ vi.mock("./client.js", () => ({
   createSlackLookupClient: slackClientMocks.createSlackLookupClient,
 }));
 
+function resolve(entries: string[]) {
+  return resolveSlackUserAllowlist({ token: "lookup-fixture", entries });
+}
+
+function member(id: string, name: string, flags = {}) {
+  return { id, name, profile: { email: "person@example.com", display_name: "Person" }, ...flags };
+}
+
 describe("resolveSlackUserAllowlist", () => {
   beforeEach(() => {
     slackClientMocks.usersList.mockReset();
@@ -20,69 +27,30 @@ describe("resolveSlackUserAllowlist", () => {
   });
 
   it("uses the bounded lookup client when no client is injected", async () => {
-    const fixture = "lookup-fixture";
     slackClientMocks.usersList.mockResolvedValue({ members: [] });
 
-    const result = await resolveSlackUserAllowlist({
-      token: fixture,
-      entries: ["@missing-user"],
-    });
+    const result = await resolve(["@missing-user"]);
 
     expect(result).toEqual([{ input: "@missing-user", resolved: false }]);
-    expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledOnce();
-    expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledWith(fixture);
+    expect(slackClientMocks.createSlackLookupClient).toHaveBeenCalledExactlyOnceWith(
+      "lookup-fixture",
+    );
     expect(slackClientMocks.usersList).toHaveBeenCalledOnce();
   });
 
   it.each(["person@example.com", "@Person"])(
     "resolves %s by preferring active humans and retaining directory order on ties",
     async (input) => {
-      const client = {
-        users: {
-          list: vi.fn().mockResolvedValue({
-            members: [
-              {
-                id: "U1",
-                name: "bot-user",
-                is_bot: true,
-                deleted: false,
-                profile: { email: "person@example.com", display_name: "Person" },
-              },
-              {
-                id: "U_DELETED",
-                name: "deleted-person",
-                deleted: true,
-                profile: { email: "person@example.com", display_name: "Person" },
-              },
-              {
-                id: "U_APP",
-                name: "app-user",
-                is_app_user: true,
-                profile: { email: "person@example.com", display_name: "Person" },
-              },
-              {
-                id: "U2",
-                name: "person",
-                is_bot: false,
-                deleted: false,
-                profile: { email: "person@example.com", display_name: "Person" },
-              },
-              {
-                id: "U3",
-                name: "another-person",
-                profile: { email: "person@example.com", display_name: "Person" },
-              },
-            ],
-          }),
-        },
-      };
-
-      const res = await resolveSlackUserAllowlist({
-        token: "xoxb-test",
-        entries: [input],
-        client: client as never,
+      slackClientMocks.usersList.mockResolvedValue({
+        members: [
+          member("U1", "bot-user", { is_bot: true, deleted: false }),
+          member("U_DELETED", "deleted-person", { deleted: true }),
+          member("U_APP", "app-user", { is_app_user: true }),
+          member("U2", "person", { is_bot: false, deleted: false }),
+          member("U3", "another-person"),
+        ],
       });
-
+      const res = await resolve([input]);
       expect(res[0]).toEqual({
         deleted: false,
         email: "person@example.com",
@@ -123,10 +91,7 @@ describe("resolveSlackUserAllowlist", () => {
       const first = "team:T22222222:user:U01234567";
       const last = "team:T33333333:user:U01234567";
 
-      const result = await resolveSlackUserAllowlist({
-        token: "lookup-fixture",
-        entries: [first, input, last],
-      });
+      const result = await resolve([first, input, last]);
 
       expect(result).toEqual([
         { input: first, resolved: true, id: first },

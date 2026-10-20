@@ -1,4 +1,3 @@
-// Slack tests cover probe plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { probeSlack } from "./probe.js";
 
@@ -14,6 +13,21 @@ vi.mock("./client-options.js", () => ({
   createSlackProbeDispatcher: createSlackProbeDispatcherMock,
 }));
 
+const team = { id: "T123", name: "OpenClaw" };
+function auth(user_id: string, user: string, bot_id?: string) {
+  authTestMock.mockResolvedValue({
+    ok: true,
+    user_id,
+    user,
+    bot_id,
+    team_id: team.id,
+    team: team.name,
+  });
+}
+function probeUser() {
+  return probeSlack("test-user-token", 2500, { identity: "user" });
+}
+
 describe("probeSlack", () => {
   beforeEach(() => {
     authTestMock.mockReset();
@@ -21,30 +35,19 @@ describe("probeSlack", () => {
     createSlackProbeDispatcherMock.mockClear();
     probeDispatcher.destroy.mockReset().mockResolvedValue(undefined);
 
-    createSlackReadClientMock.mockReturnValue({
-      auth: {
-        test: authTestMock,
-      },
-    });
+    createSlackReadClientMock.mockReturnValue({ auth: { test: authTestMock } });
   });
 
   it("maps Slack auth metadata on success", async () => {
     vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
-    authTestMock.mockResolvedValue({
-      ok: true,
-      user_id: "U123",
-      bot_id: "B123",
-      user: "openclaw-bot",
-      team_id: "T123",
-      team: "OpenClaw",
-    });
+    auth("U123", "openclaw-bot", "B123");
 
     await expect(probeSlack("xoxb-test", 2500)).resolves.toEqual({
       ok: true,
       status: 200,
       elapsedMs: 45,
       bot: { id: "U123", name: "openclaw-bot" },
-      team: { id: "T123", name: "OpenClaw" },
+      team,
     });
     expect(createSlackReadClientMock).toHaveBeenCalledWith(
       "xoxb-test",
@@ -60,13 +63,7 @@ describe("probeSlack", () => {
 
   it("warns when auth.test looks like a user token in the bot token slot", async () => {
     vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
-    authTestMock.mockResolvedValue({
-      ok: true,
-      user_id: "UUSER",
-      user: "human-installer",
-      team_id: "T123",
-      team: "OpenClaw",
-    });
+    auth("UUSER", "human-installer");
 
     await expect(probeSlack("xoxp-user-token", 2500, { accountId: "work" })).resolves.toMatchObject(
       {
@@ -78,30 +75,19 @@ describe("probeSlack", () => {
   });
 
   it("maps a human auth.test identity for user identity", async () => {
-    authTestMock.mockResolvedValue({
-      ok: true,
-      user_id: "UUSER",
-      user: "test-human",
-      team_id: "T123",
-      team: "OpenClaw",
-    });
+    auth("UUSER", "test-human");
 
-    await expect(probeSlack("test-user-token", 2500, { identity: "user" })).resolves.toMatchObject({
+    await expect(probeUser()).resolves.toMatchObject({
       ok: true,
       user: { id: "UUSER", name: "test-human" },
-      team: { id: "T123", name: "OpenClaw" },
+      team,
     });
   });
 
   it("rejects a bot token in the user identity slot", async () => {
-    authTestMock.mockResolvedValue({
-      ok: true,
-      user_id: "UBOT",
-      bot_id: "BBOT",
-      user: "test-bot",
-    });
+    auth("UBOT", "test-bot", "BBOT");
 
-    await expect(probeSlack("test-user-token", 2500, { identity: "user" })).resolves.toMatchObject({
+    await expect(probeUser()).resolves.toMatchObject({
       ok: false,
       error: "Slack auth.test identified a bot token; user identity requires a user OAuth token",
     });
@@ -110,7 +96,7 @@ describe("probeSlack", () => {
   it("rejects user identity auth.test responses without a human user_id", async () => {
     authTestMock.mockResolvedValue({ ok: true, user: "test-human" });
 
-    await expect(probeSlack("test-user-token", 2500, { identity: "user" })).resolves.toMatchObject({
+    await expect(probeUser()).resolves.toMatchObject({
       ok: false,
       error: "Slack auth.test returned no human user_id for user identity",
     });
