@@ -79,6 +79,54 @@ async function listenOnLoopback(handler: RequestListener) {
 }
 
 describe("gateway startup benchmark script", () => {
+  it.skipIf(process.platform === "win32")(
+    "reports an unavailable high-port range without retrying indefinitely",
+    async ({ signal }) => {
+      const root = tempDirs.make("openclaw-bench-low-ports-");
+      const entry = path.join(root, "entry.mjs");
+      const preload = path.join(root, "low-ports.mjs");
+      fs.writeFileSync(entry, 'throw new Error("Gateway must not start without a usable port");');
+      fs.writeFileSync(
+        preload,
+        `import { Server } from "node:net";
+const address = Server.prototype.address;
+let attempts = 0;
+Server.prototype.address = function () {
+  const result = address.call(this);
+  if (result && typeof result === "object") {
+    // Fail the fixture before an unbounded retry loop can hang the test process.
+    if (++attempts > 1000) throw new Error("unbounded port allocation retries");
+    return { ...result, port: 39999 };
+  }
+  return result;
+};`,
+      );
+      const result = await runNodeScript(
+        [
+          "--import",
+          preload,
+          "--import",
+          "tsx",
+          "scripts/bench-gateway-startup.ts",
+          "--entry",
+          entry,
+          "--case",
+          "skipChannels",
+          "--runs",
+          "1",
+          "--warmup",
+          "0",
+        ],
+        { ...process.env, TMPDIR: root },
+        undefined,
+        { cwd: process.cwd(), signal, maxBuffer: 1024 * 1024, requireProcessTreeExit: true },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("could not allocate a benchmark port >= 40000");
+    },
+  );
+
   // Strict managed process-group verification is not supported on Windows.
   it.skipIf(process.platform === "win32")(
     "requires seeded session access and clean shutdown only for populated fixtures",

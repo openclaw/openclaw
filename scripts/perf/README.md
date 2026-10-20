@@ -63,7 +63,9 @@ the shared deadline. A healthy HTTP endpoint without a successful session RPC
 fails the measurement. The `teamBoot` case also requires the expected seeded
 session; an empty or unrelated roster does not count. `startupTraceLines` preserves every observed startup
 trace line, including repeated spans; `startupTrace` retains the existing numeric
-summary. All benchmark Gateway ports are at least 40000.
+summary. All benchmark Gateway ports are at least 40000. If the host's ephemeral
+port range cannot provide one, the benchmark reports a setup error after bounded
+attempts instead of waiting indefinitely.
 
 Samples record teardown duration in `shutdownMs` and forced process-tree cleanup
 in `shutdownForced`; the summary includes shutdown timing statistics. The

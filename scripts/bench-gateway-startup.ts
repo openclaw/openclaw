@@ -875,11 +875,13 @@ async function seedTeamBootFixture(root: string): Promise<void> {
   const previousEnv = process.env;
   process.env = { ...env };
   try {
-    const [agentDb, stateDb, { writeSessionEntry }] = await Promise.all([
-      import("../src/state/openclaw-agent-db.js"),
-      import("../src/state/openclaw-state-db.js"),
-      import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
-    ]);
+    const [agentDb, stateDb, { writeSessionEntry }, { writeConfigMachineStateAsync }] =
+      await Promise.all([
+        import("../src/state/openclaw-agent-db.js"),
+        import("../src/state/openclaw-state-db.js"),
+        import("../src/config/sessions/session-accessor.sqlite-entry-store.js"),
+        import("../src/state/config-machine-state-async.js"),
+      ]);
     const now = Date.parse("2026-10-19T00:00:00Z");
     const agents = buildBenchAgentList(root, benchCase.agentTopology)!;
     const databasePaths: string[] = [];
@@ -920,15 +922,8 @@ async function seedTeamBootFixture(root: string): Promise<void> {
             );
           }
         }
-        const payload = JSON.stringify(cipher.update(Buffer.alloc(768 * 1024)).toString("base64"));
-        stateDb.runOpenClawStateWriteTransaction(
-          ({ db }) => {
-            db.prepare(
-              "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-            ).run(`startup-benchmark.payload.${index}`, payload, now);
-          },
-          { env },
-        );
+        const payload = cipher.update(Buffer.alloc(768 * 1024)).toString("base64");
+        await writeConfigMachineStateAsync(`startup-benchmark.payload.${index}`, payload, { env });
         if (index % 8 === 7) {
           state.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
           await delay(100);
@@ -1223,9 +1218,14 @@ async function runGatewaySample(
     : withGatewayBenchRoot;
   return await withRoot(async (root) => {
     const slowAgent = options.benchCase.id === "slowAgentDatabase";
-    let port = await getFreePort();
-    while (port < 40000) {
+    let port = 0;
+    for (let attempt = 0; port < 40000 && attempt < 32; attempt++) {
       port = await getFreePort();
+    }
+    if (port < 40000) {
+      throw new CliArgumentError(
+        "could not allocate a benchmark port >= 40000 after 32 attempts; ensure the host's ephemeral port range includes ports >= 40000",
+      );
     }
     const configPath = writeConfig(root, options.benchCase);
     const env = createGatewayBenchEnv(root, configPath, { caseEnv: options.benchCase.env });
