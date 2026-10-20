@@ -13,7 +13,8 @@ import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.type
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const published = vi.hoisted((): { owner?: PreparedModelRuntimeSnapshot } => ({}));
-vi.mock("./prepared-model-catalog.js", () => ({
+vi.mock("./prepared-model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./prepared-model-catalog.js")>()),
   getPublishedPreparedModelCatalogOwnerSnapshot: () => published.owner,
   materializePreparedModelCatalogOwner: (owner: PreparedModelRuntimeSnapshot) => owner,
   loadProviderScopedThinkingCatalog: async () => {
