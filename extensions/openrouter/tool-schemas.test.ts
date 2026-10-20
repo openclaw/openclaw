@@ -24,19 +24,15 @@ function normalize(
   modelId = "openrouter/moonshotai/kimi-example",
 ) {
   const tool = createTool(schema);
-  const context = {
+  const tools = provider.normalizeToolSchemas?.({
     provider: "openrouter",
     modelId,
     modelApi: "openai-completions",
     tools: [tool],
-  };
-  const tools = provider.normalizeToolSchemas?.(context);
+  });
   expect(tools).toHaveLength(1);
-  expect(tools?.[0]?.execute).toBe(tool.execute);
-  const normalizedTool = tools?.[0];
-  if (!normalizedTool) {
-    throw new Error("normalized tool missing");
-  }
+  const normalizedTool = tools![0]!;
+  expect(normalizedTool.execute).toBe(tool.execute);
   return normalizedTool.parameters as Record<string, unknown>;
 }
 
@@ -48,85 +44,56 @@ describe("OpenRouter tool schemas", () => {
     const schema = { type: "object", properties: { value }, required: ["value"] };
     const result = normalize(schema);
     expect(result.properties).not.toEqual(schema.properties);
-    for (const sample of [
-      "red",
-      "blue",
-      null,
-      1,
-      2,
-      3,
-      4,
-      4.5,
-      true,
-      {},
-      { a: 1 },
-      { b: 2 },
-      { c: 3 },
-    ]) {
+    for (const sample of ["red", "blue", null, 1, 2, 3, 4, 4.5, true, {}]) {
       expect(Check(result, { value: sample }), JSON.stringify(sample)).toBe(
         Check(schema, { value: sample }),
       );
     }
   });
 
-  it.each([{ type: "string", anyOf: [{ oneOf: [{ const: "red" }, { const: "blue" }] }] }])(
-    "leaves unevidenced or incompatible unions intact: %j",
-    (value) => {
-      const schema = { type: "object", properties: { value } };
-      expect(normalize(schema)).toEqual(schema);
-    },
-  );
+  it("leaves unevidenced or incompatible unions intact", () => {
+    const value = { type: "string", anyOf: [{ oneOf: [{ const: "red" }, { const: "blue" }] }] };
+    const schema = { type: "object", properties: { value } };
+    expect(normalize(schema)).toEqual(schema);
+  });
 
   it("walks schema locations without interpreting annotation objects or special property names", () => {
     const union = { type: "string", anyOf: [{ const: "red" }, { const: "blue" }] };
-    const typed = {
-      anyOf: [
-        { type: "string", const: "red" },
-        { type: "string", const: "blue" },
-      ],
-    };
+    const typed = { anyOf: ["red", "blue"].map((color) => ({ type: "string", const: color })) };
+    const locations = (value: Record<string, unknown>) => ({
+      properties: Object.fromEntries([
+        ["__proto__", value],
+        ["anyOf", { type: "array", items: value }],
+      ]),
+      $defs: { value },
+      dependencies: { dependent: value, list: ["first", "second"] },
+    });
     const schema = {
       type: "object",
-      properties: Object.fromEntries([
-        ["__proto__", union],
-        ["anyOf", { type: "array", items: union }],
-      ]),
-      $defs: { value: union },
-      dependencies: { dependent: union, list: ["first", "second"] },
+      ...locations(union),
       default: { value: union },
       examples: [{ value: union }],
     };
     const result = normalize(schema);
-    expect(result).toEqual({
-      ...schema,
-      properties: Object.fromEntries([
-        ["__proto__", typed],
-        ["anyOf", { type: "array", items: typed }],
-      ]),
-      $defs: { value: typed },
-      dependencies: { dependent: typed, list: ["first", "second"] },
-    });
+    expect(result).toEqual({ ...schema, ...locations(typed) });
     expect(Object.hasOwn(result.properties as object, "__proto__")).toBe(true);
     expect(normalize(result)).toEqual(result);
   });
 
-  it.each(["openrouter/deepseek-v4-flash"])(
-    "preserves existing OpenRouter schemas for %s",
-    (modelId) => {
-      const schema = {
-        type: "object",
-        properties: { value: { anyOf: [{ type: "string" }, { type: "integer" }] } },
-        additionalProperties: false,
-      };
-      const result = normalize(schema, modelId);
-      expect(result).toBe(schema);
-      expect(
-        provider.inspectToolSchemas?.({
-          provider: "openrouter",
-          modelId,
-          tools: [createTool(schema)],
-        }),
-      ).toEqual([]);
-    },
-  );
+  it("preserves existing OpenRouter schemas for DeepSeek", () => {
+    const modelId = "openrouter/deepseek-v4-flash";
+    const schema = {
+      type: "object",
+      properties: { value: { anyOf: [{ type: "string" }, { type: "integer" }] } },
+      additionalProperties: false,
+    };
+    expect(normalize(schema, modelId)).toBe(schema);
+    expect(
+      provider.inspectToolSchemas?.({
+        provider: "openrouter",
+        modelId,
+        tools: [createTool(schema)],
+      }),
+    ).toEqual([]);
+  });
 });

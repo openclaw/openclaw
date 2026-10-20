@@ -18,10 +18,8 @@ function resolveContribution(agents: OpenClawConfig["agents"], agentId?: string)
   });
 }
 
-function createFusionModelConfig(modelKey: string, extraBody: Record<string, unknown>) {
-  return {
-    defaults: { models: { [modelKey]: { params: { extraBody } } } },
-  };
+function fusionModels(fields: Record<string, unknown>, key = "openrouter/fusion") {
+  return { [key]: { params: { extraBody: fusionBody(fields) } } };
 }
 
 function fusionBody(fields: Record<string, unknown>) {
@@ -31,15 +29,14 @@ function fusionBody(fields: Record<string, unknown>) {
 describe("openrouter Fusion prompt hooks", () => {
   it("keeps bounded Fusion model IDs on valid UTF-16 boundaries", () => {
     const boundaryModelId = `${"a".repeat(255)}😀tail`;
-    const contribution = resolveContribution(
-      createFusionModelConfig(
-        "openrouter/openrouter/fusion",
-        fusionBody({
-          analysis_models: [boundaryModelId],
-          model: boundaryModelId,
-        }),
-      ),
-    );
+    const contribution = resolveContribution({
+      defaults: {
+        models: fusionModels(
+          { analysis_models: [boundaryModelId], model: boundaryModelId },
+          "openrouter/openrouter/fusion",
+        ),
+      },
+    });
 
     expect(contribution?.dynamicSuffix).toContain(`Analysis models: ${"a".repeat(255)}.`);
     expect(contribution?.dynamicSuffix).toContain(`Final Fusion model: ${"a".repeat(255)}.`);
@@ -49,13 +46,7 @@ describe("openrouter Fusion prompt hooks", () => {
     const contribution = resolveContribution({
       defaults: {
         params: { extra_body: fusionBody({ analysis_models: ["google/gemini-3.5-flash"] }) },
-        models: {
-          "openrouter/fusion": {
-            params: {
-              extraBody: fusionBody({ analysis_models: ["deepseek/deepseek-v4-pro"] }),
-            },
-          },
-        },
+        models: fusionModels({ analysis_models: ["deepseek/deepseek-v4-pro"] }),
       },
     });
 
@@ -68,9 +59,7 @@ describe("openrouter Fusion prompt hooks", () => {
       {
         entries: {
           reviewer: {
-            params: {
-              extraBody: fusionBody({ analysis_models: ["deepseek/deepseek-v4-pro"] }),
-            },
+            params: { extraBody: fusionBody({ analysis_models: ["deepseek/deepseek-v4-pro"] }) },
           },
         },
       },
@@ -83,20 +72,10 @@ describe("openrouter Fusion prompt hooks", () => {
   it("uses the bound agent's model-specific Fusion configuration", () => {
     const contribution = resolveContribution(
       {
-        defaults: {
-          models: {
-            "openrouter/fusion": {
-              params: { extraBody: fusionBody({ model: "default/model" }) },
-            },
-          },
-        },
+        defaults: { models: fusionModels({ model: "default/model" }) },
         entries: {
           reviewer: {
-            models: {
-              "openrouter/openrouter/fusion": {
-                params: { extraBody: fusionBody({ model: "reviewer/model" }) },
-              },
-            },
+            models: fusionModels({ model: "reviewer/model" }, "openrouter/openrouter/fusion"),
           },
         },
       },
@@ -107,28 +86,22 @@ describe("openrouter Fusion prompt hooks", () => {
     expect(contribution?.dynamicSuffix).not.toContain("default/model");
   });
 
-  it("keeps arbitrary OpenRouter extraBody fields out of the system prompt", () => {
-    const contribution = resolveContribution(
-      createFusionModelConfig("openrouter/openrouter/fusion", {
-        metadata: { private: "do-not-render" },
-        plugins: [{ id: "not-fusion", model: "private-model" }],
-      }),
-    );
-
-    expect(contribution).toBeUndefined();
-  });
-
-  it("does not describe disabled Fusion plugin config in the system prompt", () => {
-    const contribution = resolveContribution(
-      createFusionModelConfig(
-        "openrouter/fusion",
-        fusionBody({
-          enabled: false,
-          analysis_models: ["deepseek/deepseek-v4-pro"],
-          model: "google/gemini-3.5-flash",
-        }),
-      ),
-    );
+  it.each([
+    {
+      metadata: { private: "do-not-render" },
+      plugins: [{ id: "not-fusion", model: "private-model" }],
+    },
+    fusionBody({
+      enabled: false,
+      analysis_models: ["deepseek/deepseek-v4-pro"],
+      model: "google/gemini-3.5-flash",
+    }),
+  ])("omits non-Fusion and disabled extraBody from the prompt: %j", (extraBody) => {
+    const contribution = resolveContribution({
+      defaults: {
+        models: { "openrouter/openrouter/fusion": { params: { extraBody } } },
+      },
+    });
 
     expect(contribution).toBeUndefined();
   });

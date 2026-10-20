@@ -1,4 +1,3 @@
-// Openrouter tests cover media understanding provider plugin behavior.
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
@@ -23,22 +22,35 @@ function firstPostJsonRequest(): { body?: unknown; headers?: Headers } {
   return request as { body?: unknown; headers?: Headers };
 }
 
+function respond(body = JSON.stringify({ text: "ok" }), status = 200) {
+  const release = vi.fn(async () => {});
+  postJsonRequestMock.mockResolvedValue({ response: new Response(body, { status }), release });
+  return release;
+}
+function transcribe(overrides: Partial<Parameters<typeof transcribeOpenRouterAudio>[0]> = {}) {
+  return transcribeOpenRouterAudio({
+    buffer: Buffer.from("audio"),
+    fileName: "voice.wav",
+    mime: "audio/wav",
+    apiKey: "sk-openrouter",
+    timeoutMs: 5_000,
+    fetchFn: fetch,
+    ...overrides,
+  });
+}
+function inputAudio(data: string, format: string) {
+  return { data: Buffer.from(data).toString("base64"), format };
+}
+
 describe("openrouter media understanding provider", () => {
   it("sends JSON STT payload to OpenRouter transcriptions endpoint", async () => {
-    const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ text: "hello world" }), { status: 200 }),
-      release,
-    });
-
-    const result = await transcribeOpenRouterAudio({
+    const release = respond(JSON.stringify({ text: "hello world" }));
+    const result = await transcribe({
       buffer: Buffer.from("audio-bytes"),
       fileName: "voice.oga",
       mime: "audio/ogg",
-      apiKey: "sk-openrouter",
       timeoutMs: 12_000,
       language: " en ",
-      fetchFn: fetch,
     });
 
     expect(result).toEqual({
@@ -64,10 +76,7 @@ describe("openrouter media understanding provider", () => {
       headers: expect.any(Headers),
       body: {
         model: "openai/whisper-large-v3-turbo",
-        input_audio: {
-          data: Buffer.from("audio-bytes").toString("base64"),
-          format: "ogg",
-        },
+        input_audio: inputAudio("audio-bytes", "ogg"),
         language: "en",
       },
       timeoutMs: 12_000,
@@ -85,106 +94,43 @@ describe("openrouter media understanding provider", () => {
   });
 
   it("accepts temperature via provider query options", async () => {
-    const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
-      release,
-    });
-
-    await transcribeOpenRouterAudio({
-      buffer: Buffer.from("audio"),
+    respond();
+    await transcribe({
       fileName: "voice.webm",
-      apiKey: "sk-openrouter",
-      timeoutMs: 5_000,
+      mime: undefined,
       query: { temperature: 0.2 },
-      fetchFn: fetch,
     });
 
     expect(firstPostJsonRequest().body).toEqual({
       model: "openai/whisper-large-v3-turbo",
-      input_audio: {
-        data: Buffer.from("audio").toString("base64"),
-        format: "webm",
-      },
+      input_audio: inputAudio("audio", "webm"),
       temperature: 0.2,
     });
   });
 
-  it("falls back to filename extension when mime is missing", async () => {
-    const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
-      release,
-    });
-
-    await transcribeOpenRouterAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "voice.opus",
-      apiKey: "sk-openrouter",
-      timeoutMs: 5_000,
-      fetchFn: fetch,
-    });
+  it.each([
+    ["opus", "ogg"],
+    ["mp4", "m4a"],
+  ])("resolves %s filename extension to %s when mime is missing", async (extension, format) => {
+    respond();
+    await transcribe({ fileName: `voice.${extension}`, mime: undefined });
 
     expect(firstPostJsonRequest().body).toEqual({
       model: "openai/whisper-large-v3-turbo",
-      input_audio: {
-        data: Buffer.from("audio").toString("base64"),
-        format: "ogg",
-      },
-    });
-  });
-
-  it("maps mp4 filename extension to m4a when mime is missing", async () => {
-    const release = vi.fn(async () => {});
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(JSON.stringify({ text: "ok" }), { status: 200 }),
-      release,
-    });
-
-    await transcribeOpenRouterAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "voice.mp4",
-      apiKey: "sk-openrouter",
-      timeoutMs: 5_000,
-      fetchFn: fetch,
-    });
-
-    expect(firstPostJsonRequest().body).toEqual({
-      model: "openai/whisper-large-v3-turbo",
-      input_audio: {
-        data: Buffer.from("audio").toString("base64"),
-        format: "m4a",
-      },
+      input_audio: inputAudio("audio", format),
     });
   });
 
   it("throws when format cannot be resolved", async () => {
     await expect(
-      transcribeOpenRouterAudio({
-        buffer: Buffer.from("audio"),
-        fileName: "voice.bin",
-        mime: "application/octet-stream",
-        apiKey: "sk-openrouter",
-        timeoutMs: 5_000,
-        fetchFn: fetch,
-      }),
+      transcribe({ fileName: "voice.bin", mime: "application/octet-stream" }),
     ).rejects.toThrow("OpenRouter STT could not resolve audio format");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
   const transcribeWavResponse = (body: string, status = 200) => {
-    postJsonRequestMock.mockResolvedValue({
-      response: new Response(body, { status }),
-      release: vi.fn(async () => {}),
-    });
-    return transcribeOpenRouterAudio({
-      buffer: Buffer.from("audio"),
-      fileName: "voice.wav",
-      mime: "audio/wav",
-      apiKey: "sk-openrouter",
-      timeoutMs: 5_000,
-      fetchFn: fetch,
-    });
+    respond(body, status);
+    return transcribe();
   };
 
   it.each(["", " \t\n"])(
