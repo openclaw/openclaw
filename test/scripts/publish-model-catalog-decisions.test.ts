@@ -11,6 +11,12 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+const decision = { protocol: "fixture.decisions", input: ["text"] };
+const billing = {
+  unit: "tokens",
+  source: "provider-docs",
+  usdPerMillion: { input: 0, output: 0 },
+};
 
 function fixture(chatModels = 200) {
   const rootDir = tempDirs.make("openclaw-catalog-decisions-");
@@ -27,14 +33,7 @@ function fixture(chatModels = 200) {
             authScope: "agent",
             models: Array.from({ length: chatModels - 1 }, (_, index) => ({
               id: `chat-${index}`,
-              ...(index === 0
-                ? {
-                    inference: {
-                      chat: true,
-                      decision: { protocol: "fixture.decisions", input: ["text"] },
-                    },
-                  }
-                : {}),
+              ...(index === 0 ? { inference: { chat: true, decision } } : {}),
             })),
           },
           fixture: {
@@ -50,14 +49,9 @@ function fixture(chatModels = 200) {
                 inference: {
                   chat: false,
                   decision: {
-                    protocol: "fixture.decisions",
-                    input: ["text"],
+                    ...decision,
                     questions: { boolean: { probabilities: "boolean", abstention: false } },
-                    billing: {
-                      unit: "tokens",
-                      source: "provider-docs",
-                      usdPerMillion: { input: 0, output: 0 },
-                    },
+                    billing,
                   },
                 },
               },
@@ -69,11 +63,8 @@ function fixture(chatModels = 200) {
   );
   fs.mkdirSync(path.join(rootDir, "scripts", "lib"), { recursive: true });
   fs.writeFileSync(path.join(rootDir, "scripts", "lib", "recommended-models.json"), "[]");
-  const files = [
-    path.join(rootDir, "v1.json"),
-    path.join(rootDir, "v2.json"),
-    path.join(rootDir, "v3.json"),
-  ] as const;
+  const file = (version: number) => path.join(rootDir, `v${version}.json`);
+  const files = [file(1), file(2), file(3)] as const;
   vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   return {
     files,

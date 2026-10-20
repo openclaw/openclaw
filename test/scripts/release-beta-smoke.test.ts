@@ -1,4 +1,3 @@
-// Release Beta Smoke tests cover release beta smoke script behavior.
 import { describe, expect, it } from "vitest";
 import {
   mergeTelegramProofIntoReleaseBody,
@@ -10,6 +9,19 @@ import {
   run,
 } from "../../scripts/release-beta-smoke.ts";
 
+const telegramProof =
+  "- npm Telegram beta E2E: https://github.com/openclaw/openclaw/actions/runs/123";
+const releaseBody = (proof = "") =>
+  `## Changes\n\n### Release verification\n\n` +
+  `- npm package: https://www.npmjs.com/package/openclaw/v/2026.5.20-beta.1\n` +
+  `${proof}\n\n### Assets\n\n- artifact\n`;
+const workflowRun = (completed = false) => ({
+  conclusion: completed ? "success" : null,
+  html_url: "https://github.com/openclaw/openclaw/actions/runs/123",
+  status: completed ? "completed" : "queued",
+  updated_at: "2026-05-28T12:00:00Z",
+});
+
 describe("release-beta-smoke", () => {
   it("rejects runs with both validation lanes skipped", () => {
     expect(() => parseArgs(["--skip-parallels", "--skip-telegram"])).toThrow(
@@ -17,30 +29,26 @@ describe("release-beta-smoke", () => {
     );
   });
 
-  it("stops parsing options after the argument terminator", () => {
-    expect(
-      parseArgs(["--beta", "beta-a", "--", "--skip-parallels", "--skip-telegram"]),
-    ).toMatchObject({
+  it.each([
+    [["--beta", "beta-a", "--", "--skip-parallels", "--skip-telegram"], false],
+    [["--", "--beta", "beta-a", "--skip-parallels"], true],
+  ] as const)("respects the argument separator in %j", (args, skipParallels) => {
+    expect(parseArgs([...args])).toMatchObject({
       beta: "beta-a",
-      skipParallels: false,
+      skipParallels,
       skipTelegram: false,
     });
   });
 
-  it("accepts package-manager argument separators before script options", () => {
-    expect(parseArgs(["--", "--beta", "beta-a", "--skip-parallels"])).toMatchObject({
-      beta: "beta-a",
-      skipParallels: true,
-    });
-  });
-
   it("rejects malformed positive integer environment limits", () => {
-    expect(readPositiveInt(undefined, 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS")).toBe(60);
-    expect(readPositiveInt("", 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS")).toBe(60);
-    expect(readPositiveInt("25", 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS")).toBe(25);
+    const readLimit = (raw?: string) =>
+      readPositiveInt(raw, 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS");
+    expect(readLimit()).toBe(60);
+    expect(readLimit("")).toBe(60);
+    expect(readLimit("25")).toBe(25);
 
     for (const raw of ["1e3", "25ms", "1.5", "0", "-1", String(Number.MAX_SAFE_INTEGER + 1)]) {
-      expect(() => readPositiveInt(raw, 60, "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS")).toThrow(
+      expect(() => readLimit(raw)).toThrow(
         "OPENCLAW_RELEASE_BETA_SMOKE_COMMAND_MS must be a positive integer",
       );
     }
@@ -61,23 +69,9 @@ describe("release-beta-smoke", () => {
   });
 
   it("replaces stale Telegram proof placeholders", () => {
-    const body = [
-      "## Changes",
-      "",
-      "### Release verification",
-      "",
-      "- npm package: https://www.npmjs.com/package/openclaw/v/2026.5.20-beta.1",
-      "- npm Telegram beta E2E: not supplied",
-      "",
-      "### Assets",
-      "",
-      "- artifact",
-      "",
-    ].join("\n");
-
     const merged = mergeTelegramProofIntoReleaseBody(
-      body,
-      "- npm Telegram beta E2E: https://github.com/openclaw/openclaw/actions/runs/123",
+      releaseBody("- npm Telegram beta E2E: not supplied"),
+      telegramProof,
     );
 
     expect(merged).toContain("actions/runs/123");
@@ -86,24 +80,7 @@ describe("release-beta-smoke", () => {
   });
 
   it("inserts Telegram proof before the next release notes subsection", () => {
-    const body = [
-      "## Changes",
-      "",
-      "### Release verification",
-      "",
-      "- npm package: https://www.npmjs.com/package/openclaw/v/2026.5.20-beta.1",
-      "",
-      "### Assets",
-      "",
-      "- artifact",
-      "",
-    ].join("\n");
-
-    const merged = mergeTelegramProofIntoReleaseBody(
-      body,
-      "- npm Telegram beta E2E: https://github.com/openclaw/openclaw/actions/runs/123",
-    );
-
+    const merged = mergeTelegramProofIntoReleaseBody(releaseBody(), telegramProof);
     expect(merged.indexOf("actions/runs/123")).toBeLessThan(merged.indexOf("### Assets"));
   });
 
@@ -112,10 +89,7 @@ describe("release-beta-smoke", () => {
       run(
         process.execPath,
         ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
-        {
-          capture: true,
-          timeoutMs: 50,
-        },
+        { capture: true, timeoutMs: 50 },
       ),
     ).toThrow(/timed out after 50ms/u);
   });
@@ -128,12 +102,7 @@ describe("release-beta-smoke", () => {
       pollRun("openclaw/openclaw", "123", {
         now: () => now,
         pollIntervalMs: 400,
-        readRun: () => ({
-          conclusion: null,
-          html_url: "https://github.com/openclaw/openclaw/actions/runs/123",
-          status: "queued",
-          updated_at: "2026-05-28T12:00:00Z",
-        }),
+        readRun: () => workflowRun(),
         sleep: async (ms) => {
           sleeps.push(ms);
           now += ms;
@@ -147,12 +116,7 @@ describe("release-beta-smoke", () => {
   it("returns when the Telegram workflow succeeds", async () => {
     await expect(
       pollRun("openclaw/openclaw", "123", {
-        readRun: () => ({
-          conclusion: "success",
-          html_url: "https://github.com/openclaw/openclaw/actions/runs/123",
-          status: "completed",
-          updated_at: "2026-05-28T12:00:00Z",
-        }),
+        readRun: () => workflowRun(true),
         sleep: async () => {
           throw new Error("sleep should not run after completion");
         },

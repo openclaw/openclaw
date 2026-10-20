@@ -14,6 +14,11 @@ import {
 } from "./run-node.test-support.js";
 
 const liveSuiteArgs = ["qa", "suite", "--provider-mode", "live-frontier"] as const;
+const callerEnv = { CODEX_HOME: "/host/.codex", OPENCLAW_RUNNER_LOG: "0" };
+const apiKey = "synthetic-qa-api-key";
+const keyReader = () =>
+  vi.fn(() => ({ type: "api_key" as const, provider: "openai" as const, key: apiKey }));
+const readOptions = { codexHome: callerEnv.CODEX_HOME, allowKeychainPrompt: false };
 
 describe("QA Codex API-key launcher handoff", () => {
   it("preserves missing-auth rejection by returning no handoff", () => {
@@ -26,10 +31,7 @@ describe("QA Codex API-key launcher handoff", () => {
         readCodexApiKey,
       }),
     ).toBeUndefined();
-    expect(readCodexApiKey).toHaveBeenCalledExactlyOnceWith({
-      codexHome: "/host/.codex",
-      allowKeychainPrompt: false,
-    });
+    expect(readCodexApiKey).toHaveBeenCalledExactlyOnceWith(readOptions);
   });
 
   it.each([
@@ -39,19 +41,10 @@ describe("QA Codex API-key launcher handoff", () => {
       ["qa", "--log-level", "debug", "suite", "--provider-mode=live-frontier"],
     ],
   ] as const)("recognizes a live suite with a %s between command tokens", (_name, args) => {
-    const readCodexApiKey = vi.fn(() => ({
-      type: "api_key" as const,
-      provider: "openai" as const,
-      key: "synthetic-qa-api-key",
-    }));
-
-    expect(
-      resolveQaCodexApiKeyEnvPatch({
-        args,
-        env: { CODEX_HOME: "/host/.codex" },
-        readCodexApiKey,
-      }),
-    ).toEqual({ [OPENCLAW_QA_CODEX_API_KEY_HANDOFF]: "synthetic-qa-api-key" });
+    const readCodexApiKey = keyReader();
+    expect(resolveQaCodexApiKeyEnvPatch({ args, env: callerEnv, readCodexApiKey })).toEqual({
+      [OPENCLAW_QA_CODEX_API_KEY_HANDOFF]: apiKey,
+    });
     expect(readCodexApiKey).toHaveBeenCalledOnce();
   });
 
@@ -65,13 +58,7 @@ describe("QA Codex API-key launcher handoff", () => {
       throw new Error("unexpected credential read");
     });
 
-    expect(
-      resolveQaCodexApiKeyEnvPatch({
-        args,
-        env,
-        readCodexApiKey,
-      }),
-    ).toBeUndefined();
+    expect(resolveQaCodexApiKeyEnvPatch({ args, env, readCodexApiKey })).toBeUndefined();
     expect(readCodexApiKey).not.toHaveBeenCalled();
   });
 });
@@ -86,16 +73,7 @@ fixtureIt(
         [QA_RUNTIME_PLUGIN_SDK_ENTRY]: "export {};\n",
       },
     });
-    const callerEnv = {
-      CODEX_HOME: "/host/.codex",
-      OPENCLAW_RUNNER_LOG: "0",
-    };
-    const apiKey = "synthetic-qa-api-key";
-    const readCodexApiKey = vi.fn(() => ({
-      type: "api_key" as const,
-      provider: "openai" as const,
-      key: apiKey,
-    }));
+    const readCodexApiKey = keyReader();
     let launchedEnv: NodeJS.ProcessEnv | undefined;
     const spawn = vi.fn(
       (_command: string, _args: string[], options: { env?: NodeJS.ProcessEnv }) => {
@@ -120,9 +98,6 @@ fixtureIt(
     expect(launchedEnv).not.toHaveProperty("CODEX_API_KEY");
     expect(callerEnv).toEqual({ CODEX_HOME: "/host/.codex", OPENCLAW_RUNNER_LOG: "0" });
     expect(JSON.stringify(callerEnv)).not.toContain(apiKey);
-    expect(readCodexApiKey).toHaveBeenCalledExactlyOnceWith({
-      codexHome: "/host/.codex",
-      allowKeychainPrompt: false,
-    });
+    expect(readCodexApiKey).toHaveBeenCalledExactlyOnceWith(readOptions);
   },
 );
