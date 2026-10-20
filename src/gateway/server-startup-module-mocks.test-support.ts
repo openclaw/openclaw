@@ -65,10 +65,7 @@ export async function installGatewayHookModuleLoad(
 ): Promise<void> {
   const owner = await import("../plugins/hooks.js");
   // mock-isolation: Preserve the captured hook namespace while delaying only future imports.
-  vi.doMock("../plugins/hooks.js", async () => {
-    await waitForLoad();
-    return owner;
-  });
+  vi.doMock("../plugins/hooks.js", () => waitForLoad().then(() => owner));
   // mock-isolation: Restore captured namespaces without resetting Gateway singletons.
   restorers.push(() => vi.doMock("../plugins/hooks.js", () => owner));
 }
@@ -80,9 +77,8 @@ export async function installGatewaySubagentModuleLoad(
 ): Promise<void> {
   const owner = await import("../agents/subagents/registry/subagent-registry.js");
   // mock-isolation: Delay registry loading and observe activation without restoring live runs.
-  vi.doMock("../agents/subagents/registry/subagent-registry.js", async () => {
-    await waitForLoad();
-    return { ...owner, activateSubagentRegistry: activate };
-  });
+  vi.doMock("../agents/subagents/registry/subagent-registry.js", () =>
+    waitForLoad().then(() => ({ ...owner, activateSubagentRegistry: activate })),
+  );
   restorers.push(() => vi.doMock("../agents/subagents/registry/subagent-registry.js", () => owner));
 }

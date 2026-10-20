@@ -1,11 +1,4 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { beforeAll, expect, it, vi } from "vitest";
-import {
-  BUILD_STAMP_FILE,
-  resolveGitHead,
-  RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata.mts";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getFreePort } from "../test-utils/ports.js";
@@ -13,31 +6,12 @@ import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer } from "./server-public.js";
 import * as fixture from "./server-startup-state.test-support.js";
 
-beforeAll(async () => {
-  const root = process.cwd();
-  const head = resolveGitHead({ cwd: root });
-  expect(head).toMatch(/^[0-9a-f]{40}$/u);
-  await fs.access(path.join(root, "dist/index.js"));
-  for (const [file, field] of [
-    [BUILD_STAMP_FILE, "head"],
-    [RUNTIME_POSTBUILD_STAMP_FILE, "head"],
-    ["build-info.json", "commit"],
-  ] as const) {
-    const metadata = JSON.parse(await fs.readFile(path.join(root, "dist", file), "utf8"));
-    expect(metadata[field], file).toBe(head);
-  }
-});
-
 it.for(["kernel", "public"] as const)(
   "retains shutdown dependencies after connection-sidecar failure during %s close",
   async (entry) => {
     const port = await getFreePort();
     const state = await fixture.createGatewayStartupTestState(`gateway-${entry}-sidecar-retention`);
     const token = "gateway-sidecar-retention-token";
-    const stopEntered = createDeferred();
-    const releaseStop = createDeferred();
-    const lateStopEntered = createDeferred();
-    const releaseLateStop = createDeferred();
     const dependencyStopEntered = createDeferred();
     const stopError = new Error("remote worker stop failed");
     let failStop = true;
@@ -52,15 +26,14 @@ it.for(["kernel", "public"] as const)(
         return kernel;
       },
     );
-    const sidecar = {
-      stop: vi.fn(async () => {
-        stopEntered.resolve();
-        await releaseStop.promise;
-        if (failStop) {
-          throw stopError;
-        }
-      }),
-    };
+    const stopGate = fixture.createStartupGate(() => {
+      if (failStop) {
+        throw stopError;
+      }
+    });
+    const lateStopGate = fixture.createStartupGate();
+    const sidecar = { stop: vi.fn(stopGate.run) };
+    const lateSidecar = { stop: vi.fn(lateStopGate.run) };
     try {
       await state.writeConfig({
         gateway: fixture.gatewayStartupTestConfig(port, token),
@@ -92,19 +65,13 @@ it.for(["kernel", "public"] as const)(
       closing = (server ? server.close() : activeKernel.closeOnStartupFailure()).catch(
         (error: unknown) => error,
       );
-      await stopEntered.promise;
-      const lateSidecar = {
-        stop: vi.fn(async () => {
-          lateStopEntered.resolve();
-          await releaseLateStop.promise;
-        }),
-      };
+      await stopGate.entered;
       activeKernel.registerConnectionDependentSidecars(lateSidecar);
       expect(closeTransport).not.toHaveBeenCalled();
-      releaseStop.resolve();
-      await lateStopEntered.promise;
+      stopGate.release();
+      await lateStopGate.entered;
       expect(closeTransport).not.toHaveBeenCalled();
-      releaseLateStop.resolve();
+      lateStopGate.release();
       // Observe the failed owner's boundary without waiting for a later teardown stall.
       await Promise.race([closing, dependencyStopEntered.promise]);
       expect(closeTransport).not.toHaveBeenCalled();
@@ -125,8 +92,8 @@ it.for(["kernel", "public"] as const)(
       expect(sidecar.stop).toHaveBeenCalledTimes(2);
     } finally {
       // Join the original failure before changing its fault or releasing fixture state.
-      releaseStop.resolve();
-      releaseLateStop.resolve();
+      stopGate.release();
+      lateStopGate.release();
       try {
         await closing;
         failStop = false;

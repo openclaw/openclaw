@@ -1,4 +1,19 @@
+import { createDeferred } from "../../test/helpers/promise.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+
+export function createStartupGate(afterRelease: () => void = () => {}) {
+  const entered = createDeferred();
+  const released = createDeferred();
+  return {
+    entered: entered.promise,
+    release: released.resolve,
+    run: async () => {
+      entered.resolve();
+      await released.promise;
+      afterRelease();
+    },
+  };
+}
 
 export function createGatewayStartupTestState(
   label: string,

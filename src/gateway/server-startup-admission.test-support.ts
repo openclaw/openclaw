@@ -13,6 +13,7 @@ import {
 } from "./server-startup-module-mocks.test-support.js";
 import type { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
 import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
+import { createStartupGate } from "./server-startup-state.test-support.js";
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 
@@ -27,12 +28,10 @@ export function registerGatewayStartupAdmissionTests(params: {
   stopSidecar: (sidecar: GatewayPostReadySidecarHandle) => Promise<void>;
 }): void {
   it("does not activate restored recovery when close begins during activation loading", async () => {
-    let closeStarted = false;
     const postReadyWork = createDeferred();
     const tracked: Promise<unknown>[] = [];
     const lifetime = new AbortController();
-    const { promise: recoveryLoadReady, resolve: releaseRecoveryLoad } = createDeferred();
-    const { promise: recoveryLoadStarted, resolve: markRecoveryLoadStarted } = createDeferred();
+    const recoveryLoad = createStartupGate();
     const pluginServices = {
       reload: vi.fn(async () => {}),
       stop: vi.fn(async () => {}),
@@ -49,10 +48,7 @@ export function registerGatewayStartupAdmissionTests(params: {
     const unlockStartupMethods = vi.fn();
     const activateSubagentRegistry = vi.fn(async () => {});
     await installGatewaySubagentModuleLoad(
-      async () => {
-        markRecoveryLoadStarted?.();
-        await recoveryLoadReady;
-      },
+      recoveryLoad.run,
       activateSubagentRegistry,
       params.startupModuleRestorers,
     );
@@ -73,7 +69,7 @@ export function registerGatewayStartupAdmissionTests(params: {
           tracked.push(work);
           return work;
         },
-        isClosing: () => closeStarted,
+        isClosing: () => lifetime.signal.aborted,
         startWorkerEnvironmentRuntime: startWorker,
         onGatewayLifetimeSidecars: vi.fn(),
         onPostReadySidecars: (...sidecars) => {
@@ -95,10 +91,9 @@ export function registerGatewayStartupAdmissionTests(params: {
       expect(startServices).toHaveBeenCalledOnce();
       expect(publishedPostReadySidecars.size).toBe(1);
       postReadyWork.resolve();
-      await recoveryLoadStarted;
-      closeStarted = true;
+      await recoveryLoad.entered;
       lifetime.abort();
-      releaseRecoveryLoad?.();
+      recoveryLoad.release();
       await Promise.allSettled(tracked);
 
       expect(activateSubagentRegistry).not.toHaveBeenCalled();
@@ -107,10 +102,9 @@ export function registerGatewayStartupAdmissionTests(params: {
       expectStops(0);
       expect(onPluginServices).toHaveBeenLastCalledWith(pluginServices);
     } finally {
-      closeStarted = true;
       lifetime.abort();
       postReadyWork.resolve();
-      releaseRecoveryLoad?.();
+      recoveryLoad.release();
       await Promise.allSettled(tracked);
       if (startWorker.mock.calls.length) {
         await params.stopSidecar(workerSidecar);
@@ -135,8 +129,7 @@ export function registerGatewayStartupAdmissionTests(params: {
         source: "startup-suspension-test",
       });
       const postReadyWork = createDeferred();
-      const hookLoadStarted = createDeferred();
-      const releaseHookLoad = createDeferred();
+      const hookLoad = createStartupGate();
       const connectionWork = new GatewayConnectionWork();
       const refreshStarted = createDeferred();
       const refresh = vi.fn(async () => {
@@ -147,13 +140,9 @@ export function registerGatewayStartupAdmissionTests(params: {
       // The subagent row isolates recovery admission; the hook row owns hook admission.
       if (stage === "subagent") {
         pluginRegistry.typedHooks.length = 0;
+        hookLoad.release();
       }
-      await installGatewayHookModuleLoad(async () => {
-        hookLoadStarted.resolve();
-        if (stage === "gateway_start") {
-          await releaseHookLoad.promise;
-        }
-      }, params.startupModuleRestorers);
+      await installGatewayHookModuleLoad(hookLoad.run, params.startupModuleRestorers);
       const trackStartupWork: PostAttachParams["trackStartupWork"] = (run) => {
         const operation = Promise.resolve().then(() => run(connectionWork.signal));
         return connectionWork.track(() => operation);
@@ -190,13 +179,13 @@ export function registerGatewayStartupAdmissionTests(params: {
         expect(sidecarsReady).toHaveBeenCalledOnce();
         if (stage === "gateway_start") {
           postReadyWork.resolve();
-          await hookLoadStarted.promise;
+          await hookLoad.entered;
           await refreshStarted.promise;
         }
         suspension = tryBeginGatewaySuspendAdmission(() => {});
         expect(suspension?.commit()).toBe(true);
         postReadyWork.resolve();
-        releaseHookLoad.resolve();
+        hookLoad.release();
         // Dynamic imports can outlive a turn; close only after the real admission waiter parks.
         await admissionParked.promise;
         connectionWork.beginClose();
@@ -208,7 +197,7 @@ export function registerGatewayStartupAdmissionTests(params: {
         admissionSpy.mockRestore();
         suspension?.release();
         postReadyWork.resolve();
-        releaseHookLoad.resolve();
+        hookLoad.release();
         await runtime.startupSettled;
         await connectionWork.drain();
       }

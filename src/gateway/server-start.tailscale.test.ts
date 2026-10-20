@@ -19,8 +19,7 @@ it("stops a ready Tailscale claim while the Gateway is still preparing its close
   });
   const port = await acquireTestPortBlock({ offsets: [0], signal });
   const operations = createGatewayStartupOperations();
-  const finishing = createDeferred();
-  const resume = createDeferred();
+  const finishing = fixture.createStartupGate();
   const stopped = createDeferred();
   const cleanup = vi.fn(async () => stopped.resolve());
   const wait = (gate: Promise<void>, work: Promise<unknown>, message: string) =>
@@ -28,8 +27,7 @@ it("stops a ready Tailscale claim while the Gateway is still preparing its close
   vi.spyOn(tailscale, "startGatewayTailscaleExposure").mockResolvedValue(cleanup);
   vi.spyOn(startup, "finishGatewayStartup").mockImplementation(async (params) => {
     await params.kernelRuntime.startListening();
-    finishing.resolve();
-    await resume.promise;
+    await finishing.run();
     return { startupSettled: Promise.resolve() };
   });
   let starting: ReturnType<typeof startGatewayServerCore> | undefined;
@@ -46,17 +44,17 @@ it("stops a ready Tailscale claim while the Gateway is still preparing its close
     state.applyEnv();
     starting = startGatewayServerCore(port.port, { startupOperation: operations.run });
     const result = starting.catch((error: unknown) => error);
-    await wait(finishing.promise, result, "Startup settled before the post-exposure phase");
+    await wait(finishing.entered, result, "Startup settled before the post-exposure phase");
     operations.close();
     const draining = operations.drain();
     await wait(stopped.promise, draining, "Native stop left its Tailscale claim active");
     // The claimant is gone while startup is still blocked, before any close handle exists.
     expect(cleanup).toHaveBeenCalledOnce();
-    resume.resolve();
+    finishing.release();
     expect(operations.cancelledWith(await result)).toBe(true);
     await draining;
   } finally {
-    resume.resolve();
+    finishing.release();
     const server = await starting?.catch(() => undefined);
     await server?.close();
     vi.restoreAllMocks();

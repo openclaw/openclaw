@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { createSnapshot } from "../config/mutate.test-support.js";
@@ -30,65 +30,63 @@ afterEach(() => {
   clearPluginMetadataLifecycleCaches();
 });
 
-describe("Gateway channel activation consent", () => {
-  it.each<[string, AmbientEnvTriggerPolicy, OpenClawConfig["channels"], boolean]>([
-    ["default env-only suppression", "suppress", {}, false],
-    ["ambient opt-in", "allow", {}, true],
-    ["explicit channel config", "suppress", { discord: { dmPolicy: "pairing" } }, true],
-    ["explicit disable with opt-in", "allow", { discord: { enabled: false } }, false],
-  ])(
-    "preserves %s through initial config loading and reload",
-    async (_name, ambientEnvTriggers, channels, enabled) => {
-      const sourceConfig: OpenClawConfig = { channels };
-      const snapshot = createSnapshot({
-        path: process.env.OPENCLAW_CONFIG_PATH!,
-        sourceConfig,
-        hash: "ambient-channels",
-      });
-      const log = { info: vi.fn(), warn: vi.fn() };
-      const startup = await loadGatewayStartupConfigSnapshot({
-        minimalTestGateway: false,
-        ambientEnvTriggers,
-        log,
-        initialSnapshotRead: { snapshot, pluginMetadataSnapshot: metadata },
-      });
-      const reload = resolveGatewayReloadPluginActivationCandidate({
-        sourceConfig: { ...sourceConfig, logging: { level: "debug" } },
-        env: process.env,
-        manifestRegistry: metadata.manifestRegistry,
-        ambientEnvTriggers,
-      });
-
-      for (const config of [startup.snapshot.config, reload]) {
-        expect(config.channels?.discord?.enabled === true).toBe(enabled);
-        expect(
-          activatedChannelIds({
-            config,
-            activationSourceConfig: sourceConfig,
-            env: process.env,
-            manifestRecords: metadata.plugins,
-            ambientEnvTriggers,
-          }),
-        ).toEqual(enabled ? ["discord"] : []);
-      }
-      expect(startup.snapshot.sourceConfig).toBe(sourceConfig);
-      expect(sourceConfig.channels).toEqual(channels);
-      if (Object.keys(channels ?? {}).length === 0) {
-        expect(sourceConfig.channels?.discord).toBeUndefined();
-        expect(log.info).toHaveBeenCalledTimes(enabled ? 1 : 0);
-      }
-    },
-  );
-
-  it("does not treat generated channel enablement as authored consent", () => {
-    const params = {
-      config: { channels: { discord: { enabled: true } } },
-      activationSourceConfig: { channels: {} },
+it.each<[string, AmbientEnvTriggerPolicy, OpenClawConfig["channels"], boolean]>([
+  ["default env-only suppression", "suppress", {}, false],
+  ["ambient opt-in", "allow", {}, true],
+  ["explicit channel config", "suppress", { discord: { dmPolicy: "pairing" } }, true],
+  ["explicit disable with opt-in", "allow", { discord: { enabled: false } }, false],
+])(
+  "preserves %s through initial config loading and reload",
+  async (_name, ambientEnvTriggers, channels, enabled) => {
+    const sourceConfig: OpenClawConfig = { channels };
+    const snapshot = createSnapshot({
+      path: process.env.OPENCLAW_CONFIG_PATH!,
+      sourceConfig,
+      hash: "ambient-channels",
+    });
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const startup = await loadGatewayStartupConfigSnapshot({
+      minimalTestGateway: false,
+      ambientEnvTriggers,
+      log,
+      initialSnapshotRead: { snapshot, pluginMetadataSnapshot: metadata },
+    });
+    const reload = resolveGatewayReloadPluginActivationCandidate({
+      sourceConfig: { ...sourceConfig, logging: { level: "debug" } },
       env: process.env,
-      manifestRecords: metadata.plugins,
-      includePersistedAuthState: false,
-    };
-    expect(listAmbientOnlyConfiguredChannelIds(params)).toEqual(["discord"]);
-    expect(activatedChannelIds({ ...params, ambientEnvTriggers: "suppress" })).toEqual([]);
-  });
+      manifestRegistry: metadata.manifestRegistry,
+      ambientEnvTriggers,
+    });
+
+    for (const config of [startup.snapshot.config, reload]) {
+      expect(config.channels?.discord?.enabled === true).toBe(enabled);
+      expect(
+        activatedChannelIds({
+          config,
+          activationSourceConfig: sourceConfig,
+          env: process.env,
+          manifestRecords: metadata.plugins,
+          ambientEnvTriggers,
+        }),
+      ).toEqual(enabled ? ["discord"] : []);
+    }
+    expect(startup.snapshot.sourceConfig).toBe(sourceConfig);
+    expect(sourceConfig.channels).toEqual(channels);
+    if (Object.keys(channels ?? {}).length === 0) {
+      expect(sourceConfig.channels?.discord).toBeUndefined();
+      expect(log.info).toHaveBeenCalledTimes(enabled ? 1 : 0);
+    }
+  },
+);
+
+it("does not treat generated channel enablement as authored consent", () => {
+  const params = {
+    config: { channels: { discord: { enabled: true } } },
+    activationSourceConfig: { channels: {} },
+    env: process.env,
+    manifestRecords: metadata.plugins,
+    includePersistedAuthState: false,
+  };
+  expect(listAmbientOnlyConfiguredChannelIds(params)).toEqual(["discord"]);
+  expect(activatedChannelIds({ ...params, ambientEnvTriggers: "suppress" })).toEqual([]);
 });
