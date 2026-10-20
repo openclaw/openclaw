@@ -31,20 +31,29 @@ describe("inbound_claim hook runner", () => {
     pluginId = "test-plugin",
   ) => runner.runInboundClaimForPluginOutcome(pluginId, inboundClaimEvent, inboundClaimCtx);
 
-  it("stops at the first handler that claims the event", async () => {
-    const first = vi.fn().mockResolvedValue({ handled: true });
-    const second = vi.fn().mockResolvedValue({ handled: true });
-    const { runner } = createHookRunnerWithRegistry([
-      { hookName: "inbound_claim", handler: first },
-      { hookName: "inbound_claim", handler: second },
-    ]);
+  it.each([undefined, "beta-plugin"])(
+    "selects the first eligible claimant (target=%s)",
+    async (target) => {
+      const first = vi.fn().mockResolvedValue({ handled: true });
+      const second = vi.fn().mockResolvedValue({ handled: true });
+      const { runner } = createHookRunnerWithRegistry([
+        {
+          hookName: "inbound_claim",
+          handler: first,
+          pluginId: target ? "alpha-plugin" : undefined,
+        },
+        { hookName: "inbound_claim", handler: second, pluginId: target },
+      ]);
 
-    const result = await runner.runInboundClaim(forumEvent, forumCtx);
+      const result = target
+        ? await runner.runInboundClaimForPlugin(target, inboundClaimEvent, inboundClaimCtx)
+        : await runner.runInboundClaim(forumEvent, forumCtx);
 
-    expect(result).toEqual({ handled: true });
-    expect(first).toHaveBeenCalledTimes(1);
-    expect(second).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({ handled: true });
+      expect(first).toHaveBeenCalledTimes(target ? 0 : 1);
+      expect(second).toHaveBeenCalledTimes(target ? 1 : 0);
+    },
+  );
 
   it("continues to the next handler when a higher-priority handler throws", async () => {
     const logger = { warn: vi.fn(), error: vi.fn() };
@@ -68,36 +77,14 @@ describe("inbound_claim hook runner", () => {
     expect(succeeding).toHaveBeenCalledTimes(1);
   });
 
-  it("can target a loaded non-default plugin without mutating the helper registry", async () => {
-    const first = vi.fn().mockResolvedValue({ handled: true });
-    const second = vi.fn().mockResolvedValue({ handled: true });
-    const { runner } = createHookRunnerWithRegistry([
-      { hookName: "inbound_claim", handler: first, pluginId: "alpha-plugin" },
-      { hookName: "inbound_claim", handler: second, pluginId: "beta-plugin" },
-    ]);
-
-    const result = await runner.runInboundClaimForPlugin(
-      "beta-plugin",
-      inboundClaimEvent,
-      inboundClaimCtx,
-    );
-
-    expect(result).toEqual({ handled: true });
-    expect(first).not.toHaveBeenCalled();
-    expect(second).toHaveBeenCalledTimes(1);
-  });
-
-  it("reports missing_plugin when the bound plugin is not loaded", async () => {
+  it.each([false, true])("reports absent targeted hooks (plugin loaded=%s)", async (loaded) => {
     const { registry, runner } = createHookRunnerWithRegistry([]);
-    registry.plugins = [];
-
-    expect(await runTargeted(runner, "missing-plugin")).toEqual({ status: "missing_plugin" });
-  });
-
-  it("reports no_handler when the plugin is loaded but has no targeted hooks", async () => {
-    const { runner } = createHookRunnerWithRegistry([]);
-
-    expect(await runTargeted(runner)).toEqual({ status: "no_handler" });
+    if (!loaded) {
+      registry.plugins = [];
+    }
+    expect(await runTargeted(runner, loaded ? "test-plugin" : "missing-plugin")).toEqual({
+      status: loaded ? "no_handler" : "missing_plugin",
+    });
   });
 
   it("reports targeted per-hook registration timeouts as handler errors", async () => {

@@ -8,10 +8,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createWebSearchTool } from "../agents/tools/web-search.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
-import { PluginInstanceDrainTimeoutError } from "./plugin-instance-error.js";
+import { writeTree } from "./plugin-generation-capture.test-support.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { drainTimeout } from "./plugin-instance.test-support.js";
 import { clearActivePluginRegistry } from "./runtime.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -26,30 +28,22 @@ it.each(["ordinary", "timed-out"] as const)(
   async (kind) => {
     const root = temp.make("web-provider-custody-");
     const pluginRoot = path.join(root, "search-fixture");
-    fs.mkdirSync(pluginRoot);
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     const event = `web-provider-custody:${root}`;
     const readEvent = `${event}:read`;
-    fs.writeFileSync(
-      path.join(pluginRoot, "package.json"),
-      JSON.stringify({
+    writeTree(pluginRoot, {
+      "package.json": {
         name: "search-fixture",
         main: "index.cjs",
         openclaw: { extensions: ["./index.cjs"] },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginRoot, "openclaw.plugin.json"),
-      JSON.stringify({
+      },
+      "openclaw.plugin.json": {
         id: "search-fixture",
         contracts: { webSearchProviders: ["fixture-search"] },
         configSchema: { type: "object", properties: {} },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(pluginRoot, "index.cjs"),
-      `const fs = require("node:fs");
+      },
+      "index.cjs": `const fs = require("node:fs");
 const filename = require("node:path").join(__dirname, "package.json");
 module.exports = { id: "search-fixture", register(api) {
   api.registerWebSearchProvider({ id: "fixture-search", label: "Fixture", requiresCredential: false,
@@ -63,14 +57,9 @@ module.exports = { id: "search-fixture", register(api) {
     } }; }
   });
 } };`,
-    );
+    });
     const config: OpenClawConfig = {
-      plugins: {
-        load: { paths: [pluginRoot] },
-        allow: ["search-fixture"],
-        entries: { "search-fixture": { enabled: true } },
-        slots: { memory: "none" },
-      },
+      ...pluginFixtureConfig({ id: "search-fixture", file: pluginRoot }, { enabled: true }),
       tools: { web: { search: { provider: "fixture-search" } } },
     };
     const cache = createPluginCache();
@@ -96,10 +85,9 @@ module.exports = { id: "search-fixture", register(api) {
     process.on(readEvent, captureRead);
     const cancellation = vi.fn();
     instance.lifecycle.onDispose(cancellation);
+    const queries = Array.from({ length: 50 }, (_, index) => `query-${index}`);
     const calls = Promise.allSettled(
-      Array.from({ length: 50 }, (_, index) =>
-        tool.execute(`search-${index}`, { query: `query-${index}` }),
-      ),
+      queries.map((query, i) => tool.execute(`search-${i}`, { query })),
     );
     let retirement: ReturnType<typeof instance.dispose> | undefined;
     let physical: Promise<void> | undefined;
@@ -117,11 +105,7 @@ module.exports = { id: "search-fixture", register(api) {
         await vi.advanceTimersByTimeAsync(5_001);
         await nextTurn();
         const { errors } = await retirement;
-        const timeout = errors[0];
-        expect(timeout).toBeInstanceOf(PluginInstanceDrainTimeoutError);
-        if (!(timeout instanceof PluginInstanceDrainTimeoutError)) {
-          throw new Error("Expected forced retirement");
-        }
+        const timeout = drainTimeout(errors[0]);
         expect(timeout.forcedRetirement).toEqual({ activeCallCount: 50, retainedConsumerCount: 0 });
         physical = timeout.settled;
       }
@@ -136,9 +120,7 @@ module.exports = { id: "search-fixture", register(api) {
       expect(fs.existsSync(filename)).toBe(true);
       readers.forEach((reader) => reader.release());
       const outcomes = await calls;
-      expect(completedReads.toSorted()).toEqual(
-        Array.from({ length: 50 }, (_, index) => `query-${index}`).toSorted(),
-      );
+      expect(completedReads.toSorted()).toEqual(queries.toSorted());
       expect(outcomes.map((result) => result.status)).toEqual(Array(50).fill("fulfilled"));
       for (const [index, outcome] of outcomes.entries()) {
         if (outcome.status !== "fulfilled") {

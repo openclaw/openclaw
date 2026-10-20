@@ -1,4 +1,3 @@
-// Covers web provider resolution candidate selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveManifestDeclaredWebProviderCandidatePluginIds } from "./web-provider-resolution-shared.js";
 
@@ -76,28 +75,16 @@ describe("resolveManifestDeclaredWebProviderCandidatePluginIds", () => {
   it("limits sandboxed web fetch candidates to bundled and trusted official installs", () => {
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
-        {
-          id: "bundled-fetch",
-          origin: "bundled",
-          contracts: { webFetchProviders: ["bundled-fetch"] },
-        },
-        {
-          id: "firecrawl",
-          origin: "global",
-          trustedOfficialInstall: true,
-          contracts: { webFetchProviders: ["firecrawl"] },
-        },
-        {
-          id: "third-party-fetch",
-          origin: "global",
-          contracts: { webFetchProviders: ["third-party"] },
-        },
-        {
-          id: "workspace-fetch",
-          origin: "workspace",
-          contracts: { webFetchProviders: ["workspace-fetch"] },
-        },
-      ],
+        ["bundled-fetch", "bundled", false],
+        ["firecrawl", "global", true],
+        ["third-party-fetch", "global", false],
+        ["workspace-fetch", "workspace", false],
+      ].map(([id, origin, trustedOfficialInstall]) => ({
+        id,
+        origin,
+        trustedOfficialInstall,
+        contracts: { webFetchProviders: [id] },
+      })),
       diagnostics: [],
     });
 

@@ -1,4 +1,3 @@
-/** Tests web provider fallback loading from bundled public artifacts. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type * as Metadata from "./plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
@@ -87,14 +86,17 @@ describe("web provider public artifact manifest fallback", () => {
     loadFetch.mockReturnValue([fetchProvider]);
   });
 
-  it("loads an allowlisted named web-search provider without a manifest scan", () => {
+  it.each(["allowlist", "compat"] as const)("resolves named search with %s discovery", (mode) => {
+    const compat = mode === "compat";
+    mocks.readBundledDiscoveryModeMemoized.mockReturnValue(mode);
     const providers = resolveSearch({
-      config: { plugins: { allow: ["fallback-search"] } },
-      onlyPluginIds: ["blocked-search", "fallback-search"],
+      config: { plugins: { allow: [compat ? "some-other-plugin" : "fallback-search"] } },
+      onlyPluginIds: compat ? ["fallback-search"] : ["blocked-search", "fallback-search"],
       env,
     });
 
     expect(providers).toEqual([searchProvider]);
+    expect(mocks.readBundledDiscoveryModeMemoized).toHaveBeenCalledWith(env);
     expect(mocks.loadMetadata).not.toHaveBeenCalled();
     expectLoad(loadSearch, ["fallback-search"]);
   });
@@ -112,46 +114,29 @@ describe("web provider public artifact manifest fallback", () => {
     ]);
   });
 
-  it("keeps deprecated bundledDiscovery compat discovery outside plugin allowlists", () => {
-    mocks.readBundledDiscoveryModeMemoized.mockReturnValue("compat");
-
-    const providers = resolveSearch({
-      config: { plugins: { allow: ["some-other-plugin"] } },
-      onlyPluginIds: ["fallback-search"],
-      env,
-    });
-
-    expect(providers).toEqual([searchProvider]);
-    expect(mocks.readBundledDiscoveryModeMemoized).toHaveBeenCalledWith(env);
-    expectLoad(loadSearch, ["fallback-search"]);
-  });
-
-  it("keeps manifest bundled web-fetch public artifact candidates inside allowlist discovery", () => {
-    const fetchSnapshot = createPluginMetadataSnapshotFixture({
-      plugins: [
-        { id: "blocked-fetch", contracts: { webFetchProviders: ["blocked-fetch"] } },
-        { id: "fallback-fetch", contracts: { webFetchProviders: ["fallback-fetch"] } },
-      ],
-    });
-    mocks.loadMetadata.mockReturnValueOnce(fetchSnapshot);
-
-    const providers = resolveFetch({ config: { plugins: { allow: ["fallback-fetch"] } }, env });
-
-    expect(providers).toEqual([fetchProvider]);
-    expectLoad(loadFetch, ["fallback-fetch"], fetchSnapshot.plugins);
-  });
-
-  it("matches bundled web-search candidates through provider alias allowlist entries", () => {
-    const googleSnapshot = createPluginMetadataSnapshotFixture({
-      plugins: [{ id: "google", contracts: { webSearchProviders: ["gemini"] } }],
-    });
-    const gemini = createProvider("google", "gemini");
-    mocks.loadMetadata.mockReturnValueOnce(googleSnapshot);
-    loadSearch.mockReturnValueOnce([gemini]);
-
-    const providers = resolveSearch({ config: { plugins: { allow: ["google-gemini-cli"] } }, env });
-
-    expect(providers).toEqual([gemini]);
-    expectLoad(loadSearch, ["google"], googleSnapshot.plugins);
-  });
+  it.each(["fetch allowlist", "search alias"] as const)(
+    "filters manifest candidates by %s",
+    (kind) => {
+      const fetch = kind === "fetch allowlist";
+      const provider = fetch ? fetchProvider : createProvider("google", "gemini");
+      const contract = fetch ? "webFetchProviders" : "webSearchProviders";
+      const manifest = createPluginMetadataSnapshotFixture({
+        plugins: [
+          ...(fetch ? [{ id: "blocked-fetch", contracts: { [contract]: ["blocked-fetch"] } }] : []),
+          { id: provider.pluginId, contracts: { [contract]: [provider.id] } },
+        ],
+      });
+      mocks.loadMetadata.mockReturnValueOnce(manifest);
+      const load = fetch ? loadFetch : loadSearch;
+      load.mockReturnValueOnce([provider]);
+      const resolve = fetch ? resolveFetch : resolveSearch;
+      expect(
+        resolve({
+          config: { plugins: { allow: [fetch ? "fallback-fetch" : "google-gemini-cli"] } },
+          env,
+        }),
+      ).toEqual([provider]);
+      expectLoad(load, [provider.pluginId], manifest.plugins);
+    },
+  );
 });
