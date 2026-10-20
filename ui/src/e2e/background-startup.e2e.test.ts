@@ -1,4 +1,4 @@
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import type { SessionBackground } from "../components/session-background.tsx";
@@ -11,34 +11,32 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Personal background first-paint readiness" });
 
-function backgroundOf(page: Page) {
-  const element = page.locator("openclaw-session-background").first();
-  return {
-    element,
-    source: () =>
-      element.evaluate(
-        (node) => (node as SessionBackground).context?.theme.settings.background?.source.kind,
-      ),
-  };
-}
+const backgroundOf = (page: Page) => page.locator("openclaw-session-background").first();
+const backgroundKind = (element: Locator) =>
+  element.evaluate(
+    (node) => (node as SessionBackground).context?.theme.settings.background?.source.kind,
+  );
 
 const preferences = (entries: Record<string, unknown>) => ({ status: "ok", entries });
+
+function installPreferences(page: Page, dark = false) {
+  return installMockGateway(page, {
+    presenceUsers: [{ id: "background-viewer", name: "Background demo", self: true }],
+    deferredMethods: ["users.prefs.get"],
+    ...(dark ? { featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get"] } : {}),
+    methodResponses: {
+      "config.get": configResponse(dark ? { themeMode: "dark" } : {}, "background"),
+    },
+  });
+}
 
 suite.define(() => {
   it.each(["none", "custom"] as const)(
     "keeps an old custom mirror hidden until the saved %s choice loads",
-    async (choice) => {
-      await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-        const custom = selectBackgroundSource({
-          kind: "custom",
-          assetId: "previous-private-image",
-        });
-        const profileId = "stale-background-viewer";
-        const gateway = await installMockGateway(page, {
-          presenceUsers: [{ id: profileId, name: "Background demo", self: true }],
-          deferredMethods: ["users.prefs.get"],
-          methodResponses: { "config.get": configResponse({}, "stale-background") },
-        });
+    (choice) =>
+      suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+        const custom = selectBackgroundSource({ kind: "custom", assetId: "previous-image" });
+        const gateway = await installPreferences(page);
         const reads: string[] = [];
         await page.route("**/__openclaw__/users/background/*", async (route) => {
           reads.push(route.request().url());
@@ -51,7 +49,8 @@ suite.define(() => {
         reads.length = 0;
         await page.reload();
         await gateway.waitForRequest("users.prefs.get");
-        const { element: background, source } = backgroundOf(page);
+        const background = backgroundOf(page),
+          source = () => backgroundKind(background);
         await expect.poll(source).toBe("custom");
         await background.evaluate(async (element) => {
           await (element as SessionBackground).updateComplete;
@@ -69,29 +68,18 @@ suite.define(() => {
           await expect.poll(() => reads.length).toBe(1);
           expect(await background.getAttribute("data-custom")).not.toBeNull();
         }
-      });
-    },
+      }),
   );
 
   it.each(["none", "absent"] as const)(
     "waits for the saved %s choice before any initial shell image request",
-    async (choice) => {
-      await suite.withPage(
+    (choice) =>
+      suite.withPage(
         { colorScheme: "dark", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           const entries =
             choice === "none" ? { "ui.background": selectBackgroundSource({ kind: "none" }) } : {};
-          const gateway = await installMockGateway(page, {
-            presenceUsers: [
-              { id: "background-startup-viewer", name: "Background startup", self: true },
-            ],
-            featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get"],
-            deferredMethods: ["users.prefs.get"],
-            methodResponses: {
-              "config.get": configResponse({ themeMode: "dark" }, "background-startup"),
-              "users.prefs.get": preferences(entries),
-            },
-          });
+          const gateway = await installPreferences(page, true);
           const imageRequests: string[] = [];
           page.on("request", (request) => {
             const pathname = new URL(request.url()).pathname;
@@ -108,11 +96,7 @@ suite.define(() => {
           // preserve the startup ordering. Never seed synthetic root attributes.
           for (const reload of [false, true]) {
             imageRequests.length = 0;
-            if (reload) {
-              await page.reload();
-            } else {
-              await page.goto(suite.server.baseUrl + "new");
-            }
+            await (reload ? page.reload() : page.goto(suite.server.baseUrl + "new"));
             await gateway.waitForRequest("users.prefs.get");
             const shell = page.locator(".shell");
             await shell.waitFor({ state: "visible" });
@@ -122,7 +106,7 @@ suite.define(() => {
             expect(imageRequests).toEqual([]);
             await gateway.resolveDeferred("users.prefs.get", preferences(entries));
             if (choice === "none") {
-              await expect.poll(backgroundOf(page).source).toBe("none");
+              await expect.poll(() => backgroundKind(backgroundOf(page))).toBe("none");
               expect(await shellImage()).toBe("none");
               expect(await page.locator(".session-background__image").count()).toBe(0);
               expect(imageRequests).toEqual([]);
@@ -134,7 +118,6 @@ suite.define(() => {
             }
           }
         },
-      );
-    },
+      ),
   );
 });

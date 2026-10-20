@@ -13,16 +13,6 @@ const suite = createControlUiE2eSuite({ name: "Control UI browser bootstrap" });
 suite.define(() => {
   it("recovers a bare HTTPS deep link and reuses the paired browser credential on reload", async () => {
     const artifactDir = suite.artifactDir;
-    const startedAt = performance.now();
-    const elapsedMs = () => Math.round(performance.now() - startedAt);
-    let cleanupStarted = false;
-    const assetRequests: Array<{
-      path: string;
-      startedMs: number;
-      response?: { elapsedMs: number; status: number };
-      fulfilledMs?: number;
-      failure?: { elapsedMs: number; error: string; cleanupStarted: boolean };
-    }> = [];
     const handoff = createDeferred();
     const pendingRoutes = new Set<Promise<void>>();
     const trackRoute = (handle: (route: Route) => Promise<void>) => async (route: Route) => {
@@ -66,28 +56,8 @@ suite.define(() => {
               `${requested.pathname}${requested.search}`,
               suite.server.baseUrl,
             );
-            const request: (typeof assetRequests)[number] = {
-              path: requested.pathname,
-              startedMs: elapsedMs(),
-            };
-            assetRequests.push(request);
-            try {
-              const response = await route.fetch({ url: upstream.href, maxRetries: 1 });
-              request.response = { elapsedMs: elapsedMs(), status: response.status() };
-              await route.fulfill({ response });
-              request.fulfilledMs = elapsedMs();
-            } catch (error) {
-              request.failure = {
-                elapsedMs: elapsedMs(),
-                error:
-                  error instanceof Error
-                    ? error.message.replace(/\n[\s\S]*/, "")
-                    : "Non-Error rejection",
-                cleanupStarted,
-              };
-              console.error("[browser-bootstrap] asset request failed", JSON.stringify(request));
-              throw error;
-            }
+            const response = await route.fetch({ url: upstream.href, maxRetries: 1 });
+            await route.fulfill({ response });
           }),
         );
         const gateway = await installMockGateway(page, {
@@ -117,48 +87,39 @@ suite.define(() => {
           }),
         );
 
-        try {
-          await page.goto(deepLink);
-          const initialConnect = await gateway.waitForRequest("connect");
-          expect(initialConnect.params).not.toHaveProperty("auth.bootstrapToken");
-          expect(initialConnect.params).not.toHaveProperty("auth.deviceToken");
-          await gateway.rejectDeferred("connect", {
-            code: "INVALID_REQUEST",
-            message: "The Gateway needs a matching token or password.",
-            details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
-          });
-          await page.getByText("This Gateway expects its token", { exact: true }).waitFor();
-          await expect.poll(() => helperCalls).toBe(1);
-          await page.screenshot({ path: path.join(artifactDir, "1-auth-required.png") });
+        await page.goto(deepLink);
+        const initialConnect = await gateway.waitForRequest("connect");
+        expect(initialConnect.params).not.toHaveProperty("auth.bootstrapToken");
+        expect(initialConnect.params).not.toHaveProperty("auth.deviceToken");
+        await gateway.rejectDeferred("connect", {
+          code: "INVALID_REQUEST",
+          message: "The Gateway needs a matching token or password.",
+          details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
+        });
+        await page.getByText("This Gateway expects its token", { exact: true }).waitFor();
+        await expect.poll(() => helperCalls).toBe(1);
+        await page.screenshot({ path: path.join(artifactDir, "1-auth-required.png") });
 
-          await gateway.deferNext("connect");
-          handoff.resolve();
-          const recoveredConnect = await gateway.waitForRequest("connect", { after: 1 });
-          expect(recoveredConnect.params).toMatchObject({
-            auth: { bootstrapToken },
-            device: { id: expect.any(String), signature: expect.any(String) },
-          });
-          await gateway.resolveDeferred("connect");
-          await expectConnected("2-connected.png");
+        await gateway.deferNext("connect");
+        handoff.resolve();
+        const recoveredConnect = await gateway.waitForRequest("connect", { after: 1 });
+        expect(recoveredConnect.params).toMatchObject({
+          auth: { bootstrapToken },
+          device: { id: expect.any(String), signature: expect.any(String) },
+        });
+        await gateway.resolveDeferred("connect");
+        await expectConnected("2-connected.png");
 
-          await page.reload();
-          const reloadConnect = await gateway.waitForRequest("connect");
-          expect(reloadConnect.params).toMatchObject({ auth: { deviceToken } });
-          expect(reloadConnect.params).not.toHaveProperty("auth.bootstrapToken");
-          await gateway.resolveDeferred("connect");
-          await expectConnected("3-reloaded.png");
-          expect(helperCalls).toBe(1);
-          return page.video();
-        } catch (error) {
-          console.error(
-            "[browser-bootstrap] asset requests before cleanup",
-            JSON.stringify({ elapsedMs: elapsedMs(), cleanupStarted, requests: assetRequests }),
-          );
-          throw error;
-        }
+        await page.reload();
+        const reloadConnect = await gateway.waitForRequest("connect");
+        expect(reloadConnect.params).toMatchObject({ auth: { deviceToken } });
+        expect(reloadConnect.params).not.toHaveProperty("auth.bootstrapToken");
+        await gateway.resolveDeferred("connect");
+        await expectConnected("3-reloaded.png");
+        expect(helperCalls).toBe(1);
+        return page.video();
       },
       async ({ page }) => {
-        cleanupStarted = true;
         // Stop page requests, then drain handlers while the context still owns
         // fetched bodies. Unrouting during the drain can auto-continue active routes.
         handoff.resolve();
