@@ -2,21 +2,102 @@ import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { resolveCheckoutChip, type CheckoutChipOptions } from "./checkout-chip.ts";
+import { resolveCheckoutChip } from "./checkout-chip.ts";
 import { CheckoutChip } from "./checkout-chip.tsx";
+import type { DraftRepositoryState } from "./discovery.ts";
+import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
+import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
-function mountCheckout(initial: CheckoutChipOptions) {
+type CheckoutFixture = {
+  state: ReturnType<typeof resolveCheckoutChip>;
+  remotePlacement: boolean;
+  currentCheckoutUnavailableReason?: string;
+  repository?: boolean;
+  folderLabel: string;
+  worktree: boolean;
+  worktreeAvailable: boolean;
+  repositoryUnavailable?: boolean;
+  branches: Omit<Extract<DraftRepositoryState, { kind: "git" }>, "kind"> | null;
+  branchesLoading: boolean;
+  baseRef: string;
+  worktreeName: string;
+  submitting: boolean;
+  pendingPlacement: boolean;
+  popoverOpen: boolean;
+  onPopoverShow: () => void;
+  onPopoverHide: () => void;
+  onPopoverAfterHide: () => void;
+  onSelectWorktree: (value: boolean) => void;
+  onBaseRefInput: (baseRef: string) => void;
+  onWorktreeNameInput: (name: string) => void;
+  onConfirm: () => void;
+};
+
+function mountCheckout(initial: CheckoutFixture) {
   const [params, setParams] = createSignal(initial);
+  const { state: place, browser, gateway } = createRepositoryFixture();
+  Object.defineProperties(place, {
+    worktree: { get: () => params().worktree },
+    worktreeName: { get: () => params().worktreeName },
+    baseRef: { get: () => params().baseRef },
+    remotePlacement: { get: () => params().remotePlacement },
+    remoteRepository: {
+      get: () => (params().repository ? { url: "https://example.com/repo.git" } : undefined),
+    },
+    currentCheckoutUnavailableReason: { get: () => params().currentCheckoutUnavailableReason },
+    repository: {
+      get: () => {
+        const current = params();
+        return current.branches
+          ? { kind: "git", ...current.branches }
+          : {
+              kind: current.branchesLoading
+                ? "checking"
+                : current.repositoryUnavailable
+                  ? "unavailable"
+                  : "idle",
+            };
+      },
+    },
+  });
+  vi.spyOn(place, "worktreeAvailable").mockImplementation(() => params().worktreeAvailable);
+  vi.spyOn(place, "selectWorktree").mockImplementation((value) => params().onSelectWorktree(value));
+  vi.spyOn(place, "setBaseRef").mockImplementation((value) => params().onBaseRefInput(value));
+  vi.spyOn(place, "setWorktreeName").mockImplementation((value) =>
+    params().onWorktreeNameInput(value),
+  );
+  vi.spyOn(browser, "popoverOpen").mockImplementation(() => params().popoverOpen);
+  vi.spyOn(browser, "popoverCallbacks").mockImplementation(() => params());
+  const options: NewSessionPlaceControlsOptions = {
+    place,
+    gateway,
+    context: undefined,
+    data: undefined,
+    get submitting() {
+      return params().submitting;
+    },
+    get pendingPlacement() {
+      return params().pendingPlacement;
+    },
+    onConnectMachine: vi.fn(),
+    onNavigate: vi.fn(),
+    onChange: vi.fn(),
+    onFocusComposer: () => params().onConfirm(),
+  };
   const mounted = mountSolid(() =>
     createComponent(CheckoutChip, {
-      get params() {
-        return params();
+      params: options,
+      get state() {
+        return params().state;
+      },
+      get folderLabel() {
+        return params().folderLabel;
       },
     }),
   );
   return {
     container: mounted.container,
-    update: (next: CheckoutChipOptions) => {
+    update: (next: CheckoutFixture) => {
       setParams(next);
       flush();
     },
@@ -337,7 +418,7 @@ describe("Checkout chip state", () => {
     const onPopoverShow = vi.fn();
     const onPopoverHide = vi.fn();
     const onPopoverAfterHide = vi.fn();
-    const params: CheckoutChipOptions = {
+    const params: CheckoutFixture = {
       state: { label: "New worktree from main" },
       remotePlacement: false,
       folderLabel: "OpenClaw",

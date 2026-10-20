@@ -8,6 +8,7 @@ import { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { withStateMigrationBackupForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createFixtureLifetime } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stateMigrations } from "./doctor-contract-api.js";
@@ -147,7 +148,9 @@ describe("Matrix account state Doctor migration", () => {
         expect(detected?.preview).not.toContainEqual(
           expect.stringContaining(archivedStorageRootDir),
         );
-        const doctor = await migration.migrateLegacyState(migrationParams);
+        const doctor = await withStateMigrationBackupForTest({ env: migrationParams.env }, () =>
+          migration.migrateLegacyState(migrationParams),
+        );
         expect(doctor.warnings).toEqual([]);
         expect(doctor.changes).toContainEqual(
           expect.stringContaining(`Matrix account SQLite ${storageRootDir}`),

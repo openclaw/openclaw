@@ -6,7 +6,6 @@ import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { markToolExecutionLivenessDiagnosticEvent } from "../../infra/diagnostic-tool-execution-liveness.js";
 import { projectProgressCardChannelUpdate } from "../../session-cards/progress-card-channel-summary.js";
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
-import { registerListener } from "../../shared/listeners.js";
 import { projectAgentActivityItem } from "../agent-activity-presentation.js";
 import { prepareAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import type {
@@ -48,7 +47,7 @@ export function createCliEventHandlers(params: {
   };
   let observedCliActivity = false;
   let compactionActive = false;
-  const compactionChangeListeners = new Set<() => void>();
+  let onCompactionActiveChange: (() => void) | undefined;
   const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
   const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
     if (signaledPhases.has(phase)) {
@@ -64,10 +63,7 @@ export function createCliEventHandlers(params: {
   };
   let commentaryCounter = 0;
   let assistantVisibleText = "";
-  const toolSummaryById = new Map<
-    string,
-    { name: string; failed: boolean; terminalObserved?: boolean }
-  >();
+  const toolSummaryById = new Map<string, { failed: boolean; terminalObserved?: boolean }>();
   // CLI results report an outcome without repeating the request, so the terminal
   // progress event would otherwise describe the output instead of the command.
   const toolArgsByCallId = new Map<
@@ -113,11 +109,8 @@ export function createCliEventHandlers(params: {
     let current = toolSummaryById.get(event.toolCallId);
     if (current) {
       current.failed ||= failed;
-      if (!current.name && event.name) {
-        current.name = event.name;
-      }
     } else {
-      current = { name: event.name, failed };
+      current = { failed };
       toolSummaryById.set(event.toolCallId, current);
     }
     if (event.name) {
@@ -259,12 +252,20 @@ export function createCliEventHandlers(params: {
     // Claude enforces this MCP response timeout. Keep recovery behind that
     // deadline while the request is still in the CLI's own tool runtime.
     const timeoutMs = context.managedMcpToolTimeoutMs;
-    emitTrustedDiagnosticEvent(
+    const deadlineAtMs =
       timeoutMs !== undefined && event.name.startsWith("mcp__openclaw__")
-        ? markToolExecutionLivenessDiagnosticEvent(diagnosticEvent, {
-            deadlineAtMs: startedAt + timeoutMs,
-          })
-        : diagnosticEvent,
+        ? startedAt + timeoutMs
+        : undefined;
+    runParams.diagnosticOwner?.watchdogAttempt?.toolEvent({
+      phase: "start",
+      toolName: event.name,
+      toolCallId: event.toolCallId,
+      deadlineAtMs,
+    });
+    emitTrustedDiagnosticEvent(
+      deadlineAtMs === undefined
+        ? diagnosticEvent
+        : markToolExecutionLivenessDiagnosticEvent(diagnosticEvent, { deadlineAtMs }),
     );
     emitToolUseStart(event, true);
   };
@@ -278,6 +279,13 @@ export function createCliEventHandlers(params: {
     activeParsedTools.delete(event.toolCallId);
     const trustedOutcome = params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId);
     const toolName = activeTool?.toolName ?? event.name;
+    if (!event.incomplete) {
+      runParams.diagnosticOwner?.watchdogAttempt?.toolEvent({
+        phase: "end",
+        toolName,
+        toolCallId: event.toolCallId,
+      });
+    }
     const now = Date.now();
     const trustedTerminalReason =
       trustedOutcome &&
@@ -359,9 +367,7 @@ export function createCliEventHandlers(params: {
     const previous = compactionActive;
     compactionActive = event.phase === "start";
     if (compactionActive !== previous) {
-      for (const listener of compactionChangeListeners) {
-        listener();
-      }
+      onCompactionActiveChange?.();
     }
     emitLiveEvent("compaction", () => ({ ...event, backend: context.backendResolved.id }));
   };
@@ -376,7 +382,7 @@ export function createCliEventHandlers(params: {
     }
   };
   const emitCliCommentaryText = (text: string) => {
-    if (!emitLiveEvents) {
+    if (!emitLiveEvents || params.toolTracking.shouldSuppressAssistantOutput()) {
       return;
     }
     const prepared = prepareAgentRunTerminalReply({ rawText: text });
@@ -400,7 +406,11 @@ export function createCliEventHandlers(params: {
     }));
   };
   const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text || delta) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progress("semantic", "cli:assistant");
       observedCliActivity = true;
       signalExecutionPhase("assistant_output_started");
     }
@@ -431,7 +441,11 @@ export function createCliEventHandlers(params: {
     }));
   };
   const emitCliCompletedReply = (text: string, assistantMessageIndex: number) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text) {
+      runParams.diagnosticOwner?.watchdogAttempt?.progress("semantic", "cli:completed_reply");
       observedCliActivity = true;
     }
     assistantVisibleText = "";
@@ -452,6 +466,9 @@ export function createCliEventHandlers(params: {
   // Emit-always: thinking reaches the event bus and session archive like the
   // embedded reasoning stream; /reasoning and /verbose gate presentation only.
   const emitCliThinkingDelta = ({ text, delta, isReasoningSnapshot }: CliThinkingDelta) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text || delta) {
       observedCliActivity = true;
     }
@@ -489,8 +506,9 @@ export function createCliEventHandlers(params: {
     emitCliThinkingProgress,
     hasObservedCliActivity: () => observedCliActivity,
     hasActiveCompaction: () => compactionActive,
-    onCompactionActiveChange: (listener: () => void) =>
-      registerListener(compactionChangeListeners, listener),
+    setOnCompactionActiveChange: (listener: (() => void) | undefined) => {
+      onCompactionActiveChange = listener;
+    },
     activeParsedToolCount: () => activeParsedTools.size,
     isActiveForegroundAgentTool: (toolCallId: string) => {
       const tool = activeParsedTools.get(toolCallId);

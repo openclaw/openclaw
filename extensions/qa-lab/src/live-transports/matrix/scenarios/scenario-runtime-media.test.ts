@@ -1,11 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const advanceMatrixQaActorCursor = vi.hoisted(() => vi.fn());
 const primeMatrixQaDriverScenarioClient = vi.hoisted(() => vi.fn());
 
 vi.mock("./scenario-runtime-shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./scenario-runtime-shared.js")>()),
-  advanceMatrixQaActorCursor,
   primeMatrixQaDriverScenarioClient,
 }));
 
@@ -37,7 +35,7 @@ function createGeneratedImageContext(
     roomId,
     sutAccessToken: "sut-token",
     sutUserId: "@sut:matrix-qa.test",
-    syncState: {},
+    syncStreams: {},
     timeoutMs: 180_000,
     topology: {
       defaultRoomId: roomId,

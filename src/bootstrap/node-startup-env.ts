@@ -1,4 +1,3 @@
-// Builds Node startup environment variables for subprocess launches.
 import fs from "node:fs";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { matchesVersionManagerPath } from "../shared/version-manager-path.js";
@@ -25,7 +24,6 @@ export function resolveNodeStartupTlsEnvironment(
     platform?: NodeJS.Platform;
     execPath?: string;
     includeDarwinDefaults?: boolean;
-    accessSync?: (path: string, mode?: number) => void;
   } = {},
 ): NodeStartupTlsEnvironment {
   const env = params.env ?? (process.env as EnvMap);
@@ -42,10 +40,9 @@ export function resolveNodeStartupTlsEnvironment(
       const isVersionManagerRuntime =
         Boolean(env.NVM_DIR?.trim()) || matchesVersionManagerPath(execPath, "linux-ca");
       if (isVersionManagerRuntime) {
-        const accessSync = params.accessSync ?? fs.accessSync.bind(fs);
         for (const candidate of LINUX_CA_BUNDLE_PATHS) {
           try {
-            accessSync(candidate, fs.constants.R_OK);
+            fs.accessSync(candidate, fs.constants.R_OK);
             nodeExtraCaCerts = candidate;
             break;
           } catch {

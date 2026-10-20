@@ -15,11 +15,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type {
-  ProviderAuthChoiceMetadata,
-  resolveManifestProviderAuthChoice,
-  resolveManifestProviderAuthChoices,
-} from "../plugins/provider-auth-choices.js";
+import type { ProviderAuthChoiceMetadata } from "../plugins/provider-auth-choices.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -217,7 +213,6 @@ export type ActivateSetupInferenceParams = {
   onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
   /** Finish application or recovery only after releasing the Gateway setup queue. */
   onActivationCompletion?: (complete: () => Promise<boolean>) => void;
-  deps?: ActivateSetupInferenceDeps;
 };
 
 export class SetupInferenceCancelledError extends Error {
@@ -245,12 +240,6 @@ export async function waitForProviderAuth<T>(
     () => new SetupInferenceCancelledError(),
   );
 }
-
-export type ActivateSetupInferenceDeps = {
-  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
-  resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-};
 
 export function toProviderAutoSetupKind(choiceId: string): ProviderAutoSetupInferenceKind {
   return `${PROVIDER_AUTO_SETUP_KIND_PREFIX}${encodeURIComponent(choiceId)}`;
@@ -511,7 +500,6 @@ export function validateSetupModelTarget(
 }
 export type StageContext = {
   params: ActivateSetupInferenceParams;
-  deps: ActivateSetupInferenceDeps;
   snapshot: ConfigFileSnapshot;
   cfg: OpenClawConfig;
   routeAgentId: string;

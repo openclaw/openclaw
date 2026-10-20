@@ -148,7 +148,7 @@ type WorkerNodeBootstrapAccess = {
     /** Core-owned POSIX prerequisite script, applied only to Linux before invoking Node. */
     linuxToolchainSetup?: string;
   };
-  /** Runtime/enrollment closure, including shutdown; provision's separate signal identifies explicit Stop. */
+  /** Runtime/enrollment closure, including shutdown; stop this work while preserving its allocation. */
   signal?: AbortSignal;
 };
 
@@ -356,7 +356,10 @@ export type WorkerProvider = {
       profileId?: string;
       /** Attempt-scoped display facts; the host rejects reports after provisioning closes. */
       reportStartStatus?: (status: WorkerEnvironmentStartStatus) => void;
-      /** Cancel this attempt; settle its active commands before rejecting. Cleanup proves release separately. */
+      /**
+       * Stop this attempt, including on Gateway shutdown; settle active commands before rejecting.
+       * Preserve allocations on abort. Explicit cancellation/destroy requests record destruction intent separately.
+       */
       signal?: AbortSignal;
       /** Modern hosts supply authority; legacy optionality is source compatibility only. */
       assertCurrent?: () => void;

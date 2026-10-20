@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, For, onCleanup, onSettled, Show } from "solid-js";
 import { SYSTEM_AGENT_ID } from "../../../../src/system-agent/agent-id.js";
 import { MarkdownBlocks } from "../../components/markdown-blocks-owner.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
@@ -29,6 +29,8 @@ import "../../styles/chat/text.css";
 import "../../styles/custodian.css";
 import {
   adjustTextareaHeight,
+  handleTextareaOverflowInteraction,
+  handleTextareaOverflowScroll,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
 } from "../chat/components/chat-composer-dom.ts";
@@ -173,7 +175,10 @@ export type CustodianSurfaceProps = {
   historyContent: JSX.Element;
 };
 
-function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
+type CustodianSurfaceElement = SolidBridgeElement<CustodianSurfaceProps>;
+const inputChanges = new WeakMap<CustodianSurfaceElement, () => void>();
+
+function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfaceElement) {
   const context = useApplication();
   const projection = createMemo(() => projectOwner(props.store, (store) => store));
   const alerts = projectOwner(custodianAlertStore, (store) => store.alert);
@@ -183,13 +188,30 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
     projection().revision();
     return alerts.read();
   });
-  // The session owner retargets Gateway requests when this surface's route intent changes.
-  createEffect(
-    () => [props.store, props.onboarding, props.newAgentIntent] as const,
-    ([source, onboarding, newAgentIntent]) => {
-      source.connect(context, sessionVariant(onboarding, newAgentIntent));
-    },
-  );
+  let queued = false;
+  function connectSession(): void {
+    queued = false;
+    const { store: source, onboarding, newAgentIntent } = host;
+    source.connect(context, sessionVariant(onboarding, newAgentIntent));
+  }
+  onSettled(() => {
+    inputChanges.set(host, () => {
+      if (!queued) {
+        queued = true;
+        // Bridge properties arrive separately during one render.
+        queueMicrotask(() => {
+          if (queued) {
+            connectSession();
+          }
+        });
+      }
+    });
+    connectSession();
+    return () => {
+      inputChanges.delete(host);
+      queued = false;
+    };
+  });
   const plugin = () => {
     store();
     return currentPluginHelpReference(context);
@@ -476,8 +498,20 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: HTMLElement) {
                         placeholder={placeholder()}
                         aria-label={placeholder()}
                         disabled={!store().chatAvailable}
-                        onInput={(event) => store().setInput(event.currentTarget.value)}
-                        onKeyDown={handleKeydown}
+                        onInput={(event) => {
+                          handleTextareaOverflowInteraction(event);
+                          store().setInput(event.currentTarget.value);
+                        }}
+                        onKeyDown={(event) => {
+                          handleTextareaOverflowInteraction(event);
+                          handleKeydown(event);
+                        }}
+                        onBeforeInput={handleTextareaOverflowInteraction}
+                        onCompositionStart={handleTextareaOverflowInteraction}
+                        onBlur={handleTextareaOverflowInteraction}
+                        onWheel={handleTextareaOverflowInteraction}
+                        onPointerDown={handleTextareaOverflowInteraction}
+                        onScroll={handleTextareaOverflowScroll}
                       />
                     }
                   >
@@ -521,6 +555,11 @@ export const CustodianSurface = defineSolidBridge<CustodianSurfaceProps>(
   "openclaw-custodian-surface",
   CustodianSurfaceView,
   {
+    propertyChanged: (host, key) => {
+      if (key === "store" || key === "onboarding" || key === "newAgentIntent") {
+        inputChanges.get(host)?.();
+      }
+    },
     properties: {
       store: { default: custodianSessionStore, attribute: false },
       onboarding: { default: false, attribute: false },
@@ -537,6 +576,6 @@ export const CustodianSurface = defineSolidBridge<CustodianSurfaceProps>(
 
 declare global {
   interface HTMLElementTagNameMap {
-    "openclaw-custodian-surface": SolidBridgeElement<CustodianSurfaceProps>;
+    "openclaw-custodian-surface": CustodianSurfaceElement;
   }
 }

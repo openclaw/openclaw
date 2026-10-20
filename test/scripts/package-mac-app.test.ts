@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -16,6 +17,8 @@ import { createInterface } from "node:readline";
 import { minimatch } from "minimatch";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
+import { listCoreRuntimePostBuildOutputs } from "../../scripts/runtime-postbuild.mts";
+import { resolveNodeRuntimeExecutable } from "../../src/infra/node-runtime-executable.ts";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
@@ -402,22 +405,147 @@ ${scriptBlock("cleanup_package_build() {", "PNPM_CMD=()")}
     expect(matches).toEqual([app]);
   });
 
-  it("rebuilds dirty JavaScript even when the old SKIP_TSC shortcut is requested", () => {
-    const root = tempDirs.make("openclaw-package-worker-freshness-");
-    const result = spawnSync(
-      process.platform === "win32" ? "bash" : "/bin/bash",
-      [
-        "-c",
-        `
-      set -euo pipefail
-      run_pnpm() { printf '%s\\n' 'fresh dirty worker' > "$HOME/worker.js"; }
-      ${scriptBlock('if [[ "${SKIP_TSC:-0}"', 'node - "$ROOT_DIR/dist/build-info.json"')}
-    `,
-      ],
-      { encoding: "utf8", env: { HOME: root, PATH: "/usr/bin:/bin", SKIP_TSC: "1" } },
+  it
+    .skipIf(process.platform === "win32")
+    .each([
+      "reuse",
+      "dirty",
+      "dirty-ui",
+      "untracked-ui",
+      "missing-runtime",
+      "wrong-identity",
+      "legacy-skip",
+    ])("admits an existing source generation through the package script: %s", (mode) => {
+    const root = tempDirs.make("openclaw-package-source-reuse-");
+    const builtAt = "2026-10-18T10:20:30.000Z";
+    writeFiles(root, {
+      ".gitignore": "dist/\n.artifacts/\n",
+      "package.json": JSON.stringify({ version: "1.2.3" }),
+      "src/entry.ts": "export {};\n",
+      "ui/src/fixture.ts": "export {};\n",
+      "apps/macos/Package.resolved": JSON.stringify({
+        pins: [{ identity: "peekaboo", state: { revision: "b".repeat(40) } }],
+      }),
+      "scripts/package-mac-app.sh": readFileSync(scriptPath),
+      "scripts/apple-release-source-check.sh": readFileSync(
+        "scripts/apple-release-source-check.sh",
+      ),
+      "scripts/lib/plistbuddy.sh": readFileSync("scripts/lib/plistbuddy.sh"),
+      "scripts/lib/build-metadata.sh": readFileSync("scripts/lib/build-metadata.sh"),
+      "scripts/lib/mac-app-bundle.sh": readFileSync("scripts/lib/mac-app-bundle.sh"),
+      "scripts/lib/mac-swift-build.sh": "",
+      "scripts/lib/swift-toolchain.sh": "require_swift_toolchain() { :; }\n",
+      "scripts/build-mac-swift.mts": `console.log("SWIFT_IDENTITY=" + process.env.OPENCLAW_BUILD_TIMESTAMP); process.exit(86);\n`,
+      "scripts/prepare-apple-mermaid.mjs": "",
+    });
+    for (const script of ["tsx.mjs", "verify-mac-source-build.mts"]) {
+      symlinkSync(path.resolve("scripts", script), path.join(root, "scripts", script));
+    }
+    const bin = path.join(root, "bin");
+    mkdirSync(bin);
+    const node = resolveNodeRuntimeExecutable();
+    if (!node) {
+      throw new Error("Mac packaging fixture requires Node");
+    }
+    symlinkSync(node, path.join(bin, "node"));
+    writeExecutable(
+      path.join(bin, "pnpm"),
+      "#!/bin/bash\necho UNEXPECTED_SOURCE_WRITE >&2\nexit 87\n",
     );
-    expect(result.status, result.stderr).toBe(0);
-    expect(existsSync(path.join(root, "worker.js"))).toBe(true);
+    writeExecutable(path.join(bin, "corepack"), "#!/bin/bash\nexit 1\n");
+    const git = (...args: string[]) =>
+      spawnSync("git", args, {
+        cwd: root,
+        encoding: "utf8",
+        env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" },
+      });
+    expect(git("init", "--quiet").status).toBe(0);
+    expect(git("add", ".").status).toBe(0);
+    expect(
+      git(
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "fixture",
+      ).status,
+    ).toBe(0);
+    const head = git("rev-parse", "HEAD").stdout.trim();
+    // Supply the canonical owner's required generated files as fixture inputs;
+    // this test proves packaging admission, not the postbuild inventory itself.
+    for (const output of listCoreRuntimePostBuildOutputs({ rootDir: root })) {
+      writeFiles(root, { [output]: "fixture output\n" });
+    }
+    const info = JSON.stringify({
+      version: "1.2.3",
+      commit: head,
+      builtAt,
+      buildId: "fixture-runtime-build",
+    });
+    writeFiles(root, {
+      "dist/entry.js": "export {};\n",
+      "dist/install.runtime.js": "export {};\n",
+      "dist/build-info.json": info,
+      "dist/.buildstamp": JSON.stringify({ head, inputsClean: true }),
+      "dist/.runtime-postbuildstamp": JSON.stringify({
+        head,
+        inputsClean: true,
+        staticAssets: true,
+      }),
+    });
+    if (mode === "dirty") {
+      writeFiles(root, { "src/entry.ts": "export const changed = true;\n" });
+    }
+    if (mode === "dirty-ui") {
+      writeFiles(root, { "ui/src/fixture.ts": "export const changed = true;\n" });
+    }
+    if (mode === "untracked-ui") {
+      writeFiles(root, { "ui/src/new.ts": "export const added = true;\n" });
+    }
+    if (mode === "missing-runtime") {
+      rmSync(path.join(root, "dist/.runtime-postbuildstamp"));
+    }
+    if (mode === "wrong-identity") {
+      writeFiles(root, { "dist/build-info.json": info.replace(head, "a".repeat(40)) });
+    }
+    const before = readFileSync(path.join(root, "dist/build-info.json"), "utf8");
+    const result = spawnSync("/bin/bash", [path.join(root, scriptPath)], {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        HOME: root,
+        PATH: `${bin}${path.delimiter}${path.dirname(process.execPath)}:/usr/bin:/bin`,
+        APP_BUILD: "1",
+        ...(mode === "legacy-skip"
+          ? { SKIP_TSC: "1", SKIP_PNPM_INSTALL: "1" }
+          : { OPENCLAW_MAC_REUSE_BUILD: "1" }),
+      },
+    });
+    if (mode === "reuse") {
+      expect(result.status, result.stderr).toBe(86);
+      expect(result.stdout).toContain(`SWIFT_IDENTITY=${builtAt}`);
+      expect(result.stdout).toContain("Reusing verified source runtime");
+    } else if (mode === "legacy-skip") {
+      expect(result.status, result.stderr).toBe(87);
+      expect(result.stderr).toContain("UNEXPECTED_SOURCE_WRITE");
+    } else {
+      expect(result.status, result.stderr).toBe(1);
+      expect(result.stderr).toContain(
+        mode === "wrong-identity"
+          ? "provenance does not match"
+          : mode === "missing-runtime"
+            ? "stale or incomplete"
+            : "require a clean Git checkout",
+      );
+      expect(result.stdout).not.toContain("SWIFT_IDENTITY=");
+    }
+    expect(readFileSync(path.join(root, "dist/build-info.json"), "utf8")).toBe(before);
+    expect(result.stdout).not.toContain("Ensuring deps");
   });
 });
 
@@ -929,7 +1057,7 @@ function runSwiftPackageResolutionHarness() {
 }
 
 describe("package-mac-app plist stamping", () => {
-  it("gates only release packaging on clean matching source and verifies the embedded commit", () => {
+  it("gates release packaging and source reuse on clean matching source and verifies the embedded commit", () => {
     const script = readFileSync(scriptPath, "utf8");
     const sourceCheck = script.indexOf(
       '/bin/bash "$ROOT_DIR/scripts/apple-release-source-check.sh"',
@@ -943,7 +1071,7 @@ describe("package-mac-app plist stamping", () => {
     );
     const signing = script.indexOf('"$ROOT_DIR/scripts/codesign-mac-app.sh"');
     const releaseBranch = script.lastIndexOf(
-      'if [[ "$BUILD_CONFIG" == "release" ]]; then',
+      'if [[ "$BUILD_CONFIG" == "release" || "$REUSE_SOURCE_BUILD" == "1" ]]; then',
       sourceCheck,
     );
     const releaseBranchEnd = script.indexOf("\nfi", sourceCheck);
@@ -1024,7 +1152,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("keeps dependency installation lockfile-safe", () => {
     const installBlock = scriptBlock(
-      'if [[ "${SKIP_PNPM_INSTALL:-0}" != "1" ]]',
+      'if [[ "$REUSE_SOURCE_BUILD" != "1" && "${SKIP_PNPM_INSTALL:-0}" != "1" ]]',
       'if [[ -z "${APP_BUILD:-}" ]]',
     );
     expectContains(installBlock, [

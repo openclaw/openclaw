@@ -32,7 +32,7 @@ export function sidebarPanelDefinitions(
     slot: Exclude<SidebarSlotId, `plugin:${string}` | "link-reader">,
     icon: IconName,
     hasContent = true,
-    actions?: Pick<SidebarPanelDefinition, "headerAction" | "headerActionView" | "headerLink">,
+    actions?: Pick<SidebarPanelDefinition, "headerActionView" | "headerLink">,
   ): SidebarPanelDefinition => {
     const textKey = slot === "detail" ? "review" : slot === "workspace" ? "files" : slot;
     return {

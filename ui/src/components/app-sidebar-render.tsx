@@ -1,5 +1,5 @@
-import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import type { JSX as SolidJSX } from "@solidjs/web";
+import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import { serializeSidebarEntry, type SidebarZoneEntry } from "../app-navigation.ts";
 import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
@@ -12,11 +12,13 @@ import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
+import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { pluginTabKey } from "../pages/plugin/route.ts";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
@@ -24,20 +26,20 @@ import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-n
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { iconData, type IconName } from "./icon-data.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import { SidebarAgentCard } from "./sidebar-agent-card.tsx";
 import { SidebarAttention } from "./sidebar-attention.tsx";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 import { GatewayStatus, gatewayStatusLabel } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
+import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
 import { ShortcutHint } from "./solid/kbd.tsx";
 import { renderSessionLeadingState, SessionRowBadges } from "./solid/session-presentation.tsx";
-import "./theme-brand-icon.tsx";
+import { ThemeBrandIcon } from "./theme-brand-icon.tsx";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
   readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
-  renderPinnedSidebarSession(session: () => SidebarRecentSession): JSX.Element;
+  renderPinnedSidebarSession(session: () => SidebarRecentSession): SolidJSX.Element;
   toggleSection(sectionId: string): void;
 };
 
@@ -46,7 +48,8 @@ function readSidebarNativeGateway(host: AppSidebarRenderHost): NativeGateway | n
   return snapshot?.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
 }
 
-export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element {
+export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Element {
+  let menuTrigger: HTMLButtonElement | undefined;
   const chipAgent = createMemo(() => host.activeChipAgent()),
     cardAgentId = () => chipAgent().activeId,
     rosterAgent = () => chipAgent().agent,
@@ -87,48 +90,133 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element 
         bootstrapIdentity()?.agentId === cardAgentId()),
     ),
   );
+  const avatarUrl = () =>
+    cached()
+      ? cached()!.avatar
+      : cardAgent()
+        ? resolveAgentAvatarUrl(cardAgent()!, cardIdentity())
+        : null;
+  const avatarText = () =>
+    cached()
+      ? (cached()!.textAvatar ?? null)
+      : cardAgent()
+        ? resolveAgentTextAvatar(cardAgent()!, cardIdentity())
+        : null;
+  const environment = () => host.sessionDataContext?.config?.current?.environment ?? null;
+  const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
+  function AgentCard() {
+    const avatarLoader = createIdentityAvatars();
+    onCleanup(avatarLoader.connect());
+    const avatarSource = projectOwner(avatarLoader, (owner) => owner);
+    const avatar = createMemo(() => {
+      const sourceUrl = avatarUrl();
+      const pending = Boolean(sourceUrl?.startsWith("/") && !avatarAuthReady());
+      return avatarSource.read().withActiveRoutes(() => ({
+        sourceUrl,
+        pending,
+        url: sourceUrl && !pending ? avatarLoader.resolve(sourceUrl) : null,
+      }));
+    });
+    const menuLabel = () =>
+      cardAgents().length > 1 ? t("agentChip.switchAgent") : t("agentChip.menuLabel");
+    return (
+      <openclaw-sidebar-agent-card
+        style={{ display: "contents" }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          if (!menuOpen()) {
+            host.sidebarMenus.toggleAgentMenu(menuTrigger ?? event.currentTarget);
+          }
+        }}
+      >
+        <div
+          class={[
+            "sidebar-agent-card",
+            { "sidebar-agent-card--open": menuOpen(), "sidebar-agent-card--rail": true },
+          ]}
+        >
+          <button
+            ref={(element) => (menuTrigger = element)}
+            type="button"
+            class="sidebar-agent-card__main"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen() ? "true" : "false"}
+            aria-label={`${cardName()} · ${menuLabel()}`}
+            onPointerMove={(event) => {
+              if (cardAgents().length > 1) {
+                host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
+              }
+            }}
+            onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
+            onPointerDown={(event: PointerEvent) => {
+              // The portaled menu has a hidden trigger; keep its outside-click
+              // handler from dismissing hover-open state before click can pin it.
+              event.stopPropagation();
+            }}
+            onClick={(event) => {
+              event.stopPropagation();
+              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+            }}
+          >
+            <span
+              class={[
+                "sidebar-agent-card__avatar",
+                { "sidebar-agent-card__avatar--environment": Boolean(environment()) },
+              ]}
+            >
+              <AgentIdentityAvatar
+                agent={{
+                  id: cardAgentId(),
+                  avatar: avatar().url,
+                  textAvatar: avatarText(),
+                  pending: avatar().pending,
+                }}
+                onImageError={
+                  avatar().sourceUrl
+                    ? avatarLoader.imageErrorHandler(avatar().sourceUrl!)
+                    : undefined
+                }
+              />
+              {menuUnread() && !menuOpen() ? (
+                <span
+                  class="session-unread-dot sidebar-agent-card__menu-unread"
+                  role="img"
+                  aria-label={t("sessionsView.unread")}
+                />
+              ) : null}
+            </span>
+            <span class="sidebar-agent-card__text">
+              <span class="sidebar-agent-card__name">
+                <HoverMarquee
+                  content={cardName()}
+                  class="sidebar-agent-card__name-text"
+                  options={{ loop: true, delay: 300, speed: 35 }}
+                />
+                <span class="sidebar-agent-card__chevron" aria-hidden="true">
+                  <Icon name="chevronsUpDown" />
+                </span>
+              </span>
+              {environment() ? (
+                <span class="sidebar-agent-card__subtitle-row">
+                  <span class="control-ui-environment-pill">{environment()?.label}</span>
+                </span>
+              ) : null}
+            </span>
+          </button>
+        </div>
+      </openclaw-sidebar-agent-card>
+    );
+  }
   return (
     <Show
       when={host.sidebarAgentsMode !== "roster" && (cardAgent() || cached())}
       fallback={renderSidebarWorkspaceHeader(host)}
     >
-      <openclaw-tooltip prop:content={cardName()}>
-        <SidebarAgentCard
-          compact={true}
-          agentName={cardName()}
-          agentId={cardAgentId()}
-          avatarUrl={
-            cached()
-              ? cached()!.avatar
-              : cardAgent()
-                ? resolveAgentAvatarUrl(cardAgent()!, cardIdentity())
-                : null
-          }
-          avatarAuthReady={avatarAuthReady()}
-          avatarText={
-            cached()
-              ? (cached()!.textAvatar ?? null)
-              : cardAgent()
-                ? resolveAgentTextAvatar(cardAgent()!, cardIdentity())
-                : null
-          }
-          environment={host.sessionDataContext?.config?.current?.environment ?? null}
-          menuOpen={host.sidebarMenus.agentMenuPosition !== null}
-          menuUnread={menuUnread()}
-          switcherAvailable={cardAgents().length > 1}
-          onToggleMenu={(trigger: HTMLElement) => host.sidebarMenus.toggleAgentMenu(trigger)}
-          onMenuPointerMove={(trigger: HTMLElement, event: PointerEvent) =>
-            host.sidebarMenus.scheduleAgentMenuHoverOpen(trigger, event)
-          }
-          onMenuPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
-          onContextMenu={(trigger, event) => {
-            event.preventDefault();
-            if (host.sidebarMenus.agentMenuPosition !== null) {
-              return;
-            }
-            host.sidebarMenus.toggleAgentMenu(trigger);
-          }}
-        />
+      <openclaw-tooltip
+        prop:content={cardName()}
+        prop:descriptionTarget={() => menuTrigger ?? null}
+      >
+        <AgentCard />
       </openclaw-tooltip>
     </Show>
   );
@@ -158,7 +246,14 @@ export function readSidebarBrandPresentation(host: AppSidebarRenderHost) {
   };
 }
 
-function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
+function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Element {
+  let button: HTMLButtonElement | undefined;
+  const focusHeader = () => button?.focus();
+  onCleanup(() => {
+    if (host.sidebarMenus.focusAgentRoster === focusHeader) {
+      host.sidebarMenus.focusAgentRoster = undefined;
+    }
+  });
   const currentBranding = () => host.sessionDataContext?.theme.branding ?? currentThemeBranding();
   const cached = () => (host.sidebarSnapshot?.brand.agentId ? null : host.sidebarSnapshot?.brand);
   const brand = () => cached() ?? readSidebarBrandPresentation(host);
@@ -179,11 +274,15 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
   const name = () => brand().name;
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   return (
-    <openclaw-tooltip prop:content={name()}>
+    <openclaw-tooltip prop:content={name()} prop:descriptionTarget={() => button ?? null}>
       <div class="sidebar-workspace-header sidebar-workspace-header--rail">
         <button
           type="button"
           class="sidebar-workspace-header__main"
+          ref={(element) => {
+            button = element;
+            host.sidebarMenus.focusAgentRoster = focusHeader;
+          }}
           aria-haspopup="menu"
           aria-expanded={menuOpen() ? "true" : "false"}
           aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
@@ -211,7 +310,7 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
               {branding().brandIcon === "mark" ? (
                 <Icon name="mark" />
               ) : (
-                <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
+                <ThemeBrandIcon branding={branding()} aria-hidden="true" />
               )}
             </span>
           ) : (
@@ -242,7 +341,7 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
   );
 }
 
-export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Element {
+export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.Element {
   const context = useApplication();
   const profileGateway = projectGateway(context.gateway);
   const home = () => host.visibleHomeSession(host.expandedAgentId());
@@ -294,6 +393,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
       transition: host.connectionFlagVisible,
       hover: hovered(),
       focus: focused(),
+      footerControlsOverlap: host.footerControlsOverlap,
     }),
     (request, previous) => {
       if (!request.kind || !(request.transition || request.hover || request.focus)) {
@@ -313,24 +413,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
       const anchor = identityAnchor.getBoundingClientRect();
       const { width, height } = flag.getBoundingClientRect();
       // The hidden flag has a box; anchor its resting rect without the slide transform.
-      const surfaces = identityAnchor
-        .closest(".shell")
-        ?.querySelectorAll<HTMLElement>(
-          "main.content :is(.chat-footer .agent-chat__composer-shell, .new-session-page__composer, .creation-composer, .cron-editor-actions)",
-        );
-      const overlaps = Array.from(surfaces ?? []).some((surface) => {
-        if (!surface.checkVisibility({ checkOpacity: true, visibilityProperty: true })) {
-          return false;
-        }
-        const rect = surface.getBoundingClientRect();
-        return (
-          rect.width > 0 &&
-          rect.height > 0 &&
-          rect.left < anchor.right + width &&
-          rect.right > anchor.right &&
-          rect.top < anchor.bottom &&
-          rect.bottom > anchor.bottom - height
-        );
+      const overlaps = request.footerControlsOverlap?.({
+        left: anchor.right,
+        right: anchor.right + width,
+        top: anchor.bottom - height,
+        bottom: anchor.bottom,
       });
       setFlagOpen(!overlaps);
     },
@@ -454,7 +541,7 @@ export function renderAppSidebarPageEntry(
   entry: SidebarZoneEntry,
   sessionRows: () => ReadonlyMap<string, SidebarRecentSession>,
   pluginTabs: () => ReadonlyMap<string, GatewayControlUiPluginTab>,
-): JSX.Element {
+): SolidJSX.Element {
   if (entry.type === "person") {
     return undefined;
   }
@@ -514,15 +601,11 @@ export function renderAppSidebarPageEntry(
 export function renderAppSidebarPluginTab(
   host: AppSidebarRenderHost,
   tab: () => GatewayControlUiPluginTab,
-): JSX.Element {
-  const ref = () => ({ pluginId: tab().pluginId, id: tab().id });
-  const key = () => pluginTabKey(ref());
-  const routePlacement = () => {
-    const placement = tab().placement;
-    return placement?.startsWith("route:") ? placement.slice("route:".length) : "";
-  };
+  triggerRef?: (element: HTMLAnchorElement) => void,
+): SolidJSX.Element {
   const routeId = createMemo(() => {
-    const route = routePlacement();
+    const placement = tab().placement;
+    const route = placement?.startsWith("route:") ? placement.slice("route:".length) : "";
     return isRouteId(route) ? route : null;
   });
   const location = createMemo(() => pluginTabLocation(tab(), host.basePath));
@@ -534,10 +617,11 @@ export function renderAppSidebarPluginTab(
   });
   const link = (
     <SidebarNavLink
+      ref={triggerRef}
       href={`${location().pathname}${location().search}`}
       icon={<Icon name={iconName()} />}
       label={tab().label}
-      active={host.activeRouteId === "plugin" && host.activePluginTabId === key()}
+      active={host.activeRouteId === "plugin" && host.activePluginTabId === pluginTabKey(tab())}
       onNavigate={() => host.onNavigate?.("plugin", location())}
     />
   );
@@ -546,4 +630,12 @@ export function renderAppSidebarPluginTab(
       {(route) => host.sidebarMenus.renderRoute(route(), host)}
     </Show>
   );
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-sidebar-agent-card": HTMLAttributes<HTMLElement>;
+    }
+  }
 }

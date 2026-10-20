@@ -375,6 +375,10 @@ const supportsCurrentMacosSwiftCi =
   existsSync("scripts/install-swift-tools.sh") &&
   existsSync("scripts/lint-swift.sh") &&
   existsSync("scripts/format-swift.sh");
+const runMacosSwift =
+  runMacos &&
+  !npmQualification &&
+  (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi);
 const supportsIosBuild = hasPackageScript("ios:build");
 const supportsCurrentIosCi = supportsIosBuild && supportsCurrentMacosSwiftCi;
 const iosBuildScope =
@@ -714,6 +718,7 @@ const uiWebkitOwners = [
   "ui/vitest.config.ts",
   "ui/src/components/{control-theme*,modal-dialog*,tooltip*,menu-*,overlay*,composer-menu*,dropdown-menu*,anchored-overlay*,textarea-token-anchor*,panel-tab-strip*,select-picker*,multi-select*,agent-select*,lobster-pet*,session-group-defaults-dialog*}.{ts,tsx}",
   "ui/src/components/{session-hovercard*,solid/session-hovercard*}.{ts,tsx,css}",
+  "ui/src/components/solid/{menu*.{ts,tsx},overlay.css}",
   "ui/src/app/app-shell-chrome.ts",
   "ui/src/pages/{cron/view-jobs-filter,plugins/settings-editor,plugins/settings-view}.{ts,tsx,css}",
   "ui/src/pages/chat/chat-composer*.{ts,tsx}",
@@ -982,6 +987,7 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
+  ".github/actions/postgres-conformance/**",
   "**/*.postgres.test.ts",
   "src/state/openclaw-agent-*",
   "src/config/sessions/**",
@@ -1079,6 +1085,7 @@ const runPostgresConformance =
         ))));
 const runBuildArtifacts =
   publishedDriverUpdate ||
+  (runMacosSwift && existsSync("apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift")) ||
   (runNodeFull &&
     (changedScopeHasBuildImpact ||
       runSqliteSessionLifecycle ||
@@ -1750,10 +1757,7 @@ const manifest = {
           [{ check_name: "macos-node", runtime: "node", task: "test" }]
       : [],
   ),
-  run_macos_swift:
-    runMacos &&
-    !npmQualification &&
-    (!frozenTarget || compatibilityTarget || supportsCurrentMacosSwiftCi),
+  run_macos_swift: runMacosSwift,
   run_openclawkit_tests: runMacos && !npmQualification && supportsOpenClawKitTests,
   run_ios_build: runIosBuild,
   run_ios_voice_cleanup_tests: iosSimulatorSelection.voice.selected,

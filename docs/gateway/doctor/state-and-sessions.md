@@ -202,6 +202,8 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
 
     Older versions could copy a plugin's generated provider block into the agent's root `models.json`. For example, `claude-cli` received the `anthropic` catalog through its hook alias. The root file is author-owned, so the copy and its prices never refreshed, and its zero placeholders made unpriced models show as free. With `--fix`, Doctor removes a root provider only when it is an exact copy of a block in that plugin's generated catalog, config does not declare the id, and the block carries no credentials or overrides. It saves the previous file as `models.json.bak-<timestamp>` and lists each removed provider. Edited copies stay.
 
+    This repair accepts line comments and trailing commas, just like model loading. The repaired file uses plain JSON; the backup preserves the original bytes, including comments.
+
     OAuth credential sidecar imports are retired. Doctor leaves their files and encryption keys untouched. When a legacy `auth-profiles.json` still references a sidecar, Doctor refuses the migration: upgrade through `2026.9.7` and run `openclaw doctor --fix` from an interactive terminal on the original host before retrying; that release can recover the historical key and import the credentials. Unreferenced sidecars stay in place without blocking. See [retention policy](/gateway/doctor/config-migrations#retention-policy).
 
     Stale OAuth shadow cleanup preserves profiles with sidecar references in either the legacy file or the canonical store. If a legacy auth file cannot be read or parsed, Doctor skips that agent's shadow cleanup and warns with the file path; inspect or restore it before retrying. A missing legacy file does not prevent cleanup of ordinary SQLite-only profiles.
@@ -225,6 +227,8 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
     The `core/doctor/legacy-plugin-dependencies` lint selector shipped in v2026.8.1 remains available as a deprecated, non-destructive informational check. It no longer scans cache roots or recommends deleting them. Use `--severity-min info` to display its deprecation notice.
 
     Package-local cleanup remains with the package installer. Doctor still removes orphaned or recovered managed npm copies of bundled `@openclaw/*` plugins that can shadow the current bundled manifest. It also relinks the host `openclaw` package into managed npm plugins that declare `peerDependencies.openclaw`, so package-local runtime imports such as `openclaw/plugin-sdk/*` keep resolving after updates or npm repairs.
+
+    Host-link checks and post-update relinking use the active install-record paths, so stale managed npm generations do not add work to those passes. If storage access prevents Doctor from reading the records, it warns and falls back to inspecting all managed npm roots. Recovery and cleanup still discover stale generations: `openclaw doctor --fix` retires them for safe pruning after Gateway shutdown.
 
     Doctor can also reinstall missing downloadable plugins when config references them but the local plugin registry cannot find them (material `plugins.entries`, configured channel/provider/search settings, configured agent runtimes). During package updates, doctor avoids reinstalling plugin packages while the core package is being swapped; run `openclaw doctor --fix` again after the update if a configured plugin still needs recovery. Gateway startup and config reload do not run package repair; plugin installs remain explicit doctor/install/update work.
 

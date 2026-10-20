@@ -31,7 +31,6 @@ type PreparedSignalApprovalTarget = {
   accountId: string;
   baseUrl?: string;
   account?: string;
-  accountUuid?: string;
   targetAuthorKeys: readonly string[];
 };
 type PendingSignalApprovalEntry = {
@@ -128,7 +127,6 @@ export const signalApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
         accountId: preparedAccountId,
         ...(runtimeContext.baseUrl ? { baseUrl: runtimeContext.baseUrl } : {}),
         ...(runtimeContext.account ? { account: runtimeContext.account } : {}),
-        ...(runtimeContext.accountUuid ? { accountUuid: runtimeContext.accountUuid } : {}),
         targetAuthorKeys,
       };
       return {

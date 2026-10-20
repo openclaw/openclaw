@@ -17,6 +17,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { defaultRuntime } from "../../../runtime.js";
+import { isSessionMutationActive } from "../../../sessions/session-controller.lifecycle-projections.js";
 import {
   recordGatewaySessionRunFailure,
   resolveSessionRunError,
@@ -34,12 +35,16 @@ import {
 } from "./subagent-session-metrics.js";
 import { resolveCompletionFromSessionEntry } from "./subagent-session-reconciliation.js";
 
+/** A kill no operation settlement confirmed is reconciled by the sweeper after this window. */
 export const PROVISIONAL_KILL_RECONCILIATION_MS = 5 * 60_000;
+export const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 export const MIN_ANNOUNCE_RETRY_DELAY_MS = 15_000;
 const MAX_ANNOUNCE_RETRY_DELAY_MS = 5 * 60_000;
 const ANNOUNCE_RETRY_JITTER = 0.2;
 export const ANNOUNCE_EXPIRY_MS = 5 * 60_000;
 export const ANNOUNCE_COMPLETION_HARD_EXPIRY_MS = 30 * 60_000;
+/** The durable media outbox owns its own delivery window, independent of the mailbox. */
+export const SESSION_DELIVERY_DEADLINE_MS = ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
 
 const ANNOUNCE_RETRY_BACKOFF = {
   initialMs: MIN_ANNOUNCE_RETRY_DELAY_MS,
@@ -124,10 +129,25 @@ export async function persistSubagentSessionTiming(
     options?.session?.storePath ??
     options?.settledQueuedCancellation?.storePath ??
     configuredStorePath;
+  // Controllers retain logical store scopes; native currency pins physical reads.
+  const mutationScopes = new Set([configuredStorePath, storePath]);
   const refused = new Error("Subagent timing owner changed before commit");
   const assertGenerationCurrent = () => {
     if (options?.isCurrentGeneration?.() === false) {
       throw refused;
+    }
+    // Reset/delete own the retained row; late best-effort timing must not
+    // invalidate it. Ordinary kill mutations still publish terminal timing.
+    for (const scope of mutationScopes) {
+      if (
+        isSessionMutationActive(
+          scope,
+          [childSessionKey, entry.childSessionIdentity?.sessionId],
+          ["reset", "delete"],
+        )
+      ) {
+        throw refused;
+      }
     }
     options?.assertCommitAllowed?.();
   };
@@ -348,10 +368,7 @@ function resolveArchiveAfterMs(cfg?: OpenClawConfig) {
   const minutes =
     config.agents?.defaults?.subagents?.archiveAfterMinutes ??
     DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES;
-  if (!Number.isFinite(minutes) || minutes <= 0) {
-    return undefined;
-  }
-  return Math.max(1, Math.floor(minutes)) * 60_000;
+  return minutes === 0 ? undefined : minutes * 60_000;
 }
 
 /** Arms retention only after the run or its waitable collector result has completed. */

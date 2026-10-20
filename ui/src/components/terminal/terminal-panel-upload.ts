@@ -83,6 +83,9 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
   }
 
   function admitUpload(): boolean {
+    if (!host.client()) {
+      return false;
+    }
     if (uploadsEnabled()) {
       return true;
     }
@@ -123,7 +126,7 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
     if (!hasDraggedFiles(event)) {
       return false;
     }
-    if (!uploadsEnabled()) {
+    if (!uploadsEnabled() || !host.client()) {
       event.preventDefault();
       if (event.dataTransfer) {
         event.dataTransfer.dropEffect = "none";
@@ -159,7 +162,7 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
   }
 
   function ensureCurrent(batch: TerminalUploadBatch): boolean {
-    if (activeBatch !== batch || batch.abortController.signal.aborted) {
+    if (activeBatch !== batch) {
       return false;
     }
     if (!uploadsEnabled()) {
@@ -194,6 +197,7 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
 
   async function runBatch(batch: TerminalUploadBatch): Promise<void> {
     const client = host.client();
+    const signal = batch.abortController.signal;
     if (!client || !ensureCurrent(batch)) {
       cancelBatch(batch);
       return;
@@ -207,10 +211,13 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
       try {
         contentBase64 = await encodeTerminalUpload(file);
       } catch (error) {
+        if (signal.aborted) {
+          return;
+        }
         failBatch(batch, error, false);
         return;
       }
-      if (!ensureCurrent(batch)) {
+      if (signal.aborted || !ensureCurrent(batch)) {
         return;
       }
 
@@ -221,12 +228,15 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
           client,
           batch.tab.gatewaySessionId,
           { name: file.name, contentBase64 },
-          batch.abortController.signal,
+          signal,
         );
-        if (!ensureCurrent(batch)) {
+        if (signal.aborted || !ensureCurrent(batch)) {
           return;
         }
       } catch (error) {
+        if (signal.aborted) {
+          return;
+        }
         failBatch(batch, error, isRetryableUploadError(error));
         return;
       }
@@ -254,7 +264,7 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
   }
 
   function insertPaths(batch: TerminalUploadBatch): void {
-    if (!ensureCurrent(batch) || !ensureUploadsRetained(batch)) {
+    if (!host.client() || !ensureCurrent(batch) || !ensureUploadsRetained(batch)) {
       return;
     }
     // Ghostty preserves bracketed-paste mode. This produces editable input,
@@ -369,7 +379,10 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
       if (!batch || batch.state !== "failed" || !batch.retryable) {
         return;
       }
-      if (!host.isCurrent(batch.tab) || !host.client()) {
+      if (!host.client()) {
+        return;
+      }
+      if (!host.isCurrent(batch.tab)) {
         cancelBatch(batch);
         return;
       }
@@ -385,6 +398,18 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
     },
     cancel,
     cancelForTab,
+    suspend(): void {
+      const batch = activeBatch;
+      if (batch?.state === "uploading") {
+        batch.abortController.abort();
+        batch.state = "failed";
+        batch.error = t("terminal.deliveryFailed");
+        batch.retryable = true;
+        notifyBatch();
+      }
+      setDragActive(false);
+      dragDepth = 0;
+    },
     dispose,
   };
 }

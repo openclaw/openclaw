@@ -87,16 +87,14 @@ export function LobsterPetSection(props: ConfigProps) {
                     {(palette) => {
                       const look = canonicalLobsterLook(palette);
                       const entry = createMemo(() => dexEntries().get(palette.id));
-                      const seen = createMemo(() => entry() !== undefined);
-                      const shinySeen = createMemo(() => entry()?.shinySeenAt != null);
+                      const seen = () => entry() !== undefined;
+                      const shinySeen = () => entry()?.shinySeenAt != null;
                       const baseName = createMemo(() =>
                         entry() ? (entry()?.name ?? lobsterPaletteName(palette.id)) : "?",
                       );
-                      const displayName = createMemo(() =>
-                        shinySeen() ? `${baseName()} ✦` : baseName(),
-                      );
+                      const displayName = () => (shinySeen() ? `${baseName()} ✦` : baseName());
                       const lore = LOBSTER_PALETTE_LORE[palette.id];
-                      const loreLine = createMemo(() => (seen() ? lore.flavor : lore.hint));
+                      const loreLine = () => (seen() ? lore.flavor : lore.hint);
                       const visitedLine = createMemo(() => {
                         const firstSeenAt = entry()?.firstSeenAt;
                         return firstSeenAt != null

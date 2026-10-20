@@ -122,7 +122,7 @@ export function describeSubagentSpawnContext(threadAvailable: boolean): string {
 }
 
 export const SESSIONS_SPAWN_COLLECTOR_GUIDANCE =
-  "Default to ordinary spawn for one or a few children. Reserve `collect=true` (swarm) for large parallel fan-out (several similar children, about five or more). Collectors send no completion notification and cannot be steered; explicitly collect their results; structured result per `outputSchema`; `groupId` groups a batch.";
+  "Default to ordinary spawn for one or a few children unless you need in-turn result collection. Use `collect=true` (swarm) for that or large parallel fan-out (several similar children, about five or more). Collectors send no completion notification and cannot be steered; explicitly collect their results; structured result per `outputSchema`; `groupId` groups a batch.";
 
 /** Describes the sessions_spawn tool for model-facing instructions. */
 export function describeSessionsSpawnTool(options?: {
@@ -170,6 +170,7 @@ export function describeSessionStatusTool(): string {
     "Show visible-session model/usage/time/cost/tasks.",
     '`sessionKey="current"` for current; UI labels are not keys.',
     "`model` overrides; `model=default` resets. Use for active model/session questions.",
+    "`capabilities=true` lists this session's available tools and why others are missing.",
   ].join(" ");
 }
 

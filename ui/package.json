@@ -35,7 +35,7 @@
     "@panzoom/panzoom": "4.6.2",
     "@solidjs/signals": "2.0.0-rc.14",
     "@solidjs/web": "2.0.0-rc.14",
-    "@tanstack/virtual-core": "3.18.0",
+    "@tanstack/virtual-core": "3.19.0",
     "@zag-js/menu": "2.0.0-next.3",
     "@zag-js/rect-utils": "2.0.0-next.3",
     "@zag-js/vanilla": "2.0.0-next.3",
@@ -51,7 +51,7 @@
     "parse5": "8.0.1",
     "remend": "1.4.0",
     "solid-js": "2.0.0-rc.14",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@solidjs/compiler": "2.0.0-rc.14",

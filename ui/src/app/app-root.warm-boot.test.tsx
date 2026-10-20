@@ -2,19 +2,22 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal, flush } from "solid-js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import type { GatewayBrowserClient, GatewayHelloOk } from "../api/gateway.ts";
 import type { LoginGateProps } from "../components/login-gate.ts";
 import "../components/login-gate.ts";
 import { i18n } from "../i18n/index.ts";
 import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
 import { requestApplicationContext } from "../test-helpers/application-context.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createLegacyFocusEscape } from "./app-root-lit.ts";
 import { mountOpenClawApp } from "./app-root.tsx";
 import type { BootRecord } from "./boot-record.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
+import { TERMINAL_PANEL_ELEMENT } from "./lazy-custom-element.ts";
 import { loadSettings, persistSessionToken } from "./settings.ts";
 
 // mock-isolation: root admission tests isolate shell rendering while exercising the real bootstrap owner.
@@ -128,6 +131,61 @@ async function createOfflineSurface(warm = false) {
 }
 
 describe("warm boot app root", () => {
+  it("retains the focused Terminal client across transport loss while disabling live actions", async () => {
+    window.history.replaceState({}, "", "/focus/terminal");
+    document.documentElement.setAttribute(
+      CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
+      JSON.stringify({ basePath: "", terminalEnabled: true }),
+    );
+    onTestFinished(() => {
+      document.documentElement.removeAttribute(CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE);
+    });
+    // Keep this at the root-to-panel input boundary; Terminal's owner tests cover emulator custody.
+    vi.spyOn(TERMINAL_PANEL_ELEMENT, "loadModule").mockRejectedValue(
+      new Error("Terminal implementation isolated from root input test"),
+    );
+    const { snapshot, container, draw } = await createWarmSurface(false);
+    const client = createTestGatewayClient(vi.fn());
+    const hello = {
+      type: "hello-ok",
+      protocol: 1,
+      features: { methods: ["terminal.open"] },
+      auth: { role: "operator", scopes: ["operator.admin"], recoveryScope: client.recoveryScope },
+    } satisfies GatewayHelloOk;
+    Object.assign(snapshot, { phase: "connected", client, hello });
+    await draw();
+    const panel = expectDefined(
+      container.querySelector("openclaw-terminal-panel"),
+      "focused Terminal panel",
+    );
+    expect(panel.client).toBe(client);
+    expect(panel.gatewayConnected).toBe(true);
+    expect(panel.available).toBe(true);
+
+    Object.assign(snapshot, { phase: "reconnecting", hello: null });
+    await draw();
+    expect(container.querySelector("openclaw-terminal-panel")).toBe(panel);
+    expect(panel.client).toBe(client);
+    expect(panel.gatewayConnected).toBe(false);
+    expect(panel.available).toBe(true);
+
+    Object.assign(snapshot, { phase: "connected", hello });
+    await draw();
+    expect(panel.client).toBe(client);
+    expect(panel.gatewayConnected).toBe(true);
+
+    const replacement = createTestGatewayClient(vi.fn());
+    snapshot.client = replacement;
+    await draw();
+    expect(panel.client).toBe(replacement);
+
+    Object.assign(snapshot, { phase: "stopped", client: null, hello: null });
+    await draw();
+    expect(panel.client).toBeNull();
+    expect(panel.gatewayConnected).toBe(false);
+    expect(panel.available).toBe(false);
+  });
+
   it("pins embedded ingress to its serving Gateway and never offers a shared-credential login", async () => {
     document.documentElement.dataset.openclawRemoteIngress = "true";
     vi.stubGlobal("OPENCLAW_UI_DEV_GATEWAY", {

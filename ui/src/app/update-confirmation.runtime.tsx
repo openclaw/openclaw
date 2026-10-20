@@ -212,9 +212,12 @@ export async function confirmAndStartUpdateRuntime(
       }
       dispose = render(() => {
         const [view, setView] = createSignal(snapshot);
+        let cancelButton!: HTMLButtonElement;
+        let closeButton: HTMLButtonElement | undefined;
         updateView = setView;
         return (
           <openclaw-modal-dialog
+            prop:initialFocus={() => (closeButton?.isConnected ? closeButton : cancelButton)}
             label={view().route.title}
             description={view().body}
             onModal-cancel={finish}
@@ -284,7 +287,15 @@ export async function confirmAndStartUpdateRuntime(
                           view().route.confirmLabel
                         )}
                       </button>
-                      <button type="button" class="btn" autofocus onClick={finish}>
+                      <button
+                        ref={(element) => {
+                          cancelButton = element;
+                        }}
+                        type="button"
+                        class="btn"
+                        autofocus
+                        onClick={finish}
+                      >
                         {view().working ? t("common.close") : t("common.cancel")}
                       </button>
                     </>
@@ -329,7 +340,15 @@ export async function confirmAndStartUpdateRuntime(
                       {t("updates.reviewUpdate")}
                     </button>
                   </Show>
-                  <button type="button" class="btn" autofocus onClick={finish}>
+                  <button
+                    ref={(element) => {
+                      closeButton = element;
+                    }}
+                    type="button"
+                    class="btn"
+                    autofocus
+                    onClick={finish}
+                  >
                     {t("common.close")}
                   </button>
                 </Show>

@@ -112,7 +112,8 @@ suite.define(() => {
           "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
         );
         const fileView = page.locator(".sidebar-file-view:visible");
-        if ((await fileView.count()) > 0) {
+        if (intent !== "close") {
+          await fileView.waitFor({ state: "visible" });
           await polledText(fileView.locator(".cm-content")).toContain(
             "export const loaded = true;",
           );

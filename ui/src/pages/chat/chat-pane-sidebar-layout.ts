@@ -215,20 +215,9 @@ export function resolveSidebarLayoutForBoard(params: {
   return fitSidebarLayout(layout, params.paneWidth) ?? layout;
 }
 
-type FullMessageScope = {
-  owner: object;
-  sessionKey?: string;
-  agentId?: string;
-  sessionId?: string;
-  displayedSessionId?: string;
-  lifecycleRevision?: string;
-  authorizationKey?: string;
-};
+type FullMessageScope = ReturnType<typeof readSidebarFullMessageScope>;
 
-function readSidebarFullMessageScope(
-  state: ChatPageHost,
-  gateway: ApplicationGateway,
-): FullMessageScope {
+function readSidebarFullMessageScope(state: ChatPageHost, gateway: ApplicationGateway) {
   const auth = gateway.snapshot.hello?.auth;
   const session = selectedChatSessionRow(state);
   return {
@@ -265,7 +254,7 @@ export function createSidebarFullMessageLoader(
     }
     const client = state.client;
     const generation = state.connectionEpoch;
-    const scope = { ...readScope() };
+    const scope = readScope();
     const sameScope = (other: FullMessageScope) =>
       scope.owner === other.owner &&
       scope.sessionKey === other.sessionKey &&

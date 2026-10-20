@@ -298,10 +298,6 @@ async function installManagedBinary(
 ): Promise<CrabboxBinary> {
   const destination = path.dirname(binary);
   await inspectInstallationDirectory(destination);
-  const installed = await probeInstallation(binary, runCommand, signal);
-  if (installed) {
-    return installed;
-  }
   const parent = path.dirname(destination);
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
   const staging = await fs.mkdtemp(path.join(parent, ".install-"));

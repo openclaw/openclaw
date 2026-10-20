@@ -7,6 +7,7 @@ import type {
   StreamFn,
 } from "@openclaw/llm-core";
 import OpenAI from "openai";
+import type { ChatCompletion, ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { getAiTransportHost } from "../host.js";
 import {
@@ -36,7 +37,6 @@ import {
   isNativeOpenAIEndpoint,
   resolveOpenAICompletionsCompat,
 } from "./openai-completions-compat.js";
-import { bufferContextLimitedCompletions } from "./openai-completions-context-budget-buffer.js";
 import { isAzureOpenAICompatibleHost } from "./openai-completions-host.js";
 import {
   buildOpenAICompletionsRequest,
@@ -95,6 +95,12 @@ function assertOpenAICompletionsPayloadHasConversationTurn(
     `OpenAI-compatible chat payload for ${model.provider}/${model.id} contains no non-empty user or assistant messages after compaction and transport transforms; refusing to send a system/tool-only request. Start a new user turn or repair the compacted session history.`,
   );
 }
+
+// Bound provider chunks, not repeated cumulative assistant snapshots. A normal
+// multi-token reasoning response otherwise exhausts the event buffer quadratically.
+const MAX_CONTEXT_BUDGET_BUFFER_CHUNKS = 8_192;
+const MAX_CONTEXT_BUDGET_BUFFER_BYTES = 4 * 1_024 * 1_024;
+type Completion = ChatCompletionChunk | ChatCompletion;
 
 const SSE_DONE_LINE_RE = /^data:[ \t]*\[DONE\][ \t]*$/i;
 const SSE_DONE_MAX_LINE_CHARS = 1_024;
@@ -438,7 +444,79 @@ export function streamOpenAICompletionsRequest(
       const buffered =
         contextOutputBudget === undefined
           ? undefined
-          : await bufferContextLimitedCompletions(providerStream, options?.signal);
+          : await (async () => {
+              const iterator = providerStream[Symbol.asyncIterator]();
+              const chunks: Completion[] = [];
+              let bufferedBytes = 0;
+              let overflow: IteratorYieldResult<Completion> | undefined;
+              let finished = false;
+              let failed = false;
+              let sourceError: unknown;
+              let finishReason: string | undefined;
+              try {
+                for (;;) {
+                  const next = await iterator.next();
+                  if (next.done) {
+                    finished = true;
+                    break;
+                  }
+                  const chunk = next.value;
+                  const chunkBytes = Buffer.byteLength(JSON.stringify(chunk) ?? "", "utf8");
+                  if (
+                    chunks.length >= MAX_CONTEXT_BUDGET_BUFFER_CHUNKS ||
+                    bufferedBytes + chunkBytes > MAX_CONTEXT_BUDGET_BUFFER_BYTES
+                  ) {
+                    overflow = next;
+                    break;
+                  }
+                  chunks.push(chunk);
+                  bufferedBytes += chunkBytes;
+                  const chunkFinishReason = chunk?.choices?.[0]?.finish_reason;
+                  if (chunkFinishReason) {
+                    finishReason = chunkFinishReason;
+                  }
+                  options?.signal?.throwIfAborted();
+                }
+              } catch (error) {
+                failed = true;
+                sourceError = error;
+                // Replay the received prefix into the reducer before surfacing this error,
+                // retaining real provider usage without publishing incomplete candidate tools.
+                void iterator.return?.(undefined).catch(() => undefined);
+              }
+              const bounded = overflow === undefined;
+              return {
+                bounded,
+                failed,
+                finishReason,
+                stream: {
+                  async *[Symbol.asyncIterator]() {
+                    try {
+                      yield* chunks;
+                      if (failed) {
+                        throw sourceError;
+                      }
+                      if (overflow !== undefined) {
+                        yield overflow.value;
+                        for (;;) {
+                          const next = await iterator.next();
+                          if (next.done) {
+                            finished = true;
+                            return;
+                          }
+                          yield next.value;
+                        }
+                      }
+                    } finally {
+                      chunks.length = 0;
+                      if (!finished && !failed) {
+                        void iterator.return?.(undefined).catch(() => undefined);
+                      }
+                    }
+                  },
+                },
+              };
+            })();
       discardCandidate = Boolean(
         buffered?.bounded && (buffered.failed || buffered.finishReason === "length"),
       );

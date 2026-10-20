@@ -1,7 +1,6 @@
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { LoggingMessageNotificationSchema } from "@modelcontextprotocol/sdk/types.js";
+import { Client } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
@@ -103,7 +102,7 @@ describe("MCP HTTP stream timeouts", () => {
           }),
       });
       const client = new Client({ name: "timeout-test", version: "1" });
-      client.setNotificationHandler(LoggingMessageNotificationSchema, () => bodyReceived.resolve());
+      client.setNotificationHandler("notifications/message", () => bodyReceived.resolve());
       const resolved = resolveMcpTransport("slow", {
         url: `http://127.0.0.1:${fixture.claim.port}/mcp`,
         transport: "streamable-http",
@@ -115,9 +114,12 @@ describe("MCP HTTP stream timeouts", () => {
           throw new Error("Expected HTTP MCP transport");
         }
         await withinTest(client.connect(resolved.transport), signal);
-        const pending = client.callTool({ name: "slow" }, undefined, {
-          timeout: resolved.requestTimeoutMs,
-        });
+        const pending = client.callTool(
+          { name: "slow" },
+          {
+            timeout: resolved.requestTimeoutMs,
+          },
+        );
         const result = expect(pending).resolves.toMatchObject({
           content: [{ type: "text", text: "completed" }],
         });

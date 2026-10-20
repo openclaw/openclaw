@@ -141,6 +141,33 @@ describe("buildAgentSystemPrompt", () => {
       ["## Documentation", "Docs: /tmp/openclaw/docs", "Source: /tmp/openclaw"],
     ],
     [
+      "points can't-do claims at session capabilities and the docs index",
+      { toolNames: ["read", "session_status", "web_fetch"] },
+      [
+        "Can't-do claims: a missing tool or failed call shows this session's limits, not OpenClaw's; check `session_status` with `capabilities=true`, then the docs index https://docs.openclaw.ai/llms.txt before saying OpenClaw can't.",
+      ],
+    ],
+    [
+      "uses local docs instead of the remote index without a web tool",
+      {
+        docsPath: "/workspace/docs",
+        toolNames: ["read", "session_status"],
+        sandboxInfo: { enabled: true },
+      },
+      [
+        "check `session_status` with `capabilities=true`, then the local docs before saying OpenClaw can't.",
+      ],
+      ["llms.txt"],
+    ],
+    [
+      "never names an unavailable capability route in can't-do guidance",
+      { toolNames: ["read"], sandboxInfo: { enabled: true } },
+      [
+        "Can't-do claims: a missing tool or failed call shows this session's limits, not OpenClaw's; say what you could not check.",
+      ],
+      ["capabilities=true", "llms.txt"],
+    ],
+    [
       "acknowledges unavailable docs retrieval in a sandbox without web tools",
       { toolNames: ["read"], sandboxInfo: { enabled: true } },
       [
@@ -583,6 +610,58 @@ describe("buildAgentSystemPrompt", () => {
     expect(withSend).toContain("follow up via `sessions_send`");
     expect(withoutSend).not.toContain("follow up via `sessions_send`");
     expect(minimal).not.toContain("## Delegation");
+  });
+
+  it("requires in-turn child collection for isolated automation without sessions_yield", () => {
+    for (const overrides of [
+      {},
+      { subagentDelegationMode: "prefer" as const },
+      { promptMode: "minimal" as const },
+      { codeModeActive: true, toolNames: ["code_execution"] },
+    ]) {
+      const prompt = renderPrompt({
+        toolNames: ["sessions_spawn", "agents_wait"],
+        capabilityToolNames: ["sessions_spawn", "agents_wait"],
+        runtimeInfo: { sessionKey: "agent:main:cron:nightly-job:run:run-1" },
+        ...overrides,
+      });
+
+      expect(prompt).toContain("child completion will not resume this turn");
+      expect(prompt).toMatch(/collect=true.*agents_wait.*in this turn/);
+      expect(prompt).toContain("Fire-and-forget is valid when child output is the deliverable");
+      expect(prompt).not.toContain("wait for runtime completion events");
+      expect(prompt).not.toContain("Announced completion is push-based");
+      expect(prompt).not.toContain("Announcing spawns notify when the run ends");
+      const coordinationSection = prompt.split(
+        overrides.subagentDelegationMode === "prefer" ? "## Delegation" : "## Messaging",
+      )[1];
+      if (overrides.promptMode !== "minimal") {
+        expect(coordinationSection).toContain("child completion will not resume this turn");
+      }
+    }
+    const withoutCollection = renderPrompt({
+      toolNames: ["sessions_spawn"],
+      runtimeInfo: { sessionKey: "agent:main:cron:nightly-job" },
+    });
+    expect(withoutCollection).toContain("complete that work directly in this turn");
+    expect(withoutCollection).not.toContain("`agents_wait`");
+    expect(withoutCollection).not.toContain("wait for runtime completion events");
+  });
+
+  it("preserves completion-event guidance for interactive sessions without sessions_yield", () => {
+    for (const subagentDelegationMode of ["suggest", "prefer"] as const) {
+      const prompt = renderPrompt({
+        toolNames: ["sessions_spawn", "agents_wait"],
+        runtimeInfo: { sessionKey: "agent:main:main" },
+        subagentDelegationMode,
+      });
+
+      expect(prompt).toContain("wait for runtime completion events; never busy-poll.");
+      expect(prompt).not.toContain("child completion will not resume this turn");
+      expect(prompt.includes("Announced completion is push-based")).toBe(
+        subagentDelegationMode === "prefer",
+      );
+    }
   });
 
   it("adds collapsible-details guidance only for supported full prompts", () => {

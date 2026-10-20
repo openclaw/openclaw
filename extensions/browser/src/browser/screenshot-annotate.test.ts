@@ -103,7 +103,7 @@ describe("planAnnotations - element mode", () => {
 });
 
 describe("planAnnotations - maxLabels", () => {
-  it("uses ANNOTATION_MAX_LABELS_DEFAULT when not specified", () => {
+  it("caps drawn annotations at 150", () => {
     const inputs = Array.from({ length: 200 }, (_, i) => ({
       ref: `e${i + 1}`,
       role: "button",
@@ -167,11 +167,9 @@ describe("scaleAnnotations", () => {
     },
   ];
 
-  it("returns identity (structural copy) when both factors are 1", () => {
+  it("preserves coordinates when both factors are 1", () => {
     const out = scaleAnnotations(sample, 1, 1);
     expect(out[0]).toEqual(sample[0]);
-    expect(out[0]).not.toBe(sample[0]);
-    expect(out[0]?.box).not.toBe(sample[0]?.box);
   });
 
   it("scales box dimensions by independent x/y factors", () => {

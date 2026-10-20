@@ -141,9 +141,15 @@ function createCronScheduleSchema(params: {
                 ),
               ),
               cwd: Type.Optional(Type.String({ description: "Working directory (kind=stream)" })),
-              mode: optionalStringEnum(["line", "match"] as const),
+              mode: optionalStringEnum(["line", "match"] as const, {
+                description:
+                  "Stream output: line accepts every line; match uses the match regex without a trigger script",
+              }),
               match: Type.Optional(
-                Type.String({ description: "Regex source (stream match mode)" }),
+                Type.String({
+                  description:
+                    "Regex source for mode=match, e.g. ERROR; matching output is appended to the payload",
+                }),
               ),
               batchMs: optionalNonNegativeIntegerSchema(),
               maxBatchBytes: optionalNonNegativeIntegerSchema(),
@@ -429,7 +435,9 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           : actions,
       ),
       ...gatewayCallOptionSchemaProperties(),
-      includeDisabled: Type.Optional(Type.Boolean()),
+      includeDisabled: Type.Optional(
+        Type.Boolean({ description: "List: false by default; true includes disabled saved jobs." }),
+      ),
       limit: optionalPositiveIntegerSchema({
         maximum: CRON_TOOL_LIST_MAX_LIMIT,
         description: 'Maximum jobs returned by action="list"',

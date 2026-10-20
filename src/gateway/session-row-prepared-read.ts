@@ -39,6 +39,7 @@ export type SessionRowReadView = {
     options?: records.SnapshotOptions,
   ): ReturnType<typeof records.present>;
   selectEntries(query: { key: string }): records.EntryRow[];
+  readonly physicalPaths: (locator: string, agentId?: string) => readonly string[];
   readonly state: {
     cfg: OpenClawConfig;
     policyConfig: OpenClawConfig;
@@ -122,6 +123,7 @@ export function readPreparedSessionRows<T>(
   }
   // Targeted materialization may refresh the owner's metadata context. Capture its final facts.
   const preparedState = owner.state;
+  const physicalPaths = owner.physicalPaths;
   state = {
     cfg: preparedState.cfg,
     policyConfig: preparedState.policyConfig,
@@ -175,6 +177,10 @@ export function readPreparedSessionRows<T>(
         return rows;
       }
       return owner.selectEntries(query);
+    },
+    get physicalPaths() {
+      assertActive();
+      return physicalPaths;
     },
     get state() {
       assertActive();

@@ -265,7 +265,7 @@ it("refuses retirement while a peer maintenance operation holds the selected sta
     run: async () => {
       await expect(
         runOutsideOpenClawDatabaseMaintenanceScope(() => retire(store, confirm, preview)),
-      ).rejects.toThrow("undergoing offline maintenance");
+      ).rejects.toThrow("without an active schema lease or maintenance scope");
     },
   });
   expect(confirm).not.toHaveBeenCalled();

@@ -7,7 +7,7 @@ import { Agent, type AgentTool } from "../../runtime/index.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
 
-export const terminalModel: Model = {
+const terminalModel: Model = {
   id: "test-model",
   name: "Test Model",
   api: "openai-responses",

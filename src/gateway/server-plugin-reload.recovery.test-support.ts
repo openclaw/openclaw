@@ -380,17 +380,12 @@ export function expectSiblingUnchanged(fixture: RecoveryFixture) {
   fixture.expectServices({ siblingStart: 1, siblingStop: 0 });
 }
 
-export function observeRetainedWork(
-  instance: NonNullable<ReturnType<typeof getPluginInstance>>,
-  consumersOnly = false,
-) {
+export function observeRetainedWork(instance: NonNullable<ReturnType<typeof getPluginInstance>>) {
   const entered = createDeferredCore();
   const wait = instance.waitForRetainedWork.bind(instance);
   const observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
     const pending = wait(...args);
-    if (!consumersOnly || args[1]) {
-      entered.resolve();
-    }
+    entered.resolve();
     return pending;
   });
   return {

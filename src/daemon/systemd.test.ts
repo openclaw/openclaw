@@ -590,7 +590,9 @@ it.each(["access-denied", "missing-file", "manager-denied", "not-found"] as cons
     if (scenario === "access-denied") {
       await expect(result).rejects.toMatchObject({ reason: "service-manager-access-denied" });
     } else if (scenario === "manager-denied") {
-      await expect(result).rejects.toThrow("systemctl is-enabled unavailable: permission denied");
+      await expect(result).rejects.toThrow(
+        "systemctl --user is-enabled: exit 1; permission denied",
+      );
     } else {
       await expect(result).resolves.toBe(false);
       if (scenario === "missing-file") {
@@ -852,9 +854,12 @@ describe("readSystemdServiceRuntime", () => {
         { HOME: TEST_MANAGED_HOME },
         { commandInspection: { kind: "present" } },
       ),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       status: "unknown",
-      detail,
+      inspectionReason: undefined,
+      inspectionFailure: {
+        detail: expect.stringContaining(`systemctl --user show: exit 1; ${detail}`),
+      },
       missingUnit: false,
     });
   });

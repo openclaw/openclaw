@@ -111,6 +111,30 @@ describe("createReplyTurnLedger", () => {
     expect(ledger.resolveTerminalDelivery()).toBe("pending");
   });
 
+  it("preserves a legacy idle observer's rejection", async () => {
+    const error = new Error("Synthetic idle failure");
+    const ledger = createReplyTurnLedger(
+      createUntrackedDispatcher({
+        waitForIdle: async () => {
+          throw error;
+        },
+      }),
+    );
+    await expect(ledger.settleQueued()).rejects.toBe(error);
+  });
+
+  it("keeps caller cancellation ahead of a same-turn idle receipt", async () => {
+    const controller = new AbortController();
+    const ledger = createReplyTurnLedger(
+      createUntrackedDispatcher({
+        waitForIdle: async () => {
+          queueMicrotask(() => controller.abort());
+        },
+      }),
+    );
+    await expect(ledger.settleQueued(controller.signal)).resolves.toBe("aborted");
+  });
+
   it("does not authorize another final after an adapter copies a terminal payload", async () => {
     const deliver = vi.fn(async () => {});
     const dispatcher = createReplyDispatcher({ deliver });

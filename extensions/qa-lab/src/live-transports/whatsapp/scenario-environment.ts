@@ -9,7 +9,6 @@ import {
 import { buildWhatsAppQaConfig } from "./whatsapp-live.config.js";
 import {
   resolveWhatsAppQaScenarioTarget,
-  type WhatsAppObservedMessage,
   type WhatsAppQaRuntimeEnv,
   type WhatsAppQaScenarioImplementation,
   type WhatsAppQaScenarioRun,
@@ -28,7 +27,6 @@ export type WhatsAppQaScenarioEnvironment = {
   driverAuthDir: string;
   gateway: FlowPreparationInput["gateway"];
   getDriver: () => WhatsAppQaDriverSession;
-  observedMessages: WhatsAppObservedMessage[];
   replaceDriver: (driver: WhatsAppQaDriverSession) => Promise<void>;
   runtimeEnv: WhatsAppQaRuntimeEnv;
   scenario: { id: string; timeoutMs: number; title: string };
@@ -44,8 +42,6 @@ export function createWhatsAppQaScenarioEnvironment(params: {
   runtimeEnv: WhatsAppQaRuntimeEnv;
   sutAuthDir: string;
 }) {
-  const observedMessages: WhatsAppObservedMessage[] = [];
-
   const prepareFlow = async (input: FlowPreparationInput) => {
     let preparedScenario: WhatsAppQaScenarioEnvironment["preparedScenario"];
     if (input.config.whatsappScenario !== undefined) {
@@ -118,7 +114,6 @@ export function createWhatsAppQaScenarioEnvironment(params: {
         driverAuthDir: params.driverAuthDir,
         gateway: input.gateway,
         getDriver: params.getDriver,
-        observedMessages,
         replaceDriver: params.replaceDriver,
         runtimeEnv: params.runtimeEnv,
         scenario: {

@@ -55,6 +55,8 @@ export type OpenClawStateIntegrityAdmission = {
   readonly proof: SharedArrayBuffer;
 };
 export type OpenClawStateDatabaseAsyncResource = {
+  /** Retain the admission getter so first creation can publish its physical identity. */
+  admission?: Pick<OpenClawStateDatabaseReadAdmission, "identity">;
   /** Shared execution resources close only after accepted owners settle their remaining work. */
   phase?: "after-resources";
   close: (identity?: DatabasePathIdentity) => Promise<void>;
@@ -672,7 +674,14 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
             await Promise.all(
               batch.map(async (resource) => {
                 try {
-                  await resource.close(record?.identity);
+                  const identity = record?.identity;
+                  if (
+                    !identity ||
+                    !resource.admission ||
+                    identity.key === resource.admission.identity.key
+                  ) {
+                    await resource.close(identity);
+                  }
                   current.retained.delete(resource);
                 } catch (error) {
                   // Unregistration cannot abandon a resource whose close failed.

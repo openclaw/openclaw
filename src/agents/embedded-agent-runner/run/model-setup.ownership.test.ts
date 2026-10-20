@@ -5,7 +5,6 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { withAgentTurnCompletion } from "../../../auto-reply/reply/agent-runner-completion.js";
-import { createReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSessionUsageUpdate } from "../../../auto-reply/reply/session-usage.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../../../config/sessions.js";
@@ -17,6 +16,7 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { projectionLane } from "../../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { createReplyOperation } from "../../../sessions/session-controller.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
@@ -42,11 +42,11 @@ import {
   resetModelGenerationFixtureState,
 } from "../model.generation-scope.test-support.js";
 import {
-  clearActiveEmbeddedRun,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  setActiveEmbeddedRun,
-} from "../runs.js";
-import { createEmbeddedRunHandle } from "../runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  steerTestSessionTurn,
+} from "../runs.test-support.js";
 import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { prepareEmbeddedRunRuntime } from "./runtime.js";
@@ -674,27 +674,30 @@ describe("model chat and native model ownership", () => {
       sessionKey: fixture.target.sessionKey,
       sessionFile: `${fixture.state.workspaceDir}/native-ownership-transcript`,
       senderIsOwner: true,
-      messageProvider: "webchat",
+      messageProvider: "telegram",
+      senderId: "model-owner",
     };
     const caller = {
+      senderId: execution.senderId,
       senderIsOwner: true,
       disableTools: false,
       traceAuthorized: true,
-      messageProvider: "webchat",
+      messageProvider: execution.messageProvider,
       clientCaps: ["task_suggestions"],
       approvalReviewerDeviceId: "review-device",
     };
     const authority = prepareReplyToolAuthority({
       run: {
+        ...profile,
         config: execution.config,
         agentId: execution.agentId,
         sessionId: execution.sessionId,
         sessionKey: execution.sessionKey,
         sessionFile: execution.sessionFile,
         workspaceDir: execution.workspaceDir,
-        authProfileId: execution.authProfileId,
-        senderIsOwner: execution.senderIsOwner,
         messageProvider: execution.messageProvider,
+        senderId: execution.senderId,
+        senderIsOwner: execution.senderIsOwner,
         traceAuthorized: caller.traceAuthorized,
         clientCaps: caller.clientCaps,
         approvalReviewerDeviceId: caller.approvalReviewerDeviceId,
@@ -732,6 +735,7 @@ describe("model chat and native model ownership", () => {
                 runId: execution.runId,
                 toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
                 queueMessage,
+                guarded: true,
               }),
               kind: "embedded" as const,
               cancel: () => {},
@@ -742,30 +746,21 @@ describe("model chat and native model ownership", () => {
               execution.sessionKey,
               execution.sessionFile,
             );
-            operation.attachBackend(handle);
             operation.setPhase("running");
             try {
               await expect(
-                queueEmbeddedAgentMessageWithOutcomeAsync(
-                  execution.sessionId,
-                  "Keep the current task",
-                  {
-                    isInboundUserMessage: true,
-                    toolAuthorityOverlay: caller,
-                  },
-                ),
-              ).resolves.toMatchObject({ queued: true });
+                steerTestSessionTurn(execution.sessionId, "Keep the current task", {
+                  isInboundUserMessage: true,
+                  toolAuthorityOverlay: caller,
+                }),
+              ).resolves.toMatchObject({ status: "accepted" });
               await expect(
-                queueEmbeddedAgentMessageWithOutcomeAsync(
-                  execution.sessionId,
-                  "Use different permissions",
-                  {
-                    isInboundUserMessage: true,
-                    toolAuthorityOverlay: { ...caller, clientCaps: [] },
-                    toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
-                  },
-                ),
-              ).resolves.toMatchObject({ queued: false, reason: "tool_authority_mismatch" });
+                steerTestSessionTurn(execution.sessionId, "Use different permissions", {
+                  isInboundUserMessage: true,
+                  toolAuthorityOverlay: { ...caller, clientCaps: [] },
+                  toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
+                }),
+              ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
               expect(queueMessage).toHaveBeenCalledOnce();
               expect(prepared.toolAuthorityFingerprint).not.toBe(authority.fingerprint());
             } finally {

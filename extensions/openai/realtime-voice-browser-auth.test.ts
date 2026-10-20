@@ -381,19 +381,19 @@ describe("OpenAI realtime voice browser authentication", () => {
 
   it.each([
     {
-      $name: "structured direct error expects normalization",
+      name: "structured direct error expects normalization",
       event: "structured" as const,
       providerConfig: undefined,
       expectedMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,
     },
     {
-      $name: "direct handshake error expects normalization",
+      name: "direct handshake error expects normalization",
       event: "handshake" as const,
       providerConfig: undefined,
       expectedMessage: OPENAI_REALTIME_REJECTED_KEY_MESSAGE,
     },
     {
-      $name: "Azure handshake error expects raw preservation",
+      name: "Azure handshake error expects raw preservation",
       event: "handshake" as const,
       providerConfig: {
         apiKey: "test-api-key-test",
@@ -403,7 +403,7 @@ describe("OpenAI realtime voice browser authentication", () => {
       expectedMessage: "Unexpected server response: 401",
     },
     {
-      $name: "custom-endpoint handshake error expects raw preservation",
+      name: "custom-endpoint handshake error expects raw preservation",
       event: "handshake" as const,
       providerConfig: {
         apiKey: "test-api-key-test",

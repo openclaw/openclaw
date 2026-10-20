@@ -129,7 +129,7 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
     "packages/terminal-core/src/theme.ts",
     "src/cli/daemon-cli/register-service-commands.ts",
     "src/cli/program/register.status-health-sessions.ts",
-    "src/plugins/register-plugin-cli-command-groups.ts",
+    "src/plugins/cli.ts",
   ]) {
     writeFixtureFile(rootDir, relativePath, "export {};\n");
   }
@@ -1483,7 +1483,7 @@ finally:
     }
   });
 
-  it("regenerates nodes help when bundled canvas CLI help sources change", async () => {
+  it("regenerates nodes help when canvas or plugin CLI registration sources change", async () => {
     const metadata = metadataFixture("openclaw-startup-metadata-signature-");
     const { sourceRootDir: tempRoot, outputPath } = metadata;
     let nodesRenderCount = 0;
@@ -1517,6 +1517,13 @@ finally:
 
     expect(nodesRenderCount).toBe(3);
     expect(readMetadata(outputPath).nodesHelpText).toContain("openclaw nodes 3");
+
+    writeFixtureFile(tempRoot, "src/plugins/cli.ts", "export const pluginCliHelp = 'changed';\n");
+
+    await writeMetadata();
+
+    expect(nodesRenderCount).toBe(4);
+    expect(readMetadata(outputPath).nodesHelpText).toContain("openclaw nodes 4");
   });
 
   it("regenerates help when build version or commit changes", async () => {

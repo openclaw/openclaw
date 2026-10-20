@@ -21,6 +21,7 @@ import {
   withSqliteReadOnlyWorkerScope,
 } from "./sqlite-readonly-worker.js";
 import {
+  forkSqlitePrivateSnapshot,
   prepareSqliteReadOnlyLocation,
   startSqliteReadOnlyLocationAsync,
 } from "./sqlite-snapshot-source.js";
@@ -92,6 +93,121 @@ function readQueries(location: string, ...queries: string[]) {
 }
 
 describe("scoped SQLite read-only children", () => {
+  it.each(["committed WAL", "frame-free read", "disposal refusal"] as const)(
+    "forks through the retained IPC session with %s",
+    async (scenario) => {
+      const source = createDatabase(
+        null,
+        "CREATE TABLE witness (value TEXT); INSERT INTO witness VALUES ('checkpointed');",
+      );
+      using writer = new (requireNodeSqlite().DatabaseSync)(source);
+      writer.exec(
+        "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; INSERT INTO witness VALUES ('seed WAL'); DELETE FROM witness WHERE value='seed WAL'; PRAGMA wal_checkpoint(TRUNCATE)",
+      );
+      if (scenario !== "frame-free read") {
+        writer.exec("INSERT INTO witness VALUES ('committed in WAL')");
+      } else {
+        writer.close();
+      }
+      const familyBytes = (location: string) =>
+        ["", "-wal", "-shm"].map((suffix) =>
+          fs.existsSync(location + suffix) ? fs.readFileSync(location + suffix) : null,
+        );
+      const sourceBytes = familyBytes(source);
+      const preparation = startSqliteReadOnlyLocationAsync(source, {
+        preserveSourceArtifacts: true,
+        signal: new AbortController().signal,
+      });
+      let prepared: Awaited<typeof preparation.result> | undefined;
+      let fork: Awaited<ReturnType<typeof forkSqlitePrivateSnapshot>> | undefined;
+      const assertCurrent = vi.fn();
+      let forkChildren: ReturnType<typeof spawn>[] = [];
+      try {
+        prepared = await preparation.result;
+        const family = prepared.privateFamily;
+        if (!family) {
+          throw new Error("Retained fixture did not publish its captured WAL family");
+        }
+        if (scenario === "frame-free read") {
+          expect(family.wal).toBeNull();
+          expect(fs.existsSync(`${prepared.location}-wal`)).toBe(false);
+          const reader = new (requireNodeSqlite().DatabaseSync)(prepared.location, {
+            readOnly: true,
+          });
+          try {
+            expect(reader.prepare("SELECT value FROM witness").all()).toEqual([
+              { value: "checkpointed" },
+            ]);
+            expect(fs.statSync(`${prepared.location}-wal`).size).toBe(0);
+          } finally {
+            reader.close();
+          }
+        } else {
+          expect(family.wal).not.toBeNull();
+        }
+        const privateBytes = familyBytes(prepared.location);
+        // The retained source may start a shared native broker. Only the fork owns
+        // the IPC child whose retirement this fixture must join.
+        const firstChild = vi.mocked(spawn).mock.results.length;
+        fork = await forkSqlitePrivateSnapshot(
+          prepared.location,
+          family,
+          new AbortController().signal,
+          assertCurrent,
+        );
+        forkChildren = vi
+          .mocked(spawn)
+          .mock.results.slice(firstChild)
+          .map(({ value }) => value);
+        expect(assertCurrent).toHaveBeenCalledOnce();
+        expect(fs.statSync(fork.location).ino).not.toBe(fs.statSync(prepared.location).ino);
+        expect(fs.existsSync(`${fork.location}-shm`)).toBe(false);
+        if (scenario === "frame-free read") {
+          expect(fs.existsSync(`${fork.location}-wal`)).toBe(false);
+        }
+        {
+          using writable = new (requireNodeSqlite().DatabaseSync)(fork.location);
+          expect(writable.prepare("SELECT value FROM witness ORDER BY rowid").all()).toEqual(
+            scenario === "frame-free read"
+              ? [{ value: "checkpointed" }]
+              : [{ value: "checkpointed" }, { value: "committed in WAL" }],
+          );
+          writable.exec("DELETE FROM witness; PRAGMA wal_checkpoint(TRUNCATE)");
+        }
+        expect(familyBytes(prepared.location)).toEqual(privateBytes);
+        expect(familyBytes(source)).toEqual(sourceBytes);
+        if (scenario === "disposal refusal") {
+          const remove = fs.promises.rm.bind(fs.promises);
+          let refused = false;
+          using _ = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+            if (String(target) === fork!.cleanupRoot) {
+              refused = true;
+              throw Object.assign(new Error("fixture directory is busy"), { code: "EBUSY" });
+            }
+            return remove(target, options);
+          });
+          expect(await fork.cleanupAsync()).toBe(false);
+          expect(refused).toBe(true);
+        }
+      } finally {
+        if (fork) {
+          expect(await fork.cleanupAsync()).toBe(true);
+          expect(fs.existsSync(fork.cleanupRoot!)).toBe(false);
+        }
+        if (prepared) {
+          expect(await prepared.cleanupAsync()).toBe(true);
+        }
+        await preparation.startClose().result;
+      }
+      expect(fs.existsSync(prepared!.cleanupRoot!)).toBe(false);
+      expect(forkChildren).toHaveLength(1);
+      for (const child of forkChildren) {
+        expect(child.connected).toBe(false);
+        expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+      }
+    },
+  );
+
   it.each(["callback", "throw"])(
     "joins a staging IPC send %s failure before admitting another request",
     async (failureMode) => {
@@ -196,7 +312,10 @@ describe("scoped SQLite read-only children", () => {
       );
     });
     resumed.resolve();
-    await expect(late).rejects.toThrow("scope closed");
+    await expect(late).rejects.toMatchObject({
+      message: "SQLite read-only worker scope closed",
+      code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED",
+    });
     expect(spawn).not.toHaveBeenCalled();
     expect(execFile).not.toHaveBeenCalled();
   });

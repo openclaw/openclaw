@@ -18,13 +18,13 @@ export function useObserverSuite() {
     vi.useFakeTimers();
     vi.setSystemTime(0);
   });
-  afterEach(() => {
+  afterEach(async () => {
     for (const harness of activeHarnesses) {
-      harness.observer.dispose();
+      await harness.observer.disposeAsync();
     }
     activeHarnesses.clear();
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     resetSessionObserverEventSequence();
   });
   return {
@@ -43,7 +43,7 @@ export function emitEvent(
   data: Record<string, unknown>,
   route: EventRoute = {},
 ) {
-  harness.observer.handleEvent(event({ ...route, stream, data }));
+  return harness.observer.handleEventAsync(event({ ...route, stream, data }));
 }
 
 export async function advanceAndFlush(ms: number) {
@@ -55,7 +55,7 @@ export function broadcastDigest(harness: Harness, index = -1) {
   return harness.broadcastToConnIds.mock.calls.at(index)?.[1] as SessionObserverDigest | undefined;
 }
 
-export function persistedDigest(harness: Harness, index = 0) {
+function persistedDigest(harness: Harness, index = 0) {
   return harness.persistDigest.mock.calls.at(index)?.[0]?.digest as
     | SessionObserverDigest
     | undefined;

@@ -30,6 +30,8 @@ import {
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
+  sidebarRegionElement: HTMLElement | null = null;
+  sidebarRegionView: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
   protected sessionCompanionHydrationKey = "";
   protected sessionCompanionFocusGeneration = 0;
   private sessionCompanionPresented = false;
@@ -125,19 +127,15 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     await new Promise<void>((resolve) => {
       state.renderLifecycle.afterCommit(() => resolve(), resolve);
     });
-    // The lazy sidebar owns its header DOM; wait for its commit before resolving the focus target.
-    const region = this.element.querySelector("openclaw-chat-sidebar-region");
+    const region = this.sidebarRegionView;
     await region?.updateComplete;
-    const tab = region?.parentElement?.querySelector<HTMLButtonElement>(
-      '[data-region-header="side"] .tabstrip-tab[aria-selected="true"]',
-    );
     if (
       this.isConnected &&
       this.state === state &&
       state.sessionKey === sessionKey &&
       this.isSlotShown(state.sidebarLayout, "subagents")
     ) {
-      tab?.focus({ preventScroll: true });
+      region?.focusActiveSideTab({ preventScroll: true });
     }
   }
 
@@ -270,6 +268,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       showToast({ message: uploadsDisabledMessage() });
       return;
     }
+    // The question carries the model controls shown when it was asked.
+    const modelSelection = this.sessionCompanionThreads.view(sessionKey, agentId).modelSelection;
     const ask = (key: string, value: string, requestedAttachments?: ChatAttachment[]) =>
       requestSessionCompanionAnswer(
         client,
@@ -278,6 +278,7 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
         agentId,
         requestedAttachments,
         state.uploadConfig,
+        modelSelection,
       );
     await this.sessionCompanionThreads.submit(sessionKey, question, ask, agentId);
   };

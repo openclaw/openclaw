@@ -1,7 +1,7 @@
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { stableStringify } from "@openclaw/normalization-core";
 import { generateSecureHex } from "../infra/secure-random.js";
-import { getPluginToolMeta, type PluginToolMcpMeta } from "../plugins/tool-metadata.js";
+import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
@@ -108,23 +108,6 @@ function rebindCatalogExecutors(
     : undefined;
 }
 
-function classifyTool(tool: CatalogTool): {
-  source: CatalogSource;
-  sourceName?: string;
-  mcp?: PluginToolMcpMeta;
-} {
-  const meta = getPluginToolMeta(tool as AnyAgentTool);
-  const pluginId = meta?.pluginId?.trim();
-  const mcp = meta?.mcp;
-  if (mcp) {
-    return { source: "mcp", sourceName: mcp.safeServerName || pluginId || "mcp", mcp };
-  }
-  if (pluginId === "bundle-mcp") {
-    return { source: "mcp", sourceName: pluginId };
-  }
-  return { source: "openclaw", sourceName: pluginId || "core" };
-}
-
 export function prepareToolSearchCatalogExecutionTool(
   entry: ToolSearchCatalogEntry,
   options: { prepareInput?: boolean; validateInput?: boolean },
@@ -155,7 +138,7 @@ function toCatalogEntry(
   sourceOverride?: CatalogSource,
   hookContext?: HookContext,
 ): ToolSearchCatalogEntry {
-  const classified = classifyTool(tool);
+  const classified = classifyAgentToolSource(tool);
   const source = sourceOverride ?? classified.source;
   const sourceName = sourceOverride === "client" ? "client" : classified.sourceName;
   // SAFETY: source classification excludes client callbacks from the native hook wrapper.
@@ -194,7 +177,7 @@ export function isDirectVisibleCatalogTool(
   tool: AnyAgentTool,
   directToolNames: ReadonlySet<string>,
 ): boolean {
-  const classified = classifyTool(tool);
+  const classified = classifyAgentToolSource(tool);
   return (
     classified.source === "openclaw" &&
     (directToolNames.has(tool.name) ||

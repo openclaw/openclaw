@@ -137,7 +137,7 @@ it("prewarms modules and Memory Core in order without executing requests", async
     mocks.events.push("context-window");
   });
   mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
-  const cfg: OpenClawConfig = { agents: { entries: {} } };
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
 
   schedule({ getConfig: () => cfg });
   expect(mocks.events).toEqual([]);
@@ -158,6 +158,7 @@ it("prewarms modules and Memory Core in order without executing requests", async
     isCancelled: expect.any(Function),
   });
   expect(mocks.loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledOnce();
+  expect(mocks.prewarmMemorySearchWorker).toHaveBeenCalledExactlyOnceWith(cfg);
   expect(mocks.listManagedPlugins).toHaveBeenCalledWith({ config: cfg });
 });
 
@@ -259,15 +260,12 @@ it("prewarms only history while foreground work is active", async () => {
 it("logs a failed prewarm and continues to later items", async () => {
   const warn = vi.fn();
   const laterPrewarm = vi.fn(async () => {});
-  const requestLoad = vi
-    .fn<() => Promise<string>>()
-    .mockRejectedValueOnce(new Error("cold read failed"))
-    .mockResolvedValue("request result");
+  const failedPrewarm = vi.fn().mockRejectedValue(new Error("cold read failed"));
 
   schedule({
     log: { warn },
     items: [
-      { name: "broken", load: requestLoad },
+      { name: "broken", load: failedPrewarm },
       { name: "later", load: laterPrewarm },
     ],
   });
@@ -277,9 +275,8 @@ it("logs a failed prewarm and continues to later items", async () => {
   expect(warn).toHaveBeenCalledWith(
     "post-ready gateway data prewarm failed for broken: Error: cold read failed",
   );
-  expect(requestLoad).toHaveBeenCalledOnce();
+  expect(failedPrewarm).toHaveBeenCalledOnce();
   expect(laterPrewarm).toHaveBeenCalledOnce();
-  await expect(requestLoad()).resolves.toBe("request result");
 });
 
 it("stops before scheduling another event-loop turn", async () => {
@@ -303,6 +300,7 @@ it("stops before scheduling another event-loop turn", async () => {
   expect(second).not.toHaveBeenCalled();
 });
 it("delays context prewarm and uses current config after foreground work", async () => {
+  mocks.getMemoryCapabilityRegistration.mockReturnValue({ pluginId: "memory-core" });
   let current: OpenClawConfig = { agents: { entries: {} } };
   schedule({ getConfig: () => current });
   await vi.advanceTimersByTimeAsync(4_999);
@@ -310,7 +308,11 @@ it("delays context prewarm and uses current config after foreground work", async
   const request = foreground();
   await vi.advanceTimersByTimeAsync(1);
   expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
-  current = { agents: { entries: {} }, skills: { load: { watch: false } } };
+  current = {
+    agents: { entries: { main: {} } },
+    memory: { search: { enabled: false } },
+    skills: { load: { watch: false } },
+  };
   request.release();
   await vi.advanceTimersByTimeAsync(249);
   expect(mocks.prewarmContextWindowCacheAfterReady).not.toHaveBeenCalled();
@@ -319,6 +321,8 @@ it("delays context prewarm and uses current config after foreground work", async
     config: current,
     isCancelled: expect.any(Function),
   });
+  await drainPrewarm();
+  expect(mocks.prewarmMemorySearchWorker).toHaveBeenCalledExactlyOnceWith(current);
 });
 
 it("skips optional discovery if foreground work arrives after admission", async () => {

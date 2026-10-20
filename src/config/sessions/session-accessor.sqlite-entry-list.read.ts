@@ -7,7 +7,7 @@ import {
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -208,7 +208,7 @@ export function listSqliteSessionEntriesFromDatabase(
     const expired = scope.expiredCronRuns;
     const requestedOwner = expired ? normalizeAgentId(expired.agentId) : undefined;
     const captured = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-      runSqliteDeferredTransactionSync(database.db, () => {
+      runSqliteReadSnapshotSync(database.db, () => {
         let entries: SessionEntrySummary[];
         if (scope.cronRetention) {
           const page = scope.cronRetention;
@@ -230,24 +230,16 @@ export function listSqliteSessionEntriesFromDatabase(
           }
           options.captureCronRunSessionKey?.(keys.length === page.limit ? keys.at(-1)! : null);
           entries = readSelectedSessionEntriesInDatabase(database, keys);
-          if (!deferParticipants) {
-            entries = [
-              ...projectSqliteSessionParticipantsBatch(
-                database.db,
-                new Map(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
-              ),
-            ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
-          }
         } else {
           const snapshot = readSessionEntryCache(database, {
             cache: false,
             projection: "list",
-            deferParticipants,
+            deferParticipants: true,
           });
           entries = Array.from(iterateSessionEntriesForListing(snapshot));
         }
         let oldestUpdatedAt: number | null = null;
-        const selected = entries.filter(({ sessionKey, entry }) => {
+        let selected = entries.filter(({ sessionKey, entry }) => {
           if (
             !isCronRunSessionKey(sessionKey) ||
             (expired &&
@@ -260,6 +252,14 @@ export function listSqliteSessionEntriesFromDatabase(
           return !expired || updatedAt < expired.updatedBefore;
         });
         options.captureCronRunUpdatedAt?.(oldestUpdatedAt);
+        if (!deferParticipants) {
+          selected = [
+            ...projectSqliteSessionParticipantsBatch(
+              database.db,
+              new Map(selected.map(({ sessionKey, entry }) => [sessionKey, entry])),
+            ),
+          ].map(([sessionKey, entry]) => ({ sessionKey, entry }));
+        }
         // Capture only deletion candidates' payloads, in the same snapshot as their metadata.
         const rows = selected.length
           ? executeSqliteQuerySync(

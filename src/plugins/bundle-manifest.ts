@@ -24,10 +24,16 @@ import {
 } from "./plugin-cache-files.js";
 
 /** Relative manifest path for Codex-style plugin bundles. */
-export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
+const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
-export const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
-export const AGENT_BUNDLE_MANIFEST_RELATIVE_PATH = "plugin.json";
+const CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH = ".cursor-plugin/plugin.json";
+const AGENT_BUNDLE_MANIFEST_RELATIVE_PATH = "plugin.json";
+export const BUNDLE_MANIFEST_PATHS: Readonly<Record<PluginBundleFormat, string>> = {
+  agent: AGENT_BUNDLE_MANIFEST_RELATIVE_PATH,
+  claude: CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH,
+  codex: CODEX_BUNDLE_MANIFEST_RELATIVE_PATH,
+  cursor: CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH,
+};
 const AGENT_BUNDLE_EXTENSION_NAMESPACE = "ai.openclaw";
 const AGENT_BUNDLE_MANIFEST_SCHEMA = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 const MAX_AGENT_BUNDLE_MANIFEST_BYTES = 256 * 1024;
@@ -218,14 +224,13 @@ export function loadBundleManifest(params: {
   rejectHardlinks?: boolean;
 }): BundleManifestLoadResult {
   const rejectHardlinks = params.rejectHardlinks ?? true;
+  // Unknown runtime inputs retain the manifest reader's Claude fallback.
   const manifestRelativePath =
-    params.bundleFormat === "codex"
-      ? CODEX_BUNDLE_MANIFEST_RELATIVE_PATH
-      : params.bundleFormat === "cursor"
-        ? CURSOR_BUNDLE_MANIFEST_RELATIVE_PATH
-        : params.bundleFormat === "agent"
-          ? AGENT_BUNDLE_MANIFEST_RELATIVE_PATH
-          : CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH;
+    params.bundleFormat === "codex" ||
+    params.bundleFormat === "cursor" ||
+    params.bundleFormat === "agent"
+      ? BUNDLE_MANIFEST_PATHS[params.bundleFormat]
+      : CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH;
   const loaded = loadBundleManifestFile({
     rootDir: params.rootDir,
     ...(params.rootRealPath !== undefined ? { rootRealPath: params.rootRealPath } : {}),

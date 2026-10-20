@@ -6,6 +6,7 @@ import { z } from "zod";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { readConfigFileSnapshotForWrite } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { rebindPortedClientCredentials } from "../infra/client-credential-restore.js";
 import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
 import type { PortVerification } from "../infra/database-engine/port.worker.js";
 import {
@@ -238,6 +239,27 @@ export function finalize(ctx: Context, outcome: "ported" | "rolled-back") {
     current.state = "complete";
     current.outcome = outcome;
     revise(ctx);
+  }
+  const binding = current.artifacts.find(
+    (artifact) => artifact.path === path.join(ctx.directory, "client-credential-binding.json"),
+  );
+  if (binding) {
+    const sharedPath = path.join(ctx.stateDir, "state", "openclaw.sqlite");
+    const index = current.targets.findIndex((target) => livePath(target) === sharedPath);
+    const target = current.targets[index];
+    const input = ctx.inputs?.stores[index];
+    if (!target || !input) {
+      refuse(ctx, "credential binding without shared target", "captured shared store");
+    }
+    rebindPortedClientCredentials({
+      env: ctx.env,
+      binding: JSON.parse(fs.readFileSync(binding.path, "utf8")),
+      sharedPath,
+      sqliteSnapshotPath: input.image,
+      engine: outcome === "ported" ? current.direction.to : current.direction.from,
+      storeId: target.storeId,
+      assertCurrent: ctx.assertCurrent,
+    });
   }
   const archived = archiveDatabasePortManifest(
     ctx.stateDir,

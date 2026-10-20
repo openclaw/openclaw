@@ -104,7 +104,6 @@ export function createInitialCronState<Row = CronJob>(
     cronRunsScope: "all",
     cronRunsStatuses: [],
     cronRunsDeliveryStatuses: [],
-    cronRunsStatusFilter: "all",
     cronRunsQuery: "",
     cronRunsSortDir: "desc",
     cronBusy: false,

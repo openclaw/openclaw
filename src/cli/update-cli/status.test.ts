@@ -1,6 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as configModule from "../../config/config.js";
 import { recordDeferredPluginMigrations as recordMigrations } from "../../infra/deferred-plugin-migrations.js";
@@ -327,6 +327,12 @@ it.each([true, false])(
     const recorded = createUpdateRun({ trigger: "cli" });
     await closeState();
     closeStateForTest();
+    const workerThreads = process.getBuiltinModule("node:worker_threads");
+    const admissionKey = "openclaw.sqliteNativeRuntimeAdmission";
+    const inheritedAdmission = workerThreads.getEnvironmentData(admissionKey);
+    onTestFinished(() => workerThreads.setEnvironmentData(admissionKey, inheritedAdmission));
+    // Module resets retain worker admission; force this fixture to observe its unsafe library.
+    workerThreads.setEnvironmentData(admissionKey, undefined);
     vi.resetModules();
     const sqlitePrototype: {
       prepare: (this: DatabaseSync, sql: string) => ReturnType<DatabaseSync["prepare"]>;

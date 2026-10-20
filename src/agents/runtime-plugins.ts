@@ -17,6 +17,7 @@ import { ensureGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import {
   acquirePluginRegistryForInspection,
+  loadOpenClawPluginsAsync,
   loadPluginRegistryHandle,
   type PluginLoadOptions,
 } from "../plugins/loader.js";
@@ -78,6 +79,7 @@ function resolveAgentRuntimePluginRegistryLoad(
 ): PluginLoadOptions {
   const loadOptions: PluginLoadOptions = {
     config: params.config,
+    metadataSnapshot: params.metadataSnapshot,
     activationSourceConfig: params.config && projectConfigOntoRuntimeSourceSnapshot(params.config),
     env: params.env,
     workspaceDir: params.workspaceDir?.trim() ? resolveUserPath(params.workspaceDir) : undefined,
@@ -140,6 +142,7 @@ function resolveAgentRuntimePluginRegistryLoad(
     config: plan.config,
     activationSourceConfig,
     workspaceDir,
+    metadataSnapshot,
     discovery: metadataSnapshot.discovery,
     installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
     manifestRegistry: metadataSnapshot.manifestRegistry,
@@ -320,6 +323,27 @@ export function loadAgentRuntimePluginRegistryHandle(
     ? withPluginMetadataSnapshotScope(params.metadataSnapshot, load)
     : load();
   // Media providers remain owned by this source when full-only donors require a copy.
+  onPrimaryRegistry?.(pluginRegistry);
+  return adoptAgentRuntimeRegistrations(pluginRegistry, params, loadOptions.config, channelSource)
+    .registry;
+}
+
+/** Async hosts keep cached registry ownership while awaiting cold database admission. */
+export async function loadAgentRuntimePluginRegistryHandleAsync(
+  params: AgentRuntimePluginRegistryParams,
+  onPrimaryRegistry?: (registry: PluginRegistry) => void,
+): Promise<PluginRegistry> {
+  const loadOptions = resolveAgentRuntimePluginRegistryLoad(params);
+  const reusable = reusableAgentRuntimeRegistry(params, loadOptions);
+  if (reusable) {
+    onPrimaryRegistry?.(reusable);
+    return bindAdmittingGateway(reusable);
+  }
+  const load = () => loadOpenClawPluginsAsync({ ...loadOptions, activate: false });
+  const channelSource = captureRuntimeChannelSource(getActivePluginRegistry());
+  const pluginRegistry = await (params.metadataSnapshot
+    ? withPluginMetadataSnapshotScope(params.metadataSnapshot, load)
+    : load());
   onPrimaryRegistry?.(pluginRegistry);
   return adoptAgentRuntimeRegistrations(pluginRegistry, params, loadOptions.config, channelSource)
     .registry;

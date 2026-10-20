@@ -331,24 +331,24 @@ describe("managed Crabbox", () => {
       await finish.promise;
       return download(test.checksums);
     });
-    const controller = new AbortController();
-    const candidatesProbed = createDeferred<void>();
-    let probes = 0;
-    const synchronizedRunner: CrabboxCommandRunner = async (argv, options) => {
-      const result = await runCommand(argv, options);
-      if (argv[0] === test.candidate) {
-        probes += 1;
-        if (probes === 2) {
-          candidatesProbed.resolve();
-        }
-        await candidatesProbed.promise;
-      }
-      return result;
-    };
-    const cancelled = test.ensure({ runCommand: synchronizedRunner, signal: controller.signal });
-    const cancelledResult = expect(cancelled).rejects.toThrow("caller stopped");
-    const retained = test.ensure({ runCommand: synchronizedRunner });
+    const retained = test.ensure();
     await started.promise;
+    const controller = new AbortController();
+    const cancellationReady = createDeferred<void>();
+    const addEventListener = controller.signal.addEventListener.bind(controller.signal);
+    vi.spyOn(controller.signal, "addEventListener").mockImplementation(
+      (type, listener, options) => {
+        addEventListener(type, listener, options);
+        if (type === "abort") {
+          cancellationReady.resolve();
+        }
+      },
+    );
+    const cancelled = test.ensure({ signal: controller.signal });
+    const cancelledResult = expect(cancelled).rejects.toThrow("caller stopped");
+    // Candidate probes happen before acquisition admission. Cancel only after
+    // this caller joins the held download and subscribes to abandonment.
+    await cancellationReady.promise;
     controller.abort(new Error("caller stopped"));
     try {
       await cancelledResult;
@@ -403,7 +403,8 @@ describe("managed Crabbox", () => {
     async (damage) => {
       const test = await fixture();
       await test.damage(damage === "missing" ? undefined : damage);
-      await expect(test.ensure()).resolves.toEqual(test.installed);
+      const probes = vi.fn(runCommand);
+      await expect(test.ensure({ runCommand: probes })).resolves.toEqual(test.installed);
       expect(await test.read()).toBe(CRABBOX_MIN_VERSION);
       expect(await fs.readFile(test.candidate, "utf8")).toBe("0.66.0");
       const entries = await test.entries();
@@ -413,6 +414,7 @@ describe("managed Crabbox", () => {
       expect(await test.read("operator-note", backup)).toBe("preserve this");
       if (damage !== "missing") {
         expect(await test.read(test.executable, backup)).toBe(damage);
+        expect(probes.mock.calls.filter(([argv]) => argv[0] === test.binary)).toHaveLength(2);
       }
       expect(entries).toHaveLength(2);
     },

@@ -5,6 +5,7 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
+import { WorkerTaskAdmission } from "./worker-task-admission.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -54,6 +55,7 @@ import type {
 
 // Reusable workers must not retain the first submitting caller's async scope.
 const runInWorkerPoolContext = AsyncLocalStorage.snapshot();
+const memoryPressure = channel("openclaw.memory.critical");
 
 type WorkerReply<Output> = { status: "ok"; value: Output } | { status: "failed"; error: string };
 /** Bounded execution workers; each worker accepts one task at a time. */
@@ -89,7 +91,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     diagnostics: () => ({
       worker: this.options.workerUrl.pathname.split("/").at(-1),
       ...(this.publicDispatch?.getSnapshot() ?? this.getSnapshot()),
-      pendingBytes: this.pendingBytes,
+      pendingBytes: this.admission.pendingBytes,
     }),
   };
   private readonly retirement;
@@ -101,10 +103,7 @@ export class WorkerTaskPoolCore<Input, Output> {
   );
   private readonly maxWorkers: number;
   private readonly observeTask;
-  private readonly maxPendingTasks: number;
-  private readonly maxPendingBytes: number;
-  private pendingTasks = 0;
-  private pendingBytes = 0;
+  private readonly admission: WorkerTaskAdmission;
   private workers = 0;
   private workersCreated = 0;
   private activeTasks = 0;
@@ -124,24 +123,24 @@ export class WorkerTaskPoolCore<Input, Output> {
   ) {
     this.observeTask = host.createTaskObserver?.(options.workerUrl);
     this.maxWorkers = host.maxWorkers ?? options.maxWorkers ?? availableParallelism();
-    this.maxPendingTasks = options.maxPendingTasks ?? DEFAULT_WORKER_PENDING_TASKS;
-    this.maxPendingBytes = options.maxPendingBytes ?? DEFAULT_WORKER_PENDING_BYTES;
-    for (const [name, value] of Object.entries({
-      maxWorkers: this.maxWorkers,
-      maxPendingTasks: this.maxPendingTasks,
-      maxPendingBytes: this.maxPendingBytes,
-    })) {
-      if (!Number.isSafeInteger(value) || value < 1) {
-        throw new RangeError(`${name} must be a positive safe integer`);
-      }
+    if (!Number.isSafeInteger(this.maxWorkers) || this.maxWorkers < 1) {
+      throw new RangeError("maxWorkers must be a positive safe integer");
     }
     this.computeCapacity = options.sharedCompute ? host.computeCapacity : undefined;
+    this.admission = new WorkerTaskAdmission(
+      options.maxPendingTasks ?? DEFAULT_WORKER_PENDING_TASKS,
+      options.maxPendingBytes ?? DEFAULT_WORKER_PENDING_BYTES,
+      this.computeCapacity,
+    );
     this.retirement = createWorkerTaskPoolRetirement({
       slots: this.slots,
       options,
       runInContext: runInWorkerPoolContext,
       dispatch: () => this.dispatch(),
-      onRotationComplete: this.bootstrap.reset,
+      onRotationComplete: () => {
+        this.bootstrap.reset();
+        options.onRotationComplete?.();
+      },
       serviceDeadlines: this.expireTasks,
       markWorkerRetirement: (worker, reason) => host.workerRetiring(worker, reason),
       serviceHost: host,
@@ -241,17 +240,16 @@ export class WorkerTaskPoolCore<Input, Output> {
       );
       return task;
     }
-    if (
-      this.pendingTasks >= this.maxPendingTasks ||
-      this.pendingBytes + inputBytes > this.maxPendingBytes ||
-      (this.computeCapacity && !this.computeCapacity.admit(inputBytes))
-    ) {
-      this.finish(task, new WorkerTaskError("worker task capacity reached", "overloaded"));
+    if (!this.admission.admit(inputBytes)) {
+      this.finish(
+        task,
+        new WorkerTaskError("worker task capacity reached", "overloaded", {
+          capacityAvailable: this.admission.waitForCapacity(inputBytes),
+        }),
+      );
       return task;
     }
     task.admitted = true;
-    this.pendingTasks++;
-    this.pendingBytes += inputBytes;
     task.observation = this.observeTask?.(task.options.diagnosticOperation);
     if (options.timeoutMs !== undefined) {
       armWorkerTaskTimeout(task, options.timeoutMs, () => this.timeout(task));
@@ -276,7 +274,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       workers: this.workers,
       workersCreated: this.workersCreated,
       activeTasks: this.activeTasks,
-      pendingTasks: this.pendingTasks,
+      pendingTasks: this.admission.pendingTasks,
     };
   }
 
@@ -308,7 +306,8 @@ export class WorkerTaskPoolCore<Input, Output> {
     reason: WorkerRetirementReason = "closed",
   ): Promise<void> {
     this.closedError ??= error;
-    channel("openclaw.memory.critical").unsubscribe(this.retireIdleOnPressure);
+    this.admission.close();
+    memoryPressure.unsubscribe(this.retireIdleOnPressure);
     this.computeCapacity?.remove(this.resumeCompute);
     for (const task of this.queue.splice(0)) {
       this.finish(task, this.closedError);
@@ -336,7 +335,7 @@ export class WorkerTaskPoolCore<Input, Output> {
 
   private dispatch(): void {
     if (!this.slots.size) {
-      channel("openclaw.memory.critical").unsubscribe(this.retireIdleOnPressure);
+      memoryPressure.unsubscribe(this.retireIdleOnPressure);
     }
     if (!this.queue.length || this.closedError || !this.retirement.dispatchAllowed) {
       this.computeCapacity?.remove(this.resumeCompute);
@@ -437,9 +436,8 @@ export class WorkerTaskPoolCore<Input, Output> {
   // Worker listeners outlive tasks; their creation scope must not retain an async task frame.
   private createWorker(slot: Slot<Input, Output>): WorkerLifecycle {
     if ((this.options.idleTimeoutMs ?? 60_000) > 0) {
-      const pressure = channel("openclaw.memory.critical");
-      pressure.unsubscribe(this.retireIdleOnPressure);
-      pressure.subscribe(this.retireIdleOnPressure);
+      memoryPressure.unsubscribe(this.retireIdleOnPressure);
+      memoryPressure.subscribe(this.retireIdleOnPressure);
     }
     return createWorkerTaskPoolWorker({
       slot,
@@ -604,8 +602,6 @@ export class WorkerTaskPoolCore<Input, Output> {
     dispatchOwnedWorkerRequest(task, slot, message.value, exchange, {
       accept,
       reject,
-      closedError: () =>
-        new WorkerTaskError("worker task closed before host dispatch", "unavailable"),
     });
   }
 
@@ -731,9 +727,7 @@ export class WorkerTaskPoolCore<Input, Output> {
   private releaseAdmission(task: Task<Input, Output>): void {
     if (task.admitted) {
       task.admitted = false;
-      this.pendingTasks--;
-      this.pendingBytes -= task.inputBytes;
-      this.computeCapacity?.finish(task.inputBytes);
+      this.admission.finish(task.inputBytes);
     }
   }
 

@@ -98,6 +98,50 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile,
     watchGlobs: ["src/gateway/server-close.ts", "src/gateway/server-run-shutdown.ts"],
   })),
+  // These E2Es boot a real Gateway or built CLI as a child process, so the
+  // import graph reaches only the test-instance helper. Without owner watches
+  // they ran on PRs only when that helper changed and drifted for days.
+  {
+    testFile: "test/gateway-background-process-restart.e2e.test.ts",
+    watchGlobs: [
+      "src/gateway/server-startup-observers.ts",
+      "src/agents/bash-tools.exec-notify.ts",
+      "src/infra/restart-intent{,-payload}.ts",
+      "src/sessions/session-controller*.ts",
+    ],
+    sourceOnly: true,
+  },
+  {
+    testFile: "test/gateway-session-end-shutdown.e2e.test.ts",
+    watchGlobs: [
+      "src/gateway/active-sessions-shutdown-{drain,tracker}.ts",
+      "src/gateway/session-lifecycle-plugin-hooks.ts",
+      "src/gateway/server-close.ts",
+      "src/gateway/server-run-shutdown.ts",
+      "src/plugins/session-end-transcript.ts",
+      "gateway-shutdown-budget.mjs",
+    ],
+    sourceOnly: true,
+  },
+  {
+    testFile: "test/gateway-hook-concurrency.e2e.test.ts",
+    watchGlobs: [
+      "src/process/command-queue{,.capacity-groups,.state}.ts",
+      "src/process/background-work.ts",
+      "src/gateway/server/hooks{,-event-dispatch,-request-handler}.ts",
+    ],
+    sourceOnly: true,
+  },
+  {
+    testFile: "test/scripts/node-runtime-recovery.built-cli.e2e.test.ts",
+    watchGlobs: [
+      "node-runtime-recovery.mjs",
+      "cli-parent-lifetime.mjs",
+      "src/entry.{compile-cache,respawn}.ts",
+      "src/process/respawn-child-runner.ts",
+    ],
+    sourceOnly: true,
+  },
   {
     testFile: "src/agents/agent-bundle-mcp-reload.test.ts",
     watchGlobs: ["src/agents/agent-bundle-mcp-manager.ts"],
@@ -525,7 +569,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   {
     testFile: "src/cli/gateway-cli/run-loop.direct-stop-active-work.process.test.ts",
     watchGlobs: [
-      "src/agents/embedded-agent-runner/active-run-projections.ts",
+      "src/sessions/session-controller.admission.ts",
+      "src/sessions/session-controller.queries.ts",
+      "src/sessions/session-controller.state.ts",
       "src/agents/embedded-agent-runner/runs.ts",
       "src/channels/message/ingress-drain.ts",
       "src/channels/message/ingress-queue.ts",
@@ -594,7 +640,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "extensions/minimax/index.ts",
       "extensions/minimax/oauth.runtime.ts",
       "extensions/minimax/oauth.ts",
-      "extensions/minimax/provider-registration.ts",
     ],
   },
   {

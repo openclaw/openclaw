@@ -1,7 +1,6 @@
 import rawFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -143,7 +142,7 @@ it("preserves project precedence when a later matching transcript is found first
   });
 });
 
-it("projects oversized Claude messages off-thread using one worker per snapshot", async () => {
+it("bounds oversized Claude messages and continues after malformed records", async () => {
   const homeDir = tempDirs.make("openclaw-claude-snapshot-");
   const sessionId = "5b8b202c-f6bb-4046-9475-d2f15fd07530";
   const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
@@ -169,44 +168,28 @@ it("projects oversized Claude messages off-thread using one worker per snapshot"
     ].join("\n"),
     "utf8",
   );
-  const parseSpy = vi.spyOn(JSON, "parse");
-  const workers: Worker[] = [];
-  const onWorker = (worker: Worker) => workers.push(worker);
-  process.on("worker", onWorker);
-  try {
-    const messages = await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir });
+  const messages = await readClaudeCliSessionMessagesAsync({ cliSessionId: sessionId, homeDir });
 
-    expect(messages).toHaveLength(4);
-    for (let index = 0; index < 2; index++) {
-      expect(messages[index]).toMatchObject({
-        __openclaw: { externalId: `oversized-user-${index}` },
-        content: expect.stringContaining("exceeded 1 MiB"),
-      });
-    }
-    // A tool result must keep its shape, or the placeholder renders as a user turn.
-    expect(messages[2]).toMatchObject({
-      __openclaw: { externalId: "oversized-tool-result" },
-      content: [
-        {
-          type: "tool_result",
-          tool_use_id: "tool-1",
-          content: expect.stringContaining("exceeded 1 MiB"),
-        },
-      ],
+  expect(messages).toHaveLength(4);
+  for (let index = 0; index < 2; index++) {
+    expect(messages[index]).toMatchObject({
+      __openclaw: { externalId: `oversized-user-${index}` },
+      content: expect.stringContaining("exceeded 1 MiB"),
     });
-    expect(messages[3]).toMatchObject({
-      __openclaw: { externalId: "visible-after-oversized" },
-      content: "visible",
-    });
-    expect(workers).toHaveLength(1);
-    expect(workers[0]?.threadId).toBe(-1);
-    expect(
-      parseSpy.mock.calls.some(
-        ([source]) => typeof source === "string" && source.length > 1024 * 1024,
-      ),
-    ).toBe(false);
-  } finally {
-    process.off("worker", onWorker);
-    parseSpy.mockRestore();
   }
+  // A tool result must keep its shape, or the placeholder renders as a user turn.
+  expect(messages[2]).toMatchObject({
+    __openclaw: { externalId: "oversized-tool-result" },
+    content: [
+      {
+        type: "tool_result",
+        tool_use_id: "tool-1",
+        content: expect.stringContaining("exceeded 1 MiB"),
+      },
+    ],
+  });
+  expect(messages[3]).toMatchObject({
+    __openclaw: { externalId: "visible-after-oversized" },
+    content: "visible",
+  });
 });

@@ -12,12 +12,6 @@ export function getDefaultLaneConcurrency(lane: string): number {
     : 1;
 }
 
-export type CommandLaneTaskMarker = Readonly<{
-  lane: string;
-  taskId: number;
-  generation: number;
-}>;
-
 export type QueuePriority = -1 | 0 | 1;
 
 const PRIORITY_HEAD_START_MS = 15_000;
@@ -26,7 +20,7 @@ export type QueueEntry = {
   queued?: true;
   previous?: QueueEntry;
   next?: QueueEntry;
-  task: (marker: CommandLaneTaskMarker) => Promise<unknown>;
+  task: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
   /** Monotonic enqueue time; wall-clock corrections must not reorder work. */
@@ -38,12 +32,6 @@ export type QueueEntry = {
   activeAheadAtEnqueue: number;
   taskIdentity?: CommandQueueEnqueueOptions["taskIdentity"];
   sessionTarget?: CommandQueueEnqueueOptions["sessionTarget"];
-  taskTimeoutMs?: number;
-  taskTimeoutProgressAtMs?: () => number | undefined;
-  taskTimeoutSubscribe?: CommandQueueEnqueueOptions["taskTimeoutSubscribe"];
-  taskTimeoutAbortSignal?: AbortSignal;
-  taskTimeoutAbortGraceMs?: number;
-  taskTimeoutReleaseSignal?: AbortSignal;
   onWait?: (waitMs: number, queuedAhead: number) => void;
   releaseQueuedAbort?: () => void;
 };

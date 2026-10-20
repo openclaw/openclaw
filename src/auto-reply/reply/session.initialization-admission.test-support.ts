@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
@@ -10,14 +11,29 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { listSessionPendingInputs } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { replyRunRegistry, waitForReplyRunSuccessorAdmission } from "./reply-run-registry.js";
-import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
+import {
+  acquireSessionInputActor,
+  bindUserTurnInputActor,
+} from "../../config/sessions/session-input-actor.js";
+import {
+  releaseSessionControllerClaim,
+  retireSessionControllerInput,
+  submitSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { createQueueTestRun } from "./queue.test-helpers.js";
+import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import { admitReplyTurn, runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission.js";
 import {
   initSessionState,
   writeSessionStore as writeSessionStoreFast,
 } from "./test/session.test-support.js";
+import { createTypingController } from "./typing.js";
 
 export function telegramTurn(sessionKey: string, body: string, from: string) {
   return {
@@ -40,12 +56,16 @@ async function admit(scope: Scope, sessionId: string, resetTriggered: boolean) {
   if (admitted.status !== "owned" || !admitted.databaseClaim) {
     throw new Error("Fixture requires a retained reply admission");
   }
+  const controller = getSessionControllerEntryForOperation(admitted.operation);
   return {
     ...admitted,
+    controller,
     databaseClaim: admitted.databaseClaim,
     async [Symbol.asyncDispose]() {
       admitted.operation.complete();
-      await waitForReplyRunSuccessorAdmission(scope.sessionKey, null);
+      await waitForReplyRunSuccessorAdmission(scope.sessionKey, null, {
+        target: controller.target,
+      });
     },
   };
 }
@@ -132,6 +152,115 @@ export function registerSessionInitializationAdmissionTests({
       }
     },
   );
+  it("stages first-turn input through its initialized owner without opening the legacy locator", async () => {
+    const scope = await makeScope("initialization-input-custody");
+    const text = "Keep this first request before maintenance.";
+    const idempotencyKey = "first-turn-input-custody";
+    await using admitted = await admit(scope, "initializing-input", false);
+    const initialized = await initialize(scope, admitted, text);
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text, idempotencyKey },
+      target: {
+        ...scope,
+        sessionId: initialized.sessionId,
+        sessionEntry: initialized.sessionEntry,
+      },
+      updateMode: "none",
+    });
+    // The Gateway recorder predates first-session initialization and has no read source yet.
+    let gatewayInput: ReturnType<typeof acquireSessionInputActor> | undefined;
+    bindUserTurnInputActor(recorder, {
+      phase: "acceptInput",
+      acquire: () =>
+        (gatewayInput ??= acquireSessionInputActor(
+          {
+            ...scope,
+            target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+          },
+          { assertCurrent() {}, assertReadable() {} },
+        )),
+    });
+    const queued = createQueueTestRun({ prompt: text, messageId: idempotencyKey });
+    const followupRun = {
+      ...queued,
+      userTurnTranscriptRecorder: recorder,
+      run: {
+        ...queued.run,
+        agentId: scope.agentId,
+        sessionId: initialized.sessionId,
+        sessionKey: scope.sessionKey,
+        config: { session: { store: scope.storePath } },
+      },
+    };
+    const input = submitSessionControllerInput(
+      scope.sessionKey,
+      followupRun,
+      { mode: "followup" },
+      {
+        protocolRunId: idempotencyKey,
+        storePath: scope.storePath,
+      },
+    );
+    const typing = createTypingController({});
+    const checkpoint = new Error("first-turn input reached the maintenance boundary");
+    let releaseSourceAdmission: (() => Promise<void>) | undefined;
+    try {
+      expect(existsSync(scope.storePath)).toBe(false);
+      const prepared = await prepareReplyAgentTurn({
+        queued: followupRun,
+        kind: "visible",
+        providedReplyOperation: admitted.operation,
+        onOperationOwned: () => true,
+        defaults: {
+          typing,
+          typingMode: "never",
+          defaultModel: queued.run.model,
+          sessionEntry: initialized.sessionEntry,
+          sessionStore: initialized.sessionStore,
+          sessionKey: scope.sessionKey,
+          storePath: scope.storePath,
+          opts: { runId: idempotencyKey },
+        },
+        signalRunStart: async () => {
+          expect(
+            await listSessionPendingInputs({ ...scope, sessionId: initialized.sessionId }),
+          ).toMatchObject({
+            total: 1,
+            items: [{ state: "queued", message: { role: "user", content: text, idempotencyKey } }],
+          });
+          expect(existsSync(scope.storePath)).toBe(false);
+          // This existing callback follows source staging and precedes model/memory work.
+          throw checkpoint;
+        },
+      });
+      if (prepared.kind !== "admitted") {
+        throw new Error("First-turn preparation did not retain its admitted owner");
+      }
+      releaseSourceAdmission = prepared.turn.releaseSourceAdmission;
+      expect(prepared.turn.preflightError).toBe(checkpoint);
+      expect(existsSync(scope.storePath)).toBe(false);
+    } finally {
+      try {
+        await releaseSourceAdmission?.();
+      } finally {
+        admitted.operation.complete();
+        try {
+          const claim = input.claim;
+          if (claim) {
+            releaseSessionControllerClaim(claim);
+            await claim.settlement.promise;
+          } else {
+            retireSessionControllerInput(input);
+            await input.settlement.promise;
+          }
+        } finally {
+          typing.cleanup();
+          await (await gatewayInput?.catch(() => undefined))?.actor.release();
+        }
+      }
+    }
+  });
+
   it.for(["prepared", "retiring"] as const)(
     "joins reply close while the initialization handoff is %s",
     async (stage, { signal }) => {
@@ -190,7 +319,9 @@ export function registerSessionInitializationAdmissionTests({
           expect(next.isCurrent()).toBe(false);
         }
         let closed = false;
-        closing = waitForReplyRunSuccessorAdmission(sessionKey, null).then((result) => {
+        closing = waitForReplyRunSuccessorAdmission(sessionKey, null, {
+          target: admitted.controller.target,
+        }).then((result) => {
           closed = true;
           return result;
         });
@@ -203,7 +334,7 @@ export function registerSessionInitializationAdmissionTests({
         );
         expect(await withinTest(closing, signal)).toMatchObject({ settled: true });
         expect(next.isCurrent()).toBe(false);
-        expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+        expect(admitted.controller.active).toBeUndefined();
       } finally {
         continueHandoff.resolve();
         prepareSpy.mockRestore();

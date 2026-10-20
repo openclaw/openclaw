@@ -25,6 +25,7 @@ export function createProvisionIsolationFixture(directory: string, canonical: st
   const observations = join(root, "provisioner-stores.jsonl");
   const preload = join(root, "provisioner-store-preload.mjs");
   const stateDatabase = join(repository, ".local", "pr-state", "state", "openclaw.sqlite");
+  const snapshotCache = join(repository, ".local", "pr-state", "snapshot-cache");
   writeFileSync(launches, "");
   writeFileSync(observations, "");
   // Explicit argv survives env/NODE_OPTIONS replacement without patching the trust anchor.
@@ -61,6 +62,8 @@ if (workerThreads.isMainThread) assert(fs.readdirSync(binding.directory).some(na
 }), 'Missing private provisioner handoff preload');
 const repository = ${JSON.stringify(repository)};
 const stateDatabase = ${JSON.stringify(stateDatabase)};
+const clientDatabase = path.join(repository, '.local', 'pr-state', 'client', 'credentials.sqlite');
+const snapshotCache = ${JSON.stringify(snapshotCache)};
 const observations = ${JSON.stringify(observations)};
 const entry = process.argv[1];
 const observerParams = new URL(import.meta.url).searchParams;
@@ -75,7 +78,14 @@ function observe(kind, databasePath) {
 }
 function assertPrivateState(location) {
   // Check spelling before even stat'ing a path: negatives never inspect live stores.
-  assert(location === stateDatabase, 'Unexpected provisioning SQLite store: ' + location);
+  const scopedBackup = location.startsWith(stateDatabase + '.pre-startup-migration-') &&
+    /^[a-f0-9-]+\\.scoped\\.bak$/.test(location.slice((stateDatabase + '.pre-startup-migration-').length));
+  const staged = path.relative(snapshotCache, location).split(path.sep);
+  const snapshot = staged.length >= 3 && /^openclaw(?:-\\d+)?$/.test(staged[0]) &&
+    staged.slice(1, -1).every(name => /^openclaw-sqlite-readonly-v2-[A-Za-z0-9]{6}$/.test(name)) &&
+    ['owner.sqlite', 'database.sqlite', 'database.sqlite.partial'].includes(staged.at(-1));
+  assert(location === stateDatabase || location === clientDatabase || scopedBackup || snapshot,
+    'Unexpected provisioning SQLite store: ' + location);
   const stat = fs.lstatSync(repository, {bigint: true});
   assert.equal(fs.realpathSync(repository), repository, 'Canonical repository alias');
   assert.equal(String(stat.dev), ${JSON.stringify(String(identity.dev))});
@@ -169,6 +179,7 @@ if (provisioner) {
     bin,
     observations,
     stateDatabase,
+    snapshotCache,
     path: (inheritedPath: string) => [bin, inheritedPath].join(delimiter),
     assertProvisioner() {
       const pids = readLines(launches).map(Number);

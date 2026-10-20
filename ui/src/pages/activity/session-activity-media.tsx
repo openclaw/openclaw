@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onSettled, untrack } from "solid-js";
+import { createEffect, createSignal, onSettled, Show } from "solid-js";
 import type { ArtifactsListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import { resolveArtifactDownloadSource } from "../../api/artifact-download.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
@@ -93,6 +93,17 @@ export type ActivitySessionMediaProps = {
 };
 
 export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
+  return (
+    <Show when={props.context.gateway} keyed>
+      {(gateway) => SessionMedia(gateway, props)}
+    </Show>
+  );
+}
+
+function SessionMedia(
+  sourceGateway: ApplicationContext["gateway"],
+  props: ActivitySessionMediaProps,
+) {
   let host!: HTMLElement;
   const mediaOwner = {};
   const [revision, setRevision] = createSignal(0);
@@ -328,13 +339,7 @@ export function ActivitySessionMedia(props: ActivitySessionMediaProps) {
         ),
     };
   }
-  // The projection is seeded once; its source follows the tracked effect below.
-  const gatewayProjection = projectGateway(untrack(() => props.context.gateway));
-  // Keep the Gateway observer attached to the presented connection owner.
-  createEffect(
-    () => props.context.gateway,
-    (source) => gatewayProjection.replaceSource(source),
-  );
+  const gatewayProjection = projectGateway(sourceGateway);
   // Synchronize the viewport-gated artifact requests with their Gateway/session scope.
   createEffect(
     () => [

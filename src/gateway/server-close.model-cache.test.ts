@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { acquireReadOnlyPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import { registerPreparedModelRuntimeClose } from "../agents/prepared-model-runtime.lifecycle.js";
@@ -77,23 +78,19 @@ it(
       policyRoots.set(id, fs.realpathSync(root));
       const marker = fixture.state.path(`${id}-evaluated`);
       markers.set(id, marker);
-      fs.writeFileSync(
-        path.join(root, "package.json"),
-        JSON.stringify({
-          name: id,
-          version: "1.0.0",
-          type: "commonjs",
-          openclaw: { extensions: ["./index.cjs"] },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(root, "openclaw.plugin.json"),
-        JSON.stringify({
-          id,
-          providers: [id],
-          configSchema: { type: "object", properties: {} },
-        }),
-      );
+      const writeJson = (name: string, value: unknown) =>
+        fs.writeFileSync(path.join(root, name), JSON.stringify(value));
+      writeJson("package.json", {
+        name: id,
+        version: "1.0.0",
+        type: "commonjs",
+        openclaw: { extensions: ["./index.cjs"] },
+      });
+      writeJson("openclaw.plugin.json", {
+        id,
+        providers: [id],
+        configSchema: { type: "object", properties: {} },
+      });
       fs.writeFileSync(
         path.join(root, "index.cjs"),
         `require('node:fs').writeFileSync(${JSON.stringify(runtimeMarker)}, 'unexpected'); throw Error('policy runtime must stay cold');`,
@@ -136,10 +133,10 @@ it(
       });
     const gateEntered = createDeferredCore(),
       releaseBuild = createDeferredCore();
-    const leases: PreparedModelRuntimeLease[] = [];
+    let warmA: PreparedModelRuntimeLease | undefined;
     const builds: BuildObservation[] = [];
     const jobs: Promise<PreparedModelRuntimeLease>[] = [];
-    const closing: Promise<void>[] = [];
+    let closing: Promise<void> | undefined;
     const restorers: Array<() => void> = [];
     try {
       const aPort = await fixture.reservePort();
@@ -173,8 +170,7 @@ it(
           () => acquireReadOnlyPreparedModelRuntime(selected, { catalogMode: "static" }),
           { config: selected.config, env: fixture.state.env, trustConfigIdentity: true },
         );
-      const warmA = await acquire(aMetadata, input(warmId, "warm-a"));
-      leases.push(warmA);
+      warmA = await acquire(aMetadata, input(warmId, "warm-a"));
       expect(warmA.snapshot.metadataSnapshot).toBe(aMetadata);
       const warmEntry = warmA.snapshot.modelCatalog.entries.find(
         (entry) => entry.provider === warmId,
@@ -235,12 +231,11 @@ it(
       const first = acquire(aMetadata, input(warmId, "blocked-a"));
       jobs.push(first);
       void first.catch(() => {});
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         gateEntered.promise,
-        first.then(() => {
-          throw new Error("Model build bypassed the real static catalog gate");
-        }),
-      ]);
+        first,
+        "Model build bypassed the real static catalog gate",
+      );
       const queued = acquire(aMetadata, input(coldId, "queued-a"));
       jobs.push(queued);
       void queued.catch(() => {});
@@ -253,14 +248,13 @@ it(
       expect(fs.existsSync(markers.get(coldId)!)).toBe(false);
 
       const aClose = aServer.close({ reason: "retire captured queued model metadata" });
-      closing.push(aClose);
+      closing = aClose;
       void aClose.catch(() => {});
-      const shutdownError = await Promise.race([
+      const shutdownError = await awaitGateBeforeSettlement(
         modelCloseEntered.promise,
-        aClose.then(() => {
-          throw new Error("Gateway closed without joining model acquisition");
-        }),
-      ]);
+        aClose,
+        "Gateway closed without joining model acquisition",
+      );
       expect(shutdownError.message).toBe("prepared model runtime process lifetime closed");
       expect(getPluginMetadataSnapshotCache(aMetadata)).toBe(aCache);
       expect(aCache.retirement).toBeUndefined();
@@ -293,10 +287,8 @@ it(
           await job.value[Symbol.asyncDispose]();
         }
       }
-      for (const lease of leases) {
-        await lease[Symbol.asyncDispose]();
-      }
-      await Promise.allSettled([...builds.map(({ completion }) => completion), ...closing]);
+      await warmA?.[Symbol.asyncDispose]();
+      await Promise.allSettled([...builds.map(({ completion }) => completion), closing]);
       for (const restore of restorers.toReversed()) {
         restore();
       }

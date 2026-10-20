@@ -10,26 +10,26 @@ import {
   startZaloQrLoginMock,
   waitForZaloQrLoginMock,
 } from "./zalo-js.test-mocks.js";
-import {
-  zalouserAuthAdapter,
-  zalouserGroupsAdapter,
-  zalouserMessageActions,
-  zalouserMessagingAdapter,
-  zalouserOutboundAdapter,
-  zalouserPairingTextAdapter,
-  zalouserResolverAdapter,
-  zalouserSecurityAdapter,
-} from "./channel.adapters.js";
 import { zalouserPlugin } from "./channel.js";
 
+const zalouserAuthAdapter = required(zalouserPlugin.auth);
+const zalouserGroupsAdapter = required(zalouserPlugin.groups);
+const zalouserMessageActions = required(zalouserPlugin.actions);
+const zalouserMessagingAdapter = required(zalouserPlugin.messaging);
+const zalouserOutboundAdapter = required(zalouserPlugin.outbound);
+const zalouserPairingTextAdapter = required(zalouserPlugin.pairing);
+const zalouserResolverAdapter = required(zalouserPlugin.resolver);
+const zalouserSecurityAdapter = required(zalouserPlugin.security);
+
 it("distinguishes users from groups", () => {
-  expect(zalouserMessagingAdapter.inferTargetChatType({ to: "user:123" })).toBe("direct");
-  expect(zalouserMessagingAdapter.inferTargetChatType({ to: "group:456" })).toBe("group");
+  const inferTargetChatType = required(zalouserMessagingAdapter.inferTargetChatType);
+  expect(inferTargetChatType({ to: "user:123" })).toBe("direct");
+  expect(inferTargetChatType({ to: "group:456" })).toBe("group");
 });
 
-import { listZalouserDirectoryGroupMembers } from "./directory.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import { sendMessageZalouser } from "./send.js";
+import { listZaloGroupMembers } from "./zalo-js.js";
 
 vi.mock("./qr-temp-file.js", () => ({
   writeQrDataUrlToTempFile: vi.fn(async () => null),
@@ -71,7 +71,7 @@ function resolveGroupToolPolicy(
   groups: Record<string, { tools: { allow?: string[]; deny?: string[] } }>,
   groupId: string,
 ) {
-  return zalouserGroupsAdapter.resolveToolPolicy({
+  return required(zalouserGroupsAdapter.resolveToolPolicy)({
     cfg: config({ groups }),
     accountId: "default",
     groupId,
@@ -149,7 +149,7 @@ describe("zalouser channel policies", () => {
   });
 
   it("resolves requireMention from group config", () => {
-    const resolveRequireMention = zalouserGroupsAdapter.resolveRequireMention;
+    const resolveRequireMention = required(zalouserGroupsAdapter.resolveRequireMention);
     const requireMention = resolveRequireMention({
       cfg: config({ groups: { "123": { requireMention: false } } }),
       accountId: "default",
@@ -374,10 +374,12 @@ it.each([
   ["group:1471383327500481391", "1471383327500481391"],
   ["1471383327500481391", "1471383327500481391"],
 ])("resolves directory group %s to %s", async (groupId, expectedId) => {
-  const listZaloGroupMembers = vi.fn(async () => []);
-  await listZalouserDirectoryGroupMembers(
-    { cfg: {}, accountId: "default", groupId },
-    { listZaloGroupMembers },
-  );
+  vi.mocked(listZaloGroupMembers).mockResolvedValueOnce([]);
+  await required(zalouserPlugin.directory?.listGroupMembers)({
+    cfg: {},
+    accountId: "default",
+    groupId,
+    runtime: createNonExitingRuntimeEnv(),
+  });
   expect(listZaloGroupMembers).toHaveBeenLastCalledWith("default", expectedId);
 });

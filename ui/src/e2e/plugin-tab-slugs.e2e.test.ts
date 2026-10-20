@@ -210,8 +210,6 @@ suite.define(() => {
                     mode: context.theme.mode,
                     resolvedMode: context.theme.resolvedMode,
                     documentMode: document.documentElement.dataset.themeMode ?? null,
-                    toggleMode: toggle?.mode ?? null,
-                    toggleMenuItem: toggle?.menuItem ?? null,
                     buttonLabel: button?.getAttribute("aria-label") ?? null,
                     buttonRole: button?.getAttribute("role") ?? null,
                     menuPresent: Boolean(menu),

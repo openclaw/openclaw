@@ -618,7 +618,6 @@ describe("runEmbeddedAgent auth profile rotation", () => {
     expect(computeBackoffMock).not.toHaveBeenCalled();
     await logCapture.flush();
 
-    const safeProfileId = redactIdentifier("openai:p1", { len: 12 });
     const failoverDecision = requireLogRecord(logCapture.records, "embedded run failover decision");
     const failoverAttributes = requireRecord(
       failoverDecision.attributes,
@@ -629,12 +628,13 @@ describe("runEmbeddedAgent auth profile rotation", () => {
       runId: "run:overloaded-logging",
       decision: "rotate_profile",
       failoverReason: "overloaded",
-      profileId: safeProfileId,
+      profileId: redactIdentifier("openai:p1", { len: 12 }),
       sourceProvider: "openai",
       sourceModel: "mock-1",
       providerErrorType: "overloaded_error",
+      requestIdHash: redactIdentifier("req_overload", { len: 12 }),
     });
-    expect(failoverAttributes.rawErrorPreview).toContain('"request_id":"sha256:');
+    expect(failoverAttributes).not.toHaveProperty("rawErrorPreview");
 
     expect(
       logCapture.records.some(

@@ -2,6 +2,11 @@ import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sess
 
 const encodings = new WeakMap<SessionRow, string>();
 
+/** Account for already prepared UTF-16 strings without encoding rows just for telemetry. */
+export function sessionRowEncodingBytes(row: SessionRow): number {
+  return (encodings.get(row)?.length ?? 0) * 2;
+}
+
 /** Publish an immutable presentation with the bytes prepared by its owner. */
 export function registerSessionRowEncoding(row: SessionRow, encoded: string): void {
   encodings.set(row, encoded);

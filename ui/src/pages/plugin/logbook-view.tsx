@@ -1,21 +1,23 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { i18n } from "../../i18n/index.ts";
+import { registerLogbookEnglish } from "../../i18n/locales/en-logbook.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
-import { projectI18n, t } from "../../lib/reactive/i18n.ts";
+import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/logbook.css";
 import { createLogbook, localDayKey, shiftDay, type LogbookModel } from "./logbook-state.ts";
 import type { LogbookCardPayload, LogbookStatusPayload, LogbookUiState } from "./logbook-types.ts";
 
+registerEnglishCatalog(registerLogbookEnglish);
+
 export type LogbookProps = {
-  client: GatewayBrowserClient | null;
-  connected: boolean;
+  initialClient: GatewayBrowserClient | null;
 };
 
 /** Stable category hue so colors stay consistent across renders and days. */
@@ -95,6 +97,32 @@ function StatusChips(props: { status: LogbookStatusPayload }) {
   );
 }
 
+function LogbookKeyframe(props: { model: LogbookModel; id: number }) {
+  // An expanded image keeps its decoded source when the bounded shared cache evicts it.
+  const preview = createMemo<string | undefined>(
+    (previous) => props.model.state.framePreviews.get(props.id) ?? previous,
+  );
+  onSettled(() => {
+    if (!preview()) {
+      void props.model.loadFrame(props.id);
+    }
+  });
+  return (
+    <Show
+      when={preview()}
+      fallback={
+        <div class="logbook-card__keyframe logbook-card__keyframe--loading">
+          {t("common.loading")}
+        </div>
+      }
+    >
+      {(src) => (
+        <img class="logbook-card__keyframe" src={src()} alt={t("logbook.card.keyframeAlt")} />
+      )}
+    </Show>
+  );
+}
+
 function LogbookCard(props: {
   model: LogbookModel;
   card: LogbookCardPayload;
@@ -108,22 +136,6 @@ function LogbookCard(props: {
     !props.model.state.framePreviewFailed.has(props.card.keyframeId)
       ? props.card.keyframeId
       : undefined;
-  const preview = () =>
-    keyframeId() !== undefined ? props.model.state.framePreviews.get(keyframeId()!) : undefined;
-  // Load the expanded card's missing keyframe through the Gateway-backed preview cache.
-  createEffect(
-    () => ({
-      expanded: expanded(),
-      id: keyframeId(),
-      preview: preview(),
-      model: props.model,
-    }),
-    (current) => {
-      if (current.expanded && current.id !== undefined && !current.preview) {
-        void current.model.loadFrame(current.id);
-      }
-    },
-  );
   return (
     <article
       class={["logbook-card", { "logbook-card--expanded": expanded() }]}
@@ -152,20 +164,9 @@ function LogbookCard(props: {
       </button>
       <Show when={expanded()}>
         <div class="logbook-card__body">
-          <Show
-            when={preview()}
-            fallback={
-              <Show when={keyframeId() !== undefined}>
-                <div class="logbook-card__keyframe logbook-card__keyframe--loading">
-                  {t("common.loading")}
-                </div>
-              </Show>
-            }
-          >
-            {(src) => (
-              <img class="logbook-card__keyframe" src={src()} alt={t("logbook.card.keyframeAlt")} />
-            )}
-          </Show>
+          <For each={keyframeId() === undefined ? [] : [keyframeId()!]}>
+            {(id) => <LogbookKeyframe model={props.model} id={id} />}
+          </For>
           <Show when={props.card.detail}>
             <p class="logbook-card__detail">{props.card.detail.trim()}</p>
           </Show>
@@ -316,13 +317,12 @@ export function Logbook(props: LogbookProps) {
     locale.locale();
     return formatTimeMs(ms, { hour: "2-digit", minute: "2-digit", timeZone }, "");
   };
-  const model = createLogbook();
+  // PluginPage's keyed host keeps this client fixed until the model is disposed.
+  const initialClient = props.initialClient;
+  const model = createLogbook(initialClient);
   const state = () => model.state;
-  // A client change retires logbook requests and starts loading the newly connected Gateway.
-  createEffect(
-    () => (props.connected ? props.client : null),
-    (client) => void (model.connect(client) && model.load()),
-  );
+  // PluginPageOwner remounts this view when the connection changes.
+  onSettled(() => void model.load());
   const isToday = () => state().day === (state().status?.today ?? localDayKey());
   return (
     <section class="logbook">

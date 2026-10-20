@@ -21,6 +21,7 @@ import {
   type OpenClawConfig,
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.test-support.js";
+import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 
 vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),
@@ -28,7 +29,7 @@ vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
 }));
 
 async function driftFixture() {
-  let config: OpenClawConfig = {
+  const config: OpenClawConfig = {
     agents: { defaults: { model: "openai/gpt-5.5" } },
     models: {
       providers: {
@@ -41,11 +42,18 @@ async function driftFixture() {
       },
     },
   };
+  const configFixture = await createInferenceConfigFixture(config);
+  const snapshot = configFixture.snapshot;
+  const readConfigFileSnapshot = vi.fn(configFixture.read);
+  mocks.readConfigFileSnapshot.mockImplementation(readConfigFileSnapshot);
   return {
-    verifiedInference: await createAmbientVerifiedBinding(config),
-    readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)),
-    drift: () => {
-      config = { agents: { defaults: { model: "anthropic/claude-opus-4-8" } } };
+    verifiedInference: await createAmbientVerifiedBinding(
+      snapshot.runtimeConfig ?? snapshot.config,
+      snapshot,
+    ),
+    readConfigFileSnapshot,
+    drift: async () => {
+      await configFixture.write({ agents: { defaults: { model: "anthropic/claude-opus-4-8" } } });
     },
   };
 }
@@ -168,7 +176,7 @@ describe("SystemAgentChatEngine facade", () => {
     const engine = new SystemAgentChatEngine({
       verifiedInference,
       classifyApproval: async () => {
-        drift();
+        await drift();
         return "approve";
       },
       deps: {
@@ -202,7 +210,7 @@ describe("SystemAgentChatEngine facade", () => {
   it("does not expose an agent reply after its inference owner drifts", async () => {
     const { verifiedInference, readConfigFileSnapshot, drift } = await driftFixture();
     const runAgentTurn = vi.fn(async () => {
-      drift();
+      await drift();
       return { text: "stale reply" };
     });
     const engine = new SystemAgentChatEngine({

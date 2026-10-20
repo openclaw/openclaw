@@ -525,6 +525,16 @@ describe("qa cli registration", () => {
     });
   });
 
+  it("routes evidence gap reporting without starting a QA run", async () => {
+    await parseQa(["coverage", "--evidence", "run/qa-evidence.json", "--json"]);
+    expect(runQaCoverageReportCommand).toHaveBeenCalledWith({
+      evidence: "run/qa-evidence.json",
+      json: true,
+      tools: false,
+      match: [],
+    });
+  });
+
   it("routes coverage match queries into the qa runtime command", async () => {
     await parseQa(["coverage", "--match", "image roundtrip", "--match", "native"]);
 

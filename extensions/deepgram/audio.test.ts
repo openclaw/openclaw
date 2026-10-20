@@ -1,4 +1,5 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
@@ -82,6 +83,26 @@ describe("transcribeDeepgramAudio", () => {
     expect(headers.get("content-type")).toBe("audio/wav");
     expect(seenInit.body).toBeInstanceOf(Uint8Array);
   });
+
+  it.each([{ keyterm: ["OpenClaw", "Deepgram"] }, { keyterm: [] }])(
+    "sends array query values as repeated parameters: $keyterm",
+    async ({ keyterm }) => {
+      const { fetchFn, getRequest } = createRequestCaptureJsonFetch({
+        results: { channels: [{ alternatives: [{ transcript: "hello" }] }] },
+      });
+      await transcribeDeepgramAudio({
+        ...audioRequest,
+        query: { keyterm },
+        fetchFn,
+      });
+
+      expect(
+        new URL(expectDefined(getRequest().url, "Deepgram request URL")).searchParams.getAll(
+          "keyterm",
+        ),
+      ).toEqual(keyterm);
+    },
+  );
 
   it.each([
     {

@@ -57,7 +57,7 @@ describe("ModelProvidersPage agent scope", () => {
       selectionIntentRevision: context.settingsAgentSelection.intentRevision,
       data: {
         ...EMPTY_MODEL_PROVIDERS_DATA,
-        providerUsage: { ok: false as const, error: { kind: "request-failed" as const } },
+        providerUsage: { ok: false as const },
         updatedAt: Date.now(),
       },
       client: snapshot.client,
@@ -846,18 +846,24 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
       '.model-providers__defaults .settings-segmented[role="radiogroup"]',
     );
     expect(groups).toHaveLength(2);
-    const thinkingHigh = groups[0]!.querySelector<HTMLInputElement>(
-      '.settings-segmented__input[value="high"]',
+    expect(groups[0]!.querySelector('.settings-segmented__input[value="high"]')).toBeNull();
+    const savedThinking = groups[0]!.querySelector<HTMLInputElement>(
+      '.settings-segmented__input[value="low"]',
     )!;
-    expect(thinkingHigh.disabled).toBe(false);
-    thinkingHigh.click();
+    expect(savedThinking.checked).toBe(true);
+    expect(savedThinking.disabled).toBe(true);
+    const thinkingDefault = groups[0]!.querySelector<HTMLInputElement>(
+      '.settings-segmented__input[value=""]',
+    )!;
+    expect(thinkingDefault.disabled).toBe(false);
+    thinkingDefault.click();
     await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
       raw: {
         agents: {
           defaults: {
             fastModeDefault: "auto",
-            thinkingDefault: "high",
+            thinkingDefault: null,
             utilityModel: null,
           },
         },

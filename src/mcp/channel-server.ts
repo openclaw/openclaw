@@ -9,21 +9,19 @@ export async function serveOpenClawChannelMcp(opts: OpenClawMcpServeOptions = {}
   const { server, start, close } = await createChannelMcpRuntime(opts);
   const transport = new StdioServerTransport();
 
-  let shuttingDown = false;
   let closePromise: Promise<void> | undefined;
   const { promise: closed, resolve: resolveClosed } = createDeferredCore();
 
   const shutdown = () => {
-    if (shuttingDown) {
+    if (closePromise) {
       return;
     }
-    shuttingDown = true;
+    // Assign before cleanup starts so SDK transport-close reentry observes the same owner promise.
+    closePromise = Promise.resolve().then(close);
     process.stdin.off("end", shutdown);
     process.stdin.off("close", shutdown);
     process.off("SIGINT", shutdown);
     process.off("SIGTERM", shutdown);
-    // Assign before cleanup starts so SDK transport-close reentry observes the same owner promise.
-    closePromise = Promise.resolve().then(close);
     void closePromise.then(resolveClosed, resolveClosed);
   };
 

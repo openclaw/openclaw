@@ -78,7 +78,6 @@ export function createSettledFinalizationTestInput(
     getLifecycleGeneration: () => lifecycleGeneration,
     getParams: () => ({ ...runParams, sessionFile: "/tmp/session-settled.jsonl" }),
     globalLane: "settled-finalization-global",
-    sessionLane: "settled-finalization-session",
     initialQueuedLifecycleGeneration: lifecycleGeneration,
     setLifecycleGeneration: (value) => {
       lifecycleGeneration = value;

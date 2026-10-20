@@ -16,6 +16,7 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import {
+  composerContextWrapper,
   createComposerContainer,
   createComposerProps,
   resetComposerFixture,
@@ -149,10 +150,12 @@ async function createGatewaySurface(
   return { runtime, container, draw: settleRootContent };
 }
 
-afterEach(() => {
+afterEach(async () => {
   for (const dispose of mountedSurfaces.splice(0)) {
     dispose();
   }
+  // Standalone startup views load their panel registration while the splash is visible.
+  await vi.dynamicImportSettled();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -180,17 +183,27 @@ describe("Control UI Gateway target lineage", () => {
           pathname,
           pendingGatewayUrl,
         );
+        await vi.dynamicImportSettled();
+        await draw();
         const confirmations = container.querySelectorAll("openclaw-gateway-url-confirmation");
         expect(confirmations).toHaveLength(1);
-        const confirmation = confirmations[0] as HTMLElement & {
-          props: { pendingGatewayUrl: string; onConfirm(): void; onCancel(): void };
-        };
+        const confirmation = confirmations[0]!;
         expect(confirmation.closest("openclaw-tooltip-provider")).not.toBeNull();
-        expect(confirmation.props.pendingGatewayUrl).toBe(pendingGatewayUrl);
+        await vi.waitFor(() =>
+          expect(confirmation.querySelector(".gateway-switch__host--next code")?.textContent).toBe(
+            pendingGatewayUrl,
+          ),
+        );
         if (pathname.startsWith("/approve/")) {
           expect(container.querySelector("openclaw-approval-page")).toBeNull();
         }
-        confirmation.props[action]();
+        confirmation
+          .querySelector<HTMLButtonElement>(
+            action === "onConfirm"
+              ? ".gateway-switch__actions .primary"
+              : ".gateway-switch__actions .btn:not(.primary)",
+          )!
+          .click();
         await draw();
         expect(container.querySelector("openclaw-gateway-url-confirmation")).toBeNull();
         expect(
@@ -305,6 +318,7 @@ describe("Control UI Gateway target lineage", () => {
         });
         unmountComposer = mountSolid(() => createComponent(ChatComposer, props), {
           container: composer,
+          wrapper: composerContextWrapper(composer),
         }).unmount;
         flush();
         if (!sameOwner) {

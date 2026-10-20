@@ -175,7 +175,12 @@ export async function doctorCommand(
     exitCliAfterOutput(outputRuntime, hasError ? 1 : 0);
   }
   const doctorHealth = await import("../flows/doctor-health.js");
-  await doctorHealth.runDoctorHealthFlow(runtime, options, undefined, databasePreflight);
+  try {
+    await doctorHealth.runDoctorHealthFlow(runtime, options, undefined, databasePreflight);
+  } catch (error) {
+    const { diagnoseDoctorStateStorageFailure } = await import("./doctor-database-preflight.js");
+    throw diagnoseDoctorStateStorageFailure(error) ?? error;
+  }
 }
 
 async function maybeCreateSessionSqliteGithubIssue(

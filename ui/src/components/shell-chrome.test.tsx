@@ -1,8 +1,11 @@
 import { createSignal, flush, Show } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../app/navigation-surface.ts";
+import { RouteElements, type RouteElementEvent } from "../app/route-elements.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import "./app-topbar-solid.tsx";
 import type { GatewayStatusProps } from "./gateway-status.ts";
 import { MacosTitlebarControls } from "./macos-titlebar-controls.runtime-solid.tsx";
@@ -125,6 +128,45 @@ describe("Solid shell chrome", () => {
     flush();
     await topbar.updateComplete;
     expect(view.container.querySelector(".control-ui-environment-pill")).toBeNull();
+  });
+
+  it("releases topbar toggle registrations on repeated mount and unmount", async () => {
+    const elements = new RouteElements();
+    const [visible, setVisible] = createSignal(false);
+    const view = mountSolid(() => (
+      <Show when={visible()}>
+        <openclaw-app-topbar />
+      </Show>
+    ));
+    view.container.addEventListener("openclaw-route-element", (event) =>
+      elements.register(event as RouteElementEvent),
+    );
+    try {
+      for (let mount = 0; mount < 2; mount += 1) {
+        setVisible(true);
+        flush();
+        const topbar =
+          view.container.querySelector<SolidBridgeElement<object>>("openclaw-app-topbar")!;
+        await topbar.updateComplete;
+        const toggle = view.container.querySelector<HTMLButtonElement>(".topbar-nav-toggle")!;
+        await waitForSolid(() =>
+          expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([toggle]),
+        );
+        setVisible(false);
+        flush();
+        // Reconnect the retired node so isConnected filtering cannot hide a leaked registration.
+        view.container.append(toggle);
+        try {
+          await waitForSolid(() =>
+            expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([]),
+          );
+        } finally {
+          toggle.remove();
+        }
+      }
+    } finally {
+      view.unmount();
+    }
   });
 
   it("retains native history actions across the Settings takeover", () => {

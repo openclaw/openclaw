@@ -115,33 +115,73 @@ describe("AppSidebar catalog row lifecycle", () => {
     expect(row()?.style.getPropertyValue("--session-color")).toBe("");
   });
 
-  it.each(["open", "closed"])("keeps %s menu focus after row adoption", async (menuState) => {
-    const { sidebar, query, update } = await fixture({ sessionKey: undefined });
-    const trigger = query<HTMLButtonElement>("[data-catalog-session-menu]")!;
-    trigger.focus();
-    expect(document.activeElement).toBe(trigger);
-    if (menuState === "open") {
-      trigger.click();
-    }
-    await sidebar.updateComplete;
-    await update({ sessionKey: key });
-    await Promise.resolve();
-    await sidebar.updateComplete;
-    const adoptedMenu = query<HTMLAnchorElement>(
-      `[data-session-key="${key}"] .sidebar-recent-session__link`,
-    );
-    const popup = query<HTMLElement & { trigger?: HTMLElement }>("openclaw-catalog-session-menu");
-    if (menuState === "open") {
-      expect(popup).not.toBeNull();
-      expect(popup?.trigger).toBe(adoptedMenu);
-      popup?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  it.each(["open", "closed"])(
+    "keeps %s menu focus through row adoption and release",
+    async (menuState) => {
+      const { sidebar, query, update } = await fixture({ sessionKey: undefined });
+      const trigger = query<HTMLButtonElement>("[data-catalog-session-menu]")!;
+      trigger.focus();
+      expect(document.activeElement).toBe(trigger);
+      if (menuState === "open") {
+        trigger.click();
+      }
       await sidebar.updateComplete;
-    } else {
-      expect(popup).toBeNull();
-    }
-    expect(document.activeElement).toBe(adoptedMenu);
-  });
+      const originalPopup = query("openclaw-catalog-session-menu");
+      await update({ sessionKey: key });
+      await Promise.resolve();
+      await sidebar.updateComplete;
+      const adoptedMenu = query<HTMLAnchorElement>(
+        `[data-session-key="${key}"] .sidebar-recent-session__link`,
+      );
+      const popup = query<HTMLElement & { trigger?: HTMLElement }>("openclaw-catalog-session-menu");
+      if (menuState === "open") {
+        expect(popup).not.toBeNull();
+        expect(popup).toBe(originalPopup);
+        expect(popup?.trigger).toBe(adoptedMenu);
+        popup?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await sidebar.updateComplete;
+      } else {
+        expect(popup).toBeNull();
+      }
+      expect(document.activeElement).toBe(adoptedMenu);
+
+      if (menuState === "open") {
+        adoptedMenu!.dispatchEvent(
+          new MouseEvent("contextmenu", {
+            bubbles: true,
+            cancelable: true,
+            clientX: 20,
+            clientY: 30,
+          }),
+        );
+        await sidebar.updateComplete;
+      }
+      const adoptedPopup = query("openclaw-catalog-session-menu");
+      await update({ sessionKey: undefined });
+      await Promise.resolve();
+      await sidebar.updateComplete;
+      const releasedLink = query<HTMLAnchorElement>(
+        "[data-catalog-session-key] .sidebar-recent-session__link",
+      );
+      const releasedMenu = query<HTMLButtonElement>("[data-catalog-session-menu]");
+      expect(releasedLink).not.toBe(adoptedMenu);
+      if (menuState === "open") {
+        const releasedPopup = query<HTMLElement & { trigger?: HTMLElement }>(
+          "openclaw-catalog-session-menu",
+        );
+        expect(releasedPopup).toBe(adoptedPopup);
+        expect(releasedPopup?.trigger).toBe(releasedMenu);
+        releasedPopup?.querySelector<HTMLElement>('[role="menuitem"]')?.focus();
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+        await sidebar.updateComplete;
+        expect(document.activeElement).toBe(releasedMenu);
+      } else {
+        expect(query("openclaw-catalog-session-menu")).toBeNull();
+        expect(document.activeElement).toBe(releasedLink);
+      }
+    },
+  );
 
   it.each([
     { catalog: false, session: true, canRemove: false },

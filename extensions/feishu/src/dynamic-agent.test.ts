@@ -189,10 +189,12 @@ describe("maybeCreateDynamicAgent", () => {
     const { runtime } = createRuntime(cfg);
 
     const result = await createAgent(cfg, runtime, { accountId: "Ops Team" });
+    const agentId = result.updatedCfg.bindings?.[0]?.agentId ?? "";
 
     expect(result.created).toBe(true);
-    expect(result.agentId).toMatch(/^feishu-ops-team-[a-f0-9]{32}$/);
-    expect(result.updatedCfg.bindings).toEqual([binding(result.agentId!, "ops-team")]);
+    expect(agentId).toMatch(/^feishu-ops-team-[a-f0-9]{32}$/);
+    expect(result.updatedCfg.agents?.entries).toHaveProperty(agentId);
+    expect(result.updatedCfg.bindings).toEqual([binding(agentId, "ops-team")]);
   });
 
   it("keeps named-account dynamic agent ids bounded and sender-unique", async () => {
@@ -208,14 +210,16 @@ describe("maybeCreateDynamicAgent", () => {
       accountId,
       senderOpenId: "ou_sender_two_with_a_shared_long_prefix",
     });
+    const firstAgentId = first.updatedCfg.bindings?.[0]?.agentId ?? "";
+    const secondAgentId = second.updatedCfg.bindings?.at(-1)?.agentId ?? "";
 
-    expect(first.agentId).toHaveLength(52);
-    expect(second.agentId).toHaveLength(52);
-    expect(first.agentId).not.toBe(second.agentId);
+    expect(firstAgentId).toHaveLength(52);
+    expect(secondAgentId).toHaveLength(52);
+    expect(firstAgentId).not.toBe(secondAgentId);
     expect(Object.keys(second.updatedCfg.agents?.entries ?? {})).toEqual([
       "main",
-      first.agentId,
-      second.agentId,
+      firstAgentId,
+      secondAgentId,
     ]);
   });
 

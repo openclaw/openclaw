@@ -7,7 +7,7 @@ import "../../../styles/chat.ts";
 import { ActivityGroup, MessageGroup } from "./chat-message-group-view.tsx";
 import { WorkGroupSummary } from "./chat-message-stream-view.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
-import { ChatToolRawOutput } from "./chat-tool-content.solid.tsx";
+import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -120,7 +120,9 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
         ) : kind === "tool-output" ? (
           <MessageGroup group={output} options={options()} />
         ) : (
-          <ChatToolRawOutput text="Copyable output" />
+          <openclaw-chat-tool-raw>
+            <RawOutputToggle text="Copyable output" />
+          </openclaw-chat-tool-raw>
         );
       }
       const view = mountSolid(Disclosure, { expanded }, container);
@@ -170,7 +172,9 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
             }}
             options={{ showReasoning: false }}
           />
-          <ChatToolRawOutput text="Copyable output" />
+          <openclaw-chat-tool-raw>
+            <RawOutputToggle text="Copyable output" />
+          </openclaw-chat-tool-raw>
         </>
       ),
       { container },

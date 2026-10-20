@@ -14,23 +14,21 @@ import {
   getFollowupQueueDepth,
   scheduleFollowupDrain,
 } from "../../auto-reply/reply/queue.js";
-import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
 import { resetRecentQueuedMessageIdDedupe } from "../../auto-reply/reply/queue/recent-message-ids.test-support.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import type { ReplyOperationRunState } from "../../auto-reply/reply/reply-operation-run-state.js";
-import type { ReplyBackendHandle } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
-import { testing as replyRunTesting } from "../../auto-reply/reply/reply-run-registry.test-support.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { createMockFollowupRun } from "../../auto-reply/reply/test-helpers.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { testing as replyRunTesting } from "../../sessions/session-controller.test-support.js";
 import type { EmbeddedAgentQueueHandle } from "../embedded-agent-runner/run-state.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
 import {
-  clearActiveEmbeddedRun,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-  setActiveEmbeddedRun,
-} from "../embedded-agent-runner/runs.js";
-import { testing as embeddedRunsTesting } from "../embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  testing as embeddedRunsTesting,
+  steerTestSessionTurn,
+} from "../embedded-agent-runner/runs.test-support.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -40,7 +38,7 @@ import {
 } from "./agent-session-loop-correctness.test-support.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import type { AgentSession } from "./agent-session.js";
-import type { ToolDefinition } from "./extensions/types.js";
+import type { ExtensionFactory, ToolDefinition } from "./extensions/types.js";
 
 registerAgentSessionLoopTestLifecycle();
 
@@ -64,12 +62,12 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
   const steerReturned = createDeferred();
   const ownerReleased = createDeferred();
   embeddedRunsTesting.resetActiveEmbeddedRuns();
-  replyRunTesting.resetReplyRunRegistry();
+  replyRunTesting.resetSessionControllerForTest();
   resetRecentQueuedMessageIdDedupe();
   const steerEnqueued = createDeferred();
-  const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>([
-    ["agent_settled", [async () => settled()]],
-  ]);
+  const handlers: ExtensionFactory = (api) => {
+    api.on("agent_settled", async () => settled());
+  };
   const yieldTool: ToolDefinition = {
     name: "yield_turn",
     label: "Yield turn",
@@ -105,12 +103,12 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
   });
   const { session } = await createTestSession({
     customTools: [yieldTool],
-    resourceLoader: createResourceLoader(handlers),
+    resourceLoader: await createResourceLoader(handlers),
   });
   const lifecycleEvents: string[] = [];
   session.subscribe((event) => {
     lifecycleEvents.push(event.type);
-    if (event.type === "queue_update" && event.steering.includes(steerText)) {
+    if (event.type === "queue_update" && session.getSteeringMessages().includes(steerText)) {
       steerEnqueued.resolve();
     }
   });
@@ -123,14 +121,28 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
       steerReturned.resolve();
     },
   };
-  const queueMessage: EmbeddedAgentQueueHandle["queueMessage"] = async (text, options) =>
-    await steerActiveSessionWithOptionalDeliveryWait(delayedSteerTarget, text, {
-      ...options,
-      onQueueAccepted: (accepted) => {
-        acceptanceEvents.push(accepted);
-        options?.onQueueAccepted?.(accepted);
+  const queueMessage = async (
+    text: string,
+    options: Parameters<EmbeddedAgentQueueHandle["queueMessage"]>[1],
+    assertCurrent?: () => void,
+  ) =>
+    await steerActiveSessionWithOptionalDeliveryWait(
+      delayedSteerTarget,
+      text,
+      {
+        ...options,
+        onQueueAccepted: (accepted) => {
+          acceptanceEvents.push(accepted);
+          options?.onQueueAccepted?.(accepted);
+        },
       },
-    });
+      queueKey,
+      assertCurrent &&
+        (() => {
+          assertCurrent();
+          return true;
+        }),
+    );
   const followupRun = createMockFollowupRun({
     prompt: steerText,
     messageId: "handoff-proof-message",
@@ -143,7 +155,12 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
       onAbandoned: abandoned,
       onSettled: lifecycleSettled,
     },
-    run: { sessionId, sessionKey: queueKey, messageProvider: "telegram" },
+    run: {
+      sessionId,
+      sessionKey: queueKey,
+      messageProvider: "telegram",
+      senderId: "handoff-requester",
+    },
   });
   const activeOperation = createReplyOperation({
     sessionKey: queueKey,
@@ -161,7 +178,11 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     runId: "handoff-proof-active-run",
     toolAuthorityFingerprint,
     queueMessage,
-    messageInjection: { isAvailable: () => session.isStreaming, queueMessage },
+    messageInjectionV2: {
+      version: 2,
+      isAvailable: () => session.isStreaming,
+      queueMessage,
+    },
     isStreaming: () => session.isStreaming,
     isStopped: () => !session.isStreaming,
     isCompacting: () => false,
@@ -170,36 +191,19 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     cancel: () => {},
     abort: () => {},
   };
-  const replyBackend: ReplyBackendHandle = {
-    kind: "embedded",
-    runId: queueHandle.runId,
-    toolAuthorityFingerprint,
-    supportsQueueMessageImages: true,
-    messageInjection: {
-      isAvailable: () => true,
-      queueMessage: async (text, options) => {
-        const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, text, options);
-        if (!outcome.queued) {
-          throw new Error(outcome.errorMessage ?? outcome.reason);
-        }
-        return outcome.transcriptCommit === "unconfirmed"
-          ? {
-              transcriptCommit: outcome.transcriptCommit,
-              errorMessage: outcome.errorMessage ?? "transcript commitment unconfirmed",
-            }
-          : undefined;
-      },
-    },
-    cancel: () => {},
-  };
   const runState: ReplyOperationRunState = {};
   const runFollowup = async (queued: typeof followupRun) => {
     await ownerReleased.promise;
+    const mailboxClaim = queued.controllerInput?.claim;
+    if (!mailboxClaim) {
+      throw new Error("follow-up has no selected controller mailbox claim");
+    }
     const followupOperation = createReplyOperation({
       sessionKey: queueKey,
       sessionId,
       turnKind: "queued_followup",
       resetTriggered: false,
+      mailboxClaim,
     });
     followupOperation.setPhase("running");
     followupOperations.push(followupOperation.turnKind);
@@ -224,7 +228,6 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
   });
 
   try {
-    activeOperation.attachBackend(replyBackend);
     setActiveEmbeddedRun(sessionId, queueHandle, queueKey);
 
     const initialPrompt = session.prompt("yield now");
@@ -250,17 +253,22 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     expect(followupRuns).toEqual([]);
     expect(session.pendingMessageCount).toBe(0);
     expect(session.getSteeringMessages()).toEqual([]);
-    expect(runState.admission).toEqual({ status: "accepted", mode: "followup" });
+    expect(runState.admission).toEqual({
+      status: "accepted",
+      mode: "followup",
+      reason: "steering-unavailable",
+    });
     expect(settled).not.toHaveBeenCalled();
     expect(lifecycleEvents).toContain("agent_handoff");
     expect(lifecycleEvents).not.toContain("agent_settled");
 
     clearActiveEmbeddedRun(sessionId, queueHandle, queueKey);
     await expect(
-      queueEmbeddedAgentMessageWithOutcomeAsync(sessionId, "stale owner probe", {
-        waitForTranscriptCommit: true,
-      }),
-    ).resolves.toMatchObject({ queued: false, reason: "transcript_commit_wait_unsupported" });
+      steerTestSessionTurn(sessionId, "stale owner probe", { waitForTranscriptCommit: true }),
+    ).resolves.toMatchObject({
+      status: "rejected",
+      reason: "injection_unavailable",
+    });
     activeOperation.complete();
     ownerReleased.resolve();
     await vi.waitFor(() => expect(finalDelivery).toHaveBeenCalledExactlyOnceWith(finalText));
@@ -302,9 +310,8 @@ it("cancels a pending-acceptance steer before one follow-up reuses the session",
     activeOperation.complete();
     clearActiveEmbeddedRun(sessionId, queueHandle, queueKey);
     clearFollowupQueue(queueKey);
-    clearFollowupDrainCallback(queueKey);
     embeddedRunsTesting.resetActiveEmbeddedRuns();
-    replyRunTesting.resetReplyRunRegistry();
+    replyRunTesting.resetSessionControllerForTest();
     resetRecentQueuedMessageIdDedupe();
     session.agent.clearAllQueues();
   }

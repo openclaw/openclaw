@@ -326,12 +326,12 @@ beforeEach(() => {
   }));
   mocks.updateConfig.mockImplementation(
     async (
-      mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+      mutator: (cfg: OpenClawConfig) => OpenClawConfig | Promise<OpenClawConfig>,
       _selectModelRefs: unknown,
       beforeCommit?: ConfigWriteOptions["beforeCommit"],
       writeOptions?: ConfigWriteOptions,
     ) => {
-      const nextConfig = mutator(currentConfig);
+      const nextConfig = await mutator(currentConfig);
       await beforeCommit?.();
       writeOptions?.assertCurrent?.();
       lastUpdatedConfig = nextConfig;

@@ -15,6 +15,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as updateStartup from "../../infra/update-startup.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import * as bundledStamp from "../../model-catalog/bundled-catalog-stamp.js";
 import * as pricing from "../../model-catalog/pricing.js";
 import { setRemoteModelCatalogOverlaySourcesForTest } from "../../model-catalog/remote-overlay.test-support.js";
 import { refreshRemoteModelCatalog } from "../../model-catalog/remote-refresh.js";
@@ -138,8 +139,8 @@ it.for([1, 2])(
       const token = "remote-catalog-gateway-fixture-token";
       const catalogConfig = { models: { catalogRefresh: { url: `${baseUrl}/catalog.json` } } };
       const bundledGeneratedAt = () => generatedAt - 1;
-      const refresh = () =>
-        refreshRemoteModelCatalog({ config: catalogConfig, force: true, bundledGeneratedAt });
+      vi.spyOn(bundledStamp, "bundledCatalogGeneratedAt").mockImplementation(bundledGeneratedAt);
+      const refresh = () => refreshRemoteModelCatalog({ config: catalogConfig, force: true });
       const cfg = {
         ...catalogConfig,
         agents: catalogAgents(state, { model: { primary: "kimi/remote-first" } }),

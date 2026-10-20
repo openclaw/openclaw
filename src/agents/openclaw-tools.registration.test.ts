@@ -592,6 +592,11 @@ describe("gateway client capability tool filtering", () => {
       expect(Value.Check(tool.parameters, { action: "publish" })).toBe(publishing && actions);
       expect(Value.Check(tool.parameters, { action: "refresh_base" })).toBe(publishing);
       expect(Value.Check(tool.parameters, { action: "edit" })).toBe(publishing);
+      expect(Value.Check(tool.parameters, { action: "ready" })).toBe(publishing || actions);
+      expect(
+        Value.Check(tool.parameters, { action: "ready", publishingSessionKey: "agent:main:child" }),
+      ).toBe(actions);
+      expect(Value.Check(tool.parameters, { action: "upload_evidence" })).toBe(publishing);
       if (!publishing) {
         expect(tool.description).toContain("cannot publish its own workspace");
       } else if (!actions) {
@@ -599,12 +604,14 @@ describe("gateway client capability tool filtering", () => {
           action: expect.any(Object),
           conflictsResolved: expect.any(Object),
           baseCommit: expect.any(Object),
+          draft: expect.any(Object),
           title: expect.any(Object),
           body: expect.any(Object),
           requestId: expect.any(Object),
           expectedHeadCommit: expect.any(Object),
           expectedTitle: expect.any(Object),
           expectedBody: expect.any(Object),
+          evidence: expect.any(Object),
         });
         expect(tool.parameters).toHaveProperty("additionalProperties", false);
         expect(tool.description).not.toContain("use inspect");

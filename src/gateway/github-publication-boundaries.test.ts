@@ -599,30 +599,43 @@ describe("Gateway GitHub publication boundaries", () => {
     ]);
   });
 
-  it("defers an orphaned turn request and publishes it when the workspace is quiescent", async () => {
-    const { database, placements, claim: claimTurn } = await cloudFixture();
-    const claim = await claimTurn("run-orphan", "claim-orphan");
-    const coordinator = createTestGitHubPublicationCoordinator({ placements });
-    const accepted = await coordinator.requestForClaimV2({
-      claim,
-      ...cloudRequest("publish-orphan"),
-    });
-    await placements.releaseTurn(claim);
+  it.each(["local", "worker"] as const)(
+    "keeps a live %s request until its turn ends, then publishes it when quiescent",
+    async (owner) => {
+      const fixture = owner === "worker" ? await cloudFixture() : undefined;
+      const database = fixture?.database ?? localDatabase();
+      const placements = fixture?.placements ?? createWorkerSessionPlacementStore({ database });
+      const claim = fixture
+        ? await fixture.claim("run-orphan", "claim-orphan")
+        : await localClaim(placements, "orphan");
+      const coordinator = createTestGitHubPublicationCoordinator({ placements });
+      const accepted = await coordinator.requestForClaimV2({
+        claim,
+        ...(owner === "worker" ? cloudRequest("publish-orphan") : sessionRequest("publish-orphan")),
+      });
+      await coordinator.deferOrphanedRequestsAsync();
+      expect(receipt(database, accepted.requestId)?.claim_id).toBe(claim.claimId);
+      await placements.releaseTurn(claim);
 
-    expect(await coordinator.deferOrphanedRequestsAsync()).toBeUndefined();
-    expect(receipt(database, accepted.requestId)?.claim_id).toBeNull();
+      expect(await coordinator.deferOrphanedRequestsAsync()).toBeUndefined();
+      expect(receipt(database, accepted.requestId)?.claim_id).toBeNull();
 
-    expect(await coordinator.readAsync(accepted.requestId)).toMatchObject({ status: "requested" });
-    expect(await coordinator.listUnreportedResultsAsync()).toEqual([]);
-    expect(commands).toEqual([]);
+      expect(await coordinator.readAsync(accepted.requestId)).toMatchObject({
+        status: "requested",
+      });
+      expect(await coordinator.listUnreportedResultsAsync()).toEqual([]);
+      expect(commands).toEqual([]);
 
-    await coordinator.resumeSessionRequests();
+      await coordinator.resumeSessionRequests();
 
-    expect(await coordinator.readAsync(accepted.requestId)).toMatchObject({ status: "published" });
-    expect(await coordinator.listUnreportedResultsAsync()).toEqual([
-      expect.objectContaining({ result: expect.objectContaining({ status: "published" }) }),
-    ]);
-  });
+      expect(await coordinator.readAsync(accepted.requestId)).toMatchObject({
+        status: "published",
+      });
+      expect(await coordinator.listUnreportedResultsAsync()).toEqual([
+        expect.objectContaining({ result: expect.objectContaining({ status: "published" }) }),
+      ]);
+    },
+  );
 
   it("defers snapshot preparation failures without blocking workspace acceptance", async () => {
     const { database, placements, claim: claimTurn } = await cloudFixture();

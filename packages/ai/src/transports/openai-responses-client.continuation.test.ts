@@ -235,9 +235,12 @@ describe("native OpenAI Responses SSE continuation", () => {
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     cleanupSessionResources();
     configureAiTransportHost(initialHost);
+    if (vi.isFakeTimers()) {
+      await vi.runAllTimersAsync();
+    }
     vi.useRealTimers();
   });
 

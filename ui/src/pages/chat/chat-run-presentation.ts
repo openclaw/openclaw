@@ -23,7 +23,7 @@ const RUN_FIELDS = [
 
 type RunField = (typeof RUN_FIELDS)[number];
 type ChatRunFields<T> = Partial<Pick<T, Extract<RunField, keyof T>>>;
-export type ChatRunPublication = "immediate" | "animation-frame";
+type ChatRunPublication = "immediate" | "animation-frame";
 
 const presentations = new WeakMap<object, ChatRunPresentation<object>>();
 
@@ -121,15 +121,11 @@ class ChatRunPresentation<T extends object> {
       }
       return;
     }
-    this.clearFrame();
+    this.cancelFrame();
     this.notify();
   }
 
   cancelFrame(): void {
-    this.clearFrame();
-  }
-
-  private clearFrame(): void {
     if (this.frame !== null) {
       globalThis.cancelAnimationFrame?.(this.frame);
       this.frame = null;

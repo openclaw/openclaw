@@ -1,4 +1,4 @@
-import { expect, it, onTestFinished } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { createSessionActivityNoteState } from "../agents/session-activity-notes.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -16,6 +16,8 @@ import {
   type SessionObserverState,
 } from "./session-observer-model.js";
 import { createSessionObserverDigestPersister } from "./session-observer-persistence.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const scope = { agentId: "main", sessionKey: "agent:main:session-1" };
 const sessionId = "session-1";
@@ -148,8 +150,8 @@ it("publishes a live/preamble persist", () =>
   withStore(async ({ seed }) => {
     await seed();
     const changes = observeRows();
+    vi.spyOn(Date, "now").mockReturnValue(0);
     const persist = createSessionObserverDigestPersister({
-      now: () => 0,
       persistDigest: defaultPersistDigest,
       stillCurrent: () => () => true,
       onMissingEntry: () => {},
@@ -163,11 +165,11 @@ it("publishes terminal-digest synthesis through the same seam", () =>
   withStore(async ({ seed, read }) => {
     await seed();
     const changes = observeRows();
+    vi.spyOn(Date, "now").mockReturnValue(1);
     const terminal = await synthesizeSessionObserverTerminalDigest({
       source: { state: observerState({ previousDigest: digest(1), terminalHealth: "done" }) },
       readSession: read,
       persistDigest: defaultPersistDigest,
-      now: () => 1,
     });
     expect(terminal?.health).toBe("done");
     expect(changes).toContainEqual(expect.objectContaining(scope));

@@ -3,8 +3,11 @@
 import { useSubagentControlFixture } from "./subagent-control.test-support.js";
 import { expect, it, vi } from "vitest";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import {
+  clearTestEmbeddedRun as detachActiveEmbeddedRun,
+  registerTestEmbeddedRun as attachActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../embedded-agent-runner/runs.test-support.js";
 import { killSubagentRunAdmin } from "./subagent-control.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import {
@@ -93,8 +96,19 @@ it.each([
     const executionSessionId = expectedKey ? current : (expected ?? current);
     const abort = vi.fn();
     const handle = createEmbeddedRunHandle({ runId, abort });
-    abort.mockImplementation(() => clearActiveEmbeddedRun(executionSessionId, handle, sessionKey));
-    setActiveEmbeddedRun(executionSessionId, handle, sessionKey, undefined, "main");
+    abort.mockImplementation(() => detachActiveEmbeddedRun(executionSessionId, handle, sessionKey));
+    attachActiveEmbeddedRun(
+      executionSessionId,
+      handle,
+      sessionKey,
+      undefined,
+      "main",
+      undefined,
+      undefined,
+      {
+        storeScope: storePath,
+      },
+    );
     try {
       const result = await killSubagentRunAdmin({
         cfg: { session: { store: storePath } },
@@ -119,7 +133,7 @@ it.each([
       expect(loadSessionEntry(scope)).toEqual(sessionBefore);
       expect(fixture.cleanup).not.toHaveBeenCalled();
     } finally {
-      clearActiveEmbeddedRun(executionSessionId, handle, sessionKey);
+      detachActiveEmbeddedRun(executionSessionId, handle, sessionKey);
     }
   },
 );

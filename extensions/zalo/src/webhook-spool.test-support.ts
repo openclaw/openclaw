@@ -7,7 +7,7 @@ import type { zaloWebhookIngressRuntime } from "./webhook-spool.js";
 type CreateZaloWebhookIngress = (typeof zaloWebhookIngressRuntime)["createZaloWebhookIngress"];
 
 type ZaloWebhookTestQueue = NonNullable<Parameters<CreateZaloWebhookIngress>[0]["queue"]>;
-export type ZaloWebhookTestPayload = Parameters<ZaloWebhookTestQueue["enqueue"]>[1];
+type ZaloWebhookTestPayload = Parameters<ZaloWebhookTestQueue["enqueue"]>[1];
 
 export function createZaloWebhookTestEvent(params?: {
   messageId?: string;

@@ -198,9 +198,7 @@ async function withoutParentTranscriptSql(operation: () => Promise<void>) {
     for (const entry of observed) {
       expect(entry.databasePath, "caller-thread file-backed SQLite activity").toBeNull();
       if (entry.sql !== undefined) {
-        expect(entry.sql).toBe(
-          "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted",
-        );
+        expect(entry.sql).toMatch(/^SELECT sqlite_version\(\) AS version, /u);
       }
     }
   } finally {

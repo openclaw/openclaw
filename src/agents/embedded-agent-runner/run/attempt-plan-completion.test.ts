@@ -1,10 +1,11 @@
 import { Type } from "typebox";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ProgressCardPutResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import type { Context, Model } from "../../../llm/types.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
+import { createReplyOperation, type ReplyOperation } from "../../../sessions/session-controller.js";
 import { createOpenClawCodingToolsInternal } from "../../agent-tools.js";
 import {
   createAssistant,
@@ -16,18 +17,27 @@ import {
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import * as gatewayTool from "../../tools/in-process-gateway.js";
 import { createProgressCardTool } from "../../tools/progress-card-tool.js";
-import { clearActiveEmbeddedRun } from "../runs.js";
+import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "../runs.test-support.js";
 import { prepareCatalogExecutor } from "./attempt-stream-prepare.test-support.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 
 registerAgentSessionLoopTestLifecycle();
 const streams: ReturnType<typeof prepareCatalogExecutor>[] = [];
+let replyOperation: ReplyOperation;
+beforeEach(() => {
+  replyOperation = createReplyOperation({
+    sessionId: "session-output-schema",
+    sessionKey: "agent:main:main",
+    resetTriggered: false,
+  });
+});
 afterEach(() => {
   for (const stream of streams.splice(0)) {
     stream.subscription.unsubscribe();
     clearActiveEmbeddedRun("session-output-schema", stream.queueHandle, "agent:main:main");
   }
+  replyOperation.complete();
   vi.restoreAllMocks();
 });
 
@@ -116,6 +126,7 @@ it.each([
     const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
     const attempt = { completionCheck };
     const prepared = prepareCatalogExecutor({
+      replyOperation,
       activeSession: session,
       attempt,
       onAgentEvent: (event) => events.push(event),
@@ -230,7 +241,11 @@ it("keeps a reply that already reports the blocker as the only reply after the c
     },
   });
   const { session } = await createTestSession({ customTools: [progress] });
-  const prepared = prepareCatalogExecutor({ activeSession: session, attempt: { completionCheck } });
+  const prepared = prepareCatalogExecutor({
+    activeSession: session,
+    attempt: { completionCheck },
+    replyOperation,
+  });
   streams.push(prepared);
   const answer = "Files: big.log (9 KB), notes.md (1 KB). May I delete big.log?";
   let requests = 0;
@@ -335,6 +350,7 @@ it.each([
   });
   const { session } = await createTestSession({ customTools: [progress] });
   const prepared = prepareCatalogExecutor({
+    replyOperation,
     activeSession: session,
     attempt: {
       completionCheck,
@@ -425,6 +441,7 @@ it.each([
         )
       : undefined;
   const prepared = prepareCatalogExecutor({
+    replyOperation,
     activeSession: session,
     hookRunner,
     runAbortController: controller,

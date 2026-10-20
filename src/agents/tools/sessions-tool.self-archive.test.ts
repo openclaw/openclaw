@@ -8,7 +8,7 @@ import {
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import * as inProcessGateway from "./in-process-gateway.js";
@@ -29,7 +29,7 @@ const patchRequest = (key: string, params: Record<string, unknown>) => ({
 });
 const archive = (tool: ReturnType<typeof createSessionsTool>, id: string, settings = {}) =>
   tool.execute(id, { action: "patch", archived: true, ...settings });
-type Admission = Awaited<ReturnType<typeof beginSessionWorkAdmission>>;
+type Admission = Awaited<ReturnType<typeof beginSessionEffect>>;
 async function withAdmission<T>(admission: Admission, run: () => Promise<T>) {
   try {
     return await admission.run(run);
@@ -61,7 +61,7 @@ async function createArchiveSession(name: string, sessionId = `session-${name}`)
         callGateway,
       }),
     beginAdmission: (id = sessionId) =>
-      beginSessionWorkAdmission({
+      beginSessionEffect({
         scope: storePath,
         identities: [sessionKey, id],
         assertAllowed: () => {},

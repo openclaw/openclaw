@@ -95,8 +95,8 @@ or result delivery fails; recovery reconciles through its original owner instead
 of repeating the write. See
 [committed facts and completeness](/reference/database-schemas/worker-access#committed-facts-and-completeness).
 
-SQLite remains the supported default. The experimental PostgreSQL adapter
-supports remote persistence for one Gateway;
+SQLite remains the default. PostgreSQL supports remote persistence for one
+Gateway on the [qualified runtime](/gateway/postgresql#support-matrix);
 multiple active Gateways would require a separate ownership and coordination
 design. A shared database alone does not make process-local writer queues,
 session lifecycles, or host-owned leases safe across Gateway instances.
@@ -225,12 +225,15 @@ SQLite primitive owners listed in `SQLITE_PRIMITIVE_OWNERS` may grow engine-main
 The lexical gate examines `.sql` files minus comments, all static parts of templates whose tag's final identifier ends in `sql` (case-insensitive), strings and untagged templates starting after whitespace and `(` with an uppercase SQL statement keyword, and the `orReplace`/`orIgnore`/`orAbort`/`orFail`/`orRollback` method calls; construct regexes remain case-insensitive, exclude SQL double-quoted text, require `name(` for functions, and require `PRAGMA <name>` or `pragma_<name>(` for `data_version`/`schema_version`/`user_version`.
 Prose, fragments without a statement prefix, and substitutions are ignored, accepting under-counts for assembled SQL; both revisions use identical rules without type, symbol, import, or SQL token-role analysis, and runtime behavior and schemas are unchanged.
 
-### Experimental PostgreSQL engine (workboard pilot)
+<a id="experimental-postgresql-engine-workboard-pilot" />
+
+### PostgreSQL engine
 
 `database.engine: "postgres"` selects PostgreSQL for every store with a registered
-PostgreSQL schema; workboard is currently the only supported store. Doctor
-reports each store's engine and warns about stores that remain on SQLite.
-See [Database engines (experimental)](/reference/database-engines) for SecretRef
+PostgreSQL schema: state, agent, Workboard, Logbook and Team Reports. Doctor
+reports configured and observed engines and warns about mismatches and missing
+capabilities. Local safety stores remain SQLite by design.
+See [Database engines](/reference/database-engines) for SecretRef
 configuration, isolation and durability, matched anchor/schema backups,
 limitations, and engine-boundary observation. Missing secrets, connection failures,
 and admission errors never fall back to SQLite. Existing SQLite workboard data
@@ -788,6 +791,31 @@ Eligible terminal session-state events share the row transaction. Unknown write
 outcomes fence affected rows until restoration from the store; they never authorize replay.
 The digest requires no new column, schema migration, or updater behavior, and also
 detects writes from older processes that cannot maintain a new revision column.
+
+Private requester-settle wakes retain `privateInput` (the dispatch run ID and raw
+prompt) inside their existing `subagent_runs.payload_json` wake state before
+Gateway dispatch. The same row transition owns retries; this adds no table,
+column, index, schema version, or scheduler. Accepted input can be transformed by
+transcript hooks or reduced to a hash/outcome receipt, so it cannot reconstruct
+the original raw request. Later descendant delivery and findings updates must
+not change that request under its existing idempotency key.
+
+The field is optional and needs no backfill. Wakes already dispatched by an older
+build retain their existing strict input comparison: if the original raw prompt
+cannot be reconstructed, a mismatch remains a refusal, never permission to
+replace accepted input. Older builds ignore the field and may discard it when
+writing wake state; rollback therefore loses this retry guarantee without
+changing transcript bytes or requiring reverse migration. Upgrading again
+cannot recover raw bytes already discarded by an older writer.
+
+The prompt has the same private scope as the existing child findings. It is
+retained only with the pending wake, removed when the wake settles or is
+cancelled, and cleared when its retry identity resets. New yield generations
+replace the wake. Each member of a frozen batch retains the shared wake value,
+so temporary storage grows with prompt size times the number of batch members;
+there is no extra payload read or write transaction. Registry deletion removes
+it with the row. Current requester, cohort, store, and execution authority still
+revalidate before dispatch; the saved prompt grants no authority.
 
 An ordinary follow-up to a completed child creates a new task and execution while
 retaining the completed row's pending parent delivery and receipt. The same row
@@ -1789,6 +1817,14 @@ and lease cleanup; explicit shutdown, deletion, quarantine, and replacement keep
 their existing close and revocation paths. Reuse preserves read admission and
 owning-writer invalidation, without changing schemas, stored retention, or update
 behavior. The idle window is an internal constant, not a configuration option.
+
+Agent database handles and executors hold a lease that Doctor maintenance waits
+for, and no owner can tell an idle holder in another process that an update is
+waiting. CLI processes therefore retire an unused agent handle, executor, or
+session reclamation Worker 30 seconds after its last use; the Gateway (including
+the bare `openclaw` TUI entry) and embedders that install no process role keep
+the 30-minute window. Borrowed handles, open transactions, and an executor's
+pinned Worker handle keep their lease until the work settles.
 
 Explicit artifact-preserving inspections, private snapshots, and extension-enabled or nested
 transaction reads retain their isolated connection and cleanup contracts.

@@ -1,4 +1,4 @@
-import { For, createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { For, createEffect, createSignal, onCleanup } from "solid-js";
 import type {
   PluginCredentialDescriptor,
   PluginCredentialInspection,
@@ -67,6 +67,7 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
   let active = true;
   let pending = false;
   let literalInput: HTMLInputElement | undefined;
+  let referenceSourceSelect: HTMLSelectElement | undefined;
 
   // Reinspect the Gateway credential when its field, revision, or connection changes.
   createEffect(
@@ -98,9 +99,11 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         next.field !== previous?.field ||
         (next.connected && !next.canInspect);
       // Snapshot this revision's editing intent and error copy; neither retriggers inspection.
-      const [wasOpen, wasSaving, staleMessage] = untrack(
-        () => [dialogOpen(), saving(), t("pluginsPage.credentials.stale")] as const,
-      );
+      const [wasOpen, wasSaving, staleMessage] = [
+        dialogOpen(),
+        saving(),
+        t("pluginsPage.credentials.stale"),
+      ] as const;
       setRevealed(false);
       // Other settings can advance the revision before this field's blur commit.
       // Only retiring the field's identity or access may discard its uncommitted key.
@@ -447,6 +450,9 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         ) : null}
         {dialogOpen() ? (
           <openclaw-modal-dialog
+            prop:initialFocus={() =>
+              referenceSourceSelect?.isConnected ? referenceSourceSelect : null
+            }
             ref={(dialog) => dialog.setReturnFocusTarget(referenceTrigger)}
             label={`${t("pluginsPage.credentials.referenceTitle")}: ${props.descriptor.label}`}
             onModal-cancel={(event: Event) => {
@@ -464,6 +470,9 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
                   <label>
                     {t("pluginsPage.credentials.source")}
                     <select
+                      ref={(element) => {
+                        referenceSourceSelect = element;
+                      }}
                       autofocus
                       class="settings-input"
                       aria-label={t("pluginsPage.credentials.source")}

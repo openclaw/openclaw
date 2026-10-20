@@ -4,7 +4,6 @@ export const MENTION_INBOX_COMPAT_RECORD = {
   code: "mention-inbox-sync-persistence",
   status: "deprecated",
   owner: "sdk",
-  introduced: "2026-10-03",
   deprecated: "2026-10-03",
   warningStarts: "2026-10-03",
   removalGate: "stable-deprecation-period",
@@ -21,13 +20,4 @@ export const MENTION_INBOX_COMPAT_RECORD = {
   diagnostics: [
     "TypeScript @deprecated annotations, explicit migration-directed rejection, and one DEP_SESSION_PERSISTENCE warning per plugin and capability family per process; unscoped callers share one SDK-level family warning",
   ],
-  tests: [
-    "src/plugins/compat/registry.test.ts",
-    "src/plugins/compat/mention-inbox-deprecation.test.ts",
-    "test/type-contracts/gateway-mention-inbox-compat.ts",
-    "src/gateway/mention-inbox.test.ts",
-    "src/gateway/mention-inbox.compat.test.ts",
-  ],
-  releaseNote:
-    "Mention Inbox reads, dismissals, recording, and invalidation expose awaited worker-backed methods. Synchronous list/dismiss return UNAVAILABLE and invalidate throws with awaited migration guidance. Legacy recording queues the worker operation after an enclosing commit; await recordCommittedInputAsync for completion. Their TypeScript signatures remain deprecated until an announced later ordinary stable release; stored data, retention, and update behavior are unchanged.",
 } as const satisfies PluginCompatRecord;

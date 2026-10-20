@@ -1,6 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import "../components/sidebar-attention.tsx";
-import "../components/sidebar-update-card.tsx";
 import "../styles.css";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { FloatingUpdateCard } from "./navigation-surface-view.tsx";
@@ -52,16 +51,14 @@ describe.skipIf(!hasBrowserLayout)("navigation surface browser layout", () => {
       </div>
     ));
 
-    const refreshCardHost = document.querySelector<
-      HTMLElement & { updateComplete: Promise<boolean> }
-    >("openclaw-sidebar-update-card");
+    await vi.waitFor(() => expect(document.querySelector(".sidebar-update-card")).not.toBeNull());
+    const refreshCardHost = document.querySelector("openclaw-sidebar-update-card");
     const attentionHost = document.querySelector<
       HTMLElement & { updateComplete: Promise<boolean> }
     >("openclaw-sidebar-attention");
     await attentionHost?.updateComplete;
     expect(attentionHost).not.toBeNull();
     expect(attentionHost?.querySelector(".sidebar-issues-button")).toBeNull();
-    await refreshCardHost?.updateComplete;
     const refreshCard = refreshCardHost?.querySelector<HTMLElement>(".sidebar-update-card");
     const buttons = Array.from(
       document.querySelectorAll<HTMLElement>(".shell-chrome-controls__button"),

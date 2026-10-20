@@ -52,7 +52,7 @@ describe("command palette input", () => {
       clientHeight: { configurable: true, get: () => Number.parseFloat(input.style.height) || 24 },
     });
     await vi.advanceTimersByTimeAsync(20);
-    expect(observe).toHaveBeenCalledWith(entry);
+    expect(observe.mock.calls.map(([target]) => target)).toContain(entry);
     expect(inputRef).toHaveBeenCalledWith(input);
 
     contentHeight = 48;
@@ -81,6 +81,23 @@ describe("command palette input", () => {
     notifyResize();
     await vi.advanceTimersByTimeAsync(20);
     expect(input.style.height).toBe("48px");
+
+    contentHeight = 144;
+    input.focus();
+    input.value = "Line one\nLine two\nLine three\nLine four";
+    input.setSelectionRange(input.value.length, input.value.length);
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(input.style.height).toBe("72px");
+    expect(input.scrollTop).toBe(144);
+    flush();
+    measureContent.mockClear();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(measureContent).not.toHaveBeenCalled();
+
+    input.scrollTop = 16;
+    notifyResize();
+    await vi.advanceTimersByTimeAsync(20);
+    expect(input.scrollTop).toBe(16);
 
     const initialHeight = input.style.height;
     const initialEntryAttributes = entry

@@ -1,5 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { createMemo, createStore, onCleanup, untrack } from "solid-js";
+import { createMemo, createStore, onCleanup } from "solid-js";
 import {
   BOARD_GRID_COLUMNS,
   BOARD_GRID_GAP,
@@ -15,10 +15,15 @@ import {
 import type { BoardOp, BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardViewCallbacks, BoardWidgetFrameUrl } from "../../lib/board/view-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { orderedBoardTabs } from "./board-tabs.tsx";
 import type { BoardWidgetCellMethods } from "./board-widget-cell-options.ts";
-import type { BoardWidgetCellCallbacks, BoardWidgetCellProps } from "./board-widget-cell.ts";
+import {
+  boardWidgetPresentationReady,
+  type BoardWidgetCellCallbacks,
+  type BoardWidgetCellProps,
+} from "./board-widget-cell.ts";
 
 type BoardPointerGesture = {
   mode: "move" | "resize";
@@ -66,6 +71,7 @@ export function createBoardViewState(
 ) {
   // Pointer identity and mutation admission must be visible within the same event turn.
   let gesture: BoardPointerGesture | null = null;
+  let gestureListeners: (() => void)[] = [];
   let grid: HTMLElement | undefined;
   let mutationPending = false;
   let mutationRequestId = 0;
@@ -152,20 +158,17 @@ export function createBoardViewState(
   }
 
   // Readiness is sampled after a cell commit; this callback owns no subscription.
-  const reconcileInitialPresentation = (): void =>
-    untrack(() => {
-      if (
-        presentation.initialLoading &&
-        props.snapshot &&
-        [...host.querySelectorAll("openclaw-board-widget-cell")].every(
-          (cell) => cell.hidden || cell.presentationReady,
-        )
-      ) {
-        update((local) => {
-          local.initialLoading = false;
-        });
-      }
-    });
+  const reconcileInitialPresentation = (): void => {
+    if (
+      presentation.initialLoading &&
+      props.snapshot &&
+      cells().every((cell) => cell.hidden || boardWidgetPresentationReady(cell))
+    ) {
+      update((local) => {
+        local.initialLoading = false;
+      });
+    }
+  };
   function announce(message: string): void {
     update((local) => {
       local.announcement = message;
@@ -233,6 +236,7 @@ export function createBoardViewState(
   }
 
   const cellCallbacks: BoardWidgetCellCallbacks = {
+    presentationReady: reconcileInitialPresentation,
     appViewGeneration: () => props.callbacks?.appViewGeneration ?? 0,
     grant: async (name, decision) => {
       if (!props.callbacks) {
@@ -330,7 +334,7 @@ export function createBoardViewState(
       });
       queueMicrotask(() => {
         const cell = cells().find((entry) => entry.widget?.name === target.name);
-        cell?.querySelector<HTMLElement>(".board-widget")?.focus();
+        cell?.focusWidget();
       });
     },
     focusChanged: (name) => {
@@ -342,12 +346,10 @@ export function createBoardViewState(
     widgetAppView: async (name, revision) =>
       (await props.callbacks?.widgetAppView?.(name, revision)) ?? {
         status: "stale",
-        error: "MCP App view unavailable",
       },
     refreshWidgetAppView: async (name, revision) =>
       (await props.callbacks?.refreshWidgetAppView?.(name, revision)) ?? {
         status: "stale",
-        error: "MCP App view unavailable",
       },
   };
 
@@ -407,9 +409,11 @@ export function createBoardViewState(
       local.previewItems = items;
       local.gesture = { name: widget.name, mode };
     });
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-    window.addEventListener("pointercancel", handlePointerCancel);
+    gestureListeners = [
+      listen(window, "pointermove", handlePointerMove),
+      listen(window, "pointerup", handlePointerUp),
+      listen(window, "pointercancel", handlePointerCancel),
+    ];
   }
 
   function pointerPreview(
@@ -518,9 +522,8 @@ export function createBoardViewState(
   };
 
   function stopGesture(): void {
-    window.removeEventListener("pointermove", handlePointerMove);
-    window.removeEventListener("pointerup", handlePointerUp);
-    window.removeEventListener("pointercancel", handlePointerCancel);
+    gestureListeners.forEach((stop) => stop());
+    gestureListeners = [];
     gesture = null;
   }
 

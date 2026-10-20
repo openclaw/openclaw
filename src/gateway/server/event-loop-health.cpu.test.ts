@@ -112,7 +112,7 @@ describe("CPU breakdown sampling", () => {
       throw new Error("unsupported");
     });
     vi.mocked(cpus).mockReturnValue([]);
-    workerUsage.mockRejectedValue(new Error("worker exited"));
+    workerUsage.mockResolvedValue(undefined);
     const monitor = await createMonitor();
     await sample();
     expect(monitor.snapshot()).toMatchObject({ cpuCoreRatio: 2, cpuBreakdown: {} });

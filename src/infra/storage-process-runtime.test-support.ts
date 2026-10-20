@@ -1,5 +1,15 @@
 // Native storage probes share the invocation build before their child deadlines begin.
 export const storageProcessTestEntrypoints = {
+  nodeSqlite: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "node-sqlite",
+    distWorkerPath: "infra/node-sqlite.js",
+  },
+  sqliteRuntimeInitialize: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "sqlite-runtime-initialize",
+    distWorkerPath: "infra/sqlite-runtime-initialize.js",
+  },
   auditRecovery: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "state-migrations.audit-recovery-protocol.test-support",

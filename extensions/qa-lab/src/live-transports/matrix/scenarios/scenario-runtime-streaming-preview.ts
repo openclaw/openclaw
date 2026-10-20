@@ -1,6 +1,5 @@
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
-  advanceMatrixQaActorCursor,
   buildMatrixQaToken,
   buildMatrixPartialStreamingPrompt,
   buildMatrixQuietStreamingPrompt,
@@ -166,12 +165,6 @@ export async function runStreamingReplacementRetentionScenario(
     if (context.observedEvents.some((event) => event.redactsEventId === firstDraftEventId)) {
       throw new Error(`Matrix healthy turn redacted retained draft ${firstDraftEventId}`);
     }
-    advanceMatrixQaActorCursor({
-      actorId: "driver",
-      syncState: context.syncState,
-      nextSince: duplicateRedaction.since,
-      startSince,
-    });
     return {
       artifacts: {
         faultHitCount: faultRule.hits().length,
@@ -260,12 +253,6 @@ async function runMatrixStreamingPreviewScenario(
         since: preview.since,
         timeoutMs: context.timeoutMs,
       });
-  advanceMatrixQaActorCursor({
-    actorId: "driver",
-    syncState: context.syncState,
-    nextSince: finalized.since,
-    startSince,
-  });
   const finalReply = buildMatrixReplyArtifact(finalized.event, params.finalText);
   return {
     artifacts: {

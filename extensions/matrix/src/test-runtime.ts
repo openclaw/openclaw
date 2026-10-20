@@ -186,6 +186,7 @@ export function installMatrixMonitorTestRuntime(
   installMatrixTestRuntime({
     cfg: options.cfg,
     stateDir: options.stateDir,
+    logging: {},
     channel: {
       inbound: createPluginRuntimeMock().channel.inbound,
       mentions: {

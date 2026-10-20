@@ -18,7 +18,7 @@ import { resolveAvatarHat } from "../agent-avatar-hat.ts";
 import { PluginThemeArtwork } from "../plugin-theme-artwork.tsx";
 import { ThemeBrandIcon } from "../theme-brand-icon.tsx";
 import { AVATAR_HAT_ARTWORK } from "../theme-flair-artwork.tsx";
-import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
+import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useAvatarGatewayContext, useIdentityAvatarView } from "./identity-avatar-view.ts";
 import "../../styles/identity-avatar.css";
 
@@ -27,6 +27,7 @@ const AgentAvatarFace = lazy(() => import("../agent-avatar-face.tsx"), {
 });
 
 export function AgentIdentityAvatar(props: {
+  elementRef?: (element: HTMLElement) => void;
   agent: AgentIdentity;
   class?: string;
   onImageError?: () => void;
@@ -41,16 +42,23 @@ export function AgentIdentityAvatar(props: {
     gateway();
     return resolveAgentIdentityAvatarView(props.agent);
   });
+  const presentation = createIdentityAvatarPresentation(view);
   return (
     <Show
       when={!isReservedSystemAgentId(props.agent.id)}
       fallback={
-        <SystemAgentAvatar name={props.agent.name} class={props.class} branding={branding.read()} />
+        <SystemAgentAvatar
+          name={props.agent.name}
+          class={props.class}
+          branding={branding.read()}
+          elementRef={props.elementRef}
+        />
       }
     >
       <span
-        ref={identityAvatarState(view)}
-        class={["identity-avatar--agent", props.class]}
+        ref={(element) => props.elementRef?.(element)}
+        data-avatar-state={presentation.state()}
+        class={["identity-avatar--agent", props.class, presentation.classes()]}
         role={props.agent.name ? "img" : undefined}
         aria-label={props.agent.name}
         aria-hidden={props.agent.name ? undefined : "true"}
@@ -58,7 +66,7 @@ export function AgentIdentityAvatar(props: {
         <Show when={Boolean(view().imageUrl)}>
           <IdentityAvatarImage
             view={view()}
-            fallbackSelector=".identity-avatar--agent"
+            onStateChange={presentation.onStateChange}
             class="identity-avatar__image"
             onImageError={props.onImageError}
           />
@@ -115,12 +123,18 @@ export function AgentAvatarHat(props: { agentId: string; branding: ThemeBranding
   );
 }
 
-function SystemAgentAvatar(props: { name?: string; class?: string; branding: ThemeBranding }) {
+function SystemAgentAvatar(props: {
+  name?: string;
+  class?: string;
+  branding: ThemeBranding;
+  elementRef?: (element: HTMLElement) => void;
+}) {
   return (
     <Show
       when={props.branding.brandIcon !== "claw"}
       fallback={
         <img
+          ref={(element) => props.elementRef?.(element)}
           class={["identity-avatar--agent", props.class]}
           src={inferControlUiPublicAssetPath("favicon.svg")}
           alt={props.name ?? ""}
@@ -129,6 +143,7 @@ function SystemAgentAvatar(props: { name?: string; class?: string; branding: The
       }
     >
       <span
+        ref={(element) => props.elementRef?.(element)}
         class={["identity-avatar--agent", "identity-avatar--neutral", props.class]}
         role={props.name ? "img" : undefined}
         aria-label={props.name}

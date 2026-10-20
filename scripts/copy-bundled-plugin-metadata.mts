@@ -351,6 +351,7 @@ function copyMetadata(params: CopyMetadataParams): void {
       const controlUi = loadPluginControlUiDeclaration({
         rootDir: pluginDir,
         controlUi: manifest.controlUi,
+        channels: manifest.channels,
         rejectHardlinks: false,
       });
       if (!controlUi.ok) {

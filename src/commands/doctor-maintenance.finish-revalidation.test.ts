@@ -14,6 +14,7 @@ import type { GatewayService } from "../daemon/service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { createSystemdCommandQuery } from "../daemon/systemd-command-query.js";
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -258,7 +259,12 @@ async function runDoctorFinishForStoppedUnit(
               now + 60_000,
               now,
               JSON.stringify({
-                owner: { pid: process.pid, host: hostname(), startedAt },
+                owner: {
+                  pid: process.pid,
+                  host: hostname(),
+                  startedAt,
+                  processNamespace: readGatewayLockProcessNamespace(),
+                },
                 port: gatewayPort.port,
                 mode: "supervised",
                 supervisor: { kind: "systemd", name: "openclaw-gateway.service" },
@@ -476,6 +482,7 @@ async function runDoctorFinishForStoppedUnit(
                 : {
                     payload: {
                       pid: process.pid,
+                      processNamespace: readGatewayLockProcessNamespace(),
                       createdAt: new Date().toISOString(),
                       configPath: path.join(home, ".openclaw", "openclaw.json"),
                       role: "gateway",
@@ -608,26 +615,32 @@ it.each([
   },
 );
 
-it("refuses offline Doctor repair of a newer schema without recommending repair or changing files", async () => {
-  const stateDir = tempDirs.make("openclaw-doctor-newer-schema-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-  const databasePath = openOpenClawStateDatabase().path;
-  await closeOpenClawStateDatabaseAsync();
-  writeUnreadableNewerStateSchema(databasePath);
-  const before = snapshotSourceFamily(databasePath);
+it.each(process.platform === "win32" ? ["0600"] : ["0600", "0444"])(
+  "refuses offline Doctor repair of a newer schema without recommending repair or changing files (mode %s)",
+  async (mode) => {
+    const stateDir = tempDirs.make("openclaw-doctor-newer-schema-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+    const databasePath = openOpenClawStateDatabase().path;
+    await closeOpenClawStateDatabaseAsync();
+    writeUnreadableNewerStateSchema(databasePath);
+    fs.chmodSync(databasePath, Number.parseInt(mode, 8));
+    const beforeMode = fs.statSync(databasePath).mode;
+    const before = snapshotSourceFamily(databasePath);
 
-  const admission = beginDoctorMaintenance({
-    root: null,
-    options: { repair: true, nonInteractive: true },
-    runtime: createTestRuntime(),
-  });
-  await expect(admission).rejects.toThrow("newer schema version");
-  await expect(admission).rejects.toThrow(/restore.*backup/);
-  await expect(admission).rejects.not.toThrow(/doctor --fix/);
-  expect(snapshotSourceFamily(databasePath)).toEqual(before);
-  expect(mocks.stops).toBe(0);
-});
+    const admission = beginDoctorMaintenance({
+      root: null,
+      options: { repair: true, nonInteractive: true },
+      runtime: createTestRuntime(),
+    });
+    await expect(admission).rejects.toThrow("newer schema version");
+    await expect(admission).rejects.toThrow(/restore.*backup/);
+    await expect(admission).rejects.not.toThrow(/doctor --fix/);
+    expect(snapshotSourceFamily(databasePath)).toEqual(before);
+    expect(fs.statSync(databasePath).mode).toBe(beforeMode);
+    expect(mocks.stops).toBe(0);
+  },
+);
 
 it.each<{
   scenario?: StoppedUnitState;
@@ -637,7 +650,7 @@ it.each<{
 }>([
   {
     scenario: "lifecycle-contended",
-    message: "is undergoing offline maintenance; retry when it finishes.",
+    message: "without an active schema lease or maintenance scope",
   },
   { catalog: "conflict-on-recheck", message: "remains recorded as running" },
   { catalog: "different-state", message: "non-default state dir or config path" },

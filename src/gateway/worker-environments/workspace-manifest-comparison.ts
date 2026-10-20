@@ -7,7 +7,7 @@ import {
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
+import { isDerivedWorkspacePath, buildCacheInputPaths } from "./workspace-path-exclusions.js";
 
 export type WorkspaceNode =
   | WorkerWorkspaceManifestEntry
@@ -39,17 +39,30 @@ export function sameEntry(left: WorkspaceNode, right: WorkspaceNode): boolean {
 
 export function manifestNodes(manifest: WorkerWorkspaceManifest) {
   const staged = stagedInputDirectoriesFromEntries(manifest.entries);
+  const retained = buildCacheInputPaths(manifest.buildCacheInputs);
   const nodes = new Map<
     string,
     WorkerWorkspaceManifestEntry | { path: string; type: "directory" }
   >();
   for (const directory of manifest.directories ?? []) {
-    if (!isDerivedWorkspacePath(directory, isStagedInputPath(directory, staged))) {
+    if (
+      !isDerivedWorkspacePath(
+        directory,
+        retained.has(directory) || isStagedInputPath(directory, staged),
+        manifest.buildCacheInputs !== undefined,
+      )
+    ) {
       nodes.set(directory, { path: directory, type: "directory" });
     }
   }
   for (const entry of manifest.entries) {
-    if (!isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, staged))) {
+    if (
+      !isDerivedWorkspacePath(
+        entry.path,
+        retained.has(entry.path) || isStagedInputPath(entry.path, staged),
+        manifest.buildCacheInputs !== undefined,
+      )
+    ) {
       nodes.set(entry.path, entry);
     }
   }

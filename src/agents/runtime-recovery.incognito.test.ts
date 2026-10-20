@@ -14,14 +14,21 @@ import {
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { waitForSessionNativeAttemptEnd } from "../sessions/session-controller.native-runtime.js";
+import { readSessionControllerOperationState } from "../sessions/session-controller.state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { claimAgentSessionWriter } from "./embedded-agent-runner/run/session-bootstrap.js";
 import {
   abortAndDrainEmbeddedAgentRun,
+  detachActiveEmbeddedRun,
   isEmbeddedAgentRunHandleActive,
-  setActiveEmbeddedRun,
 } from "./embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle, testing } from "./embedded-agent-runner/runs.test-support.js";
+import {
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun,
+  testing,
+} from "./embedded-agent-runner/runs.test-support.js";
 import { prepareRestartRecoveryDeliveryCurrent } from "./main-session-recovery/main-session-restart-recovery-delivery.js";
 import { retryRestartAbortedMainSessionRecovery } from "./main-session-recovery/main-session-restart-recovery-runtime.js";
 import { resolveAgentRunSessionTarget } from "./run-session-target.js";
@@ -111,6 +118,7 @@ function recoveryRuntime(
     dispatchSessionMethod: unexpected,
     waitForAgent: unexpected,
     sendRecoveryNotice: unexpected,
+    resumeChatInput: unexpected,
   };
 }
 
@@ -126,14 +134,42 @@ function recover(target: Target, runtime = recoveryRuntime()) {
     }),
   );
 }
-function registerRun(target: Target, runId: string, abort: () => void) {
-  setActiveEmbeddedRun(
+async function registerRun(target: Target, runId: string, abort: () => void) {
+  const handle = createEmbeddedRunHandle({ runId, abort });
+  const operation = registerTestEmbeddedRun(
     target.sessionId,
-    createEmbeddedRunHandle({ runId, abort }),
+    handle,
     target.sessionKey,
     undefined,
     "main",
+    undefined,
+    undefined,
+    { storeScope: target.storePath },
   );
+  const writer = await withMemory(target, () =>
+    claimAgentSessionWriter({
+      ...target,
+      sessionTarget: target,
+      runId,
+      replyOperation: operation,
+      prompt: "incognito cleanup",
+      workspaceDir: stateDir,
+      timeoutMs: 30_000,
+    }),
+  );
+  const state = readSessionControllerOperationState(operation);
+  if (!writer || !state) {
+    throw new Error("Missing admitted incognito writer");
+  }
+  const releaseFence = state.registerTerminalProducerFence((isCurrent, options) =>
+    writer.revoke(isCurrent, options),
+  );
+  onTestFinished(() => {
+    releaseFence();
+    detachActiveEmbeddedRun(target.sessionId, handle, target.sessionKey);
+    operation.complete();
+  });
+  return { operation, handle };
 }
 
 it("resolves partial markers and store/SID targets within the selected physical actor", async () => {
@@ -189,8 +225,8 @@ it("keeps selected absence missing without discovering a durable or successor ow
   expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBeUndefined();
 });
 
-it.each(["settle", "replacement"] as const)(
-  "force-clears from memory and honors %s before terminal persistence",
+it.each(["settle", "replacement", "incarnation"] as const)(
+  "fences the incognito writer and honors %s before terminal persistence",
   async (outcome) => {
     const target = await create(`cancel-snapshot-${outcome}`, {
       lifecycleRunId: "cancel-run",
@@ -198,18 +234,49 @@ it.each(["settle", "replacement"] as const)(
     });
     setRuntimeConfigSnapshot(configFor());
     const aborted = vi.fn();
-    registerRun(target, "cancel-run", aborted);
+    const native = await registerRun(target, "cancel-run", aborted);
+    const other = await create(
+      `same-id-other-owner-${outcome}`,
+      { sessionId: target.sessionId },
+      sibling,
+    );
+    const otherBefore = { ...sibling.readSession(other.sessionKey, authority)?.entry };
+    let rawSettled = false;
+    const rawSettlement = waitForSessionNativeAttemptEnd(
+      target.sessionId,
+      null,
+      native.handle,
+    ).then(() => {
+      rawSettled = true;
+    });
     const replacementAbort = vi.fn();
-    const acquire = actor.acquireExisting.bind(actor);
-    const preparation = vi
-      .spyOn(actor, "acquireExisting")
-      .mockImplementationOnce(async (...args) => {
-        expect(aborted).toHaveBeenCalledOnce();
-        if (outcome === "replacement") {
-          registerRun(target, "replacement-run", replacementAbort);
-        }
-        return acquire(...args);
-      });
+    let replacementEntry: SessionEntry | undefined;
+    const storage = bindings.get(`${target.storePath}\n${target.sessionKey}`)?.actor.storage;
+    if (!storage) {
+      throw new Error("Missing incognito storage factory");
+    }
+    const acquire = storage.acquire.bind(storage);
+    const preparation = vi.spyOn(storage, "acquire").mockImplementationOnce(async (...args) => {
+      expect(aborted).toHaveBeenCalledOnce();
+      if (outcome === "replacement") {
+        await registerRun(target, "replacement-run", replacementAbort);
+        await withMemory(target, () =>
+          patchSessionEntryCore(target, () => ({ lifecycleRunId: "replacement-run" })),
+        );
+        replacementEntry = { ...readEntry(target)! };
+      } else if (outcome === "incarnation") {
+        await withMemory(target, () =>
+          patchSessionEntryCore(target, () => ({
+            sessionId: "successor-incarnation",
+            lifecycleRevision: "successor-revision",
+            lifecycleRunId: "successor-run",
+            activeWriterRunId: "successor-run",
+          })),
+        );
+        replacementEntry = { ...readEntry(target)! };
+      }
+      return acquire(...args);
+    });
     onTestFinished(() => preparation.mockRestore());
     await expect(
       withMemory(target, () =>
@@ -220,12 +287,14 @@ it.each(["settle", "replacement"] as const)(
           settleMs: 0,
         }),
       ),
-    ).resolves.toMatchObject({ forceCleared: true });
+    ).resolves.toMatchObject({ aborted: true, drained: false, forceCleared: outcome === "settle" });
     expect(aborted).toHaveBeenCalledOnce();
     const entry = readEntry(target);
-    expect(isEmbeddedAgentRunHandleActive(target.sessionId)).toBe(outcome === "replacement");
-    if (outcome === "replacement") {
-      expect(entry).toMatchObject({ sessionId: target.sessionId, lifecycleRunId: "cancel-run" });
+    expect(isEmbeddedAgentRunHandleActive(target.sessionId)).toBe(outcome !== "settle");
+    expect(rawSettled).toBe(false);
+    expect(sibling.readSession(other.sessionKey, authority)?.entry).toEqual(otherBefore);
+    if (outcome !== "settle") {
+      expect(entry).toEqual(replacementEntry);
       expect(entry?.status).toBeUndefined();
       expect(entry?.abortedLastRun).toBeUndefined();
       expect(replacementAbort).not.toHaveBeenCalled();
@@ -235,7 +304,10 @@ it.each(["settle", "replacement"] as const)(
         status: "killed",
         abortedLastRun: true,
       });
+      expect(entry?.activeWriterRunId).toBeUndefined();
     }
+    detachActiveEmbeddedRun(target.sessionId, native.handle, target.sessionKey);
+    await rawSettlement;
   },
 );
 

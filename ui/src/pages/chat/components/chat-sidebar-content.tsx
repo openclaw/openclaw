@@ -24,6 +24,7 @@ import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import "../../../components/tooltip.ts";
 import { McpAppPanel } from "../../../components/solid/mcp-app-panel.tsx";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
+import { createCanvasFramePresentation } from "../../../lib/chat/canvas-frame-presentation.ts";
 import {
   resolveCanvasIframeUrl,
   resolveEmbedSandbox,
@@ -33,18 +34,14 @@ import { isSvgImageMediaPath } from "../../../lib/media-file-extension.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import {
-  AttachmentCardHeader,
-  AttachmentPreviewSkeleton,
-  CompactAttachmentCard,
-} from "./chat-attachment-card-solid.tsx";
+import { AttachmentStateCard, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
+import "./chat-audio-player.tsx";
 import {
   isCrossOriginHttpSource,
   safeAttachmentHref,
   safePlainTextAttachmentHref,
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
-import "./chat-audio-player.tsx";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import "./chat-video-player.tsx";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
@@ -163,6 +160,14 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
     return prepareAttachment(props, sourceChanged);
   });
   onCleanup(() => releaseChatMediaResourceOwner(sourceChanged));
+  const mediaProps = () => ({
+    "prop:sourceIdentity": props.content.sourceIdentity ?? props.content.src ?? model().src ?? "",
+    "prop:label": props.content.title,
+    "prop:mimeType": props.content.mimeType ?? "",
+    "prop:playback": model().source?.playback ?? props.content.playback ?? "native",
+    "prop:authToken": model().source?.authToken ?? null,
+    "prop:sizeBytes": model().source?.sizeBytes ?? props.content.sizeBytes,
+  });
   return (
     <Switch
       fallback={
@@ -213,85 +218,29 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
         <openclaw-chat-video-player
           prop:src={model().src ?? ""}
           prop:preview={true}
-          prop:sourceIdentity={
-            props.content.sourceIdentity ?? props.content.src ?? model().src ?? ""
-          }
-          prop:label={props.content.title}
-          prop:mimeType={props.content.mimeType ?? ""}
-          prop:playback={model().source?.playback ?? props.content.playback ?? "native"}
-          prop:authToken={model().source?.authToken ?? null}
-          prop:sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+          {...mediaProps()}
           prop:mediaWidth={model().source?.width ?? props.content.width}
           prop:mediaHeight={model().source?.height ?? props.content.height}
         />
       </Match>
       <Match when={!model().src || model().imagePreview}>
-        <div
-          class={[
-            "chat-assistant-attachment-card",
-            `chat-assistant-attachment-card--${model().kind}`,
-            "sidebar-attachment-preview__state-card",
-          ]}
-          aria-busy={model().pending ? "true" : undefined}
-        >
-          <AttachmentCardHeader
-            kind={model().kind}
-            label={props.content.title}
-            mimeType={props.content.mimeType ?? undefined}
-            sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
-            downloadHref={model().src ?? undefined}
-            downloadPending={model().pending}
-            visualMode="preview-with-favicon"
-          />
-          <div
-            class="sidebar-attachment-preview__state"
-            style={{ "--preview-ratio": model().ratio }}
-          >
-            <Show when={model().pending || model().imagePreview}>
-              <AttachmentPreviewSkeleton />
-            </Show>
-            <Show when={model().imagePreview && model().src} keyed>
-              {(src) => (
-                <img
-                  class="sidebar-attachment-preview__image"
-                  src={src}
-                  alt={props.content.title}
-                  onLoad={(event) => {
-                    event.currentTarget.dataset.preview = "ready";
-                  }}
-                  onError={(event) => {
-                    event.currentTarget.dataset.preview = "error";
-                  }}
-                />
-              )}
-            </Show>
-            <Show when={!model().pending}>
-              <div class="sidebar-attachment-preview__unavailable">
-                {t("chat.attachments.previewUnavailable")}
-                <Show when={model().error}>{(error) => <span>{error()}</span>}</Show>
-                <Show when={model().retry}>
-                  {(retry) => (
-                    <button class="btn btn--sm" type="button" onClick={() => retry()()}>
-                      {t("common.retry")}
-                    </button>
-                  )}
-                </Show>
-              </div>
-            </Show>
-          </div>
-        </div>
+        <AttachmentStateCard
+          kind={model().kind}
+          label={props.content.title}
+          mimeType={props.content.mimeType ?? undefined}
+          sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+          downloadHref={model().src ?? undefined}
+          downloadPending={model().pending}
+          imagePreview={Boolean(model().imagePreview)}
+          previewRatio={model().ratio}
+          error={model().error}
+          onRetry={model().retry}
+        />
       </Match>
       <Match when={model().kind === "audio"}>
         <openclaw-chat-audio-player
           prop:src={model().src ?? ""}
-          prop:sourceIdentity={
-            props.content.sourceIdentity ?? props.content.src ?? model().src ?? ""
-          }
-          prop:label={props.content.title}
-          prop:mimeType={props.content.mimeType ?? ""}
-          prop:playback={model().source?.playback ?? props.content.playback ?? "native"}
-          prop:authToken={model().source?.authToken ?? null}
-          prop:sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+          {...mediaProps()}
           prop:serverDurationMs={model().source?.durationMs ?? props.content.durationMs}
           prop:voiceNote={props.content.voiceNote === true}
         />
@@ -401,18 +350,26 @@ function CanvasPreview(props: {
       props.canvasPluginSurfaceUrl,
       props.allowExternalEmbedUrls ?? false,
     );
-  // A changed sandbox, URL, or height restarts the iframe, matching the original keyed preview.
+  let initialized = false;
+  const presentation = createCanvasFramePresentation(
+    () => `${sandbox()}\0${props.content.entryUrl ?? ""}\0${src() ? 1 : 0}`,
+    src,
+    () => initialized,
+  );
   return (
-    <Show
-      when={`${sandbox()}\u0000${src() ?? ""}\u0000${props.content.preferredHeight ?? ""}`}
-      keyed
-    >
+    <Show when={presentation.identity()} keyed>
       {(_identity) => (
         <iframe
+          ref={() => {
+            initialized = false;
+          }}
+          onLoad={() => {
+            initialized = true;
+          }}
           class="chat-tool-card__preview-frame"
           title={props.title}
           sandbox={sandbox()}
-          src={src() ?? undefined}
+          src={presentation.src()}
           style={{
             height: props.content.preferredHeight
               ? `${props.content.preferredHeight}px`
@@ -430,11 +387,10 @@ export function SidebarPanel(props: SidebarPanelProps) {
     ["file", "markdown", "attachment", "session-diff"].includes(props.content?.kind ?? "");
   // Text attachments initialize their own asynchronously loaded Markdown.
   const markdownPresented = createMemo(() => props.content?.kind !== "attachment");
-  const markdownRef = markdownBlocksRef(markdownPresented);
   return (
     <div
       class={{ "sidebar-panel-host--fill": fillHost() }}
-      ref={markdownRef}
+      ref={markdownBlocksRef(markdownPresented)}
       onClick={(event) => props.onClick(event)}
       onKeyDown={(event) => props.onKeydown(event)}
     >

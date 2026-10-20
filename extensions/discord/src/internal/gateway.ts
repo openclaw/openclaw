@@ -13,6 +13,7 @@ import {
 } from "discord-api-types/v10";
 import { asSafeIntegerInRange, MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type * as ws from "ws";
 import type { Client } from "./client.js";
 import { canResumeAfterGatewayClose, isFatalGatewayCloseCode } from "./gateway-close-codes.js";
@@ -28,7 +29,6 @@ import type {
   GatewayPluginOptions,
   UpdatePresenceData,
 } from "./plugin-contract.js";
-import { WebSocket } from "./ws-runtime.js";
 
 export { GatewayCloseCodes };
 export const GatewayIntents = GatewayIntentBits;
@@ -458,9 +458,5 @@ export class GatewayPlugin implements GatewayPluginContract {
 
   updateVoiceState(data: GatewayVoiceStateUpdateData): void {
     this.send({ op: GatewayOpcodes.VoiceStateUpdate, d: data }, true);
-  }
-
-  getRateLimitStatus() {
-    return this.outboundLimiter.getStatus();
   }
 }

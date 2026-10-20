@@ -132,7 +132,7 @@ describe("session approval protocol validators", () => {
     ).toBe(false);
   });
 
-  it("replays only authoritative pending approval snapshots", () => {
+  it("keeps pending replay authoritative", () => {
     const replay = {
       sessionKey: "agent:main:main",
       updatedAtMs: approval.createdAtMs,

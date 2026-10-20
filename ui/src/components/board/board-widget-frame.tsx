@@ -12,7 +12,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { WidgetRenderTimeoutError } from "../../lib/widget-sandbox-host.ts";
-import { postWidgetTheme } from "../../lib/widget-theme.ts";
+import { postWidgetTheme, registerWidgetThemeFrame } from "../../lib/widget-theme.ts";
 import { COMMAND_PALETTE_OPEN_EVENT } from "../command-palette-contract.ts";
 import { McpAppConfirmation } from "../mcp-app-confirm-solid.tsx";
 import { createMcpAppConfirm } from "../mcp-app-confirm.ts";
@@ -147,6 +147,7 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
   const changes = new EventStream<void>();
   let frameError = "";
   let frameElement: HTMLIFrameElement | undefined;
+  let releaseTheme: (() => void) | undefined;
   let waiting = false;
   let renderStalled = false;
   let frameFailureKey = "";
@@ -465,6 +466,8 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
       }
     },
     disconnect(): void {
+      releaseTheme?.();
+      releaseTheme = undefined;
       frameProbeGeneration += 1;
       resetPresentation();
       stopWork();
@@ -585,6 +588,8 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
         });
     },
     postBoardHostState(frame: HTMLIFrameElement): void {
+      releaseTheme?.();
+      releaseTheme = registerWidgetThemeFrame(frame, sandboxOrigin || "*");
       boardHostNonce = generateUUID();
       keyboardHostNonce = sandboxOrigin ? generateUUID() : "";
       postWidgetTheme(frame, sandboxOrigin || "*");
@@ -599,9 +604,12 @@ export function createBoardWidgetFrame(host: BoardWidgetFrameOwnerHost) {
         );
       }
     },
+    // Forward the widget owner's event stream to its projection subscribers.
     subscribe: (listener: () => void) => changes.subscribe(listener),
     confirmation,
     bindFrame(frame: HTMLIFrameElement) {
+      releaseTheme?.();
+      releaseTheme = undefined;
       frameElement = frame;
     },
     prepareView(value: BoardWidget) {

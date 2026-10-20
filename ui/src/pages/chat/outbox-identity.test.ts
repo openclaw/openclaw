@@ -26,7 +26,6 @@ import {
   loadChatComposerState as loadComposer,
   persistChatComposerState as persistComposer,
   updateStoredChatComposerQueueItems as updateQueueItems,
-  removeStoredChatComposerQueueItem as removeQueueItem,
 } from "./composer-persistence.ts";
 
 const gatewayUrl = "ws://outbox.test";
@@ -410,14 +409,16 @@ it("mutates captured scopes after mainKey changes", () => {
   };
   const changes = [{ expected: item, next }];
   expect(updateQueueItems(changed, sessionKey, changes, "other")).toBe(false);
-  removeQueueItem(changed, sessionKey, item.id, item, "other");
+  updateQueueItems(changed, sessionKey, [{ expected: item, next: null }], "other");
   expect(listOutboxes(changed)).toEqual([original]);
   expect(updateQueueItems(changed, sessionKey, changes, agentId)).toBe(true);
   expect(listOutboxes(changed)[0]).toMatchObject({
     sessionKey: initial.sessionKey,
     queue: [next],
   });
-  expect(removeQueueItem(changed, sessionKey, item.id, next, agentId)).toBe(true);
+  expect(updateQueueItems(changed, sessionKey, [{ expected: next, next: null }], agentId)).toBe(
+    true,
+  );
   expect(listOutboxes(changed)).toEqual([]);
 });
 it.each(["bucket", "item"])("quarantines conflicting %s agents", (conflict) => {

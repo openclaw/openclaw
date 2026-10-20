@@ -3,7 +3,6 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
-import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { createContextEngineLogicalTurnLease } from "../../agents/harness/context-engine-logical-turn.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -16,6 +15,7 @@ import { registerContextEngineInRegistry } from "../../context-engine/registry.j
 import type { ContextEngine } from "../../context-engine/types.js";
 import { resetGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
@@ -193,7 +193,7 @@ it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", 
     expect(result.payloads).toEqual([{ text: "Fresh worker answer" }]);
     assert(claim);
     expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
-    await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
+    await waitForSessionRunEnd(SESSION_ID, null);
     expect(published).toHaveBeenCalledExactlyOnceWith(claim);
     expect(placements.validateWorkspaceResultClaim(claim)).toBe(false);
     expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();

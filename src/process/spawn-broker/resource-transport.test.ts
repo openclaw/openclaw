@@ -91,7 +91,7 @@ it.skipIf(process.platform === "win32")(
       lease.release();
     } finally {
       try {
-        void lease?.ownerMessage("permit-close").result.catch(() => {});
+        lease?.ownerMessage("permit-close");
       } catch {
         // A successfully closed/released fixture needs no fallback permission.
       }

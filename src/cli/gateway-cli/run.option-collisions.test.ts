@@ -18,7 +18,6 @@ import {
   setTestEnvValue,
   withEnvAsync,
 } from "../../test-utils/env.js";
-import { getFreePort } from "../../test-utils/ports.js";
 import { withTempSecretFiles } from "../../test-utils/secret-file-fixture.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { VERSION } from "../../version.js";
@@ -32,6 +31,7 @@ import {
   gatewayRunReadFailures,
   type RuntimeDotEnvLoadResult,
 } from "./run-config.test-support.js";
+import { registerGatewayLockFailureTests } from "./run-lock-failure.test-support.js";
 import { installGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 const mocks = vi.hoisted(() => ({
@@ -87,7 +87,7 @@ const { isTerminalInteractive, offerInvalidConfigRecovery } = mocks;
 const { parkCurrentLaunchAgentForMaintenance, ensureDevGatewayConfig } = mocks;
 const { normalizeStateDirEnv, pinConfigDir, pinRuntimePaths, detectRespawnSupervisor } = mocks;
 const { loadGlobalRuntimeDotEnvFiles, refreshManagedProxy, loadShellEnvFallback } = mocks;
-const { clearShellEnvAppliedKeys, resolveShellEnvExpectedKeys } = mocks;
+const { clearShellEnvAppliedKeys } = mocks;
 const { shouldDeferShellEnvFallback, shouldEnableShellEnvFallback } = mocks;
 // mock-isolation: Record triage requests without running live diagnostics.
 vi.mock("../../commands/triage-failure.js", () => ({
@@ -189,7 +189,7 @@ vi.mock("../../config/paths.js", async (importOriginal) => ({
   normalizeStateDirEnv: mocks.normalizeStateDirEnv,
   pinRuntimePaths: mocks.pinRuntimePaths,
   resolveConfigPath: () => "/tmp/openclaw-test-missing-config.json",
-  resolveStateDir: () => "/tmp",
+  resolveStateDir: (env?: NodeJS.ProcessEnv) => env?.OPENCLAW_STATE_DIR ?? "/tmp",
   resolveGatewayPort: (cfg?: { gateway?: { port?: number } }) => cfg?.gateway?.port ?? 18789,
 }));
 
@@ -308,8 +308,9 @@ vi.mock("../../gateway/ws-logging.js", () => ({
 // mock-isolation: Keep verbose-mode changes local to the CLI fixture.
 vi.mock("../../globals.js", () => ({ setVerbose: (_enabled: boolean) => undefined }));
 
-vi.mock("../../infra/ports-inspect.js", () => ({
-  inspectPortUsage: async () => ({ status: "free" }),
+vi.mock("../../infra/ports-inspect.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/ports-inspect.js")>()),
+  inspectPortUsage: vi.fn(async () => ({ status: "free" })),
 }));
 
 vi.mock("../../infra/ports-format.js", () => ({ formatPortDiagnostics: () => [] }));
@@ -513,7 +514,7 @@ describe("gateway run option collisions", () => {
     expect(gatewayStartOptions().ambientEnvTriggers).toBe("allow");
   });
 
-  it("loads configured shell env fallback before final proxy refresh and gateway startup", async () => {
+  it.each([false, true])("prepares shell env fallback (%s)", async (changed) => {
     await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: undefined }, async () => {
       const finalConfig = {
         env: {
@@ -527,32 +528,30 @@ describe("gateway run option collisions", () => {
         proxy: { enabled: true, proxyUrl: "http://127.0.0.1:29876" },
       };
       configState.snapshot = configSnapshot(finalConfig, { parsed: finalConfig });
-      readConfigFileSnapshotWithPluginMetadata
-        .mockImplementationOnce(async (options) => {
-          expect(options?.lowerPrecedenceEnv).toBeUndefined();
-          expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-          return { snapshot: configState.snapshot };
-        })
-        .mockImplementationOnce(async (options) => {
-          expect(options?.lowerPrecedenceEnv).toEqual({
-            OPENCLAW_GATEWAY_TOKEN: "shell-token",
-          });
-          expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("shell-token");
-          return {
-            snapshot: {
+      let startupSnapshot = configState.snapshot;
+      readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async (options) => {
+        expect(options?.lowerPrecedenceEnv).toBeUndefined();
+        expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+        return { snapshot: startupSnapshot };
+      });
+      loadShellEnvFallback.mockImplementationOnce(() => {
+        if (changed) {
+          process.env.OPENCLAW_GATEWAY_TOKEN = "shell-token";
+          readConfigFileSnapshotWithPluginMetadata.mockImplementationOnce(async (options) => {
+            expect(options?.lowerPrecedenceEnv).toEqual({
+              OPENCLAW_GATEWAY_TOKEN: "shell-token",
+            });
+            expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("shell-token");
+            startupSnapshot = {
               ...configState.snapshot,
               config: {
                 ...finalConfig,
-                gateway: {
-                  ...finalConfig.gateway,
-                  auth: { mode: "token", token: "config-token" },
-                },
+                gateway: { mode: "local", auth: { mode: "token", token: "config-token" } },
               },
-            },
-          };
-        });
-      loadShellEnvFallback.mockImplementationOnce((opts?: unknown) => {
-        (opts as { env: NodeJS.ProcessEnv }).env.OPENCLAW_GATEWAY_TOKEN = "shell-token";
+            };
+            return { snapshot: startupSnapshot };
+          });
+        }
       });
       const uninstall = installGatewayRunRuntimeHooks({ refreshManagedProxy });
       try {
@@ -568,16 +567,15 @@ describe("gateway run option collisions", () => {
         logger: expect.any(Object),
         timeoutMs: 1234,
       });
-      expect(resolveShellEnvExpectedKeys).toHaveBeenCalledWith(
-        expect.objectContaining({ OPENCLAW_GATEWAY_TOKEN: "config-token" }),
-        finalConfig,
-      );
-      expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(2);
+      expect(readConfigFileSnapshotWithPluginMetadata).toHaveBeenCalledTimes(changed ? 2 : 1);
+      expect(gatewayStartOptions().startupConfigSnapshotRead?.snapshot).toEqual(startupSnapshot);
       expect(process.env.OPENCLAW_GATEWAY_TOKEN).toBe("config-token");
-      expect(clearShellEnvAppliedKeys).toHaveBeenCalledWith(["OPENCLAW_GATEWAY_TOKEN"]);
       const shellOrder = callOrder(loadShellEnvFallback);
       expect(shellOrder).toBeGreaterThan(callOrder(readConfigFileSnapshotWithPluginMetadata));
-      expect(callOrder(readConfigFileSnapshotWithPluginMetadata, 1)).toBeGreaterThan(shellOrder);
+      if (changed) {
+        expect(clearShellEnvAppliedKeys).toHaveBeenCalledWith(["OPENCLAW_GATEWAY_TOKEN"]);
+        expect(callOrder(readConfigFileSnapshotWithPluginMetadata, 1)).toBeGreaterThan(shellOrder);
+      }
       expect(callOrder(refreshManagedProxy)).toBeGreaterThan(shellOrder);
       expect(callOrder(startGatewayServer)).toBeGreaterThan(callOrder(refreshManagedProxy));
     });
@@ -1159,28 +1157,13 @@ describe("gateway run option collisions", () => {
     }
   });
 
-  it("skips failure bundles but exits nonzero for unconfirmed gateway lock conflicts", async () => {
-    const port = await getFreePort();
-    configState.snapshot = {
-      config: { gateway: { port } },
-      exists: false,
-      sourceConfig: {},
-      valid: true,
-    };
-    const err = Object.assign(new Error(`gateway already running on port ${port}`), {
-      name: "GatewayLockError",
-    });
-    startGatewayServer.mockRejectedValueOnce(err);
-
-    await withEnvAsync(withoutSupervisorEnv, async () => {
-      await expectExit(1);
-    });
-
-    expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
-    expect(startGatewayServer).toHaveBeenCalledWith(port, expect.any(Object));
-    expect(runtimeErrors.join("\n")).toContain(`gateway already running on port ${port}`);
-    expect(runtimeErrors.join("\n")).toContain("gateway stop");
-    expect(triageAfterFailure).not.toHaveBeenCalled();
+  registerGatewayLockFailureTests({
+    ...mocks,
+    expectExit,
+    configState,
+    withoutSupervisorEnv,
+    runtimeErrors,
+    writeDiagnosticStabilityBundleForFailureSync,
   });
 
   it("exits 78 and parks launchd for a repairable shared-state schema", async () => {

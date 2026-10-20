@@ -16,7 +16,6 @@ import { emitCoreModelRequestStartedDiagnosticEvent } from "../infra/diagnostic-
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import {
   BLOCKED_TOOL_CALL_ABORT_FLOOR_MS,
-  clearDiagnosticEmbeddedRunActivityForSession,
   createDiagnosticEmbeddedRunOwner,
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticArgumentChurnObservation,
@@ -223,6 +222,26 @@ describe("argument-churn liveness", () => {
     expectActivity(ref, { lastProgressAgeMs: 60_000, lastProgressReason: "model_call:stream" });
   });
 
+  it("keeps a later same-timestamp churn clear when session refs merge", () => {
+    const startedAt = setClock("2026-07-27T00:00:00Z");
+    const sessionId = "churn-clear-merge-session";
+    const sessionKey = "agent:main:churn-clear-merge";
+    const runId = "churn-clear-merge-run";
+    markDiagnosticEmbeddedRunStarted({ sessionId, runId });
+    markDiagnosticArgumentChurnObservation({ sessionId, runId, active: true });
+    markDiagnosticArgumentChurnObservation({ sessionKey, active: true });
+    markDiagnosticArgumentChurnObservation({ sessionKey, active: false });
+
+    vi.setSystemTime(startedAt + 60_000);
+    expectActivity(
+      { sessionId, sessionKey },
+      {
+        lastProgressAgeMs: 60_000,
+        lastProgressReason: "embedded_run:started",
+      },
+    );
+  });
+
   it("keeps overlapping policy waits suspended until every call releases its token", () => {
     const startedAt = setClock("2026-07-27T00:00:00Z");
     const ref = { sessionId: "policy-overlap-session", sessionKey: "agent:main:policy-overlap" };
@@ -424,12 +443,7 @@ describe("repeated request liveness", () => {
     await vi.advanceTimersByTimeAsync(0);
     await waitForDiagnosticEventsDrained();
     expectRequestAge(ref, 60_000);
-    expect(
-      clearDiagnosticEmbeddedRunActivityForSession({
-        ...ref,
-        activeSessionId: "replacement-owner",
-      }).cleared,
-    ).toBe(true);
+    markDiagnosticEmbeddedRunEnded(ref);
     expectRequestAge(ref, undefined);
   });
 

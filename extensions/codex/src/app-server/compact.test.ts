@@ -1235,44 +1235,60 @@ describe("maybeCompactCodexAppServerSession", () => {
     await vi.waitFor(() => {
       expect(fake.request).toHaveBeenCalledTimes(1);
     });
-    const second = maybeCompactCodexAppServerSession({
-      sessionId: "session-2",
-      sessionKey: "agent:main:session-2",
-      sessionFile: secondSessionFile,
-      workspaceDir: tempDir,
-      trigger: "manual",
-      abortSignal: abortController.signal,
-    });
-    await flushAsyncTasks();
-    expect(factory).toHaveBeenCalledTimes(1);
-    abortController.abort();
-    await expect(second).resolves.toMatchObject({
-      ok: false,
-      compacted: false,
-      reason: "codex app-server compaction aborted while waiting to start",
-    });
+    let mutationQueued = createDeferred<void>();
+    const enqueueMutation = threadOwnershipQueue.withCodexAppServerThreadMutation;
+    const queueSpy = vi
+      .spyOn(threadOwnershipQueue, "withCodexAppServerThreadMutation")
+      .mockImplementation((threadId, run) => {
+        const pending = enqueueMutation(threadId, run);
+        if (threadId === "thread-1") {
+          mutationQueued.resolve();
+        }
+        return pending;
+      });
+    try {
+      const second = maybeCompactCodexAppServerSession({
+        sessionId: "session-2",
+        sessionKey: "agent:main:session-2",
+        sessionFile: secondSessionFile,
+        workspaceDir: tempDir,
+        trigger: "manual",
+        abortSignal: abortController.signal,
+      });
+      await mutationQueued.promise;
+      expect(factory).toHaveBeenCalledTimes(1);
+      abortController.abort();
+      await expect(second).resolves.toMatchObject({
+        ok: false,
+        compacted: false,
+        reason: "codex app-server compaction aborted while waiting to start",
+      });
 
-    const third = maybeCompactCodexAppServerSession({
-      sessionId: "session-3",
-      sessionKey: "agent:main:session-3",
-      sessionFile: thirdSessionFile,
-      workspaceDir: tempDir,
-      trigger: "manual",
-    });
-    await flushAsyncTasks();
-    expect(factory).toHaveBeenCalledTimes(1);
-    expect(fake.request).toHaveBeenCalledTimes(1);
+      mutationQueued = createDeferred<void>();
+      const third = maybeCompactCodexAppServerSession({
+        sessionId: "session-3",
+        sessionKey: "agent:main:session-3",
+        sessionFile: thirdSessionFile,
+        workspaceDir: tempDir,
+        trigger: "manual",
+      });
+      await mutationQueued.promise;
+      expect(factory).toHaveBeenCalledTimes(1);
+      expect(fake.request).toHaveBeenCalledTimes(1);
 
-    fake.completeCompaction();
-    await expect(first).resolves.toMatchObject({ ok: true, compacted: true });
-    await vi.waitFor(() => {
-      expect(
-        fake.request.mock.calls.filter(([method]) => method === "thread/compact/start"),
-      ).toHaveLength(2);
-    });
+      fake.completeCompaction();
+      await expect(first).resolves.toMatchObject({ ok: true, compacted: true });
+      await vi.waitFor(() => {
+        expect(
+          fake.request.mock.calls.filter(([method]) => method === "thread/compact/start"),
+        ).toHaveLength(2);
+      });
 
-    fake.completeCompaction();
-    await expect(third).resolves.toMatchObject({ ok: true, compacted: true });
+      fake.completeCompaction();
+      await expect(third).resolves.toMatchObject({ ok: true, compacted: true });
+    } finally {
+      queueSpy.mockRestore();
+    }
   });
 
   it("preserves stale thread binding metadata for recovery and reports failed native compaction", async () => {

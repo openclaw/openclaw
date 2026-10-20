@@ -116,7 +116,7 @@ function ListTabs(props: CronProps) {
           }
           props.onListTabChange("tasks");
           if (value !== props.jobsEnabledFilter) {
-            void props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
+            props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
           }
         },
       }}
@@ -145,7 +145,7 @@ function Toolbar(
               aria-label={t("cron.list.searchPlaceholder")}
               placeholder={t("cron.list.searchPlaceholder")}
               onInput={(e) =>
-                void props.onJobsFiltersChange({
+                props.onJobsFiltersChange({
                   cronJobsQuery: e.currentTarget.value,
                 })
               }
@@ -323,7 +323,7 @@ function JobRow(
             data-test-id={`cron-row-run-${props.job.id}`}
             title={t("cron.actions.runNowJob", { name: displayName() })}
             aria-label={t("cron.actions.runNowJob", { name: displayName() })}
-            disabled={props.busy}
+            disabled={props.busy || !props.connected}
             onClick={() => props.onRun(props.job, "force")}
           >
             <Icon name="play" />

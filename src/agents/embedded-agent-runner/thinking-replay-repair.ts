@@ -22,7 +22,7 @@ type ReplayRepairParams = {
   agentId?: string;
 };
 
-type ReplayRepairResult = { repaired: boolean; repairedCount: number; reason?: string };
+type ReplayRepairResult = { repaired: boolean; reason?: string };
 
 async function rewriteRejectedReplayInSessionManager(
   params: ReplayRepairParams,
@@ -33,14 +33,14 @@ async function rewriteRejectedReplayInSessionManager(
   },
 ): Promise<ReplayRepairResult> {
   if (repair.replacements.length === 0) {
-    return { repaired: false, repairedCount: 0, reason: repair.emptyReason };
+    return { repaired: false, reason: repair.emptyReason };
   }
   const rewriteResult = await rewriteTranscriptEntriesInSessionManager({
     sessionManager: params.sessionManager,
     replacements: repair.replacements,
   });
   if (!rewriteResult.changed) {
-    return { repaired: false, repairedCount: 0, reason: rewriteResult.reason };
+    return { repaired: false, reason: rewriteResult.reason };
   }
   const target = params.sessionManager.getSessionTarget();
   if (target || params.sessionFile) {
@@ -58,11 +58,7 @@ async function rewriteRejectedReplayInSessionManager(
     `[session-recovery] ${repair.logMessage}: repaired=${rewriteResult.rewrittenEntries} ` +
       `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
   );
-  return {
-    repaired: true,
-    repairedCount: rewriteResult.rewrittenEntries,
-    reason: rewriteResult.reason,
-  };
+  return { repaired: true };
 }
 
 export function repairRejectedThinkingReplayInSessionManager(

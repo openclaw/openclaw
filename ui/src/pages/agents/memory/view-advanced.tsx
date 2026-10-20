@@ -77,7 +77,7 @@ function AdvancedEntryList(params: {
         <div class="dreams-advanced__list">
           <For each={params.entries} keyed={(entry) => entry.key}>
             {(entry) => {
-              const badge = createMemo(() => params.badge?.(entry()));
+              const badge = () => params.badge?.(entry());
               return (
                 <article class="dreams-advanced__item" data-entry-key={entry().key}>
                   {badge() ? <span class="dreams-advanced__badge">{badge()}</span> : undefined}

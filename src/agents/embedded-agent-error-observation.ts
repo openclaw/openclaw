@@ -5,13 +5,13 @@ import { filterStringEntries } from "@openclaw/normalization-core/string-normali
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { readLoggingConfig } from "../logging/config.js";
 import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
+import { parseApiErrorInfo } from "../shared/assistant-error-format.js";
 import {
   classifyProviderRuntimeFailureKind,
-  getApiErrorPayloadFingerprint,
-  parseApiErrorInfo,
   type ProviderRuntimeFailureKind,
-} from "./embedded-agent-helpers.js";
+} from "./embedded-agent-helpers/provider-runtime-failure.js";
 import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
+import { getApiErrorPayloadFingerprint } from "./failover/user-copy.js";
 
 const MAX_OBSERVATION_INPUT_CHARS = 64_000;
 const MAX_FINGERPRINT_MESSAGE_CHARS = 8_000;
@@ -93,13 +93,14 @@ function buildObservationFingerprint(params: {
 
 export function buildApiErrorObservationFields(
   rawError?: string,
-  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner },
+  opts?: { provider?: string; providerOwner?: PreparedProviderFailoverOwner; code?: string },
 ): {
   rawErrorPreview?: string;
   rawErrorHash?: string;
   rawErrorFingerprint?: string;
   httpCode?: string;
   providerRuntimeFailureKind?: ProviderRuntimeFailureKind;
+  providerErrorCode?: string;
   providerErrorType?: string;
   providerErrorMessagePreview?: string;
   requestIdHash?: string;
@@ -141,6 +142,7 @@ export function buildApiErrorObservationFields(
         },
         { providerPlugin: opts?.providerOwner ?? null },
       ),
+      providerErrorCode: redactObservationText(opts?.code ?? parsed?.code),
       providerErrorType: redactObservationText(parsed?.type),
       providerErrorMessagePreview: truncateForObservation(
         redactedProviderMessage,

@@ -9,7 +9,7 @@ import {
   addIMessageApprovalReactionHintToStructuredPayload,
   buildIMessageApprovalConversationKeyForTarget,
   clearIMessageApprovalReactionTargetsForTest,
-  maybeResolveIMessageApprovalReaction,
+  handleIMessageApprovalReaction,
   registerIMessageApprovalReactionTargetForDeliveredPayload as bindDelivered,
   registerIMessageApprovalReactionTarget as registerRaw,
   resolveIMessageApprovalReactionTargetWithPersistence as lookupTarget,
@@ -94,19 +94,21 @@ function buildTapbackReactionPayload(overrides: Partial<IMessagePayload>): IMess
   } as IMessagePayload;
 }
 
-type ReactionParams = Parameters<typeof maybeResolveIMessageApprovalReaction>[0];
+type ReactionParams = Parameters<typeof handleIMessageApprovalReaction>[0];
 
-function resolveReaction(
+async function resolveReaction(
   message: IMessagePayload,
   overrides: Partial<Omit<ReactionParams, "message">> = {},
 ) {
-  return maybeResolveIMessageApprovalReaction({
-    cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
-    accountId: "default",
-    bodyText: "",
-    message,
-    ...overrides,
-  });
+  return (
+    await handleIMessageApprovalReaction({
+      cfg: { channels: { imessage: { allowFrom: ["+15551230000"] } } },
+      accountId: "default",
+      bodyText: "",
+      message,
+      ...overrides,
+    })
+  ).handled;
 }
 
 describe("iMessage approval reactions", () => {

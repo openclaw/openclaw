@@ -43,6 +43,7 @@ export function buildDeveloperInstructions(
   params: CodexThreadPromptContext,
   options: {
     dynamicTools?: readonly CodexDynamicToolSpec[];
+    nativeCodeModeEnabled?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
   } = {},
 ): string {
@@ -64,7 +65,7 @@ export function buildDeveloperInstructions(
       const name = tool.name.trim();
       const qualifiedName = spec.type === "namespace" ? `${spec.name}.${name}` : name;
       if (tool.deferLoading === true && name) {
-        deferredToolNames.add(name);
+        deferredToolNames.add(qualifiedName);
       }
       if (!toolNames.has(name)) {
         toolNames.set(name, qualifiedName);
@@ -103,6 +104,7 @@ export function buildDeveloperInstructions(
     !isMessageOnlyCodexSourceReply(params);
   const nativeDelegationAvailable =
     delegationGuidanceAvailable &&
+    options.nativeCodeModeEnabled !== false &&
     params.delegationCapability !== "host_only" &&
     params.pluginHarnessToolPolicyRestricted !== true &&
     params.requireWorkspaceOnly !== true &&
@@ -110,10 +112,13 @@ export function buildDeveloperInstructions(
     !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
     !shouldDisableCodexToolSearchForModel(params.modelId);
   const deferredToolDiscoveryGuidance =
-    deferredToolNames.size > 0 || nativeDelegationAvailable
-      ? options.nativeCodeModeOnlyEnabled === true
-        ? "Deferred tools may be absent from the direct tool list. Use `tool_search` when directly callable. On code-mode-only models, use `exec` instead: filter `ALL_TOOLS` by name and description, then call the matching entry through `tools`."
-        : "Deferred tools may be absent from the direct tool list. Call a tool that is in the direct tool list directly. Use `tool_search` to find a tool that is not listed; if `tool_search` is not directly callable, use `exec` to filter `ALL_TOOLS` by name and description and call the matching entry through `tools`. Never use `exec` to look up a tool that is already listed, and do not re-run a completed call to get a result you already have."
+    (options.nativeCodeModeEnabled === true ? deferredToolNames.size > 0 : toolNames.size > 0) ||
+    nativeDelegationAvailable
+      ? options.nativeCodeModeEnabled === true
+        ? options.nativeCodeModeOnlyEnabled === true
+          ? "Deferred tools may be absent from the direct tool list. Use Codex's native JavaScript `exec` to filter `ALL_TOOLS` by name and description, then invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Call directly listed tools by their exact qualified names."
+          : "Call directly listed tools by their exact qualified names. Use `tool_search` for deferred tools when it is directly callable. Otherwise use Codex's native JavaScript `exec` to filter `ALL_TOOLS` and invoke the matching entry through `tools`. `ALL_TOOLS` and `tools` are JavaScript globals, not shell environment variables. OpenClaw shell command tools are separate from this JavaScript runner. Do not repeat a completed call to retrieve a result you already have."
+        : "Call the supplied OpenClaw tools by their exact qualified names. Shell command tools execute operating-system commands, not JavaScript tool discovery."
       : undefined;
   const sections = [
     "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",

@@ -56,7 +56,7 @@ function resolveBindingsState(input: DevicesProps) {
 }
 
 function Bindings(props: BindingState) {
-  const supportsBinding = createMemo(() => props.nodes.length > 0);
+  const supportsBinding = () => props.nodes.length > 0;
   const saveButton = (
     <button
       class="btn"
@@ -121,10 +121,9 @@ function Bindings(props: BindingState) {
 }
 
 function AgentBinding(props: BindingState & { agent: BindingAgent }) {
-  const bindingValue = createMemo(() => props.agent.binding ?? "__default__");
-  const label = createMemo(() =>
-    props.agent.name?.trim() ? `${props.agent.name} (${props.agent.id})` : props.agent.id,
-  );
+  const bindingValue = () => props.agent.binding ?? "__default__";
+  const label = () =>
+    props.agent.name?.trim() ? `${props.agent.name} (${props.agent.id})` : props.agent.id;
   return (
     <SettingsRow
       title={label()}

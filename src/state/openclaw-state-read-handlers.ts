@@ -56,7 +56,7 @@ import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   readInterruptedUpdateCandidate,
   readUpdateRunStatusInDatabase,
@@ -88,7 +88,6 @@ import {
 } from "./config-machine-state.js";
 import { readGitHubPublicationSessionLifecycle } from "./github-publication-session-lifecycles.worker.js";
 import { readOnboardingRecommendationsInDatabase } from "./onboarding-recommendations.kernel.js";
-import { readRegisteredAgentDatabaseRows } from "./openclaw-agent-db-registry.read.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import {
@@ -100,10 +99,7 @@ import type { RegisteredStateReadCommand } from "./openclaw-state-read-operation
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.worker.js";
 import { readStateStream } from "./openclaw-state-read-stream.js";
-import type {
-  OpenClawStateReadRequest,
-  OpenClawStateReadResult,
-} from "./openclaw-state-read.types.js";
+import type { OpenClawStateReadRequest } from "./openclaw-state-read.types.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import { readUserBackgroundCommand } from "./user-background.kernel.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
@@ -111,12 +107,7 @@ import { readUserPreferences, selectUserPreferenceValues } from "./user-preferen
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
 import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 
-export {
-  prepareAcpSessionMetadataRead,
-  loadSubagentSessionListRunsFromSqlite,
-  readRegisteredAgentDatabaseRows,
-  readStateStream,
-};
+export { prepareAcpSessionMetadataRead, loadSubagentSessionListRunsFromSqlite, readStateStream };
 
 /** Non-metadata query owners load only when the shared worker receives one of their commands. */
 export function readOpenClawStateDatabaseCommand(
@@ -137,7 +128,7 @@ export function readOpenClawStateDatabaseCommand(
       }
   >,
   metadataRead: ReturnType<typeof prepareAcpSessionMetadataRead> | undefined,
-): OpenClawStateReadResult {
+) {
   if (command.type === "claws.inventory") {
     return readClawStateCommandInDatabase(db, command);
   }
@@ -283,13 +274,13 @@ export function readOpenClawStateDatabaseCommand(
   if (command.type === "updateRuns.status") {
     return {
       type: command.type,
-      status: runSqliteDeferredTransactionSync(db, () => readUpdateRunStatusInDatabase(db)),
+      status: runSqliteReadSnapshotSync(db, () => readUpdateRunStatusInDatabase(db)),
     };
   }
   if (command.type === "updateRuns.historyStatus") {
     return {
       type: command.type,
-      status: runSqliteDeferredTransactionSync(db, () => readUpdateRunHistoryStatusInDatabase(db)),
+      status: runSqliteReadSnapshotSync(db, () => readUpdateRunHistoryStatusInDatabase(db)),
     };
   }
   if (command.type === "updateRuns.interruptedCandidate") {
@@ -389,16 +380,16 @@ export function readOpenClawStateDatabaseCommand(
       row: readGitHubPublicationRequest(db, { requestId: command.requestId }),
     };
   }
-  if (
-    command.type === "githubPublication.knownPullRequestUrls" ||
-    command.type === "githubRepository.knownPullRequestUrls"
-  ) {
+  if (command.type === "githubPublication.knownPullRequestUrls") {
     return {
       type: command.type,
-      urls:
-        command.type === "githubPublication.knownPullRequestUrls"
-          ? readKnownGitHubPublicationPullRequestUrlsInDatabase(db, command.input)
-          : readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(db, command.input),
+      urls: readKnownGitHubPublicationPullRequestUrlsInDatabase(db, command.input),
+    };
+  }
+  if (command.type === "githubRepository.knownPullRequestUrls") {
+    return {
+      type: command.type,
+      urls: readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase(db, command.input),
     };
   }
   if (
@@ -426,7 +417,7 @@ export function readOpenClawStateDatabaseCommand(
   if (command.type === "userPreferences.read") {
     return {
       type: command.type,
-      preferences: runSqliteDeferredTransactionSync(db, () => {
+      preferences: runSqliteReadSnapshotSync(db, () => {
         const profile = tableExists(db, "user_profiles")
           ? selectResolvedUserProfileMetadataById(db, command.profileId)
           : undefined;
@@ -451,9 +442,12 @@ export function readOpenClawStateDatabaseCommand(
     return readUserModelAccountCommand(db, command);
   }
   if (command.type === "sessionRepositoryWorkspaces.find") {
+    if (command.owners.length === 0 || !tableExists(db, "session_repository_workspaces")) {
+      return { type: command.type, workspaces: [] };
+    }
     return {
       type: command.type,
-      workspaces: runSqliteDeferredTransactionSync(db, () =>
+      workspaces: runSqliteReadSnapshotSync(db, () =>
         command.owners.flatMap((owner) => {
           const workspace = findSessionRepositoryWorkspaceInDatabase(db, owner);
           return workspace ? [workspace] : [];

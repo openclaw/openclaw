@@ -11,8 +11,8 @@ import {
   type ProcessSession,
 } from "../../agents/bash-process-registry.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+  attachActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createLazyExecTool } from "../../agents/lazy-exec-tool.js";
@@ -26,6 +26,7 @@ import {
   getRuntimeConfig,
   setRuntimeConfigSnapshot,
 } from "../../config/config.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
@@ -36,11 +37,6 @@ import {
   publishSystemEventStoreConfig,
   resolvePhysicalSessionStorePath,
 } from "../../config/sessions/session-store-path.js";
-import {
-  clearAgentRunContext,
-  getAgentRunContext,
-  registerAgentRunContext,
-} from "../../infra/agent-run-registry.js";
 import {
   captureExecRequestOwners,
   withExecRequestTurn,
@@ -54,20 +50,25 @@ import {
   patchSessionEntry,
 } from "../../plugin-sdk/session-store-runtime.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { executeFastAbortRequest } from "./abort-operation.js";
-import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
+import { registerAbortAcknowledgmentCases } from "./abort.acknowledgment.cases.js";
+import { registerAbortHandoffCases } from "./abort.handoff.cases.js";
+import { tryFastAbortFromMessage } from "./abort.js";
 import { handleStopCommand } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
-import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue.js";
+import { enqueueFollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import { clearFollowupDrainCallback } from "./queue/drain.js";
-import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
-import { createReplyOperation } from "./reply-run-registry.js";
-import { testing } from "./reply-run-registry.test-support.js";
+import { clearSessionQueues } from "./queue/cleanup.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const dirs = createSuiteTempRootTracker({ prefix: "openclaw-stop-owner-" });
@@ -76,9 +77,8 @@ const sessionKey = "agent:main:slack:group:g12345678";
 beforeAll(() => dirs.setup());
 afterAll(() => dirs.cleanup());
 afterEach(() => {
-  clearFollowupQueue(sessionKey);
-  clearFollowupDrainCallback(sessionKey);
-  testing.resetReplyRunRegistry();
+  clearSessionQueues([sessionKey]);
+  resetSessionControllerStateForTest();
   clearRuntimeConfigSnapshot();
 });
 
@@ -139,12 +139,20 @@ async function setupStop(createEntry = true) {
     isGroup: true,
     opts: { isCommandTargetCurrent },
   };
-  return { cfg, ctx, entry, params, storePath, isCommandTargetCurrent };
+  const target = captureSessionTarget({
+    storeScope: storePath,
+    sessionKey,
+    incarnation: entry.sessionId,
+    agentId: "main",
+  });
+  return { cfg, ctx, entry, params, storePath, target, isCommandTargetCurrent };
 }
 
-it.each([false, true])(
-  "retires idle MCP state while preserving a later lease=%s",
-  async (laterLease) => {
+registerAbortAcknowledgmentCases({ sessionKey, setupStop });
+
+it.each(["idle", "leased", "replaced"] as const)(
+  "public Stop retires captured idle MCP state safely (%s)",
+  async (mode) => {
     const state = await setupStop();
     const { getOrCreateSessionMcpRuntime, getSessionMcpRuntimeTestManager, unopenedMcpConfig } =
       await import("../../agents/agent-bundle-mcp-manager.test-support.js");
@@ -154,96 +162,58 @@ it.each([false, true])(
     onTestFinished(() => scheduler.stop());
     await setSessionMcpRuntimeScheduler(scheduler);
     const manager = getSessionMcpRuntimeTestManager();
+    const metadataEntered = createDeferred();
+    const releaseMetadata = createDeferred();
+    const resolveTarget = sessionAccessor.resolveSessionAbortTarget;
+    const metadata = vi
+      .spyOn(sessionAccessor, "resolveSessionAbortTarget")
+      .mockImplementationOnce(async (...args) => {
+        metadataEntered.resolve();
+        await releaseMetadata.promise;
+        return await resolveTarget(...args);
+      });
     try {
-      const runtime = await getOrCreateSessionMcpRuntime({
+      const runtimeParams = {
         sessionId: state.entry.sessionId,
         sessionKey,
         workspaceDir: state.params.workspaceDir,
         cfg: unopenedMcpConfig,
         manifestRegistry: { plugins: [] },
-      });
+      };
+      const runtime = await getOrCreateSessionMcpRuntime(runtimeParams);
       expect(manager.peekSession({ sessionId: state.entry.sessionId })).toBe(runtime);
-      const stopping = executeFastAbortRequest(state, {
-        commandSessionKey: state.ctx.SessionKey,
-        targetKey: sessionKey,
-        resolveTargetAgentId: () => "main",
-      });
-      const releaseLease = laterLease
-        ? expectDefined(runtime.acquireLease, "runtime lease")()
-        : undefined;
+      const stopping = tryFastAbortFromMessage(state);
+      await metadataEntered.promise;
+      const releaseLease =
+        mode === "leased" ? expectDefined(runtime.acquireLease, "runtime lease")() : undefined;
+      let replacement: typeof runtime | undefined;
       try {
+        if (mode === "replaced") {
+          await manager.disposeSession(state.entry.sessionId);
+          replacement = await getOrCreateSessionMcpRuntime(runtimeParams);
+          expect(replacement).not.toBe(runtime);
+        }
+        releaseMetadata.resolve();
         await stopping;
         expect(manager.peekSession({ sessionId: state.entry.sessionId })).toBe(
-          laterLease ? runtime : undefined,
+          replacement ?? (mode === "leased" ? runtime : undefined),
         );
       } finally {
         releaseLease?.();
+        releaseMetadata.resolve();
+        await stopping;
       }
       await manager.completeDeferredRetirement(state.entry.sessionId, runtime);
-      expect(manager.peekSession({ sessionId: state.entry.sessionId })).toBeUndefined();
+      expect(manager.peekSession({ sessionId: state.entry.sessionId })).toBe(replacement);
     } finally {
+      releaseMetadata.resolve();
+      metadata.mockRestore();
       await manager.disposeAll();
     }
   },
 );
 
 describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) => {
-  it.each([
-    { waiting: false, abortable: true },
-    { waiting: true, abortable: true },
-    { waiting: true, abortable: false },
-  ])(
-    "reports a captured local wait only for accepted cancellation: %j",
-    async ({ waiting, abortable }) => {
-      const state = await setupStop();
-      const runId = `cancel-wait-${pathKind}`;
-      registerAgentRunContext(runId, { sessionKey, agentId: "main" });
-      const context = expectDefined(getAgentRunContext(runId), "run context");
-      context.localModelWait = waiting ? { requestId: "request-1" } : undefined;
-      const operation = createReplyOperation({
-        sessionKey,
-        sessionId: state.entry.sessionId,
-        resetTriggered: false,
-      });
-      operation.attachBackend({
-        kind: "embedded",
-        runId,
-        cancel: () => {
-          context.localModelWait = undefined;
-        },
-      });
-      if (!abortable) {
-        operation.freezeAbort();
-      }
-      const handle = createEmbeddedRunHandle({ runId, isAbortable: abortable });
-      setActiveEmbeddedRun(state.entry.sessionId, handle, sessionKey, undefined, "main");
-      try {
-        const result =
-          pathKind === "fast"
-            ? await tryFastAbortFromMessage(state)
-            : await handleStopCommand(state.params, true);
-        const text =
-          result && "handled" in result
-            ? formatAbortReplyText(
-                result.stoppedSubagents,
-                result.rejectionReason,
-                result.failedSubagents,
-                result.localModelMayStillBeFinishing,
-              )
-            : result?.reply?.text;
-        expect(text).toBe(
-          abortable
-            ? `⚙️ Agent was aborted.${waiting ? " Cancellation requested; the local model may still be finishing." : ""}`
-            : "Agent reply is already finalizing and can no longer be aborted.",
-        );
-      } finally {
-        operation.complete();
-        clearActiveEmbeddedRun(state.entry.sessionId, handle);
-        clearAgentRunContext(runId);
-      }
-    },
-  );
-
   it.each(["completed", "running", "backend-error", "cleanup-error"] as const)(
     "stops a %s request's command while preserving its independent service",
     async (phase) => {
@@ -253,6 +223,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
         agentId: "main",
         sessionKey,
         sessionId: state.entry.sessionId,
+        target: state.target,
         resetTriggered: false,
       });
       const commands: ProcessSession[] = [];
@@ -336,6 +307,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
           operation.attachBackend({
             kind: "embedded",
             cancel: () => {
+              queueMicrotask(() => operation.complete());
               if (phase === "backend-error") {
                 throw new Error("Synthetic backend cancellation failure");
               }
@@ -385,6 +357,12 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
             agentId: "main",
             sessionKey: childKey,
             sessionId: childSessionId,
+            target: captureSessionTarget({
+              storeScope: state.storePath,
+              sessionKey: childKey,
+              incarnation: childSessionId,
+              agentId: "main",
+            }),
             resetTriggered: false,
           });
           child.attachBackend({
@@ -512,7 +490,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
   );
 
   it.each(["reply", "embedded", "new-session"] as const)(
-    "preserves later human %s work across Stop preparation",
+    "preserves later active %s work and cancels pending input at the Stop effect",
     async (backend) => {
       const state = await setupStop(backend !== "new-session");
       const release = createDeferred();
@@ -544,24 +522,60 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
       );
       const nativeAbort = vi.fn();
       const native = createEmbeddedRunHandle({ abort: nativeAbort });
-      const original =
-        backend === "new-session"
-          ? createReplyOperation({
-              agentId: "main",
-              sessionKey,
-              sessionId: state.entry.sessionId,
-              resetTriggered: false,
-            })
-          : undefined;
+      const controllerTarget = captureSessionTarget({
+        storeScope: state.storePath,
+        sessionKey,
+        incarnation: state.entry.sessionId,
+        agentId: "main",
+      });
+      const preparedTarget = await captureSessionEntryCurrentCheckAsync({
+        agentId: "main",
+        storePath: state.storePath,
+        sessionKey,
+        // This cell permits metadata to appear while the captured Stop owners stay fixed.
+        matchGeneration: backend !== "new-session",
+      });
+      const releasePreparation = createDeferred();
+      const isCommandTargetCurrent = Object.assign(
+        async () => {
+          await releasePreparation.promise;
+          return backend === "new-session" || state.isCommandTargetCurrent();
+        },
+        { sessionSource: preparedTarget.source },
+      );
+      const original = createReplyOperation({
+        ...target,
+        target: controllerTarget,
+        resetTriggered: false,
+      });
       let replacement: ReturnType<typeof createReplyOperation> | undefined;
+      const selectedQueued = vi.fn(async () => {});
+      let selectedAdmission: Promise<unknown> | undefined;
+      const laterStarted = createDeferred();
+      const laterQueued = vi.fn(async (operation: ReplyOperation | undefined) => {
+        replacement = expectDefined(operation, "later controller turn");
+        if (backend === "embedded") {
+          attachActiveEmbeddedRun(
+            state.entry.sessionId,
+            native,
+            sessionKey,
+            undefined,
+            "main",
+            replacement,
+          );
+        }
+        laterStarted.resolve();
+        await release.promise;
+      });
+      let laterAdmission: Promise<unknown> | undefined;
+      let stopping: Promise<unknown> | undefined;
       try {
-        const stopping =
+        stopping =
           pathKind === "fast"
             ? executeFastAbortRequest(
                 {
                   ...state,
-                  isCommandTargetCurrent:
-                    backend === "new-session" ? undefined : state.isCommandTargetCurrent,
+                  isCommandTargetCurrent,
                 },
                 {
                   commandSessionKey: state.ctx.SessionKey,
@@ -572,28 +586,50 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
             : handleStopCommand(
                 {
                   ...state.params,
-                  opts: backend === "new-session" ? undefined : state.params.opts,
+                  opts: { isCommandTargetCurrent },
                 },
                 true,
               );
-        original?.complete();
+        original.complete();
+        await original.ownerSettlement;
         start({ ...target, runId: "during-preparation" });
+        laterAdmission = withSessionTurn(
+          { ...target, target: controllerTarget },
+          laterQueued,
+        ).catch((error: unknown) => {
+          laterStarted.reject(error);
+          return error;
+        });
+        await laterStarted.promise;
+        // The replacement must already own the turn; Stop cancels inputs still pending
+        // at its effect, including those submitted during asynchronous preparation.
+        selectedAdmission = withSessionTurn(
+          { ...target, target: controllerTarget },
+          selectedQueued,
+        ).catch((error: unknown) => error);
+        const selectedFollowup = createQueueTestRun({ prompt: "selected pending input" });
+        selectedFollowup.run = { ...selectedFollowup.run, ...target, config: state.cfg };
+        enqueueFollowupRun(
+          sessionKey,
+          selectedFollowup,
+          { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+          "none",
+        );
+        const laterFollowup = createQueueTestRun({ prompt: "later human input" });
+        laterFollowup.run = { ...laterFollowup.run, ...target, config: state.cfg };
+        enqueueFollowupRun(
+          sessionKey,
+          laterFollowup,
+          { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+          "none",
+        );
         if (backend === "new-session") {
           replaceSessionEntrySync(
             { storePath: state.storePath, sessionKey },
             { ...state.entry, activeWriterRunId: "later-human" },
           );
         }
-        if (backend !== "embedded") {
-          replacement = createReplyOperation({
-            agentId: "main",
-            sessionKey,
-            sessionId: state.entry.sessionId,
-            resetTriggered: false,
-          });
-        } else {
-          setActiveEmbeddedRun(state.entry.sessionId, native, sessionKey, undefined, "main");
-        }
+        releasePreparation.resolve();
         await stopping;
         expect(owners.map((owner) => [owner.identity.runId, owner.signal.aborted])).toEqual([
           ["selected", true],
@@ -610,15 +646,70 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
             loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun,
           ).not.toBe(true);
         }
-      } finally {
-        replacement?.complete();
-        original?.complete();
-        clearActiveEmbeddedRun(state.entry.sessionId, native, sessionKey);
+        expect(await selectedAdmission).toMatchObject({
+          name: "AbortError",
+          code: "OPENCLAW_DIRECT_ABORT",
+        });
+        expect(selectedQueued).not.toHaveBeenCalled();
+        await laterFollowup.controllerInput!.settlement.promise;
+        expect(laterFollowup.controllerInput!.abortSignal.aborted).toBe(true);
+        expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([]);
         release.resolve();
+        expect(await laterAdmission).toBeUndefined();
+        expect(laterQueued).toHaveBeenCalledOnce();
+      } finally {
+        releasePreparation.resolve();
+        replacement?.complete();
+        original.complete();
+        detachActiveEmbeddedRun(state.entry.sessionId, native, sessionKey);
+        release.resolve();
+        await Promise.allSettled([selectedAdmission, laterAdmission, stopping]);
+        preparedTarget.release();
+        await original.ownerSettlement;
+        await replacement?.ownerSettlement;
         await Promise.all(executions);
       }
     },
   );
+
+  it("does not stop the same agent and alias in another store", async () => {
+    const state = await setupStop();
+    const createOperation = (storeScope: string, sessionId: string) =>
+      createReplyOperation({
+        agentId: "main",
+        sessionKey,
+        sessionId,
+        resetTriggered: false,
+        target: captureSessionTarget({
+          storeScope,
+          sessionKey,
+          incarnation: sessionId,
+          agentId: "main",
+        }),
+      });
+    const selected = createOperation(state.storePath, state.entry.sessionId);
+    const foreign = createOperation(
+      path.join(state.params.workspaceDir, "foreign.json"),
+      "foreign",
+    );
+    for (const operation of [selected, foreign]) {
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: () => queueMicrotask(() => operation.complete()),
+        isStreaming: () => true,
+      });
+    }
+    try {
+      await (pathKind === "fast"
+        ? tryFastAbortFromMessage(state)
+        : handleStopCommand(state.params, true));
+      expect(selected.abortSignal.aborted).toBe(true);
+      expect(foreign.abortSignal.aborted).toBe(false);
+    } finally {
+      selected.complete();
+      foreign.complete();
+    }
+  });
 
   it.each([
     { agentId: "selected", activeAgentId: "selected", otherAgentId: "other" },
@@ -668,13 +759,24 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
       const isCommandTargetCurrent = () =>
         loadSessionEntry(scope)?.sessionId === state.entry.sessionId;
       const ownsActiveRun = agentId === activeAgentId;
+      const activeScope = ownsActiveRun ? scope : otherScope;
       const operation = createReplyOperation({
         agentId: activeAgentId,
         sessionKey: globalKey,
         sessionId: ownsActiveRun ? state.entry.sessionId : otherEntry.sessionId,
         resetTriggered: false,
+        target: captureSessionTarget({
+          storeScope: activeScope.storePath,
+          sessionKey: globalKey,
+          incarnation: ownsActiveRun ? state.entry.sessionId : otherEntry.sessionId,
+          agentId: activeAgentId,
+        }),
       });
-      operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: () => queueMicrotask(() => operation.complete()),
+        isStreaming: () => true,
+      });
       try {
         const followups = [
           { ownerAgentId: agentId, sessionId: state.entry.sessionId },
@@ -684,6 +786,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
           followup.run = {
             ...followup.run,
             agentId: ownerAgentId,
+            config: cfg,
             sessionKey: globalKey,
             sessionId,
           };
@@ -724,8 +827,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
         expect(loadSessionEntry(otherScope)?.abortedLastRun).not.toBe(true);
       } finally {
         operation.complete();
-        clearFollowupQueue(globalKey);
-        clearFollowupDrainCallback(globalKey);
+        clearSessionQueues([globalKey]);
       }
     },
   );
@@ -757,9 +859,14 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     const operation = createReplyOperation({
       sessionKey,
       sessionId: state.entry.sessionId,
+      target: state.target,
       resetTriggered: false,
     });
-    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => queueMicrotask(() => operation.complete()),
+      isStreaming: () => true,
+    });
     let reassigned = false;
     state.isCommandTargetCurrent = () => {
       const current = getConversationSession(address);
@@ -804,7 +911,7 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
   });
 
   it.each(["session", "writer"] as const)(
-    "skips stale abort bookkeeping after waiting for a replacement %s",
+    "keeps replacement %s bookkeeping untouched after cancellation",
     async (replacement) => {
       const state = await setupStop();
       const entered = createDeferred();
@@ -825,9 +932,14 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
       const operation = createReplyOperation({
         sessionKey,
         sessionId: "session-a",
+        target: state.target,
         resetTriggered: false,
       });
-      operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+      operation.attachBackend({
+        kind: "embedded",
+        cancel: () => queueMicrotask(() => operation.complete()),
+        isStreaming: () => true,
+      });
       const aborted = createDeferred();
       const onAbort = () => aborted.resolve();
       operation.abortSignal.addEventListener("abort", onAbort, { once: true });
@@ -853,7 +965,13 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
       expect(operation.abortSignal.aborted).toBe(true);
       release.resolve();
       expect(await writer).toMatchObject(nextOwner);
-      await stopping;
+      if (replacement === "session") {
+        await expect(stopping).rejects.toThrow(
+          "The selected session changed before it could be stopped.",
+        );
+      } else {
+        await stopping;
+      }
       expect(loadSessionEntry({ storePath: state.storePath, sessionKey })).toMatchObject(nextOwner);
       expect(loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun).not.toBe(
         true,
@@ -861,72 +979,30 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     },
   );
 
-  it("completes cancellation when its own abort releases the live publisher", async () => {
+  it("stops issuing effects when cancellation releases its active publisher authority", async () => {
     const state = await setupStop();
     const operation = createReplyOperation({
       sessionKey,
       sessionId: "session-a",
+      target: state.target,
       resetTriggered: false,
     });
-    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+    operation.attachBackend({
+      kind: "embedded",
+      cancel: () => queueMicrotask(() => operation.complete()),
+      isStreaming: () => true,
+    });
     state.isCommandTargetCurrent = () => !operation.abortSignal.aborted;
     state.params.opts = { isCommandTargetCurrent: state.isCommandTargetCurrent };
-    const result = await (pathKind === "fast"
-      ? tryFastAbortFromMessage(state)
-      : handleStopCommand(state.params, true));
+    await expect(
+      pathKind === "fast" ? tryFastAbortFromMessage(state) : handleStopCommand(state.params, true),
+    ).rejects.toThrow("The selected session changed before it could be stopped.");
     expect(operation.abortSignal.aborted).toBe(true);
-    expect(result).toMatchObject(
-      pathKind === "fast" ? { handled: true, aborted: true } : { shouldContinue: false },
-    );
     expect(
       loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun,
     ).toBeUndefined();
     operation.complete();
   });
 
-  it("preserves a replacement run and its queued input after dispatch handoff", async () => {
-    const state = await setupStop();
-    const admitted = createReplyOperation({
-      sessionKey,
-      sessionId: "session-a",
-      resetTriggered: false,
-    });
-    const dispatch = createDeferred();
-    expect(state.isCommandTargetCurrent()).toBe(true);
-    const pending = dispatch.promise.then(async () =>
-      pathKind === "fast" ? tryFastAbortFromMessage(state) : handleStopCommand(state.params, true),
-    );
-    admitted.complete();
-    await replaceSessionEntry(
-      { storePath: state.storePath, sessionKey },
-      {
-        sessionId: "session-b",
-        updatedAt: Date.now(),
-      },
-    );
-    const replacement = createReplyOperation({
-      sessionKey,
-      sessionId: "session-b",
-      resetTriggered: false,
-    });
-    replacement.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
-    enqueueFollowupRun(
-      sessionKey,
-      createQueueTestRun({ prompt: "next conversation" }),
-      { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
-      "none",
-    );
-    dispatch.resolve();
-    const result = await pending.then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    expect(replacement.abortSignal.aborted).toBe(false);
-    expect(result).toBeInstanceOf(Error);
-    expect(getFollowupQueueDepth(sessionKey)).toBe(1);
-    expect(
-      loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun,
-    ).toBeUndefined();
-    replacement.complete();
-  });
+  registerAbortHandoffCases({ pathKind, sessionKey, setupStop });
 });

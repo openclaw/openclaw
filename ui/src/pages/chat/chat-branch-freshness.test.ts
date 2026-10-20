@@ -116,7 +116,6 @@ describe("chat branch freshness", () => {
       chatBranchesConnectionEpoch: null,
       currentSessionId: "selected-session",
       chatMessagesBySession: new Map(),
-      chatThinkingLevel: null,
       chatVerboseLevel: null,
       chatStreamStartedAt: null,
       ...overrides,

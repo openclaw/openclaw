@@ -257,7 +257,10 @@ Preparation uses the state worker when the owner has no published row or absence
 The final read uses memory, follows committed replacements and deletions, and
 honors expiry and runtime retirement.
 
-Queued mutations deny these reads before commit. Known rollback preserves the
+Queued mutations deny reads of affected entries before commit. A write that can
+evict other live entries denies the namespace; native and compound writes without
+a captured scope retain database-wide denial. Independent keyed writes do not
+deny unrelated binding reads. Known rollback preserves the
 prior facts; compound binding cleanup publishes deletion or compensation before
 releasing denial. An unknown outcome keeps effect guards denied for that database
 identity until the Gateway restarts. Ordinary descriptive reads remain available.

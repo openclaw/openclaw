@@ -150,6 +150,7 @@ function createPairingShell(params: {
     pendingGatewayConnection: null,
     confirmPendingGatewayConnection: () => undefined,
     cancelPendingGatewayConnection: () => undefined,
+    setShell: () => undefined,
     start: async () => undefined,
     stop: () => router.stop(),
   };

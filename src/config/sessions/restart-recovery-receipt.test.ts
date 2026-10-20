@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import {
   beginRestartRecoveryTerminalDelivery as begin,
@@ -8,6 +11,7 @@ import {
 } from "./restart-recovery-receipt.js";
 import { loadSessionEntry, replaceSessionEntry } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import * as sessionActors from "./session-actor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
 
@@ -37,6 +41,39 @@ describe("restart recovery terminal delivery receipt", () => {
   });
   const read = () => loadSessionEntry(scope());
   const seed = (fields: Partial<SessionEntry>) => replaceSessionEntry(scope(), entry(fields));
+
+  it("preserves storage guidance when terminal delivery admission has an unknown outcome", async () => {
+    await seed(claim);
+    const before = read();
+    const createActor = sessionActors.createSessionActor;
+    const observer = vi.spyOn(sessionActors, "createSessionActor").mockImplementation((params) => {
+      const actor = createActor(params);
+      vi.spyOn(actor, "deliveryPending").mockResolvedValue({
+        kind: "unknown",
+        target: actor.target,
+        commandId: "storage-failure",
+        error: {
+          name: "Error",
+          message: "Unconfirmed actor settlement",
+          cause: Object.assign(new Error("database or disk is full"), { errcode: 13 }),
+        },
+      });
+      return actor;
+    });
+    try {
+      await expect(begin(scope())).rejects.toSatisfy((error: unknown) => {
+        expect(
+          renderAssistantRequestFailureCopy({
+            storageFailure: classifyGatewayStorageFailure(error),
+          }),
+        ).toContain("disk is full. Free up space");
+        return hasSqliteWorkerOutcomeUnknown(error);
+      });
+      expect(read()).toEqual(before);
+    } finally {
+      observer.mockRestore();
+    }
+  });
 
   it.each(["success", "non-delivery"] as const)(
     "persists pending and blocks repeat sends until provider %s",
@@ -191,6 +228,8 @@ describe("restart recovery steering block reasons", () => {
     [tombstone("source-old")],
     [tombstone("source-old"), "unknown-source-with-terminal-history", ""],
     [{ ...claim, status: "done", restartRecoveryDeliverySourceRunId: "source-2" }, "stale-claim"],
+    [claim, undefined, "recovery-1"],
+    [claim, "stale-claim", "other-run"],
     [{ ...tombstone("source-1"), sessionId: "session-2" }, "stale-claim"],
     [{ status: undefined }, undefined, ""],
     ...([undefined, "done", "interrupted"] as const).map(

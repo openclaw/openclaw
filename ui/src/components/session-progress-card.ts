@@ -194,7 +194,6 @@ export function progressCardPresentation(
     effectiveSessionStatus,
     activityTimestamp,
     activityKey,
-    currentStep,
     currentPosition,
     complete,
     stepLabel,
