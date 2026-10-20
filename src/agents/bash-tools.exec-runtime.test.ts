@@ -56,6 +56,7 @@ vi.mock("../infra/system-events.js", () => ({
   enqueueSystemEventWithReceipt: enqueueSystemEventWithReceiptMock,
 }));
 
+// mock-isolation: Control child-process settlement without spawning real processes.
 vi.mock("../process/supervisor/index.js", () => ({ getProcessSupervisor: () => supervisorMock }));
 
 beforeEach(() => {

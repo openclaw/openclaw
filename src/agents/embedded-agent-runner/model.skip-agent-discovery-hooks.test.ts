@@ -46,6 +46,7 @@ vi.mock("../../plugins/provider-external-auth-core.js", () => ({
   }),
 }));
 
+// mock-isolation: Observe target-provider hooks without loading the host provider registry.
 vi.mock("../../plugins/provider-runtime.js", () => hooks);
 
 import { resolveModelAsync as resolve } from "./model.js";

@@ -15,6 +15,7 @@ import type { FallbackRunnerParams } from "./agent-runner-execution.test-support
 
 const loadProviderScopedThinkingCatalog = vi.hoisted(() => vi.fn());
 
+// mock-isolation: Supply the thinking catalog fixture without live model discovery.
 vi.mock("../../agents/model-catalog.runtime.js", () => ({ loadProviderScopedThinkingCatalog }));
 
 const { state, runTurn } = await setupExecutionSuite();
