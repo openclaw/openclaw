@@ -6,21 +6,11 @@ import { expect } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 
-type TracedLitPart = {
-  startNode: Node;
-  endNode: Node | null;
-  options?: { host?: object; renderBefore?: Node };
-};
-
 function traceNativeWorkspaceLitErrors() {
   const scope = window as NativePluginWindow;
-  const trace = { prototypes: 0, errors: [] as unknown[] };
+  const trace = { errors: [] as unknown[] };
   scope.nativeWorkspaceLitTrace = trace;
   const prototypes = new WeakSet<object>();
-  const describe = (node: unknown) =>
-    node instanceof Node
-      ? { node: node.nodeName, connected: node.isConnected, parent: node.parentNode?.nodeName }
-      : null;
   const discover = (node: Node) => {
     if (!(node instanceof Comment) || node.data !== "lit-content") {
       return;
@@ -29,17 +19,15 @@ function traceNativeWorkspaceLitErrors() {
     if (!cached || typeof cached !== "object") {
       return;
     }
-    // SAFETY: Lit 3.3.3 render caches its RootPart on this renderBefore comment.
-    const part = cached as TracedLitPart;
-    const prototype: object = Object.getPrototypeOf(part);
+    // Lit's DEV runtime caches the RootPart on this renderBefore comment.
+    const prototype: object = Object.getPrototypeOf(cached);
     const original: unknown = Reflect.get(prototype, "_$setValue");
     // The bundled production runtime renames this method; this probe targets Lit DEV.
     if (prototypes.has(prototype) || typeof original !== "function") {
       return;
     }
     prototypes.add(prototype);
-    trace.prototypes += 1;
-    Reflect.set(prototype, "_$setValue", function (this: TracedLitPart, ...args: unknown[]) {
+    Reflect.set(prototype, "_$setValue", function (this: object, ...args: unknown[]) {
       try {
         return Reflect.apply(original, this, args);
       } catch (error) {
@@ -47,9 +35,6 @@ function traceNativeWorkspaceLitErrors() {
           trace.errors.push({
             message: error instanceof Error ? error.message.slice(0, 1_600) : "Non-Error throw",
             stack: error instanceof Error ? error.stack?.slice(0, 1_600) : undefined,
-            start: describe(this.startNode),
-            end: describe(this.endNode),
-            host: describe(this.options?.host),
           });
         }
         throw error;
@@ -97,7 +82,6 @@ export async function captureNativeWorkspaceFailure(page: Page): Promise<void> {
         contextTarget: target,
         subscribe: false,
         callback(context: ApplicationContext) {
-          const router = context.router.getState();
           owner = {
             registryStatus: context.plugins.registryStatus,
             selected: (["workspace", "composer", "transcript"] as const).map((surface) => {
@@ -109,8 +93,6 @@ export async function captureNativeWorkspaceFailure(page: Page): Promise<void> {
               };
             }),
             errorCount: context.plugins.errors.length,
-            routeStatus: router.status,
-            routeIds: router.matches.map((match) => match.routeId),
           };
         },
       }),
@@ -148,14 +130,13 @@ export async function captureNativePluginUiProof(
   name: string,
   options: { fullPage?: boolean } = {},
 ): Promise<void> {
-  if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
-    return;
+  if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+    await page.screenshot({ ...options, path: path.join(owner.artifactDir, name) });
   }
-  await page.screenshot({ ...options, path: path.join(owner.artifactDir, name) });
 }
 
 export type NativePluginWindow = Window & {
-  nativeWorkspaceLitTrace?: { prototypes: number; errors: unknown[] };
+  nativeWorkspaceLitTrace?: { errors: unknown[] };
   nativePluginProof?: { release?: () => void };
   nativeActionProof?: {
     runs: number;
@@ -179,19 +160,14 @@ export async function waitForPendingPluginInitializer(page: Page): Promise<void>
 export const pluginId = "ui-fixture";
 
 export function catalog(revision: string) {
-  return {
+  const plugin = {
+    pluginId,
+    name: "UI fixture",
     revision,
-    diagnostics: [],
-    plugins: [
-      {
-        pluginId,
-        name: "UI fixture",
-        revision,
-        entryUrl: `/__openclaw__/plugins/control-ui/${pluginId}/${revision}/index.js`,
-        styles: [],
-      },
-    ],
+    entryUrl: `/__openclaw__/plugins/control-ui/${pluginId}/${revision}/index.js`,
+    styles: [],
   };
+  return { revision, diagnostics: [], plugins: [plugin] };
 }
 
 export function pluginModule(revision: string, replacements = true) {

@@ -1,8 +1,6 @@
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -10,15 +8,9 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "native Gateway health" });
 const snapshot: NativeGatewaysSnapshot = {
   currentId: "profile:team",
-  gateways: (
-    [
-      ["primary", "Local Gateway"],
-      ["profile:team", "Team"],
-      ["profile:studio", "Studio"],
-    ] as const
-  ).map(([id, name]) => ({
+  gateways: ["primary", "profile:team", "profile:studio"].map((id) => ({
     id,
-    name,
+    name: id === "profile:team" ? "Team" : id,
     kind: id === "primary" ? "local" : "remote",
     isPrimary: id === "primary",
     canPromote: id !== "primary",
@@ -26,8 +18,7 @@ const snapshot: NativeGatewaysSnapshot = {
   })),
 };
 
-// Chromium models only the native host boundary. The production application owns
-// the handshake and health report; no test writes a successful health report.
+// Model the native host boundary only; the application owns handshake and health reports.
 async function installNativeHost(page: Page) {
   await page.addInitScript((initial) => {
     type HealthReport = { gatewayUrl: string; health: "ok" | "error" | "unknown" };
@@ -79,19 +70,20 @@ async function assertSelectionUnchanged(page: Page) {
   const primary = gatewayRow(page, "primary");
   const team = gatewayRow(page, "profile:team");
   const studio = gatewayRow(page, "profile:studio");
-  expect(await primary.getAttribute("aria-checked")).toBe("false");
-  expect(await primary.locator(".sidebar-gateway-primary").textContent()).toBe("primary");
-  expect(await primary.locator(".sidebar-gateway-check").count()).toBe(0);
-  expect(await team.getAttribute("aria-checked")).toBe("true");
-  expect(await team.locator(".sidebar-gateway-check").count()).toBe(1);
-  expect(await team.locator(".sidebar-gateway-primary").count()).toBe(0);
-  expect(await studio.getAttribute("aria-checked")).toBe("false");
-  expect(await studio.locator(".sidebar-gateway-health").getAttribute("data-health")).toBe(
-    "unknown",
-  );
-  expect(await studio.locator(".sidebar-gateway-health").getAttribute("aria-label")).toBe(
-    "Unknown status",
-  );
+  const health = studio.locator(".sidebar-gateway-health");
+  expect(
+    await Promise.all([
+      primary.getAttribute("aria-checked"),
+      primary.locator(".sidebar-gateway-primary").textContent(),
+      primary.locator(".sidebar-gateway-check").count(),
+      team.getAttribute("aria-checked"),
+      team.locator(".sidebar-gateway-check").count(),
+      team.locator(".sidebar-gateway-primary").count(),
+      studio.getAttribute("aria-checked"),
+      health.getAttribute("data-health"),
+      health.getAttribute("aria-label"),
+    ]),
+  ).toEqual(["false", "primary", 0, "true", 1, 0, "false", "unknown", "Unknown status"]);
   expect(await page.evaluate(() => Reflect.get(window, "nativeGatewayActions"))).toEqual([]);
 }
 
@@ -105,14 +97,6 @@ suite.define(() => {
         serviceWorkers: "block",
       },
       async ({ page }) => {
-        const proof = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()
-          ? createControlUiE2eArtifactDir("native-gateway-health")
-          : undefined;
-        const capture = async (name: string) => {
-          if (proof) {
-            await page.screenshot({ path: path.join(proof, name), animations: "disabled" });
-          }
-        };
         await installNativeHost(page);
         const gateway = await installMockGateway(page, { sessions: [], historyMessages: [] });
         await page.goto(`${suite.server.baseUrl}new`);
@@ -155,10 +139,6 @@ suite.define(() => {
               .waitFor();
           }
           await assertSelectionUnchanged(page);
-          if (phase === "after-connected") {
-            await page.mouse.move(1100, 850);
-          }
-          await capture(phase + ".png");
         }
         const reportedHealth = await page.evaluate(() => {
           const reports = Reflect.get(window, "nativeHealthReports") as Array<{ health: string }>;
@@ -170,7 +150,6 @@ suite.define(() => {
         const socketUrls = await gateway.getSocketUrls();
         expect(new Set(socketUrls).size).toBe(1);
         expect(new URL(socketUrls[0]!).host).toBe(new URL(suite.server.baseUrl).host);
-        await capture("after-reconnected.png");
       },
     );
   });

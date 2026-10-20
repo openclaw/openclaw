@@ -1,6 +1,4 @@
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import type { BrowserContextOptions, Locator, Page } from "playwright";
+import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   createNewSessionPageE2eSuite,
@@ -9,8 +7,6 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofStage = process.env.OPENCLAW_AGENT_IDENTITY_PROOF_STAGE ?? "after";
 
 const agentsList = {
   agents: [
@@ -51,21 +47,6 @@ async function setTheme(page: Page, mode: "dark" | "light") {
     root.style.colorScheme = nextMode;
   }, mode);
 }
-
-async function capture(target: Page | Locator, name: string, fullPage = true) {
-  if (!captureProof) {
-    return;
-  }
-  const directory = path.join(suite.artifactDir, "new-session-agent-identity", proofStage);
-  await mkdir(directory, { recursive: true });
-  await target.screenshot({
-    animations: "disabled",
-    ...(fullPage ? { fullPage: true } : {}),
-    path: path.join(directory, `${proofStage}-${name}`),
-  });
-}
-
-const captureElement = (locator: Locator, name: string) => capture(locator, name, false);
 
 async function identityPage(options: Parameters<typeof installMockGateway>[1] = {}) {
   const context = await suite.browser.newContext(CONTEXT);
@@ -150,19 +131,11 @@ suite.define(() => {
         await expect
           .poll(() => welcomeEmoji.evaluate((element) => getComputedStyle(element).fontSize))
           .toBe("56px");
-        if (theme === "dark") {
-          await capture(page, "dark-welcome-emoji.png");
-        }
         await picker.locator(".agent-select__label").waitFor();
         await page.waitForLoadState("networkidle");
         const identityRequests = await gateway.getRequests("agent.identity.get");
         expect(identityRequests).toMatchObject([{ params: { agentId: "main" } }]);
         await picker.locator(".agent-select__trigger").click();
-        await capture(page, `${theme}-named-picker-open.png`);
-        await captureElement(
-          picker.locator(".agent-select__trigger"),
-          `${theme}-named-trigger-crop.png`,
-        );
         await pollLocatorText(hero).toBe("Pacino");
         await pollLocatorText(picker.locator(".agent-select__label")).toBe("Pacino");
         const selectedAgent = picker.locator(
@@ -172,7 +145,6 @@ suite.define(() => {
         await expect
           .poll(() => selectedAgent.evaluate((element) => document.activeElement === element))
           .toBe(true);
-        await captureElement(selectedAgent, `${theme}-selected-focus.png`);
         const unnamedAgent = picker.getByRole("menuitemradio", {
           name: "research",
           exact: true,
@@ -182,17 +154,14 @@ suite.define(() => {
         const longNameAgent = picker.getByRole("menuitemradio", { name: longName, exact: true });
         await pollLocatorText(longNameAgent).toContain(longName);
         await longNameAgent.hover();
-        await captureElement(longNameAgent, `${theme}-long-name-hover.png`);
 
         await unnamedAgent.click();
         await pollLocatorText(hero).toBe("research");
         await pollLocatorText(picker.locator(".agent-select__label")).toBe("research");
-        await capture(page, `${theme}-unnamed-id-fallback.png`);
         await picker.evaluate((element) => {
           (element as HTMLElement & { disabled: boolean }).disabled = true;
         });
         await expect.poll(() => picker.locator(".agent-select__trigger").isDisabled()).toBe(true);
-        await captureElement(picker, `${theme}-disabled.png`);
       } finally {
         await context.close();
       }
