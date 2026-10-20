@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import {
-  AcpSessionManager,
   baseCfg,
-  createRuntime,
+  expectCalledWith,
   extractRuntimeOptionsFromUpserts,
   hoisted,
   installAcpSessionManagerTestLifecycle,
   installMutableAcpSessionMetaUpsert,
+  managerFixture,
   type SessionAcpMeta,
 } from "./manager.test-helpers.js";
 
@@ -17,17 +17,16 @@ const target = { cfg: baseCfg, sessionKey };
 const input = { ...target, agent: "codex", mode: "persistent" as const };
 
 function fixture() {
-  const runtime = createRuntime();
+  const { runtimeState, manager, run } = managerFixture(sessionKey);
   const state: { currentMeta: SessionAcpMeta | undefined } = { currentMeta: undefined };
   installMutableAcpSessionMetaUpsert(state);
-  hoisted.requireAcpRuntimeBackendMock.mockReturnValue({ id: "acpx", runtime: runtime.runtime });
   hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
     sessionKey,
     storeSessionKey: sessionKey,
     acp: state.currentMeta,
     entry: { sessionId: "initialization", updatedAt: 1, acp: state.currentMeta },
   }));
-  return { ...runtime, state, manager: new AcpSessionManager() };
+  return { ...runtimeState, state, manager, run };
 }
 
 describe("AcpSessionManager initializeSession", () => {
@@ -47,14 +46,12 @@ describe("AcpSessionManager initializeSession", () => {
       runtimeOptions: { ...accepted, thinking: "max" },
       thinkingExplicit: false,
     });
-    expect(f.ensureSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey,
-        ...accepted,
-        thinking: "max",
-        thinkingExplicit: false,
-      }),
-    );
+    expectCalledWith(f.ensureSession, {
+      sessionKey,
+      ...accepted,
+      thinking: "max",
+      thinkingExplicit: false,
+    });
     expect(extractRuntimeOptionsFromUpserts()).toEqual([accepted]);
     expect(f.state.currentMeta?.runtimeOptions).toEqual(accepted);
   });
@@ -107,18 +104,10 @@ describe("AcpSessionManager initializeSession", () => {
       reason: "session-actor-superseded",
       discardPersistentState: true,
     });
-    await f.manager.runTurn({
-      ...target,
-      provenance: "system",
-      text: "follow-up",
-      mode: "prompt",
-      requestId: "follow-up",
-    });
+    await f.run({ text: "follow-up", requestId: "follow-up" });
     expect(ensureCount).toBe(2);
-    expect(f.runTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        handle: expect.objectContaining({ runtimeSessionName: "runtime-2" }),
-      }),
-    );
+    expectCalledWith(f.runTurn, {
+      handle: expect.objectContaining({ runtimeSessionName: "runtime-2" }),
+    });
   });
 });

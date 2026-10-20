@@ -1,7 +1,7 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  baseCfg,
   extractStatesFromUpserts,
   installAcpSessionManagerTestLifecycle,
   managerFixture,
@@ -9,8 +9,9 @@ import {
   readySessionMeta,
 } from "./manager.test-helpers.js";
 
+// Load manager defaults only after the unit fixture registers its module mocks.
+const { createGate } = await import("./manager.cancellation-locator.test-support.js");
 const sessionKey = "agent:codex:acp:child-1";
-const target = { cfg: baseCfg, sessionKey };
 
 function fixture() {
   const state = managerFixture(sessionKey);
@@ -22,7 +23,7 @@ describe("AcpSessionManager cancelSession", () => {
   installAcpSessionManagerTestLifecycle();
 
   it("records idle cancellation failure and preserves its cause", async () => {
-    const { runtimeState: runtime, manager } = fixture();
+    const { runtimeState: runtime, manager, target } = fixture();
     const error = new Error("Cancel transport failed");
     runtime.cancel.mockRejectedValue(error);
     await expect(
@@ -38,7 +39,7 @@ describe("AcpSessionManager cancelSession", () => {
   });
 
   it("cancels an active controller turn through the manager API", async () => {
-    const { runtimeState: runtime, manager, run } = fixture();
+    const { runtimeState: runtime, manager, run, target } = fixture();
     const entered = createDeferred();
     const release = createDeferred();
     runtime.runTurn.mockImplementationOnce(async function* (input) {
@@ -70,32 +71,22 @@ describe("AcpSessionManager cancelSession", () => {
   });
 
   it("holds new controller turns until the idle backend cancellation settles", async () => {
-    const { runtimeState: runtime, manager, run } = fixture();
-    const entered = createDeferred();
-    const release = createDeferred();
-    runtime.cancel.mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-    });
+    const { runtimeState: runtime, manager, run, target } = fixture();
+    const backend = createGate("Idle cancellation settled before entering the backend.");
+    runtime.cancel.mockImplementationOnce(backend.wait);
     const cancellation = manager.cancelSession(target);
     let turn: Promise<void> | undefined;
     try {
-      await awaitGateBeforeSettlement(
-        entered.promise,
-        cancellation,
-        "Idle cancellation settled before entering the backend.",
-      );
+      await backend.reached(cancellation);
       turn = run({ requestId: "after-idle-cancel", text: "after idle cancel" });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
+      await nextTurn();
       expect(runtime.runTurn).not.toHaveBeenCalled();
-      release.resolve();
+      backend.open();
       await Promise.all([cancellation, turn]);
       expect(runtime.cancel).toHaveBeenCalledOnce();
       expect(runtime.runTurn).toHaveBeenCalledOnce();
     } finally {
-      release.resolve();
+      backend.open();
       await Promise.allSettled([cancellation, turn]);
     }
   });

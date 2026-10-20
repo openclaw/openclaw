@@ -6,14 +6,14 @@ import {
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import {
-  AcpSessionManager,
   baseCfg,
-  createRuntime,
-  hoisted,
   installAcpSessionManagerTestLifecycle,
+  managerFixture,
   mockMutableSession,
   readySessionMeta,
 } from "./manager.test-helpers.js";
+
+type ModelPolicy = GatewayOperatorRoleDefinition["modelPolicy"];
 
 describe("ACP operator model ceiling", () => {
   installAcpSessionManagerTestLifecycle();
@@ -25,13 +25,11 @@ describe("ACP operator model ceiling", () => {
 
   async function run(
     model: string | undefined,
-    beforePrompt?: (
-      changePolicy: (policy: GatewayOperatorRoleDefinition["modelPolicy"]) => void,
-    ) => void,
+    beforePrompt?: (changePolicy: (policy: ModelPolicy) => void) => void,
     appliedModel?: string,
-    initialPolicy: GatewayOperatorRoleDefinition["modelPolicy"] = {},
+    initialPolicy: ModelPolicy = {},
   ) {
-    const runtimeState = createRuntime();
+    const { runtimeState, run: runTurn } = managerFixture(sessionKey, readySessionMeta(), cfg);
     if (appliedModel) {
       runtimeState.ensureSession.mockResolvedValue({
         sessionKey,
@@ -43,18 +41,12 @@ describe("ACP operator model ceiling", () => {
         configOptions: [{ id: "model", currentValue: appliedModel }],
       });
     }
-    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
-      id: "acpx",
-      runtime: runtimeState.runtime,
-    });
     mockMutableSession(sessionKey, {
       currentMeta: readySessionMeta({ agent: "fixture", runtimeOptions: model ? { model } : {} }),
     });
-    let modelPolicy = prepareOperatorModelPolicy({
-      cfg,
-      policy: initialPolicy,
-      manifestPlugins: [],
-    });
+    const preparePolicy = (policy: ModelPolicy) =>
+      prepareOperatorModelPolicy({ cfg, policy, manifestPlugins: [] });
+    let modelPolicy = preparePolicy(initialPolicy);
     const policyListeners = new Set<() => void>();
     const authority = createAdmittedRunOperatorAuthority({
       profileId: "fixture-person",
@@ -78,27 +70,19 @@ describe("ACP operator model ceiling", () => {
     );
     try {
       const admittedRunContext = await admission.admit("acp");
-      const outcome = await new AcpSessionManager()
-        .runTurn({
-          cfg,
-          admittedRunContext,
-          provenance: "human",
-          sessionKey,
-          text: "fixture request",
-          mode: "prompt",
-          requestId: "fixture-role-run",
-          onBeforePrompt: () =>
-            beforePrompt?.((policy) => {
-              modelPolicy = prepareOperatorModelPolicy({ cfg, policy, manifestPlugins: [] });
-              for (const listener of policyListeners) {
-                listener();
-              }
-            }),
-        })
-        .then(
-          () => undefined,
-          (error: unknown) => error,
-        );
+      const outcome = await runTurn({
+        admittedRunContext,
+        provenance: "human",
+        text: "fixture request",
+        requestId: "fixture-role-run",
+        onBeforePrompt: () =>
+          beforePrompt?.((policy) => {
+            modelPolicy = preparePolicy(policy);
+            for (const listener of policyListeners) {
+              listener();
+            }
+          }),
+      }).catch((error: unknown) => error);
       return { outcome, runtimeState };
     } finally {
       admission.close();

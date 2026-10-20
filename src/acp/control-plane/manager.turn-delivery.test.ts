@@ -51,10 +51,7 @@ describe("AcpSessionManager turn delivery", () => {
           await releaseDelivery.promise;
         }
       },
-    }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    }).catch((error: unknown) => error);
     try {
       await deliveryStarted.promise;
       result.resolve({ status: "failed", error: { message: "Backend failed after output" } });
@@ -101,10 +98,7 @@ describe("AcpSessionManager turn delivery", () => {
         deliveryStarted.resolve();
         throw deliveryError;
       },
-    }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    }).catch((error: unknown) => error);
     let second: Promise<void> | undefined;
     try {
       await deliveryStarted.promise;

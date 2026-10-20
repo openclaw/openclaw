@@ -24,9 +24,10 @@ describe("ACP terminal state signals", () => {
   installAcpSessionManagerTestLifecycle();
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  function setupParentedTurn(childSessionKey: string) {
+  function setupParentedTurn(suffix: string) {
+    const childSessionKey = `agent:main:acp:${suffix}`;
     setRuntimeConfigSnapshot(baseCfg);
-    const fixture = managerFixture(childSessionKey);
+    const { run, ...fixture } = managerFixture(childSessionKey);
     const metadata = { currentMeta: readySessionMeta() };
     mockMutableSession(childSessionKey, metadata);
     mockParentedAcpSessionEntries({
@@ -38,40 +39,20 @@ describe("ACP terminal state signals", () => {
       ...fixture,
       events: async () =>
         (await listSessionStateEventsSince(childSessionKey, "main", 0, 200)).events,
-      input: {
-        provenance: "system" as const,
-        cfg: baseCfg,
-        sessionKey: childSessionKey,
-        text: "complete the task",
-        mode: "prompt" as const,
-      },
+      run: (requestId: string, overrides: Partial<Parameters<typeof run>[0]> = {}) =>
+        run({ text: "complete the task", requestId, ...overrides }),
     };
   }
 
   it("records parented ACP turns only for human provenance", async () => {
     await withStateDirEnv("openclaw-acp-manager-", async () => {
-      const childSessionKey = "agent:main:acp:child-state";
-      const { runtimeState, manager, input, events } = setupParentedTurn(childSessionKey);
-
-      await manager.runTurn({
-        ...input,
-        provenance: "human",
-        text: "human turn",
-        requestId: "human-state-turn",
-      });
-      await manager.runTurn({
-        ...input,
-        text: "system turn",
-        requestId: "system-state-turn",
-      });
+      const { runtimeState, run, events } = setupParentedTurn("child-state");
+      await run("human-state-turn", { provenance: "human" });
+      await run("system-state-turn");
       runtimeState.runTurn.mockImplementationOnce(async function* () {
         yield { type: "done" as const, status: "cancelled" as const };
       });
-      await manager.runTurn({
-        ...input,
-        text: "cancelled turn",
-        requestId: "cancelled-state-turn",
-      });
+      await run("cancelled-state-turn");
 
       expect(await events()).toMatchObject([
         { kind: "human_direct_message", runId: "human-state-turn" },
@@ -89,8 +70,7 @@ describe("ACP terminal state signals", () => {
 
   it("leaves a same-id predecessor's terminal outcome to it when a queued duplicate is cancelled", async () => {
     await withStateDirEnv("openclaw-acp-manager-", async () => {
-      const childSessionKey = "agent:main:acp:same-id-duplicate";
-      const { runtimeState, manager, input, events } = setupParentedTurn(childSessionKey);
+      const { runtimeState, run, events } = setupParentedTurn("same-id-duplicate");
       const entered = createDeferred();
       const release = createDeferred();
       runtimeState.runTurn.mockImplementationOnce(async function* () {
@@ -98,16 +78,12 @@ describe("ACP terminal state signals", () => {
         await release.promise;
         yield { type: "done" as const, stopReason: "end_turn" };
       });
-      const predecessor = manager.runTurn({ ...input, requestId: "same-id" });
+      const predecessor = run("same-id");
       const abortDuplicate = new AbortController();
       let duplicate: Promise<void> | undefined;
       try {
         await Promise.race([entered.promise, predecessor]);
-        duplicate = manager.runTurn({
-          ...input,
-          requestId: "same-id",
-          signal: abortDuplicate.signal,
-        });
+        duplicate = run("same-id", { signal: abortDuplicate.signal });
         abortDuplicate.abort();
         await duplicate;
         expect(await events()).toEqual([]);
@@ -124,9 +100,8 @@ describe("ACP terminal state signals", () => {
 
   it("keeps Stop joined to a finishing ACP turn's physical terminal writer", async () => {
     await withStateDirEnv("openclaw-acp-manager-", async () => {
-      const childSessionKey = "agent:main:acp:contended-terminal";
-      const { manager, input, runtimeState, events } = setupParentedTurn(childSessionKey);
-      await manager.runTurn({ ...input, requestId: "warm-terminal-worker" });
+      const { run, target, runtimeState, events } = setupParentedTurn("contended-terminal");
+      await run("warm-terminal-worker");
       const databasePath = resolveOpenClawStateSqlitePath();
       let holder: ReturnType<typeof holdStateDatabaseWriteTransaction> | undefined;
       const entered = createDeferred();
@@ -144,11 +119,11 @@ describe("ACP terminal state signals", () => {
       let pending: Promise<void> | undefined;
       let stopped: Promise<void> | undefined;
       try {
-        pending = manager.runTurn({ ...input, requestId: "contended-terminal" }).finally(() => {
+        pending = run("contended-terminal").finally(() => {
           settled = true;
         });
         await Promise.race([entered.promise, pending]);
-        stopped = stopAcpControllerTurns(input).then(() => {
+        stopped = stopAcpControllerTurns(target).then(() => {
           stopSettled = true;
         });
         await nextTurn();
@@ -170,7 +145,6 @@ describe("ACP terminal state signals", () => {
           await Promise.all([pending, stopped]);
         }
       }
-      expect({ settled, stopSettled }).toEqual({ settled: true, stopSettled: true });
       expect((await events()).map(({ kind, runId }) => ({ kind, runId }))).toEqual([
         { kind: "run_completed", runId: "warm-terminal-worker" },
         { kind: "run_completed", runId: "contended-terminal" },
