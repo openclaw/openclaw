@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { expect, it, onTestFinished } from "vitest";
 import {
   controlGatewayProfile,
+  createGatewayGcTraceCollector,
   measureGatewayCpuUsage,
   measureGatewayAllocations,
   readGatewayCpuUsage,
@@ -24,6 +25,46 @@ const preloadUrl = new URL("../../scripts/lib/gateway-bench-profile-preload.ts",
 const fixturePath = (name: string) =>
   fileURLToPath(new URL(`./fixtures/${name}.mjs`, import.meta.url));
 const readJson = async <T>(file: string): Promise<T> => JSON.parse(await readFile(file, "utf8"));
+
+it("counts Node 26 promotion and GC pauses only for the owned main thread", () => {
+  const trace = createGatewayGcTraceCollector(73);
+  const before = trace.snapshot();
+  trace.consume('[73:0xbbb:1] 1 ms: GC: {"pause":9,"gc":"s","promoted":999999}');
+  expect(trace.snapshot().isolate).toBeNull();
+  trace.consume('[73:0xaaa:0] 3 ms: GC: {"pause":1.25,"mutator":2,"gc":"s","promoted":4096}');
+  trace.consume('[73:0xbbb:1] 4 ms: GC: {"pause":99,"gc":"mc","promoted":999999}');
+  trace.consume('[74:0xaaa:0] 5 ms: GC: {"pause":99,"gc":"mc","promoted":999999}');
+  trace.consume('[73:0xaaa:0] 6 ms: GC: {"pause":2.5,"gc":"mc","promoted":8192}');
+  trace.consume('[73:0xaaa:0] 7 ms: GC: {"pause":0.5,"gc":"s","promoted":0}');
+  expect(trace.snapshot()).toEqual({
+    pid: 73,
+    isolate: "0xaaa",
+    promotedBytes: 12288,
+    gcCount: 3,
+    pauseMs: 4.25,
+    scavengeCount: 2,
+    scavengePauseMs: 1.75,
+    majorCount: 1,
+    majorPauseMs: 2.5,
+    unknownCount: 0,
+    malformedCount: 0,
+  });
+  expect(before.promotedBytes).toBe(0);
+  expect(before.gcCount).toBe(0);
+  trace.consume("unrelated gateway message");
+  trace.consume('[73:0xaaa:0] 7 ms: Memory pool: {"committed":1000}');
+  trace.consume('[73:0xaaa:0] 8 ms: GC: {"pause":1,"gc":"s"}');
+  trace.consume('[73:0xaaa:0] 9 ms: GC: {"pause":NaN,"gc":"s","promoted":10}');
+  trace.consume('[73:0xaaa:0] 10 ms: GC: {"pause":1,"gc":"s","promoted":-10}');
+  trace.consume('[73:0xaaa:0] 11 ms: GC: {"pause":3,"gc":"unknown","promoted":32}');
+  expect(trace.snapshot()).toMatchObject({
+    promotedBytes: 12320,
+    gcCount: 4,
+    pauseMs: 7.25,
+    unknownCount: 1,
+    malformedCount: 3,
+  });
+});
 
 function spawnFixture(args: string[], directory?: string, ipc = true) {
   const child = spawn(nodeExecutable, args, {

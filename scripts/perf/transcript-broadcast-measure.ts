@@ -1,10 +1,18 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv, createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { appendFileSync, createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  createWriteStream,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import type { Profiler } from "node:inspector";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { finished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
@@ -27,6 +35,7 @@ import { stopChild } from "../lib/gateway-bench-child.ts";
 import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 import {
   controlGatewayProfile,
+  createGatewayGcTraceCollector,
   readGatewayCpuProfile,
   readGatewayHeapProfile,
   readGatewayGcTrace,
@@ -51,6 +60,8 @@ const { values } = parseArgs({
     diagnostics: { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
+    "stress-tools": { type: "boolean", default: false },
+    "mixed-rpc": { type: "boolean", default: false },
     "stream-start-diagnostics": { type: "boolean", default: false },
     "stream-start-allocations": { type: "boolean", default: false },
     "active-work-diagnostics": { type: "boolean", default: false },
@@ -171,10 +182,12 @@ const retainedProfileMs = integer(values["retained-profile-ms"], "--retained-pro
 const resetEveryRounds = integer(values["reset-every-rounds"], "--reset-every-rounds", 0);
 if (
   soakScenario &&
-  (values.allocations || values["stream-start-allocations"] || retainedProfileMs > durationMs)
+  (values["stream-start-allocations"] ||
+    (values.allocations && retainedProfileMs > 0) ||
+    retainedProfileMs > durationMs)
 ) {
   throw new Error(
-    "memory-soak needs a retained profile no longer than its duration and no allocation-churn capture",
+    "memory-soak requires --retained-profile-ms 0 for --allocations; retained capture must fit its duration and cannot overlap stream-start allocation capture",
   );
 }
 const chunkCount = integer(values.chunks, "--chunks");
@@ -182,6 +195,14 @@ const chunkIntervalMs = integer(values["chunk-interval-ms"], "--chunk-interval-m
 const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
 if (connectionScenario && listIntervalMs) {
   throw new Error("connection scenarios use their own sidebar refresh; omit --list-interval-ms");
+}
+if (values["stress-tools"] && !toolScenario) {
+  throw new Error("--stress-tools requires chat.send, attempt-retention, or memory-soak");
+}
+if (values["mixed-rpc"] && (!listIntervalMs || !turnScenario || clientCount < 4)) {
+  throw new Error(
+    "--mixed-rpc requires a turn scenario, --list-interval-ms, and at least four clients",
+  );
 }
 const recapBurstRepeats = integer(values["recap-burst-repeats"], "--recap-burst-repeats", 0);
 const recapBurstIntervalMs = integer(
@@ -223,16 +244,33 @@ const root = path.resolve(values["state-dir"]);
 const fixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
 );
-if (
-  !fixture ||
-  typeof fixture !== "object" ||
-  !("format" in fixture) ||
-  fixture.format !== "openclaw-team-shape-v1"
-) {
+if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
   throw new Error("--state-dir must contain a generated team-shape fixture");
 }
 const output = path.join(root, `broadcast-measure-${Date.now()}`);
 mkdirSync(output);
+const project = Array.isArray(fixture.projectWorktrees) ? fixture.projectWorktrees[0] : undefined;
+const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
+if (values["mixed-rpc"] && fixtureSessionCount < 1) {
+  throw new Error("--mixed-rpc requires retained fixture sessions for chat.history");
+}
+let stressWorktree: string | undefined;
+let diffControlOriginal: string | undefined;
+if (values["stress-tools"] || values["mixed-rpc"]) {
+  if (!isRecord(project) || typeof project.path !== "string") {
+    throw new Error("stress tools and mixed RPCs require a fixture generated with --projects >= 1");
+  }
+  stressWorktree = realpathSync(project.path);
+  if (
+    !stressWorktree.startsWith(`${realpathSync(root)}${path.sep}`) ||
+    !readFileSync(path.join(stressWorktree, ".git"), "utf8").startsWith("gitdir: ")
+  ) {
+    throw new Error("stress worktree must be a real linked worktree inside the synthetic fixture");
+  }
+  if (values["mixed-rpc"]) {
+    diffControlOriginal = readFileSync(path.join(stressWorktree, "README.md"), "utf8");
+  }
+}
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
 applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
 cfg.agents.defaults = {
@@ -242,7 +280,13 @@ cfg.agents.defaults = {
   skipBootstrap: true,
 };
 cfg.memory = { ...cfg.memory, search: { enabled: false } };
-cfg.tools = { codeMode: false };
+cfg.tools = {
+  codeMode: values["stress-tools"],
+  ...(values["stress-tools"] ? { exec: { host: "gateway", mode: "full" } } : {}),
+};
+if (stressWorktree) {
+  cfg.agents.entries.main.workspace = stressWorktree;
+}
 cfg.plugins = {
   ...cfg.plugins,
   entries: {
@@ -263,6 +307,9 @@ if (soakScenario) {
     cfg.plugins.allow = [...new Set([...cfg.plugins.allow, "diagnostics-prometheus"])];
   }
   cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
+  if (values["stress-tools"]) {
+    cfg.cron = { ...cfg.cron, enabled: true };
+  }
 }
 let reloadPluginId: string | undefined;
 if (scenario === "plugins.reload") {
@@ -464,10 +511,13 @@ const mock = createServer((req, res) => {
         toolOutputs.some(
           (toolResult) =>
             typeof toolResult.output !== "string" ||
-            !toolResult.output.includes("Synthetic allocation benchmark tool result."),
+            !toolResult.output.includes("Synthetic allocation benchmark tool result.") ||
+            (values["stress-tools"] && !toolResult.output.includes("synthetic-code-exec-verified")),
         )
       ) {
-        throw new Error("synthetic read tool did not return its fixture text");
+        throw new Error(
+          "synthetic tool result did not verify its read and optional code-mode exec",
+        );
       }
       if (!retentionScenario || !cohort?.outputLimited.has(toolOutput.call_id)) {
         toolResults += toolOutputs.length;
@@ -543,8 +593,19 @@ const mock = createServer((req, res) => {
             type: "function_call",
             id: `fc_${currentCohort.id}_${index}_${toolIndex}`,
             call_id: callId,
-            name: "read",
-            arguments: JSON.stringify({ path: toolPath }),
+            name: values["stress-tools"] ? "exec" : "read",
+            arguments: JSON.stringify(
+              values["stress-tools"]
+                ? {
+                    title: "Read the synthetic fixture and verify its worktree",
+                    code:
+                      `json(await read({ path: ${JSON.stringify(toolPath)} }));\n` +
+                      `const shell = await exec({ command: "pwd", workdir: ${JSON.stringify(stressWorktree)} });\n` +
+                      `if (shell.exitCode !== 0 || shell.aggregated.trim() !== ${JSON.stringify(stressWorktree)}) throw new Error("Synthetic exec worktree mismatch");\n` +
+                      'return "synthetic-code-exec-verified";',
+                  }
+                : { path: toolPath },
+            ),
           };
         });
         toolCalls += items.length;
@@ -699,6 +760,43 @@ const perClientRecaps: Map<string, RecapReceipt>[] = [];
 const recapReceipts: RecapReceipt[] = [];
 let recapPhase: Awaited<ReturnType<typeof runRecapBurst>> | undefined;
 let gateway: ChildProcess | undefined;
+let stressCronJobId: string | undefined;
+let gcTrace: ReturnType<typeof createGatewayGcTraceCollector> | undefined;
+type GcTraceSnapshot = ReturnType<ReturnType<typeof createGatewayGcTraceCollector>["snapshot"]>;
+function summarizeGcTrace(
+  before: GcTraceSnapshot,
+  after: GcTraceSnapshot,
+  turns: number,
+  wallMs: number,
+) {
+  if (before.pid !== after.pid || (before.isolate !== null && before.isolate !== after.isolate)) {
+    throw new Error("GC trace isolate changed during measurement");
+  }
+  const delta = {
+    promotedBytes: after.promotedBytes - before.promotedBytes,
+    gcCount: after.gcCount - before.gcCount,
+    pauseMs: after.pauseMs - before.pauseMs,
+    scavengeCount: after.scavengeCount - before.scavengeCount,
+    scavengePauseMs: after.scavengePauseMs - before.scavengePauseMs,
+    majorCount: after.majorCount - before.majorCount,
+    majorPauseMs: after.majorPauseMs - before.majorPauseMs,
+    unknownCount: after.unknownCount - before.unknownCount,
+    malformedCount: after.malformedCount - before.malformedCount,
+  };
+  if (delta.unknownCount || delta.malformedCount) {
+    throw new Error(`GC trace accounting incomplete: ${JSON.stringify(delta)}`);
+  }
+  return {
+    before,
+    after,
+    ...delta,
+    completedTurns: turns,
+    wallMs,
+    promotedMbPerTurn: delta.promotedBytes / 1_000_000 / turns,
+    scavengeSecondsPerMinute: (delta.scavengePauseMs * 60) / wallMs,
+    majorSecondsPerMinute: (delta.majorPauseMs * 60) / wallMs,
+  };
+}
 function fieldBytes(record: Record<string, unknown>) {
   return Object.fromEntries(
     Object.entries(record).map(([field, value]) => [
@@ -833,6 +931,53 @@ const keys = Array.from(
   { length: runCount },
   (_, index) => `agent:main:transcript-broadcast-measure-child-${index}`,
 );
+const connectParams = {
+  minProtocol: PROTOCOL_VERSION,
+  maxProtocol: PROTOCOL_VERSION,
+  client: {
+    id: "gateway-client",
+    displayName: "synthetic-broadcast-measurement",
+    version: "1.0.0",
+    platform: process.platform,
+    mode: "backend",
+  },
+  role: "operator",
+  scopes: ["operator.read", "operator.admin"],
+  caps: [
+    "session-scoped-events",
+    "chat-only-assistant-text",
+    ...(exactClients < clientCount ? ["roster-message-bodies-optional"] : []),
+    ...(values["session-row-deltas"] ? ["session-row-deltas"] : []),
+    ...(values["session-envelope-refs"] ? ["session-event-field-refs"] : []),
+  ],
+};
+function summarizeLatencies(latencies: number[]) {
+  const sorted = latencies.toSorted((a, b) => a - b);
+  return {
+    count: sorted.length,
+    p50: sorted[Math.ceil(sorted.length * 0.5) - 1] ?? null,
+    p95: sorted[Math.ceil(sorted.length * 0.95) - 1] ?? null,
+    p99: sorted[Math.ceil(sorted.length * 0.99) - 1] ?? null,
+    max: sorted.at(-1) ?? null,
+    latencies,
+  };
+}
+function validateDiff(result: unknown, additions = 1) {
+  if (
+    !isRecord(result) ||
+    result.root !== stressWorktree ||
+    result.unavailableReason !== undefined ||
+    !Array.isArray(result.files) ||
+    !result.files.some(
+      (file: unknown) =>
+        isRecord(file) && file.path === "README.md" && file.additions === additions,
+    )
+  ) {
+    throw new Error(
+      `sessions.diff did not return the synthetic worktree control (${additions} added lines): ${JSON.stringify(result)}`,
+    );
+  }
+}
 async function rpc(
   client: ReturnType<typeof createGatewayWsClient>,
   method: string,
@@ -1072,9 +1217,11 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
       ),
     45_000,
   );
+  const turnLatencies: number[] = [];
   try {
     const turns = Promise.all(
       keys.map(async (sessionKey, index) => {
+        const turnStarted = performance.now();
         const runId = randomUUID();
         const image = retentionScenario
           ? promptContent.update(Buffer.alloc(256 * 128 * 4))
@@ -1115,6 +1262,7 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
         ) {
           throw new Error(`agent.wait: ${JSON.stringify(result)}`);
         }
+        turnLatencies.push(performance.now() - turnStarted);
       }),
     ).then(() => {
       current.phases.completedAtEpochMs = epochNow();
@@ -1123,7 +1271,7 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>, measur
     if (soakScenario) {
       completedSoakRounds++;
     }
-    return { phases: current.phases, ...capture };
+    return { phases: current.phases, turnLatencyMs: summarizeLatencies(turnLatencies), ...capture };
   } finally {
     clearTimeout(timeout);
     current.release();
@@ -1467,6 +1615,9 @@ function cleanup() {
         mock.close((error) => (error ? reject(error) : resolve()));
       });
     }
+    if (stressWorktree && diffControlOriginal !== undefined) {
+      writeFileSync(path.join(stressWorktree, "README.md"), diffControlOriginal);
+    }
   })());
 }
 for (const [signal, exitCode] of [
@@ -1511,6 +1662,7 @@ try {
     if (index === 0) {
       await rpc(client, "sessions.create", {
         key: parentKey,
+        ...(stressWorktree ? { cwd: stressWorktree } : {}),
         visibility: "shared",
         displayName: "Synthetic broadcast parent",
       });
@@ -1518,6 +1670,7 @@ try {
       for (const key of keys) {
         await rpc(client, "sessions.create", {
           key,
+          ...(stressWorktree ? { cwd: stressWorktree } : {}),
           ...(values["activity-summaries"] ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
           visibility: "shared",
@@ -1539,6 +1692,53 @@ try {
     scenario === "reconnect"
       ? sidebarIdentity(await rpc(sender, "sessions.list", { limit, rowMode, archived: "all" }))
       : undefined;
+  if (stressWorktree && diffControlOriginal !== undefined) {
+    // First work captures the baseline; later child announcements must not capture our edit.
+    const runId = randomUUID();
+    await rpc(sender, "agent", {
+      sessionKey: parentKey,
+      message: "Acknowledge this synthetic diff baseline preparation.",
+      deliver: false,
+      idempotencyKey: runId,
+    });
+    const result = await rpc(sender, "agent.wait", { runId, timeoutMs: 170_000 });
+    if (!isRecord(result) || result.status !== "ok") {
+      throw new Error(`diff baseline preparation failed: ${JSON.stringify(result)}`);
+    }
+    writeFileSync(
+      path.join(stressWorktree, "README.md"),
+      `${diffControlOriginal}Synthetic diff control.\n`,
+    );
+  }
+  if (soakScenario && values["stress-tools"]) {
+    const job = await rpc(sender, "cron.add", {
+      name: "Synthetic allocation stress cron",
+      agentId: "main",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "Acknowledge this synthetic scheduled allocation probe.",
+        timeoutSeconds: 120,
+      },
+      delivery: { mode: "none" },
+      failureAlert: false,
+    });
+    if (!isRecord(job) || typeof job.id !== "string") {
+      throw new Error("stress cron.add did not return a job ID");
+    }
+    stressCronJobId = job.id;
+    const run = await rpc(sender, "cron.run", {
+      id: job.id,
+      mode: "force",
+      waitTimeoutMs: 170_000,
+    });
+    if (!isRecord(run) || !isRecord(run.run) || run.run.status !== "ok") {
+      throw new Error(`stress cron did not complete its real agent turn: ${JSON.stringify(run)}`);
+    }
+  }
   console.log("PHASE subscribed-and-reset");
   const runScenario = async (measuredRound?: number) => {
     if (turnScenario) {
@@ -1679,10 +1879,17 @@ try {
   }
   const initialRetainedResources =
     retentionScenario || soakScenario
-      ? await readGatewayResources(gateway, { collectGarbage: true })
+      ? await readGatewayResources(gateway, {
+          collectGarbage: !soakScenario || !values.allocations,
+        })
       : undefined;
   const measurementStartedAt = Date.now();
   const measuredGateway = gateway;
+  const wholeSoakGcBefore = soakScenario ? gcTrace?.snapshot() : undefined;
+  const finishWholeSoakDiagnostics =
+    soakScenario && (values.diagnostics || values.allocations)
+      ? await startGatewayDiagnostics(gateway, "whole-soak")
+      : undefined;
   const samples = [];
   const memorySamples: Array<{
     atEpochMs: number;
@@ -1760,12 +1967,20 @@ try {
       ? startGatewayBenchDiagnostics()
       : undefined;
     const before = await readGatewayCpuUsage(gateway);
+    const gcBefore = gcTrace?.snapshot();
+    const gcStartedAt = performance.now();
     measuring = true;
-    const listLatencies: number[] = [];
+    const rpcLatencies: Record<string, number[]> = {
+      "sessions.list": [],
+      "chat.history": [],
+      "sessions.diff": [],
+      connect: [],
+    };
+    const listLatencies = rpcLatencies["sessions.list"]!;
     const initialPollPhasesMs: number[] = [];
     let streamStart: Awaited<ReturnType<typeof runRound>> | undefined;
     const listRequests: Array<{
-      method: "sessions.list";
+      method: string;
       responseId: string;
       client: number;
       round: number;
@@ -1789,38 +2004,88 @@ try {
                 if (random) {
                   await Promise.race([delay(initialPhaseMs, undefined, { ref: false }), stopped]);
                 }
+                let poll = clientIndex;
                 while (true) {
                   if (!polling) {
                     break;
                   }
                   const started = performance.now();
                   let responseId = "";
-                  const page = await rpc(
-                    client,
-                    "sessions.list",
-                    { rowMode: "compact", limit, archived: "all" },
-                    recordListRequests
-                      ? (id) => {
-                          responseId = id;
-                        }
-                      : undefined,
-                  );
-                  if (
-                    !isRecord(page) ||
-                    typeof page.totalCount !== "number" ||
-                    page.count !== Math.min(limit, page.totalCount) ||
-                    !Array.isArray(page.sessions) ||
-                    page.sessions.length !== page.count ||
-                    page.count === 0
-                  ) {
-                    throw new Error("concurrent sessions.list did not return the requested page");
+                  const method = values["mixed-rpc"]
+                    ? ["sessions.list", "chat.history", "sessions.diff", "connect"][poll++ % 4]!
+                    : "sessions.list";
+                  const onResponse = recordListRequests
+                    ? (id: string) => {
+                        responseId = id;
+                      }
+                    : undefined;
+                  if (method === "connect") {
+                    const peer = createGatewayWsClient({ url: `ws://127.0.0.1:${port}` });
+                    try {
+                      await peer.waitOpen();
+                      const hello = await rpc(peer, "connect", connectParams, onResponse);
+                      if (!isRecord(hello) || hello.type !== "hello-ok") {
+                        throw new Error("fresh connect did not return hello-ok");
+                      }
+                    } finally {
+                      peer.close();
+                    }
+                  } else if (method === "chat.history") {
+                    const history = await rpc(
+                      client,
+                      method,
+                      {
+                        sessionKey: `agent:main:team-shape-session-${clientIndex % fixtureSessionCount}`,
+                        limit: 50,
+                      },
+                      onResponse,
+                    );
+                    if (
+                      !isRecord(history) ||
+                      !Array.isArray(history.messages) ||
+                      !history.messages.length
+                    ) {
+                      throw new Error(
+                        "chat.history did not return the retained fixture transcript",
+                      );
+                    }
+                  } else if (method === "sessions.diff") {
+                    validateDiff(
+                      await rpc(
+                        client,
+                        method,
+                        {
+                          sessionKey: parentKey,
+                          scope: "all",
+                          summaryOnly: true,
+                        },
+                        onResponse,
+                      ),
+                    );
+                  } else {
+                    const page = await rpc(
+                      client,
+                      method,
+                      { rowMode, limit, archived: "all" },
+                      onResponse,
+                    );
+                    if (
+                      !isRecord(page) ||
+                      typeof page.totalCount !== "number" ||
+                      page.count !== Math.min(limit, page.totalCount) ||
+                      !Array.isArray(page.sessions) ||
+                      page.sessions.length !== page.count ||
+                      page.count === 0
+                    ) {
+                      throw new Error("concurrent sessions.list did not return the requested page");
+                    }
                   }
                   const ended = performance.now();
                   const requestDurationMs = ended - started;
-                  listLatencies.push(requestDurationMs);
+                  rpcLatencies[method]!.push(requestDurationMs);
                   if (recordListRequests) {
                     listRequests.push({
-                      method: "sessions.list",
+                      method,
                       responseId,
                       client: clientIndex,
                       round,
@@ -1866,6 +2131,19 @@ try {
       : undefined;
     if (!values.allocations) {
       await workload();
+    }
+    const gcAfter = gcTrace?.snapshot();
+    const gc =
+      gcBefore && gcAfter
+        ? summarizeGcTrace(
+            gcBefore,
+            gcAfter,
+            turnScenario ? runCount : operations,
+            performance.now() - gcStartedAt,
+          )
+        : undefined;
+    if (values["mixed-rpc"] && Object.values(rpcLatencies).some((latencies) => !latencies.length)) {
+      throw new Error("mixed RPC workload must observe every method; increase cohort duration");
     }
     if (listIntervalMs && listLatencies.length === 0) {
       throw new Error("No sessions.list samples collected; shorten --list-interval-ms");
@@ -1967,8 +2245,22 @@ try {
             reconnectStorms: [...reconnectStorms],
           }
         : {}),
+      ...(turnScenario && allocation
+        ? { allocatedMbPerTurn: allocation.estimatedAllocatedBytesPerOperation / 1_000_000 }
+        : {}),
+      gcTrace: gc,
       diagnostics,
       streamStart,
+      ...(values["mixed-rpc"]
+        ? {
+            rpcLatencyMs: Object.fromEntries(
+              Object.entries(rpcLatencies).map(([method, latencies]) => [
+                method,
+                summarizeLatencies(latencies),
+              ]),
+            ),
+          }
+        : {}),
       activeWorkCounts,
       toolCalls,
       toolResults,
@@ -1994,9 +2286,11 @@ try {
               ...(values["poll-seed"] !== undefined ? { initialPollPhasesMs } : {}),
               ...(recordListRequests
                 ? {
-                    requests: listRequests,
-                    p99Request: listRequests.toSorted((a, b) => a.durationMs - b.durationMs)[
-                      Math.ceil(listRequests.length * 0.99) - 1
+                    requests: listRequests.filter((request) => request.method === "sessions.list"),
+                    p99Request: listRequests
+                      .filter((request) => request.method === "sessions.list")
+                      .toSorted((a, b) => a.durationMs - b.durationMs)[
+                      Math.ceil(listLatencies.length * 0.99) - 1
                     ],
                   }
                 : {}),
@@ -2054,6 +2348,26 @@ try {
       ]);
     }
   }
+  const wholeSoakDiagnostics = await finishWholeSoakDiagnostics?.();
+  const wholeSoakGcAfter = soakScenario ? gcTrace?.snapshot() : undefined;
+  const wholeSoakGc =
+    wholeSoakGcBefore && wholeSoakGcAfter
+      ? summarizeGcTrace(
+          wholeSoakGcBefore,
+          wholeSoakGcAfter,
+          samples.length * runCount,
+          Date.now() - measurementStartedAt,
+        )
+      : undefined;
+  if (
+    values["trace-gc"] &&
+    !(
+      wholeSoakGc?.gcCount ??
+      samples.reduce((sum, sample) => sum + (sample.gcTrace?.gcCount ?? 0), 0)
+    )
+  ) {
+    throw new Error("No main-isolate GC trace observed; promotion evidence is unavailable");
+  }
   let retainedProfile;
   if (soakScenario) {
     await sampleMemory();
@@ -2080,6 +2394,47 @@ try {
       });
     }
   }
+  let diffEditVisibilityMs: number | undefined;
+  if (values["mixed-rpc"] && stressWorktree && diffControlOriginal !== undefined) {
+    writeFileSync(
+      path.join(stressWorktree, "README.md"),
+      `${diffControlOriginal}Synthetic diff control.\nSynthetic edit control.\n`,
+    );
+    const editStarted = performance.now();
+    let diff;
+    do {
+      diff = await rpc(sender, "sessions.diff", {
+        sessionKey: parentKey,
+        scope: "all",
+        summaryOnly: true,
+      });
+      if (isRecord(diff) && diff.additions === 2) {
+        break;
+      }
+      await delay(100);
+    } while (performance.now() - editStarted < 12_000);
+    validateDiff(diff, 2);
+    diffEditVisibilityMs = performance.now() - editStarted;
+  }
+  let cronRuns;
+  if (stressCronJobId) {
+    await rpc(sender, "cron.update", { id: stressCronJobId, patch: { enabled: false } });
+    const history = await rpc(sender, "cron.runs", { id: stressCronJobId, limit: 200 });
+    if (
+      !isRecord(history) ||
+      !Array.isArray(history.entries) ||
+      !history.entries.length ||
+      history.entries.some((entry: unknown) => !isRecord(entry) || entry.status !== "ok")
+    ) {
+      throw new Error("stress cron history is missing or contains a failed run");
+    }
+    cronRuns = history.entries.filter(
+      (entry: { runAtMs?: number }) => (entry.runAtMs ?? 0) >= measurementStartedAt,
+    );
+    if (durationMs >= 60_000 && !cronRuns.length) {
+      throw new Error("stress cron did not complete during the measured soak");
+    }
+  }
   // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
   await cleanup();
   const result = {
@@ -2101,6 +2456,10 @@ try {
     sessionRowDeltas: values["session-row-deltas"],
     sessionEnvelopeRefs: values["session-envelope-refs"],
     listIntervalMs,
+    mixedRpc: values["mixed-rpc"],
+    stressTools: values["stress-tools"],
+    cronRuns,
+    ...(values["mixed-rpc"] ? { diffEditControlVerified: true, diffEditVisibilityMs } : {}),
     pollSeed: values["poll-seed"] ?? null,
     diagnostics: values.diagnostics,
     cpuProfile: values["cpu-profile"],
@@ -2133,8 +2492,11 @@ try {
           sessionResets,
           completedSoakRounds,
           initialRetainedResources,
+          initialMemoryCollected: !values.allocations,
           memorySamples,
           retainedProfile,
+          wholeSoakDiagnostics,
+          wholeSoakGc,
         }
       : {}),
     samples: samples.map((sample) =>
