@@ -13,7 +13,6 @@ import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Home command recovery across presentations",
-  trackBrowserContexts: true,
 });
 
 suite.define(() => {
@@ -24,17 +23,15 @@ suite.define(() => {
   ])(
     "recovers a rejected command without replacing newer input (handoff=$handoff, newer=$newerDraft)",
     async ({ handoff, newerDraft }) => {
-      const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
-      const page = await context.newPage();
-      const homeKey = "agent:main:main";
-      const command = "/steer QA recovery message";
-      const newer = "QA newer draft stays here";
-      const gateway = await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
-        sessionKey: homeKey,
-        sessions: [{ key: homeKey, kind: "direct", label: "Main", updatedAt: 1 }],
-      });
-      try {
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const homeKey = "agent:main:main";
+        const command = "/steer QA recovery message";
+        const newer = "QA newer draft stays here";
+        const gateway = await installMockGateway(page, {
+          featureMethods: [...defaultControlUiFeatureMethods, "chat.history", "chat.send"],
+          sessionKey: homeKey,
+          sessions: [{ key: homeKey, kind: "direct", label: "Main", updatedAt: 1 }],
+        });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
         const composer = page.locator("openclaw-chat-page .agent-chat__composer-combobox textarea");
         await composer.waitFor({ state: "visible" });
@@ -86,9 +83,7 @@ suite.define(() => {
           .waitFor({ state: "visible" });
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         await expect.poll(() => composer.inputValue()).toBe(newerDraft ? newer : command);
-      } finally {
-        await suite.closeBrowserContext(context);
-      }
+      });
     },
   );
 });

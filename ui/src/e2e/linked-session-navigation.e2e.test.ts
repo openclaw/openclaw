@@ -8,6 +8,9 @@ const targetKey = "agent:main:thread:12345678-aaaa-4000-8000-000000000001";
 const targetText = "Selected owner transcript 741";
 const otherText = "Different owner transcript 982";
 const timestamp = Date.parse("2026-09-16T12:00:00.000Z");
+const makeTranscript = (text: string) => ({
+  messages: [{ role: "assistant", content: [{ type: "text", text }], timestamp }],
+});
 const scenarios = [
   { surface: "worktrees", activation: "click", collision: true },
   { surface: "worktrees", activation: "href", collision: true },
@@ -39,16 +42,8 @@ suite.define(() => {
             sessions: [target, other],
             sessionKey: "agent:main:main",
             sessionTranscripts: {
-              [target.key]: {
-                messages: [
-                  { role: "assistant", content: [{ type: "text", text: targetText }], timestamp },
-                ],
-              },
-              [other.key]: {
-                messages: [
-                  { role: "assistant", content: [{ type: "text", text: otherText }], timestamp },
-                ],
-              },
+              [target.key]: makeTranscript(targetText),
+              [other.key]: makeTranscript(otherText),
             },
             methodResponses: {
               "sessions.list": {
@@ -114,8 +109,11 @@ suite.define(() => {
           await settle();
           const afterReload = await observe();
           for (const stage of [afterClick, afterReload]) {
-            expect(stage).toMatchObject({ chooser: false, targetVisible: true });
-            expect(stage.otherVisible).toBe(false);
+            expect(stage).toMatchObject({
+              chooser: false,
+              targetVisible: true,
+              otherVisible: false,
+            });
             expect(stage.startupRequests.map((request) => request.params)).toContainEqual(
               expect.objectContaining({ sessionKey: targetKey }),
             );
