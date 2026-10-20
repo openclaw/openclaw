@@ -2408,7 +2408,6 @@
     "zod-to-json-schema": "3.25.2"
   },
   "devDependencies": {
-    "@a2ui/lit": "0.13.0",
     "@a2ui/web_core": "0.13.0",
     "@babel/types": "8.0.6",
     "@copilotkit/aimock": "1.45.1",

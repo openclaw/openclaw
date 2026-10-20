@@ -5,10 +5,7 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import {
-  takeControlUiViewportScreenshot,
-  waitForControlUiProofSurface,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
   installMockGateway,
@@ -34,8 +31,6 @@ import {
 import { phoneProofCleanup } from "./phone-stale-build-recovery.test-support.ts";
 
 const proofIdentity = phoneProofIdentity();
-const captureUiProofEnabled =
-  process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" || proofIdentity.proofRevision !== "local";
 const proofBuildId = proofIdentity.expectedRevisionSha
   ? `phone-proof-${proofIdentity.expectedRevisionSha.slice(0, 12)}-${proofIdentity.expectedRevisionSha.slice(12)}-artifact`
   : "phone-proof-local-artifact";
@@ -77,25 +72,21 @@ suite.define(() => {
       const context = await suite.browser.newContext({
         hasTouch: true,
         isMobile: true,
-        ...(captureUiProofEnabled
-          ? { recordVideo: { dir: artifactDir, size: { height: 844, width: 390 } } }
-          : {}),
+        recordVideo: {
+          dir: artifactDir,
+          size: { height: 844, width: 390 },
+        },
         serviceWorkers,
         viewport: { height: 844, width: 390 },
       });
       await using contextCleanup = phoneProofCleanup(() => closeContext(context));
       void contextCleanup;
       const page = await context.newPage();
-      const capture = async (name: string, content: Locator) => {
-        if (!captureUiProofEnabled) {
-          await waitForControlUiProofSurface(page.locator(".shell"), [content]);
-          return;
-        }
-        await writeFile(
+      const capture = async (name: string, content: Locator) =>
+        writeFile(
           path.join(artifactDir, name + ".png"),
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [content]),
         );
-      };
       const documentRequests: PhoneRecoveryObservation["documentRequests"] = [];
       const documentResponses: PhoneRecoveryObservation["documentResponses"] = [];
       page.on("request", (request) => {

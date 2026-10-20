@@ -149,6 +149,24 @@ it("shows managed host desktop coordinates", () => {
   );
 });
 
+it("shows utility model capability warnings in normal and full status", () => {
+  expect(findRowValue(buildStatusCommandOverviewRows(params), "Utility model")).toBeUndefined();
+  params.summary.utilityModelWarnings = [
+    { path: "agents.defaults.utilityModel", message: "fixture-cli/small cannot disable tools." },
+  ];
+  expect(findRowValue(buildStatusCommandOverviewRows(params), "Utility model")).toBe(
+    "warn(agents.defaults.utilityModel: fixture-cli/small cannot disable tools.)",
+  );
+  const rows = buildStatusAllOverviewRows({
+    ...params,
+    configPath: "/fixture/openclaw.json",
+    secretDiagnosticsCount: 0,
+  });
+  expect(findRowValue(rows, "Utility model")).toBe(
+    "agents.defaults.utilityModel: fixture-cli/small cannot disable tools.",
+  );
+});
+
 it("builds status-all overview rows from the shared surface", () => {
   const rows = buildStatusAllOverviewRows({
     surface: {

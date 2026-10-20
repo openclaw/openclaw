@@ -449,9 +449,6 @@ importers:
         specifier: 3.25.2
         version: 3.25.2(zod@4.6.7)
     devDependencies:
-      '@a2ui/lit':
-        specifier: 0.13.0
-        version: 0.13.0(signal-polyfill@0.2.2)
       '@a2ui/web_core':
         specifier: 0.13.0
         version: 0.13.0
@@ -896,15 +893,18 @@ importers:
 
   extensions/canvas:
     dependencies:
-      '@a2ui/lit':
-        specifier: 0.13.0
-        version: 0.13.0(signal-polyfill@0.2.2)
       '@a2ui/web_core':
         specifier: 0.13.0
         version: 0.13.0
       '@solidjs/web':
         specifier: 2.0.0-rc.14
         version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
+      dompurify:
+        specifier: 3.4.17
+        version: 3.4.17
+      marked:
+        specifier: 18.1.1
+        version: 18.1.1
       signal-utils:
         specifier: 0.21.1
         version: 0.21.1(signal-polyfill@0.2.2)
@@ -3196,14 +3196,6 @@ importers:
 
 packages:
 
-  '@a2ui/lit@0.13.0':
-    resolution: {integrity: sha512-dFqWFjW6R+XSjbTCP+MV/PIlFxRr22t7JfjtIpc0mAt6iZdu/WZI5Pc2ac4r26h5T+cbw6xcyxFwBmZ3Iiq9rQ==}
-    peerDependencies:
-      '@a2ui/markdown-it': ^0.2.1
-    peerDependenciesMeta:
-      '@a2ui/markdown-it':
-        optional: true
-
   '@a2ui/web_core@0.13.0':
     resolution: {integrity: sha512-4Clpksne0RY9KAheQoPoTwVDJ+6XI0Es2yqVME/PN0aWQ1321Wih69SEr8Nkc+7uKMyV5FlK32o88uoyM7ZBCw==}
 
@@ -4702,9 +4694,6 @@ packages:
   '@line/bot-sdk@11.3.0':
     resolution: {integrity: sha512-AHCtmdgcVDElRLlrR8jxSracF4beWholl3Ywnl6TrPgEiSYH81fSovgWVO/LbyN0tlGidCzJMAsOLXNddF5FGg==}
     engines: {node: '>=22'}
-
-  '@lit-labs/signals@0.3.0':
-    resolution: {integrity: sha512-PfB5FLtorVfkhwTWXOPNT/rvrVdSDY8siwPyR17ztrViRbMqxy1TQBcHqJoA4303QT8yXPGxYtGKJGj7fEfEwg==}
 
   '@lit-labs/ssr-dom-shim@1.6.0':
     resolution: {integrity: sha512-VHb0ALPMTlgKjM6yIxxoQNnpKyUKLD04VzeQdsiXkMqkvYlAHxq9glGLmgbb889/1GsohSOAjvQYoiBppXFqrQ==}
@@ -11179,17 +11168,6 @@ packages:
 
 snapshots:
 
-  '@a2ui/lit@0.13.0(signal-polyfill@0.2.2)':
-    dependencies:
-      '@a2ui/web_core': 0.13.0
-      '@lit-labs/signals': 0.3.0
-      '@lit/context': 1.1.6
-      lit: 3.3.3
-      signal-utils: 0.21.1(signal-polyfill@0.2.2)
-      zod: 3.25.76
-    transitivePeerDependencies:
-      - signal-polyfill
-
   '@a2ui/web_core@0.13.0':
     dependencies:
       '@lit/context': 1.1.6
@@ -13061,11 +13039,6 @@ snapshots:
   '@line/bot-sdk@11.3.0':
     dependencies:
       '@types/node': 24.19.1
-
-  '@lit-labs/signals@0.3.0':
-    dependencies:
-      lit: 3.3.3
-      signal-polyfill: 0.2.2
 
   '@lit-labs/ssr-dom-shim@1.6.0': {}
 

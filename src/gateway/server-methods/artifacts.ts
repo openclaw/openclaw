@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -9,10 +9,14 @@ import {
   validateArtifactsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.sqlite-active-events.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
+import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import { resolveChatAttachmentFrameBudgetBytes } from "../../shared/chat-attachment-frame-budget.js";
 import { normalizeChatImageRenditionWidth } from "../../shared/chat-image-renditions.js";
+import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import {
   canCreateArtifactDownload,
   createArtifactDownload,
@@ -38,7 +42,6 @@ import {
   type ArtifactRecord,
   toArtifactSummary,
 } from "./artifacts-content.js";
-import { readArtifactImagePage } from "./artifacts-image-page.js";
 import { prepareArtifactSessionRead } from "./artifacts-session-read.js";
 import {
   ArtifactSessionResolutionError,
@@ -62,6 +65,27 @@ type ArtifactCollectionOptions = {
 
 type ArtifactDownloadLookup = ArtifactLookup &
   ({ download: PreparedArtifactDownload; release: () => void } | { download?: undefined });
+
+const CURSOR_TTL_MS = 15 * 60_000;
+type ImageCursor = {
+  binding: string;
+  beforeSeq: number;
+  imageOffset: number;
+  readWindow: TranscriptReadWindow;
+  expiresAt: number;
+};
+
+// Connection-owned continuation facts are bounded, ephemeral, and never confer access.
+const cursors = new WeakMap<object, Map<string, ImageCursor>>();
+const internalCaller = {};
+
+function invalidImageCursor(message: string) {
+  return new ArtifactSessionResolutionError(
+    errorShape(ErrorCodes.INVALID_REQUEST, message, {
+      details: { type: "artifact_cursor_invalid" },
+    }),
+  );
+}
 
 const queuedArtifactDownloads = new Map<
   string,
@@ -133,23 +157,59 @@ async function loadArtifacts(
   const { sessionKey, scope, assertCurrent } = selected;
   const { storePath, sessionId, sessionEntry: entry } = scope;
   if (query.type === "image") {
-    const page = await readArtifactImagePage({
-      scope,
-      binding: JSON.stringify([
-        sessionKey,
-        scope.agentId,
-        sessionId,
-        query.runId,
-        query.messageRole,
-      ]),
-      client: access.client,
-      cursor: query.cursor,
-      limit: query.limit ?? 4,
+    const binding = JSON.stringify([
       sessionKey,
-      filters: { runId: query.runId, messageRole: query.messageRole },
+      scope.agentId,
+      sessionId,
+      query.runId,
+      query.messageRole,
+    ]);
+    const state = getOrCreateWeakOwnerMap(cursors, access.client ?? internalCaller);
+    const now = Date.now();
+    for (const [key, value] of state) {
+      if (value.expiresAt <= now) {
+        state.delete(key);
+      }
+    }
+    const cursor = query.cursor ? state.get(query.cursor) : undefined;
+    if (query.cursor && (!cursor || cursor.binding !== binding)) {
+      throw invalidImageCursor(
+        "Image cursor expired or belongs to another session; restart artifacts.list",
+      );
+    }
+    const page = await readSessionArtifacts(scope, {
+      kind: "image-page",
+      sessionKey,
+      runId: query.runId,
+      messageRole: query.messageRole,
+      limit: query.limit ?? 4,
+      beforeSeq: cursor?.beforeSeq,
+      imageOffset: cursor?.imageOffset,
+      readWindow: cursor?.readWindow,
+    }).catch((error: unknown) => {
+      if (cursor && isSessionTranscriptProjectionUnavailableError(error)) {
+        throw invalidImageCursor("Transcript changed; restart artifacts.list");
+      }
+      throw error;
     });
+    let nextCursor: string | undefined;
+    if (page.next) {
+      nextCursor = randomUUID();
+      state.set(nextCursor, {
+        ...page.next,
+        binding,
+        expiresAt: now + CURSOR_TTL_MS,
+      });
+      pruneMapToMaxSize(state, 128);
+    }
     assertCurrent();
-    return { ...page, sessionKey, assertCurrent };
+    return {
+      artifacts: page.artifacts,
+      ...(nextCursor ? { nextCursor } : {}),
+      ...(page.omittedOversized ? { omittedOversized: true } : {}),
+      sessionKey,
+      assertCurrent,
+    };
   }
   const downloadIds = opts.downloadArtifactId ? new Set([opts.downloadArtifactId]) : undefined;
   const queuedKey =

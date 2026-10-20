@@ -280,7 +280,7 @@ and prevent native test execution.
 
 ## Temporary resource investigation
 
-Qualification, screenshot-only runs, and store/TestFlight uploads collect a
+Qualification, screenshot-only runs, CI screenshot capture, and store/TestFlight uploads collect a
 bounded `ios-resource-timeline.jsonl` while their main command runs. This temporary
 instrumentation investigates runner contention; it does not change test deadlines,
 simulator services, build parallelism, or release admission.
@@ -313,7 +313,10 @@ continuous peak. Interpret memory pressure and swap activity alongside free memo
 
 The timeline is retained with the qualification proof or screenshot diagnostics,
 including after failures. Store runs also preserve the existing sanitized screenshot
-resource/startup/crash JSON before their temporary source checkout is removed.
+phase/startup/crash JSON before their temporary source checkout is removed.
+Screenshot phases do not run synchronous resource probes; the background timeline
+is the sole resource sampler. CI retains it alongside `screenshot-diagnostics.json`
+in the existing screenshot diagnostics artifact.
 Xcode build timing summaries appear in screenshot/archive logs; qualification
 exports recognized task totals as `buildTimings` in its proof. Task totals can
 overlap and must not be summed as wall time.

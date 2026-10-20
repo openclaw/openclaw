@@ -343,6 +343,81 @@ struct CLIInstallerTests {
         #expect(summary.steps?.first?.stderrTail == "registry unavailable")
     }
 
+    @Test(arguments: [
+        (
+            #"{"status":"warning","coreUpdate":"completed","warnings":["Optional device-pair plugin is disabled"]}"#,
+            0,
+            true),
+        (#"{"status":"ok","coreUpdate":"completed"}"#, 0, true),
+        (#"{"status":"warning","coreUpdate":"pending"}"#, 0, false),
+        (#"{"status":"error","coreUpdate":"completed"}"#, 1, false),
+        (#"{"status":"warning","coreUpdate":"completed"}"#, 1, false),
+        (#"{"status":"ok"}"#, 0, false),
+        (#"{"status":"ok","coreUpdate":"unknown"}"#, 0, false),
+    ])
+    func `managed repair settles only proven core completion across relaunch`(
+        payload: String, exitCode: Int, completes: Bool) async throws
+    {
+        let root = temporaryDirectoryForTests().appendingPathComponent(
+            "openclaw-repair-completion-\(UUID().uuidString)")
+        defer { try? FileManager().removeItem(at: root) }
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        let executable = root.appendingPathComponent("openclaw")
+        try """
+        #!/bin/sh
+        if [ "$1" = "--version" ]; then
+          echo 'OpenClaw 2026.10.2'
+          exit 0
+        fi
+        echo '\(payload)'
+        exit \(exitCode)
+        """.write(to: executable, atomically: false, encoding: .utf8)
+        try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        let config = root.appendingPathComponent("openclaw.json")
+        try "{}".write(to: config, atomically: false, encoding: .utf8)
+        let suite = "CLIInstallerTests.repair-completion.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        try await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_STATE_DIR": root.path, "OPENCLAW_CONFIG_PATH": config.path],
+            defaults: [cliInstallPolicyKey: "exact"])
+        {
+            let absent = root.appendingPathComponent("absent-service")
+            let authority = GatewayLaunchAgentManager.ServiceAuthority(
+                plist: absent,
+                environment: absent,
+                wrapper: absent,
+                definition: .init(plist: nil, environment: nil, wrapper: nil),
+                isLocalGateway: false,
+                updateSelection: CLIInstallPolicy.managedUpdateSelection())
+            let receipt = PostAppUpdateReceiptStore.recordSetupRecovery(
+                fromVersion: "2026.9.8", toVersion: "2026.10.2", defaults: defaults)
+            let outcome = await CLIInstaller.updateManaged(
+                targetVersion: "2026.10.2",
+                restartGateway: false,
+                repair: true,
+                installedCLI: .init(
+                    prefix: [executable.path], sqliteLibrary: nil, serviceAuthority: authority),
+                statusHandler: { _ in })
+
+            switch outcome {
+            case .success:
+                #expect(completes)
+                PostAppUpdateReceiptStore.completeCoreRepair(
+                    receipt: receipt, owner: .gateway, defaults: defaults)
+            case .failure:
+                #expect(!completes)
+            }
+            let relaunched = try #require(PostAppUpdateReceiptStore.pendingForLaunch(
+                currentVersion: "2026.10.2", onboardingSeen: true, defaults: defaults))
+            #expect(relaunched.coreUpdatePending == !completes)
+            #expect(PostUpdateController.coreRepairAction(
+                receipt: relaunched, migrationFailed: false, explicitRetry: true) ==
+                (completes ? .none : .repair))
+        }
+    }
+
     @Test func `release builds install exact while unreleased builds choose a channel`() {
         #expect(CLIInstaller.automaticInstallTarget(
             appVersion: "2026.7.2",

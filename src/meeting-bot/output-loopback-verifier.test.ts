@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMeetingOutputLoopbackVerifier } from "./output-loopback-verifier.js";
+
+afterEach(vi.restoreAllMocks);
 
 function pcmEnergyFrames(amplitudes: readonly number[]): Buffer {
   const samplesPerFrame = 240;
@@ -23,9 +25,9 @@ const unrelatedEnvelope = Array.from(
 describe("meeting output loopback verifier", () => {
   it("requires the current output energy envelope on the captured input", () => {
     let nowMs = 1_000;
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const verifier = createMeetingOutputLoopbackVerifier({
       audioFormat: "pcm16-24khz",
-      now: () => nowMs,
     });
 
     verifier.recordInput(pcmEnergyFrames(outputEnvelope));
@@ -52,9 +54,9 @@ describe("meeting output loopback verifier", () => {
     "keeps the rolling deadline after verification and starts fresh after expiry (%s)",
     (audioFormat) => {
       let nowMs = 0;
+      vi.spyOn(Date, "now").mockImplementation(() => nowMs);
       const verifier = createMeetingOutputLoopbackVerifier({
         audioFormat,
-        now: () => nowMs,
       });
       const output = Buffer.concat(
         outputEnvelope.map((_, index) => Buffer.alloc(80, (index * 37) % 220)),

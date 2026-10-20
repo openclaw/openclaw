@@ -236,6 +236,20 @@ it("excludes overlapping JSON only in native PostgreSQL branches", () => {
   ]);
 });
 
+it("classifies native context projections without hiding SQLite SQL in the same helpers", () => {
+  const { root, write } = fixture();
+  const native =
+    "SELECT jsonb_typeof(body), jsonb_each(body), jsonb_array_elements(body), body -> 'message', body ->> 'type'";
+  const source = `function postgresModelNavigationSql() {
+    sql\`${native}\`;
+    sql\`SELECT json_extract(body, '$'), jsonb_extract(body, '$')\`;
+  }
+  function other() { sql\`${native}\`; }`;
+  write("src/config/sessions/session-model-context-projection.ts", source);
+  write("src/other.ts", source);
+  expect(inventory(root).map((row) => row.matches.length)).toEqual([7, 12]);
+});
+
 it("distinguishes PostgreSQL staging from SQLite temporary schemas", () => {
   const { root, write } = fixture();
   write(
