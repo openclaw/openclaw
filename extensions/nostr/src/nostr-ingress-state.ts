@@ -39,9 +39,8 @@ export async function migrateNostrLegacyRecentEventIds(params: {
   queue: ChannelIngressQueue<NostrIngressPayload>;
   eventIds: readonly string[];
   migratedAt?: number;
-}): Promise<number> {
+}): Promise<void> {
   const migratedAt = params.migratedAt ?? Date.now();
-  let migrated = 0;
   for (const eventId of new Set(params.eventIds)) {
     if (!eventId.trim()) {
       continue;
@@ -60,8 +59,5 @@ export async function migrateNostrLegacyRecentEventIds(params: {
         throw new Error(`Failed to migrate Nostr replay event ${eventId}.`);
       }
     }
-    // Existing ingress state already rejects the retired LRU's replay.
-    migrated += 1;
   }
-  return migrated;
 }
