@@ -1,8 +1,10 @@
 import type { BigIntStats, Stats } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { afterEach, expect, it, vi, type Mock } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { expectPendingDeletion, expectRespondOk } from "./agents-mutate.test-support.js";
+
+const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
 
 type AgentDeleteFilesystemHarness = {
   mocks: {
@@ -41,82 +43,75 @@ export function registerAgentDeleteFilesystemTests(harness: AgentDeleteFilesyste
     await promise;
     return respond;
   };
-  describe("filesystem cleanup", () => {
-    const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-    it("preserves cleanup paths when durable authority changes during filesystem preparation", async () => {
-      const retired = new Error("deletion journal was replaced");
-      const readStat = mocks.rootStat.getMockImplementation()!;
-      mocks.rootStat.mockImplementation(async (params) => {
-        const stat = await readStat(params);
-        mocks.assertAgentDeletionCurrentFinal.mockImplementation(() => {
-          throw retired;
-        });
-        return stat;
+  it("preserves cleanup paths when durable authority changes during filesystem preparation", async () => {
+    const retired = new Error("deletion journal was replaced");
+    const readStat = mocks.rootStat.getMockImplementation()!;
+    mocks.rootStat.mockImplementation(async (params) => {
+      const stat = await readStat(params);
+      mocks.assertAgentDeletionCurrentFinal.mockImplementation(() => {
+        throw retired;
       });
-
-      expectPendingDeletion(await deleteAgent(), {
-        failed: expect.arrayContaining([
-          { path: "/workspace/test-agent", reason: retired.message },
-        ]),
-      });
-      expect(mocks.movePathToTrash).not.toHaveBeenCalled();
-      expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
+      return stat;
     });
 
-    it.skipIf(process.platform === "win32")(
-      "does not trash a lexical decoy for a dangling workspace symlink",
-      async () => {
-        const actualFs =
-          await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-        const base = await actualFs.realpath(tempDirs.make("openclaw-agent-delete-dangling-"));
-        const workspaceLink = path.join(base, "workspace-link");
-        const decoy = path.join(base, "missing");
-        await actualFs.mkdir(path.join(base, "physical", "child"), { recursive: true });
-        await actualFs.mkdir(decoy);
-        await actualFs.symlink("physical/child", path.join(base, "alias"));
-        await actualFs.symlink("alias/../missing", workspaceLink);
-        mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) =>
-          agentId === "test-agent" ? workspaceLink : `/workspace/${agentId ?? "unknown"}`,
-        );
-        mocks.fsRealpath.mockImplementation(async (pathname) =>
-          pathname.startsWith(base) ? await actualFs.realpath(pathname) : pathname,
-        );
-        mocks.fsLstat.mockImplementation(async (pathname) =>
-          String(pathname).startsWith(base)
-            ? await actualFs.lstat(String(pathname), { bigint: true })
-            : makeFileStat(),
-        );
-        mocks.fsReadlink.mockImplementation(async (pathname) => await actualFs.readlink(pathname));
+    expectPendingDeletion(await deleteAgent(), {
+      failed: expect.arrayContaining([{ path: "/workspace/test-agent", reason: retired.message }]),
+    });
+    expect(mocks.movePathToTrash).not.toHaveBeenCalled();
+    expect(mocks.beginAgentDeletionFinish).not.toHaveBeenCalled();
+  });
 
-        expectRespondOk(await deleteAgent(), { ok: true });
-        expectNotTrashed(decoy);
-        expectTrashedWithinParent(workspaceLink);
-        expect(mocks.deleteWorkspaceState).toHaveBeenCalled();
-      },
-    );
-
-    it("reports trash failures without deleting the retained directory", async () => {
-      const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-      const workspaceDir = await actualFs.realpath(
-        tempDirs.make("openclaw-agent-delete-trash-failure-"),
-      );
+  it.skipIf(process.platform === "win32")(
+    "does not trash a lexical decoy for a dangling workspace symlink",
+    async () => {
+      const base = await actualFs.realpath(tempDirs.make("openclaw-agent-delete-dangling-"));
+      const workspaceLink = path.join(base, "workspace-link");
+      const decoy = path.join(base, "missing");
+      await actualFs.mkdir(path.join(base, "physical", "child"), { recursive: true });
+      await actualFs.mkdir(decoy);
+      await actualFs.symlink("physical/child", path.join(base, "alias"));
+      await actualFs.symlink("alias/../missing", workspaceLink);
       mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) =>
-        agentId === "test-agent" ? workspaceDir : `/workspace/${agentId ?? "unknown"}`,
+        agentId === "test-agent" ? workspaceLink : `/workspace/${agentId ?? "unknown"}`,
       );
-      mocks.movePathToTrash.mockImplementation(async (pathname) => {
-        if (pathname === workspaceDir) {
-          throw Object.assign(new Error("trash destination missing"), { code: "ENOENT" });
-        }
-        return "/trashed";
-      });
+      mocks.fsRealpath.mockImplementation(async (pathname) =>
+        pathname.startsWith(base) ? await actualFs.realpath(pathname) : pathname,
+      );
+      mocks.fsLstat.mockImplementation(async (pathname) =>
+        String(pathname).startsWith(base)
+          ? await actualFs.lstat(String(pathname), { bigint: true })
+          : makeFileStat(),
+      );
+      mocks.fsReadlink.mockImplementation(async (pathname) => await actualFs.readlink(pathname));
 
-      expectPendingDeletion(await deleteAgent(), {
-        failed: [{ path: workspaceDir, reason: "trash destination missing" }],
-      });
-      await expect(actualFs.stat(workspaceDir)).resolves.toBeDefined();
-      expect(mocks.fsRm).not.toHaveBeenCalled();
-      expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
+      expectRespondOk(await deleteAgent(), { ok: true });
+      expectNotTrashed(decoy);
+      expectTrashedWithinParent(workspaceLink);
+      expect(mocks.deleteWorkspaceState).toHaveBeenCalled();
+    },
+  );
+
+  it("reports trash failures without deleting the retained directory", async () => {
+    const workspaceDir = await actualFs.realpath(
+      tempDirs.make("openclaw-agent-delete-trash-failure-"),
+    );
+    mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) =>
+      agentId === "test-agent" ? workspaceDir : `/workspace/${agentId ?? "unknown"}`,
+    );
+    mocks.movePathToTrash.mockImplementation(async (pathname) => {
+      if (pathname === workspaceDir) {
+        throw Object.assign(new Error("trash destination missing"), { code: "ENOENT" });
+      }
+      return "/trashed";
     });
+
+    expectPendingDeletion(await deleteAgent(), {
+      failed: [{ path: workspaceDir, reason: "trash destination missing" }],
+    });
+    await expect(actualFs.stat(workspaceDir)).resolves.toBeDefined();
+    expect(mocks.fsRm).not.toHaveBeenCalled();
+    expect(mocks.deleteWorkspaceState).not.toHaveBeenCalled();
   });
 }

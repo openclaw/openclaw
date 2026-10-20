@@ -58,27 +58,14 @@ export function registerAgentDeletionAuthorityTests({
     const approvals = new Set(["test-agent", "other-agent"]);
     const events: string[] = [];
     mocks.cronRemoveAgentJobsTransactional.mockImplementation(async (agentId, commit) => {
-      const snapshot = structuredClone(cronJobs);
       cronJobs.splice(0, cronJobs.length, ...cronJobs.filter((job) => job.agentId !== agentId));
       events.push("cron");
-      try {
-        return await commit();
-      } catch (error) {
-        cronJobs.splice(0, cronJobs.length, ...snapshot);
-        throw error;
-      }
+      return await commit();
     });
     mocks.withAgentExecApprovalsRemoved.mockImplementation(async (agentId, commit) => {
-      const existed = approvals.delete(agentId);
+      approvals.delete(agentId);
       events.push("approvals");
-      try {
-        return await commit();
-      } catch (error) {
-        if (existed) {
-          approvals.add(agentId);
-        }
-        throw error;
-      }
+      return await commit();
     });
     mocks.writeConfigFile.mockImplementationOnce(async () => {
       expect(memorySessionActorOwners.read(memoryOwner)).toBeUndefined();
@@ -100,15 +87,13 @@ export function registerAgentDeletionAuthorityTests({
       agentId: "test-agent",
       removedBindings: 2,
       failed: [],
-    });
-    expect(result).not.toHaveProperty("purgeFailed");
-    expect(result.removed).toEqual(
-      expect.arrayContaining([
+      removed: expect.arrayContaining([
         { path: "/workspace/test-agent", method: "trash" },
         { path: "/agents/test-agent", method: "trash" },
         { path: "/transcripts/test-agent", method: "trash" },
       ]),
-    );
+    });
+    expect(result).not.toHaveProperty("purgeFailed");
     expect(mocks.writeConfigFile).toHaveBeenCalledWith(expect.anything(), {
       allowConfigSizeDrop: true,
       assertConfigPathForWrite: mocks.assertAgentDeletionCurrentFinal,
@@ -123,10 +108,6 @@ export function registerAgentDeletionAuthorityTests({
     );
     expect(cronJobs).toEqual([{ id: "other-job", agentId: "other-agent" }]);
     expect(approvals).toEqual(new Set(["other-agent"]));
-    expect(mocks.cronRemoveAgentJobsTransactional).toHaveBeenCalledWith(
-      "test-agent",
-      expect.any(Function),
-    );
     expect(mocks.withAgentExecApprovalsRemoved).toHaveBeenCalledWith(
       "test-agent",
       expect.any(Function),
@@ -136,13 +117,14 @@ export function registerAgentDeletionAuthorityTests({
       "/agents/test-agent/openclaw-agent.sqlite",
       "test-agent",
     );
-    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledWith({ unregisterDatabases: true });
+    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledExactlyOnceWith({
+      unregisterDatabases: true,
+    });
     expect(mocks.unregisterResolvedAgentDir).toHaveBeenCalledWith({
       agentId: "test-agent",
       agentDir: "/agents/test-agent",
     });
     expect(events).toEqual(["database", "cron", "approvals", "config", "directory"]);
-    expect(mocks.beginAgentDeletionFinish).toHaveBeenCalledOnce();
     await actor.release();
   });
 }

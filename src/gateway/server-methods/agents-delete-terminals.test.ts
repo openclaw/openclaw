@@ -33,12 +33,8 @@ it("joins a cancelled connection terminal spawn through backend exit while prese
   const backend = createDeferred<ReturnType<typeof makeFakePty>>();
   const doomed = makeFakePty();
   const keeper = makeFakePty();
-  const opening = terminals.open(
-    baseOpenRequest({
-      agentId: "doomed",
-      createBackend: () => backend.promise,
-    }),
-  );
+  const request = baseOpenRequest({ agentId: "doomed", createBackend: () => backend.promise });
+  const opening = terminals.open(request);
   const drain = terminals.beginAgentSessionDrain("doomed");
   try {
     backend.resolve(doomed);
@@ -68,8 +64,9 @@ it("joins a cancelled connection terminal spawn through backend exit while prese
 it("keeps deletion draining until every connection terminal exits, without touching a survivor", async () => {
   await withOpenClawTestState({ label: "agent-delete-terminals" }, async (state) => {
     const workspace = state.path("workspace-doomed");
+    const witness = "still owned by terminal work";
     await fs.mkdir(workspace);
-    await fs.writeFile(`${workspace}/witness.txt`, "still owned by terminal work");
+    await fs.writeFile(`${workspace}/witness.txt`, witness);
     await state.writeConfig({
       agents: {
         ownership: "explicit",
@@ -102,6 +99,11 @@ it("keeps deletion draining until every connection terminal exits, without touch
       withOpenAdmission: withAgentTerminalOpenAdmission,
       detachGraceMs: 60_000,
     });
+    const context = createDirectChatContext({
+      cron,
+      getRuntimeConfig,
+      terminalSessions: terminals,
+    });
     const ptys = [makeFakePty(), makeFakePty(), makeFakePty()];
     const keeper = makeFakePty();
     const killed = createDeferred();
@@ -128,15 +130,7 @@ it("keeps deletion draining until every connection terminal exits, without touch
         agentId: "keeper",
         owner: { kind: "conn", connId: "keeper" },
       });
-      deleting = deleteGatewayAgent(
-        "doomed",
-        true,
-        createDirectChatContext({
-          cron,
-          getRuntimeConfig,
-          terminalSessions: terminals,
-        }),
-      );
+      deleting = deleteGatewayAgent("doomed", true, context);
       const settled = vi.fn();
       void deleting.then(settled, settled);
       await awaitGateBeforeSettlement(
@@ -154,9 +148,7 @@ it("keeps deletion draining until every connection terminal exits, without touch
         cleanupCompleted: false,
       });
       expect(settled).not.toHaveBeenCalled();
-      expect(await fs.readFile(`${workspace}/witness.txt`, "utf8")).toBe(
-        "still owned by terminal work",
-      );
+      expect(await fs.readFile(`${workspace}/witness.txt`, "utf8")).toBe(witness);
       expect(terminals.write("keeper", survivor.sessionId, "still usable")).toBe(true);
       ptys[2]!.emitExit(0);
       await expect(deleting).resolves.toMatchObject({ ok: true, failed: [] });
