@@ -37,6 +37,11 @@ function required(container: HTMLElement, selector: string) {
   assert(element);
   return element;
 }
+const fileResource = {
+  viewId: "synthetic-form",
+  selection: "implicit",
+  userOptions: { kind: "file" },
+} satisfies Question["resource"];
 async function mountQuestion(question: Partial<Question>) {
   const container = document.body.appendChild(document.createElement("div"));
   const onSubmit = vi.fn();
@@ -62,7 +67,11 @@ async function mountQuestion(question: Partial<Question>) {
   mountSolid(() => createComponent(ComposerQuestionDock, { panel: props }), { container });
   const panel = await questionPanelIn(container);
   const group = required(container, ".chat-question-panel");
-  return { container, panel, group, onSubmit };
+  const press = async (key: string, target = group) => {
+    target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+    await panel.updateComplete;
+  };
+  return { container, group, onSubmit, press };
 }
 
 it.each([
@@ -77,13 +86,12 @@ it.each([
 ])(
   "submits selected answers from $selector with $modifier+Enter",
   async ({ selector, modifier }) => {
-    const { container, panel, group, onSubmit } = await mountQuestion({
+    const { container, press, onSubmit } = await mountQuestion({
       options: options.slice(0, 2),
       multiSelect: selector.includes("checkbox"),
       isOther: true,
     });
-    group.dispatchEvent(new KeyboardEvent("keydown", { key: "2", bubbles: true }));
-    await panel.updateComplete;
+    await press("2");
     const target = required(container, selector);
     target.focus();
     const event = keydown(target, "Enter", { [modifier]: true });
@@ -98,25 +106,18 @@ it.each([
   { key: "9", value: "format-9" },
   { key: "ArrowRight", value: "  detailed-id  " },
 ])("submits the canonical option value selected with $key", async ({ key, value }) => {
-  const { container, panel, group, onSubmit } = await mountQuestion({
+  const { container, press, group, onSubmit } = await mountQuestion({
     presentation: "form",
     options,
   });
   expect(badges(container)).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
-  const target =
-    key === "ArrowRight" ? container.querySelector<HTMLElement>('[role="radio"]') : group;
-  assert(target);
-  target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
-  await panel.updateComplete;
+  await press(key, key === "ArrowRight" ? required(container, '[role="radio"]') : group);
   required(container, ".chat-question-panel__advance").click();
   expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: [value] });
 });
 
 it.each([false, true])("respects allowEmpty=%s for shortcut submission", async (allowEmpty) => {
-  const { group, onSubmit } = await mountQuestion({
-    options: [],
-    allowEmpty,
-  });
+  const { group, onSubmit } = await mountQuestion({ allowEmpty });
   const event = keydown(group, "Enter", { ctrlKey: true });
   expect(event.defaultPrevented).toBe(allowEmpty);
   expect(onSubmit.mock.calls).toEqual(allowEmpty ? [[{ format: [] }]] : []);
@@ -124,13 +125,9 @@ it.each([false, true])("respects allowEmpty=%s for shortcut submission", async (
 
 it("keeps native activation on links, file pickers, and action buttons", async () => {
   const { container, onSubmit } = await mountQuestion({
-    questionId: "attachment",
-    header: "Attachment",
-    question: "Attach a file",
-    options: [],
     allowEmpty: true,
     url: "https://example.test/confirm",
-    resource: { viewId: "synthetic-form", selection: "implicit", userOptions: { kind: "file" } },
+    resource: fileResource,
   });
   for (const selector of [
     "a",
@@ -148,45 +145,40 @@ it("keeps native activation on links, file pickers, and action buttons", async (
   }
 });
 
-it("numbers only visible implicit resources and cannot restore a hidden option with a shortcut", async () => {
-  const { container, panel, group, onSubmit } = await mountQuestion({
-    questionId: "resources",
-    header: "Resources",
-    question: "Keep resources",
+it("numbers visible resources without restoring hidden options through shortcuts", async () => {
+  const { container, press, group, onSubmit } = await mountQuestion({
     presentation: "form",
     multiSelect: true,
     allowEmpty: true,
     defaultAnswers: ["kept"],
-    resource: { viewId: "synthetic-form", selection: "implicit", userOptions: { kind: "file" } },
+    resource: fileResource,
     options: [
       { label: "Hidden", value: "hidden", resourceUri: "parts://hidden" },
       { label: "Kept", value: "kept", resourceUri: "parts://kept" },
     ],
   });
   expect(badges(container)).toEqual(["1"]);
-  group.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
-  await panel.updateComplete;
+  await press("1");
   expect(container.querySelector(".chat-question-panel__option")).toBeNull();
   for (const key of ["1", "2"]) {
     const event = keydown(group, key);
     expect(event.defaultPrevented).toBe(false);
   }
   group.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ resources: [] });
+  expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: [] });
 });
 
 it.each([8, 9])(
   "offers an Other shortcut only within the nine-key range (%d options)",
   async (count) => {
-    const { container, panel, group } = await mountQuestion({
+    const { container, press } = await mountQuestion({
       isOther: true,
       options: options.slice(0, count),
     });
     expect(
       container.querySelector(".chat-question-panel__option--other kbd")?.textContent?.trim(),
     ).toBe(count === 8 ? "9" : undefined);
-    group.dispatchEvent(new KeyboardEvent("keydown", { key: "9", bubbles: true }));
-    await panel.updateComplete;
+    await press("9");
     if (count === 8) {
       expect(document.activeElement).toBe(container.querySelector("textarea"));
     } else {

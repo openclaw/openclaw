@@ -17,17 +17,44 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function question(text: string, defaultAnswers?: string[]) {
+function model(key: string, text: string, defaults?: string[]): QuestionPanelProps["model"] {
   return {
-    questionId: "answer",
-    header: "Answer",
-    question: text,
-    options: [],
-    ...(defaultAnswers ? { presentation: "form" as const, defaultAnswers } : {}),
+    requestKey: key,
+    title: "Question",
+    questions: [
+      {
+        questionId: "answer",
+        header: "Answer",
+        question: text,
+        options: [],
+        ...(defaults ? { presentation: "form" as const, defaultAnswers: defaults } : {}),
+      },
+    ],
+    collapsed: false,
+    disabled: false,
+    drafts: new Map(),
   };
 }
+function mountDock(initial: QuestionPanelProps | null = null) {
+  const container = document.body.appendChild(document.createElement("div"));
+  let updatePanel!: (value: QuestionPanelProps | null) => void;
+  mountSolid(
+    () => {
+      const [panel, setPanel] = createSignal(initial);
+      updatePanel = setPanel;
+      return createComponent(ComposerQuestionDock, {
+        get panel() {
+          return panel();
+        },
+      });
+    },
+    { container },
+  );
+  flush();
+  return { container, updatePanel };
+}
 
-it("defers the question controls, retries failed loading, and mounts only the current connected request", async () => {
+it("defers controls, retries loading, and mounts only the current connected request", async () => {
   const initialLoad = createDeferred();
   const retryLoad = createDeferred();
   const loadStarted = createDeferred();
@@ -41,36 +68,11 @@ it("defers the question controls, retries failed loading, and mounts only the cu
     await pending;
     return importOriginal();
   });
-  const container = document.body.appendChild(document.createElement("div"));
-  let updatePanel!: (value: QuestionPanelProps | null) => void;
-  mountSolid(
-    () => {
-      const [panel, setPanel] = createSignal<QuestionPanelProps | null>(null);
-      updatePanel = setPanel;
-      return createComponent(ComposerQuestionDock, {
-        get panel() {
-          return panel();
-        },
-      });
-    },
-    { container },
-  );
-  flush();
+  const { container, updatePanel } = mountDock();
   expect(customElements.get("openclaw-chat-question-panel")).toBeUndefined();
   expect(load).not.toHaveBeenCalled();
-
   const onSubmit = vi.fn();
-  const props: QuestionPanelProps = {
-    model: {
-      requestKey: "old-request",
-      title: "Question",
-      questions: [question("Old question")],
-      collapsed: false,
-      disabled: false,
-      drafts: new Map(),
-    },
-    onSubmit,
-  };
+  const props = { model: model("old-request", "Old question"), onSubmit };
   updatePanel(props);
   flush();
   const card = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
@@ -94,23 +96,13 @@ it("defers the question controls, retries failed loading, and mounts only the cu
   card.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
   await card.updateComplete;
   expect(card.querySelector('[role="status"]')).not.toBeNull();
-  const current: QuestionPanelProps = {
-    ...props,
-    model: {
-      ...props.model,
-      requestKey: "current-request",
-      questions: [question("Current question", ["  current value  "])],
-      drafts: new Map(),
-    },
-  };
-  updatePanel(current);
-  flush();
-  await card.updateComplete;
-  const removed = document.body.appendChild(document.createElement("div"));
-  mountSolid(() => createComponent(ComposerQuestionDock, { panel: props }), {
-    container: removed,
+  updatePanel({
+    model: model("current-request", "Current question", ["  current value  "]),
+    onSubmit,
   });
   flush();
+  await card.updateComplete;
+  const { container: removed } = mountDock(props);
   const removedCard = removed.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
   await removedCard.updateComplete;
   removed.remove();

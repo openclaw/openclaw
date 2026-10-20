@@ -11,6 +11,9 @@ import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts
 import "./chat-details-session.tsx";
 import "./chat-processes-panel.tsx";
 
+const mainRead = ["sessions.processes.list", { key: "agent:main:parent", agentId: "main" }];
+const workerRead = ["sessions.processes.list", { key: "global", agentId: "worker" }];
+
 function process(overrides: Partial<SessionsProcessesListResult["processes"][number]> = {}) {
   return {
     processId: "build",
@@ -115,8 +118,8 @@ it("retires stop authority immediately and reads the complete replacement scope"
   expect(request.mock.calls.filter(([method]) => method === "sessions.processes.stop")).toEqual([]);
   await settle(panel, 0);
   expect(request.mock.calls.filter(([method]) => method === "sessions.processes.list")).toEqual([
-    ["sessions.processes.list", { key: "agent:main:parent", agentId: "main" }],
-    ["sessions.processes.list", { key: "global", agentId: "worker" }],
+    mainRead,
+    workerRead,
   ]);
 });
 
@@ -144,9 +147,7 @@ it("keeps details process observation through refreshes and follows its presente
   await settle(details, 0);
   const row = details.querySelector(".chat-details__process");
   expect(row?.textContent).toContain("Main build");
-  expect(request.mock.calls).toEqual([
-    ["sessions.processes.list", { key: "agent:main:parent", agentId: "main" }],
-  ]);
+  expect(request.mock.calls).toEqual([mainRead]);
 
   details.props = { ...details.props!, messages: [] };
   await settle(details, 0);
@@ -155,10 +156,7 @@ it("keeps details process observation through refreshes and follows its presente
 
   details.props = { ...details.props!, sessionKey: "global", currentAgentId: "worker" };
   await settle(details, 0);
-  expect(request.mock.calls).toEqual([
-    ["sessions.processes.list", { key: "agent:main:parent", agentId: "main" }],
-    ["sessions.processes.list", { key: "global", agentId: "worker" }],
-  ]);
+  expect(request.mock.calls).toEqual([mainRead, workerRead]);
   expect(details.querySelector(".chat-details__process")?.textContent).toContain("Worker build");
 
   details.presented = false;
@@ -168,10 +166,7 @@ it("keeps details process observation through refreshes and follows its presente
 
   details.presented = true;
   await settle(details, 0);
-  expect(request.mock.calls.at(-1)).toEqual([
-    "sessions.processes.list",
-    { key: "agent:main:parent", agentId: "main" },
-  ]);
+  expect(request.mock.calls.at(-1)).toEqual(mainRead);
   expect(request).toHaveBeenCalledTimes(3);
   expect(details.querySelector(".chat-details__process")?.textContent).toContain("Main build");
 });

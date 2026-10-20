@@ -8,12 +8,14 @@ import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import { MessageGroup as NativeMessageGroup } from "./chat-message-group-view.tsx";
 import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
-import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
+import { createReplyPreviewResolver, type LoadedReplySource } from "./chat-reply-preview.ts";
 
 const replyName = (root: ParentNode | null | undefined) =>
   root?.querySelector(".chat-reply-attribution__name")?.textContent;
 const unavailableElement = (root: ParentNode) =>
   root.querySelector(".chat-reply-attribution__unavailable");
+const find = <E extends Element = HTMLElement>(selector: string, root: ParentNode = container) =>
+  root.querySelector<E>(selector);
 const textMessage = (role: string, content: string, metadata: Record<string, unknown> = {}) => ({
   role,
   content,
@@ -27,6 +29,21 @@ const groupDefaults = {
   visibleContent: "text" as const,
 };
 const renderOptions = { showReasoning: false, showToolCalls: false };
+type RenderOptions = Parameters<ReturnType<typeof createMessageGroupHarness>["render"]>[1];
+function renderGroup(group: MessageGroup, options: RenderOptions) {
+  container = document.body.appendChild(document.createElement("div"));
+  const harness = createMessageGroupHarness(container);
+  harness.render(group, { ...renderOptions, ...options });
+  return harness;
+}
+function loadedPreview(id: string, message: unknown, senderLabel: string, userName?: string) {
+  return createReplyPreviewResolver(
+    new Map<string, LoadedReplySource>([[id, { message, messageId: id, senderLabel }]]),
+    { assistantName: "OpenClaw", userId: "alice", userName },
+  );
+}
+const entries = (messages: unknown[]) =>
+  messages.map((message, index) => ({ message, key: `answer-${index}`, hasVisibleContent: true }));
 const ownSender = {
   id: "alice",
   name: "Alice",
@@ -38,17 +55,13 @@ function ownReplyGroup(id: string, target: string, snapshot?: Snapshot): Message
     key: id,
     role: "user",
     sender: ownSender,
-    messages: [
-      {
-        key: id,
-        hasVisibleContent: true,
-        message: textMessage("user", "Follow up", {
-          id,
-          replyToId: target,
-          ...(snapshot ? { replyToPreview: snapshot } : {}),
-        }),
-      },
-    ],
+    messages: entries([
+      textMessage("user", "Follow up", {
+        id,
+        replyToId: target,
+        ...(snapshot ? { replyToPreview: snapshot } : {}),
+      }),
+    ]),
   };
 }
 
@@ -58,6 +71,11 @@ const prompt = textMessage("user", "Original question", {
   senderId: "alice",
   senderName: "Alice",
 });
+const currentReply = {
+  role: "assistant",
+  content: "Answer",
+  openclawDelivery: { replyToCurrent: true },
+};
 // A 1:1 turn whose own prompt is loaded: a reference to anything else is older.
 const turnSource = { replyTurnSource: { key: "prompt-render-key", message: prompt } };
 let container: HTMLDivElement;
@@ -85,53 +103,40 @@ it("redraws the reply connector from the current avatar after its presentation c
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
     this: HTMLElement,
   ) {
-    if (this.classList.contains("chat-avatar-slot")) {
-      return new DOMRect(30, 50, 40, 40);
-    }
-    if (this.classList.contains("chat-avatar")) {
-      return new DOMRect(10, 30, 20, 20);
-    }
-    if (this.classList.contains("chat-reply-attribution")) {
-      return new DOMRect(100, 20, 60, 20);
-    }
-    if (this.classList.contains("chat-reply-attribution__label")) {
-      return new DOMRect(100, 20, 40, 20);
-    }
-    return new DOMRect(0, 0, 400, 200);
+    const bounds = [
+      ["chat-avatar-slot", [30, 50, 40, 40]],
+      ["chat-avatar", [10, 30, 20, 20]],
+      ["chat-reply-attribution", [100, 20, 60, 20]],
+      ["chat-reply-attribution__label", [100, 20, 40, 20]],
+    ] as const;
+    const rect = bounds.find(([name]) => this.classList.contains(name))?.[1];
+    return new DOMRect(...(rect ?? ([0, 0, 400, 200] as const)));
   });
-  container = document.body.appendChild(document.createElement("div"));
-  const harness = createMessageGroupHarness(container);
   const group: MessageGroup = {
     ...groupDefaults,
     key: "connector",
     replyToSender: alice,
     replyToMessage: { key: "prompt", message: prompt },
-    messages: [
-      { key: "answer", message: { role: "assistant", content: "Answer" }, hasVisibleContent: true },
-    ],
+    messages: entries([textMessage("assistant", "Answer")]),
   };
   const options = {
     avatarPlacement: "gutter" as const,
     ...renderOptions,
   };
-  harness.render(group, options);
-  await waitForSolid(() =>
-    expect(container.querySelector(".chat-reply-connector path")).not.toBeNull(),
-  );
+  const harness = renderGroup(group, options);
+  await waitForSolid(() => expect(find(".chat-reply-connector path")).not.toBeNull());
   for (const resize of resizes) {
     resize();
   }
-  const path = container.querySelector(".chat-reply-connector path")!;
+  const path = find(".chat-reply-connector path")!;
   expect(path.getAttribute("d")).toMatch(/^M 20 30 /);
 
   harness.render(group, { ...options, assistantAvatar: "blob:reply-avatar" });
-  await waitForSolid(() =>
-    expect(container.querySelector(".chat-group > .chat-avatar-slot")).not.toBeNull(),
-  );
+  await waitForSolid(() => expect(find(".chat-group > .chat-avatar-slot")).not.toBeNull());
   for (const resize of resizes) {
     resize();
   }
-  expect(container.querySelector(".chat-reply-connector path")).toBe(path);
+  expect(find(".chat-reply-connector path")).toBe(path);
   expect(path.getAttribute("d")).toMatch(/^M 50 50 /);
 });
 
@@ -165,11 +170,7 @@ function draw(
     replyToSender: alice,
     replyToMessage: { key: "prompt-render-key", message: source },
     ...groupContext,
-    messages: replies.map((message, index) => ({
-      message,
-      key: `answer-${index}`,
-      hasVisibleContent: true,
-    })),
+    messages: entries(replies),
   };
   const onOpenReply = vi.fn();
   const resolveReplyPreview = createReplyPreviewResolver(
@@ -230,7 +231,7 @@ function draw(
   );
   return {
     onOpenReply,
-    row: container.querySelector<HTMLElement>(".chat-reply-attribution--reply")!,
+    row: find(".chat-reply-attribution--reply")!,
   };
 }
 
@@ -240,7 +241,7 @@ it("renders one recipient per group and navigates from the name by persisted ID"
     { role: "assistant", content: "Second answer", __openclaw: { replyToId: "prompt" } },
   ]);
   expect(container.querySelectorAll(".chat-reply-attribution--reply")).toHaveLength(1);
-  expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
+  expect(find(".chat-reply-attribution--inline")).toBeNull();
   expect(row.textContent).not.toContain("Original question");
   const target = row.querySelector<HTMLButtonElement>("button")!;
   expect(target.getAttribute("aria-label")).toBe("Replying to Alice");
@@ -274,43 +275,24 @@ it.each([
 ] as const)(
   "keeps the sender name of %s unless the group strip names that same identity",
   (_replier, role, sender, original, strip, senderName) => {
-    container = document.body.appendChild(document.createElement("div"));
-    const resolveReplyPreview = createReplyPreviewResolver(
-      new Map([["earlier", { message: original, messageId: "earlier-key", senderLabel: strip }]]),
-      { assistantName: "OpenClaw", userId: "alice" },
-    );
-    createMessageGroupHarness(container).render(
+    renderGroup(
       {
         ...groupDefaults,
         key: "reply-group",
         role,
         replyShared: true,
         ...(sender ? { sender, senderLabel: sender.name } : {}),
-        messages: [
-          {
-            key: "reply",
-            hasVisibleContent: true,
-            message: {
-              role,
-              content: "Reply",
-              __openclaw: { id: "reply", replyToId: "earlier" },
-            },
-          },
-        ],
+        messages: entries([textMessage(role, "Reply", { id: "reply", replyToId: "earlier" })]),
       },
       {
-        ...renderOptions,
         avatarPlacement: "none",
         userId: "alice",
         assistantName: "OpenClaw",
-        resolveReplyPreview,
+        resolveReplyPreview: loadedPreview("earlier", original, strip),
       },
     );
-    expect(
-      container.querySelector(".chat-reply-attribution--reply .chat-reply-attribution__name")
-        ?.textContent,
-    ).toBe(strip);
-    expect(container.querySelector(".chat-sender-name")?.textContent ?? null).toBe(senderName);
+    expect(replyName(find(".chat-reply-attribution--reply"))).toBe(strip);
+    expect(find(".chat-sender-name")?.textContent ?? null).toBe(senderName);
   },
 );
 
@@ -334,7 +316,7 @@ it.each([
       ...(status ? { [status]: ["deleted"] } : {}),
     });
     if (!reserve) {
-      expect(container.querySelector(".chat-reply-attribution")).toBeNull();
+      expect(find(".chat-reply-attribution")).toBeNull();
       expect(container.textContent).not.toContain("Original message unavailable");
       return;
     }
@@ -387,7 +369,7 @@ it.each([
       } else {
         expect(row.querySelector(".chat-author-avatar")).not.toBeNull();
         expect(unavailableElement(row)).toBeNull();
-        expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
+        expect(find(".chat-reply-attribution--inline")).toBeNull();
         row.querySelector<HTMLButtonElement>("button.chat-reply-attribution__target")!.click();
         expect(onOpenReply).toHaveBeenCalledWith("older");
       }
@@ -397,13 +379,8 @@ it.each([
   },
 );
 
-function reply(id: string, snapshot?: Snapshot) {
-  return {
-    role: "assistant",
-    content: "Answer",
-    __openclaw: { replyToId: id, replyToPreview: snapshot },
-  };
-}
+const reply = (id: string, snapshot?: Snapshot) =>
+  textMessage("assistant", "Answer", { replyToId: id, replyToPreview: snapshot });
 
 it.each([
   { promptRun: undefined, name: undefined, anonymous: false },
@@ -413,24 +390,16 @@ it.each([
 ])(
   "settles a 1:1 reply to a paged-out prompt by run ownership, not its snapshot (run $promptRun)",
   ({ promptRun, name, anonymous }) => {
-    const paged = {
-      role: "user",
-      content: "Deploy?",
-      __openclaw: {
-        id: "p1",
-        ...(anonymous ? {} : { senderName: "Alice", idempotencyKey: `${promptRun}:user` }),
-      },
-    };
+    const paged = textMessage("user", "Deploy?", {
+      id: "p1",
+      ...(anonymous ? {} : { senderName: "Alice", idempotencyKey: `${promptRun}:user` }),
+    });
     const { row } = draw(
       prompt,
       [
         {
-          role: "assistant",
+          ...reply("p1", anonymous ? undefined : { senderLabel: "Alice", text: "Deploy?" }),
           content: "Deploying",
-          __openclaw: {
-            replyToId: "p1",
-            replyToPreview: anonymous ? undefined : { senderLabel: "Alice", text: "Deploy?" },
-          },
         },
       ],
       false,
@@ -443,27 +412,21 @@ it.each([
       },
     );
     if (anonymous) {
-      expect(container.querySelector(".chat-reply-attribution")).toBeNull();
+      expect(find(".chat-reply-attribution")).toBeNull();
     }
     expect(replyName(row)).toBe(name);
-    expect(container.querySelector(".chat-reply-attribution--pending")).toBeNull();
+    expect(find(".chat-reply-attribution--pending")).toBeNull();
   },
 );
 
 it("does not resolve a shared reply_to_current to a prompt without sender provenance", () => {
-  const unattributed = { role: "user", content: "Question", __openclaw: { id: "current" } };
-  draw(
-    prompt,
-    [{ role: "assistant", content: "Answer", openclawDelivery: { replyToCurrent: true } }],
-    true,
-    "group",
-    {
-      replyShared: true,
-      replyCurrentSource: { key: "current-render-key", message: unattributed },
-      sources: { current: { message: unattributed, senderLabel: "Message" } },
-    },
-  );
-  expect(container.querySelector(".chat-reply-attribution")).toBeNull();
+  const unattributed = textMessage("user", "Question", { id: "current" });
+  draw(prompt, [currentReply], true, "group", {
+    replyShared: true,
+    replyCurrentSource: { key: "current-render-key", message: unattributed },
+    sources: { current: { message: unattributed, senderLabel: "Message" } },
+  });
+  expect(find(".chat-reply-attribution")).toBeNull();
 });
 
 it.each([
@@ -485,19 +448,14 @@ it.each([
       senderId: "jordan",
       senderName: "Jordan",
     });
-    const current = {
-      role: "assistant",
-      content: "Answer",
-      openclawDelivery: { replyToCurrent: true },
-    };
     const bob = { key: "current-prompt-render-key", message: currentPrompt };
     const explicitOlder = finalTarget === "older" || !finalTarget;
     draw(
       prompt,
       [
-        explicitOlder ? reply("older") : finalTarget === "current" ? reply("prompt") : current,
+        explicitOlder ? reply("older") : finalTarget === "current" ? reply("prompt") : currentReply,
         finalTarget === "current"
-          ? current
+          ? currentReply
           : finalTarget
             ? reply(finalTarget)
             : { role: "assistant", content: "Final answer" },
@@ -523,7 +481,7 @@ it.each([
       recipient ? 1 : 0,
     );
     expect(replyName(container)).toBe(recipient);
-    expect(container.querySelector(".chat-reply-attribution--inline")).toBeNull();
+    expect(find(".chat-reply-attribution--inline")).toBeNull();
   },
 );
 
@@ -557,46 +515,33 @@ it.each([
 );
 
 it.each([
-  {
-    role: "assistant",
-    identity: { type: "agent", id: "main" },
-    name: "OpenClaw",
-    label: "OpenClaw",
-  },
-  { role: "user", identity: { type: "profile", id: "alice" }, name: "Alice", label: "You" },
-  { role: "user", identity: { type: "profile", id: "jordan" }, name: "Jordan", label: "Jordan" },
+  ["assistant", { type: "agent", id: "main" }, "OpenClaw", "OpenClaw"],
+  ["user", { type: "profile", id: "alice" }, "Alice", "You"],
+  ["user", { type: "profile", id: "jordan" }, "Jordan", "Jordan"],
 ] as const)(
-  "renders an inline reply to $label through the source identity owner",
-  ({ role, identity, name, label }) => {
-    container = document.body.appendChild(document.createElement("div"));
+  "renders an inline reply through the source identity owner (%s, %j, %s, %s)",
+  (role, identity, name, label) => {
     const source = textMessage(role, "The original answer", {
       id: "inline-source",
       senderIdentity: identity,
       senderId: identity.id,
       senderName: name,
     });
-    const resolveReplyPreview = createReplyPreviewResolver(
-      new Map([
-        ["inline-source", { message: source, messageId: "inline-source", senderLabel: name }],
-      ]),
-      { assistantName: "OpenClaw", userId: "alice", userName: "Alice" },
-    );
     const onOpenReply = vi.fn();
-    createMessageGroupHarness(container).render(ownReplyGroup("inline-user", "inline-source"), {
-      ...renderOptions,
+    renderGroup(ownReplyGroup("inline-user", "inline-source"), {
       userId: "alice",
-      resolveReplyPreview,
+      resolveReplyPreview: loadedPreview("inline-source", source, name, "Alice"),
       onOpenReply,
     });
-    const row = container.querySelector<HTMLButtonElement>(
+    const row = find<HTMLButtonElement>(
       ".chat-bubble > .chat-reply-attribution--inline .chat-reply-attribution__target",
     )!;
     expect(row.getAttribute("aria-label")).toBe(`Replying to ${label}`);
     expect(replyName(row)).toBe(label);
     expect(row.querySelector(".chat-author-avatar")).not.toBeNull();
     expect(Boolean(row.querySelector(".identity-avatar--agent"))).toBe(role === "assistant");
-    expect(container.querySelector(".chat-reply-connector")).toBeNull();
-    const labelElement = container.querySelector<HTMLElement>(".chat-reply-attribution__label")!;
+    expect(find(".chat-reply-connector")).toBeNull();
+    const labelElement = find(".chat-reply-attribution__label")!;
     expect(row.contains(labelElement)).toBe(false);
     labelElement.click();
     expect(onOpenReply).not.toHaveBeenCalled();
@@ -604,26 +549,6 @@ it.each([
     expect(onOpenReply).toHaveBeenCalledWith("inline-source");
   },
 );
-
-function drawOwnReply(
-  original: Record<string, unknown>,
-  shared: boolean,
-  snapshot?: { senderLabel: string; text: string },
-) {
-  container = document.body.appendChild(document.createElement("div"));
-  const resolveReplyPreview = createReplyPreviewResolver(new Map(), {
-    assistantName: "OpenClaw",
-    userId: "alice",
-    replyMessageAccess: {
-      read: (id) => (id === "older" ? original : undefined),
-    },
-  });
-  createMessageGroupHarness(container).render(
-    { ...ownReplyGroup("own-reply", "older", snapshot), ...(shared ? { replyShared: true } : {}) },
-    { ...renderOptions, userId: "alice", resolveReplyPreview },
-  );
-  return container.querySelector(".chat-bubble > .chat-reply-attribution--inline");
-}
 
 const jordanId = { senderId: "jordan@example.com" };
 it.each([
@@ -637,15 +562,23 @@ it.each([
 ] as const)(
   "names a fetched own-reply source from provenance before its snapshot (shared %s, sender %j, label %s, snapshot %j, name %s)",
   (shared, sender, label, snapshot, name) => {
-    const strip = drawOwnReply(
+    const original = {
+      ...textMessage("user", "Earlier question", { id: "older", ...sender }),
+      ...(label ? { senderLabel: label } : {}),
+    };
+    const resolveReplyPreview = createReplyPreviewResolver(new Map(), {
+      assistantName: "OpenClaw",
+      userId: "alice",
+      replyMessageAccess: { read: (id) => (id === "older" ? original : undefined) },
+    });
+    renderGroup(
       {
-        ...textMessage("user", "Earlier question", { id: "older", ...sender }),
-        ...(label ? { senderLabel: label } : {}),
+        ...ownReplyGroup("own-reply", "older", snapshot),
+        ...(shared ? { replyShared: true } : {}),
       },
-      shared,
-      snapshot,
+      { userId: "alice", resolveReplyPreview },
     );
-    expect(replyName(strip)).toBe(name);
-    expect(container.querySelector(".chat-reply-attribution--pending")).toBeNull();
+    expect(replyName(find(".chat-bubble > .chat-reply-attribution--inline"))).toBe(name);
+    expect(find(".chat-reply-attribution--pending")).toBeNull();
   },
 );
