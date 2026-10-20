@@ -33,10 +33,21 @@ export function buildMessageToolFinalityGuidance(
 export function buildHarnessVisibleReplyGuidance(params: {
   sourceReplyDeliveryMode?: string;
   messageToolAvailable: boolean;
+  hasCurrentSourceConversation?: boolean;
   requireExplicitMessageTarget?: boolean;
   messageToolFinalByDefault?: boolean;
   uiPresentation?: Parameters<typeof buildUiPresentationPrompt>[0];
 }): string {
+  if (params.hasCurrentSourceConversation === false) {
+    return [
+      "This turn has no current conversation. Reply normally in your final assistant message; OpenClaw delivers your final response automatically to the caller.",
+      params.messageToolAvailable ? buildMessageToolTargetGuidance(true) : undefined,
+      "Commentary is optional progress and may be hidden. Include answers to every still-pending user question, including questions received during ongoing work, in your final response.",
+      params.uiPresentation ? buildUiPresentationPrompt(params.uiPresentation) : undefined,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+  }
   const omittedFinalCompletes = params.messageToolFinalByDefault !== false;
   const deliveryGuidance = messageToolOwnsVisibleReply(params)
     ? params.messageToolAvailable

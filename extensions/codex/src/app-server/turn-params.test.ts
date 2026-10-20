@@ -23,7 +23,7 @@ const activeComputer = application(
   "Current active computer: active_node=unknown (host presence unavailable)",
 );
 const sourceDelivery = application(
-  expect.stringContaining("reply normally in your final assistant message"),
+  expect.stringContaining("Reply normally in your final assistant message"),
 );
 const deliveryValue = (turn: Awaited<ReturnType<typeof buildTurnStartParams>>) =>
   turn.additionalContext?.openclaw_source_delivery?.value;
@@ -183,6 +183,8 @@ it.each([
 it("carries explicit current policy without changing native turn input", async () => {
   const params = paramsForTurn(undefined, {
     prompt: "unchanged current request",
+    messageChannel: "telegram",
+    currentChannelId: "123",
     permissionChange: permissionChange("Permission changed."),
   });
   const options = turnOptions({
@@ -247,6 +249,27 @@ it("carries explicit current policy without changing native turn input", async (
     "including questions received during ongoing work, in your final response",
   );
   expect(deliveryValue(finalOnly)).not.toContain("message(action=send");
+});
+it("replaces channel delivery guidance on a routeless operator turn", async () => {
+  const options = turnOptions({
+    messageToolAvailable: true,
+    requireExplicitMessageTarget: false,
+    preserveNativeTurnSettings: true,
+  });
+  const channelTurn = await buildTurnStartParams(
+    paramsForTurn(undefined, { messageChannel: "telegram", currentChannelId: "123" }),
+    options,
+  );
+  const operatorTurn = await buildTurnStartParams(paramsForTurn(), options);
+
+  expect(deliveryValue(channelTurn)).toContain("current source is default target");
+  expect(deliveryValue(operatorTurn)).toContain(
+    "OpenClaw delivers your final response automatically to the caller",
+  );
+  expect(deliveryValue(operatorTurn)).toContain("target required this turn");
+  expect(deliveryValue(operatorTurn)).not.toContain("current source");
+  expect(deliveryValue(operatorTurn)).not.toContain("final=false");
+  expect(operatorTurn.input).toEqual(textInput(paramsForTurn().prompt));
 });
 it("adds a permission notice without overwriting native supervised settings", async () => {
   const notice = "Permission change. Continue with updated permissions.";
