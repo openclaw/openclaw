@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   GatewayBrowserDeviceAuthLifecycle,
   type GatewayBrowserDeviceTokenRecord,
@@ -30,96 +30,79 @@ function fixture(stored: GatewayBrowserDeviceTokenRecord | null = null) {
   return { lifecycle, sign, store };
 }
 
-describe("GatewayBrowserDeviceAuthLifecycle", () => {
-  it("preserves stored scopes for the same token and uses hello scopes after rotation", async () => {
-    const { lifecycle, sign, store } = fixture({
-      token: "test-token-placeholder",
-      scopes: ["operator.admin", "operator.write"],
-    });
+it("preserves stored scopes for the same token and uses hello scopes after rotation", async () => {
+  const { lifecycle, sign, store } = fixture({
+    token: "test-token-placeholder",
+    scopes: ["operator.admin", "operator.write"],
+  });
 
-    const plan = await lifecycle.buildPlan({
-      ...planOptions,
-      defaultScopes: ["operator.read", "operator.write"],
-      challengeTs: 456,
-    });
+  const plan = await lifecycle.buildPlan({
+    ...planOptions,
+    defaultScopes: ["operator.read", "operator.write"],
+    challengeTs: 456,
+  });
 
-    expect(plan.auth).toEqual({
-      token: undefined,
-      bootstrapToken: undefined,
-      deviceToken: "test-token-placeholder",
-      password: undefined,
-      approvalRuntimeToken: undefined,
-      agentRuntimeIdentityToken: undefined,
-    });
-    expect(plan.scopes).toEqual(["operator.admin", "operator.write"]);
-    expect(sign).toHaveBeenCalledWith(
-      "v3|device|openclaw-browser-copilot|ui|operator|operator.admin,operator.write|456|test-token-placeholder|nonce|chrome|extension",
-    );
+  expect(plan.auth).toEqual({
+    token: undefined,
+    bootstrapToken: undefined,
+    deviceToken: "test-token-placeholder",
+    password: undefined,
+    approvalRuntimeToken: undefined,
+    agentRuntimeIdentityToken: undefined,
+  });
+  expect(plan.scopes).toEqual(["operator.admin", "operator.write"]);
+  expect(sign).toHaveBeenCalledWith(
+    "v3|device|openclaw-browser-copilot|ui|operator|operator.admin,operator.write|456|test-token-placeholder|nonce|chrome|extension",
+  );
 
-    await lifecycle.acceptHello(
-      {
-        auth: {
-          deviceToken: "test-token-placeholder",
-          role: "operator",
-          scopes: ["operator.read"],
-        },
-      },
-      plan,
-    );
-    expect(store).toHaveBeenCalledWith({
-      ...binding,
-      token: "test-token-placeholder",
-      scopes: ["operator.admin", "operator.write"],
-    });
-
+  for (const [token, scopes] of [
+    ["test-token-placeholder", ["operator.admin", "operator.write"]],
+    ["rotated-token", ["operator.read"]],
+  ] as const) {
     store.mockClear();
     await lifecycle.acceptHello(
-      { auth: { deviceToken: "rotated-token", role: "operator", scopes: ["operator.read"] } },
+      { auth: { deviceToken: token, role: "operator", scopes: ["operator.read"] } },
       plan,
     );
-    expect(store).toHaveBeenCalledWith({
-      ...binding,
-      token: "rotated-token",
-      scopes: ["operator.read"],
-    });
+    expect(store).toHaveBeenCalledWith({ ...binding, token, scopes });
+  }
+});
+
+it("rejects the protocol's malformed-timestamp signal", async () => {
+  const { lifecycle } = fixture();
+
+  await expect(lifecycle.buildPlan({ ...planOptions, challengeTs: null })).rejects.toThrow(
+    "gateway connect challenge timestamp invalid",
+  );
+});
+
+it("keeps the local-clock fallback for callers that received no challenge", async () => {
+  const { lifecycle } = fixture();
+  const plan = await lifecycle.buildPlan(planOptions);
+
+  expect(plan.device?.signedAt).toBe(123);
+});
+
+it("uses only the preferred bootstrap credential and never persists it", async () => {
+  const { lifecycle, sign, store } = fixture();
+  const plan = await lifecycle.buildPlan({
+    ...planOptions,
+    bootstrapScopes: ["operator.read", "operator.write"],
+    token: "test-shared-token",
+    bootstrapToken: "test-bootstrap-token",
+    password: "test-password",
+    preferBootstrapToken: true,
   });
 
-  it("rejects the protocol's malformed-timestamp signal", async () => {
-    const { lifecycle } = fixture();
-
-    await expect(lifecycle.buildPlan({ ...planOptions, challengeTs: null })).rejects.toThrow(
-      "gateway connect challenge timestamp invalid",
-    );
+  expect(plan.auth).toMatchObject({
+    bootstrapToken: "test-bootstrap-token",
+    token: undefined,
+    password: undefined,
   });
-
-  it("keeps the local-clock fallback for callers that received no challenge", async () => {
-    const { lifecycle } = fixture();
-    const plan = await lifecycle.buildPlan(planOptions);
-
-    expect(plan.device?.signedAt).toBe(123);
-  });
-
-  it("uses only the preferred bootstrap credential and never persists it", async () => {
-    const { lifecycle, sign, store } = fixture();
-    const plan = await lifecycle.buildPlan({
-      ...planOptions,
-      bootstrapScopes: ["operator.read", "operator.write"],
-      token: "test-shared-token",
-      bootstrapToken: "test-bootstrap-token",
-      password: "test-password",
-      preferBootstrapToken: true,
-    });
-
-    expect(plan.auth).toMatchObject({
-      bootstrapToken: "test-bootstrap-token",
-      token: undefined,
-      password: undefined,
-    });
-    expect(plan.selectedAuth.signatureToken).toBe("test-bootstrap-token");
-    expect(sign).toHaveBeenCalledWith(
-      "v3|device|openclaw-browser-copilot|ui|operator|operator.read,operator.write|123|test-bootstrap-token|nonce|chrome|extension",
-    );
-    await lifecycle.acceptHello({ auth: { role: "operator", scopes: [] } }, plan);
-    expect(store).not.toHaveBeenCalled();
-  });
+  expect(plan.selectedAuth.signatureToken).toBe("test-bootstrap-token");
+  expect(sign).toHaveBeenCalledWith(
+    "v3|device|openclaw-browser-copilot|ui|operator|operator.read,operator.write|123|test-bootstrap-token|nonce|chrome|extension",
+  );
+  await lifecycle.acceptHello({ auth: { role: "operator", scopes: [] } }, plan);
+  expect(store).not.toHaveBeenCalled();
 });
