@@ -1,10 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { SessionPlacementDiskSpace } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -13,13 +9,6 @@ import {
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const sessionKey = "agent:main:disk-monitor";
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let artifactDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    artifactDir = createControlUiE2eArtifactDir("cloud-disk");
-  }
-});
 const viewport = { height: 900, width: 1280 };
 const gibibyte = 1024 ** 3;
 const mebibyte = 1024 ** 2;
@@ -69,20 +58,13 @@ function sessionsList(diskSpace: SessionPlacementDiskSpace): SessionsListResult 
 
 suite.define(() => {
   it("refreshes selected-chat and sidebar disk pressure through canonical session events", async () => {
-    if (captureUiProof) {
-      await mkdir(path.join(artifactDir, "video"), { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
       viewport,
-      ...(captureUiProof
-        ? { recordVideo: { dir: path.join(artifactDir, "video"), size: viewport } }
-        : {}),
     });
     const page = await context.newPage();
-    const video = page.video();
     const healthy = {
       status: "ok",
       availableBytes: 6 * gibibyte,
@@ -101,15 +83,6 @@ suite.define(() => {
       sessionKey,
     });
 
-    const capture = async (name: string): Promise<void> => {
-      if (!captureUiProof) {
-        return;
-      }
-      await writeFile(
-        path.join(artifactDir, name),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [cloudBadge]),
-      );
-    };
     const sidebarRow = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
     const cloudBadge = sidebarRow.locator(".session-row-badge--cloud");
     const expectAccessibleBadge = async (
@@ -143,7 +116,6 @@ suite.define(() => {
       await sidebarRow.getByText("Disk monitor", { exact: true }).waitFor();
       expect(await page.locator(".chat-cloud-disk-space-notice").count()).toBe(0);
       await expectAccessibleBadge("ok", "Placement: active");
-      await capture("01-healthy.png");
 
       await refresh({
         status: "warning",
@@ -159,7 +131,6 @@ suite.define(() => {
         "96% used · 247 MB free. Delete unneeded files or stop the cloud worker before large writes.",
       );
       await expectAccessibleBadge("warning", "Placement: active · Cloud session disk space is low");
-      await capture("02-warning.png");
 
       await refresh({
         status: "critical",
@@ -178,17 +149,12 @@ suite.define(() => {
         "critical",
         "Placement: active · Cloud session disk space is critically low",
       );
-      await capture("03-critical.png");
 
       await refresh({ ...healthy, observedAtMs: observedAtMs + 3_000 });
       await expect.poll(() => page.locator(".chat-cloud-disk-space-notice").count()).toBe(0);
       await expectAccessibleBadge("ok", "Placement: active");
-      await capture("04-recovered.png");
     } finally {
       await suite.closeBrowserContext(context);
-      if (video) {
-        await video.saveAs(path.join(artifactDir, "cloud-session-disk-space.webm"));
-      }
     }
   });
 });

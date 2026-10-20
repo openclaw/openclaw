@@ -1,39 +1,39 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+function listing<T>(sessionKey: string, folder: string, entries: T[], parentPath?: string) {
+  return {
+    sessionKey,
+    root: "/workspace",
+    files: [],
+    browser: { path: folder, entries, ...(parentPath === undefined ? {} : { parentPath }) },
+  };
+}
 
 suite.define(() => {
   it.each([false, true])(
     "keeps parent navigation usable after a directory refresh (missing: %s)",
     async (missing) => {
-      const artifacts = createControlUiE2eArtifactDir(
-        missing ? "files-missing-directory" : "files-existing-directory",
-      );
       await suite.withPage({}, async ({ page }) => {
         const baseListing = { sessionKey: "main", root: "/workspace", files: [] };
-        const rootListing = {
-          ...baseListing,
-          browser: {
-            path: "",
-            entries: [
-              { kind: "directory", name: "reports", path: "reports" },
-              { kind: "directory", name: "other", path: "other" },
-            ],
-          },
-        };
-        const directoryListing = (folder: string, name: string) => ({
-          ...baseListing,
-          browser: {
-            path: folder,
-            parentPath: "",
-            entries: [{ kind: "file", name, path: `${folder}/${name}`, size: 12 }],
-          },
-        });
+        const rootListing = listing(
+          "main",
+          "",
+          ["reports", "other"].map((name) => ({
+            kind: "directory",
+            name,
+            path: name,
+          })),
+        );
+        const directoryListing = (folder: string, name: string) =>
+          listing(
+            "main",
+            folder,
+            [{ kind: "file", name, path: `${folder}/${name}`, size: 12 }],
+            "",
+          );
         const gateway = await installMockGateway(page, {
           methodResponses: {
             "artifacts.list": { artifacts: [] },
@@ -43,16 +43,14 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await openChatSidePanelType(page, "Files");
         const rail = page.locator(".chat-workspace-rail");
-        await rail.getByRole("button", { name: "reports", exact: true }).waitFor();
+        const file = (name: string) => rail.getByRole("button", { name, exact: true });
+        await file("reports").waitFor();
         await gateway.setMethodResponse(
           "sessions.files.list",
           directoryListing("reports", "notes.md"),
         );
-        await rail.getByRole("button", { name: "reports", exact: true }).click();
-        const originalFile = rail.getByRole("button", {
-          name: "reports/notes.md",
-          exact: true,
-        });
+        await file("reports").click();
+        const originalFile = file("reports/notes.md");
         await originalFile.waitFor();
 
         // A removed or renamed directory returns a successful listing without browser.
@@ -63,14 +61,9 @@ suite.define(() => {
         await gateway.emitChatFinal({ runId: "folder-change", text: "Workspace updated." });
         await originalFile.waitFor({ state: "hidden" });
         if (!missing) {
-          await rail.getByRole("button", { name: "reports/refreshed.md", exact: true }).waitFor();
+          await file("reports/refreshed.md").waitFor();
         }
-        await page.screenshot({ path: path.join(artifacts, "after-refresh.png") });
-        await writeFile(
-          path.join(artifacts, "requests-before-recovery.json"),
-          JSON.stringify(await gateway.getRequests("sessions.files.list"), null, 2),
-        );
-        const parent = rail.getByRole("button", { name: "..", exact: true });
+        const parent = file("..");
         await expect.poll(() => parent.isVisible()).toBe(true);
 
         await gateway.setMethodResponse("sessions.files.list", {
@@ -83,36 +76,25 @@ suite.define(() => {
           },
         });
         await parent.click();
-        await rail.getByRole("button", { name: "other", exact: true }).waitFor();
+        await file("other").waitFor();
         await gateway.setMethodResponse(
           "sessions.files.list",
           directoryListing("other", "keep.md"),
         );
-        await rail.getByRole("button", { name: "other", exact: true }).click();
-        await rail.getByRole("button", { name: "other/keep.md", exact: true }).waitFor();
-        await page.screenshot({ path: path.join(artifacts, "sibling-folder.png") });
+        await file("other").click();
+        await file("other/keep.md").waitFor();
       });
     },
   );
 
   it("keeps a newly opened project file selected after an older directory response", async () => {
-    const artifacts = createControlUiE2eArtifactDir("files-directory-selection");
     await suite.withPage({}, async ({ page }) => {
-      const rootListing = {
-        sessionKey: "agent:main:main",
-        root: "/workspace",
-        files: [],
-        browser: { path: "", entries: [{ kind: "directory", name: "reports", path: "reports" }] },
-      };
-      const reportsListing = {
-        ...rootListing,
-        browser: {
-          path: "reports",
-          entries: [
-            { kind: "file", name: "inventory.csv", path: "reports/inventory.csv", size: 24 },
-          ],
-        },
-      };
+      const rootListing = listing("agent:main:main", "", [
+        { kind: "directory", name: "reports", path: "reports" },
+      ]);
+      const reportsListing = listing("agent:main:main", "reports", [
+        { kind: "file", name: "inventory.csv", path: "reports/inventory.csv", size: 24 },
+      ]);
       const gateway = await installMockGateway(page, {
         historyMessages: [
           { role: "assistant", content: [{ type: "text", text: "Open `reports/inventory.csv`." }] },
@@ -160,18 +142,6 @@ suite.define(() => {
       const row = rail.locator(".chat-workspace-rail__file").filter({ hasText: "inventory.csv" });
       await row.waitFor();
       await page.mouse.click(600, 300);
-      await page.screenshot({ path: path.join(artifacts, "selection.png") });
-      await writeFile(
-        path.join(artifacts, "observations.json"),
-        JSON.stringify(
-          {
-            requests: await gateway.getRequests("sessions.files.list"),
-            rowClass: await row.getAttribute("class"),
-          },
-          null,
-          2,
-        ),
-      );
       expect(await row.getAttribute("class")).toContain("chat-workspace-rail__file--active");
     });
   });

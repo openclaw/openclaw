@@ -3,7 +3,6 @@ import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
-  captureUiProof,
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
@@ -26,24 +25,22 @@ suite.define(() => {
         sessionRow(unrelatedKey, unrelatedLabel, 10),
       ]);
     const childFailure = {
-      __mockError: {
-        code: "UNAVAILABLE",
-        message: "Child sessions unavailable",
-      },
+      __mockError: { code: "UNAVAILABLE", message: "Child sessions unavailable" },
     };
     const childResponse = sessionsListResponse([
       sessionRow(childKey, "Recovered child", 40, { spawnedBy: parentKey }),
     ]);
+    const listCases = (
+      response: typeof childFailure | typeof childResponse = childFailure,
+      label?: string,
+    ) => ({
+      cases: [{ match: { spawnedBy: parentKey }, response }, { response: rootRows(label) }],
+    });
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       methodResponses: {
-        "sessions.list": {
-          cases: [
-            { match: { spawnedBy: parentKey }, response: childFailure },
-            { response: rootRows() },
-          ],
-        },
+        "sessions.list": listCases(),
       },
       sessionKey: mainKey,
     });
@@ -83,18 +80,12 @@ suite.define(() => {
             request.params.spawnedBy === parentKey,
         ).length;
       expect(await childRequestCount()).toBe(1);
-      await captureUiProof(suite, page, "child-session-load-error.png");
 
       await page.clock.install();
       await pauseVirtualClock(page);
       for (let revision = 1; revision <= 3; revision += 1) {
         const unrelatedLabel = `Unrelated active task ${revision}`;
-        await gateway.setMethodResponse("sessions.list", {
-          cases: [
-            { match: { spawnedBy: parentKey }, response: childFailure },
-            { response: rootRows(unrelatedLabel) },
-          ],
-        });
+        await gateway.setMethodResponse("sessions.list", listCases(childFailure, unrelatedLabel));
         const listRequests = await gateway.deferNext("sessions.list", rosterMatch);
         await gateway.emitGatewayEvent("sessions.changed", {
           key: unrelatedKey,
@@ -135,17 +126,11 @@ suite.define(() => {
       ).toBe(1);
 
       await page.clock.resume();
-      await gateway.setMethodResponse("sessions.list", {
-        cases: [
-          { match: { spawnedBy: parentKey }, response: childResponse },
-          { response: rootRows() },
-        ],
-      });
+      await gateway.setMethodResponse("sessions.list", listCases(childResponse));
       await alert.getByRole("button", { name: "Retry" }).click();
       await page.getByText("Recovered child", { exact: true }).waitFor();
       expect(await childRequestCount()).toBe(2);
       expect(await alert.count()).toBe(0);
-      await captureUiProof(suite, page, "child-session-load-recovered.png");
     } finally {
       await context.close();
     }

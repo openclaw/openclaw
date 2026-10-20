@@ -64,39 +64,26 @@ export function hostGroupedNativeCatalogs() {
     id,
     label,
     capabilities: { continueSession: true, archive: false },
-    hosts: [
-      {
-        hostId: "gateway:local",
-        label: "Gateway Mac",
-        kind: "gateway",
-        connected: true,
-        sessions: [
-          {
-            threadId: `${id}-local`,
-            name: `${label} local plan`,
-            status: "stored",
-            canContinue: true,
-            canArchive: false,
-          },
-        ],
-      },
-      {
-        hostId: "node:build",
-        label: "Build Node",
-        kind: "node",
-        connected: true,
-        nodeId: "build",
-        sessions: [
-          {
-            threadId: `${id}-remote`,
-            name: `${label} remote review`,
-            status: "stored",
-            canContinue: false,
-            canArchive: false,
-          },
-        ],
-      },
-    ],
+    hosts: [true, false].map((local) =>
+      Object.assign(
+        {
+          hostId: local ? "gateway:local" : "node:build",
+          label: local ? "Gateway Mac" : "Build Node",
+          kind: local ? "gateway" : "node",
+          connected: true,
+          sessions: [
+            {
+              threadId: `${id}-${local ? "local" : "remote"}`,
+              name: `${label} ${local ? "local plan" : "remote review"}`,
+              status: "stored",
+              canContinue: local,
+              canArchive: false,
+            },
+          ],
+        },
+        local ? {} : { nodeId: "build" },
+      ),
+    ),
   });
   return { catalogs: [catalog("claude", "Claude Code"), catalog("codex", "Codex")] };
 }
