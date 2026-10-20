@@ -1,4 +1,4 @@
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -17,13 +17,13 @@ const operatorConfig = {
   agents: { entries: { main: { default: true, name: "Main" }, reviewer: { name: "Reviewer" } } },
 };
 
-function approvals(security: string, hash: string) {
+function approvals(hash: string) {
   return {
     path: "/tmp/openclaw-e2e/exec-approvals.json",
     exists: true,
     hash,
     file: {
-      defaults: { security, ask: "on-miss", askFallback: "deny", autoAllowSkills: false },
+      defaults: { security: "deny", ask: "on-miss", askFallback: "deny", autoAllowSkills: false },
       agents: { reviewer: { security: "allowlist", ask: "on-miss", askFallback: "deny" } },
     },
   };
@@ -35,8 +35,8 @@ const execApprovalsNode = (nodeId: string, displayName: string) => ({
   commands: ["system.run", "system.execApprovals.get", "system.execApprovals.set"],
 });
 
-function gatewayOptions() {
-  return {
+async function openApprovals(page: Page) {
+  const gateway = await installMockGateway(page, {
     featureMethods: [
       "agents.list",
       "chat.metadata",
@@ -59,29 +59,25 @@ function gatewayOptions() {
         valid: true,
       },
       "device.pair.list": { paired: [], pending: [] },
-      "exec.approvals.get": approvals("deny", "gateway-hash-1"),
-      "exec.approvals.set": { ok: true },
-      "exec.approvals.node.get": approvals("deny", "node-hash-1"),
-      "exec.approvals.node.set": { ok: true },
+      "exec.approvals.get": approvals("gateway-hash-1"),
+      "exec.approvals.node.get": approvals("node-hash-1"),
       "node.list": {
         nodes: [execApprovalsNode("node-alpha", "Alpha"), execApprovalsNode("node-beta", "Beta")],
       },
       "system-presence": [],
       "environments.list": { environments: [] },
     },
-  };
+  });
+  await page.goto(`${suite.server.baseUrl}nodes`);
+  await gateway.waitForRequest("exec.approvals.get");
+  const section = page.locator(".settings-section", { hasText: "Exec approvals" });
+  return { gateway, section, hostSelect: section.getByRole("combobox", { name: "Host" }) };
 }
 
 suite.define(() => {
   it("confirms before discarding a dirty draft on Gateway to node and node to node switches", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page, gatewayOptions());
-
-      await page.goto(`${suite.server.baseUrl}nodes`);
-      await gateway.waitForRequest("exec.approvals.get");
-
-      const section = page.locator(".settings-section", { hasText: "Exec approvals" });
-      const hostSelect = section.getByRole("combobox", { name: "Host" });
+      const { gateway, section, hostSelect } = await openApprovals(page);
       const saveButton = section.getByRole("button", { name: "Save", exact: true });
       const defaultsMode = section.getByRole("combobox", { name: "Mode" }).first();
       const unloadedHint = section.getByText("Load exec approvals to edit allowlists.");
@@ -92,58 +88,41 @@ suite.define(() => {
         await dialog.getByRole("button", { name: decision }).click();
         await dialog.waitFor({ state: "hidden" });
       };
-      const expectDraft = async (mode: string, requestCount: number) => {
-        expect(await defaultsMode.inputValue()).toBe(mode);
-        expect(await saveButton.isEnabled()).toBe(true);
-        expect(await gateway.getRequests("exec.approvals.node.get")).toHaveLength(requestCount);
-      };
-
+      const nodeSelect = section.getByRole("combobox", { name: "Node" });
       await expect.poll(() => defaultsMode.inputValue()).toBe("deny");
       expect(await saveButton.isEnabled()).toBe(false);
-      await defaultsMode.selectOption("full");
-      await expect.poll(() => saveButton.isEnabled()).toBe(true);
-      expect(await defaultsMode.inputValue()).toBe("full");
-      expect(await hostSelect.inputValue()).toBe("gateway");
-
-      // Cancel preserves the edited draft and sends no request to the new target.
-      const nodeGetsBefore = (await gateway.getRequests("exec.approvals.node.get")).length;
-      await switchTarget(hostSelect, "node", "Cancel");
-      await expect.poll(() => hostSelect.inputValue()).toBe("gateway");
-      await expectDraft("full", nodeGetsBefore);
-
-      await switchTarget(hostSelect, "node", "Discard changes");
-      await expect.poll(() => hostSelect.inputValue()).toBe("node");
-      await unloadedHint.waitFor();
-
-      const nodeSelect = section.getByRole("combobox", { name: "Node" });
-      await expect.poll(() => nodeSelect.inputValue()).toBe("node-alpha");
-      await section.getByRole("button", { name: "Load approvals" }).click();
-      await gateway.waitForRequest("exec.approvals.node.get");
-      await expect.poll(() => defaultsMode.inputValue()).toBe("deny");
-
-      await defaultsMode.selectOption("allowlist");
-      await expect.poll(() => saveButton.isEnabled()).toBe(true);
-
-      const nodeGetsBeforeCancel = (await gateway.getRequests("exec.approvals.node.get")).length;
-      await switchTarget(nodeSelect, "node-beta", "Cancel");
-      await expect.poll(() => nodeSelect.inputValue()).toBe("node-alpha");
-      await expectDraft("allowlist", nodeGetsBeforeCancel);
-
-      await switchTarget(nodeSelect, "node-beta", "Discard changes");
-      await expect.poll(() => nodeSelect.inputValue()).toBe("node-beta");
-      await unloadedHint.waitFor();
+      for (const [select, from, to, mode] of [
+        [hostSelect, "gateway", "node", "full"],
+        [nodeSelect, "node-alpha", "node-beta", "allowlist"],
+      ] satisfies Array<[Locator, string, string, string]>) {
+        if (select === nodeSelect) {
+          await expect.poll(() => select.inputValue()).toBe(from);
+          await section.getByRole("button", { name: "Load approvals" }).click();
+          await gateway.waitForRequest("exec.approvals.node.get");
+          await expect.poll(() => defaultsMode.inputValue()).toBe("deny");
+        }
+        await defaultsMode.selectOption(mode);
+        await expect.poll(() => saveButton.isEnabled()).toBe(true);
+        expect(await defaultsMode.inputValue()).toBe(mode);
+        expect(await select.inputValue()).toBe(from);
+        const requestsBefore = (await gateway.getRequests("exec.approvals.node.get")).length;
+        await switchTarget(select, to, "Cancel");
+        await expect.poll(() => select.inputValue()).toBe(from);
+        expect({
+          mode: await defaultsMode.inputValue(),
+          dirty: await saveButton.isEnabled(),
+        }).toEqual({ mode, dirty: true });
+        expect(await gateway.getRequests("exec.approvals.node.get")).toHaveLength(requestsBefore);
+        await switchTarget(select, to, "Discard changes");
+        await expect.poll(() => select.inputValue()).toBe(to);
+        await unloadedHint.waitFor();
+      }
     });
   });
 
   it("switches without confirming when the draft is clean", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page, gatewayOptions());
-
-      await page.goto(`${suite.server.baseUrl}nodes`);
-      await gateway.waitForRequest("exec.approvals.get");
-
-      const section = page.locator(".settings-section", { hasText: "Exec approvals" });
-      const hostSelect = section.getByRole("combobox", { name: "Host" });
+      const { hostSelect } = await openApprovals(page);
       await expect.poll(() => hostSelect.inputValue()).toBe("gateway");
 
       await hostSelect.selectOption("node");

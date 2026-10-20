@@ -1,16 +1,13 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { QuestionRecord } from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
-import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { sessionList } from "./panel-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI Home attention",
@@ -22,18 +19,6 @@ const suite = createControlUiE2eSuite({
 
 const mainSessionKey = "agent:main:main";
 const rosterMatch = { includeGlobal: true };
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofVariant = process.env.OPENCLAW_HOME_ATTENTION_PROOF_VARIANT || "candidate";
-
-function sessionsList(row: GatewaySessionRow): SessionsListResult {
-  return {
-    ts: Date.now(),
-    path: "",
-    count: 1,
-    defaults: { modelProvider: "openai", model: "gpt-5.6-luna", contextTokens: null },
-    sessions: [row],
-  };
-}
 
 function sessionRow(overrides: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
   return {
@@ -52,7 +37,7 @@ async function publishSessionRow(
   overrides: Partial<GatewaySessionRow>,
 ): Promise<void> {
   const row = sessionRow(overrides);
-  await gateway.setSessionsListResponse(sessionsList(row));
+  await gateway.setSessionsListResponse(sessionList(row, "gpt-5.6-luna"));
   const requestCount = (await gateway.getRequests("sessions.list", rosterMatch)).length;
   await gateway.emitGatewayEvent("sessions.changed", {
     key: row.key,
@@ -66,23 +51,17 @@ async function publishSessionRow(
 
 suite.define(() => {
   it("projects question, failure, and agent-declared attention onto Home", async () => {
-    const proofDir = captureUiProof
-      ? path.join(createControlUiE2eArtifactDir("home-attention"), proofVariant)
-      : "";
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
-      ...(captureUiProof
-        ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } } }
-        : {}),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       featureMethods: ["question.get", "question.list", "question.resolve"],
       methodResponses: {
         "question.list": { questions: [] },
-        "sessions.list": sessionsList(sessionRow()),
+        "sessions.list": sessionList(sessionRow(), "gpt-5.6-luna"),
       },
       sessionKey: mainSessionKey,
     });
@@ -91,23 +70,16 @@ suite.define(() => {
     await gateway.waitForRequest("sessions.list", { match: rosterMatch });
     const home = page.locator(".sidebar-footer-bar__home");
     await home.waitFor();
-    const capture = async (name: string, surface = page.locator(".shell")) => {
+    const attentionCount = async () => {
       await page.evaluate(
         () =>
           new Promise<void>((resolve) => {
             requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
           }),
       );
-      if (captureUiProof) {
-        await mkdir(proofDir, { recursive: true });
-        await writeFile(
-          path.join(proofDir, `${name}.png`),
-          await takeControlUiViewportScreenshot(page, surface, [home]),
-        );
-      }
       return home.locator("[data-session-attention]").count();
     };
-    const quiet = await capture("00-non-attention");
+    const quiet = await attentionCount();
 
     await publishSessionRow(gateway, {
       displayName: "Declared attention state",
@@ -119,7 +91,7 @@ suite.define(() => {
         expiresAt: Date.now() + 60_000,
       },
     });
-    const agent = await capture("01-agent-declared-attention");
+    const agent = await attentionCount();
 
     const now = Date.now();
     const question = {
@@ -131,7 +103,7 @@ suite.define(() => {
           questionId: "continue_run",
           header: "Continue",
           question: "Should the run continue?",
-          options: [{ label: "Continue", description: "Resume the waiting run." }],
+          options: [{ label: "Continue" }],
         },
       ],
       createdAtMs: now,
@@ -141,7 +113,7 @@ suite.define(() => {
     await gateway.emitGatewayEvent("question.requested", question);
     const questionPanel = page.locator(".chat-question-panel");
     await questionPanel.getByText("Should the run continue?", { exact: true }).waitFor();
-    const pendingQuestion = await capture("02-question-attention", questionPanel);
+    const pendingQuestion = await attentionCount();
 
     await gateway.emitGatewayEvent("question.resolved", {
       id: question.id,
@@ -156,13 +128,8 @@ suite.define(() => {
       lastRunError: "Release validation failed",
       status: "failed",
     });
-    const error = await capture("03-failed-run-attention");
+    const error = await attentionCount();
 
-    expect({ quiet, agent, question: pendingQuestion, error }).toEqual({
-      quiet: 0,
-      agent: 1,
-      question: 1,
-      error: 1,
-    });
+    expect([quiet, agent, pendingQuestion, error]).toEqual([0, 1, 1, 1]);
   });
 });

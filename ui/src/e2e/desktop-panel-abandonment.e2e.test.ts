@@ -1,24 +1,15 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
-import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import {
-  canvasPixel,
-  desktopObservation,
-  workerDesktop,
-} from "./desktop-panel-fixtures.test-support.ts";
 import { createRfbRawFrame, installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
+import { canvasPixel, desktopObservation, workerDesktop } from "./panel-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Desktop panel observation abandonment" });
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
   it("releases a late observation without opening RFB and reconnects on the same Gateway client", async () => {
@@ -63,20 +54,10 @@ suite.define(() => {
             }),
           );
         }, environmentId);
-      const capture = async (name: string, content: readonly Locator[]) => {
-        if (captureUiProof) {
-          await writeFile(
-            path.join(suite.artifactDir, name),
-            await takeControlUiViewportScreenshot(page, page.locator(".shell"), content),
-          );
-        }
-      };
-
       await open();
       await gateway.waitForRequest("desktop.observe");
       const pending = panel.getByRole("status", { name: "Connecting to desktop…" });
       await pending.waitFor();
-      await capture("01-observation-pending.png", [pending]);
       await panel.getByRole("button", { name: "Hide desktop panel", exact: true }).click();
       await panel.locator("section[aria-label='Desktop']").waitFor({ state: "hidden" });
       await gateway.resolveDeferred("desktop.observe");
@@ -87,7 +68,6 @@ suite.define(() => {
       expect(await sameRequester()).toBe(true);
       expect(await rfb.connectionCount()).toBe(0);
       expect(await rfb.events()).toEqual([]);
-      await capture("02-late-observation-released.png", []);
 
       await gateway.setMethodResponse("desktop.observe", desktopObservation(claimedPath));
       await open();
@@ -101,7 +81,6 @@ suite.define(() => {
       expect(await sameRequester()).toBe(true);
       expect(await rfb.connectionCount()).toBe(1);
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(2);
-      await capture("03-reopened-desktop-frame.png", [canvas]);
 
       await panel.getByRole("button", { name: "Hide desktop panel", exact: true }).click();
       await expect.poll(rfb.events).toEqual(["authenticated:1", "closed:1"]);

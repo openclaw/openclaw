@@ -1,7 +1,5 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -14,8 +12,6 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
-
-const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 function waitForPhase(page: Page, phase: string) {
   return page.waitForFunction(
@@ -31,30 +27,18 @@ function pairedDevice(operatorLabel?: string) {
     deviceId: DEVICE_ID,
     displayName: "office-workstation.example.test",
     ...(operatorLabel ? { operatorLabel } : {}),
-    platform: "linux",
     roles: ["node", "operator"],
-    scopes: ["operator.read"],
-    approvedVia: "owner",
-    createdAtMs: Date.now() - 86_400_000,
-    lastSeenAtMs: Date.now(),
   };
 }
 
 suite.define(() => {
   it("retries a rejected alias rename and retains unsaved edits until client replacement", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const proofDir = captureUiProofEnabled
-        ? createControlUiE2eArtifactDir("device-alias-rename")
-        : "";
-      const capture = async (fileName: string) => {
-        if (captureUiProofEnabled) {
-          await page.screenshot({ animations: "disabled", path: path.join(proofDir, fileName) });
-        }
-      };
+      const rename = { deviceId: DEVICE_ID, label: "Office node" };
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "device.pair.list": { pending: [], paired: [pairedDevice()] },
-          "device.pair.rename": { deviceId: DEVICE_ID, label: "Office node" },
+          "device.pair.rename": rename,
           "environments.list": { environments: [] },
           "exec.approvals.get": {
             exists: false,
@@ -76,28 +60,20 @@ suite.define(() => {
         await entry.locator('[role="menuitem"][data-value="editAlias"]').click();
       };
       await row.waitFor();
-      await capture("01-devices-inventory.png");
 
       await openAlias();
       const dialog = page.locator("openclaw-modal-dialog").last();
       const input = dialog.locator('input[name="value"]');
       const save = dialog.getByRole("button", { name: "Save" });
+      const submit = async (after: number) => {
+        await save.click();
+        const request = await gateway.waitForRequest("device.pair.rename", { after });
+        expect(request.params).toEqual(rename);
+      };
       await input.waitFor();
-      await capture("02-alias-dialog-open.png");
-
       await input.fill("Office node");
-      await capture("03-alias-dialog-filled.png");
-
-      // Reject the first request at the transport boundary; the same dialog
-      // must preserve the value and remain usable for a second attempt.
-      await gateway.deferNext("device.pair.rename");
-      const renamesBefore = (await gateway.getRequests("device.pair.rename")).length;
-      await save.click();
-
-      const renameRequest = await gateway.waitForRequest("device.pair.rename", {
-        after: renamesBefore,
-      });
-      expect(renameRequest.params).toEqual({ deviceId: DEVICE_ID, label: "Office node" });
+      const renamesBefore = await gateway.deferNext("device.pair.rename");
+      await submit(renamesBefore);
 
       await gateway.rejectDeferred("device.pair.rename", { message: "Alias change rejected" });
       const failure = dialog.getByRole("alert");
@@ -105,31 +81,18 @@ suite.define(() => {
       expect(await failure.textContent()).toContain("Alias change rejected");
       expect(await input.inputValue()).toBe("Office node");
       expect(await save.isEnabled()).toBe(true);
-      await capture("03b-alias-rejected-retryable.png");
 
-      const retryAfter = (await gateway.getRequests("device.pair.rename")).length;
-      await gateway.deferNext("device.pair.rename");
-      await save.click();
-      const retryRequest = await gateway.waitForRequest("device.pair.rename", {
-        after: retryAfter,
-      });
-      expect(retryRequest.params).toEqual({ deviceId: DEVICE_ID, label: "Office node" });
-
+      await submit(await gateway.deferNext("device.pair.rename"));
       // Publish the new list before releasing success so the refresh has no race.
       await gateway.setMethodResponse("device.pair.list", {
         pending: [],
         paired: [pairedDevice("Office node")],
       });
-      await gateway.resolveDeferred("device.pair.rename", {
-        deviceId: DEVICE_ID,
-        label: "Office node",
-      });
+      await gateway.resolveDeferred("device.pair.rename", rename);
 
       await page
         .locator(".device-entry .settings-row__title", { hasText: "Office node" })
         .waitFor();
-      await capture("04-alias-applied.png");
-
       await dialog.waitFor({ state: "hidden" });
       const renamedRow = page.locator(".device-entry", { hasText: "Office node" });
       await openAlias(renamedRow);
@@ -152,10 +115,8 @@ suite.define(() => {
       expect(await input.inputValue()).toBe("Unsaved alias");
       await expect.poll(() => save.isEnabled()).toBe(true);
       expect(await gateway.getRequests("device.pair.rename")).toHaveLength(renamesBefore + 2);
-      await capture("05-alias-after-reconnect.png");
 
-      // Restoring a suspended page replaces the logical client without changing routes.
-      // Unlike the transport reconnect above, this retires identity-scoped dialogs.
+      // A persisted pageshow replaces the client, retiring identity-scoped dialogs.
       const connectsBeforeReplacement = (await gateway.getRequests("connect")).length;
       await page.evaluate(() => {
         window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
@@ -167,7 +128,6 @@ suite.define(() => {
       await openAlias(renamedRow);
       expect(await input.inputValue()).toBe("Office node");
       expect(await gateway.getRequests("device.pair.rename")).toHaveLength(renamesBefore + 2);
-      await capture("06-alias-after-client-replacement.png");
     });
   });
 });

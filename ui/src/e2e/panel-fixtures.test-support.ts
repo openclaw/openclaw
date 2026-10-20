@@ -1,10 +1,17 @@
 import type { Locator } from "playwright";
+import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 
-export function workerDesktop(
-  id: string,
-  attachedSessionIds: string[] = [],
-  desktopApps: string[] = [],
-) {
+export function sessionList(row: GatewaySessionRow, model = "gpt-5.5"): SessionsListResult {
+  return {
+    ts: Date.now(),
+    path: "",
+    count: 1,
+    defaults: { modelProvider: "openai", model, contextTokens: null },
+    sessions: [row],
+  };
+}
+
+export function workerDesktop(id: string) {
   return {
     id,
     type: "worker",
@@ -14,9 +21,9 @@ export function workerDesktop(
       providerId: "crabbox",
       state: "attached",
       ageMs: 1_000,
-      attachedSessionIds,
+      attachedSessionIds: [],
       tunnelStatus: "connected",
-      desktopApps,
+      desktopApps: [],
     },
   };
 }

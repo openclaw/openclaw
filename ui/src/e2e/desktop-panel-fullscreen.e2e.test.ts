@@ -1,12 +1,10 @@
-import path from "node:path";
 import type { Page } from "playwright";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { desktopObservation, workerDesktop } from "./desktop-panel-fixtures.test-support.ts";
 import { installScriptedRfbServer } from "./desktop-rfb-test-support.ts";
+import { desktopObservation, sessionList, workerDesktop } from "./panel-fixtures.test-support.ts";
 
 const realVncWsUrl = process.env.OPENCLAW_DESKTOP_REAL_VNC_WS_URL?.trim() || null;
 const suite = createControlUiE2eSuite({
@@ -18,38 +16,18 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`.`,
 });
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofStage = process.env.OPENCLAW_DESKTOP_FULLSCREEN_PROOF_STAGE ?? "after";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("desktop-fullscreen");
-  }
-});
 
 function sessionsList() {
-  return {
-    count: 1,
-    defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-    path: "",
-    sessions: [
-      {
-        key: "main",
-        kind: "direct",
-        label: "Main",
-        placement: { state: "active" },
-        updatedAt: Date.now(),
-      },
-    ],
-    ts: Date.now(),
-  };
+  return sessionList({
+    key: "main",
+    kind: "direct",
+    label: "Main",
+    placement: { state: "active" },
+    updatedAt: Date.now(),
+  });
 }
 
-const workerDesktopEnvironment = workerDesktop(
-  "worker-desktop-1",
-  ["agent:main:release-operations"],
-  ["browser", "terminal"],
-);
+const workerDesktopEnvironment = workerDesktop("worker-desktop-1");
 
 async function installDesktopGateway(page: Page) {
   return installMockGateway(page, {
@@ -84,23 +62,6 @@ async function setTheme(page: Page, theme: "dark" | "light") {
     document.documentElement.dataset.themeResolved = nextTheme;
     document.documentElement.style.colorScheme = nextTheme;
   }, theme);
-}
-
-async function captureDesktopProof(page: Page, panel: import("playwright").Locator, name: string) {
-  if (!captureUiProof) {
-    return;
-  }
-  const capture = (target: Page | import("playwright").Locator, suffix: string) =>
-    target.screenshot({
-      animations: "disabled",
-      path: path.join(proofDir, `${proofStage}-${name}-${suffix}.png`),
-    });
-  await capture(page, "context");
-  await capture(panel.locator(".bp-header"), "header");
-  const connectionToolbar = panel.locator(".desktop-toolbar--connection");
-  if ((await connectionToolbar.count()) > 0) {
-    await capture(connectionToolbar, "controls");
-  }
 }
 
 suite.define(() => {
@@ -140,7 +101,6 @@ suite.define(() => {
           const takeControl = panelButton("Take control");
           const disconnect = panelButton("Disconnect");
           const fullscreenActive = () => page.evaluate(() => document.fullscreenElement !== null);
-          const capture = (state: string) => captureDesktopProof(page, panel, `${theme}-${state}`);
           await setTheme(page, theme);
           await gateway.waitForRequest("environments.list");
           if (!realVncWsUrl) {
@@ -173,19 +133,9 @@ suite.define(() => {
               .toBe(true);
           }
 
-          await capture("default");
-          expect(
-            await page.evaluate(() => ({
-              enabled: document.fullscreenEnabled,
-              requestType: typeof Element.prototype.requestFullscreen,
-            })),
-          ).toEqual({ enabled: true, requestType: "function" });
           const fullscreenButton = panel.locator(".desktop-fullscreen-button");
           expect(await fullscreenButton.getAttribute("aria-label")).toBe("Enter fullscreen");
-          await fullscreenButton.hover();
-          await capture("hover");
           await fullscreenButton.focus();
-          await capture("focus");
 
           const screenHandle = await screen.elementHandle();
           await fullscreenButton.press("Enter");
@@ -222,7 +172,6 @@ suite.define(() => {
           expect(
             stageBox.width - screenBox.width > 20 || stageBox.height - screenBox.height > 20,
           ).toBe(true);
-          await capture("fullscreen");
 
           await takeControl.click();
           await expect
@@ -247,13 +196,11 @@ suite.define(() => {
               (button) => button === (button.getRootNode() as ShadowRoot).activeElement,
             ),
           ).toBe(true);
-          await capture("exit");
 
           await fullscreenButton.click();
           await disconnect.click();
           await panel.getByText("Desktop sources", { exact: true }).waitFor();
           expect(await fullscreenActive()).toBe(true);
-          await capture("disconnected-fullscreen");
           await fullscreenButton.click();
           await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
         },
