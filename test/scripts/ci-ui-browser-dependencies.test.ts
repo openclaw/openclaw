@@ -50,14 +50,12 @@ export default { test: {
   sequence: { sequencer: UiE2eSequencer },
 } };\n`,
   );
-  writeExecutable(path.join(bin, "pnpm"), [
-    "#!/bin/sh",
-    'printf "%s\\n" "$*" >> "$UI_BROWSER_INSTALLS"',
-  ]);
-  writeExecutable(path.join(bin, "node"), [
-    "#!/bin/sh",
-    'printf "%s\\n" "$@" > "$UI_BROWSER_ARGS"',
-  ]);
+  for (const [command, body] of [
+    ["pnpm", 'printf "%s\\n" "$*" >> "$UI_BROWSER_INSTALLS"'],
+    ["node", 'printf "%s\\n" "$@" > "$UI_BROWSER_ARGS"'],
+  ] as const) {
+    writeExecutable(path.join(bin, command), ["#!/bin/sh", body]);
+  }
   writeFileSync(installs, "");
   const run = (index: number, patterns?: string[]) => {
     writeFileSync(include, JSON.stringify(patterns ?? []));
@@ -78,18 +76,11 @@ export default { test: {
     });
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stderr).toBe("");
-    expect(readFileSync(args, "utf8").trim().split("\n")).toEqual([
-      "scripts/run-vitest.mjs",
-      "run",
-      "--config",
-      "test/vitest/vitest.ui-e2e.config.ts",
-      "--configLoader",
-      "runner",
-      "--maxWorkers",
-      "3",
-      "--shard",
-      `${index}/2`,
-    ]);
+    expect(readFileSync(args, "utf8").trim().split("\n")).toEqual(
+      `scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner --maxWorkers 3 --shard ${index}/2`.split(
+        " ",
+      ),
+    );
   };
   run(1);
   run(2);

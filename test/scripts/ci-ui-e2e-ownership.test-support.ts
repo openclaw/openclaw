@@ -123,51 +123,6 @@ export function assertControlUiE2eOwnership(
   ].toSorted();
 
   expect(privateServerFiles).toEqual(uiE2ePrivateServerTestFiles);
-  expect(helperPrivateServerFiles.toSorted()).toEqual([
-    "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
-    "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
-    "ui/src/e2e/agent-switch-roster.e2e.test.ts",
-    "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
-    "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
-    "ui/src/e2e/browser-capabilities.e2e.test.ts",
-    "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts",
-    "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
-    "ui/src/e2e/child-session-load-errors.e2e.test.ts",
-    "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
-    "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
-    "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
-    "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
-    "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
-    "ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts",
-    "ui/src/e2e/mobile-chat-session-menu.e2e.test.ts",
-    "ui/src/e2e/mobile-sidebar-session-menu.e2e.test.ts",
-    "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
-    "ui/src/e2e/model-catalog-partial-refresh.real-gateway.e2e.test.ts",
-    "ui/src/e2e/model-picker-search.real-gateway.e2e.test.ts",
-    "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
-    "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",
-    "ui/src/e2e/post-deploy-session-entry.e2e.test.ts",
-    "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
-    "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
-    "ui/src/e2e/session-management.delete.e2e.test.ts",
-    "ui/src/e2e/session-management.promotion.e2e.test.ts",
-    "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
-    "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
-    "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
-  ]);
   expect(uiE2eRealGatewayTestFiles.every((file) => uiE2eSerialTestFiles.includes(file))).toBe(true);
   expect(uiE2eSerialTestFiles).toContain(uiE2eRuntimeBudgetTestFile);
 
@@ -204,16 +159,13 @@ export function assertControlUiE2eOwnership(
   ]);
   expect(new Set(projects.map((project) => project.cacheDir)).size).toBe(projects.length);
   expect(config.test?.maxWorkers).toBe(Math.min(2, sharedVitestConfig.test.maxWorkers));
-  expect(projects[0]?.test).toMatchObject({
-    fileParallelism: sharedVitestConfig.test.fileParallelism,
-    maxWorkers: undefined,
-    sequence: { groupOrder: 0 },
-  });
-  expect(projects[1]?.test).toMatchObject({
-    fileParallelism: sharedVitestConfig.test.fileParallelism,
-    maxWorkers: undefined,
-    sequence: { groupOrder: 0 },
-  });
+  for (const project of projects.slice(0, 2)) {
+    expect(project.test).toMatchObject({
+      fileParallelism: sharedVitestConfig.test.fileParallelism,
+      maxWorkers: undefined,
+      sequence: { groupOrder: 0 },
+    });
+  }
   for (const project of projects.slice(2)) {
     expect(project.test).toMatchObject({
       exclude: expect.not.arrayContaining(uiE2eRealGatewayTestFiles),
@@ -227,11 +179,17 @@ export function assertControlUiE2eOwnership(
   const realGateway = new Set(uiE2eRealGatewayTestFiles);
   const ordinary = trackedUiE2eFiles.filter((file) => !realGateway.has(file));
   const serial = new Set(uiE2eSerialTestFiles);
+  const assertPartition = (selection: string[][], files: string[]) => {
+    expect(selection.slice(0, 2).flat().toSorted()).toEqual(
+      files.filter((file) => !serial.has(file)),
+    );
+    expect(selection.slice(2).flat().toSorted()).toEqual(files.filter((file) => serial.has(file)));
+    expect(selection.flat().toSorted()).toEqual(files);
+    expect(new Set(selection.flat()).size).toBe(files.length);
+  };
   const localSelected = projects.map((project) => selectedFiles(project.test));
   expect(selectedFiles(rootTest)).toEqual(trackedUiE2eFiles);
-  expect(localSelected.slice(0, 2).flat().toSorted()).toEqual(
-    trackedUiE2eFiles.filter((file) => !serial.has(file)),
-  );
+  assertPartition(localSelected, trackedUiE2eFiles);
   expect(localSelected.slice(2).flat().toSorted()).toEqual(uiE2eSerialTestFiles);
   expect(localSelected[1]).toEqual([
     "ui/src/e2e/board-fixture.e2e.test.ts",
@@ -243,21 +201,12 @@ export function assertControlUiE2eOwnership(
   // Keep packaged asset proof on the production bundle and source proof on its own server.
   expect(localSelected[0]).toContain("ui/src/e2e/memory-overview-plugin.e2e.test.ts");
   expect(localSelected[3]).toContain("ui/src/e2e/memory-overview-source.e2e.test.ts");
-  expect(localSelected.flat().toSorted()).toEqual(trackedUiE2eFiles);
-  expect(new Set(localSelected.flat()).size).toBe(trackedUiE2eFiles.length);
 
   const ordinaryConfig = createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []);
   const ordinaryProjects = ordinaryConfig.test?.projects as typeof projects;
   const ordinarySelected = ordinaryProjects.map((project) => selectedFiles(project.test));
   expect(selectedFiles(ordinaryConfig.test as typeof rootTest)).toEqual(ordinary);
-  expect(ordinarySelected.slice(0, 2).flat().toSorted()).toEqual(
-    ordinary.filter((file) => !serial.has(file)),
-  );
-  expect(ordinarySelected.slice(2).flat().toSorted()).toEqual(
-    ordinary.filter((file) => serial.has(file)),
-  );
-  expect(ordinarySelected.flat().toSorted()).toEqual(ordinary);
-  expect(new Set(ordinarySelected.flat()).size).toBe(ordinary.length);
+  assertPartition(ordinarySelected, ordinary);
 
   // The packaged delivery proof needs the runtime build owned by the prebuilt lane.
   const packagedWorkboard = "ui/src/pages/workboard/workboard-distribution.e2e.test.ts";

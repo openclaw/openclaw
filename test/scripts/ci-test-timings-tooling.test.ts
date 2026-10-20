@@ -87,30 +87,25 @@ describe("PR tooling timing weights", () => {
     expect(result.timings.runtimePlacementTimings).toEqual({ blacksmith: [], github: [] });
   });
 
-  type TimingCase = {
-    label: string;
-    summary?: Parameters<typeof toolingLog>[4];
-    nativeSeconds?: number;
-    mutate?: (text: string) => string;
-    expected: number | undefined;
-  };
+  type TimingCase = [
+    label: string,
+    expected: number | undefined,
+    options?: Parameters<typeof toolingLog>[4] | number,
+    mutate?: (text: string) => string,
+  ];
   it.each<TimingCase>([
-    { label: "singleton wall", expected: 190 },
-    { label: "native file time", nativeSeconds: 120, expected: 120 },
-    { label: "missing file summary", summary: { testFiles: [] }, expected: 391 },
-    { label: "skipped file", summary: { testFiles: ["1 passed | 1 skipped (2)"] }, expected: 391 },
-    { label: "multiple invocations", summary: { durations: ["190.06s", "20s"] }, expected: 391 },
-    {
-      label: "multiple declared files",
-      summary: { includePatterns: [file, "other.test.ts"] },
-      expected: 391,
-    },
-    {
-      label: "multiple configs",
-      summary: { configs: ["test/vitest/vitest.tooling.config.ts", "other.config.ts"] },
-      expected: 391,
-    },
-    { label: "another config", summary: { configs: ["other.config.ts"] }, expected: 391 },
+    ["singleton wall", 190],
+    ["native file time", 120, 120],
+    ["missing file summary", 391, { testFiles: [] }],
+    ["skipped file", 391, { testFiles: ["1 passed | 1 skipped (2)"] }],
+    ["multiple invocations", 391, { durations: ["190.06s", "20s"] }],
+    ["multiple declared files", 391, { includePatterns: [file, "other.test.ts"] }],
+    [
+      "multiple configs",
+      391,
+      { configs: ["test/vitest/vitest.tooling.config.ts", "other.config.ts"] },
+    ],
+    ["another config", 391, { configs: ["other.config.ts"] }],
     ...[
       ["nested summary", "Test Files 1 passed (1)", "[shard:nested] Test Files 1 passed (1)"],
       ["nested duration", "Duration 190.06s", "[shard:nested] Duration 20s"],
@@ -119,56 +114,52 @@ describe("PR tooling timing weights", () => {
         "Test Files 1 passed (1)",
         "✓ tooling test/scripts/unselected.test.ts > nested fixture 9000ms",
       ],
-    ].map(([label, from, nested]) => ({
-      label: label!,
-      expected: 391,
-      mutate: (text: string) =>
+    ].map(([label, from, nested]): TimingCase => [
+      label!,
+      391,
+      undefined,
+      (text) =>
         text.replace(
           from!,
           `${nested}\n2026-09-20T01:00:04Z [shard:core-tooling-1-hosted-1] ${from}`,
         ),
-    })),
-    {
-      label: "repeated begin",
-      expected: 391,
-      mutate: (text) =>
+    ]),
+    [
+      "repeated begin",
+      391,
+      undefined,
+      (text) =>
         text
           .split("\n")
           .flatMap((line) => (line.endsWith("] begin") ? [line, line] : [line]))
           .join("\n"),
-    },
-    {
-      label: "no matched file",
-      expected: undefined,
-      mutate: (text) =>
+    ],
+    [
+      "no matched file",
+      undefined,
+      undefined,
+      (text) =>
         text
           .split("\n")
           .filter((line) => !line.includes("✓ tooling"))
           .join("\n"),
-    },
-    {
-      label: "failed",
-      expected: undefined,
-      mutate: (text) => text.replace("end (exit 0)", "end (exit 1)"),
-    },
-    {
-      label: "unfinished",
-      expected: undefined,
-      mutate: (text) => text.split("\n").slice(0, -1).join("\n"),
-    },
-    { label: "no duration", summary: { durations: [] }, expected: undefined },
-    {
-      label: "other family",
-      expected: undefined,
-      mutate: (text) => text.replaceAll("core-tooling", "agentic-gateway"),
-    },
+    ],
+    ["failed", undefined, undefined, (text) => text.replace("end (exit 0)", "end (exit 1)")],
+    ["unfinished", undefined, undefined, (text) => text.split("\n").slice(0, -1).join("\n")],
+    ["no duration", undefined, { durations: [] }],
+    [
+      "other family",
+      undefined,
+      undefined,
+      (text) => text.replaceAll("core-tooling", "agentic-gateway"),
+    ],
   ])(
-    "prices only complete, unambiguous tooling observations: $label",
-    ({ summary, nativeSeconds, mutate, expected }) => {
-      const text = toolingLog(391, "0", nativeSeconds, file, {
+    "prices only complete, unambiguous tooling observations: %s",
+    (_label, expected, options, mutate) => {
+      const text = toolingLog(391, "0", typeof options === "number" ? options : undefined, file, {
         testFiles: ["1 passed (1)"],
         durations: ["190.06s"],
-        ...summary,
+        ...(typeof options === "object" ? options : {}),
       });
       const observed = mutate?.(text) ?? text;
       expect(
