@@ -353,7 +353,6 @@ export {
   resolveMainSessionDelegationMode,
 } from "../agents/delegation-guidance.js";
 export { buildHarnessVisibleReplyGuidance } from "../auto-reply/source-reply-delivery-mode.js";
-export { hasMessageToolSourceConversation } from "../agents/tools/message-tool-discovery.js";
 export { buildCredentialSafetyPrompt } from "../agents/credential-safety-prompt.js";
 export { buildUiPresentationPrompt } from "../agents/ui-presentation-prompt.js";
 export { normalizeQuestionTimeoutSeconds } from "../agents/tools/ask-user-tool-normalization.js";

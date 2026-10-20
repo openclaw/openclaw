@@ -8,7 +8,7 @@ describe("buildHarnessVisibleReplyGuidance", () => {
       const guidance = buildHarnessVisibleReplyGuidance({
         sourceReplyDeliveryMode,
         messageToolAvailable: true,
-        hasCurrentSourceConversation: false,
+        currentConversation: { agentSessionKey: "agent:main:operator" },
         requireExplicitMessageTarget: false,
         messageToolFinalByDefault: false,
       });
@@ -31,7 +31,7 @@ describe("buildHarnessVisibleReplyGuidance", () => {
       buildHarnessVisibleReplyGuidance({
         sourceReplyDeliveryMode: "automatic",
         messageToolAvailable: true,
-        hasCurrentSourceConversation: true,
+        currentConversation: { currentChannelProvider: "telegram", currentChannelId: "123" },
         requireExplicitMessageTarget: false,
       }),
     ).toBe(

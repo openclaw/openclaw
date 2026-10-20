@@ -1,7 +1,6 @@
 import {
   buildTemporalContextText,
   buildHarnessVisibleReplyGuidance,
-  hasMessageToolSourceConversation,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -136,12 +135,12 @@ export async function buildTurnStartParams(
         buildHarnessVisibleReplyGuidance({
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           messageToolAvailable: options.messageToolAvailable === true,
-          hasCurrentSourceConversation: hasMessageToolSourceConversation({
+          currentConversation: {
             agentSessionKey: params.sessionKey,
             currentChannelProvider: params.messageChannel ?? params.messageProvider,
             currentChannelId: params.currentChannelId,
             currentMessagingTarget: params.currentMessagingTarget,
-          }),
+          },
           requireExplicitMessageTarget: options.requireExplicitMessageTarget,
           messageToolFinalByDefault: params.messageToolFinalByDefault,
         }),

@@ -22,7 +22,6 @@ import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { projectRuntimeContextFragments } from "../internal-runtime-context.js";
 import { buildInterruptedInputContext } from "../interrupted-input-context.js";
 import { buildMediaTaskRuntimeContext } from "../media-generation-task-status.js";
-import { hasMessageToolSourceConversation } from "../tools/message-tool-discovery.js";
 import { buildProactiveSubagentOrchestrationSection } from "../ultra-orchestration.js";
 import { cliBackendLog } from "./log.js";
 import type { CliReusableSession, RunCliAgentParams } from "./types.js";
@@ -44,11 +43,11 @@ export function buildCliVisibleReplyGuidance(
   return buildHarnessVisibleReplyGuidance({
     ...options,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    hasCurrentSourceConversation: hasMessageToolSourceConversation({
+    currentConversation: {
       agentSessionKey: params.sessionKey,
       currentChannelProvider: params.messageChannel ?? params.messageProvider,
       currentChannelId: params.currentChannelId,
-    }),
+    },
   });
 }
 
