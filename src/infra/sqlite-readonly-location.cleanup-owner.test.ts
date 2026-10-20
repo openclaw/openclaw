@@ -23,21 +23,11 @@ import {
 } from "./sqlite-snapshot-source.js";
 
 function createDatabase(location: string, sql: string): Buffer {
-  const database = new (requireNodeSqlite().DatabaseSync)(location);
-  try {
+  {
+    using database = new (requireNodeSqlite().DatabaseSync)(location);
     database.exec(sql);
-  } finally {
-    database.close();
   }
   return fs.readFileSync(location);
-}
-
-function createSnapshot(name: string) {
-  const ownedRoot = path.join(root, name);
-  const location = path.join(ownedRoot, "database.sqlite");
-  fs.mkdirSync(ownedRoot, { recursive: true, mode: 0o700 });
-  fs.writeFileSync(location, "snapshot bytes");
-  return { ownedRoot, location };
 }
 
 it("keeps synchronous and asynchronous token cleanup in separate snapshot flights", async () => {
@@ -67,13 +57,9 @@ it("keeps synchronous and asynchronous token cleanup in separate snapshot flight
       admitSqliteSchema(nested);
     }
     for (const snapshot of [syncSnapshot, asyncSnapshot]) {
-      const reader = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
-      try {
-        admitSqliteSchema(reader);
-        expect(reader.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
-      } finally {
-        reader.close();
-      }
+      using reader = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
+      admitSqliteSchema(reader);
+      expect(reader.prepare("SELECT value FROM probe").get()).toEqual({ value: "preserved" });
     }
     for (const location of [syncSnapshot.location, asyncSnapshot.location, nestedLocation]) {
       expect(hasSqliteDatabaseSchemaAdmissionForPath(location)).toBe(true);
@@ -138,21 +124,15 @@ afterEach(async () => {
   await fs.promises.rm(root, { recursive: true, force: true });
 });
 
-async function readCleanupLog(): Promise<unknown[]> {
-  await testApi.flushFileLogQueueForTests();
-  return (await fs.promises.readFile(path.join(root, "cleanup.log"), "utf8"))
-    .trim()
-    .split("\n")
-    .map((line): unknown => JSON.parse(line));
-}
-
 it("does not throw when the onCleanupFailure callback itself throws", async () => {
   const processWarning = vi.spyOn(process, "emitWarning");
   const consoleWarning = vi.spyOn(console, "warn");
-  const { ownedRoot, location } = createSnapshot("throwing-callback");
+  const ownedRoot = path.join(root, "throwing-callback");
+  const location = path.join(ownedRoot, "database.sqlite");
+  fs.mkdirSync(ownedRoot, { recursive: true, mode: 0o700 });
+  fs.writeFileSync(location, "snapshot bytes");
 
-  // Force removal failure via fs.rmSync mock so the callback is exercised on
-  // every platform, including root POSIX and Windows (where chmod can't deny).
+  // Mock removal rather than relying on platform-dependent chmod denial.
   vi.spyOn(fs, "rmSync").mockImplementation(() => {
     throw Object.assign(new Error("mock removal failure"), { code: "EBUSY" });
   });
@@ -162,8 +142,6 @@ it("does not throw when the onCleanupFailure callback itself throws", async () =
   });
 
   try {
-    // cleanup() must not throw even though the callback throws — the
-    // non-throwing contract (requireCleanup=false) must hold.
     expect(prepared.cleanup()).toBe(false);
     expect(processWarning).not.toHaveBeenCalled();
     expect(consoleWarning).not.toHaveBeenCalled();
@@ -171,7 +149,11 @@ it("does not throw when the onCleanupFailure callback itself throws", async () =
     vi.restoreAllMocks();
   }
 
-  const records = await readCleanupLog();
+  await testApi.flushFileLogQueueForTests();
+  const records = (await fs.promises.readFile(path.join(root, "cleanup.log"), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line): unknown => JSON.parse(line));
   expect(records).toHaveLength(1);
   expect(records[0]).toMatchObject({
     "1": { path: ownedRoot, operation: "rm", errorCode: "EBUSY" },

@@ -50,27 +50,23 @@ it("snapshots a verified live writer once despite checkpoints that exhaust raw-c
       allowLiveOwner: true,
     });
     try {
-      const db = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
-      try {
-        expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-        const rows = db.prepare("SELECT generation FROM snapshot_pair ORDER BY id").all();
-        expect(rows[0]?.generation).toBeGreaterThan(0);
-        expect(rows[0]).toEqual(rows[1]);
-        expect(db.prepare("SELECT length(data) AS bytes FROM snapshot_payload").get()).toEqual({
-          bytes: 33554432,
-        });
-        expect(fs.statSync(prepared.location).size).toBeLessThan(34 * 1024 * 1024);
-        const retainedBytes = fs
-          .readdirSync(path.dirname(prepared.location))
-          .reduce(
-            (bytes, name) =>
-              bytes + fs.statSync(path.join(path.dirname(prepared.location), name)).size,
-            0,
-          );
-        expect(retainedBytes).toBeLessThan(34 * 1024 * 1024);
-      } finally {
-        db.close();
-      }
+      using db = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
+      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      const rows = db.prepare("SELECT generation FROM snapshot_pair ORDER BY id").all();
+      expect(rows[0]?.generation).toBeGreaterThan(0);
+      expect(rows[0]).toEqual(rows[1]);
+      expect(db.prepare("SELECT length(data) AS bytes FROM snapshot_payload").get()).toEqual({
+        bytes: 33554432,
+      });
+      expect(fs.statSync(prepared.location).size).toBeLessThan(34 * 1024 * 1024);
+      const retainedBytes = fs
+        .readdirSync(path.dirname(prepared.location))
+        .reduce(
+          (bytes, name) =>
+            bytes + fs.statSync(path.join(path.dirname(prepared.location), name)).size,
+          0,
+        );
+      expect(retainedBytes).toBeLessThan(34 * 1024 * 1024);
     } finally {
       expect(await prepared.cleanupAsync()).toBe(true);
     }
@@ -86,11 +82,12 @@ it.each(["absent", "unverifiable"])(
   async (owner) => {
     const root = roots.make("sqlite-offline-metadata-");
     const source = path.join(root, "openclaw.sqlite");
-    const db = new (requireNodeSqlite().DatabaseSync)(source);
-    db.exec(
-      "PRAGMA journal_mode=WAL; CREATE TABLE probe(value); INSERT INTO probe VALUES('offline');",
-    );
-    db.close();
+    {
+      using db = new (requireNodeSqlite().DatabaseSync)(source);
+      db.exec(
+        "PRAGMA journal_mode=WAL; CREATE TABLE probe(value); INSERT INTO probe VALUES('offline');",
+      );
+    }
     if (owner === "unverifiable") {
       const ownerPath = resolveGatewayStateOwnerPath(source);
       fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
@@ -105,11 +102,10 @@ it.each(["absent", "unverifiable"])(
       );
     }
     const entries = fs.readdirSync(root);
-    const expectedSourceIdentity = readDatabasePathIdentitySync(source);
     const before = fs.readFileSync(source);
     const options = {
       signal: new AbortController().signal,
-      expectedSourceIdentity,
+      expectedSourceIdentity: readDatabasePathIdentitySync(source),
       allowLiveOwner: true,
     };
     if (owner === "unverifiable") {

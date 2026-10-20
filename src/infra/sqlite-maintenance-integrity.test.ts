@@ -59,6 +59,14 @@ async function withCapture(
   }
 }
 
+function checkSteps(
+  source: ReturnType<typeof openNodeSqliteDatabase>,
+  sourcePath: string,
+  check: "quick" | "full" = "quick",
+) {
+  return sqliteIntegrityCheckSteps(source, sourcePath, undefined, { check, tables: ["touched"] });
+}
+
 it.each(["quick", "full"] as const)(
   "reuses only the captured QUICK source proof before migration (%s)",
   async (check) => {
@@ -66,9 +74,7 @@ it.each(["quick", "full"] as const)(
       await capture(check);
       using source = openNodeSqliteDatabase(sourcePath);
       const prepare = vi.spyOn(source, "prepare");
-      runSqliteIntegrityOperationSync(
-        sqliteIntegrityCheckSteps(source, sourcePath, undefined, { check, tables: ["touched"] }),
-      );
+      runSqliteIntegrityOperationSync(checkSteps(source, sourcePath, check));
       const checks = prepare.mock.calls.filter(([sql]) =>
         /^PRAGMA (quick|integrity)_check;/.test(sql),
       );
@@ -109,14 +115,9 @@ it.each([false, true])(
         `PRAGMA ignore_check_constraints = ON; ${uncommitted ? "BEGIN;" : ""} INSERT INTO untouched VALUES(-1); PRAGMA ignore_check_constraints = OFF;`,
       );
       try {
-        expect(() =>
-          runSqliteIntegrityOperationSync(
-            sqliteIntegrityCheckSteps(source, sourcePath, undefined, {
-              check: "quick",
-              tables: ["touched"],
-            }),
-          ),
-        ).toThrow(/quick_check.*CHECK constraint failed in untouched/s);
+        expect(() => runSqliteIntegrityOperationSync(checkSteps(source, sourcePath))).toThrow(
+          /quick_check.*CHECK constraint failed in untouched/s,
+        );
       } finally {
         if (source.isTransaction) {
           source.exec("ROLLBACK");
@@ -130,11 +131,7 @@ it("keeps the post-migration scoped FULL check after reusing source proof", asyn
   await withCapture(async (sourcePath, capture) => {
     await capture();
     using source = openNodeSqliteDatabase(sourcePath);
-    const admission = sqliteIntegrityCheckSteps(source, sourcePath, undefined, {
-      check: "quick",
-      tables: ["touched"],
-    });
-    expect(admission.next().done).toBe(true);
+    expect(checkSteps(source, sourcePath).next().done).toBe(true);
     source.exec(
       "PRAGMA ignore_check_constraints = ON; INSERT INTO touched VALUES(-1); PRAGMA ignore_check_constraints = OFF;",
     );

@@ -33,9 +33,10 @@ it.skipIf(process.platform === "win32").each([
     fs.mkdirSync(cache);
     fs.writeFileSync(log, "");
     setLoggerOverride({ level: "warn", file: log });
-    const database = new (requireNodeSqlite().DatabaseSync)(source);
-    database.exec("CREATE TABLE probe(value BLOB); INSERT INTO probe VALUES(zeroblob(2097152));");
-    database.close();
+    {
+      using database = new (requireNodeSqlite().DatabaseSync)(source);
+      database.exec("CREATE TABLE probe(value BLOB); INSERT INTO probe VALUES(zeroblob(2097152));");
+    }
     const before = fs.readFileSync(source);
     const result = spawnSync(
       process.execPath,
@@ -86,14 +87,10 @@ it.skipIf(process.platform === "win32").each([
         // Drain the same bounded reclamation pass used by the idle worker.
       }
       expect(abandoned.every((directory) => !fs.existsSync(directory))).toBe(true);
-      const reader = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
-      try {
-        expect(reader.prepare("SELECT length(value) AS bytes FROM probe").get()).toEqual({
-          bytes: 2097152,
-        });
-      } finally {
-        reader.close();
-      }
+      using reader = new (requireNodeSqlite().DatabaseSync)(prepared.location, { readOnly: true });
+      expect(reader.prepare("SELECT length(value) AS bytes FROM probe").get()).toEqual({
+        bytes: 2097152,
+      });
     } finally {
       prepared.cleanup();
     }
@@ -112,9 +109,10 @@ it.skipIf(process.platform === "win32")(
     const cache = path.join(root, "cache");
     fs.mkdirSync(cache);
     const sqlite = requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(source);
-    database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
-    database.close();
+    {
+      using database = new sqlite.DatabaseSync(source);
+      database.exec("CREATE TABLE probe(value TEXT); INSERT INTO probe VALUES('preserved');");
+    }
     const before = fs.readFileSync(source);
     const artifacts = ["operator.txt", "database.sqlite", "owner.sqlite", "owner.sqlite-journal"];
     const directories = artifacts.map((artifact, index) => {

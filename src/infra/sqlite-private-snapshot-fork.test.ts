@@ -26,14 +26,43 @@ function fixture() {
   fs.writeFileSync(`${source}-shm`, Buffer.alloc(32768, 41));
   const family = captureSqlitePrivateSnapshotFamily(source, owned);
   assert(family);
-  return { source, owned, destination, family };
+  const fork = (captured = family) =>
+    forkSqlitePrivateSnapshotInProcess(source, captured, destination);
+  const empty = () => expect(fs.readdirSync(destination)).toEqual([]);
+  const close = async () => expect(await removeTempDirectoryAsync(owned)).toBe(true);
+  return {
+    source,
+    owned,
+    family,
+    fork,
+    empty,
+    close,
+    bytes: () => ["", "-wal", "-shm"].map((suffix) => fs.readFileSync(source + suffix)),
+    async inspect(run: (location: string) => void, captured = family) {
+      const result = await fork(captured);
+      try {
+        run(result.location);
+      } finally {
+        expect(await result.cleanupAsync()).toBe(true);
+        await close();
+      }
+    },
+    async rejects(captured = family) {
+      try {
+        await expect(fork(captured)).rejects.toThrow("Retained SQLite snapshot changed");
+        empty();
+      } finally {
+        await close();
+      }
+    },
+  };
 }
 
 it.each(["auto", "off"] as const)(
   "forks independent main/WAL bytes without comparison reads (native %s)",
   async (mode) => {
     const source = fixture();
-    const before = ["", "-wal", "-shm"].map((suffix) => fs.readFileSync(source.source + suffix));
+    const before = source.bytes();
     const native = getFsSafeNativeConfig();
     const read = fs.readSync.bind(fs);
     let payloadBytes = 0;
@@ -62,11 +91,7 @@ it.each(["auto", "off"] as const)(
     let fork: Awaited<ReturnType<typeof forkSqlitePrivateSnapshotInProcess>> | undefined;
     try {
       configureFsSafeNative({ mode });
-      fork = await forkSqlitePrivateSnapshotInProcess(
-        source.source,
-        source.family,
-        source.destination,
-      );
+      fork = await source.fork();
       reads.mockRestore();
       // Full-copy fallback reads each payload once; cloning needs no JS payload reads.
       expect(payloadBytes).toBeLessThanOrEqual(65573 + 113);
@@ -81,26 +106,24 @@ it.each(["auto", "off"] as const)(
         fs.writeFileSync(fork.location + suffix, "private write");
       }
       expect(fs.existsSync(`${fork.location}-shm`)).toBe(false);
-      expect(["", "-wal", "-shm"].map((suffix) => fs.readFileSync(source.source + suffix))).toEqual(
-        before,
-      );
+      expect(source.bytes()).toEqual(before);
     } finally {
       reads.mockRestore();
       configureFsSafeNative(native);
       if (fork) {
         expect(await fork.cleanupAsync()).toBe(true);
       }
-      expect(await removeTempDirectoryAsync(source.owned)).toBe(true);
+      await source.close();
     }
-    expect(fs.readdirSync(source.destination)).toEqual([]);
+    source.empty();
   },
 );
 
 it("preserves committed WAL rows in a separately writable image", async () => {
   const source = fixture();
   const seedPath = path.join(directories.make("private-sqlite-wal-seed-"), "seed.sqlite");
-  const seed = new DatabaseSync(seedPath);
-  try {
+  {
+    using seed = new DatabaseSync(seedPath);
     seed.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE entries(value TEXT); PRAGMA wal_checkpoint(TRUNCATE); INSERT INTO entries VALUES('committed in WAL');",
     );
@@ -108,26 +131,18 @@ it("preserves committed WAL rows in a separately writable image", async () => {
     for (const suffix of ["", "-wal"]) {
       fs.copyFileSync(seedPath + suffix, source.source + suffix);
     }
-  } finally {
-    seed.close();
   }
   const family = captureSqlitePrivateSnapshotFamily(source.source, source.owned);
   assert(family);
-  const before = ["", "-wal", "-shm"].map((suffix) => fs.readFileSync(source.source + suffix));
-  const fork = await forkSqlitePrivateSnapshotInProcess(source.source, family, source.destination);
-  try {
-    using writable = new DatabaseSync(fork.location);
+  const before = source.bytes();
+  await source.inspect((location) => {
+    using writable = new DatabaseSync(location);
     expect(writable.prepare("SELECT value FROM entries").all()).toEqual([
       { value: "committed in WAL" },
     ]);
     writable.exec("INSERT INTO entries VALUES('private only'); PRAGMA wal_checkpoint(TRUNCATE)");
-    expect(["", "-wal", "-shm"].map((suffix) => fs.readFileSync(source.source + suffix))).toEqual(
-      before,
-    );
-  } finally {
-    expect(await fork.cleanupAsync()).toBe(true);
-    expect(await removeTempDirectoryAsync(source.owned)).toBe(true);
-  }
+    expect(source.bytes()).toEqual(before);
+  }, family);
 });
 
 it.each([
@@ -150,18 +165,10 @@ it.each([
     assert(family);
     expect(family.wal).toBeNull();
     changeWal(after);
-    const fork = await forkSqlitePrivateSnapshotInProcess(
-      source.source,
-      family,
-      source.destination,
-    );
-    try {
-      expect(fs.existsSync(`${fork.location}-wal`)).toBe(false);
-      expect(fs.readFileSync(fork.location)).toEqual(Buffer.alloc(65573, 19));
-    } finally {
-      expect(await fork.cleanupAsync()).toBe(true);
-      expect(await removeTempDirectoryAsync(source.owned)).toBe(true);
-    }
+    await source.inspect((location) => {
+      expect(fs.existsSync(`${location}-wal`)).toBe(false);
+      expect(fs.readFileSync(location)).toEqual(Buffer.alloc(65573, 19));
+    }, family);
   },
 );
 
@@ -175,14 +182,7 @@ it.each([
   const family = captureSqlitePrivateSnapshotFamily(source.source, source.owned);
   assert(family);
   fs.writeFileSync(`${source.source}-wal`, Buffer.alloc(after, 29));
-  try {
-    await expect(
-      forkSqlitePrivateSnapshotInProcess(source.source, family, source.destination),
-    ).rejects.toThrow("Retained SQLite snapshot changed");
-    expect(fs.readdirSync(source.destination)).toEqual([]);
-  } finally {
-    expect(await removeTempDirectoryAsync(source.owned)).toBe(true);
-  }
+  await source.rejects(family);
 });
 
 it.each(["before admission", "during copy"] as const)(
@@ -206,14 +206,12 @@ it.each(["before admission", "during copy"] as const)(
       });
     }
     try {
-      await expect(
-        forkSqlitePrivateSnapshotInProcess(source.source, source.family, source.destination),
-      ).rejects.toThrow();
+      await expect(source.fork()).rejects.toThrow();
       expect(changed).toBe(true);
-      expect(fs.readdirSync(source.destination)).toEqual([]);
+      source.empty();
       expect(fs.readFileSync(source.source)).toEqual(Buffer.alloc(65573, 19));
     } finally {
-      expect(await removeTempDirectoryAsync(source.owned)).toBe(true);
+      await source.close();
     }
   },
 );
@@ -233,14 +231,7 @@ it.each(["same-size edit", "replacement", "journal"] as const)(
       fs.writeFileSync(`${source.source}-journal`, "pending rollback");
       expect(captureSqlitePrivateSnapshotFamily(source.source, source.owned)).toBeUndefined();
     }
-    try {
-      await expect(
-        forkSqlitePrivateSnapshotInProcess(source.source, source.family, source.destination),
-      ).rejects.toThrow("Retained SQLite snapshot changed");
-      expect(fs.readdirSync(source.destination)).toEqual([]);
-    } finally {
-      expect(await removeTempDirectoryAsync(source.owned)).toBe(true);
-    }
+    await source.rejects();
   },
 );
 
@@ -254,10 +245,8 @@ it("cleans failed destination work and releases source custody", async () => {
     }
     fsync(descriptor);
   });
-  await expect(
-    forkSqlitePrivateSnapshotInProcess(source.source, source.family, source.destination),
-  ).rejects.toBe(failure);
-  expect(fs.readdirSync(source.destination)).toEqual([]);
+  await expect(source.fork()).rejects.toBe(failure);
+  source.empty();
   expect(fs.readFileSync(source.source)).toEqual(Buffer.alloc(65573, 19));
-  expect(await removeTempDirectoryAsync(source.owned)).toBe(true);
+  await source.close();
 });

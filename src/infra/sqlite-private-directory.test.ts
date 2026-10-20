@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withEnv } from "../test-utils/env.js";
 import { isPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import * as tmpOpenClawDir from "./tmp-openclaw-dir.js";
@@ -12,63 +11,32 @@ import {
 } from "./windows-private-directory.js";
 
 describe("private SQLite snapshot staging root", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
   it.each([
-    {
-      label: "an absolute LOCALAPPDATA root",
-      xdgCacheHome: undefined,
-      localAppData: path.resolve("sqlite-local-app-data"),
-      expectedRoot: path.resolve("sqlite-local-app-data"),
-    },
-    {
-      label: "LOCALAPPDATA when XDG_CACHE_HOME is relative",
-      xdgCacheHome: "relative/cache",
-      localAppData: path.resolve("sqlite-local-app-data"),
-      expectedRoot: path.resolve("sqlite-local-app-data"),
-    },
-    {
-      label: "HOME/AppData/Local when LOCALAPPDATA is absent",
-      xdgCacheHome: undefined,
-      localAppData: undefined,
-      expectedRoot: path.join(path.resolve("sqlite-home"), "AppData", "Local"),
-    },
-    {
-      label: "HOME/AppData/Local when LOCALAPPDATA is relative",
-      xdgCacheHome: undefined,
-      localAppData: "relative/local-app-data",
-      expectedRoot: path.join(path.resolve("sqlite-home"), "AppData", "Local"),
-    },
-    {
-      label: "absolute XDG_CACHE_HOME ahead of LOCALAPPDATA",
-      xdgCacheHome: path.resolve("sqlite-xdg-cache"),
-      localAppData: path.resolve("sqlite-local-app-data"),
-      expectedRoot: path.resolve("sqlite-xdg-cache"),
-    },
-  ])(
-    "selects $label for the Windows snapshot cache",
-    ({ xdgCacheHome, localAppData, expectedRoot }) => {
+    [undefined, "sqlite-local-app-data", "sqlite-local-app-data"],
+    ["relative/cache", "sqlite-local-app-data", "sqlite-local-app-data"],
+    [undefined, undefined, "sqlite-home/AppData/Local"],
+    [undefined, "relative/local-app-data", "sqlite-home/AppData/Local"],
+    ["sqlite-xdg-cache", "sqlite-local-app-data", "sqlite-xdg-cache"],
+  ] as const)(
+    "selects the Windows cache for XDG=%s and LOCALAPPDATA=%s",
+    (xdgCacheHome, localAppData, expectedRoot) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const resolveTempRoot = vi
         .spyOn(tmpOpenClawDir, "resolvePreferredOpenClawTmpDir")
         .mockImplementation((options) => options?.preferredDir ?? "");
 
-      withEnv(
-        {
+      const resolveRoot = (root: string | undefined) =>
+        root?.startsWith("sqlite-") ? path.resolve(root) : root;
+      expect(
+        resolvePrivateSqliteSnapshotStagingRoot({
           HOME: path.resolve("sqlite-home"),
-          LOCALAPPDATA: localAppData,
-          XDG_CACHE_HOME: xdgCacheHome,
-        },
-        () => {
-          expect(resolvePrivateSqliteSnapshotStagingRoot()).toBe(
-            path.join(expectedRoot, "openclaw"),
-          );
-        },
-      );
-
-      expect(resolveTempRoot.mock.calls[0]?.[0]?.tmpdir?.()).toBe(expectedRoot);
+          LOCALAPPDATA: resolveRoot(localAppData),
+          XDG_CACHE_HOME: resolveRoot(xdgCacheHome),
+        }),
+      ).toBe(path.join(path.resolve(expectedRoot), "openclaw"));
+      expect(resolveTempRoot.mock.calls[0]?.[0]?.tmpdir?.()).toBe(path.resolve(expectedRoot));
     },
   );
 });
