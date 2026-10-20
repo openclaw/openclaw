@@ -28,7 +28,6 @@ describe("filterRecordsToActive", () => {
 
       expect(Object.getPrototypeOf(filtered)).toBeNull();
       expect(Object.keys(filtered)).toEqual([pluginId]);
-      expect(Object.hasOwn(filtered, pluginId)).toBe(true);
       expect(Object.getOwnPropertyDescriptor(filtered, pluginId)).toMatchObject({
         enumerable: true,
         value: record,

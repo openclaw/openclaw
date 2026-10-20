@@ -1,24 +1,11 @@
-// Provides test support for bundled MCP plugin packaging checks.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 
 export function createBundleMcpTempHarness() {
-  const tempDirs: string[] = [];
-
-  return {
-    async createTempDir(prefix: string): Promise<string> {
-      const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-      tempDirs.push(dir);
-      return dir;
-    },
-    async cleanup() {
-      await Promise.all(
-        tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })),
-      );
-    },
-  };
+  const { make, cleanup } = createTrackedTempDirs();
+  return { createTempDir: make, cleanup };
 }
 
 export function resolveBundlePluginRoot(homeDir: string, pluginId: string) {

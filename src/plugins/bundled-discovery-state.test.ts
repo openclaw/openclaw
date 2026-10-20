@@ -1,4 +1,3 @@
-// Covers memoized bundled-discovery mode reads across machine-state writes.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,11 +12,15 @@ import { removeBundledDiscoveryStateRoot } from "./bundled-discovery.test-suppor
 
 const roots: string[] = [];
 let snapshot: ReturnType<typeof captureEnv>;
-async function createRoot() {
+async function createRoot(mode?: "compat") {
   const root = await fs.realpath(
     await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-discovery-")),
   );
   roots.push(root);
+  setTestEnvValue("OPENCLAW_STATE_DIR", root);
+  if (mode) {
+    writeConfigMachineState("plugins.bundledDiscovery", mode);
+  }
   return root;
 }
 
@@ -34,8 +37,7 @@ describe("readBundledDiscoveryModeMemoized", () => {
   });
 
   it("observes a machine-state write after the memo is cleared", async () => {
-    const stateDir = await createRoot();
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    await createRoot();
     clearBundledDiscoveryModeMemo();
     expect(readBundledDiscoveryModeMemoized()).toBeUndefined();
     writeConfigMachineState("plugins.bundledDiscovery", "compat");
@@ -46,10 +48,9 @@ describe("readBundledDiscoveryModeMemoized", () => {
   });
 
   it("does not leak one state root's cached mode into an interleaved scope", async () => {
-    const compatRoot = await createRoot();
+    const compatRoot = await createRoot("compat");
     const plainRoot = await createRoot();
     setTestEnvValue("OPENCLAW_STATE_DIR", compatRoot);
-    writeConfigMachineState("plugins.bundledDiscovery", "compat");
     clearBundledDiscoveryModeMemo();
     expect(readBundledDiscoveryModeMemoized()).toBe("compat");
 
@@ -62,11 +63,8 @@ describe("readBundledDiscoveryModeMemoized", () => {
 
   it("honors a caller-supplied env's state root over the process root", async () => {
     // #123416: explicit caller roots must not inherit the process root's mode.
-    const compatRoot = await createRoot();
-    const plainRoot = await createRoot();
-    setTestEnvValue("OPENCLAW_STATE_DIR", compatRoot);
-    writeConfigMachineState("plugins.bundledDiscovery", "compat");
-    setTestEnvValue("OPENCLAW_STATE_DIR", plainRoot);
+    const compatRoot = await createRoot("compat");
+    await createRoot();
     clearBundledDiscoveryModeMemo();
 
     const callerEnv = { ...process.env, OPENCLAW_STATE_DIR: compatRoot };

@@ -1,4 +1,3 @@
-// Verifies bundled package channel metadata stays aligned with catalogs.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,7 +13,7 @@ vi.mock("./bundled-dir.js", () => ({
 
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { listBundledPackageChannelMetadata } from "./bundled-package-channel-metadata.js";
-import type { PluginPackageChannel } from "./manifest.js";
+import type { PluginManifest, PluginPackageChannel } from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
 const tempDirs: string[] = [];
@@ -31,12 +30,6 @@ afterEach(() => {
   vi.mocked(resolveBundledPluginsDir).mockReset();
 });
 
-function useBundledPluginsDir(extensionsRoot: string): void {
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = extensionsRoot;
-  process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
-  vi.mocked(resolveBundledPluginsDir).mockReturnValue(extensionsRoot);
-}
-
 function writePackage(packagePath: string, channel: PluginPackageChannel) {
   writeJsonFile(packagePath, { name: "@openclaw/matrix", openclaw: { channel } });
 }
@@ -52,7 +45,9 @@ function fixture(channel: PluginPackageChannel) {
     channels: ["matrix"],
   });
   fs.writeFileSync(path.join(pluginRoot, "index.js"), "export default {};\n", "utf8");
-  useBundledPluginsDir(extensionsRoot);
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = extensionsRoot;
+  process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+  vi.mocked(resolveBundledPluginsDir).mockReturnValue(extensionsRoot);
   return packagePath;
 }
 
@@ -89,53 +84,44 @@ describe("bundled package channel metadata", () => {
   });
 });
 
-describe("bundled channel schema source", () => {
-  it("keeps bundled channel schemas single-sourced from the generated metadata", async () => {
-    const { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } =
-      await import("../config/bundled-channel-config-metadata.generated.js");
-    const { listGitTrackedFiles } = await import("../test-utils/repo-files.js");
-    const { pluginTestRepoRoot } = await import("./generated-plugin-test-helpers.js");
-    type BundledManifest = {
-      id?: string;
-      channels?: string[];
-      configSchema?: unknown;
-      channelConfigs?: Record<string, { schema?: unknown }>;
-    };
-    const tracked =
-      listGitTrackedFiles({
-        repoRoot: pluginTestRepoRoot,
-        pathspecs: "extensions/*/openclaw.plugin.json",
-      }) ?? [];
-    expect(tracked.length).toBeGreaterThan(0);
-    const generatedChannelIds = new Set(
-      GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map((entry) => entry.channelId),
-    );
-    // Channel plugins whose plugin-entry config is a real, distinct surface.
-    const pluginEntryConfigExceptions = new Set(["whatsapp"]);
-    const emptyStub = { type: "object", additionalProperties: false, properties: {} };
-    for (const file of tracked) {
-      const dirName = file.split("/")[1] ?? file;
-      const manifest = JSON.parse(
-        fs.readFileSync(path.join(pluginTestRepoRoot, file), "utf8"),
-      ) as BundledManifest;
-      const channelIds = (manifest.channels ?? []).filter((id) => generatedChannelIds.has(id));
-      if (channelIds.length === 0) {
-        continue;
-      }
-      for (const channelId of channelIds) {
-        // A manifest copy silently overrides the zod-derived generated schema in
-        // config validation and rots (stale copies rejected valid keys; see #131292).
-        expect(
-          manifest.channelConfigs?.[channelId]?.schema,
-          `extensions/${dirName}: delete channelConfigs.${channelId}.schema — the zod-derived generated bundled channel metadata is the single schema source`,
-        ).toBeUndefined();
-      }
-      if (!pluginEntryConfigExceptions.has(manifest.id ?? dirName)) {
-        expect(
-          manifest.configSchema,
-          `extensions/${dirName}: channel plugins carry no plugin-entry config; keep configSchema as the empty stub or add a named exception here with its reason`,
-        ).toEqual(emptyStub);
-      }
+it("keeps bundled channel schemas single-sourced from the generated metadata", async () => {
+  const { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } =
+    await import("../config/bundled-channel-config-metadata.generated.js");
+  const { listGitTrackedFiles } = await import("../test-utils/repo-files.js");
+  const { pluginTestRepoRoot } = await import("./generated-plugin-test-helpers.js");
+  const tracked =
+    listGitTrackedFiles({
+      repoRoot: pluginTestRepoRoot,
+      pathspecs: "extensions/*/openclaw.plugin.json",
+    }) ?? [];
+  expect(tracked.length).toBeGreaterThan(0);
+  const generatedChannelIds = new Set(
+    GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map((entry) => entry.channelId),
+  );
+  const emptyStub = { type: "object", additionalProperties: false, properties: {} };
+  for (const file of tracked) {
+    const dirName = file.split("/")[1] ?? file;
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(pluginTestRepoRoot, file), "utf8"),
+    ) as PluginManifest;
+    const channelIds = (manifest.channels ?? []).filter((id) => generatedChannelIds.has(id));
+    if (channelIds.length === 0) {
+      continue;
     }
-  });
+    for (const channelId of channelIds) {
+      // A manifest copy silently overrides the zod-derived generated schema in
+      // config validation and rots (stale copies rejected valid keys; see #131292).
+      expect(
+        manifest.channelConfigs?.[channelId]?.schema,
+        `extensions/${dirName}: delete channelConfigs.${channelId}.schema — the zod-derived generated bundled channel metadata is the single schema source`,
+      ).toBeUndefined();
+    }
+    // WhatsApp has a distinct plugin-entry config surface.
+    if ((manifest.id ?? dirName) !== "whatsapp") {
+      expect(
+        manifest.configSchema,
+        `extensions/${dirName}: channel plugins carry no plugin-entry config; keep configSchema as the empty stub or add a named exception here with its reason`,
+      ).toEqual(emptyStub);
+    }
+  }
 });

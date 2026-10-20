@@ -1,4 +1,3 @@
-// Covers Claude bundle inspection for plugin packaging metadata.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -40,10 +39,8 @@ describe("Claude bundle plugin inspect integration", () => {
         lspServers: ".lsp.json",
         outputStyles: "output-styles",
       },
-      "skill-packs/demo/SKILL.md":
-        "---\nname: demo\ndescription: A demo skill\n---\nDo something useful.",
-      "extra-commands/cmd/SKILL.md":
-        "---\nname: cmd\ndescription: A command skill\n---\nRun a command.",
+      "skill-packs/demo/SKILL.md": "---\nname: demo\ndescription: Demo\n---\nDemo.",
+      "extra-commands/cmd/SKILL.md": "---\nname: cmd\ndescription: Command\n---\nRun.",
       "hooks/hooks.json": '{"hooks":[]}',
       ".mcp.json": {
         mcpServers: {
