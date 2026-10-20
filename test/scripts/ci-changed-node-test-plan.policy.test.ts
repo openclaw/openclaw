@@ -1,5 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -18,28 +17,33 @@ import {
 } from "./ci-changed-node-test-plan.test-support.js";
 
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
+function expectImpact(select: (paths: string[]) => boolean, expected: boolean, paths: string[]) {
+  for (const file of paths) {
+    expect(select([file]), file).toBe(expected);
+  }
+}
 
 describe("CI changed Node test plan", () => {
   it.each([
-    {
-      lane: "QA smoke",
-      select: hasQaSmokeAffectingChange,
-      documentation: "extensions/telegram/README.md",
-      source: "extensions/telegram/src/index.ts",
-    },
-    {
-      lane: "UI performance",
-      select: hasControlUiPerformanceAffectingChange,
-      documentation: "ui/docs/design-system/README.md",
-      source: "ui/src/main.ts",
-    },
-    {
-      lane: "prompt snapshots",
-      select: hasPromptSnapshotAffectingChange,
-      documentation: "extensions/codex/README.md",
-      source: "extensions/codex/src/index.ts",
-    },
-  ])("ignores documentation in mixed $lane diffs", ({ select, documentation, source }) => {
+    [
+      "QA smoke",
+      hasQaSmokeAffectingChange,
+      "extensions/telegram/README.md",
+      "extensions/telegram/src/index.ts",
+    ],
+    [
+      "UI performance",
+      hasControlUiPerformanceAffectingChange,
+      "ui/docs/design-system/README.md",
+      "ui/src/main.ts",
+    ],
+    [
+      "prompt snapshots",
+      hasPromptSnapshotAffectingChange,
+      "extensions/codex/README.md",
+      "extensions/codex/src/index.ts",
+    ],
+  ] as const)("ignores documentation in mixed %s diffs", (_lane, select, documentation, source) => {
     expect(select([documentation, "src/utils/absolute-deadline.test.ts"])).toBe(false);
     expect(select([documentation, source])).toBe(true);
   });
@@ -88,16 +92,10 @@ describe("CI changed Node test plan", () => {
     expect(hasBuildArtifactAffectingChange(["src/agents/foo.test.ts", "test/helpers/x.ts"])).toBe(
       false,
     );
-    expect(
-      hasBuildArtifactAffectingChange([
-        "src/gateway/server.auth.control-ui.trusted-proxy.suite.ts",
-      ]),
-    ).toBe(false);
-    expect(hasBuildArtifactAffectingChange(["src/agents/foo.ts"])).toBe(true);
-    // Build-input classification: only sources and the build pipeline can
-    // change dist bytes; repo scripts, workflows, and qa scenarios cannot.
-    expect(hasBuildArtifactAffectingChange(["scripts/build-all.mts"])).toBe(true);
-    for (const changedPath of [
+    expectImpact(hasBuildArtifactAffectingChange, true, [
+      "src/agents/foo.ts",
+      "scripts/build-all.mts",
+      "tsconfig.json",
       "cli-invocation.mjs",
       "tsdown.config.ts",
       "tsdown.ai.config.ts",
@@ -111,33 +109,33 @@ describe("CI changed Node test plan", () => {
       "scripts/lib/tsdown-declaration-writer.mts",
       "scripts/lib/tsdown-config-groups.mts",
       "scripts/lib/tsdown-output-roots.mts",
-    ]) {
-      expect(hasBuildArtifactAffectingChange([changedPath]), changedPath).toBe(true);
-    }
-    expect(hasBuildArtifactAffectingChange(["tsconfig.json"])).toBe(true);
-    expect(hasBuildArtifactAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
-    expect(hasBuildArtifactAffectingChange([".github/workflows/ci.yml"])).toBe(false);
-    expect(hasBuildArtifactAffectingChange(["qa/scenarios/index.yaml"])).toBe(false);
-    expect(hasBuildArtifactAffectingChange(["ui/src/app.ts"])).toBe(false);
-    expect(hasQaSmokeAffectingChange(["extensions/qa-lab/src/ci-smoke-plan.ts"])).toBe(true);
-    expect(hasQaSmokeAffectingChange(["qa/scenarios/index.yaml"])).toBe(true);
-    // Smoke drives matrix + telegram; other channel plugins are invisible to it.
-    expect(hasQaSmokeAffectingChange(["extensions/telegram/src/index.ts"])).toBe(true);
-    expect(hasQaSmokeAffectingChange(["extensions/discord/src/index.ts"])).toBe(false);
-    // Broad runtime changes wait for release validation; only QA owners
-    // select smoke on automatic PR and main runs.
-    expect(hasQaSmokeAffectingChange(["ui/src/app.ts"])).toBe(false);
-    expect(hasQaSmokeAffectingChange(["src/infra/retry.ts"])).toBe(false);
-    expect(hasQaSmokeAffectingChange(["packages/llm-core/src/index.ts"])).toBe(false);
-    expect(hasQaSmokeAffectingChange(["pnpm-lock.yaml"])).toBe(false);
-    expect(hasQaSmokeAffectingChange(["scripts/run-vitest.mjs"])).toBe(false);
-    expect(hasQaSmokeAffectingChange(["test/scripts/ci-node-test-plan.test.ts"])).toBe(false);
-    // The QA lane's own orchestration must not be able to skip the lane.
-    expect(hasQaSmokeAffectingChange([".github/workflows/ci.yml"])).toBe(true);
-    expect(hasQaSmokeAffectingChange([".github/actions/setup-node-env/action.yml"])).toBe(true);
-    expect(hasQaSmokeAffectingChange(["scripts/lib/ci-changed-node-test-plan.mts"])).toBe(true);
-    expect(hasQaSmokeAffectingChange(["scripts/lib/ci-qa-smoke-scope.mts"])).toBe(true);
-    expect(hasQaSmokeAffectingChange([".github/workflows/labeler.yml"])).toBe(false);
+    ]);
+    expectImpact(hasBuildArtifactAffectingChange, false, [
+      "src/gateway/server.auth.control-ui.trusted-proxy.suite.ts",
+      "scripts/run-vitest.mjs",
+      ".github/workflows/ci.yml",
+      "qa/scenarios/index.yaml",
+      "ui/src/app.ts",
+    ]);
+    expectImpact(hasQaSmokeAffectingChange, true, [
+      "extensions/qa-lab/src/ci-smoke-plan.ts",
+      "qa/scenarios/index.yaml",
+      "extensions/telegram/src/index.ts",
+      ".github/workflows/ci.yml",
+      ".github/actions/setup-node-env/action.yml",
+      "scripts/lib/ci-changed-node-test-plan.mts",
+      "scripts/lib/ci-qa-smoke-scope.mts",
+    ]);
+    expectImpact(hasQaSmokeAffectingChange, false, [
+      "extensions/discord/src/index.ts",
+      "ui/src/app.ts",
+      "src/infra/retry.ts",
+      "packages/llm-core/src/index.ts",
+      "pnpm-lock.yaml",
+      "scripts/run-vitest.mjs",
+      "test/scripts/ci-node-test-plan.test.ts",
+      ".github/workflows/labeler.yml",
+    ]);
   });
 
   it.each([
@@ -207,35 +205,31 @@ describe("CI changed Node test plan", () => {
       [["docs/guide.md"], "symlink", false],
       [["docs/../guide.md"], "file", false],
     ] as const)("preserves Node ownership for %j (%s): %s", (paths, kind, precise) => {
-      const cwd = mkdtempSync(path.join(tmpdir(), "openclaw-docs-targeting-"));
+      const cwd = argvTempDirs.make("openclaw-docs-targeting-");
       const target = "src/channels/plugins/unowned.test.ts";
-      try {
-        mkdirSync(path.dirname(path.join(cwd, target)), { recursive: true });
-        writeFileSync(path.join(cwd, target), "export {};\n");
-        for (const file of kind === "missing" ? [] : paths) {
-          const absolute = path.join(cwd, file);
-          mkdirSync(path.dirname(absolute), { recursive: true });
-          if (kind === "symlink") {
-            writeFileSync(path.join(path.dirname(absolute), "target.md"), "# Guide\n");
-            symlinkSync("target.md", absolute);
-          } else {
-            writeFileSync(absolute, "# Guide\n");
-          }
-        }
-        const before = createChangedNodeTestShards([target], { cwd });
-        expect(before?.flatMap((shard) => shard.targets ?? [])).toEqual([target]);
-        const mixed = createChangedNodeTestShards([target, ...paths], { cwd });
-        if (paths.some((file) => path.posix.normalize(file) !== file)) {
-          expect(mixed).toBeNull();
+      mkdirSync(path.dirname(path.join(cwd, target)), { recursive: true });
+      writeFileSync(path.join(cwd, target), "export {};\n");
+      for (const file of kind === "missing" ? [] : paths) {
+        const absolute = path.join(cwd, file);
+        mkdirSync(path.dirname(absolute), { recursive: true });
+        if (kind === "symlink") {
+          writeFileSync(path.join(path.dirname(absolute), "target.md"), "# Guide\n");
+          symlinkSync("target.md", absolute);
         } else {
-          expect(mixed).not.toBeNull();
-          expect(selectedFiles(mixed)).toEqual(selectedFiles(before));
+          writeFileSync(absolute, "# Guide\n");
         }
-        if (precise) {
-          expect(selectedFiles(createChangedNodeTestShards([...paths], { cwd }))).toEqual([]);
-        }
-      } finally {
-        rmSync(cwd, { recursive: true, force: true });
+      }
+      const before = createChangedNodeTestShards([target], { cwd });
+      expect(before?.flatMap((shard) => shard.targets ?? [])).toEqual([target]);
+      const mixed = createChangedNodeTestShards([target, ...paths], { cwd });
+      if (paths.some((file) => path.posix.normalize(file) !== file)) {
+        expect(mixed).toBeNull();
+      } else {
+        expect(mixed).not.toBeNull();
+        expect(selectedFiles(mixed)).toEqual(selectedFiles(before));
+      }
+      if (precise) {
+        expect(selectedFiles(createChangedNodeTestShards([...paths], { cwd }))).toEqual([]);
       }
     });
   });
