@@ -14,6 +14,24 @@ import {
 } from "../test-utils/talk-test-provider.js";
 import { analyzeCommandSecretAssignmentsFromSnapshot } from "./command-config.js";
 
+const talkPath = {
+  path: TALK_TEST_PROVIDER_API_KEY_PATH,
+  pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+};
+function analyzeTalk(sourceConfig: OpenClawConfig, resolvedConfig: OpenClawConfig) {
+  return analyzeCommandSecretAssignmentsFromSnapshot({
+    sourceConfig,
+    resolvedConfig,
+    targetIds: new Set(["talk.providers.*.apiKey"]),
+  });
+}
+function readSource(config: OpenClawConfig, env = {}) {
+  const read = resolveConfigForRead(config, env);
+  const sourceConfig = read.resolvedConfigRaw as OpenClawConfig;
+  setConfigResolutionFacts(sourceConfig, read.resolutionFacts);
+  return sourceConfig;
+}
+
 describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
   it("reports configured refs that are unresolved in the snapshot", () => {
     const sourceConfig = buildTalkTestProviderConfig({
@@ -23,33 +41,15 @@ describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
     });
     const resolvedConfig = buildTalkTestProviderConfig(undefined);
 
-    const result = analyzeCommandSecretAssignmentsFromSnapshot({
-      sourceConfig,
-      resolvedConfig,
-      targetIds: new Set(["talk.providers.*.apiKey"]),
-    });
-
-    expect(result.unresolved).toEqual([
-      {
-        path: TALK_TEST_PROVIDER_API_KEY_PATH,
-        pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
-      },
-    ]);
+    expect(analyzeTalk(sourceConfig, resolvedConfig).unresolved).toEqual([talkPath]);
   });
 
   it("reports unresolved refs under a bracket-quoted provider key", () => {
     const config = {
       talk: { providers: { "acme.speech": { apiKey: "${TALK_API_KEY}" } } },
     } as OpenClawConfig;
-    const read = resolveConfigForRead(config, {});
-    const sourceConfig = read.resolvedConfigRaw as OpenClawConfig;
-    setConfigResolutionFacts(sourceConfig, read.resolutionFacts);
-
-    const result = analyzeCommandSecretAssignmentsFromSnapshot({
-      sourceConfig,
-      resolvedConfig: sourceConfig,
-      targetIds: new Set(["talk.providers.*.apiKey"]),
-    });
+    const sourceConfig = readSource(config);
+    const result = analyzeTalk(sourceConfig, sourceConfig);
 
     expect(result.unresolved).toEqual([
       {
@@ -70,44 +70,22 @@ describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
     },
     { name: "escaped template literal", authored: "$${OTHER}", env: {}, expected: "${OTHER}" },
   ])("keeps command assignments source-authoritative: $name", ({ authored, env, expected }) => {
-    const read = resolveConfigForRead(buildTalkTestProviderConfig(authored), env);
-    const sourceConfig = read.resolvedConfigRaw as OpenClawConfig;
-    setConfigResolutionFacts(sourceConfig, read.resolutionFacts);
+    const sourceConfig = readSource(buildTalkTestProviderConfig(authored), env);
     const resolvedConfig = cloneConfigWithResolutionFacts(sourceConfig);
-
-    const result = analyzeCommandSecretAssignmentsFromSnapshot({
-      sourceConfig,
-      resolvedConfig,
-      targetIds: new Set(["talk.providers.*.apiKey"]),
-    });
+    const result = analyzeTalk(sourceConfig, resolvedConfig);
 
     expect(result.assignments).toEqual([]);
-    expect(result.unresolved).toEqual(
-      expected === null
-        ? [
-            {
-              path: TALK_TEST_PROVIDER_API_KEY_PATH,
-              pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
-            },
-          ]
-        : [],
-    );
+    expect(result.unresolved).toEqual(expected === null ? [talkPath] : []);
   });
 
   it("accepts a materialized shorthand whose literal still resembles a reference", () => {
-    const read = resolveConfigForRead(buildTalkTestProviderConfig("$SOURCE"), {});
-    const sourceConfig = read.resolvedConfigRaw as OpenClawConfig;
-    setConfigResolutionFacts(sourceConfig, read.resolutionFacts);
+    const sourceConfig = readSource(buildTalkTestProviderConfig("$SOURCE"));
     const resolvedConfig = buildTalkTestProviderConfig("${OTHER}");
     copyConfigResolutionFactsExcept(sourceConfig, resolvedConfig, [
       TALK_TEST_PROVIDER_API_KEY_PATH,
     ]);
 
-    const result = analyzeCommandSecretAssignmentsFromSnapshot({
-      sourceConfig,
-      resolvedConfig,
-      targetIds: new Set(["talk.providers.*.apiKey"]),
-    });
+    const result = analyzeTalk(sourceConfig, resolvedConfig);
 
     expect(result.unresolved).toEqual([]);
     expect(result.assignments).toEqual([
@@ -129,19 +107,7 @@ describe("analyzeCommandSecretAssignmentsFromSnapshot", () => {
         defaults: {},
       },
     } as unknown as OpenClawConfig;
-    const resolvedConfig = {
-      memory: {
-        search: {
-          remote: {
-            apiKey: { source: "env", provider: "default", id: "DEFAULT_MEMORY_KEY" },
-          },
-        },
-      },
-
-      agents: {
-        defaults: {},
-      },
-    } as unknown as OpenClawConfig;
+    const resolvedConfig = structuredClone(sourceConfig);
 
     const result = analyzeCommandSecretAssignmentsFromSnapshot({
       sourceConfig,

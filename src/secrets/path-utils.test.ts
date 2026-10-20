@@ -1,16 +1,11 @@
 /** Tests dotted-path get/set/delete helpers used by secrets migration. */
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   deletePathStrict,
   getPath,
   setPathCreateStrict,
   setPathExistingStrict,
 } from "./path-utils.js";
-
-function asConfig(value: unknown): OpenClawConfig {
-  return value as OpenClawConfig;
-}
 
 function createArrayConfig(): Record<string, unknown> {
   return { accounts: [{ id: "a" }] };
@@ -21,7 +16,7 @@ const POLLUTION_PROBE = "openclawPathPollutionProbe";
 
 describe("secrets path utils", () => {
   it("deletePathStrict compacts arrays via splice", () => {
-    const config = asConfig({});
+    const config = {};
     setPathCreateStrict(config, ["accounts"], [{ id: "a" }, { id: "b" }, { id: "c" }]);
     const changed = deletePathStrict(config, ["accounts", "1"]);
     expect(changed).toBe(true);
@@ -30,52 +25,40 @@ describe("secrets path utils", () => {
 
   it("getPath returns undefined for invalid array path segment", () => {
     const config = createArrayConfig();
-    expect(getPath(config, ["accounts", "foo"])).toBeUndefined();
-    expect(getPath(config, ["accounts", "0abc"])).toBeUndefined();
-    expect(getPath(config, ["accounts", "+0"])).toBeUndefined();
-    expect(getPath(config, ["accounts", "9007199254740993"])).toBeUndefined();
-    expect(getPath(config, ["accounts", "4294967294"])).toBeUndefined();
+    for (const segment of ["foo", "0abc", "+0", "9007199254740993", "4294967294"]) {
+      expect(getPath(config, ["accounts", segment])).toBeUndefined();
+    }
   });
 
   it("setPathCreateStrict rejects unsafe array path segments", () => {
     const config = createArrayConfig();
 
-    expect(() =>
-      setPathCreateStrict(config, ["accounts", Number.MAX_SAFE_INTEGER + 2, "id"], "b"),
-    ).toThrow(/Invalid array index segment/);
-    expect(() => setPathCreateStrict(config, ["accounts", 4294967294, "id"], "b")).toThrow(
-      /Invalid array index segment/,
-    );
+    for (const index of [Number.MAX_SAFE_INTEGER + 2, 4294967294]) {
+      expect(() => setPathCreateStrict(config, ["accounts", index, "id"], "b")).toThrow(
+        /Invalid array index segment/,
+      );
+    }
     expect(() => setPathCreateStrict(config, ["accounts", "+0", "id"], "b")).toThrow(
       /Invalid path shape/,
     );
   });
 
-  it.each(["__proto__"])(
-    "setPathCreateStrict rejects %s before creating partial containers",
-    (blockedSegment) => {
-      const config = asConfig({});
+  it("setPathCreateStrict rejects __proto__ before creating partial containers", () => {
+    const config = {};
+    expect(() =>
+      setPathCreateStrict(config, ["safe", "__proto__", POLLUTION_PROBE], "yes"),
+    ).toThrow(/prototype-polluting/);
+    expect(config).toEqual({});
+    expect(Object.hasOwn(Object.prototype, POLLUTION_PROBE)).toBe(false);
+  });
 
-      expect(() =>
-        setPathCreateStrict(config, ["safe", blockedSegment, POLLUTION_PROBE], "yes"),
-      ).toThrow(/prototype-polluting/);
-      expect(config).toEqual({});
-      expect(Object.hasOwn(Object.prototype, POLLUTION_PROBE)).toBe(false);
-    },
-  );
-
-  it.each([
-    ["middle", (blockedSegment: string) => ["safe", blockedSegment, POLLUTION_PROBE]],
-  ] as const)("all mutation helpers reject blocked segments at the %s", (_position, pathFor) => {
+  it("all mutation helpers reject blocked segments in the middle", () => {
     for (const blockedSegment of BLOCKED_PATH_SEGMENTS) {
-      const segments = pathFor(blockedSegment);
-      const config = asConfig({ safe: { value: "kept" } });
-
-      expect(() => setPathCreateStrict(config, segments, "changed")).toThrow(/prototype-polluting/);
-      expect(() => setPathExistingStrict(config, segments, "changed")).toThrow(
-        /prototype-polluting/,
-      );
-      expect(() => deletePathStrict(config, segments)).toThrow(/prototype-polluting/);
+      const segments = ["safe", blockedSegment, POLLUTION_PROBE];
+      const config = { safe: { value: "kept" } };
+      for (const mutate of [setPathCreateStrict, setPathExistingStrict, deletePathStrict]) {
+        expect(() => mutate(config, segments, "changed")).toThrow(/prototype-polluting/);
+      }
       expect(config).toEqual({ safe: { value: "kept" } });
     }
   });
@@ -88,18 +71,14 @@ describe("secrets path utils", () => {
   });
 
   it("setPathExistingStrict updates an existing leaf", () => {
-    const config = asConfig({
-      talk: {
-        apiKey: "old", // pragma: allowlist secret
-      },
-    });
+    const config = { talk: { apiKey: "old" } }; // pragma: allowlist secret
     const changed = setPathExistingStrict(config, ["talk", "apiKey"], "new");
     expect(changed).toBe(true);
     expect(getPath(config, ["talk", "apiKey"])).toBe("new");
   });
 
   it("setPathCreateStrict creates missing container segments", () => {
-    const config = asConfig({});
+    const config = {};
     const changed = setPathCreateStrict(config, ["talk", "provider", "apiKey"], "x");
     expect(changed).toBe(true);
     expect(getPath(config, ["talk", "provider", "apiKey"])).toBe("x");
@@ -121,23 +100,19 @@ describe("secrets path utils", () => {
   ])(
     "setPathCreateStrict preserves the $name container contract",
     ({ segment, expected, mismatched }) => {
-      const config = asConfig({});
+      const config = {};
 
       expect(setPathCreateStrict(config, ["accounts", segment, "token"], "secret")).toBe(true);
       expect(config).toEqual(expected);
       expect(() =>
-        setPathCreateStrict(asConfig(mismatched), ["accounts", segment, "token"], "secret"),
+        setPathCreateStrict(mismatched, ["accounts", segment, "token"], "secret"),
       ).toThrow(/Invalid path shape/);
       expect(mismatched.accounts[0].token).toBe("old");
     },
   );
 
   it("setPathCreateStrict leaves value unchanged when equal", () => {
-    const config = asConfig({
-      talk: {
-        apiKey: "same", // pragma: allowlist secret
-      },
-    });
+    const config = { talk: { apiKey: "same" } }; // pragma: allowlist secret
     const changed = setPathCreateStrict(config, ["talk", "apiKey"], "same");
     expect(changed).toBe(false);
     expect(getPath(config, ["talk", "apiKey"])).toBe("same");
