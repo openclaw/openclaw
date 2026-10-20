@@ -61,6 +61,7 @@ const codexAppServerNetworkProxySchema = z.strictObject({
   mode: z.enum(["limited", "full"]).optional(),
   domains: z.record(z.string(), z.enum(["allow", "deny"])).optional(),
   unixSockets: z.record(z.string(), z.enum(["allow", "none"])).optional(),
+  readOnlyPaths: z.array(z.string().min(1)).optional(),
   proxyUrl: z.string().trim().min(1).optional(),
   socksUrl: z.string().trim().min(1).optional(),
   enableSocks5: z.boolean().optional(),

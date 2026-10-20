@@ -1,4 +1,5 @@
 import { hostname as readHostName } from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isLoopbackHost } from "openclaw/plugin-sdk/request-url";
 import type {
@@ -63,6 +64,7 @@ export function resolveCodexAppServerNetworkProxy(
   const profile = {
     filesystem: {
       ":minimal": "read",
+      ...resolveNetworkProxyReadOnlyPaths(config),
       ":project_roots": {
         ".": fileSystemMode,
       },
@@ -95,6 +97,64 @@ function normalizeNetworkProxyPermissionMap(
     .map(([key, permission]) => [key.trim(), permission === "none" ? "deny" : permission] as const)
     .filter(([key]) => key.length > 0);
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function resolveNetworkProxyReadOnlyPaths(
+  config: CodexAppServerNetworkProxyConfig,
+): Record<string, "read"> | undefined {
+  const normalizedPaths = (config.readOnlyPaths ?? []).map((value) =>
+    normalizeNetworkProxyReadOnlyPath(value),
+  );
+  const uniquePaths = [...new Set(normalizedPaths)].toSorted();
+  return uniquePaths.length > 0
+    ? Object.fromEntries(uniquePaths.map((entry) => [entry, "read"]))
+    : undefined;
+}
+
+function normalizeNetworkProxyReadOnlyPath(value: string): string {
+  if (
+    !value ||
+    value !== value.trim() ||
+    value.startsWith(":") ||
+    hasControlCharacter(value) ||
+    /[*?[\]{}]/u.test(value) ||
+    !isLiteralAbsolutePath(value)
+  ) {
+    throw invalidNetworkProxyReadOnlyPathsError();
+  }
+  const parser = value.startsWith("/") ? path.posix : path.win32;
+  const segments = value
+    .slice(parser.parse(value).root.length)
+    .split(parser === path.posix ? "/" : /[\\/]+/u);
+  const normalized = parser.normalize(value);
+  if (normalized === parser.parse(normalized).root || segments.includes("..")) {
+    throw invalidNetworkProxyReadOnlyPathsError();
+  }
+  // A backslash is a filename character on POSIX, not a separator to remove.
+  return normalized.endsWith(parser.sep) ? normalized.slice(0, -1) : normalized;
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint < 0x20 || codePoint === 0x7f)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isLiteralAbsolutePath(value: string): boolean {
+  if (value.startsWith("/")) {
+    return path.posix.isAbsolute(value);
+  }
+  return /^[A-Za-z]:[\\/]/u.test(value) || /^\\\\[^\\]+\\[^\\]+(?:[\\/]|$)/u.test(value);
+}
+
+function invalidNetworkProxyReadOnlyPathsError(): Error {
+  return new Error(
+    'Invalid plugins.entries.codex.config.appServer.networkProxy.readOnlyPaths; fix this field before starting Codex with network restrictions. Run "openclaw doctor --fix" for supported repairs.',
+  );
 }
 
 function removeUndefinedJsonFields(value: Record<string, JsonValue | undefined>): JsonObject {

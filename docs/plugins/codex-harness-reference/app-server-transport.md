@@ -265,8 +265,17 @@ required.
             sandbox: "workspace-write",
             networkProxy: {
               enabled: true,
+              mode: "full",
+              allowLocalBinding: true,
+              readOnlyPaths: [
+                "/opt/example/runtime",
+                "/opt/example/repository-helper",
+                "/run/example/repository-credentials",
+              ],
               domains: {
+                "git.broker.example.com": "allow",
                 "api.openai.com": "allow",
+                "169.254.169.254": "deny",
                 "blocked.example.com": "deny",
               },
             },
@@ -283,6 +292,22 @@ Hosts absent from the effective native allowlist are denied. The example's
 requirements can still contribute allowed domains. These restrictions apply to
 Codex sandbox commands. See the [network proxy configuration reference](/plugins/codex-harness/config-fields)
 for matching, policy inheritance, scope, and explicit Doctor repair of blank optional fields after updates.
+`readOnlyPaths` adds literal absolute filesystem paths as read-only entries in
+the same generated Codex permissions profile. OpenClaw rejects relative paths,
+root directories, special profile keys, globs, control characters, traversal
+segments, and leading or trailing whitespace before starting the app-server.
+Repository broker access uses the same stock Codex domain policy. A
+repository-bound Agent should allow the exact broker DNS host, keep explicit
+denies such as link-local metadata addresses, use `mode: "full"`, and set
+`allowLocalBinding: true` so the managed bridge can bind and route local proxy
+traffic. This is an explicit opt-in: `allowLocalBinding: true` also disables Codex's
+resolved private-address guard, so an allowlisted hostname can reach a private
+address. Denying a metadata IP by name does not block an allowed hostname that
+resolves to that IP. Use only trusted broker hosts and enforce any required
+private-address isolation outside this profile. `mode: "full"` permits all HTTP
+methods at otherwise allowed destinations; the broker still owns repository
+authorization. OpenClaw adds no separate port, method, or private-address exception
+list. Neither setting is enabled by default.
 
 If the normal app-server runtime would be `danger-full-access`, enabling
 `networkProxy` uses workspace-style filesystem access for the generated
