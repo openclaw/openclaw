@@ -67,14 +67,12 @@ describe("worker placement move destination owner", () => {
         executionMode: "remote-exec",
       });
       const sourceBefore = JSON.stringify(source);
-      const entry = {
-        sessionId: source.sessionId,
-        worktree: {
-          id: "worktree-recovery",
-          branch: "recovery",
-          repoRoot: "/gateway/workspace",
-        },
+      const worktree = {
+        id: "worktree-recovery",
+        branch: "recovery",
+        repoRoot: "/gateway/workspace",
       };
+      const entry = { sessionId: source.sessionId, worktree };
       const config = {
         session: { store: state.path("sessions.sqlite") },
         cloudWorkers: {
@@ -114,9 +112,9 @@ describe("worker placement move destination owner", () => {
             ({
               managedWorktrees: {
                 findLiveByOwner: async () => ({
-                  id: "worktree-recovery",
+                  id: worktree.id,
                   ownerId: SESSION_KEY,
-                  path: "/gateway/workspace",
+                  path: worktree.repoRoot,
                 }),
               },
               resolveGatewaySessionStoreTargetInWorker,
@@ -132,20 +130,22 @@ describe("worker placement move destination owner", () => {
       const runMoveBarrier = vi.fn(async () => {
         throw new Error("source placement barrier started");
       });
-      const reclaimSource = vi.fn();
-      const dispatch = vi.fn();
-      const beginPlacementMove = vi.fn();
-      const destroy = vi.fn();
+      const mutations = {
+        reclaimSource: vi.fn(),
+        dispatch: vi.fn(),
+        beginPlacementMove: vi.fn(),
+        destroy: vi.fn(),
+      };
       const moves = createWorkerPlacementMoveService({
         placements: {
           getAsync: async () => source,
           getPlacementMoveAsync: async () => undefined,
-          beginPlacementMove,
+          beginPlacementMove: mutations.beginPlacementMove,
         } as never,
-        environments: { get: () => undefined, destroy } as never,
+        environments: { get: () => undefined, destroy: mutations.destroy } as never,
         runMoveBarrier,
-        dispatch,
-        reclaimSource,
+        dispatch: mutations.dispatch,
+        reclaimSource: mutations.reclaimSource,
         validateAbandonSource: vi.fn(),
         abandonSource: vi.fn(),
         resolveDestination,
@@ -166,10 +166,9 @@ describe("worker placement move destination owner", () => {
       ).rejects.toThrow(expectedError);
 
       expect(runMoveBarrier).toHaveBeenCalledTimes(barrierCalls);
-      expect(beginPlacementMove).not.toHaveBeenCalled();
-      expect(reclaimSource).not.toHaveBeenCalled();
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(destroy).not.toHaveBeenCalled();
+      for (const mutation of Object.values(mutations)) {
+        expect(mutation).not.toHaveBeenCalled();
+      }
       expect(JSON.stringify(source)).toBe(sourceBefore);
       if (supported) {
         await expect(resolveDestination.mock.results[0]?.value).resolves.toMatchObject({

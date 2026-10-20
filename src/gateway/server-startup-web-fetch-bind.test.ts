@@ -1,12 +1,6 @@
-/**
- * Gateway startup web fetch bind tests.
- */
-import http from "node:http";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { installGatewayTestHooks, startTestGatewayServer } from "./test-helpers.js";
-import { readClientResponseBody } from "./test-http-response.js";
 
 const webFetchProviderDiscovery = vi.hoisted(() => ({
   resolveBundledWebFetchProvidersFromPublicArtifactsMock: vi.fn(() => {
@@ -70,29 +64,6 @@ afterEach(() => {
   webFetchProviderDiscovery.resolvePluginWebFetchProvidersMock.mockClear();
 });
 
-async function requestHealthz(port: number): Promise<{ status: number; body: string }> {
-  return await new Promise((resolve, reject) => {
-    const req = http.request(
-      {
-        host: "127.0.0.1",
-        port,
-        path: "/healthz",
-      },
-      (res) => void readClientResponseBody(res).then(resolve, reject),
-    );
-    req.once("error", reject);
-    req.setTimeout(5_000, () => {
-      req.destroy(new Error("timeout waiting for /healthz"));
-    });
-    req.end();
-  });
-}
-
-async function writeConfig(config: OpenClawConfig): Promise<void> {
-  const { writeConfigFile } = await import("../config/config.js");
-  await writeConfigFile(config);
-}
-
 describe("gateway startup web fetch config", () => {
   let port: number;
   let previousMinimal: string | undefined;
@@ -101,17 +72,10 @@ describe("gateway startup web fetch config", () => {
   beforeAll(async () => {
     previousMinimal = process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
-    await writeConfig({
-      gateway: {
-        mode: "local",
-        bind: "loopback",
-        auth: { mode: "none" },
-      },
-      plugins: {
-        enabled: true,
-        allow: [],
-        entries: {},
-      },
+    const { writeConfigFile } = await import("../config/config.js");
+    await writeConfigFile({
+      gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
+      plugins: { enabled: true, allow: [], entries: {} },
       tools: {
         web: {
           fetch: {
@@ -121,7 +85,7 @@ describe("gateway startup web fetch config", () => {
           },
         },
       },
-    } as OpenClawConfig);
+    });
 
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     port = portClaim.port;
@@ -142,7 +106,10 @@ describe("gateway startup web fetch config", () => {
   });
 
   it("binds HTTP with credential-free tools.web.fetch config without fetch provider discovery", async () => {
-    const response = await requestHealthz(port);
+    const response = await fetch(`http://127.0.0.1:${port}/healthz`, {
+      signal: AbortSignal.timeout(5_000),
+    });
+    await response.text();
     expect(response.status).toBe(200);
     expect(
       webFetchProviderDiscovery.resolveBundledWebFetchProvidersFromPublicArtifactsMock,

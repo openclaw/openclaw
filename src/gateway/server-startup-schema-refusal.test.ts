@@ -6,7 +6,6 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
-import { OpenClawDatabaseSchemaPreflightError } from "../state/openclaw-database-preflight.messages.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -72,7 +71,9 @@ it.each([
       } catch (error) {
         refusal = error;
       }
-      expect(refusal).toBeInstanceOf(Error);
+      if (!(refusal instanceof Error)) {
+        throw new Error("Expected bootstrap schema refusal");
+      }
       const facts = `uses schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}; writer build 2026.9.4.`;
       await expect(handleGatewayStartupMaintenance(refusal)).rejects.toBe(exited);
       const output = runtimeError.mock.calls.flat().join("\n");
@@ -80,25 +81,11 @@ it.each([
       expect(output).toContain("Refused by OpenClaw");
       expect(output).toContain("Run a build at least as new as the writer");
       expect(output).toContain("restore your pre-upgrade backup");
-      const doctor = new OpenClawDatabaseSchemaPreflightError(
-        [
-          {
-            kind: "state",
-            path: databasePath,
-            foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1,
-            supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-            writerAppVersion: "2026.9.4",
-          },
-        ],
-        {
-          operation: "doctor",
-        },
+      expect(output).toContain("Gateway failed to start: Gateway refused startup");
+      expect(output).toContain(databasePath);
+      expect(runtimeError).toHaveBeenCalledExactlyOnceWith(
+        `Gateway failed to start: ${refusal.message}`,
       );
-      const message = doctor.message.replace(
-        "Doctor refused to continue",
-        "Gateway refused startup",
-      );
-      expect(runtimeError).toHaveBeenCalledExactlyOnceWith(`Gateway failed to start: ${message}`);
       expect(runtimeError.mock.invocationCallOrder[0]).toBeLessThan(
         exit.mock.invocationCallOrder[0]!,
       );
@@ -107,7 +94,7 @@ it.each([
       } else {
         expect(errorLog).toHaveBeenCalledOnce();
         expect(errorLog.mock.calls.flat().join("\n")).toContain(
-          JSON.stringify(message).slice(1, -1),
+          JSON.stringify(refusal.message).slice(1, -1),
         );
         expect(errorLog.mock.invocationCallOrder[0]).toBeLessThan(
           exit.mock.invocationCallOrder[0]!,

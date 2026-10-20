@@ -85,36 +85,23 @@ beforeAll(async () => {
     import("../skills/runtime/remote.js"),
     import("../agents/subagents/registry/subagent-registry.js"),
   ]);
-  vi.spyOn(cliShim, "prepareGatewayAgentCliShim").mockImplementation(() =>
-    rejectDeferredWork("agent CLI shim"),
-  );
-  vi.spyOn(githubCleanup, "cleanupRetiredManagedGitHubProfiles").mockImplementation(() =>
-    rejectDeferredWork("managed GitHub profile cleanup"),
-  );
-  vi.spyOn(plugins, "runGatewayPostReadyStartupMaintenance").mockImplementation(() =>
-    rejectDeferredWork("channel and session maintenance"),
-  );
-  vi.spyOn(workers, "loadGatewayWorkerEnvironmentStartupState").mockImplementation(() =>
-    rejectDeferredWork("worker environment recovery"),
-  );
-  vi.spyOn(projection, "createSessionRowProjection").mockImplementation(() =>
-    rejectDeferredWork("session catalog hydration"),
-  );
-  vi.spyOn(lifetime, "attachInitialGatewayLifetimeSidecars").mockImplementation(() =>
-    rejectDeferredWork("initial lifetime sidecars"),
-  );
-  vi.spyOn(discovery, "startGatewayDiscovery").mockImplementation(() =>
-    rejectDeferredWork("discovery"),
-  );
-  vi.spyOn(skills, "primeRemoteSkillsCache").mockImplementation(() =>
-    rejectDeferredWork("remote skills warmup"),
-  );
-  vi.spyOn(subagents, "initSubagentRegistry").mockImplementation(() =>
-    rejectDeferredWork("subagent recovery hydration"),
-  );
-  vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(() =>
-    rejectDeferredWork("subagent recovery activation"),
-  );
+  for (const [spy, name] of [
+    [vi.spyOn(cliShim, "prepareGatewayAgentCliShim"), "agent CLI shim"],
+    [
+      vi.spyOn(githubCleanup, "cleanupRetiredManagedGitHubProfiles"),
+      "managed GitHub profile cleanup",
+    ],
+    [vi.spyOn(plugins, "runGatewayPostReadyStartupMaintenance"), "channel and session maintenance"],
+    [vi.spyOn(workers, "loadGatewayWorkerEnvironmentStartupState"), "worker environment recovery"],
+    [vi.spyOn(projection, "createSessionRowProjection"), "session catalog hydration"],
+    [vi.spyOn(lifetime, "attachInitialGatewayLifetimeSidecars"), "initial lifetime sidecars"],
+    [vi.spyOn(discovery, "startGatewayDiscovery"), "discovery"],
+    [vi.spyOn(skills, "primeRemoteSkillsCache"), "remote skills warmup"],
+    [vi.spyOn(subagents, "initSubagentRegistry"), "subagent recovery hydration"],
+    [vi.spyOn(subagents, "activateSubagentRegistry"), "subagent recovery activation"],
+  ] as const) {
+    spy.mockImplementation(() => rejectDeferredWork(name));
+  }
   const pluginLoad = vi.spyOn(plugins, "loadGatewayStartupPluginRuntime");
   await withAgentDatabaseStartupAdmission(async (admission) => {
     vi.spyOn(admission, "activate").mockImplementation(() =>
