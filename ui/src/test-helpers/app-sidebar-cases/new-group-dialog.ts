@@ -1,4 +1,5 @@
 import { describe, expect, it, onTestFinished } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import "../../lib/toast-host.ts";
 import { installDialogPolyfill, submitInputDialog, waitForInputDialog } from "../modal-dialog.ts";
@@ -24,12 +25,8 @@ const waitForClose = () => waitForFast(() => expect(dialog()).toBeNull());
 async function startGroupMove(methods: string[]) {
   onTestFinished(installDialogPolyfill());
   const { sidebar, harness } = await mountMultiSelect(methods);
-  let landCatalogWrite!: () => void;
-  harness.groupsPut.mockReturnValueOnce(
-    new Promise((resolve) => {
-      landCatalogWrite = () => resolve("completed");
-    }),
-  );
+  const write = createDeferred<string>();
+  harness.groupsPut.mockReturnValueOnce(write.promise);
   for (const target of targets) {
     click(rowLink(sidebar, target.key), { altKey: true });
   }
@@ -42,63 +39,62 @@ async function startGroupMove(methods: string[]) {
   await waitForInputDialog();
   await submitInputDialog("Projects");
   await waitForFast(() => expect(harness.groupsPut).toHaveBeenCalledOnce());
-  return { harness, landCatalogWrite };
+  return { harness, landCatalogWrite: () => write.resolve("completed") };
 }
 
 describe("AppSidebar new group dialog", () => {
-  it("moves captured sessions even when both leave the bounded list mid-write", async () => {
-    const toastHost = document.createElement("openclaw-toast-host");
-    document.body.append(toastHost);
-    onTestFinished(() => toastHost.remove());
-    await toastHost.updateComplete;
-    const { harness, landCatalogWrite } = await startGroupMove([
-      "sessions.groups.put",
-      "sessions.patchMany",
-    ]);
-
-    // Projection absence is not deletion. The Gateway can still apply both
-    // captured identities, and rejects either one if it was actually removed.
-    harness.publish({ result: { count: 0, sessions: [] } as unknown as SessionsListResult });
-    expect(harness.patchMany).not.toHaveBeenCalled();
-    landCatalogWrite();
-
-    // Closing proves the submit continuation completed before negative assertions.
-    await waitForClose();
-    expect(harness.patchMany).toHaveBeenCalledWith(targets, { category: "Projects" });
-    expect(harness.patch).not.toHaveBeenCalled();
-    expect(toastHost.querySelector(".app-toast__message")).toBeNull();
-  });
-
-  it("reports the failed target when the Gateway moves only part of the selection", async () => {
-    const { harness, landCatalogWrite } = await startGroupMove([
-      "sessions.groups.put",
-      "sessions.patch",
-      "sessions.patchMany",
-    ]);
-
-    const failure = "Session agent:main:a changed before patch. Retry.";
-    harness.patchMany.mockImplementationOnce(async (requested) => ({
-      outcomes: requested.map((target) =>
-        target.key === "agent:main:a"
-          ? { ok: false, ...target, error: { code: "INVALID_REQUEST", message: failure } }
-          : { ok: true, ...target },
-      ),
-    }));
-    harness.publish({
-      result: {
-        count: 1,
-        sessions: [{ key: "agent:main:b", sessionId: "session:agent:main:b", agentId: "main" }],
-      } as unknown as SessionsListResult,
-    });
-    landCatalogWrite();
-
-    await waitForFast(() =>
-      expect(dialog()?.querySelector("[role=alert]")?.textContent).toContain(failure),
-    );
-    expect(harness.patchMany).toHaveBeenCalledWith(targets, { category: "Projects" });
-    expect(harness.patch).not.toHaveBeenCalled();
-    expect(harness.reconcileMutation).toHaveBeenCalledOnce();
-    dialog()?.querySelector<HTMLButtonElement>('button[type="button"]')?.click();
-    await waitForClose();
-  });
+  it.each([false, true])(
+    "moves captured identities after list eviction (partial failure: %s)",
+    async (partial) => {
+      const toast = partial ? null : document.createElement("openclaw-toast-host");
+      if (toast) {
+        document.body.append(toast);
+        onTestFinished(() => toast.remove());
+        await toast.updateComplete;
+      }
+      const methods = ["sessions.groups.put", "sessions.patchMany"];
+      if (partial) {
+        methods.splice(1, 0, "sessions.patch");
+      }
+      const { harness, landCatalogWrite } = await startGroupMove(methods);
+      const failure = "Session agent:main:a changed before patch. Retry.";
+      if (partial) {
+        harness.patchMany.mockImplementationOnce(async (requested) => ({
+          outcomes: requested.map((target) =>
+            target.key === "agent:main:a"
+              ? { ok: false, ...target, error: { code: "INVALID_REQUEST", message: failure } }
+              : { ok: true, ...target },
+          ),
+        }));
+      }
+      // Projection absence is not deletion: both captured identities must reach the Gateway.
+      const visible = partial
+        ? [{ key: "agent:main:b", sessionId: "session:agent:main:b", agentId: "main" }]
+        : [];
+      harness.publish({
+        result: { count: visible.length, sessions: visible } as unknown as SessionsListResult,
+      });
+      if (!partial) {
+        expect(harness.patchMany).not.toHaveBeenCalled();
+      }
+      landCatalogWrite();
+      if (partial) {
+        await waitForFast(() =>
+          expect(dialog()?.querySelector("[role=alert]")?.textContent).toContain(failure),
+        );
+      } else {
+        // Closing proves the submit continuation completed before negative assertions.
+        await waitForClose();
+      }
+      expect(harness.patchMany).toHaveBeenCalledWith(targets, { category: "Projects" });
+      expect(harness.patch).not.toHaveBeenCalled();
+      if (partial) {
+        expect(harness.reconcileMutation).toHaveBeenCalledOnce();
+        dialog()?.querySelector<HTMLButtonElement>('button[type="button"]')?.click();
+        await waitForClose();
+      } else {
+        expect(toast!.querySelector(".app-toast__message")).toBeNull();
+      }
+    },
+  );
 });

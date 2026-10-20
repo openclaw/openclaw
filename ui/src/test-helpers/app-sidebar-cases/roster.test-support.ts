@@ -2,15 +2,11 @@ import { expect, vi } from "vitest";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { activateSessionMenuValue } from "../app-sidebar-menu.ts";
-import {
-  createGatewayHarness,
-  createSessionsHarness,
-  mountSidebar,
-  type SidebarLifecycleState,
-} from "../app-sidebar.ts";
+import * as S from "../app-sidebar.ts";
 import { createGatewayRequestMock, createTestGatewayClient } from "../gateway-client.ts";
 import { flush } from "../solid-settle.ts";
 
+type Row = GatewaySessionRow;
 export const roster: AgentsListResult = {
   defaultId: "main",
   mainKey: "main",
@@ -27,11 +23,7 @@ export const owners = [
   { type: "human", id: "profile-sam", label: "Sam" },
 ] as const;
 
-export function session(
-  agentId: string,
-  updatedAt: number,
-  extra: Partial<GatewaySessionRow> = {},
-) {
+export function session(agentId: string, updatedAt: number, extra: Partial<Row> = {}) {
   return {
     key: `agent:${agentId}:main`,
     agentId,
@@ -40,6 +32,10 @@ export function session(
     updatedAt,
     ...extra,
   } satisfies GatewaySessionRow;
+}
+
+export function patchRows(rows: Row[], key: string, patch: Partial<Row>) {
+  return rows.map((row) => (row.key === key ? Object.assign({}, row, patch) : row));
 }
 
 export async function mountRoster(
@@ -55,35 +51,25 @@ export async function mountRoster(
     rows ??
     agents.agents.flatMap((agent, index) => {
       const updatedAt = now - (index + 1) * 60_000;
-      return [
-        session(agent.id, updatedAt - 300_000, {
-          lastMessagePreview: "Preparing the project summary.",
-        }),
-        session(agent.id, updatedAt, {
-          key: `agent:${agent.id}:pinned`,
-          label: `${agent.name} project`,
+      const preview = { lastMessagePreview: "Preparing the project summary." };
+      const child = (id: string, label: string, age: number, owner: 0 | 1, extra: Partial<Row>) =>
+        session(agent.id, updatedAt - age, {
+          key: `agent:${agent.id}:${id}`,
+          label: `${agent.name} ${label}`,
           isMain: false,
+          owner: { actor: owners[owner] },
+          ...extra,
+        });
+      return [
+        session(agent.id, updatedAt - 300_000, preview),
+        child("pinned", "project", 0, 0, {
           pinned: true,
           pinnedAt: updatedAt,
-          owner: { actor: owners[0] },
           hasActiveRun: agent.id === "working" || agent.kind === "system",
-          lastMessagePreview: "Preparing the project summary.",
+          ...preview,
         }),
-        session(agent.id, updatedAt - 1_000, {
-          key: `agent:${agent.id}:recent`,
-          label: `${agent.name} notes`,
-          isMain: false,
-          owner: { actor: owners[1] },
-          unread: agent.id === "main",
-        }),
-        session(agent.id, updatedAt - 2_000, {
-          key: `agent:${agent.id}:archived`,
-          label: `${agent.name} archive`,
-          isMain: false,
-          archived: true,
-          unread: true,
-          owner: { actor: owners[0] },
-        }),
+        child("recent", "notes", 1_000, 1, { unread: agent.id === "main" }),
+        child("archived", "archive", 2_000, 0, { archived: true, unread: true }),
       ];
     });
   const result: SessionsListResult = {
@@ -115,11 +101,11 @@ export async function mountRoster(
     }
     throw new Error(`Unexpected RPC: ${method}`);
   });
-  const gatewayHarness = createGatewayHarness(createTestGatewayClient(request));
+  const gatewayHarness = S.createGatewayHarness(createTestGatewayClient(request));
   const { gateway } = gatewayHarness;
   gateway.connection.gatewayUrl = gatewayUrl;
   patchSettings({ gatewayUrl });
-  const sessions = createSessionsHarness("main", ["agent:main:main"]);
+  const sessions = S.createSessionsHarness("main", ["agent:main:main"]);
   sessions.list.mockImplementation((options) => {
     const children = options?.spawnedBy
       ? (childRows ?? result.sessions.filter((row) => row.spawnedBy === options.spawnedBy))
@@ -134,13 +120,13 @@ export async function mountRoster(
   });
   const mainRows = fixtureRows.filter((row) => row.agentId === "main");
   sessions.publish({ result: { ...result, count: mainRows.length, sessions: mainRows } });
-  const mounted = await mountSidebar(gateway, sessions.sessions, "panel", agents, approvalQueue);
+  const mounted = await S.mountSidebar(gateway, sessions.sessions, "panel", agents, approvalQueue);
   mounted.sidebar.connected = true;
   await mounted.sidebar.updateComplete;
   return { ...mounted, sessions, request, gatewayHarness, result };
 }
 
-export async function settleRoster(sidebar: SidebarLifecycleState) {
+export async function settleRoster(sidebar: S.SidebarLifecycleState) {
   if ("__vitest_browser__" in globalThis) {
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => resolve());
@@ -180,6 +166,4 @@ export async function toggleRoster(sidebar: HTMLElement, agentId = "main") {
   sidebar.querySelector<HTMLElement>(selector)?.click();
 }
 
-export async function selectFilter(sidebar: SidebarLifecycleState, value: string) {
-  await activateSessionMenuValue(sidebar, value);
-}
+export const selectFilter = activateSessionMenuValue;

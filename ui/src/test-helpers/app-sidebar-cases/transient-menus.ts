@@ -6,18 +6,23 @@ import { createGateway, createSessions, mountSidebar, TWO_AGENTS } from "../app-
 import "../../components/app-sidebar.tsx";
 
 async function mountMenus(keys = ["agent:main:main"], agents?: typeof TWO_AGENTS) {
-  return mountSidebar(
+  const mounted = await mountSidebar(
     createGateway({} as GatewayBrowserClient),
     createSessions("main", keys),
     "panel",
     agents,
   );
+  const { sidebar } = mounted;
+  const q = (selector: string) => sidebar.querySelector<HTMLElement>(selector);
+  const click = async (element: HTMLElement) => {
+    element.click();
+    await sidebar.updateComplete;
+  };
+  const remove = (menu: HTMLElement) =>
+    click(menu.querySelector<HTMLElement>('[data-value="remove"]')!);
+  return { ...mounted, q, click, remove };
 }
 type Sidebar = Awaited<ReturnType<typeof mountSidebar>>["sidebar"];
-async function clickAndSettle(sidebar: Sidebar, element: HTMLElement) {
-  element.click();
-  await sidebar.updateComplete;
-}
 async function staleHide(sidebar: Sidebar, menu: HTMLElement | null) {
   menu?.dispatchEvent(new CustomEvent("overlay-after-hide", { bubbles: true, composed: true }));
   await sidebar.updateComplete;
@@ -25,38 +30,38 @@ async function staleHide(sidebar: Sidebar, menu: HTMLElement | null) {
 
 describe("AppSidebar transient menus", () => {
   it("keeps the session filters open after a choice and closes from the trigger", async () => {
-    const { sidebar } = await mountMenus(["agent:main:main", "agent:main:task"]);
-    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-session-sort")!;
+    const { sidebar, q, click } = await mountMenus(["agent:main:main", "agent:main:task"]);
+    const trigger = q(".sidebar-session-sort")!;
 
-    await clickAndSettle(sidebar, trigger);
-    const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-session-sort-menu");
+    await click(trigger);
+    const firstMenu = q(".sidebar-session-sort-menu");
     expect(firstMenu).not.toBeNull();
     await activateSessionMenuValue(sidebar, "sort:updated");
-    expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBe(firstMenu);
-    await clickAndSettle(sidebar, trigger);
-    expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
+    expect(q(".sidebar-session-sort-menu")).toBe(firstMenu);
+    await click(trigger);
+    expect(q(".sidebar-session-sort-menu")).toBeNull();
   });
 
   it("ignores a stale agent-menu hide after opening its replacement", async () => {
-    const { sidebar } = await mountMenus(undefined, TWO_AGENTS);
-    const trigger = sidebar.querySelector<HTMLButtonElement>(".sidebar-agent-card__main")!;
+    const { sidebar, q, click } = await mountMenus(undefined, TWO_AGENTS);
+    const trigger = q(".sidebar-agent-card__main")!;
 
-    await clickAndSettle(sidebar, trigger);
-    const firstMenu = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+    await click(trigger);
+    const firstMenu = q(".sidebar-agent-menu");
     const settingsItem = firstMenu?.querySelector<HTMLElement>(
       '[data-value="command:agent-settings"]',
     );
     expect(firstMenu).not.toBeNull();
     expect(firstMenu?.closest("openclaw-menu-surface")).toBeNull();
     expect(settingsItem).not.toBeNull();
-    await clickAndSettle(sidebar, settingsItem!);
+    await click(settingsItem!);
 
-    await clickAndSettle(sidebar, trigger);
-    const replacement = sidebar.querySelector<HTMLElement>(".sidebar-agent-menu");
+    await click(trigger);
+    const replacement = q(".sidebar-agent-menu");
     expect(replacement).not.toBe(firstMenu);
 
     await staleHide(sidebar, firstMenu);
-    expect(sidebar.querySelector(".sidebar-agent-menu")).toBe(replacement);
+    expect(q(".sidebar-agent-menu")).toBe(replacement);
   });
 
   async function openPinMenu(sidebar: Sidebar, entry: string) {
@@ -75,52 +80,45 @@ describe("AppSidebar transient menus", () => {
     return menu;
   }
 
-  it("ignores a removed pin menu's stale hide after Pages recreates that shortcut", async () => {
-    const { sidebar } = await mountMenus();
-    sidebar.sidebarEntries = ["route:usage"];
-    const update = vi.fn((entries: string[]) => {
-      sidebar.sidebarEntries = entries;
-    });
-    sidebar.onUpdateSidebarEntries = update;
-    await sidebar.updateComplete;
-    const first = await openPinMenu(sidebar, "route:usage");
-    await clickAndSettle(sidebar, first.querySelector<HTMLElement>('[data-value="remove"]')!);
-    expect(sidebar.sidebarEntries).toEqual([]);
-    expect(first.isConnected).toBe(false);
-    await selectSidebarView(sidebar, "pages");
-    const page = sidebar.querySelector('.sidebar-pages [data-sidebar-entry="route:usage"]')!;
-    page
-      .closest(".sidebar-pages__entry")!
-      .querySelector<HTMLButtonElement>('[aria-label="Pin"]')!
-      .click();
-    await sidebar.updateComplete;
-    const replacement = await openPinMenu(sidebar, "route:usage");
-    expect(replacement).not.toBe(first);
-    const writes = update.mock.calls.length;
-    await staleHide(sidebar, first);
-    expect(replacement.isConnected).toBe(true);
-    expect(replacement.getAttribute("role")).toBe("menu");
-    expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
-    expect(update).toHaveBeenCalledTimes(writes);
-  });
-
-  it("keeps a second pin's menu and target independent of an earlier menu's hide", async () => {
-    const { sidebar } = await mountMenus();
-    sidebar.sidebarEntries = ["route:usage", "route:plugins"];
-    sidebar.onUpdateSidebarEntries = (entries) => {
-      sidebar.sidebarEntries = entries;
-    };
-    await sidebar.updateComplete;
-    const first = await openPinMenu(sidebar, "route:usage");
-    const replacement = await openPinMenu(sidebar, "route:plugins");
-    expect(replacement).not.toBe(first);
-    await staleHide(sidebar, first);
-    expect(replacement.getAttribute("role")).toBe("menu");
-    await clickAndSettle(sidebar, replacement.querySelector<HTMLElement>('[data-value="remove"]')!);
-    expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
-    expect(sidebar.querySelector('.sidebar-rail [data-sidebar-entry="route:plugins"]')).toBeNull();
-    expect(
-      sidebar.querySelector('.sidebar-rail [data-sidebar-entry="route:usage"]'),
-    ).not.toBeNull();
-  });
+  it.each(["recreated", "different"] as const)(
+    "keeps a %s pin menu independent of the earlier menu's stale hide",
+    async (kind) => {
+      const { sidebar, q, click, remove } = await mountMenus();
+      const recreated = kind === "recreated";
+      sidebar.sidebarEntries = recreated ? ["route:usage"] : ["route:usage", "route:plugins"];
+      const update = vi.fn((entries: string[]) => {
+        sidebar.sidebarEntries = entries;
+      });
+      sidebar.onUpdateSidebarEntries = update;
+      await sidebar.updateComplete;
+      const first = await openPinMenu(sidebar, "route:usage");
+      if (recreated) {
+        await remove(first);
+        expect(sidebar.sidebarEntries).toEqual([]);
+        expect(first.isConnected).toBe(false);
+        await selectSidebarView(sidebar, "pages");
+        const page = q('.sidebar-pages [data-sidebar-entry="route:usage"]')!;
+        await click(
+          page
+            .closest(".sidebar-pages__entry")!
+            .querySelector<HTMLButtonElement>('[aria-label="Pin"]')!,
+        );
+      }
+      const replacement = await openPinMenu(sidebar, recreated ? "route:usage" : "route:plugins");
+      expect(replacement).not.toBe(first);
+      const writes = update.mock.calls.length;
+      await staleHide(sidebar, first);
+      expect(replacement.getAttribute("role")).toBe("menu");
+      if (recreated) {
+        expect(replacement.isConnected).toBe(true);
+        expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
+        expect(update).toHaveBeenCalledTimes(writes);
+      } else {
+        await remove(replacement);
+        expect(sidebar.sidebarEntries).toEqual(["route:usage"]);
+        expect(q('.sidebar-rail [data-sidebar-entry="route:plugins"]')).toBeNull();
+        expect(q('.sidebar-rail [data-sidebar-entry="route:usage"]')).not.toBeNull();
+      }
+    },
+  );
 });

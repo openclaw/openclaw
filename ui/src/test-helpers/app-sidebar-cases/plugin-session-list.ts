@@ -1,9 +1,5 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import type {
-  ControlUiReplacement,
-  ControlUiSurfaceProps,
-  ControlUiViewContext,
-} from "../../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiReplacement } from "../../../../src/plugin-sdk/control-ui.js";
 import { SIDEBAR_SESSION_PAGE_SIZE } from "../../components/app-sidebar-session-types.ts";
 import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
 import { createControlUiPluginHost } from "../../plugins/control-ui-host.ts";
@@ -11,18 +7,19 @@ import {
   type ControlUiPluginOwner,
   ControlUiPluginRuntime,
 } from "../../plugins/control-ui-runtime.ts";
-import {
-  createContext,
-  createGateway,
-  createSessionsHarness,
-  createSessionState,
-  mountSidebarContext,
-  TWO_AGENTS,
-} from "../app-sidebar.ts";
+import * as Sidebar from "../app-sidebar.ts";
 import { createTestGatewayClient } from "../gateway-client.ts";
-import { settleRoster, toggleRoster } from "./roster.test-support.ts";
+import { patchRows, settleRoster, toggleRoster } from "./roster.test-support.ts";
 import "../../plugins/control-ui-view.solid.tsx";
 import "../../plugins/control-ui-contributions.solid.tsx";
+
+function div(parent: HTMLElement, data: Record<string, string> = {}, text = "") {
+  const element = document.createElement("div");
+  Object.assign(element.dataset, data);
+  element.textContent = text;
+  parent.append(element);
+  return element;
+}
 
 describe("AppSidebar session-list replacement", () => {
   it.each([false, true])(
@@ -31,8 +28,12 @@ describe("AppSidebar session-list replacement", () => {
       const client = createTestGatewayClient(async () => ({}));
       const initialKeys = ["agent:main:main", "agent:main:first"];
       const nextKeys = ["agent:main:main", "agent:main:next"];
-      const sessions = createSessionsHarness("main", initialKeys);
-      const context = createContext(createGateway(client), sessions.sessions, TWO_AGENTS);
+      const sessions = Sidebar.createSessionsHarness("main", initialKeys);
+      const context = Sidebar.createContext(
+        Sidebar.createGateway(client),
+        sessions.sessions,
+        Sidebar.TWO_AGENTS,
+      );
       const reportError = vi.fn();
       Object.assign(context.plugins, { reportError });
       const pluginListeners = new Set<() => void>();
@@ -74,27 +75,17 @@ describe("AppSidebar session-list replacement", () => {
         label: "Sessions",
         surface: "session-list",
         mount(container, initial) {
-          const rows = document.createElement("div");
-          rows.dataset.pluginReplacement = id;
-          container.append(rows);
-          const update = ({
-            props,
-          }: ControlUiViewContext<ControlUiSurfaceProps["session-list"]>) => {
-            rows.replaceChildren(
-              ...props.sessions.map((session) => {
-                const row = document.createElement("div");
-                row.dataset.pluginSessionKey = session.key;
-                row.textContent = session.label ?? session.key;
-                return row;
-              }),
-            );
+          const rows = div(container, { pluginReplacement: id });
+          const update = ({ props }: typeof initial) => {
+            rows.replaceChildren();
+            for (const session of props.sessions) {
+              div(rows, { pluginSessionKey: session.key }, session.label ?? session.key);
+            }
           };
           update(initial);
           let stopDefault: (() => void) | undefined;
           if (delegates) {
-            const target = document.createElement("div");
-            container.append(target);
-            stopDefault = initial.mountDefault(target);
+            stopDefault = initial.mountDefault(div(container));
           }
           return { update, dispose: () => stopDefault?.() };
         },
@@ -112,7 +103,7 @@ describe("AppSidebar session-list replacement", () => {
             }
           : undefined,
       );
-      const { sidebar } = await mountSidebarContext(context);
+      const { sidebar } = await Sidebar.mountSidebarContext(context);
       const find = (selector: string) => sidebar.querySelector(selector);
       expect(reportError).not.toHaveBeenCalled();
       const keys = () =>
@@ -142,12 +133,12 @@ describe("AppSidebar session-list replacement", () => {
       expect(keys()).toEqual(initialKeys);
       await vi.waitFor(() => expect(Boolean(find(".sidebar-agent-roster"))).toBe(delegates));
 
-      sessions.publishList(createSessionState("main", nextKeys));
+      sessions.publishList(Sidebar.createSessionState("main", nextKeys));
       await vi.waitFor(() => expect(keys()).toEqual(nextKeys));
       await toggleRoster(sidebar);
       await vi.waitFor(() => expect(find(".sidebar-agent-card__main")).not.toBeNull());
       expect(keys()).toEqual(nextKeys);
-      const wide = createSessionState("main", [
+      const wide = Sidebar.createSessionState("main", [
         "agent:main:main",
         ...Array.from({ length: SIDEBAR_SESSION_PAGE_SIZE + 3 }, (_, i) => `agent:main:work-${i}`),
       ]);
@@ -164,11 +155,7 @@ describe("AppSidebar session-list replacement", () => {
         ...wide,
         result: {
           ...wide.result!,
-          sessions: wide.result!.sessions.map((row) =>
-            row.key === last.key
-              ? Object.assign({}, row, { label: "Latest replacement row" })
-              : row,
-          ),
+          sessions: patchRows(wide.result!.sessions, last.key, { label: "Latest replacement row" }),
         },
       });
       await settleRoster(sidebar);
