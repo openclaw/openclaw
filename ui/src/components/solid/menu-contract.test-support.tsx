@@ -7,7 +7,6 @@ import { createMenuControls, type MenuControls, type MenuEntry, type MenuProps }
 
 type DataAttributes = { [key: `data-${string}`]: string };
 type InputProps = JSX.InputHTMLAttributes<HTMLInputElement> & DataAttributes;
-type ButtonProps = JSX.ButtonHTMLAttributes<HTMLButtonElement> & DataAttributes;
 export function update(change: () => void) {
   change();
   flush();
@@ -36,13 +35,6 @@ export function mountControls(build: (controls: MenuControls) => Partial<MenuPro
 }
 export function controlInput(controls: MenuControls, label: string, props: InputProps = {}) {
   return <input ref={controls.ref()} aria-label={label} {...props} />;
-}
-export function controlButton(controls: MenuControls, label: string, props: ButtonProps = {}) {
-  return (
-    <button ref={controls.ref()} data-form-control="" {...props}>
-      {label}
-    </button>
-  );
 }
 export function menuContent(id: string, content: JSX.Element): MenuEntry {
   return { kind: "content", id, content };

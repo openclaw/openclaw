@@ -1,8 +1,6 @@
 import { createRouter, definePage, type PageDefinition, type RouteMatch } from "@openclaw/uirouter";
 import type { JSX } from "@solidjs/web";
-import { onTestFinished, vi } from "vitest";
 import type { SolidRouteProps } from "../app-route-types.ts";
-import { registerMcpAppUnmountTarget } from "../components/mcp-app-unmount.ts";
 
 export type OutletModule<Data> = {
   renderSolid: (props: SolidRouteProps<Data>) => JSX.Element;
@@ -47,18 +45,4 @@ export function routeFixtures<Id extends string, Context, Data extends object>()
       routers.clear();
     },
   };
-}
-
-export function McpView(props: { teardown: () => Promise<void> }) {
-  return (
-    <mcp-app-view
-      ref={(element) => {
-        const target = Object.assign(element, {
-          restartAfterTeardown: vi.fn(),
-          teardown: props.teardown,
-        });
-        onTestFinished(registerMcpAppUnmountTarget(target));
-      }}
-    />
-  );
 }
