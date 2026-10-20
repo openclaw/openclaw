@@ -58,18 +58,6 @@ function holdState(role: GatewayLockRole, update: boolean, pid = process.ppid) {
   };
 }
 
-/** The published driver recorded this update's rehearsal Doctor before activation. */
-function recordRehearsalDoctor(durationMs: number) {
-  const { runId } = createUpdateRun({ trigger: "cli" });
-  recordUpdateRunStep(runId, {
-    step: "candidate-doctor",
-    status: "completed",
-    startedAtMs: 1_000,
-    endedAtMs: 1_000 + durationMs,
-  });
-  closeOpenClawStateDatabaseForTest();
-}
-
 /** `startMs` is how long this Doctor process ran before entering maintenance. */
 function startDoctor(startMs = 0) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
@@ -78,21 +66,18 @@ function startDoctor(startMs = 0) {
   const firstLog = createDeferredCore();
   const log = vi.fn((..._args: unknown[]) => firstLog.resolve());
   let settled = false;
-  // Published drivers can run the activation Doctor without an update authority callback.
   const result = beginDoctorMaintenance({
     options: { repair: true, nonInteractive: true },
     root: null,
     runtime: { log, error: vi.fn(), exit: vi.fn() },
-  }).then(
-    (maintenance) => {
+  })
+    .then(
+      (maintenance) => ({ maintenance }),
+      (error: unknown) => ({ error }),
+    )
+    .finally(() => {
       settled = true;
-      return { maintenance };
-    },
-    (error: unknown) => {
-      settled = true;
-      return { error };
-    },
-  );
+    });
   const advanceTo = async (ms: number) => {
     clock.ms = ms;
     await vi.advanceTimersToNextTimerAsync();
@@ -128,46 +113,46 @@ it("waits for a transient OpenClaw command to release state before update Doctor
   await ("maintenance" in completed ? completed.maintenance?.finish({}) : undefined);
 });
 
-it("fails update Doctor admission at the wait deadline, naming the holder and next step", async () => {
-  using state = holdState("agent-embedded", true);
-  // Time Doctor spent before maintenance comes out of the same step allowance.
-  const doctor = state.startDoctor(100_000);
-  await doctor.firstWait;
-  expect(doctor.log).toHaveBeenCalledWith(expect.stringContaining("Waiting up to 1100 s"));
-  await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1);
-  expect(doctor.isSettled()).toBe(false);
-  await doctor.advanceTo(FALLBACK_DEADLINE_MS);
-  const completed = await doctor.result;
-  const error = "error" in completed ? completed.error : undefined;
-  expect(error).toBeInstanceOf(DoctorMaintenanceRefusalError);
-  // Contention stays a deferred refusal: no data is at risk.
-  expect((error as DoctorMaintenanceRefusalError).refusal).toEqual({
-    kind: "deferred",
-    reason: "coordinator-contention",
-  });
-  const message = (error as Error).message;
-  expect(message).toContain("Doctor could not enter maintenance.");
-  expect(message).toContain(
-    `Doctor waited 1100 s for the OpenClaw agent-embedded process ${process.ppid} to finish;`,
-  );
-  expect(message).toContain(`The holder ${process.ppid} is alive on this host, stop it first.`);
-  expect(message).toContain("then run openclaw doctor --fix from an independent shell.");
-});
-
-it("keeps twice this update's rehearsal Doctor time for Doctor's own work", async () => {
-  using state = holdState("agent-embedded", true);
-  // A slow host: 30 min less 2 x 400 s leaves 1000 s for waiting.
-  recordRehearsalDoctor(400_000);
-  const doctor = state.startDoctor();
-  await doctor.firstWait;
-  expect(doctor.log).toHaveBeenCalledWith(expect.stringContaining("Waiting up to 1000 s"));
-  await doctor.advanceTo(999_999);
-  expect(doctor.isSettled()).toBe(false);
-  await doctor.advanceTo(1_000_000);
-  expect(await doctor.result).toMatchObject({
-    error: expect.objectContaining({ message: expect.stringContaining("Doctor waited 1000 s") }),
-  });
-});
+it.each([
+  ["elapsed startup time", 100_000, 0, FALLBACK_DEADLINE_MS, 1100],
+  ["twice the rehearsal reserved for Doctor", 0, 400_000, 1_000_000, 1000],
+] as const)(
+  "enforces the wait deadline with %s",
+  async (_name, startMs, rehearsalMs, deadline, seconds) => {
+    using state = holdState("agent-embedded", true);
+    if (rehearsalMs) {
+      const { runId } = createUpdateRun({ trigger: "cli" });
+      recordUpdateRunStep(runId, {
+        step: "candidate-doctor",
+        status: "completed",
+        startedAtMs: 1_000,
+        endedAtMs: 1_000 + rehearsalMs,
+      });
+      closeOpenClawStateDatabaseForTest();
+    }
+    const doctor = state.startDoctor(startMs);
+    await doctor.firstWait;
+    expect(doctor.log).toHaveBeenCalledWith(expect.stringContaining(`Waiting up to ${seconds} s`));
+    await doctor.advanceTo(deadline - 1);
+    expect(doctor.isSettled()).toBe(false);
+    await doctor.advanceTo(deadline);
+    const completed = await doctor.result;
+    const error = "error" in completed ? completed.error : undefined;
+    expect(error).toBeInstanceOf(DoctorMaintenanceRefusalError);
+    // Contention stays a deferred refusal: no data is at risk.
+    expect((error as DoctorMaintenanceRefusalError).refusal).toEqual({
+      kind: "deferred",
+      reason: "coordinator-contention",
+    });
+    const message = (error as Error).message;
+    expect(message).toContain("Doctor could not enter maintenance.");
+    expect(message).toContain(
+      `Doctor waited ${seconds} s for the OpenClaw agent-embedded process ${process.ppid} to finish;`,
+    );
+    expect(message).toContain(`The holder ${process.ppid} is alive on this host, stop it first.`);
+    expect(message).toContain("then run openclaw doctor --fix from an independent shell.");
+  },
+);
 
 it.each([
   ["manual doctor --fix with a transient holder", "agent-embedded", false, process.ppid],
@@ -179,9 +164,7 @@ it.each([
   const doctor = state.startDoctor();
   const completed = await doctor.result;
   expect(completed).toMatchObject({
-    error: expect.objectContaining({
-      message: expect.stringContaining("OpenClaw state database is busy at"),
-    }),
+    error: { message: expect.stringContaining("OpenClaw state database is busy at") },
   });
   expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));
 });

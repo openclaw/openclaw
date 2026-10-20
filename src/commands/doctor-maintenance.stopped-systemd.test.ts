@@ -7,6 +7,7 @@ import * as systemdExec from "../daemon/systemd-exec.js";
 import { buildSystemdUnit } from "../daemon/systemd-unit.js";
 import { runDoctorHealthFlow } from "../flows/doctor-health.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { createLegacyAuditLedger } from "../infra/state-migrations.legacy-audit.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const { mocks } = await import("../flows/doctor-health.test-support.js");
@@ -19,32 +20,17 @@ it.each(["current-policy", "short-timeout", "removed-system-unit"] as const)(
   "migrates legacy audit state with an inactive Gateway: %s",
   async (scenario) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const databasePath = state.statePath("state", "openclaw.sqlite");
-      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+      const databasePath = await createLegacyAuditLedger(state.stateDir);
       const { DatabaseSync } = requireNodeSqlite();
       // Historical v1 schema: source_id was unique and agent/run IDs were required.
       const legacy = new DatabaseSync(databasePath);
       legacy.exec(`
-        PRAGMA user_version = 1;
         CREATE TABLE schema_meta (
           meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL,
           schema_version INTEGER NOT NULL, agent_id TEXT, app_version TEXT,
           created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
         );
         INSERT INTO schema_meta VALUES ('primary', 'global', 1, NULL, NULL, 10, 10);
-        CREATE TABLE audit_events (
-          sequence INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL UNIQUE,
-          source_id TEXT NOT NULL UNIQUE, source_sequence INTEGER NOT NULL,
-          occurred_at INTEGER NOT NULL, kind TEXT NOT NULL, action TEXT NOT NULL,
-          status TEXT NOT NULL, error_code TEXT, actor_type TEXT NOT NULL,
-          actor_id TEXT NOT NULL, agent_id TEXT NOT NULL, session_key TEXT,
-          session_id TEXT, run_id TEXT NOT NULL, tool_call_id TEXT, tool_name TEXT
-        );
-        INSERT INTO audit_events
-          (event_id, source_id, source_sequence, occurred_at, kind, action, status,
-           actor_type, actor_id, agent_id, run_id)
-          VALUES ('retained-event', 'source', 1, 100, 'agent_run', 'started', 'ok',
-                  'agent', 'main', 'main', 'old-run');
       `);
       legacy.close();
       const removed = scenario === "removed-system-unit";
@@ -87,9 +73,8 @@ it.each(["current-policy", "short-timeout", "removed-system-unit"] as const)(
       mocks.config.mockReturnValue({});
       mocks.outro.mockClear();
       mocks.packageRoot.mockReturnValue(process.cwd());
-      mocks.runContributions.mockReset();
       // Schema preparation belongs to beginDoctorMaintenance and runs before contributions.
-      mocks.runContributions.mockImplementation(async () => {});
+      mocks.runContributions.mockReset().mockResolvedValue(undefined);
       const exited = {
         code: 0,
         stderr: "",
@@ -109,7 +94,7 @@ it.each(["current-policy", "short-timeout", "removed-system-unit"] as const)(
         expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
         const assertEvent = (database: InstanceType<typeof DatabaseSync>) => {
           expect(database.prepare("SELECT event_id FROM audit_events").all()).toEqual([
-            { event_id: "retained-event" },
+            { event_id: "event-before-v2" },
           ]);
         };
         {

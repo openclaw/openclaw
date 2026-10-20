@@ -19,10 +19,8 @@ it.skipIf(process.platform === "win32").for([
   async ([signal, code], { signal: testSignal }) => {
     const home = directories.make("doctor-pre-admission-interruption-");
     // Keep command and signal owners real; interrupt the synthetic database inspection.
-    const overrides = [
-      [
-        "/commands/doctor-database-preflight.js",
-        `import { once } from "node:events";
+    const overrides = {
+      "/commands/doctor-database-preflight.js": `import { once } from "node:events";
       import { MessageChannel } from "node:worker_threads";
       export async function prepareDoctorDatabasePreflight() {
         // Signal listeners alone do not keep Node alive until OS signal delivery.
@@ -43,19 +41,15 @@ it.skipIf(process.platform === "win32").for([
         console.log("preflight settled");
         return { incompatible: [], indeterminate: [] };
       }`,
-      ],
-      [
-        "/commands/doctor-maintenance.js",
-        `export async function beginDoctorMaintenance() {
+      "/commands/doctor-maintenance.js": `export async function beginDoctorMaintenance() {
         throw new Error("maintenance must not start after interruption");
       }`,
-      ],
-    ];
+    };
     const child = spawn(
       resolveTestNodeExecPath(),
       createNodeEvalArgs(`
       import { registerHooks } from "node:module";
-      const overrides = new Map(${JSON.stringify(overrides)});
+      const overrides = new Map(Object.entries(${JSON.stringify(overrides)}));
       registerHooks({ resolve(specifier, context, nextResolve) {
         const resolved = nextResolve(specifier, context);
         if (specifier.includes("?original")) return resolved;

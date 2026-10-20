@@ -21,12 +21,10 @@ import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js"
 import { setupDoctorAdmissionFixture } from "./doctor-maintenance.admission.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 
-const service = vi.hoisted(() => ({
-  prepare: vi.fn<typeof maybeStopManagedServiceBeforeMutableUpdate>(),
-}));
+const prepareService = vi.hoisted(() => vi.fn<typeof maybeStopManagedServiceBeforeMutableUpdate>());
 vi.mock("../cli/update-cli/update-command-service-maintenance.js", async (original) => ({
   ...(await original<typeof import("../cli/update-cli/update-command-service-maintenance.js")>()),
-  maybeStopManagedServiceBeforeMutableUpdate: service.prepare,
+  maybeStopManagedServiceBeforeMutableUpdate: prepareService,
 }));
 vi.mock("../config/paths.js", async (original) => ({
   ...(await original<typeof import("../config/paths.js")>()),
@@ -58,12 +56,12 @@ it.each([true, false])(
     vi.stubEnv(UPDATE_RUN_ID_ENV, run.runId);
     const install = path.join(env.OPENCLAW_STATE_DIR, "install");
     fs.mkdirSync(install);
-    const observe = snapshots.readSqliteSourceContentVersionSync;
     const hashes = vi.spyOn(snapshots, "readSqliteSourceContentVersionSync");
     const pluginDirectory = path.join(env.OPENCLAW_STATE_DIR, "plugin-data");
     fs.mkdirSync(pluginDirectory);
+    const pluginPath = (index: number) => path.join(pluginDirectory, `${index}.txt`);
     for (let index = 0; index < 32; index++) {
-      fs.writeFileSync(path.join(pluginDirectory, `${index}.txt`), `plugin payload ${index}`);
+      fs.writeFileSync(pluginPath(index), `plugin payload ${index}`);
     }
     // The plugin supplies its declared backup roots; traversal and admission stay real.
     vi.spyOn(pluginResources, "preparePluginDoctorMigrationBackupResources").mockResolvedValue({
@@ -74,7 +72,7 @@ it.each([true, false])(
     });
     let gateway: Awaited<ReturnType<typeof acquireGatewayLock>> | undefined;
     let maintenance: Awaited<ReturnType<typeof beginDoctorMaintenance>>;
-    service.prepare.mockImplementation(async (params) => {
+    prepareService.mockImplementation(async (params) => {
       const inspected = {
         stopped: false,
         inspected: true,
@@ -113,7 +111,6 @@ it.each([true, false])(
           port: 1,
           allowInTests: true,
         });
-        expect(gateway).toBeDefined();
         maintenance = await beginDoctorMaintenance({
           root: install,
           options: { repair: true, nonInteractive: true },
@@ -125,38 +122,33 @@ it.each([true, false])(
               expect(isOpenClawStateDatabaseOpen(database)).toBe(false);
               const scope = getOpenClawDatabaseMaintenanceScope()!;
               hashes.mockClear();
-              hashes.mockImplementation((pathname) => {
-                expect(hashes.mock.calls.length).toBeLessThanOrEqual(2);
-                return observe(pathname);
-              });
-              const capture = await captureUpdateRecoveryBaseline({
+              const { ref } = await captureUpdateRecoveryBaseline({
                 runId: "doctor-plugin-capture",
                 installRoot: install,
                 env,
                 drivers: [],
                 assertCurrent: scope.assertAdmission,
                 acquisition: { mode: "maintenance-owner" },
-              }).finally(() => hashes.mockImplementation(observe));
+              });
               expect(hashes.mock.calls.length).toBeLessThanOrEqual(2);
               const manifest = parseUpdateRecoveryBackupManifest(
-                fs.readFileSync(capture.ref.manifestPath, "utf8"),
+                fs.readFileSync(ref.manifestPath, "utf8"),
               );
               for (let index = 0; index < 32; index++) {
                 const captured = manifest.entries.find(
-                  (entry) => entry.sourcePath === path.join(pluginDirectory, `${index}.txt`),
+                  (entry) => entry.sourcePath === pluginPath(index),
                 );
                 if (captured?.kind !== "file") {
                   throw new Error(`Missing captured plugin file ${index}`);
                 }
                 expect(
-                  fs.readFileSync(path.join(capture.ref.directory, captured.archivePath), "utf8"),
+                  fs.readFileSync(path.join(ref.directory, captured.archivePath), "utf8"),
                 ).toBe(`plugin payload ${index}`);
               }
             }
             expect(family()).toEqual(original);
           },
         });
-        expect(maintenance).toBeDefined();
         hashes.mockClear();
         maintenance!.run(() => listUpdateRuns({}, { env }, openDoctorStateSchemaReadAdmission));
         maintenance!.run(() => listUpdateRuns({}, { env }, openDoctorStateSchemaReadAdmission));
