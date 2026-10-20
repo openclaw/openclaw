@@ -17,7 +17,7 @@ afterEach(() => vi.restoreAllMocks());
 it("rebuilds only changed automation bindings and preserves complete unrelated rows", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = { agents: { entries: { main: {} } } };
-    const keys = ["agent:main:bound", "agent:main:next", "agent:main:parent", "agent:main:other"];
+    const keys = ["bound", "next", "parent", "other"].map((name) => `agent:main:${name}`);
     for (const [index, sessionKey] of keys.entries()) {
       replaceSessionEntrySync(
         { agentId: "main", sessionKey },

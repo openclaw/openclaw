@@ -3,6 +3,7 @@ import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
@@ -11,6 +12,8 @@ import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions, prepareSessionRowSelection } from "./session-utils-list.js";
 
 const weak = (value: object) => new WeakRef(value);
+const writeEntry = (sessionKey: string, entry: SessionEntry) =>
+  replaceSessionEntrySync({ agentId: "main", sessionKey }, entry);
 async function collect() {
   // End the WeakRef creation job; dereferencing before GC would keep targets alive.
   await nextTurn();
@@ -26,15 +29,12 @@ it("collects superseded resident rows and their materializations after metadata 
     setRuntimeConfigSnapshot(cfg);
     const keys = Array.from({ length: 4 }, (_, index) => `agent:main:retention-${index}`);
     const write = (key: string, revision: number) =>
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: key },
-        {
-          sessionId: key,
-          updatedAt: revision + 1,
-          label: `Revision ${revision}`,
-          lastRunError: `${key}: ${"synthetic error ".repeat(2_048)}`,
-        },
-      );
+      writeEntry(key, {
+        sessionId: key,
+        updatedAt: revision + 1,
+        label: `Revision ${revision}`,
+        lastRunError: `${key}: ${"synthetic error ".repeat(2_048)}`,
+      });
     for (const key of keys) {
       write(key, 0);
     }
@@ -119,15 +119,9 @@ it("does not retain a superseded child entry through a held parent display row",
     setRuntimeConfigSnapshot(cfg);
     const parent = "agent:main:compact-parent";
     const child = "agent:main:compact-child";
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: parent },
-      { sessionId: "compact-parent", updatedAt: 1 },
-    );
+    writeEntry(parent, { sessionId: "compact-parent", updatedAt: 1 });
     const writeChild = (updatedAt: number) =>
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: child },
-        { sessionId: "compact-child", updatedAt, parentSessionKey: parent },
-      );
+      writeEntry(child, { sessionId: "compact-child", updatedAt, parentSessionKey: parent });
     writeChild(1);
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });

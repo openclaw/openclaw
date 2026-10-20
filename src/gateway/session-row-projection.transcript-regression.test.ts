@@ -70,7 +70,6 @@ it("serves describe during a 2,048-session drain without transcript reads in row
     await nextTurn();
     const projection = await initializing;
     bindSessionRowProjection(context, () => projection);
-    /** Resolves with the dirty rows left at the reply and the rows materialized meanwhile. */
     const describe = async (id: string, includeDerivedTitles?: boolean) => {
       let remainingAtResponse = 0;
       const respond = vi.fn().mockImplementation(() => {
@@ -95,22 +94,17 @@ it("serves describe during a 2,048-session drain without transcript reads in row
       expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
         session: expect.objectContaining({ key: "agent:main:legacy-2047" }),
       });
-      return { remainingAtResponse, materializedRows: describeMaterializations };
+      // Keyed replies must precede the bulk drain and do only bounded materialization work.
+      expect(remainingAtResponse).toBeGreaterThan(0);
+      expect(describeMaterializations).toBeLessThanOrEqual(MAX_SESSION_ROW_FACTS_KEYS + 1);
     };
     try {
-      const underDrain = await describe("under-drain", true);
+      await describe("under-drain", true);
       await projection.ensureMaterialized();
       expect(indexBuilds).toHaveBeenCalledTimes(1);
       sessionChanges.emit({ all: true, scope: "config" });
-      const dirtyDrain = await describe("dirty-drain");
+      await describe("dirty-drain");
       expect(materializationReads).toBe(0);
-      // A response must not depend on completion of unrelated resident rows.
-      expect(underDrain.remainingAtResponse).toBeGreaterThan(0);
-      expect(dirtyDrain.remainingAtResponse).toBeGreaterThan(0);
-      // A keyed read materializes its own exact facts and at most the bulk batch
-      // already in flight; the drain parks behind the retained exact preparation.
-      expect(underDrain.materializedRows).toBeLessThanOrEqual(MAX_SESSION_ROW_FACTS_KEYS + 1);
-      expect(dirtyDrain.materializedRows).toBeLessThanOrEqual(MAX_SESSION_ROW_FACTS_KEYS + 1);
     } finally {
       projection.dispose();
     }

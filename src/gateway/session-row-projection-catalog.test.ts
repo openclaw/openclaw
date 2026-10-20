@@ -32,6 +32,10 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     onInvalidated: () => catalog.invalidate(),
     onRefreshed: refreshed,
   });
+  const publish = (event: Parameters<typeof notifyPreparedModelRuntimePublication>[0]) => {
+    notifyPreparedModelRuntimePublication(event);
+    return catalog.refresh();
+  };
   const retained = () => {
     expect(catalog.current).toBe(original);
     expect(refreshed).not.toHaveBeenCalled();
@@ -48,8 +52,7 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     original = catalog.current;
     refreshed.mockClear();
     read.mockClear();
-    notifyPreparedModelRuntimePublication({ phase: "catalog-status", modelFactsChanged: false });
-    await catalog.refresh();
+    await publish({ phase: "catalog-status", modelFactsChanged: false });
     retained();
     const first = createDeferredCore();
     const reading = createDeferredCore<typeof next>();
@@ -70,8 +73,7 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     retained();
 
     // Provider publication does not finish the pending runtime replacement.
-    notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
-    await catalog.refresh();
+    await publish({ phase: "catalog-published" });
     expect(catalog.current).toBe(original);
     const successor = createDeferredCore();
     notifyPreparedModelRuntimePublication({ phase: "invalidated", replacement: successor.promise });
@@ -83,8 +85,7 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     next = view(8_192);
     successor.resolve();
     await successor.promise;
-    notifyPreparedModelRuntimePublication({ phase: "published" });
-    await catalog.refresh();
+    await publish({ phase: "published" });
     adopted(new Set());
 
     // A scoped auth refresh can finish without a global publication.
@@ -106,8 +107,7 @@ it("retains completed catalog facts during runtime replacement and adopts comple
     adopted(undefined);
 
     next = onlyOther();
-    notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
-    await catalog.refresh();
+    await publish({ phase: "catalog-published" });
     adopted(undefined);
 
     const replacementRegistry = createEmptyPluginRegistry();
@@ -119,8 +119,7 @@ it("retains completed catalog facts during runtime replacement and adopts comple
           metadataSnapshot: nextMetadata,
         }),
       );
-      notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
-      await catalog.refresh();
+      await publish({ phase: "catalog-published" });
       adopted(new Set());
     }
     const harnessMetadata = createPluginMetadataSnapshotFixture({
@@ -143,8 +142,7 @@ it("retains completed catalog facts during runtime replacement and adopts comple
           config,
         }),
       );
-      notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
-      await catalog.refresh();
+      await publish({ phase: "catalog-published" });
       // Config still controls an unloaded harness even with identical index and registrations.
       expect(refreshed).toHaveBeenLastCalledWith(new Set(["other"]));
     }

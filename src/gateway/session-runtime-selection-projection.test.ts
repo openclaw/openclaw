@@ -44,17 +44,14 @@ it.each([
           },
         };
         setRuntimeConfigSnapshot(cfg);
-        const modelLocked = ["locked-harness", "locked-override", "acp-locked-harness"].includes(
-          kind,
-        );
+        const acp = kind === "acp" || kind === "acp-locked-harness";
+        const modelLocked = locked && kind !== "acp";
         const entry: SessionEntry = {
           sessionId: "current-session",
           lifecycleRevision: "current-revision",
           updatedAt: 1,
           ...(modelLocked ? { modelSelectionLocked: true } : {}),
-          ...(["locked-harness", "historical-harness", "acp-locked-harness"].includes(kind)
-            ? { agentHarnessId: "codex" }
-            : {}),
+          ...(kind.includes("harness") ? { agentHarnessId: "codex" } : {}),
           ...(kind === "runtime-pin" || kind === "locked-override"
             ? { agentRuntimeOverride: "codex" }
             : {}),
@@ -62,7 +59,7 @@ it.each([
         };
         const scope = { agentId: "main", sessionKey: key, env: state.env };
         await upsertSessionEntryCore(scope, entry);
-        if (kind === "acp" || kind === "acp-locked-harness") {
+        if (acp) {
           await upsertAcpSessionMeta({
             cfg,
             agentId: "main",
@@ -96,8 +93,11 @@ it.each([
           store: { [key]: entry },
           lightweightListRow: true,
         });
-        expect(row.runtimeSelectionLocked).toBe(locked);
-        expect(row.modelSelectionLocked).toBe(modelLocked ? true : undefined);
+        expect(row).toMatchObject({
+          runtimeSelectionLocked: locked,
+          modelSelectionLocked: modelLocked ? true : undefined,
+          thinkingLevel: "high",
+        });
         if (kind === "runtime-pin") {
           expect(row.agentRuntime?.source).toBe("session-key");
         }
@@ -119,21 +119,19 @@ it.each([
           canonicalKey: key,
           targetAgentId: "main",
         });
-        expect(patched.resolved?.runtimeSelectionLocked).toBe(locked);
-        const expectedRuntime =
-          kind === "locked-harness" || kind === "locked-override"
-            ? { id: "codex", source: "session" }
-            : kind === "acp-locked-harness"
-              ? { id: "acpx", source: "session-key" }
-              : kind === "historical-harness"
-                ? { id: "openclaw", source: "model" }
-                : undefined;
+        expect(patched.resolved).toMatchObject({
+          runtimeSelectionLocked: locked,
+          thinkingLevel: "high",
+        });
+        const expectedRuntime = modelLocked
+          ? { id: acp ? "acpx" : "codex", source: acp ? "session-key" : "session" }
+          : kind === "historical-harness"
+            ? { id: "openclaw", source: "model" }
+            : undefined;
         if (expectedRuntime) {
           expect(row.agentRuntime).toMatchObject(expectedRuntime);
           expect(patched.resolved?.agentRuntime).toEqual(expectedRuntime);
         }
-        expect(row.thinkingLevel).toBe("high");
-        expect(patched.resolved?.thinkingLevel).toBe("high");
         expect(buildGatewaySessionSnapshot({ sessionRow: row }).runtimeSelectionLocked).toBe(
           locked,
         );
