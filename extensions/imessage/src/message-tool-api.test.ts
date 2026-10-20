@@ -1,4 +1,3 @@
-// Imessage tests cover message tool api plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,20 +9,26 @@ import {
 } from "./private-api-status.js";
 import { resolveIMessageRemoteHost } from "./remote-host.js";
 
-function expireCachedPrivateApiStatus(): void {
-  setCachedIMessagePrivateApiStatus(
-    "imsg",
-    { available: false, v2Ready: false, selectors: {}, rpcMethods: [] },
-    1,
-  );
-  getCachedIMessagePrivateApiStatus("imsg");
+const unavailable = { available: false, v2Ready: false, selectors: {}, rpcMethods: [] };
+const available = { ...unavailable, available: true, v2Ready: true };
+const pollSelectors = { pollPayloadMessage: true, pollVoteMessage: true };
+function cacheStatus(overrides: Partial<Parameters<typeof setCachedIMessagePrivateApiStatus>[1]>) {
+  setCachedIMessagePrivateApiStatus("imsg", { ...available, ...overrides });
+}
+function discover(options: Partial<Parameters<typeof describeMessageTool>[0]> = {}) {
+  return describeMessageTool({
+    cfg: { channels: { imessage: { cliPath: "imsg" } } },
+    currentChannelId: "chat_id:1",
+    ...options,
+  });
 }
 
 describe("iMessage message-tool artifact", () => {
   const tempDirs: string[] = [];
 
   beforeEach(() => {
-    expireCachedPrivateApiStatus();
+    setCachedIMessagePrivateApiStatus("imsg", unavailable, 1);
+    getCachedIMessagePrivateApiStatus("imsg");
   });
 
   afterEach(async () => {
@@ -73,47 +78,21 @@ describe("iMessage message-tool artifact", () => {
   ] as const)(
     "discovers supported actions for a $chatType numeric current chat",
     ({ chatType, expectedActions }) => {
-      setCachedIMessagePrivateApiStatus("imsg", {
-        available: true,
-        v2Ready: true,
-        selectors: {
-          editMessage: true,
-          retractMessagePart: true,
-        },
-        rpcMethods: [],
-      });
+      cacheStatus({ selectors: { editMessage: true, retractMessagePart: true } });
 
-      const discovery = describeMessageTool({
-        cfg: {
-          channels: {
-            imessage: {
-              cliPath: "imsg",
-              actions: {
-                edit: false,
-              },
-            },
-          },
-        } as never,
-        chatType,
-        currentChannelId: "chat_id:1",
-      });
-
-      expect(discovery?.actions).toStrictEqual(expectedActions);
+      expect(
+        discover({
+          chatType,
+          cfg: { channels: { imessage: { cliPath: "imsg", actions: { edit: false } } } },
+        })?.actions,
+      ).toStrictEqual(expectedActions);
     },
   );
 
   it("offers poll but hides poll-vote on imsg builds without the poll.vote rpc", () => {
-    setCachedIMessagePrivateApiStatus("imsg", {
-      available: true,
-      v2Ready: true,
-      selectors: { pollPayloadMessage: true, pollVoteMessage: true },
-      rpcMethods: [],
-    });
+    cacheStatus({ selectors: pollSelectors });
 
-    const discovery = describeMessageTool({
-      cfg: { channels: { imessage: { cliPath: "imsg" } } } as never,
-      currentChannelId: "chat_id:1",
-    });
+    const discovery = discover();
 
     expect(discovery?.actions).toContain("poll");
     expect(discovery?.actions).not.toContain("poll-vote");
@@ -121,41 +100,19 @@ describe("iMessage message-tool artifact", () => {
   });
 
   it("offers poll-vote once imsg advertises the poll.vote rpc", () => {
-    setCachedIMessagePrivateApiStatus("imsg", {
-      available: true,
-      v2Ready: true,
-      selectors: { pollPayloadMessage: true, pollVoteMessage: true },
+    cacheStatus({
+      selectors: pollSelectors,
       rpcMethods: ["send", "poll.send", "poll.vote", "messages.poll.vote"],
     });
 
-    const discovery = describeMessageTool({
-      cfg: { channels: { imessage: { cliPath: "imsg" } } } as never,
-      currentChannelId: "chat_id:1",
-    });
+    const discovery = discover();
 
     expect(discovery?.actions).toContain("poll");
     expect(discovery?.actions).toContain("poll-vote");
   });
 
   it("hides private actions when cached bridge status is unavailable", () => {
-    setCachedIMessagePrivateApiStatus("imsg", {
-      available: false,
-      v2Ready: false,
-      selectors: {},
-      rpcMethods: [],
-    });
-
-    const discovery = describeMessageTool({
-      cfg: {
-        channels: {
-          imessage: {
-            cliPath: "imsg",
-          },
-        },
-      } as never,
-      currentChannelId: "chat_id:1",
-    });
-
-    expect(discovery?.actions).toStrictEqual([]);
+    setCachedIMessagePrivateApiStatus("imsg", unavailable);
+    expect(discover()?.actions).toStrictEqual([]);
   });
 });

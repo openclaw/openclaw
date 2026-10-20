@@ -22,6 +22,20 @@ vi.mock("openclaw/plugin-sdk/run-command", () => ({
 }));
 
 const { installIMessageCli } = await import("./install-imsg.js");
+const install = (upgrade?: boolean) =>
+  installIMessageCli(createRuntimeSpies(), upgrade ? { upgrade } : undefined);
+
+async function writeCli(cliPath: string) {
+  await fs.mkdir(path.dirname(cliPath), { recursive: true });
+  await fs.writeFile(cliPath, "");
+}
+
+function brewCommand(step: number, args: string[], timeoutMs: number) {
+  expect(runPluginCommandWithTimeoutMock).toHaveBeenNthCalledWith(step, {
+    argv: ["/opt/homebrew/bin/brew", ...args],
+    timeoutMs,
+  });
+}
 
 describe("installIMessageCli", () => {
   const originalPlatform = process.platform;
@@ -48,20 +62,16 @@ describe("installIMessageCli", () => {
 
   it("installs imsg through Homebrew on macOS", async () => {
     await withTempDir("openclaw-imsg-brew-", async (brewPrefix) => {
-      await fs.mkdir(path.join(brewPrefix, "bin"), { recursive: true });
-      await fs.writeFile(path.join(brewPrefix, "bin", "imsg"), "");
+      await writeCli(path.join(brewPrefix, "bin", "imsg"));
       mockCommandOutputs("", `${brewPrefix}\n`);
 
-      const result = await installIMessageCli(createRuntimeSpies());
+      const result = await install();
 
       expect(result).toEqual({
         ok: true,
         cliPath: path.join(brewPrefix, "bin", "imsg"),
       });
-      expect(runPluginCommandWithTimeoutMock).toHaveBeenNthCalledWith(1, {
-        argv: ["/opt/homebrew/bin/brew", "install", "steipete/tap/imsg"],
-        timeoutMs: 15 * 60_000,
-      });
+      brewCommand(1, ["install", "steipete/tap/imsg"], 15 * 60_000);
     });
   });
 
@@ -70,9 +80,8 @@ describe("installIMessageCli", () => {
       const cellar = path.join(brewPrefix, "Cellar");
       const formulaCliPath = path.join(cellar, "imsg", "0.13.1", "bin", "imsg");
       const cliPath = path.join(brewPrefix, "bin", "imsg");
-      await fs.mkdir(path.dirname(formulaCliPath), { recursive: true });
+      await writeCli(formulaCliPath);
       await fs.mkdir(path.dirname(cliPath), { recursive: true });
-      await fs.writeFile(formulaCliPath, "");
       await fs.symlink(formulaCliPath, cliPath);
       mockCommandOutputs(
         "steipete/tap/imsg\n",
@@ -83,22 +92,14 @@ describe("installIMessageCli", () => {
         `${brewPrefix}\n`,
       );
 
-      const result = await installIMessageCli(createRuntimeSpies(), {
-        upgrade: true,
-      });
+      const result = await install(true);
 
       expect(result).toEqual({
         ok: true,
         cliPath,
       });
-      expect(runPluginCommandWithTimeoutMock).toHaveBeenNthCalledWith(4, {
-        argv: ["/opt/homebrew/bin/brew", "update"],
-        timeoutMs: 5 * 60_000,
-      });
-      expect(runPluginCommandWithTimeoutMock).toHaveBeenNthCalledWith(5, {
-        argv: ["/opt/homebrew/bin/brew", "upgrade", "imsg"],
-        timeoutMs: 15 * 60_000,
-      });
+      brewCommand(4, ["update"], 5 * 60_000);
+      brewCommand(5, ["upgrade", "imsg"], 15 * 60_000);
     });
   });
 
@@ -109,30 +110,22 @@ describe("installIMessageCli", () => {
       stderr: "",
     });
 
-    const result = await installIMessageCli(createRuntimeSpies(), {
-      upgrade: true,
-    });
+    const result = await install(true);
 
     expect(result).toEqual({ ok: true });
     expect(runPluginCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
-    expect(runPluginCommandWithTimeoutMock).toHaveBeenCalledWith({
-      argv: ["/opt/homebrew/bin/brew", "list", "--formula", "--full-name"],
-      timeoutMs: 10_000,
-    });
+    brewCommand(1, ["list", "--formula", "--full-name"], 10_000);
   });
 
   it("preserves a PATH imsg that shadows an installed Homebrew formula", async () => {
     await withTempDir("openclaw-imsg-shadow-", async (tmpDir) => {
       const cliPath = path.join(tmpDir, "local", "bin", "imsg");
       const cellar = path.join(tmpDir, "Cellar");
-      await fs.mkdir(path.dirname(cliPath), { recursive: true });
-      await fs.writeFile(cliPath, "");
+      await writeCli(cliPath);
       await fs.mkdir(path.join(cellar, "imsg"), { recursive: true });
       mockCommandOutputs("steipete/tap/imsg\n", `${cliPath}\n`, `${cellar}\n`);
 
-      const result = await installIMessageCli(createRuntimeSpies(), {
-        upgrade: true,
-      });
+      const result = await install(true);
 
       expect(result).toEqual({ ok: true });
       expect(runPluginCommandWithTimeoutMock.mock.calls).not.toContainEqual([
@@ -147,7 +140,7 @@ describe("installIMessageCli", () => {
   it("explains that Homebrew is required when brew is missing", async () => {
     resolveBrewExecutableMock.mockReturnValue(null);
 
-    const result = await installIMessageCli(createRuntimeSpies());
+    const result = await install();
 
     expect(result.ok).toBe(false);
     expect(result.error).toContain("Homebrew is required for imsg setup");
@@ -157,7 +150,7 @@ describe("installIMessageCli", () => {
   it("does not auto-install imsg on non-macOS hosts", async () => {
     setProcessPlatform("linux");
 
-    const result = await installIMessageCli(createRuntimeSpies());
+    const result = await install();
 
     expect(result).toEqual({
       ok: false,
