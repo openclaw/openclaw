@@ -113,8 +113,8 @@ it.each([false, true])(
 );
 
 function fixture() {
-  const root = tempDirs.make("openclaw-runtime-manifest-");
-  const manifestPath = path.join(root, "package.json");
+  const fixtureRoot = tempDirs.make("openclaw-runtime-manifest-");
+  const fixtureManifestPath = path.join(fixtureRoot, "package.json");
   const manifest = {
     name: "openclaw-manifest-fixture",
     version: "1.0.0",
@@ -139,19 +139,19 @@ function fixture() {
     scripts: { proof: "node scripts/crabbox-wrapper.mjs proof" },
   };
   const original = `${JSON.stringify(manifest, null, 2)}\n`;
-  writeFileSync(manifestPath, original);
-  mkdirSync(path.join(root, "dist"));
-  writeFileSync(path.join(root, "dist/index.js"), "export const answer = 42;\n");
-  writeFileSync(path.join(root, "dist/types.js"), "export const answer = 17;\n");
-  writeFileSync(path.join(root, "dist/types.cjs"), "exports.answer = 23;\n");
-  writeFileSync(path.join(root, "dist/fallback.js"), "export const answer = 99;\n");
+  writeFileSync(fixtureManifestPath, original);
+  mkdirSync(path.join(fixtureRoot, "dist"));
+  writeFileSync(path.join(fixtureRoot, "dist/index.js"), "export const answer = 42;\n");
+  writeFileSync(path.join(fixtureRoot, "dist/types.js"), "export const answer = 17;\n");
+  writeFileSync(path.join(fixtureRoot, "dist/types.cjs"), "exports.answer = 23;\n");
+  writeFileSync(path.join(fixtureRoot, "dist/fallback.js"), "export const answer = 99;\n");
   return {
-    root,
+    root: fixtureRoot,
     manifest,
-    manifestPath,
+    manifestPath: fixtureManifestPath,
     original,
-    backupPath: path.join(root, ".artifacts/package-manifest/package.json.prepack-backup"),
-    read: () => JSON.parse(readFileSync(manifestPath, "utf8")),
+    backupPath: path.join(fixtureRoot, ".artifacts/package-manifest/package.json.prepack-backup"),
+    read: () => JSON.parse(readFileSync(fixtureManifestPath, "utf8")),
   };
 }
 
