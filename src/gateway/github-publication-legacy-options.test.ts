@@ -7,6 +7,7 @@ import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
+  personalPublicationRequest,
   preparePersonalPublicationFixtureAction,
 } from "./github-personal-publication.test-support.js";
 import * as publicationStore from "./github-publication-store-async.js";
@@ -16,7 +17,6 @@ import {
 } from "./github-publication-store.test-support.js";
 import {
   NEW_HEAD,
-  SESSION_KEY,
   commands,
   installGitHubPublicationTestHarness,
   root,
@@ -30,19 +30,25 @@ beforeEach(async () => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
+async function expectOptions(expected: Record<string, unknown>) {
+  const [ok, result, error] = await callPersonalPublicationRpc(fixture, "sessions.github.options");
+  expect(ok, JSON.stringify(error)).toBe(true);
+  expect(result).toMatchObject({
+    personal: { state: "connected", generation: fixture.generation, account },
+    ...expected,
+  });
+}
+
 describe("publication options after a retained-state upgrade", () => {
   it("reads current receipts while another snapshot retains an earlier launch environment", async () => {
     const directory = await createSqliteSnapshotStagingDirectory(root, false, undefined, true);
     vi.stubEnv("OPENCLAW_GITHUB_OPTIONS_FIXTURE", "changed-after-staging-allocation");
     try {
       const row = insertSharedWorktreeReceipt("current-shared");
-      const options = await callPersonalPublicationRpc(fixture, "sessions.github.options");
-      expect(options[0], JSON.stringify(options[2])).toBe(true);
-      expect(fs.existsSync(directory)).toBe(true);
-      expect(options[1]).toMatchObject({
-        personal: { state: "connected", generation: fixture.generation, account },
+      await expectOptions({
         latestShared: { result: { requestId: row.request_id, status: "requested" } },
       });
+      expect(fs.existsSync(directory)).toBe(true);
     } finally {
       expect(await removeTempDirectoryAsync(directory)).toBe(true);
     }
@@ -52,8 +58,6 @@ describe("publication options after a retained-state upgrade", () => {
     "keeps account choices and personal recovery with no legacy lifecycle %s",
     async (missing) => {
       const { client, context, coordinator, generation } = fixture;
-      const rpc = (method: string, params?: Record<string, unknown>) =>
-        callPersonalPublicationRpc(fixture, method, params);
       const legacy = insertSharedWorktreeReceipt("legacy-terminal");
       const claimed = claimGitHubPublicationExecutionFixture(legacy.request_id, "legacy-instance");
       createGitHubPublicationExecutionStoreFixture("legacy-instance").complete(claimed, {
@@ -73,10 +77,7 @@ describe("publication options after a retained-state upgrade", () => {
           legacy.request_id,
         );
       }
-      const options = await rpc("sessions.github.options");
-      expect(options[0], JSON.stringify(options[2])).toBe(true);
-      expect(options[1]).toMatchObject({
-        personal: { state: "connected", generation, account },
+      await expectOptions({
         shared: { source: "system-configured", accountId: 42, login: "roboclaw-bot" },
         pendingPersonal: null,
         latestShared: null,
@@ -98,21 +99,14 @@ describe("publication options after a retained-state upgrade", () => {
       try {
         await expect(
           coordinator.requestPersonalForSessionV2(
-            {
-              sessionKey: SESSION_KEY,
-              idempotencyKey: "personal-after-upgrade",
-              selection: { source: "personal", generation, account },
-            },
+            personalPublicationRequest(fixture, "personal-after-upgrade"),
             action,
           ),
         ).rejects.toMatchObject({ name: "AbortError" });
       } finally {
         interrupted.mockRestore();
       }
-      const recovered = await rpc("sessions.github.options");
-      expect(recovered[0], JSON.stringify(recovered[2])).toBe(true);
-      expect(recovered[1]).toMatchObject({
-        personal: { state: "connected", generation, account },
+      await expectOptions({
         latestShared: null,
         pendingPersonal: {
           result: { status: "needs_confirmation" },

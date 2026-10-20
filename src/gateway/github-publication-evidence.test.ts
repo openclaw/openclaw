@@ -127,6 +127,12 @@ async function evidenceFixture() {
       SESSION_KEY,
       { client, sandbox },
     );
+  const uploadEvidence = (overrides: Record<string, unknown>) =>
+    upload({ evidence: { ...evidence, ...overrides } });
+  async function denyUpload(message?: string) {
+    await expect(upload()).rejects.toThrow(message);
+    expect(fetch).not.toHaveBeenCalled();
+  }
   return {
     ...f,
     sandbox,
@@ -135,6 +141,8 @@ async function evidenceFixture() {
     url,
     fetch,
     upload,
+    uploadEvidence,
+    denyUpload,
     config,
     async deselectPublisher() {
       const next = await updateGitHubToolIdentityConfig({
@@ -199,17 +207,11 @@ describe("workspace evidence through the guest tool and registered publication a
       "unsafe\nname.png",
       "proof.txt",
     ]) {
-      await expect(f.upload({ evidence: { ...f.evidence, path: filename } })).rejects.toThrow();
+      await expect(f.uploadEvidence({ path: filename })).rejects.toThrow();
     }
-    await expect(f.upload({ evidence: { ...f.evidence, sha256: "f".repeat(64) } })).rejects.toThrow(
-      "bytes changed",
-    );
-    await expect(
-      f.upload({ evidence: { ...f.evidence, sizeBytes: f.bytes.length - 1 } }),
-    ).rejects.toThrow();
-    await expect(
-      f.upload({ evidence: { ...f.evidence, sizeBytes: 10_000_001 } }),
-    ).rejects.toThrow();
+    await expect(f.uploadEvidence({ sha256: "f".repeat(64) })).rejects.toThrow("bytes changed");
+    await expect(f.uploadEvidence({ sizeBytes: f.bytes.length - 1 })).rejects.toThrow();
+    await expect(f.uploadEvidence({ sizeBytes: 10_000_001 })).rejects.toThrow();
     await fs.writeFile(path.join(f.local!.cwd, "fake.png"), "<html>private content</html>");
     const fake = Buffer.from("<html>private content</html>");
     await expect(
@@ -224,7 +226,7 @@ describe("workspace evidence through the guest tool and registered publication a
     const foreign = path.join(path.dirname(f.local!.cwd), "foreign.png");
     await fs.writeFile(foreign, f.bytes);
     await fs.symlink(foreign, path.join(f.local!.cwd, "foreign.png"));
-    const foreignUpload = f.upload({ evidence: { ...f.evidence, path: "foreign.png" } });
+    const foreignUpload = f.uploadEvidence({ path: "foreign.png" });
     await expect(foreignUpload).rejects.toThrow(
       "Evidence could not be read from this conversation's workspace; no upload was attempted.",
     );
@@ -232,9 +234,7 @@ describe("workspace evidence through the guest tool and registered publication a
     await expect(foreignUpload).rejects.not.toThrow(path.dirname(f.local!.cwd));
     await expect(f.upload({ publishingSessionKey: "agent:main:foreign" })).rejects.toThrow();
     await expect(f.upload({ requestId: randomUUID() })).rejects.toThrow("publication changed");
-    await expect(
-      f.upload({ evidence: { ...f.evidence, repository: "foreign/repo" } }),
-    ).rejects.toThrow();
+    await expect(f.uploadEvidence({ repository: "foreign/repo" })).rejects.toThrow();
     expect(f.fetch).not.toHaveBeenCalled();
   });
 
@@ -266,9 +266,8 @@ describe("workspace evidence through the guest tool and registered publication a
       await f.deselectPublisher();
       deselected = true;
     });
-    await expect(f.upload()).rejects.toThrow("publisher changed");
+    await f.denyUpload("publisher changed");
     expect(deselected).toBe(true);
-    expect(f.fetch).not.toHaveBeenCalled();
   });
 
   it("warns about an uncertain write when publisher authority is lost after dispatch", async () => {
@@ -334,8 +333,7 @@ describe("workspace evidence through the guest tool and registered publication a
         await f.revoke();
       }
     });
-    await expect(f.upload()).rejects.toThrow("Your operator role changed");
-    expect(f.fetch).not.toHaveBeenCalled();
+    await f.denyUpload("Your operator role changed");
   });
 
   it("retains session authority across the actual workspace byte read", async () => {
@@ -352,8 +350,7 @@ describe("workspace evidence through the guest tool and registered publication a
         );
         return bytes;
       });
-    await expect(f.upload()).rejects.toThrow();
+    await f.denyUpload();
     expect(readSpy).toHaveBeenCalledOnce();
-    expect(f.fetch).not.toHaveBeenCalled();
   });
 });

@@ -28,6 +28,13 @@ import { workerWorkspaceResultStaging } from "./worker-environments/workspace-re
 
 const mocks = githubPublicationTestMocks();
 
+const write = (root: string, file: string, contents: string) =>
+  fs.writeFile(path.join(root, file), contents);
+const read = (root: string, file: string) => fs.readFile(path.join(root, file), "utf8");
+async function expectFile(root: string, file: string, contents: string) {
+  expect(await read(root, file)).toBe(contents);
+}
+
 describe("base refresh through the registered session action", () => {
   installGitHubPublicationTestHarness({
     creatorEmail: "publication-guest@example.test",
@@ -45,9 +52,9 @@ describe("base refresh through the registered session action", () => {
     const local = f.local!;
     const unchangedInput = ".artifacts/build-cache-inputs/retained.json";
     await fs.mkdir(path.dirname(path.join(local.cwd, unchangedInput)), { recursive: true });
-    await fs.writeFile(path.join(local.cwd, unchangedInput), "retained original input\n");
+    await write(local.cwd, unchangedInput, "retained original input\n");
     await local.git("add", "--force", "--", unchangedInput);
-    await fs.writeFile(path.join(local.cwd, ".gitignore"), ".env.local\n.guest-cache\n");
+    await write(local.cwd, ".gitignore", ".env.local\n.guest-cache\n");
     const first = await f.coordinator.requestForSessionV2(f.request("first-draft", f.guest));
     expect(first.status).toBe("published");
     if (first.status !== "published") {
@@ -67,56 +74,63 @@ describe("base refresh through the registered session action", () => {
     };
     const { runCommandBuffered } =
       await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+    const runGit = (cwd: string, args: string[], input?: string | Buffer) =>
+      runCommandBuffered(["git", ...args], { cwd, input, timeoutMs: 10_000 });
+    const installPack = async (cwd: string, objects: string[], promisor = false) => {
+      const packed = await runGit(
+        cwd,
+        ["pack-objects", "--stdout", "--no-reuse-delta", "--window=0"],
+        objects.join("\n") + "\n",
+      );
+      expect(packed.code).toBe(0);
+      const installed = await runGit(
+        cwd,
+        ["index-pack", "--stdin", ...(promisor ? ["--promisor"] : [])],
+        packed.stdout,
+      );
+      expect(installed.code).toBe(0);
+      return installed.stdout.toString().trim().split(/\s+/u).at(-1);
+    };
     const upstream = path.join(path.dirname(local.cwd), "upstream");
+    const upstreamGit = (...args: string[]) => local.git("-C", upstream, ...args);
     await local.git("clone", "--no-local", "--branch", "main", local.cwd, upstream);
-    await fs.writeFile(path.join(upstream, "artifact.txt"), "upstream change\n");
-    await fs.writeFile(path.join(upstream, ".gitignore"), ".env.local\n.guest-cache\n");
-    await local.git("-C", upstream, "add", "-A");
-    await local.git("-C", upstream, "commit", "-m", "Advance selected base");
-    let baseCommit = await local.git("-C", upstream, "rev-parse", "HEAD");
-    const ancestorCommit = await local.git(
-      "-C",
-      upstream,
-      "merge-base",
-      first.headCommit,
-      baseCommit,
-    );
-    const ancestorBlob = await local.git(
-      "-C",
-      upstream,
-      "rev-parse",
-      `${ancestorCommit}:artifact.txt`,
-    );
+    await write(upstream, "artifact.txt", "upstream change\n");
+    await write(upstream, ".gitignore", ".env.local\n.guest-cache\n");
+    await upstreamGit("add", "-A");
+    await upstreamGit("commit", "-m", "Advance selected base");
+    let baseCommit = await upstreamGit("rev-parse", "HEAD");
+    const ancestorCommit = await upstreamGit("merge-base", first.headCommit, baseCommit);
+    const ancestorBlob = await upstreamGit("rev-parse", `${ancestorCommit}:artifact.txt`);
     // Criss-cross tips have two merge bases; merging those bases needs their older blob too.
-    await local.git("-C", upstream, "checkout", "-b", "feature", first.headCommit);
-    await local.git("-C", upstream, "merge", "--no-edit", "-s", "ours", baseCommit);
-    const featureMerge = await local.git("-C", upstream, "rev-parse", "HEAD");
-    await local.git("-C", upstream, "checkout", "main");
-    await local.git("-C", upstream, "merge", "--no-edit", "-s", "ours", first.headCommit);
-    await fs.writeFile(path.join(upstream, "upstream.txt"), "unrelated upstream file\n");
+    await upstreamGit("checkout", "-b", "feature", first.headCommit);
+    await upstreamGit("merge", "--no-edit", "-s", "ours", baseCommit);
+    const featureMerge = await upstreamGit("rev-parse", "HEAD");
+    await upstreamGit("checkout", "main");
+    await upstreamGit("merge", "--no-edit", "-s", "ours", first.headCommit);
+    await write(upstream, "upstream.txt", "unrelated upstream file\n");
     // The synthetic ours merges otherwise record this feature input as a base-side deletion.
     await fs.mkdir(path.dirname(path.join(upstream, unchangedInput)), { recursive: true });
-    await fs.writeFile(path.join(upstream, unchangedInput), "retained original input\n");
+    await write(upstream, unchangedInput, "retained original input\n");
     const upstreamInputs = [
       ".artifacts/build-all-cache/source.txt",
       ".artifacts/build-cache-inputs/source.json",
     ];
     for (const entryPath of upstreamInputs) {
       await fs.mkdir(path.dirname(path.join(upstream, entryPath)), { recursive: true });
-      await fs.writeFile(path.join(upstream, entryPath), "upstream original input\n");
+      await write(upstream, entryPath, "upstream original input\n");
     }
-    await local.git("-C", upstream, "add", "upstream.txt", unchangedInput, ...upstreamInputs);
-    await local.git("-C", upstream, "commit", "-m", "Advance selected contents");
-    baseCommit = await local.git("-C", upstream, "rev-parse", "HEAD");
+    await upstreamGit("add", "upstream.txt", unchangedInput, ...upstreamInputs);
+    await upstreamGit("commit", "-m", "Advance selected contents");
+    baseCommit = await upstreamGit("rev-parse", "HEAD");
     for (const commit of [first.headCommit, baseCommit]) {
-      expect(await local.git("-C", upstream, "show", `${commit}:${unchangedInput}`)).toBe(
+      expect(await upstreamGit("show", `${commit}:${unchangedInput}`)).toBe(
         "retained original input",
       );
     }
     const partialBase = baseCommit;
-    const missingBlob = await local.git("-C", upstream, "rev-parse", "HEAD:upstream.txt");
+    const missingBlob = await upstreamGit("rev-parse", "HEAD:upstream.txt");
     const upstreamUrl = pathToFileURL(upstream).href;
-    await local.git("-C", upstream, "config", "uploadpack.allowFilter", "true");
+    await upstreamGit("config", "uploadpack.allowFilter", "true");
     await local.git("config", "remote.fixture.url", upstreamUrl);
     await local.git("config", "remote.fixture.promisor", "true");
     await local.git("fetch", "--filter=blob:none", "--no-write-fetch-head", "fixture", baseCommit);
@@ -147,7 +161,7 @@ describe("base refresh through the registered session action", () => {
     let contentFetches = 0;
     let commitFetches = 0;
     let cancelAfterScan: AbortController | undefined;
-    await fs.writeFile(path.join(local.cwd, ".env.local"), "host-private-fixture");
+    await write(local.cwd, ".env.local", "host-private-fixture");
     const transport = mocks.runCommand.getMockImplementation()!;
     mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
       if (argv.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))) {
@@ -191,16 +205,18 @@ describe("base refresh through the registered session action", () => {
     if (!owner) {
       throw new Error("Fixture managed workspace unavailable");
     }
+    const baseline = () =>
+      workspaceStore.withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) =>
+        store.get(),
+      );
     const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
-    expect(await fs.readFile(path.join(projection, unchangedInput), "utf8")).toBe(
-      "retained original input\n",
-    );
+    await expectFile(projection, unchangedInput, "retained original input\n");
     const disposableCache = ".artifacts/build-all-cache/guest-generated.js";
     await fs.mkdir(path.dirname(path.join(projection, disposableCache)), { recursive: true });
-    await fs.writeFile(path.join(projection, disposableCache), "disposable guest cache\n");
-    await fs.writeFile(path.join(projection, "artifact.txt"), "guest saved change\n");
-    await fs.writeFile(path.join(projection, "guest.txt"), "saved independent work\n");
-    await fs.writeFile(path.join(projection, ".guest-cache"), "saved ignored guest work\n");
+    await write(projection, disposableCache, "disposable guest cache\n");
+    await write(projection, "artifact.txt", "guest saved change\n");
+    await write(projection, "guest.txt", "saved independent work\n");
+    await write(projection, ".guest-cache", "saved ignored guest work\n");
     await fs.mkdir(path.join(projection, "empty-guest-directory"));
     await fs.appendFile(path.join(projection, ".git/config"), "\n[credential]\nhelper = !false\n");
     const reviewTransferBytes: number[] = [];
@@ -253,8 +269,8 @@ describe("base refresh through the registered session action", () => {
       return result.stdout.toString().trim();
     };
     const guestHead = await guestGit("rev-parse", "HEAD");
-    const invoke = async (
-      args: Record<string, unknown>,
+    const refresh = async (
+      args: Record<string, unknown> = {},
       prepared: typeof sandbox | null = sandbox,
       signal?: AbortSignal,
     ) => {
@@ -283,7 +299,11 @@ describe("base refresh through the registered session action", () => {
       };
       const result = await withGatewayToolCallerIdentity(
         { agentId: "main", sessionKey: f.session.sessionKey },
-        () => createGitHubPublishTool({ callGateway, sandbox: prepared }).execute("refresh", args),
+        () =>
+          createGitHubPublishTool({ callGateway, sandbox: prepared }).execute("refresh", {
+            action: "refresh_base",
+            ...args,
+          }),
       );
       return result.details;
     };
@@ -298,17 +318,7 @@ describe("base refresh through the registered session action", () => {
     )
       .split("\n")
       .filter((object) => object !== ancestorBlob);
-    const partialHostPack = await runCommandBuffered(
-      ["git", "pack-objects", "--stdout", "--no-reuse-delta", "--window=0"],
-      { cwd: local.cwd, input: `${retainedHostObjects.join("\n")}\n`, timeoutMs: 10_000 },
-    );
-    expect(partialHostPack.code).toBe(0);
-    const importedHostPack = await runCommandBuffered(
-      ["git", "index-pack", "--stdin", "--promisor"],
-      { cwd: local.cwd, input: partialHostPack.stdout, timeoutMs: 10_000 },
-    );
-    expect(importedHostPack.code).toBe(0);
-    const hostPackHash = importedHostPack.stdout.toString().trim().split(/\s+/u).at(-1);
+    const hostPackHash = await installPack(local.cwd, retainedHostObjects, true);
     for (const pack of hostPacks) {
       if (pack === `pack-${hostPackHash}.pack`) {
         continue;
@@ -322,28 +332,18 @@ describe("base refresh through the registered session action", () => {
     await fs.rm(path.join(hostObjects, ancestorBlob.slice(0, 2), ancestorBlob.slice(2)));
     expect(await missingContents(ancestorCommit)).toContain(`?${ancestorBlob}`);
     const beforeAdmission = await local.git("rev-parse", "HEAD");
-    await expect(invoke({ action: "refresh_base" }, null)).rejects.toThrow("sandboxed agent");
-    await expect(
-      invoke({ action: "refresh_base" }, { ...sandbox, workspaceAccess: "ro" }),
-    ).rejects.toThrow("read-only");
+    await expect(refresh({}, null)).rejects.toThrow("sandboxed agent");
+    await expect(refresh({}, { ...sandbox, workspaceAccess: "ro" })).rejects.toThrow("read-only");
     expect(await local.git("rev-parse", "HEAD")).toBe(beforeAdmission);
-    expect(await fs.readFile(path.join(local.cwd, "artifact.txt"), "utf8")).toBe("accepted\n");
-    await expect(invoke({ action: "refresh_base" })).rejects.toThrow(
-      "base contents could not be fetched",
-    );
+    await expectFile(local.cwd, "artifact.txt", "accepted\n");
+    await expect(refresh()).rejects.toThrow("base contents could not be fetched");
     expect(contentFetches).toBe(1);
     expect(await missingContents()).toContain(`?${missingBlob}`);
     expect(await local.git("rev-parse", "HEAD")).toBe(beforeAdmission);
-    expect(await fs.readFile(path.join(projection, "artifact.txt"), "utf8")).toBe(
-      "guest saved change\n",
-    );
-    expect(await fs.readFile(path.join(projection, "guest.txt"), "utf8")).toBe(
-      "saved independent work\n",
-    );
+    await expectFile(projection, "artifact.txt", "guest saved change\n");
+    await expectFile(projection, "guest.txt", "saved independent work\n");
     cancelAfterScan = new AbortController();
-    await expect(
-      invoke({ action: "refresh_base" }, sandbox, cancelAfterScan.signal),
-    ).rejects.toThrow();
+    await expect(refresh({}, sandbox, cancelAfterScan.signal)).rejects.toThrow();
     expect(cancelAfterScan.signal.aborted).toBe(true);
     expect(contentFetches).toBe(1);
     expect(await missingContents()).toContain(`?${missingBlob}`);
@@ -361,116 +361,82 @@ describe("base refresh through the registered session action", () => {
         }
         return result;
       });
-    await expect(invoke({ action: "refresh_base" })).rejects.toThrow(
-      "interrupted before refresh reservation",
-    );
+    await expect(refresh()).rejects.toThrow("interrupted before refresh reservation");
     stageInterruption.mockRestore();
     expect(stagedRefresh).not.toBe("");
     const stagedHead = await local.git("rev-parse", "HEAD");
-    const stagedBaseline = await workspaceStore.withLocalWorkspaceStore(
-      { worktreeId: owner.worktree.id },
-      async (store) => store.get(),
-    );
+    const stagedBaseline = await baseline();
     expect(stagedBaseline?.pending_ref).toBeNull();
     await fs.appendFile(path.join(projection, ".guest-cache"), "saved after interruption\n");
     await fs.mkdir(path.join(projection, "later-empty-guest-directory"));
     await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
-    const advancedBaseline = await workspaceStore.withLocalWorkspaceStore(
-      { worktreeId: owner.worktree.id },
-      async (store) => store.get(),
-    );
+    const advancedBaseline = await baseline();
     expect(advancedBaseline?.baseline_ref).not.toBe(stagedBaseline?.baseline_ref);
     expect(await local.git("rev-parse", "HEAD")).toBe(stagedHead);
     const withStore = workspaceStore.withLocalWorkspaceStore;
-    const reservationInterruption = vi
-      .spyOn(workspaceStore, "withLocalWorkspaceStore")
-      .mockImplementation((params, operation) =>
-        withStore(params, (store) =>
-          operation({
-            ...store,
-            update: async (row, patch, authority) => {
-              if (
-                patch.pending_target === "canonical" &&
-                isLocalWorkspaceBaseRefreshRef(patch.pending_ref ?? null)
-              ) {
-                throw new Error("interrupted before refresh reservation");
-              }
-              return await store.update(row, patch, authority);
-            },
-          }),
-        ),
-      );
-    await expect(invoke({ action: "refresh_base" })).rejects.toThrow(
-      "interrupted before refresh reservation",
-    );
+    type Store = Parameters<Parameters<typeof withStore>[1]>[0];
+    const interceptUpdate = (intercept: (update: Store["update"]) => Store["update"]) =>
+      vi
+        .spyOn(workspaceStore, "withLocalWorkspaceStore")
+        .mockImplementation((params, operation) =>
+          withStore(params, (store) => operation({ ...store, update: intercept(store.update) })),
+        );
+    const reservationInterruption = interceptUpdate((update) => async (row, patch, authority) => {
+      if (
+        patch.pending_target === "canonical" &&
+        isLocalWorkspaceBaseRefreshRef(patch.pending_ref ?? null)
+      ) {
+        throw new Error("interrupted before refresh reservation");
+      }
+      return await update(row, patch, authority);
+    });
+    await expect(refresh()).rejects.toThrow("interrupted before refresh reservation");
     reservationInterruption.mockRestore();
     expect(await local.git("rev-parse", "MERGE_HEAD")).toBe(baseCommit);
-    await fs.writeFile(
-      path.join(projection, "artifact.txt"),
-      "guest saved change after native preparation\n",
-    );
+    await write(projection, "artifact.txt", "guest saved change after native preparation\n");
     await withLocalWorkspaceProjection(owner, (state) => state.synchronize("canonical"));
     // Fail after the real canonical receipt, before projection application; retry uses its retained payload.
     let interrupted = false;
-    const interruption = vi
-      .spyOn(workspaceStore, "withLocalWorkspaceStore")
-      .mockImplementation((params, operation) =>
-        withStore(params, (store) =>
-          operation({
-            ...store,
-            update: async (row, patch, authority) => {
-              const result = await store.update(row, patch, authority);
-              if (
-                !interrupted &&
-                patch.pending_target === "projection" &&
-                isLocalWorkspaceBaseRefreshRef(result.pending_ref)
-              ) {
-                interrupted = true;
-                throw new Error("interrupted after canonical acceptance");
-              }
-              return result;
-            },
-          }),
-        ),
-      );
-    const interruptionFailure = await invoke({ action: "refresh_base" }).catch(
-      (error: unknown) => error,
-    );
+    const interruption = interceptUpdate((update) => async (row, patch, authority) => {
+      const result = await update(row, patch, authority);
+      if (
+        !interrupted &&
+        patch.pending_target === "projection" &&
+        isLocalWorkspaceBaseRefreshRef(result.pending_ref)
+      ) {
+        interrupted = true;
+        throw new Error("interrupted after canonical acceptance");
+      }
+      return result;
+    });
+    const interruptionFailure = await refresh().catch((error: unknown) => error);
     expect(interrupted, String(interruptionFailure)).toBe(true);
     expect(interruptionFailure).toBeInstanceOf(Error);
     interruption.mockRestore();
-    const pendingRefresh = await withStore({ worktreeId: owner.worktree.id }, async (store) =>
-      store.get(),
-    );
+    const pendingRefresh = await baseline();
     expect(pendingRefresh).toMatchObject({ pending_target: "projection", journal_json: null });
     expect(pendingRefresh?.base_commit).not.toBe(baseCommit);
-    const refreshed = await invoke({ action: "refresh_base" });
+    const refreshed = await refresh();
     expect(refreshed).toMatchObject({
       status: "conflicts",
       baseCommit,
       conflictPaths: ["artifact.txt"],
     });
-    const conflictedSource = await fs.readFile(path.join(projection, "artifact.txt"), "utf8");
+    const conflictedSource = await read(projection, "artifact.txt");
     expect(conflictedSource).toContain("<<<<<<<");
     expect(conflictedSource).toContain("guest saved change after native preparation");
-    expect(await fs.readFile(path.join(projection, "upstream.txt"), "utf8")).toBe(
-      "unrelated upstream file\n",
-    );
-    expect(await fs.readFile(path.join(projection, unchangedInput), "utf8")).toBe(
-      "retained original input\n",
-    );
+    await expectFile(projection, "upstream.txt", "unrelated upstream file\n");
+    await expectFile(projection, unchangedInput, "retained original input\n");
     await expect(fs.stat(path.join(local.cwd, disposableCache))).rejects.toMatchObject({
       code: "ENOENT",
     });
     for (const entryPath of upstreamInputs) {
-      expect(await fs.readFile(path.join(projection, entryPath), "utf8")).toBe(
-        "upstream original input\n",
-      );
+      await expectFile(projection, entryPath, "upstream original input\n");
     }
-    expect(await fs.readFile(path.join(projection, "guest.txt"), "utf8")).toBe(
-      "saved independent work\n",
-    );
-    expect(await fs.readFile(path.join(projection, ".guest-cache"), "utf8")).toBe(
+    await expectFile(projection, "guest.txt", "saved independent work\n");
+    await expectFile(
+      projection,
+      ".guest-cache",
       "saved ignored guest work\nsaved after interruption\n",
     );
     expect((await fs.stat(path.join(projection, "empty-guest-directory"))).isDirectory()).toBe(
@@ -490,7 +456,7 @@ describe("base refresh through the registered session action", () => {
       code: "ENOENT",
     });
     const fetchesBeforePendingRetry = commitFetches;
-    expect(await invoke({ action: "refresh_base" })).toMatchObject({
+    expect(await refresh()).toMatchObject({
       status: "conflicts",
       baseCommit,
     });
@@ -503,19 +469,21 @@ describe("base refresh through the registered session action", () => {
     await expect(
       f.coordinator.requestForSessionV2(f.request("unresolved", f.guest)),
     ).rejects.toThrow("refresh_base");
-    await expect(
-      invoke({ action: "refresh_base", conflictsResolved: true, baseCommit: "a".repeat(40) }),
-    ).rejects.toThrow("changed");
-    await expect(
-      invoke({ action: "refresh_base", conflictsResolved: true, baseCommit }),
-    ).rejects.toThrow("Conflict markers");
-    await fs.writeFile(
-      path.join(projection, "artifact.txt"),
+    await expect(refresh({ conflictsResolved: true, baseCommit: "a".repeat(40) })).rejects.toThrow(
+      "changed",
+    );
+    await expect(refresh({ conflictsResolved: true, baseCommit })).rejects.toThrow(
+      "Conflict markers",
+    );
+    await write(
+      projection,
+      "artifact.txt",
       "upstream change\nguest saved change after native preparation\n",
     );
-    expect(
-      await invoke({ action: "refresh_base", conflictsResolved: true, baseCommit }),
-    ).toMatchObject({ status: "refreshed", baseCommit });
+    expect(await refresh({ conflictsResolved: true, baseCommit })).toMatchObject({
+      status: "refreshed",
+      baseCommit,
+    });
     await local.git("merge-base", "--is-ancestor", baseCommit, "HEAD");
     expect(await guestGit("rev-parse", "HEAD")).toBe(guestHead);
     expect(await guestGit("rev-parse", "refs/openclaw/review-base")).toBe(baseCommit);
@@ -536,16 +504,14 @@ describe("base refresh through the registered session action", () => {
     expect(await local.git("show", "HEAD:artifact.txt")).toBe(
       "upstream change\nguest saved change after native preparation",
     );
-    expect(await fs.readFile(path.join(local.cwd, ".env.local"), "utf8")).toBe(
-      "host-private-fixture",
-    );
+    await expectFile(local.cwd, ".env.local", "host-private-fixture");
     await local.git("checkout", "main");
-    await fs.writeFile(path.join(local.cwd, "later-upstream.txt"), "later upstream only\n");
+    await write(local.cwd, "later-upstream.txt", "later upstream only\n");
     await local.git("add", "later-upstream.txt");
     await local.git("commit", "-m", "Advance base without conflicts");
     baseCommit = await local.git("rev-parse", "HEAD");
     await local.git("checkout", first.branch);
-    expect(await invoke({ action: "refresh_base" })).toMatchObject({
+    expect(await refresh()).toMatchObject({
       status: "refreshed",
       review: { mode: "local", base: baseCommit },
     });
@@ -553,7 +519,7 @@ describe("base refresh through the registered session action", () => {
     expect(
       (await guestGit("diff", "--cached", "--name-only", baseCommit)).split("\n"),
     ).not.toContain("later-upstream.txt");
-    expect(await invoke({ action: "refresh_base" })).toMatchObject({
+    expect(await refresh()).toMatchObject({
       status: "current",
       review: { mode: "local", base: baseCommit },
     });
@@ -565,7 +531,7 @@ describe("base refresh through the registered session action", () => {
       stdout: Buffer.alloc(0),
       stderr: Buffer.alloc(0),
     });
-    expect(await invoke({ action: "refresh_base" })).toMatchObject({ status: "current" });
+    expect(await refresh()).toMatchObject({ status: "current" });
     missingDonor.mockRestore();
     const fullTransferBytes = reviewTransferBytes.at(-1);
     expect(fullTransferBytes).toBeGreaterThan(64);
@@ -582,7 +548,7 @@ describe("base refresh through the registered session action", () => {
       stdout: Buffer.from(hostOnlyCommit),
       stderr: Buffer.alloc(0),
     });
-    expect(await invoke({ action: "refresh_base" })).toMatchObject({ status: "current" });
+    expect(await refresh()).toMatchObject({ status: "current" });
     mismatchedDonor.mockRestore();
     expect(reviewTransferBytes.at(-1)).toBe(fullTransferBytes);
 
@@ -596,21 +562,7 @@ describe("base refresh through the registered session action", () => {
     )
       .split("\n")
       .filter((object) => object !== missingDonorBlob);
-    const incompletePack = await runCommandBuffered(
-      ["git", "pack-objects", "--stdout", "--no-reuse-delta", "--window=0"],
-      {
-        cwd: projection,
-        input: [...retainedObjects, baseCommit, ""].join("\n"),
-        timeoutMs: 10_000,
-      },
-    );
-    expect(incompletePack.code).toBe(0);
-    const installedIncomplete = await runCommandBuffered(["git", "index-pack", "--stdin"], {
-      cwd: projection,
-      input: incompletePack.stdout,
-      timeoutMs: 10_000,
-    });
-    expect(installedIncomplete.code).toBe(0);
+    await installPack(projection, [...retainedObjects, baseCommit]);
     let removedRetained = false;
     const donorLoss = vi
       .spyOn(sandbox.backend!, "runShellCommand")
@@ -621,30 +573,25 @@ describe("base refresh through the registered session action", () => {
           // snapshot incomplete.
           for (const pack of packs) {
             const index = pack.replace(/\.pack$/u, ".idx");
-            const objects = await runCommandBuffered(
-              ["git", "verify-pack", "-v", path.join(packDirectory, index)],
-              {
-                cwd: projection,
-                timeoutMs: 10_000,
-              },
-            );
+            const objects = await runGit(projection, [
+              "verify-pack",
+              "-v",
+              path.join(packDirectory, index),
+            ]);
             if (objects.stdout.toString().includes(guestHead)) {
               continue;
             }
             await fs.rm(path.join(packDirectory, pack));
             await fs.rm(path.join(packDirectory, index));
           }
-          const absent = await runCommandBuffered(["git", "cat-file", "-e", missingDonorBlob], {
-            cwd: projection,
-            timeoutMs: 10_000,
-          });
+          const absent = await runGit(projection, ["cat-file", "-e", missingDonorBlob]);
           expect(absent.code).not.toBe(0);
           expect(await guestGit("rev-parse", `${baseCommit}^{tree}`)).not.toBe("");
         }
         return await runShellCommand(command);
       });
     const beforeLoss = reviewTransferBytes.length;
-    expect(await invoke({ action: "refresh_base" })).toMatchObject({ status: "current" });
+    expect(await refresh()).toMatchObject({ status: "current" });
     donorLoss.mockRestore();
     expect(removedRetained).toBe(true);
     expect(reviewTransferBytes.slice(beforeLoss)).toHaveLength(2);
@@ -653,10 +600,7 @@ describe("base refresh through the registered session action", () => {
     expect(await guestGit("rev-parse", "HEAD")).toBe(guestHead);
 
     await local.git("checkout", "main");
-    await fs.writeFile(
-      path.join(local.cwd, "retry-upstream.txt"),
-      "upstream before interrupted import\n",
-    );
+    await write(local.cwd, "retry-upstream.txt", "upstream before interrupted import\n");
     await local.git("add", "retry-upstream.txt");
     await local.git("commit", "-m", "Advance before interrupted review import");
     baseCommit = await local.git("rev-parse", "HEAD");
@@ -673,11 +617,9 @@ describe("base refresh through the registered session action", () => {
         }
         return result;
       });
-    await expect(invoke({ action: "refresh_base" })).rejects.toThrow(
-      "interrupted after review-base import",
-    );
+    await expect(refresh()).rejects.toThrow("interrupted after review-base import");
     importInterruption.mockRestore();
-    expect(await invoke({ action: "refresh_base" })).toMatchObject({ status: "current" });
+    expect(await refresh()).toMatchObject({ status: "current" });
     expect(reviewTransferBytes.at(-1)).toBeLessThanOrEqual(64);
     expect(await guestGit("show", `${baseCommit}:retry-upstream.txt`)).toBe(
       "upstream before interrupted import",
@@ -698,11 +640,11 @@ describe("base refresh through the registered session action", () => {
         revokedAfterProbe = true;
         return result;
       });
-    await expect(invoke({ action: "refresh_base" })).rejects.toThrow();
+    await expect(refresh()).rejects.toThrow();
     expect(revokedAfterProbe).toBe(true);
     expect(revokeDuringProbe).toHaveBeenCalledTimes(1);
     expect(reviewTransferBytes).toHaveLength(transfersBeforeRevocation);
     revokeDuringProbe.mockRestore();
-    await expect(invoke({ action: "refresh_base" })).rejects.toThrow();
+    await expect(refresh()).rejects.toThrow();
   });
 });

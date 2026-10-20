@@ -5,6 +5,7 @@ import * as stateWriter from "../state/openclaw-state-worker-owner.js";
 import {
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
+  personalPublicationRequest,
 } from "./github-personal-publication.test-support.js";
 import * as publicationStore from "./github-publication-store-async.js";
 import {
@@ -28,6 +29,29 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+type PersonalFixture = Awaited<ReturnType<typeof createPersonalPublicationFixture>>;
+const pending = (f: PersonalFixture) => f.coordinator.personalPending(f.action, f.action);
+const readPending = (f: PersonalFixture) =>
+  readPendingRepositoryGitHubPublication({
+    ownerProfileId: f.owner,
+    sessionKey: SESSION_KEY,
+    agentId: "main",
+  });
+function insertPending(
+  f: PersonalFixture,
+  workspace: Awaited<ReturnType<typeof sharedRepositoryWorkspace>>,
+  overrides: Parameters<typeof repositoryReceipt>[1] = {},
+) {
+  const row = repositoryReceipt(workspace, {
+    owner_profile_id: f.owner,
+    connection_generation: f.generation,
+    identity_source: "personal",
+    ...overrides,
+  });
+  insertRepositoryGitHubPublicationFixture(row, f.action.assertCurrent);
+  return row;
+}
+
 it.each([false, true])(
   "selects the last validated pending receipt without transporting content (older corrupt=%s)",
   async (corrupt) => {
@@ -35,12 +59,9 @@ it.each([false, true])(
     const workspace = await sharedRepositoryWorkspace();
     let latest: ReturnType<typeof repositoryReceipt> | undefined;
     for (let index = 128; index >= 1; index--) {
-      const row = repositoryReceipt(workspace, {
+      const row = insertPending(fixture, workspace, {
         request_id: `pending-${String(index).padStart(3, "0")}`,
         idempotency_key: `pending-${index}`,
-        owner_profile_id: fixture.owner,
-        connection_generation: fixture.generation,
-        identity_source: "personal",
         identity_account_id: account.accountId,
         identity_login: account.login,
         title: "Private publication title",
@@ -48,7 +69,6 @@ it.each([false, true])(
         status: "needs_confirmation",
         updated_at_ms: 1_000 + Math.floor((index - 1) / 2),
       });
-      insertRepositoryGitHubPublicationFixture(row, fixture.action.assertCurrent);
       latest ??= row;
     }
     for (const [requestId, scope] of [
@@ -57,35 +77,25 @@ it.each([false, true])(
       ["other-agent", { agent_id: "other" }],
       ["finished", { status: "published" }],
     ] as const) {
-      insertRepositoryGitHubPublicationFixture(
-        repositoryReceipt(workspace, {
-          request_id: requestId,
-          idempotency_key: requestId,
-          owner_profile_id: fixture.owner,
-          connection_generation: fixture.generation,
-          identity_source: "personal",
-          updated_at_ms: 99_999,
-          ...scope,
-        }),
-        fixture.action.assertCurrent,
-      );
-    }
-    const read = () =>
-      readPendingRepositoryGitHubPublication({
-        ownerProfileId: fixture.owner,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
+      insertPending(fixture, workspace, {
+        request_id: requestId,
+        idempotency_key: requestId,
+        updated_at_ms: 99_999,
+        ...scope,
       });
+    }
     if (corrupt) {
       openOpenClawStateDatabase()
         .db.prepare(
           "UPDATE github_repository_publication_requests SET body = ? WHERE request_id = ?",
         )
         .run("Corrupted older content", "pending-001");
-      await expect(read()).rejects.toThrow("GitHub repository publication receipt is corrupt");
+      await expect(readPending(fixture)).rejects.toThrow(
+        "GitHub repository publication receipt is corrupt",
+      );
       return;
     }
-    const selected = await read();
+    const selected = await readPending(fixture);
     expect(selected).toMatchObject({
       request_id: "pending-128",
       request_digest: latest?.request_digest,
@@ -94,9 +104,7 @@ it.each([false, true])(
     });
     expect(selected).not.toHaveProperty("title");
     expect(selected).not.toHaveProperty("body");
-    await expect(
-      fixture.coordinator.personalPending(fixture.action, fixture.action),
-    ).resolves.toMatchObject({
+    await expect(pending(fixture)).resolves.toMatchObject({
       result: { requestId: "pending-128", status: "needs_confirmation" },
       confirmation: { generation: fixture.generation, account },
     });
@@ -106,23 +114,16 @@ it.each([false, true])(
 it("reads committed publication status while writer dispatch is unavailable", async () => {
   const fixture = await createPersonalPublicationFixture();
   const workspace = await sharedRepositoryWorkspace();
-  const row = repositoryReceipt(workspace, {
-    owner_profile_id: fixture.owner,
-    connection_generation: fixture.generation,
-    identity_source: "personal",
+  const row = insertPending(fixture, workspace, {
     status: "needs_confirmation",
   });
-  insertRepositoryGitHubPublicationFixture(row, fixture.action.assertCurrent);
   vi.spyOn(stateWriter, "getOpenClawStateWorkerOwner").mockImplementation(() => {
     throw new Error("Writer dispatch unavailable");
   });
-  await expect(
-    readPendingRepositoryGitHubPublication({
-      ownerProfileId: fixture.owner,
-      sessionKey: SESSION_KEY,
-      agentId: "main",
-    }),
-  ).resolves.toMatchObject({ request_id: row.request_id, status: "needs_confirmation" });
+  await expect(readPending(fixture)).resolves.toMatchObject({
+    request_id: row.request_id,
+    status: "needs_confirmation",
+  });
   await expect(
     publicationStore.readRepositoryGitHubPublicationAsync(row.request_id),
   ).resolves.toEqual(row);
@@ -131,19 +132,12 @@ it("reads committed publication status while writer dispatch is unavailable", as
 it("returns the terminal receipt without executing an older confirmation", async () => {
   const fixture = await createPersonalPublicationFixture();
   const workspace = await sharedRepositoryWorkspace();
-  const row = repositoryReceipt(workspace, {
-    owner_profile_id: fixture.owner,
-    connection_generation: fixture.generation,
-    identity_source: "personal",
+  const row = insertPending(fixture, workspace, {
     identity_account_id: account.accountId,
     identity_login: account.login,
     status: "needs_confirmation",
   });
-  insertRepositoryGitHubPublicationFixture(row, fixture.action.assertCurrent);
-  const captured = expectDefined(
-    await fixture.coordinator.personalPending(fixture.action, fixture.action),
-    "original pending receipt",
-  );
+  const captured = expectDefined(await pending(fixture), "original pending receipt");
   expect(captured.result.status).toBe("needs_confirmation");
   const confirmation = expectDefined(captured.confirmation, "original confirmation");
   const commandCount = commands.length;
@@ -178,11 +172,7 @@ it.each([false, true])(
   async (corrupt) => {
     const fixture = await createPersonalPublicationFixture();
     const published = await fixture.coordinator.requestPersonalForSessionV2(
-      {
-        sessionKey: SESSION_KEY,
-        idempotencyKey: "worktree-pending",
-        selection: { source: "personal", generation: fixture.generation, account },
-      },
+      personalPublicationRequest(fixture, "worktree-pending"),
       fixture.action,
     );
     expect(published.status).toBe("published");
@@ -192,26 +182,17 @@ it.each([false, true])(
     const fallback = vi.spyOn(publicationStore, "readPersonalGitHubPublicationAsync");
     if (corrupt) {
       const workspace = await sharedRepositoryWorkspace();
-      insertRepositoryGitHubPublicationFixture(
-        repositoryReceipt(workspace, {
-          owner_profile_id: fixture.owner,
-          connection_generation: fixture.generation,
-          identity_source: "personal",
-        }),
-        fixture.action.assertCurrent,
-      );
+      insertPending(fixture, workspace);
       openOpenClawStateDatabase()
         .db.prepare("UPDATE github_repository_publication_requests SET body = ?")
         .run("Corrupted receipt");
-      await expect(
-        fixture.coordinator.personalPending(fixture.action, fixture.action),
-      ).rejects.toThrow("GitHub repository publication receipt is corrupt");
+      await expect(pending(fixture)).rejects.toThrow(
+        "GitHub repository publication receipt is corrupt",
+      );
       expect(fallback).not.toHaveBeenCalled();
       return;
     }
-    await expect(
-      fixture.coordinator.personalPending(fixture.action, fixture.action),
-    ).resolves.toMatchObject({
+    await expect(pending(fixture)).resolves.toMatchObject({
       result: { requestId: published.requestId, status: "needs_confirmation" },
       confirmation: { generation: fixture.generation, account },
     });

@@ -36,31 +36,29 @@ export async function createRealPublicationWorkspace({
   const home = path.join(root, "git-home");
   await fs.mkdir(cwd);
   await fs.mkdir(home);
-  const env = {
-    ...process.env,
+  const isolatedEnv = {
     HOME: home,
     XDG_CONFIG_HOME: home,
     GIT_CONFIG_GLOBAL: os.devNull,
     GIT_CONFIG_SYSTEM: os.devNull,
+  };
+  const env = {
+    ...process.env,
+    ...isolatedEnv,
     GIT_AUTHOR_NAME: "Publication Test",
     GIT_AUTHOR_EMAIL: "publication@example.test",
     GIT_COMMITTER_NAME: "Publication Test",
     GIT_COMMITTER_EMAIL: "publication@example.test",
   };
-  const local = async (
-    argv: string[],
-    options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string },
-  ) =>
+  type CommandOptions = { cwd?: string; env?: NodeJS.ProcessEnv; input?: string };
+  const local = async (argv: string[], options?: CommandOptions) =>
     await runCommandBuffered(argv, {
       cwd,
       ...options,
       env: {
         ...env,
         ...options?.env,
-        HOME: home,
-        XDG_CONFIG_HOME: home,
-        GIT_CONFIG_GLOBAL: os.devNull,
-        GIT_CONFIG_SYSTEM: os.devNull,
+        ...isolatedEnv,
         GIT_DIR: undefined,
         GIT_WORK_TREE: undefined,
         GH_TOKEN: undefined,
@@ -122,71 +120,63 @@ export async function createRealPublicationWorkspace({
   let remoteHead = "";
   const remoteCommits = new Set([baseHead]);
   const effects: string[] = [];
-  mocks.runCommand.mockImplementation(
-    async (argv: string[], options?: { cwd?: string; env?: NodeJS.ProcessEnv; input?: string }) => {
-      if (argv[0] === "gh") {
-        const commitPath = "repos/openclaw/openclaw/git/commits/";
-        const commit = argv.find((arg) => arg.startsWith(commitPath))?.slice(commitPath.length);
-        if (commit) {
-          if (!remoteCommits.has(commit)) {
-            return commandResult("", 1);
-          }
-          const [tree, parents, message] = await Promise.all([
-            git("rev-parse", commit + "^{tree}"),
-            git("show", "-s", "--format=%P", commit),
-            git("show", "-s", "--format=%B", commit),
-          ]);
-          return commandResult(
-            JSON.stringify({
-              sha: commit,
-              tree: { sha: tree },
-              parents: parents
-                .split(" ")
-                .filter(Boolean)
-                .map((sha) => ({ sha })),
-              message,
-            }),
-          );
+  function interrupt(at: typeof interruptAt, message: string, ready = true) {
+    if (!interrupted && interruptAt === at && ready) {
+      interrupted = true;
+      throw new Error(message);
+    }
+  }
+  mocks.runCommand.mockImplementation(async (argv: string[], options?: CommandOptions) => {
+    if (argv[0] === "gh") {
+      const commitPath = "repos/openclaw/openclaw/git/commits/";
+      const commit = argv.find((arg) => arg.startsWith(commitPath))?.slice(commitPath.length);
+      if (commit) {
+        if (!remoteCommits.has(commit)) {
+          return commandResult("", 1);
         }
-        if (argv.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))) {
-          return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: baseHead }));
-        }
-        if (argv.includes("POST")) {
-          effects.push("pull_request");
-          if (!interrupted && interruptAt === "create") {
-            interrupted = true;
-            throw new Error("synthetic PR response lost");
-          }
-        }
-        return await remote(argv, options);
+        const [tree, parents, message] = await Promise.all([
+          git("rev-parse", commit + "^{tree}"),
+          git("show", "-s", "--format=%P", commit),
+          git("show", "-s", "--format=%B", commit),
+        ]);
+        return commandResult(
+          JSON.stringify({
+            sha: commit,
+            tree: { sha: tree },
+            parents: parents
+              .split(" ")
+              .filter(Boolean)
+              .map((sha) => ({ sha })),
+            message,
+          }),
+        );
       }
-      if (argv.includes("fetch")) {
-        return commandResult();
+      if (argv.some((arg) => arg.startsWith("repos/openclaw/openclaw/git/ref/heads/"))) {
+        return commandResult(JSON.stringify({ ref: "refs/heads/main", sha: baseHead }));
       }
-      if (argv.includes("push")) {
-        effects.push("push");
-        remoteHead = await git("rev-parse", "HEAD");
-        remoteCommits.add(remoteHead);
-        if (!interrupted && interruptAt === "push") {
-          interrupted = true;
-          throw new Error("synthetic push response lost");
-        }
-        return commandResult();
+      if (argv.includes("POST")) {
+        effects.push("pull_request");
+        interrupt("create", "synthetic PR response lost");
       }
-      if (argv.includes("ls-remote")) {
-        if (!interrupted && interruptAt === "observe" && remoteHead) {
-          interrupted = true;
-          throw new Error("synthetic remote observation unavailable");
-        }
-        return commandResult(remoteHead ? `${remoteHead}\trefs/heads/${branch}\n` : "");
-      }
-      const result = await local(argv, options);
-      if (!interrupted && interruptAt === "index" && argv.includes("update-ref")) {
-        interrupted = true;
-        throw new Error("synthetic ref update response lost");
-      }
-      return result;
-    },
-  );
+      return await remote(argv, options);
+    }
+    if (argv.includes("fetch")) {
+      return commandResult();
+    }
+    if (argv.includes("push")) {
+      effects.push("push");
+      remoteHead = await git("rev-parse", "HEAD");
+      remoteCommits.add(remoteHead);
+      interrupt("push", "synthetic push response lost");
+      return commandResult();
+    }
+    if (argv.includes("ls-remote")) {
+      interrupt("observe", "synthetic remote observation unavailable", Boolean(remoteHead));
+      return commandResult(remoteHead ? `${remoteHead}\trefs/heads/${branch}\n` : "");
+    }
+    const result = await local(argv, options);
+    interrupt("index", "synthetic ref update response lost", argv.includes("update-ref"));
+    return result;
+  });
   return { cwd, git, effects };
 }
