@@ -11,6 +11,13 @@ const MCP_CATALOG_MAX_PAGES = 128;
 const MCP_CATALOG_MAX_ITEMS = 16_384;
 const MCP_CATALOG_MAX_BYTES = 10 * 1024 * 1024;
 
+/** The collector's own deadline, distinct from invalid or incomplete server pages. */
+export class McpPaginationTimeoutError extends Error {
+  constructor(label: string, timeoutMs: number) {
+    super(`${label} timed out after ${timeoutMs}ms`);
+  }
+}
+
 type McpPaginationPage<T> = {
   items: readonly T[];
   nextCursor?: string;
@@ -57,7 +64,7 @@ async function collectMcpPaginatedItems<T>(
     throw abortError(signal, params.label);
   }
   const deadlineAtMs = performance.now() + timeoutMs;
-  const timeoutError = new Error(`${params.label} timed out after ${timeoutMs}ms`);
+  const timeoutError = new McpPaginationTimeoutError(params.label, timeoutMs);
   const deadlineTimer = setTimeout(() => deadlineController.abort(timeoutError), timeoutMs);
   deadlineTimer.unref();
   const assertActive = () => {
