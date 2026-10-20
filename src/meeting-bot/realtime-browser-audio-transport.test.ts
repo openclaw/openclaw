@@ -42,6 +42,13 @@ function setup() {
       }
       pending.resolve(result);
     },
+    rejectPull(error: Error) {
+      const pending = pulls.shift();
+      if (!pending) {
+        throw new Error("Browser audio pull was not requested");
+      }
+      pending.reject(error);
+    },
     nativeTransport,
     callBrowser,
     nativeInput: (audio: Buffer) => nativeInput?.(audio),
@@ -110,5 +117,33 @@ describe("isolated meeting browser audio transport", () => {
     expect(received).not.toHaveBeenCalled();
     expect(next.nativeTransport.stop).toHaveBeenCalledOnce();
     await nextTransport.stop();
+  });
+
+  it("keeps the call through one stalled pull and ends it on a second in a row", async () => {
+    vi.useFakeTimers();
+    const fixture = setup();
+    const transport = await fixture.create();
+    const received = vi.fn();
+    const fatal = vi.fn();
+    transport.onFatal(fatal);
+    transport.startInput(received);
+    await setImmediate();
+    const stalled = new Error("browser request timed out");
+    fixture.rejectPull(stalled);
+    await vi.advanceTimersByTimeAsync(50);
+    const remote = Buffer.from([3, 0, 4, 0]);
+    fixture.resolvePull({ isolated: true, base64: remote.toString("base64") });
+    await vi.advanceTimersByTimeAsync(50);
+    expect(received.mock.calls).toEqual([[remote]]);
+    expect(fatal).not.toHaveBeenCalled();
+
+    // A success resets the count; two failures in a row mean the browser capture is gone.
+    fixture.rejectPull(stalled);
+    await vi.advanceTimersByTimeAsync(50);
+    fixture.rejectPull(stalled);
+    await setImmediate();
+    expect(fatal).toHaveBeenCalledOnce();
+    expect(fixture.nativeTransport.stop).toHaveBeenCalledOnce();
+    await transport.stop();
   });
 });
