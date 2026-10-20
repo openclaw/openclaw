@@ -19,6 +19,7 @@ import {
   createRunEntry,
   mutateLifecycleRun,
   readLifecycleRun,
+  type LifecycleControllerFixtureOptions,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
 import * as lifecyclePersistence from "./subagent-registry-lifecycle-persistence.js";
 import {
@@ -41,6 +42,36 @@ beforeEach(async () => {
   vi.mocked(retireSessionMcpRuntime).mockClear();
 });
 
+function fixture(
+  options: LifecycleControllerFixtureOptions,
+  cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {}),
+) {
+  const controller = createLifecycleControllerFixture(options, {
+    callGateway: async () => {
+      throw new Error("Unexpected Gateway call");
+    },
+    cleanupBrowserSessionsForLifecycleEnd,
+    ownersByEntry: new Map(),
+  });
+  setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
+  return controller;
+}
+
+function complete(
+  controller: ReturnType<typeof fixture>,
+  entry: SubagentRunRecord,
+  overrides: Partial<Parameters<typeof controller.completeSubagentRun>[0]> = {},
+) {
+  return controller.completeSubagentRun({
+    runId: entry.runId,
+    endedAt: 4_000,
+    outcome: { status: "ok" },
+    reason: SUBAGENT_ENDED_REASON_COMPLETE,
+    triggerCleanup: true,
+    ...overrides,
+  });
+}
+
 it("qualifies a completed child's raw session with its recorded agent", async () => {
   const entry = createRunEntry({
     childSessionKey: "global",
@@ -48,25 +79,12 @@ it("qualifies a completed child's raw session with its recorded agent", async ()
     expectsCompletionMessage: false,
   });
   const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
-  const controller = createLifecycleControllerFixture(
+  const controller = fixture(
     { entry, cleanupBrowserSessionsForLifecycleEnd },
-    {
-      callGateway: async () => {
-        throw new Error("Unexpected Gateway call");
-      },
-      cleanupBrowserSessionsForLifecycleEnd,
-      ownersByEntry: new Map(),
-    },
+    cleanupBrowserSessionsForLifecycleEnd,
   );
-  setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
   vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
-  await controller.completeSubagentRun({
-    runId: entry.runId,
-    endedAt: 4_000,
-    outcome: { status: "ok" },
-    reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    triggerCleanup: true,
-  });
+  await complete(controller, entry);
   expect(cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledWith(
     expect.objectContaining({
       sessionKeys: ["agent:alpha:global"],
@@ -81,42 +99,29 @@ it("retires a terminal callback when another completion replaces its session-eff
   const progressEntered = createDeferredCore();
   const releaseProgress = createDeferredCore();
   const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
-  const controller = createLifecycleControllerFixture(
+  const controller = fixture(
     {
       entry,
+      callGateway: vi.fn(),
       emitSubagentProgressEndedForRun: async () => {
         progressEntered.resolve();
         await releaseProgress.promise;
       },
     },
-    {
-      callGateway: vi.fn(),
-      cleanupBrowserSessionsForLifecycleEnd,
-      ownersByEntry: new Map(),
-    },
+    cleanupBrowserSessionsForLifecycleEnd,
   );
-  setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
   const announce = vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
   const createSessionEffects = () => ({
     isCurrent: async () => true,
     assertHostCurrent: () => {},
     assertCurrentEntry: () => {},
   });
-  const completion = {
-    runId: entry.runId,
-    endedAt: 4_000,
-    outcome: { status: "ok" as const },
-    reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    triggerCleanup: true,
-  };
-  const first = controller.completeSubagentRun({
-    ...completion,
+  const first = complete(controller, entry, {
     sessionEffects: createSessionEffects(),
   });
   try {
     await withinTest(progressEntered.promise, signal);
-    await controller.completeSubagentRun({
-      ...completion,
+    await complete(controller, entry, {
       sessionEffects: createSessionEffects(),
     });
     releaseProgress.resolve();
@@ -140,21 +145,14 @@ it.each(["keep", "delete"] as const)(
     });
     const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
     const wake = vi.fn(async () => false);
-    const controller = createLifecycleControllerFixture(
-      { entry, maybeWakeRequesterAfterAllChildrenSettled: wake },
-      { callGateway: vi.fn(), cleanupBrowserSessionsForLifecycleEnd, ownersByEntry: new Map() },
+    const controller = fixture(
+      { entry, callGateway: vi.fn(), maybeWakeRequesterAfterAllChildrenSettled: wake },
+      cleanupBrowserSessionsForLifecycleEnd,
     );
-    setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
     const settleRoots = observeRootWork();
 
     try {
-      await controller.completeSubagentRun({
-        runId: entry.runId,
-        endedAt: Date.now(),
-        outcome: { status: "ok" },
-        reason: SUBAGENT_ENDED_REASON_COMPLETE,
-        triggerCleanup: true,
-      });
+      await complete(controller, entry, { endedAt: Date.now() });
     } finally {
       await settleRoots();
     }
@@ -213,9 +211,10 @@ it.each(["quiet", "suppressed"] as const)(
       return false;
     });
     const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
-    const controller = createLifecycleControllerFixture(
+    const controller = fixture(
       {
         entry,
+        callGateway: vi.fn(),
         maybeWakeRequesterAfterAllChildrenSettled: wake,
         beforeWrite: ({ postimages }) => {
           const row = postimages.get(entry.runId);
@@ -224,9 +223,8 @@ it.each(["quiet", "suppressed"] as const)(
           }
         },
       },
-      { callGateway: vi.fn(), cleanupBrowserSessionsForLifecycleEnd, ownersByEntry: new Map() },
+      cleanupBrowserSessionsForLifecycleEnd,
     );
-    setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
     const settleRoots = observeRootWork();
     try {
       expect(controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
@@ -263,7 +261,7 @@ it.for(["queued", "pre-commit"] as const)(
     const cleanupQueued = createDeferredCore();
     let holdNextWrite = false;
     const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
-    const controller = createLifecycleControllerFixture(
+    const controller = fixture(
       {
         entry,
         cleanupBrowserSessionsForLifecycleEnd: undefined,
@@ -280,15 +278,8 @@ it.for(["queued", "pre-commit"] as const)(
           }
         },
       },
-      {
-        callGateway: async () => {
-          throw new Error("Unexpected Gateway call");
-        },
-        cleanupBrowserSessionsForLifecycleEnd,
-        ownersByEntry: new Map(),
-      },
+      cleanupBrowserSessionsForLifecycleEnd,
     );
-    setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
     const retireSupersededRun = vi.spyOn(controller.options, "retireSupersededRun");
     const announce = vi
       .spyOn(controller, "startSubagentAnnounceCleanupFlow")
@@ -303,13 +294,7 @@ it.for(["queued", "pre-commit"] as const)(
         return pending;
       },
     );
-    const completion = controller.completeSubagentRun({
-      runId: entry.runId,
-      endedAt: 4_000,
-      outcome: { status: "ok" },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-      triggerCleanup: true,
-    });
+    const completion = complete(controller, entry);
     let pendingWrite: Promise<void> | undefined;
     try {
       await withinTest(loaderEntered.promise, signal);
@@ -377,7 +362,7 @@ it.each([
 ])("preserves a browser cleanup claim's $name", async ({ error, outcome, name }) => {
   const entry = createRunEntry({ runId: `run-${name}`, expectsCompletionMessage: false });
   const cleanupBrowserSessionsForLifecycleEnd = vi.fn(async () => {});
-  const controller = createLifecycleControllerFixture(
+  const controller = fixture(
     {
       entry,
       beforeWrite: ({ postimages }) => {
@@ -386,26 +371,11 @@ it.each([
         }
       },
     },
-    {
-      callGateway: async () => {
-        throw new Error("Unexpected Gateway call");
-      },
-      cleanupBrowserSessionsForLifecycleEnd,
-      ownersByEntry: new Map(),
-    },
+    cleanupBrowserSessionsForLifecycleEnd,
   );
-  setRuntimeConfigSnapshot(controller.options.getRuntimeConfig());
   const announce = vi.spyOn(controller, "startSubagentAnnounceCleanupFlow").mockReturnValue(false);
   try {
-    await expect(
-      controller.completeSubagentRun({
-        runId: entry.runId,
-        endedAt: 4_000,
-        outcome: { status: "ok" },
-        reason: SUBAGENT_ENDED_REASON_COMPLETE,
-        triggerCleanup: true,
-      }),
-    ).rejects.toMatchObject({ cause: error, outcome });
+    await expect(complete(controller, entry)).rejects.toMatchObject({ cause: error, outcome });
     expect(readLifecycleRun(entry).browserCleanupDispatchedAt).toBeUndefined();
     expect(cleanupBrowserSessionsForLifecycleEnd).not.toHaveBeenCalled();
     expect(announce).not.toHaveBeenCalled();

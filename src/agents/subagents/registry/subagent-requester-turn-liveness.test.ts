@@ -54,38 +54,36 @@ function child() {
   });
 }
 
-// Settlement runs after the last attempt detaches its backend, before the operation settles.
-it("keeps the physical requester live through backend detach and yield until its turn settles", () => {
-  const { operation, backend } = requesterTurn();
-  const entry = child();
-
+function settleRequester(
+  { operation, backend }: ReturnType<typeof requesterTurn>,
+  entry: ReturnType<typeof child>,
+) {
   expect(isClaimedByLiveRequesterTurn(entry)).toBe(true);
   operation.detachBackend(backend);
   expect(isClaimedByLiveRequesterTurn(entry)).toBe(true);
   operation.yield();
   expect(isClaimedByLiveRequesterTurn(entry)).toBe(true);
-  operation.complete();
+}
+
+it("keeps the physical requester live through backend detach and yield until its turn settles", () => {
+  const turn = requesterTurn();
+  const entry = child();
+  settleRequester(turn, entry);
+  turn.operation.complete();
   expect(isClaimedByLiveRequesterTurn(entry)).toBe(false);
 });
 
-it.each(["store", "key", "agent", "turn", "no obligation"] as const)(
+it.each([
+  ["store", { requesterStorePath: "/private/tmp/requester-turn-liveness/other/sessions.json" }],
+  ["key", { requesterSessionKey: "other-requester" }],
+  ["agent", { requesterAgentId: "research" }],
+  ["turn", { requesterTurnRunId: "other-turn" }],
+  ["no obligation", { expectsCompletionMessage: false }],
+] as const)(
   "does not borrow live requester ownership across a different %s",
-  (difference) => {
+  (_difference, overrides) => {
     requesterTurn();
-    const entry = child();
-    if (difference === "store") {
-      entry.requesterStorePath = "/private/tmp/requester-turn-liveness/other/sessions.json";
-    } else if (difference === "key") {
-      entry.requesterSessionKey = "other-requester";
-    } else if (difference === "agent") {
-      entry.requesterAgentId = "research";
-    } else if (difference === "turn") {
-      entry.requesterTurnRunId = "other-turn";
-    } else {
-      entry.expectsCompletionMessage = false;
-    }
-
-    expect(isClaimedByLiveRequesterTurn(entry)).toBe(false);
+    expect(isClaimedByLiveRequesterTurn({ ...child(), ...overrides })).toBe(false);
   },
 );
 
@@ -135,14 +133,10 @@ it.each(["default", "custom"] as const)(
         requesterStorePath: physicalStore,
       };
       try {
-        expect(isClaimedByLiveRequesterTurn(entry)).toBe(true);
         expect(
           isClaimedByLiveRequesterTurn({ ...entry, requesterStorePath: physicalStore + ".other" }),
         ).toBe(false);
-        operation.detachBackend(backend);
-        expect(isClaimedByLiveRequesterTurn(entry)).toBe(true);
-        operation.yield();
-        expect(isClaimedByLiveRequesterTurn(entry)).toBe(true);
+        settleRequester({ operation, backend }, entry);
       } finally {
         operation.complete();
         await operation.ownerSettlement;

@@ -181,26 +181,22 @@ export function registerTerminalStateSignalAuthorityTests({
           await expect(completion).rejects.toMatchObject({ outcome: "not-committed" });
         }
         expect(observed).toBe(true);
-        const events = (
-          await sessionStateEvents.listSessionStateEventsSince(
-            entry.childSessionKey,
-            "main",
-            0,
-            200,
-          )
-        ).events;
+        const { events } = await sessionStateEvents.listSessionStateEventsSince(
+          entry.childSessionKey,
+          "main",
+          0,
+          200,
+        );
         const stored = loadSubagentRegistryFromSqlite().get(entry.runId);
         if (commits) {
           expect(events).toMatchObject([{ kind: "run_completed", runId: entry.runId }]);
-          expect(stored?.execution.status).toBe("terminal");
-          if (change === "corrected outcome") {
-            expect(stored?.execution.outcome).toMatchObject({
-              status: "error",
-              error: "corrected outcome",
-            });
-          } else {
-            expect(stored?.execution.outcome).toMatchObject({ status: "ok" });
-          }
+          expect(stored?.execution).toMatchObject({
+            status: "terminal",
+            outcome:
+              change === "corrected outcome"
+                ? { status: "error", error: "corrected outcome" }
+                : { status: "ok" },
+          });
           if (change === "provisional kill") {
             expect(stored?.killReconciliation).toEqual({ killedAt: 4_001 });
           }
