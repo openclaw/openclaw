@@ -5,16 +5,8 @@ import { describe, expect, it } from "vitest";
 const helper = fileURLToPath(new URL("../../scripts/ci-collect-checks.sh", import.meta.url));
 const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
 const run = (args: string[]) => spawnSync(bash, args, { encoding: "utf8" });
-const collect = (commands: string[], ...args: string[]) =>
-  run([
-    "-euo",
-    "pipefail",
-    "-c",
-    ['source "$1"', ...commands].join("\n"),
-    "check-collection",
-    helper,
-    ...args,
-  ]);
+const collect = (commands: string, ...args: string[]) =>
+  run(["-euo", "pipefail", "-c", `source "$1"\n${commands}`, "check-collection", helper, ...args]);
 
 describe.skipIf(process.platform === "win32")("CI independent check collection", () => {
   it.each([
@@ -22,11 +14,9 @@ describe.skipIf(process.platform === "win32")("CI independent check collection",
     ["first check fails", 17, 1],
   ])("collects %s without changing argument boundaries", (_name, firstExit, expectedExit) => {
     const result = collect(
-      [
-        'run_check first bash -c \'printf "first\\n"; exit "$1"\' check "$2"',
-        'run_check second printf "second: <%s>\\n" "one argument" ""',
-        "finish_checks",
-      ],
+      String.raw`run_check first bash -c 'printf "first\n"; exit "$1"' check "$2"
+run_check second printf "second: <%s>\n" "one argument" ""
+finish_checks`,
       String(firstExit),
     );
 
@@ -40,13 +30,12 @@ describe.skipIf(process.platform === "win32")("CI independent check collection",
   });
 
   it("retains setup failure inside a function while running the next independent check", () => {
-    const result = collect([
-      "dependent_check() { false; printf 'unreachable artifact check\\n'; }",
-      "run_check dependent dependent_check",
-      "run_check independent printf 'independent check\\n'",
-      "finish_checks",
-      "printf 'unreachable successful finish\\n'",
-    ]);
+    const result =
+      collect(String.raw`dependent_check() { false; printf 'unreachable artifact check\n'; }
+run_check dependent dependent_check
+run_check independent printf 'independent check\n'
+finish_checks
+printf 'unreachable successful finish\n'`);
 
     expect(result.status, result.stderr).toBe(1);
     expect(result.stdout).toContain("dependent failed");
@@ -72,11 +61,9 @@ describe.skipIf(process.platform === "win32")("CI independent check collection",
 
   it.each([124, 130, 137])("stops admitting checks after deadline or signal exit %s", (exit) => {
     const result = collect(
-      [
-        'run_check stopped bash -c \'exit "$1"\' check "$2"',
-        "run_check later printf 'unreachable check\\n'",
-        "finish_checks",
-      ],
+      String.raw`run_check stopped bash -c 'exit "$1"' check "$2"
+run_check later printf 'unreachable check\n'
+finish_checks`,
       String(exit),
     );
 

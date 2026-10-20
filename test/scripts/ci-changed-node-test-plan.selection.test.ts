@@ -6,6 +6,7 @@ import { resolveCiCheckFamilyScope } from "../../scripts/lib/ci-check-family-sco
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+type Mode = "aggressive" | "full";
 function fixture(files: Record<string, string> | string[]) {
   const cwd = tempDirs.make("node-selection-");
   const entries: [string, string][] = Array.isArray(files)
@@ -18,11 +19,8 @@ function fixture(files: Record<string, string> | string[]) {
   return cwd;
 }
 
-const select = (
-  cwd: string,
-  paths: string[],
-  selectionMode: "aggressive" | "full" = "aggressive",
-) => resolveChangedNodeTestTargets(paths, { cwd, selectionMode });
+const select = (cwd: string, paths: string[], selectionMode: Mode = "aggressive") =>
+  resolveChangedNodeTestTargets(paths, { cwd, selectionMode });
 
 it.each(["added", "renamed", "deleted", "import-edge"])(
   "retains non-import inventories and architecture for %s source modules",
@@ -58,8 +56,9 @@ it.each(["aggressive", "full"] as const)(
   (selectionMode) => {
     // Skill scripts carry node:test and Python files that no Vitest config owns.
     const unownedSkillTest = ".agents/skills/example/scripts/driver.test.mjs";
-    const skillTest = ".agents/skills/telegram-e2e-userbot/scripts/driver.test.mjs";
-    const skillPythonTest = ".agents/skills/telegram-e2e-userbot/scripts/driver.test.py";
+    const skillRoot = ".agents/skills/telegram-e2e-userbot/scripts/driver.test";
+    const skillTest = `${skillRoot}.mjs`,
+      skillPythonTest = `${skillRoot}.py`;
     const wrapper = "test/scripts/telegram-e2e-userbot-skill.test.ts";
     const routable = "src/infra/own.test.ts";
     const cwd = fixture([unownedSkillTest, skillTest, skillPythonTest, wrapper, routable]);
@@ -103,20 +102,12 @@ it("bounds protected regressions to nearby consumers and restores area coverage 
   expect(select(cwd, [source, distant])).toContain(distant);
 });
 
-it.each([
-  ["relative", 19],
-  ["relative", 20],
-  ["package", 19],
-  ["package", 20],
-  ["mixed", 19],
-  ["mixed", 20],
-] as const)("limits %s second-hop expansion at %i direct importers", (kind, count) => {
+it.each(
+  ["relative", "package", "mixed"].flatMap((kind) => [19, 20].map((count) => ({ kind, count }))),
+)("limits $kind second-hop expansion at $count direct importers", ({ kind, count }) => {
   const source = kind === "relative" ? "src/core/value.ts" : "packages/subject/src/value.ts";
   const specifier = kind === "relative" ? "../core/value.js" : "@fixture/subject";
-  const direct = Array.from(
-    { length: count - 1 },
-    (_, index) => `src/readers/direct-${index}.test.ts`,
-  );
+  const direct = Array.from({ length: count - 1 }, (_, i) => `src/readers/direct-${i}.test.ts`);
   const indirect = "src/consumers/indirect.test.ts";
   const cwd = fixture({
     "packages/subject/package.json": JSON.stringify({
@@ -146,11 +137,7 @@ it.each([30, 31])(
   "uses stems instead of broad directory ownership at %i adjacent tests",
   (count) => {
     const source = "src/infra/foo.ts";
-    const matching = [
-      "src/infra/foo.test.ts",
-      "src/infra/foo.extra.test.ts",
-      "src/infra/foo-more.test.ts",
-    ];
+    const matching = ["foo", "foo.extra", "foo-more"].map((stem) => `src/infra/${stem}.test.ts`);
     const unrelated = Array.from(
       { length: count - matching.length },
       (_, index) => `src/infra/unrelated-${index}.test.ts`,

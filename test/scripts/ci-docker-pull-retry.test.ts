@@ -14,24 +14,20 @@ function makeTempBin({ binary = "timeout", killAfter = true, exit = 0 } = {}) {
   if (binary) {
     writeExecutable(
       path.join(dir, binary),
-      [
-        "#!/bin/bash",
-        "set -euo pipefail",
-        `if [ "\${1:-}" = "--kill-after=1s" ]; then exit ${killAfter ? 0 : 1}; fi`,
-        `printf "%s\\n" "$*" >${JSON.stringify(timeoutArgs)}`,
-        'while [ "$#" -gt 0 ] && [ "$1" != "docker" ]; do shift; done',
-        'exec "$@"',
-      ].join("\n"),
+      `#!/bin/bash
+set -euo pipefail
+if [ "\${1:-}" = "--kill-after=1s" ]; then exit ${killAfter ? 0 : 1}; fi
+printf "%s\\n" "$*" >${JSON.stringify(timeoutArgs)}
+while [ "$#" -gt 0 ] && [ "$1" != "docker" ]; do shift; done
+exec "$@"`,
     );
   }
   writeExecutable(
     path.join(dir, "docker"),
-    [
-      "#!/bin/sh",
-      "set -eu",
-      `printf "%s\\n" "$*" >>${JSON.stringify(dockerArgs)}`,
-      `exit ${exit}`,
-    ].join("\n"),
+    `#!/bin/sh
+set -eu
+printf "%s\\n" "$*" >>${JSON.stringify(dockerArgs)}
+exit ${exit}`,
   );
   return { dir, timeoutArgs, dockerArgs };
 }
