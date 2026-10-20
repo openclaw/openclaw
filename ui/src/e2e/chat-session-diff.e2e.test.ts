@@ -16,6 +16,12 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 import { openDetailsPullRequests } from "./chat-details.test-support.ts";
 import {
+  diffResponse,
+  nextPaint,
+  setDiffView,
+  singleFileDiff,
+} from "./chat-session-diff.test-support.ts";
+import {
   activateChatHeaderPanelAction,
   focusChatSidePanel,
   openChatSidePanelType,
@@ -79,15 +85,11 @@ const NOTES_FILE: SessionDiffFile = {
   untracked: true,
   patch: NOTES_PATCH,
 };
-const SESSION_DIFF_RESPONSE = {
-  sessionKey: "main",
+const SESSION_DIFF_RESPONSE = diffResponse([APP_FILE, NOTES_FILE], {
   root: "/tmp/checkout",
   branch: "feature/panel",
   baseRef: "main",
-  files: [APP_FILE, NOTES_FILE],
-  additions: 4,
-  deletions: 1,
-};
+});
 
 const emptyWorkspace = (sessionKey = "main") => ({
   sessionKey,
@@ -192,37 +194,30 @@ suite.define(() => {
     ];
     const { page } = await openDiff(
       {
-        "sessions.diff": {
-          sessionKey: "main",
-          root: "/workspace/example",
-          branch: "feature/retries",
-          baseRef: "main",
-          additions: after.length,
-          deletions: before.length,
-          files: [
-            {
-              path: "src/retry.ts",
-              status: "modified",
-              additions: after.length,
-              deletions: before.length,
-              patch: [
-                `@@ -10,${before.length + 2} +10,${after.length + 2} @@`,
-                " function run(owner: string) {",
-                ...before.map((line) => "-  " + line),
-                ...after.map((line) => "+  " + line),
-                " }",
-              ].join("\n"),
-            },
-          ],
-        },
+        "sessions.diff": singleFileDiff(
+          "src/retry.ts",
+          [
+            `@@ -10,${before.length + 2} +10,${after.length + 2} @@`,
+            " function run(owner: string) {",
+            ...before.map((line) => "-  " + line),
+            ...after.map((line) => "+  " + line),
+            " }",
+          ].join("\n"),
+          after.length,
+          before.length,
+          {
+            root: "/workspace/example",
+            branch: "feature/retries",
+            baseRef: "main",
+          },
+        ),
       },
       { viewport: { width: 1600, height: 650 } },
     );
     await activateChatHeaderPanelAction(page, "Show session changes");
     await focusChatSidePanel(page);
     const panel = page.locator(".session-diff");
-    await panel.getByRole("button", { name: "Change view options" }).click();
-    await page.getByRole("menuitem", { name: "Switch to Split Diff" }).click();
+    await setDiffView(page, "Split");
     const split = panel.locator(".session-diff-split");
     await split.locator(".tok-keyword").first().waitFor();
     if (captureProof) {
@@ -262,8 +257,7 @@ suite.define(() => {
     const rightChanges = ["3", "5000", "Running", ", auditLabel", "🚀", " {", "2", "2"];
     expect(await changedText(".session-diff-split__side--left")).toEqual(leftChanges);
     expect(await changedText(".session-diff-split__side--right")).toEqual(rightChanges);
-    await panel.getByRole("button", { name: "Change view options" }).click();
-    await page.getByRole("menuitem", { name: "Switch to Unified Diff" }).click();
+    await setDiffView(page, "Unified");
     await expect.poll(() => changedText(".chat-diff__row--add")).toEqual(rightChanges);
   });
 
@@ -310,12 +304,7 @@ suite.define(() => {
     await expect
       .poll(() => page.locator(".tabstrip-tab__label").allTextContents())
       .toContain("Side chat");
-    await page.evaluate(
-      () =>
-        new Promise<void>((resolve) => {
-          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-        }),
-    );
+    await nextPaint(page);
 
     expect(await gateway.getRequests("sessions.diff")).toHaveLength(1);
   });
@@ -442,13 +431,7 @@ suite.define(() => {
     };
     const diffCase = (match: Record<string, string>, files: SessionDiffFile[]) => ({
       match,
-      response: {
-        ...SESSION_DIFF_RESPONSE,
-        ...metadata,
-        files,
-        additions: files.reduce((sum, file) => sum + file.additions, 0),
-        deletions: files.reduce((sum, file) => sum + file.deletions, 0),
-      },
+      response: diffResponse(files, { ...SESSION_DIFF_RESPONSE, ...metadata }),
     });
     const { page, gateway } = await openDiff(
       {
@@ -543,8 +526,7 @@ suite.define(() => {
     await text(files.nth(1), ".session-diff__badge").toContain("untracked");
     await text(files.nth(2), ".session-diff__note").toContain("Binary file");
 
-    await panel.getByRole("button", { name: "Change view options" }).click();
-    await page.getByRole("menuitem", { name: "Switch to Split Diff" }).click();
+    await setDiffView(page, "Split");
     await expect.poll(() => modified.locator(".session-diff-split").count()).toBe(1);
     await text(modified, ".session-diff-split__side--right .tok-keyword").toBe("const");
     if (captureProof) {
@@ -558,8 +540,7 @@ suite.define(() => {
         .scrollIntoViewIfNeeded();
       await panelSurface.screenshot({ path: path.join(artifactDir, "split-dark.png") });
     }
-    await panel.getByRole("button", { name: "Change view options" }).click();
-    await page.getByRole("menuitem", { name: "Switch to Unified Diff" }).click();
+    await setDiffView(page, "Unified");
     await expect.poll(() => modified.locator(".chat-diff").count()).toBe(1);
     // View-only toggles reuse parsed patches after the expansion revalidations.
     await requestCount(gateway).toBe(3);
