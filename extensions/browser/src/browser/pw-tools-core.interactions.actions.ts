@@ -14,15 +14,13 @@ import {
 } from "./pw-session.js";
 import {
   assertInteractionCurrent,
-  awaitNavigationGuardedInteraction,
   type ElementInteractionOptions,
   getRestoredPageForTarget,
   type GuardedInteractionOptions,
   type InteractionTargetOptions,
-  interactionNavigationPolicy,
-  reconcileRemoteDialogAfterActionSettled,
   resolveBoundedDelayMs,
   runCancellablePageInteraction,
+  runGuardedPageInteraction,
   throwIfInteractionAborted,
   toFriendlyInteractionError,
 } from "./pw-tools-core.interactions.navigation.js";
@@ -91,28 +89,6 @@ export async function clickCoordsViaPlaywright(
       delay: opts.delayMs ?? 0,
     });
   });
-}
-
-async function runGuardedPageInteraction<T>(
-  page: Page,
-  opts: GuardedInteractionOptions,
-  action: () => Promise<T>,
-): Promise<T> {
-  // Mouse and keyboard primitives lack native cancellation. Keep their guard
-  // alive after foreground interruption until the underlying operation settles.
-  return await awaitNavigationGuardedInteraction(
-    {
-      action,
-      cdpUrl: opts.cdpUrl,
-      page,
-      ...interactionNavigationPolicy(opts),
-      targetId: opts.targetId,
-      assertCurrent: opts.assertCurrent,
-    },
-    opts.signal,
-    opts.signal,
-    () => reconcileRemoteDialogAfterActionSettled(page, opts.signal),
-  );
 }
 
 function resolveInteractionElement(page: Page, resolved: ReturnType<typeof requireRefOrSelector>) {
@@ -324,8 +300,6 @@ export async function evaluateViaPlaywright(
   const abortListener = signal && addAbortListener(signal, onAbort);
 
   try {
-    const navigationPolicy = interactionNavigationPolicy(opts);
-    const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, signal);
     const evaluatorBody = `
         "use strict";
         var fnSource = args.fnSource, timeoutMs = args.timeoutMs;
@@ -364,19 +338,7 @@ export async function evaluateViaPlaywright(
       const evaluate = new Function("args", evaluatorBody) as (args: EvaluateArgs) => unknown;
       action = async () => await page.evaluate(evaluate, args);
     }
-    return await awaitNavigationGuardedInteraction(
-      {
-        action,
-        cdpUrl: opts.cdpUrl,
-        page,
-        ...navigationPolicy,
-        targetId: opts.targetId,
-        assertCurrent: opts.assertCurrent,
-      },
-      signal,
-      signal,
-      reconcileRemoteDialog,
-    );
+    return await runGuardedPageInteraction(page, opts, action);
   } finally {
     abortListener?.[Symbol.dispose]();
   }
