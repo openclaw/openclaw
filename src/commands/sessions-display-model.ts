@@ -1,6 +1,5 @@
-import { resolveAgentConfig } from "../agents/agent-scope-config.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
+import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import {
   inferUniqueProviderFromConfiguredModels,
   isCliProvider,
@@ -9,7 +8,6 @@ import {
   resolvePersistedSelectedModelRef,
   type CliProviderClassifier,
 } from "../agents/model-selection.js";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -21,18 +19,15 @@ type SessionDisplayModelRow = Pick<
 };
 
 function resolveSessionDisplayDefaults(cfg: OpenClawConfig, agentId?: string): ModelRef {
-  const primary =
-    (agentId
-      ? resolveAgentModelPrimaryValue(resolveAgentConfig(cfg, agentId)?.model)
-      : undefined) ??
-    resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model) ??
-    DEFAULT_MODEL;
-  return (
-    parseModelRef(primary, DEFAULT_PROVIDER, {
-      allowManifestNormalization: false,
-      allowPluginNormalization: false,
-    }) ?? { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }
-  );
+  // Display defaults must match the runtime's configured selection, including
+  // configured aliases; manifest/plugin normalization stays disabled so the
+  // listing never loads workspace manifests.
+  return resolveDefaultModelForAgent({
+    cfg,
+    ...(agentId ? { agentId } : {}),
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
+  });
 }
 
 function normalizeCliRuntimeDisplayRef(
