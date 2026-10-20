@@ -25,13 +25,13 @@ import {
   createChatPaneSessionPanelToggles,
   type PendingSessionPanelToggle,
 } from "./chat-pane-session-panel-toggle.ts";
+import { sidebarCallbacks } from "./chat-pane-sidebar-fixture.test-support.tsx";
 import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
 import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
 } from "./chat-pane.test-support.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 
@@ -56,6 +56,25 @@ function pageState(root: HTMLElement) {
   return state;
 }
 
+type ToggleOptions = Parameters<typeof createChatPaneSessionPanelToggles>[0];
+function bindToggles(
+  current: ToggleOptions["current"],
+  updateSidebarLayout: ToggleOptions["updateSidebarLayout"],
+) {
+  const pending = { requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>() };
+  let flush!: () => void;
+  onTestFinished(
+    createRoot((dispose) => {
+      flush = createChatPaneSessionPanelToggles({ current, pending, updateSidebarLayout });
+      return dispose;
+    }),
+  );
+  return { pending, flush };
+}
+
+const dispatch = (detail: object) =>
+  window.dispatchEvent(new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, { detail }));
+
 function fixture() {
   const definitions = createDeferred<CustomElementConstructor>();
   const commit = createDeferred<boolean>();
@@ -77,39 +96,25 @@ function fixture() {
     pluginPanels: ["review/document"] as const,
     awaitDomCommit: () => Promise.resolve(),
   };
-  const pending = { requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>() };
-  const updateSidebarLayout = vi.fn((layout: ChatPageHost["sidebarLayout"]) => {
+  const updateSidebarLayout = vi.fn((layout: typeof state.sidebarLayout) => {
     state.sidebarLayout = layout;
   });
-  let flush!: () => void;
-  const dispose = createRoot((stop) => {
-    flush = createChatPaneSessionPanelToggles({
-      current: () => owner,
-      pending,
-      updateSidebarLayout,
-    });
-    return stop;
-  });
-  onTestFinished(dispose);
+  const { pending, flush } = bindToggles(() => owner, updateSidebarLayout);
 
   const event = (url = "https://forge.example/items/1") =>
     new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
       cancelable: true,
       detail: { url, open: true },
     });
-  return {
+  return Object.assign(owner, {
     flush,
     definitions,
     commit,
     deliverPanelEvent,
     event,
-    owner,
-    region,
-    root,
     pending,
-    state,
     updateSidebarLayout,
-  };
+  });
 }
 
 afterEach(() => {
@@ -120,79 +125,100 @@ afterEach(() => {
 it("opens the terminal while the sidebar region bridge awaits upgrade", () => {
   const f = fixture();
   // The pane creates the host before the lazy sidebar renderer registers its bridge.
-  Object.defineProperty(f.region, "activateTerminalHost", { value: undefined });
+  Object.defineProperty(f.sidebarRegion, "activateTerminalHost", { value: undefined });
   window.dispatchEvent(new Event(TERMINAL_PANEL_TOGGLE_EVENT));
   expect(isSidebarSlotVisible(f.state.sidebarLayout, "terminal")).toBe(true);
 });
 
-describe("plugin panel intent delivery", () => {
-  it.each(["buffered", "direct"] as const)(
-    "routes %s intents only to registered session panels",
-    (delivery) => {
-      const f = fixture();
-      const send = (panelId: string, open: boolean) =>
-        new CustomEvent(PLUGIN_PANEL_TOGGLE_EVENT, {
-          detail: { pluginId: "review", panelId, sessionKey: "session-b", open },
-        });
-      const event = send("document", true);
-      if (delivery === "buffered") {
-        rememberSessionPanelToggle("plugin:review/document", event);
-        f.flush();
-      } else {
-        window.dispatchEvent(event);
-      }
-      expect(f.updateSidebarLayout).not.toHaveBeenCalled();
-      f.state.sessionKey = "session-b";
-      window.dispatchEvent(send("missing", true));
-      expect(f.updateSidebarLayout).not.toHaveBeenCalled();
-      if (delivery === "buffered") {
-        f.flush();
-      } else {
-        window.dispatchEvent(event);
-      }
-      expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
-      expect(f.pending.requests.size).toBe(0);
-      expect(f.deliverPanelEvent).not.toHaveBeenCalled();
-      window.dispatchEvent(send("document", false));
-      expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(false);
-    },
-  );
-});
+it.each(["buffered", "direct"] as const)(
+  "routes %s intents only to registered session panels",
+  (delivery) => {
+    const f = fixture();
+    const send = (panelId: string, open: boolean) =>
+      new CustomEvent(PLUGIN_PANEL_TOGGLE_EVENT, {
+        detail: { pluginId: "review", panelId, sessionKey: "session-b", open },
+      });
+    const event = send("document", true);
+    const deliver = () => (delivery === "buffered" ? f.flush() : window.dispatchEvent(event));
+    if (delivery === "buffered") {
+      rememberSessionPanelToggle("plugin:review/document", event);
+    }
+    deliver();
+    expect(f.updateSidebarLayout).not.toHaveBeenCalled();
+    f.state.sessionKey = "session-b";
+    window.dispatchEvent(send("missing", true));
+    expect(f.updateSidebarLayout).not.toHaveBeenCalled();
+    deliver();
+    expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
+    expect(f.pending.requests.size).toBe(0);
+    expect(f.deliverPanelEvent).not.toHaveBeenCalled();
+    window.dispatchEvent(send("document", false));
+    expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(false);
+  },
+);
 
 describe("session link-reader intent delivery", () => {
-  it.each(["ready", "closed", "session"] as const)(
-    "waits for the recipient commit before delivering an intent (%s)",
-    async (outcome) => {
+  it.each([
+    ["recipient", "ready"],
+    ["recipient", "close"],
+    ["recipient", "session"],
+    ["definitions", "close"],
+    ["region", "close"],
+    ["region", "session"],
+    ["region", "capability"],
+  ] as const)("revalidates %s readiness after %s", async (stage, change) => {
+    if (stage === "recipient") {
       vi.useFakeTimers();
-      const f = fixture();
-      const recipientCommit = createDeferred<boolean>();
+    }
+    const f = fixture();
+    const recipientCommit = createDeferred<boolean>();
+    if (stage === "recipient") {
       const recipient = document.createElement("openclaw-link-reader-panel");
       Object.defineProperty(recipient, "updateComplete", { value: recipientCommit.promise });
-      f.root.append(recipient);
-      f.region.readPanelHost = () => recipient;
-      const event = f.event();
-      window.dispatchEvent(event);
+      f.sidebarRegion.after(recipient);
+      f.sidebarRegion.readPanelHost = () => recipient;
+    }
+    const event = f.event();
+    window.dispatchEvent(event);
+    if (stage !== "recipient") {
+      window.dispatchEvent(f.event("https://forge.example/items/2"));
+    }
+    if (stage !== "definitions") {
       f.definitions.resolve(HTMLElement);
-      f.commit.resolve(true);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(f.deliverPanelEvent).not.toHaveBeenCalled();
-      if (outcome === "closed") {
-        window.dispatchEvent(
-          new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
-        );
-      } else if (outcome === "session") {
-        f.state.sessionKey = "session-b";
+      if (stage === "recipient") {
+        f.commit.resolve(true);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(f.deliverPanelEvent).not.toHaveBeenCalled();
+      } else {
+        await Promise.resolve();
+        await Promise.resolve();
       }
+    }
+    if (change === "close") {
+      dispatch({ open: false });
+      expect(f.pending.requests.size).toBe(0);
+    } else if (change === "session") {
+      f.state.sessionKey = "session-b";
+    } else if (change === "capability") {
+      f.linkReaders = [];
+    }
+    f.definitions.resolve(HTMLElement);
+    f.commit.resolve(true);
+    if (stage === "recipient") {
       recipientCommit.resolve(true);
       await vi.advanceTimersByTimeAsync(0);
       expect(f.pending.requests.size).toBe(0);
-      if (outcome === "ready") {
-        expect(f.deliverPanelEvent).toHaveBeenCalledExactlyOnceWith("link-reader", event);
-      } else {
-        expect(f.deliverPanelEvent).not.toHaveBeenCalled();
-      }
-    },
-  );
+    } else {
+      await f.commit.promise;
+      await Promise.resolve();
+      await Promise.resolve();
+    }
+    if (change === "ready") {
+      expect(f.deliverPanelEvent).toHaveBeenCalledExactlyOnceWith("link-reader", event);
+    } else {
+      expect(f.deliverPanelEvent).not.toHaveBeenCalled();
+    }
+  });
 
   it("delivers every buffered reader intent in order after the lazy commit", async () => {
     const f = fixture();
@@ -233,41 +259,6 @@ describe("session link-reader intent delivery", () => {
     expect(f.pending.requests.size).toBe(0);
   });
 
-  it.each([
-    { change: "close", ready: false },
-    { change: "close", ready: true },
-    { change: "session", ready: true },
-    { change: "capability", ready: true },
-  ])(
-    "retires a pending batch after $change (definitions ready=$ready)",
-    async ({ change, ready }) => {
-      const f = fixture();
-      window.dispatchEvent(f.event());
-      window.dispatchEvent(f.event("https://forge.example/items/2"));
-      if (ready) {
-        f.definitions.resolve(HTMLElement);
-        await Promise.resolve();
-        await Promise.resolve();
-      }
-      if (change === "close") {
-        window.dispatchEvent(
-          new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
-        );
-        expect(f.pending.requests.size).toBe(0);
-      } else if (change === "session") {
-        f.state.sessionKey = "session-b";
-      } else {
-        f.owner.linkReaders = [];
-      }
-      f.definitions.resolve(HTMLElement);
-      f.commit.resolve(true);
-      await f.commit.promise;
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(f.deliverPanelEvent).not.toHaveBeenCalled();
-    },
-  );
-
   it("keeps unsupported URLs unaccepted and leaves the layout alone", () => {
     const f = fixture();
     const event = f.event("https://example.com/ordinary-link");
@@ -307,25 +298,19 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   let browserPanel: HTMLElement | undefined;
   const state = pageState(pane);
   state.sessionKey = "agent:main:local-preview";
-  const pending = { requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>() };
-  const dispose = createRoot((stop) => {
-    createChatPaneSessionPanelToggles({
-      current: () => ({
-        sidebarRegion,
-        state,
-        linkReaders: [],
-        pluginPanels: [],
-        awaitDomCommit: () => pendingUpdate ?? Promise.resolve(),
-      }),
-      pending,
-      updateSidebarLayout: (layout) => {
-        state.sidebarLayout = layout;
-        scheduleCommit();
-      },
-    });
-    return stop;
-  });
-  onTestFinished(dispose);
+  const { pending } = bindToggles(
+    () => ({
+      sidebarRegion,
+      state,
+      linkReaders: [],
+      pluginPanels: [],
+      awaitDomCommit: () => pendingUpdate ?? Promise.resolve(),
+    }),
+    (layout) => {
+      state.sidebarLayout = layout;
+      scheduleCommit();
+    },
+  );
 
   const readSnapshot = () => ({
     layout: state.sidebarLayout,
@@ -370,15 +355,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
                 };
               },
               availableWidth: 1400,
-              callbacks: {
-                activatePanel: () => undefined,
-                togglePanelExpanded: () => undefined,
-                closeSlot: () => undefined,
-                openSlot: () => undefined,
-                reorderPanel: () => undefined,
-                resizePanel: () => undefined,
-                setOpen: () => undefined,
-              },
+              callbacks: sidebarCallbacks(),
               layout: snapshot().layout,
               narrow: false,
               panelDefinitions: definitions,

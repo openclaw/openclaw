@@ -23,7 +23,6 @@ function createPane() {
     sessionId: "child-session",
     kind: "direct",
     spawnedBy: parent.key,
-    label: "Research",
     status: "running",
     hasActiveRun: true,
   };
@@ -39,25 +38,34 @@ function createPane() {
   return { ...fixture, parent, child, roster, run };
 }
 
-it("keeps Subagents closed through hydration, new batches, and session identity changes", () => {
-  const { pane, state, parent, child, roster, run } = createPane();
-  pane.render();
-  const layout = state.sidebarLayout;
+it.each([undefined, "processes"] as const)(
+  "keeps Subagents closed across lifecycle changes with %s selected",
+  (selected) => {
+    const { pane, state, parent, child, roster, run } = createPane();
+    if (selected) {
+      state.updateSidebarLayout(openSlot(state.sidebarLayout, selected));
+    }
+    pane.render();
+    const layout = state.sidebarLayout;
 
-  roster.rows = [child];
-  run(true);
-  expect(state.sidebarLayout).toEqual(layout);
+    roster.rows = [child];
+    run(true);
+    expect(state.sidebarLayout).toEqual(layout);
+    if (selected) {
+      expect(isSidebarSlotVisible(state.sidebarLayout, selected)).toBe(true);
+    }
 
-  delete parent.sessionId;
-  pane.render();
-  parent.sessionId = "replacement-session";
-  pane.render();
-  expect(state.sidebarLayout).toEqual(layout);
+    delete parent.sessionId;
+    pane.render();
+    parent.sessionId = "replacement-session";
+    pane.render();
+    expect(state.sidebarLayout).toEqual(layout);
 
-  run(false);
-  run(true);
-  expect(state.sidebarLayout).toEqual(layout);
-});
+    run(false);
+    run(true);
+    expect(state.sidebarLayout).toEqual(layout);
+  },
+);
 
 it("preserves a manually opened panel and never reopens it after dismissal", () => {
   const { pane, state, child, roster, run } = createPane();
@@ -74,15 +82,4 @@ it("preserves a manually opened panel and never reopens it after dismissal", () 
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
   run(true);
   expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
-});
-
-it("leaves the selected panel unchanged when running children are discovered", () => {
-  const { pane, state, parent, child, roster } = createPane();
-  state.updateSidebarLayout(openSlot(state.sidebarLayout, "processes"));
-  const layout = state.sidebarLayout;
-  parent.hasActiveSubagentRun = true;
-  roster.rows = [child];
-  pane.render();
-  expect(state.sidebarLayout).toEqual(layout);
-  expect(isSidebarSlotVisible(state.sidebarLayout, "processes")).toBe(true);
 });
