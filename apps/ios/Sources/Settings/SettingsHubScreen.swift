@@ -83,10 +83,12 @@ struct SettingsHubScreen: View {
                     }
                 }
         } else {
-            SettingsProTab(
-                registersNavigationDestinations: false,
-                headerSidebarAction: self.headerSidebarAction,
-                onApprovalNotificationsRoute: self.onApprovalNotificationsRoute)
+            VStack(spacing: 0) {
+                SettingsProTab(
+                    registersNavigationDestinations: false,
+                    headerSidebarAction: self.headerSidebarAction,
+                    onApprovalNotificationsRoute: self.onApprovalNotificationsRoute)
+            }
         }
     }
 
@@ -129,6 +131,7 @@ struct SettingsHubScreen: View {
 }
 
 struct EmbeddedDashboardContent: View {
+    let appModel: NodeAppModel
     @State private var bridge: IOSDeviceSettingsBridge
     let embedCompatibility: DashboardEmbedCompatibility?
     let url: URL
@@ -145,6 +148,7 @@ struct EmbeddedDashboardContent: View {
         embedCompatibility: DashboardEmbedCompatibility? = nil,
         openGateway: (() -> Void)? = nil)
     {
+        self.appModel = appModel
         self.url = url
         self.config = config
         self.openGateway = openGateway
@@ -176,7 +180,8 @@ struct EmbeddedDashboardContent: View {
                 embedCompatibility: self.embedCompatibility)
                 .id(AuthenticatedControlUI.webContentIdentity(
                     config: self.config,
-                    storedOperatorToken: storedOperatorToken))
+                    storedOperatorToken: storedOperatorToken,
+                    authorityGeneration: self.appModel.operatorAuthorityGeneration))
                 .accessibilityIdentifier("SettingsHub.Dashboard")
         }
     }
