@@ -12,9 +12,17 @@ import { prepareWorkerProjectSnapshot } from "./workspace-git-base.js";
 import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const readText = (root: string, file: string) => fs.readFile(path.join(root, file), "utf8");
+const manifests = (home: string) => path.join(home, ".openclaw-worker", "manifests", "prepared");
 
 function fixture(setup?: string) {
   return createProjectPreparationFixture(tempDirs.make("project-verification-"), setup);
+}
+
+async function advanceProject(repository: string) {
+  await fs.writeFile(path.join(repository, "input.txt"), "changed B\n");
+  await requireGit(repository, ["commit", "--quiet", "-am", "B"]);
+  return (await prepareWorkerProjectSnapshot({ localPath: repository, namespace: "gateway" }))!;
 }
 
 describe("prepared workspace completion and verification", () => {
@@ -51,14 +59,9 @@ describe("prepared workspace completion and verification", () => {
       expect(f.upload).toHaveBeenCalledTimes(1);
       expect(prepared.sourceManifestRef).toMatch(/^sha256:[a-f0-9]{64}$/u);
       expect(prepared.preparedManifestRef).toBe(prepared.sourceManifestRef);
-      expect(await fs.readFile(path.join(prepared.workspaceDir, "input.txt"), "utf8")).toBe(
-        "prepared base\n",
-      );
+      expect(await readText(prepared.workspaceDir, "input.txt")).toBe("prepared base\n");
       const completion = path.join(
-        prepared.homeDir,
-        ".openclaw-worker",
-        "manifests",
-        "prepared",
+        manifests(prepared.homeDir),
         prepared.sourceManifestRef.slice(7),
         `${prepared.preparedManifestRef.slice(7)}.json`,
       );
@@ -72,12 +75,7 @@ describe("prepared workspace completion and verification", () => {
         code: "ENOENT",
       });
 
-      await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
-      await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
-      const project = (await prepareWorkerProjectSnapshot({
-        localPath: f.repository,
-        namespace: "gateway",
-      }))!;
+      const project = await advanceProject(f.repository);
       f.runScript.mockClear();
       const next = prepare(project, "b".repeat(64));
       const refreshed = await next.project.prepare(f);
@@ -85,14 +83,14 @@ describe("prepared workspace completion and verification", () => {
       expect(refreshed.captureRequired).toBe(true);
       expect(f.runScript).toHaveBeenCalledTimes(2);
       expect(f.upload).toHaveBeenCalledTimes(2);
-      expect(refreshed.preparedWorkspace?.workspaceDir).toBe(prepared.workspaceDir);
-      expect(refreshed.preparedWorkspace?.homeDir).toBe(prepared.homeDir);
+      expect(refreshed.preparedWorkspace).toMatchObject({
+        workspaceDir: prepared.workspaceDir,
+        homeDir: prepared.homeDir,
+      });
       expect(await requireGit(prepared.workspaceDir, ["rev-parse", "HEAD"])).toBe(
         project.baseCommit,
       );
-      expect(await fs.readFile(path.join(prepared.workspaceDir, "input.txt"), "utf8")).toBe(
-        "changed B\n",
-      );
+      expect(await readText(prepared.workspaceDir, "input.txt")).toBe("changed B\n");
       await expect(fs.stat(path.join(prepared.homeDir, "setup-ran"))).rejects.toMatchObject({
         code: "ENOENT",
       });
@@ -106,15 +104,7 @@ describe("prepared workspace completion and verification", () => {
       const first = changed === "appeared" ? f.operation() : await f.preparedOperation();
       const prepared = (await first.project.prepare(f)).preparedWorkspace!;
       first.close();
-      let project = f.project;
-      if (changed !== "appeared") {
-        await fs.writeFile(path.join(f.repository, "input.txt"), "changed B\n");
-        await requireGit(f.repository, ["commit", "--quiet", "-am", "B"]);
-        project = (await prepareWorkerProjectSnapshot({
-          localPath: f.repository,
-          namespace: "gateway",
-        }))!;
-      }
+      const project = changed === "appeared" ? f.project : await advanceProject(f.repository);
       const next =
         changed === "appeared"
           ? await f.preparedOperation()
@@ -148,12 +138,7 @@ describe("prepared workspace completion and verification", () => {
                   project.baseCommit,
                 ]);
               } else if (changed === "completion") {
-                const completionRoot = path.join(
-                  prepared.homeDir,
-                  ".openclaw-worker",
-                  "manifests",
-                  "prepared",
-                );
+                const completionRoot = manifests(prepared.homeDir);
                 await fs.rename(
                   path.join(completionRoot, prepared.sourceManifestRef.slice(7)),
                   path.join(completionRoot, "0".repeat(64)),

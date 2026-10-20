@@ -4,6 +4,20 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as support from "./service.test-support.js";
 
+async function prepareEntrance(entrance: "destroy" | "bootstrap-failure", id: string) {
+  if (entrance === "destroy") {
+    await support.seedReady(id);
+  } else {
+    support.testState.bootstrapWorker = vi.fn(async () => {
+      throw new Error("bootstrap failed before admission");
+    });
+  }
+  return (service: ReturnType<typeof support.createService>) =>
+    entrance === "destroy"
+      ? service.destroy(id)
+      : service.createWithRequest({ profileId: "development", idempotencyKey: id });
+}
+
 describe("worker provider teardown deadlines", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
@@ -18,36 +32,18 @@ describe("worker provider teardown deadlines", () => {
         await racePromiseWithAbortSignal(finish.promise, signal);
       });
       const resolveDestroyTimeoutMs = vi.fn(() => 10 * 60_000);
-      if (entrance === "destroy") {
-        await support.seedReady("slow-destroy");
-      } else {
-        support.testState.bootstrapWorker = vi.fn(async () => {
-          throw new Error("bootstrap failed before admission");
-        });
-      }
+      const run = await prepareEntrance(entrance, "slow-destroy");
       const service = support.createService(
         support.createProvider({ destroy, resolveDestroyTimeoutMs }),
       );
       // Keep the monotonic clock shared with real SQLite workers on its native epoch.
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       let settled = false;
-      const operation = (
-        entrance === "destroy"
-          ? service.destroy("slow-destroy")
-          : service.createWithRequest({
-              profileId: "development",
-              idempotencyKey: "failed-bootstrap-slow-destroy",
-            })
-      ).then(
-        (result) => {
+      const operation = run(service)
+        .catch((error: unknown) => error)
+        .finally(() => {
           settled = true;
-          return result;
-        },
-        (error: unknown) => {
-          settled = true;
-          return error;
-        },
-      );
+        });
       try {
         await support.waitForFast(() => started.promise);
         await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
@@ -82,28 +78,15 @@ describe("worker provider teardown deadlines", () => {
         throw new Error("must not evaluate overridden deadline");
       });
       const destroy = vi.fn(async () => {});
-      if (entrance === "destroy") {
-        await support.seedReady("override-destroy");
-      } else {
-        support.testState.bootstrapWorker = vi.fn(async () => {
-          throw new Error("bootstrap failed");
-        });
-      }
+      const run = await prepareEntrance(entrance, "override-destroy");
       const service = support.createService(
         support.createProvider({ destroy, resolveDestroyTimeoutMs }),
         { providerCallTimeoutMs: 1_000 },
       );
       if (entrance === "destroy") {
-        await expect(service.destroy("override-destroy")).resolves.toMatchObject({
-          state: "destroyed",
-        });
+        await expect(run(service)).resolves.toMatchObject({ state: "destroyed" });
       } else {
-        await expect(
-          service.createWithRequest({
-            profileId: "development",
-            idempotencyKey: "override-bootstrap-cleanup",
-          }),
-        ).rejects.toMatchObject({ code: "bootstrap_failure" });
+        await expect(run(service)).rejects.toMatchObject({ code: "bootstrap_failure" });
         expect(support.testState.store.list()[0]?.state).toBe("failed");
       }
       expect(resolveDestroyTimeoutMs).not.toHaveBeenCalled();
