@@ -29,57 +29,45 @@ it.each([undefined, false, true])(
         messageId: undefined,
       },
     );
-    assert(page.encodedResponse);
-    expect(Object.keys(page.encodedResponse).toSorted()).toEqual([
+    const response = page.encodedResponse;
+    const compressed = page.encodedMessagesDeflate;
+    assert(response);
+    expect(Object.keys(response).toSorted()).toEqual([
       "messages",
       "messagesBytes",
       "responseHistoryBytes",
     ]);
     if (!deflate) {
-      expect(page.encodedMessagesDeflate).toBeUndefined();
+      expect(compressed).toBeUndefined();
       return;
     }
-    assert(page.encodedMessagesDeflate);
-    expect(Buffer.from(page.encodedMessagesDeflate.subarray(-4))).toEqual(
-      Buffer.from([0, 0, 255, 255]),
+    assert(compressed);
+    expect(Buffer.from(compressed.subarray(-4))).toEqual(Buffer.from([0, 0, 255, 255]));
+    expect(inflateRawSync(compressed, { finishFlush: zlibConstants.Z_SYNC_FLUSH })).toEqual(
+      Buffer.from(response.messages),
     );
-    expect(
-      inflateRawSync(page.encodedMessagesDeflate, { finishFlush: zlibConstants.Z_SYNC_FLUSH }),
-    ).toEqual(Buffer.from(page.encodedResponse.messages));
-    expect(page.encodedMessagesDeflate.buffer.byteLength).toBe(
-      page.encodedMessagesDeflate.byteLength,
-    );
+    expect(compressed.buffer.byteLength).toBe(compressed.byteLength);
   },
 );
 
 it("joins retained legacy token metrics to the matching transcript marker", () => {
-  const marker = {
-    role: "system",
-    __openclaw: { kind: "compaction", id: "compact-entry-1", seq: 4 },
-  };
+  const marker = { role: "system", __openclaw: { kind: "compaction", id: "c", seq: 4 } };
+  const metrics = { tokensBefore: 900_000, tokensAfter: 24_700 };
   const entry = {
     sessionId: "session-1",
     updatedAt: 1_000,
     compactionCheckpoints: [
       {
-        sessionId: "session-1",
-        tokensBefore: 900_000,
-        tokensAfter: 24_700,
+        ...metrics,
         preCompaction: { sessionId: "session-1" },
-        postCompaction: { sessionId: "session-1", entryId: "compact-entry-1" },
+        postCompaction: { sessionId: "session-1", entryId: "c" },
       },
     ],
   };
 
-  const result = enrichChatHistoryCompactionMarkers([marker], entry);
-
-  expect(result[0]).toEqual({
+  expect(enrichChatHistoryCompactionMarkers([marker], entry)[0]).toEqual({
     ...marker,
-    __openclaw: {
-      ...marker["__openclaw"],
-      tokensBefore: 900_000,
-      tokensAfter: 24_700,
-    },
+    __openclaw: { ...marker["__openclaw"], ...metrics },
   });
   expect(marker["__openclaw"]).not.toHaveProperty("tokensBefore");
 });
@@ -128,26 +116,13 @@ it.each([
     },
     { entry: undefined, maxHistoryBytes: 512 * 1024, messageId },
   );
-  expect(page).toMatchObject({
-    nextOffset: 2,
-    ...(withActivity ? { hasMore: true } : {}),
-    messages: [
-      {
-        __openclaw: {
-          id: messageId ?? (withActivity ? "sibling-59" : "sibling-4"),
-          truncated: true,
-        },
-      },
-    ],
-  });
+  const id = messageId ?? (withActivity ? "sibling-59" : "sibling-4");
+  expect(page.messages).toMatchObject([{ __openclaw: { id, truncated: true } }]);
+  expect(page.nextOffset).toBe(2);
   if (withActivity) {
+    expect(page.hasMore).toBe(true);
     expect(page.activity).toBeUndefined();
-    const bytes =
-      Buffer.byteLength(JSON.stringify(page.messages)) +
-      (page.activity ? Buffer.byteLength(JSON.stringify({ activity: page.activity })) - 1 : 0);
-    expect(bytes).toBeLessThanOrEqual(512 * 1024);
-    expect(page.messagesBytes).toBe(bytes);
-  } else {
-    expect(page.messagesBytes).toBeLessThan(512 * 1024);
+    expect(page.messagesBytes).toBe(Buffer.byteLength(JSON.stringify(page.messages)));
   }
+  expect(page.messagesBytes).toBeLessThan(512 * 1024);
 });

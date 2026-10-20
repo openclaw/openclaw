@@ -1,27 +1,17 @@
 import assert from "node:assert/strict";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import {
-  appendTranscriptMessage,
-  patchSessionEntryCore,
-  updateSessionEntry,
-  upsertSessionEntryCore,
-  type SessionTranscriptReadScope,
-} from "../../config/sessions/session-accessor.js";
+import * as sessions from "../../config/sessions/session-accessor.js";
 import * as coldStorageRead from "../../config/sessions/session-cold-storage-read.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  clearUserProfileAuthLink,
-  listUserProfileAuthLinks,
-  readUserModelAuthProfile,
-} from "../../state/user-model-accounts.js";
+import * as modelAccounts from "../../state/user-model-accounts.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -36,10 +26,7 @@ import {
 } from "./chat-history-fixtures.test-support.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
-import {
-  registerMetadataCallerCases,
-  registerMetadataRevocationCases,
-} from "./chat-metadata-ownership.test-support.js";
+import * as metadataCases from "./chat-metadata-ownership.test-support.js";
 import { connectChatMetadataAccount } from "./chat-metadata-runtime.test-support.js";
 import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
@@ -99,11 +86,11 @@ function createPersonalMetadataFixture() {
           .map((current) => current.connId),
       ),
   });
-  const request = async (
+  const request = (
     params: Record<string, unknown>,
     overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> = {},
-  ) => {
-    return requestHistory(
+  ) =>
+    requestHistory(
       "chat.metadata",
       params,
       context,
@@ -112,14 +99,13 @@ function createPersonalMetadataFixture() {
       false,
       overrides.signal,
     );
-  };
   return { owner, authProfileId, client, clients, config, metadata, readChatMetadata, request };
 }
 
-it("serves notices only to Control UI through worker history, startup, delta, and exact hydration", async () => {
-  await withHistoryState(async () => {
+it("serves notices only to Control UI through worker history, startup, delta, and exact hydration", () =>
+  withHistoryState(async () => {
     const scope = await seedSession("plugin-steering");
-    await appendTranscriptMessage(scope, {
+    await sessions.appendTranscriptMessage(scope, {
       eventId: "question",
       now: 1,
       message: { role: "user", content: "Question" },
@@ -141,7 +127,7 @@ it("serves notices only to Control UI through worker history, startup, delta, an
     };
     const cursor = (await request("chat.history")).deltaCursor;
     expect(typeof cursor).toBe("string");
-    await appendTranscriptMessage(scope, {
+    await sessions.appendTranscriptMessage(scope, {
       eventId: "plugin-note",
       now: 2,
       message: {
@@ -158,7 +144,7 @@ it("serves notices only to Control UI through worker history, startup, delta, an
         },
       },
     });
-    await appendTranscriptMessage(scope, {
+    await sessions.appendTranscriptMessage(scope, {
       eventId: "hidden-exec",
       now: 3,
       message: {
@@ -205,153 +191,134 @@ it("serves notices only to Control UI through worker history, startup, delta, an
         });
       }
     }
-  });
-});
+  }));
 
 it.each(["chat.history", "chat.startup"] as const)(
   "%s keeps selection session-only for an agent with an explicit default",
-  async (method) => {
-    await withOpenClawTestState(
-      { scenario: "minimal", prepareProfileCatalog: true },
-      async (state) => {
-        const cfg = {
-          agents: {
-            defaults: { model: "openai/gpt-5.6-sol" },
-            ownership: "explicit",
-            entries: {
-              main: {},
-              work: { model: "anthropic/claude-sonnet-4-6" },
-            },
-          },
-        } satisfies OpenClawConfig;
-        await state.writeConfig(cfg);
-        setRuntimeConfigSnapshot(cfg);
-        const scope = {
-          agentId: "work",
-          sessionKey: "agent:work:main",
-          sessionId: "work-main",
-        };
-        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-        const respond = await requestHistory(
-          method,
-          { agentId: scope.agentId, sessionKey: scope.sessionKey },
-          await createHistoryReadContext({ getRuntimeConfig: () => cfg }),
-          { connect: { scopes: ["operator.admin"] } } as never,
-        );
-        expect(expectSuccess(respond).defaults).toMatchObject({
-          modelSelectionTarget: "session",
-        });
-      },
-    );
-  },
+  (method) =>
+    withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
+      const cfg = {
+        agents: {
+          defaults: { model: "openai/gpt-5.6-sol" },
+          ownership: "explicit",
+          entries: { main: {}, work: { model: "anthropic/claude-sonnet-4-6" } },
+        },
+      } satisfies OpenClawConfig;
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      const scope = { agentId: "work", sessionKey: "agent:work:main", sessionId: "work-main" };
+      await sessions.upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const respond = await requestHistory(
+        method,
+        { agentId: scope.agentId, sessionKey: scope.sessionKey },
+        await createHistoryReadContext({ getRuntimeConfig: () => cfg }),
+        { connect: { scopes: ["operator.admin"] } } as never,
+      );
+      expect(expectSuccess(respond).defaults).toMatchObject({
+        modelSelectionTarget: "session",
+      });
+    }),
 );
 
-describe("chat history sharing projection", () => {
-  it.each(["chat.history", "chat.startup"] as const)(
-    "%s projects unbound canonical ACP metadata without host ACP reads",
-    historyCase(async (method) => {
-      const sessionKey = "agent:main:acp:unbound-history";
-      seedCanonicalAcpSessionMeta({
-        sessionKey,
-        meta: {
-          backend: "acpx",
-          agent: "main",
-          runtimeSessionName: "unbound-history",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 1,
-        },
+it.each(["chat.history", "chat.startup"] as const)(
+  "%s projects unbound canonical ACP metadata without host ACP reads",
+  historyCase(async (method) => {
+    const sessionKey = "agent:main:acp:unbound-history";
+    seedCanonicalAcpSessionMeta({
+      sessionKey,
+      meta: {
+        backend: "acpx",
+        agent: "main",
+        runtimeSessionName: "unbound-history",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 1,
+      },
+    });
+    const context = await createHistoryReadContext();
+    const client = identifiedClient("unbound-history-operator");
+    client.connect.scopes = ["operator.admin"];
+    const respond = vi.fn<RespondFn>();
+    const hostSql = observeHostDataSql();
+    try {
+      await requestHistory(method, { sessionKey }, context, client, respond);
+      const info = asOptionalRecord(expectSuccess(respond).sessionInfo);
+      assert(info, "session info");
+      expect(info.runtimeSelectionLocked).toBe(true);
+      expect(info.agentRuntime).toEqual({
+        id: "acpx",
+        source: "session-key",
+        cloudPlacementSupported: false,
+        devicePlacementSupported: false,
       });
-      const context = await createHistoryReadContext();
-      const client = identifiedClient("unbound-history-operator");
-      client.connect.scopes = ["operator.admin"];
-      const respond = vi.fn<RespondFn>();
-      const hostSql = observeHostDataSql();
-      try {
-        await requestHistory(method, { sessionKey }, context, client, respond);
-        const info = asOptionalRecord(expectSuccess(respond).sessionInfo);
-        assert(info, "session info");
-        expect(info.runtimeSelectionLocked).toBe(true);
-        expect(info.agentRuntime).toEqual({
-          id: "acpx",
-          source: "session-key",
-          cloudPlacementSupported: false,
-          devicePlacementSupported: false,
-        });
-        expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
-      } finally {
-        hostSql.restore();
-      }
-    }),
-  );
+      expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
+  }),
+);
 
-  it.each(["chat.history", "chat.startup"] as const)(
-    "%s carries current caller sharing controls on sessionInfo",
-    historyCase(async (method) => {
-      const scope = { agentId: "main", sessionKey: "agent:main:sharing-history" };
-      await upsertSessionEntryCore(scope, {
+it.each(["chat.history", "chat.startup"] as const)(
+  "%s carries current caller sharing controls on sessionInfo",
+  historyCase(async (method) => {
+    const scope = { agentId: "main", sessionKey: "agent:main:sharing-history" };
+    await sessions.upsertSessionEntryCore(scope, {
+      sessionId: "sharing-history",
+      updatedAt: Date.now(),
+      visibility: "read-only",
+      createdActor: { type: "human", source: "profile", id: "owner" },
+    });
+    for (const role of ["owner", "admin", "viewer"] as const) {
+      const client = identifiedClient(role);
+      if (role === "admin") {
+        client.connect.scopes = ["operator.admin"];
+      }
+      const respond = await requestHistory(method, scope, await createHistoryReadContext(), client);
+      expect(expectSuccess(respond).sessionInfo).toMatchObject({
         sessionId: "sharing-history",
-        updatedAt: Date.now(),
+        sharingRole: role,
         visibility: "read-only",
-        createdActor: { type: "human", source: "profile", id: "owner" },
       });
-      for (const role of ["owner", "admin", "viewer"] as const) {
-        const client = identifiedClient(role);
-        if (role === "admin") {
-          client.connect.scopes = ["operator.admin"];
-        }
-        const respond = await requestHistory(
-          method,
-          scope,
-          await createHistoryReadContext(),
-          client,
-        );
-        expect(expectSuccess(respond).sessionInfo).toMatchObject({
-          sessionId: "sharing-history",
-          sharingRole: role,
-          visibility: "read-only",
-        });
-      }
-    }),
-  );
+    }
+  }),
+);
 
-  it.each(["chat.history", "chat.startup"] as const)(
-    "%s refreshes sharing after startup work and rejects a replaced session",
-    historyCase(async (method) => {
-      const scope = { agentId: "main", sessionKey: "agent:main:sharing-history-race" };
-      await upsertSessionEntryCore(scope, {
-        sessionId: "sharing-history-race",
-        updatedAt: Date.now(),
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: "owner" },
-      });
-      const client = identifiedClient("viewer");
-      client.connect.scopes = ["operator.admin"];
-      const readChatStartupProjection = vi.fn(async () => {
-        client.connect.scopes = ["operator.read", "operator.write"];
-        await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
-        return undefined;
-      });
-      const context = await createHistoryReadContext({ readChatStartupProjection });
-      const call = () => requestHistory(method, scope, context, client);
-      expect(expectSuccess(await call()).sessionInfo).toMatchObject({
-        sharingRole: "viewer",
-        visibility: "read-only",
-      });
-      readChatStartupProjection.mockImplementationOnce(async () => {
-        await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
-        return undefined;
-      });
-      expectFailure(await call(), "INVALID_REQUEST");
-      await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
-      readChatStartupProjection.mockImplementationOnce(async () => {
-        await patchSessionEntryCore(scope, () => ({ sessionId: "replacement-history" }));
-        return undefined;
-      });
-      expectFailure(await call(), "UNAVAILABLE", true);
-    }),
-  );
-});
+it.each(["chat.history", "chat.startup"] as const)(
+  "%s refreshes sharing after startup work and rejects a replaced session",
+  historyCase(async (method) => {
+    const scope = { agentId: "main", sessionKey: "agent:main:sharing-history-race" };
+    await sessions.upsertSessionEntryCore(scope, {
+      sessionId: "sharing-history-race",
+      updatedAt: Date.now(),
+      visibility: "shared",
+      createdActor: { type: "human", source: "profile", id: "owner" },
+    });
+    const client = identifiedClient("viewer");
+    client.connect.scopes = ["operator.admin"];
+    const readChatStartupProjection = vi.fn(async () => {
+      client.connect.scopes = ["operator.read", "operator.write"];
+      await sessions.patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
+      return undefined;
+    });
+    const context = await createHistoryReadContext({ readChatStartupProjection });
+    const call = () => requestHistory(method, scope, context, client);
+    expect(expectSuccess(await call()).sessionInfo).toMatchObject({
+      sharingRole: "viewer",
+      visibility: "read-only",
+    });
+    readChatStartupProjection.mockImplementationOnce(async () => {
+      await sessions.patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
+      return undefined;
+    });
+    expectFailure(await call(), "INVALID_REQUEST");
+    await sessions.patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
+    readChatStartupProjection.mockImplementationOnce(async () => {
+      await sessions.patchSessionEntryCore(scope, () => ({ sessionId: "replacement-history" }));
+      return undefined;
+    });
+    expectFailure(await call(), "UNAVAILABLE", true);
+  }),
+);
 
 it.each([
   { method: "chat.history", change: "revocation", code: "INVALID_REQUEST" },
@@ -364,8 +331,8 @@ it.each([
   { method: "chat.startup", change: "sharing metadata", code: "UNAVAILABLE" },
 ] as const)(
   "$method rejects a delta after $change during transcript restoration",
-  async ({ method, change, code }) => {
-    await withHistoryState(async () => {
+  ({ method, change, code }) =>
+    withHistoryState(async () => {
       const scope = await seedSession("delta-publication", {
         lifecycleRevision: "before-reset",
         sessionStartedAt: 1,
@@ -373,7 +340,7 @@ it.each([
         visibility: "shared",
         createdActor: { type: "human", source: "profile", id: "owner" },
       });
-      await appendTranscriptMessage(scope, {
+      await sessions.appendTranscriptMessage(scope, {
         message: { role: "user", content: "before cursor", timestamp: 1 },
       });
       const client = identifiedClient("viewer");
@@ -392,7 +359,7 @@ it.each([
       });
       const cursor = initialResponse.deltaCursor;
       assert(typeof cursor === "string", "expected initial delta cursor");
-      await appendTranscriptMessage(scope, {
+      await sessions.appendTranscriptMessage(scope, {
         message: { role: "assistant", content: "private delta content", timestamp: 2 },
       });
       const entered = createDeferred();
@@ -400,7 +367,7 @@ it.each([
       const read = coldStorageRead.readRestoredSessionTranscript;
       const readSpy = vi.spyOn(coldStorageRead, "readRestoredSessionTranscript");
       readSpy.mockImplementationOnce(async function delayedRead<T>(
-        readScope: SessionTranscriptReadScope,
+        readScope: sessions.SessionTranscriptReadScope,
         readSnapshot: () => T,
       ): Promise<T> {
         const result = await read(readScope, readSnapshot);
@@ -412,7 +379,7 @@ it.each([
       try {
         await Promise.race([entered.promise, pending]);
         expect(readSpy).toHaveBeenCalledOnce();
-        await patchSessionEntryCore(scope, () =>
+        await sessions.patchSessionEntryCore(scope, () =>
           change === "replacement"
             ? { sessionId: "replacement" }
             : change === "reset"
@@ -437,8 +404,7 @@ it.each([
           lifecycleRevision: "after-reset",
         });
       }
-    });
-  },
+    }),
 );
 
 it.each([
@@ -466,7 +432,7 @@ it.each(["chat.history", "chat.startup"] as const)(
       toolOverrides,
       skillsSnapshot,
     });
-    await upsertSessionEntryCore(childScope, {
+    await sessions.upsertSessionEntryCore(childScope, {
       sessionId: "history-child",
       updatedAt: now,
       parentSessionKey: scope.sessionKey,
@@ -476,34 +442,29 @@ it.each(["chat.history", "chat.startup"] as const)(
     const context = await createHistoryReadContext();
     const call = async () => {
       const respond = vi.fn<RespondFn>();
-      const cloneSpy = vi.spyOn(globalThis, "structuredClone");
-      const parseSpy = vi.spyOn(JSON, "parse");
-      try {
-        const pending = requestHistory(
-          method,
-          { sessionKey: scope.sessionKey },
-          context,
-          null,
-          respond,
-        );
-        // Count synchronous history preparation before optional startup icon work resumes.
-        const preparationCopies = cloneSpy.mock.calls.filter(
-          ([value]) => asOptionalRecord(value)?.sessionId === scope.sessionId,
-        ).length;
-        expect(parseSpy.mock.calls.some(([value]) => value.includes(skillsSnapshot.prompt))).toBe(
-          false,
-        );
-        await pending;
-        expect(
-          parseSpy.mock.calls.filter(([value]) => value.includes('"sessionId":"history-child"'))
-            .length,
-        ).toBeLessThanOrEqual(1);
-        expect(preparationCopies).toBe(0);
-        return expectSuccess(respond);
-      } finally {
-        cloneSpy.mockRestore();
-        parseSpy.mockRestore();
-      }
+      using cloneSpy = vi.spyOn(globalThis, "structuredClone");
+      using parseSpy = vi.spyOn(JSON, "parse");
+      const pending = requestHistory(
+        method,
+        { sessionKey: scope.sessionKey },
+        context,
+        null,
+        respond,
+      );
+      // Count synchronous history preparation before optional startup icon work resumes.
+      const preparationCopies = cloneSpy.mock.calls.filter(
+        ([value]) => asOptionalRecord(value)?.sessionId === scope.sessionId,
+      ).length;
+      expect(parseSpy.mock.calls.some(([value]) => value.includes(skillsSnapshot.prompt))).toBe(
+        false,
+      );
+      await pending;
+      expect(
+        parseSpy.mock.calls.filter(([value]) => value.includes('"sessionId":"history-child"'))
+          .length,
+      ).toBeLessThanOrEqual(1);
+      expect(preparationCopies).toBe(0);
+      return expectSuccess(respond);
     };
 
     const first = await call();
@@ -517,8 +478,8 @@ it.each(["chat.history", "chat.startup"] as const)(
     expect(toolOverrides.mcpToolsDeny.synthetic).toEqual(["blocked"]);
     expect((await call()).toolOverrides).toEqual(toolOverrides);
 
-    await updateSessionEntry(scope, () => ({ thinkingLevel: "low", updatedAt: now + 1 }));
-    await updateSessionEntry(childScope, () => ({
+    await sessions.updateSessionEntry(scope, () => ({ thinkingLevel: "low", updatedAt: now + 1 }));
+    await sessions.updateSessionEntry(childScope, () => ({
       parentSessionKey: "agent:main:other-parent",
       spawnedBy: "agent:main:other-parent",
       updatedAt: now + 1,
@@ -536,7 +497,7 @@ it.each(["chat.history", "chat.startup"] as const)(
     const scope = await seedSession("history-bytes");
     const marker = "history-byte-fixture";
     for (let index = 0; index < 12; index++) {
-      await appendTranscriptMessage(scope, {
+      await sessions.appendTranscriptMessage(scope, {
         message: {
           role: index % 2 === 0 ? "user" : "assistant",
           content: `${marker}-${index}: ${'漢字\n"\\'.repeat(100)}`,
@@ -611,7 +572,7 @@ it.each(["chat.history", "chat.startup"] as const)(
       expect(exact.inFlightRun).toEqual(expected);
       const delta = await call({ cursor: exact.deltaCursor, maxBytes: exactBytes });
       expect(delta).toMatchObject({ kind: "delta", messages: [], inFlightRun: expected });
-      await appendTranscriptMessage(scope, {
+      await sessions.appendTranscriptMessage(scope, {
         eventId: "delta-user",
         message: {
           role: "user",
@@ -619,7 +580,7 @@ it.each(["chat.history", "chat.startup"] as const)(
           timestamp: 13,
         },
       });
-      await appendTranscriptMessage(scope, {
+      await sessions.appendTranscriptMessage(scope, {
         eventId: "delta-tool",
         message: {
           role: "assistant",
@@ -640,10 +601,7 @@ it.each(["chat.history", "chat.startup"] as const)(
         1 +
         Buffer.byteLength(JSON.stringify(expected));
       for (const extraBytes of [0, -1]) {
-        const page = await call({
-          cursor: exact.deltaCursor,
-          maxBytes: deltaBytes + extraBytes,
-        });
+        const page = await call({ cursor: exact.deltaCursor, maxBytes: deltaBytes + extraBytes });
         expect(page.messages).toEqual(appended.messages);
         expect(page.activity).toEqual(appended.activity);
         expect(page.inFlightRun).toEqual(extraBytes === 0 ? expected : { ...expected, text: "" });
@@ -667,126 +625,119 @@ it.each(["chat.history", "chat.startup"] as const)(
   }),
 );
 
-describe("chat metadata ownership", () => {
-  it("previews a retained personal account with read scope without changing its cleared default", async () => {
-    await withOpenClawTestState({ layout: "state-only", prepareProfileCatalog: true }, async () => {
-      const { owner, authProfileId, metadata, readChatMetadata, request } =
-        createPersonalMetadataFixture();
-      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
-      clearUserProfileAuthLink({ profileId: owner.id, provider: "openai" });
-      const before = readUserModelAuthProfile(authProfileId);
+it("previews a retained personal account with read scope without changing its cleared default", () =>
+  withOpenClawTestState({ layout: "state-only", prepareProfileCatalog: true }, async () => {
+    const { owner, authProfileId, metadata, readChatMetadata, request } =
+      createPersonalMetadataFixture();
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    modelAccounts.clearUserProfileAuthLink({ profileId: owner.id, provider: "openai" });
+    const before = modelAccounts.readUserModelAuthProfile(authProfileId);
 
-      const respond = await request({ agentId: "main", authProfileId });
+    const respond = await request({ agentId: "main", authProfileId });
 
-      expect(respond).toHaveBeenCalledWith(true, metadata);
-      expect(readChatMetadata).toHaveBeenCalledWith({
-        agentId: "main",
-        requesterProfileId: owner.id,
-        isCurrent: expect.any(Function),
+    expect(respond).toHaveBeenCalledWith(true, metadata);
+    expect(readChatMetadata).toHaveBeenCalledWith({
+      agentId: "main",
+      requesterProfileId: owner.id,
+      isCurrent: expect.any(Function),
+      assertCurrent: expect.any(Function),
+      draftAccountSelection: expect.objectContaining({
+        owner: owner.id,
+        authProfileId,
         assertCurrent: expect.any(Function),
-        draftAccountSelection: expect.objectContaining({
-          owner: owner.id,
-          authProfileId,
-          assertCurrent: expect.any(Function),
-        }),
-      });
-      expect(listUserProfileAuthLinks(owner.id)).toEqual([]);
-      expect(readUserModelAuthProfile(authProfileId)).toEqual(before);
+      }),
     });
-  });
+    expect(modelAccounts.listUserProfileAuthLinks(owner.id)).toEqual([]);
+    expect(modelAccounts.readUserModelAuthProfile(authProfileId)).toEqual(before);
+  }));
 
-  registerMetadataCallerCases(createPersonalMetadataFixture);
+metadataCases.registerMetadataCallerCases(createPersonalMetadataFixture);
 
-  registerMetadataRevocationCases(createPersonalMetadataFixture);
+metadataCases.registerMetadataRevocationCases(createPersonalMetadataFixture);
 
-  it("reads the persisted session profile without contaminating neutral agent metadata", async () => {
-    await withHistoryState(async () => {
-      const sessionKey = "agent:main:locked";
-      await seedSession("locked", {
-        authProfileOverride: "test:locked",
-        authProfileOverrideSource: "user",
-      });
-      const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async () => ({
-        commands: [],
-        models: [],
-        swarmEnabled: false,
-      }));
-      const respond = vi.fn<RespondFn>();
-      const context = createDirectChatContext({ readChatMetadata });
-      const call = (params: Record<string, unknown>) =>
-        requestHistory("chat.metadata", params, context, null, respond);
-      for (const params of [{ agentId: "   ", sessionKey }, { agentId: "main" }]) {
-        await call(params);
-      }
-      expect(readChatMetadata.mock.calls).toEqual([
-        [
-          expect.objectContaining({
-            agentId: "main",
-            sessionKey,
-            isCurrent: expect.any(Function),
-            sessionEntry: expect.objectContaining({
-              authProfileOverride: "test:locked",
-              authProfileOverrideSource: "user",
-            }),
+it("reads the persisted session profile without contaminating neutral agent metadata", () =>
+  withHistoryState(async () => {
+    const sessionKey = "agent:main:locked";
+    await seedSession("locked", {
+      authProfileOverride: "test:locked",
+      authProfileOverrideSource: "user",
+    });
+    const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async () => ({
+      commands: [],
+      models: [],
+      swarmEnabled: false,
+    }));
+    const respond = vi.fn<RespondFn>();
+    const context = createDirectChatContext({ readChatMetadata });
+    const call = (params: Record<string, unknown>) =>
+      requestHistory("chat.metadata", params, context, null, respond);
+    for (const params of [{ agentId: "   ", sessionKey }, { agentId: "main" }]) {
+      await call(params);
+    }
+    expect(readChatMetadata.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          agentId: "main",
+          sessionKey,
+          isCurrent: expect.any(Function),
+          sessionEntry: expect.objectContaining({
+            authProfileOverride: "test:locked",
+            authProfileOverrideSource: "user",
           }),
-        ],
-        [
-          {
-            agentId: "main",
-            requesterProfileId: undefined,
-            isCurrent: expect.any(Function),
-            assertCurrent: expect.any(Function),
-          },
-        ],
-      ]);
-      const neutral = expectDefined(readChatMetadata.mock.calls[1]?.[0], "neutral metadata read");
-      expect(neutral.isCurrent?.()).toBe(true);
-      expectDefined(neutral.assertCurrent, "neutral metadata authority check")();
-      expect(respond).toHaveBeenCalledTimes(2);
-      readChatMetadata.mockClear();
-      await call({ agentId: "other", sessionKey });
-      expect(readChatMetadata).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenLastCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
-    });
-  });
-
-  it("returns a typed selection error for an ownerless explicit fleet", async () => {
-    const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { ops: {}, research: {} },
-      },
-    };
-    const respond = vi.fn();
-    const readChatMetadata = vi.fn();
-
-    await expectDefined(
-      chatHistoryHandlers["chat.metadata"],
-      'chatHistoryHandlers["chat.metadata"] test invariant',
-    )({
-      params: {},
-      respond: respond as unknown as RespondFn,
-      req: {} as never,
-      client: null,
-      isWebchatConnect: () => false,
-      context: {
-        getRuntimeConfig: () => config,
-        readChatMetadata,
-      } as unknown as GatewayRequestContext,
-    });
-
-    expect(respond).toHaveBeenCalledWith(
+        }),
+      ],
+      [
+        {
+          agentId: "main",
+          requesterProfileId: undefined,
+          isCurrent: expect.any(Function),
+          assertCurrent: expect.any(Function),
+        },
+      ],
+    ]);
+    const neutral = expectDefined(readChatMetadata.mock.calls[1]?.[0], "neutral metadata read");
+    expect(neutral.isCurrent?.()).toBe(true);
+    expectDefined(neutral.assertCurrent, "neutral metadata authority check")();
+    expect(respond).toHaveBeenCalledTimes(2);
+    readChatMetadata.mockClear();
+    await call({ agentId: "other", sessionKey });
+    expect(readChatMetadata).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenLastCalledWith(
       false,
       undefined,
-      expect.objectContaining({
-        code: "INVALID_REQUEST",
-        message: expect.stringContaining("has no explicit owner"),
-      }),
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
-    expect(readChatMetadata).not.toHaveBeenCalled();
+  }));
+
+it("returns a typed selection error for an ownerless explicit fleet", async () => {
+  const config: OpenClawConfig = {
+    agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+  };
+  const respond = vi.fn();
+  const readChatMetadata = vi.fn();
+
+  await expectDefined(
+    chatHistoryHandlers["chat.metadata"],
+    'chatHistoryHandlers["chat.metadata"] test invariant',
+  )({
+    params: {},
+    respond: respond as unknown as RespondFn,
+    req: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+    context: {
+      getRuntimeConfig: () => config,
+      readChatMetadata,
+    } as unknown as GatewayRequestContext,
   });
+
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("has no explicit owner"),
+    }),
+  );
+  expect(readChatMetadata).not.toHaveBeenCalled();
 });

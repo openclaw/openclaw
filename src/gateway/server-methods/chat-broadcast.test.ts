@@ -56,10 +56,7 @@ it.each([
     });
     const final = context.broadcast.mock.calls[2];
     expect(final?.[1]).toMatchObject({ state: "final", seq: 3 });
-    expect(final?.[2]?.liveText).toEqual({
-      group: liveText?.group,
-      settle: true,
-    });
+    expect(final?.[2]?.liveText).toEqual({ group: liveText?.group, settle: true });
     expect(context.nodeSendToSession.mock.calls.at(-1)?.[3]).toBe(final?.[2]);
     expect(deleteSpy).toHaveBeenCalledOnce();
 

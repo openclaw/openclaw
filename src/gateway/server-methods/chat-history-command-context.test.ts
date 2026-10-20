@@ -9,7 +9,6 @@ import {
 import { readTranscriptDisplayDelta } from "../../config/sessions/session-accessor.sqlite-history-events.test-support.js";
 import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
 import { readChatHistoryPage } from "./chat-history-pages.js";
 
@@ -28,19 +27,17 @@ it.each([
     };
     setRuntimeConfigSnapshot({});
     const sessionKey = "agent:main:command-context";
-    const sessionId = "command-context-session";
-    const entry = { sessionId, updatedAt: 42 };
+    const entry = { sessionId: "command-context-session", updatedAt: 42 };
     const scope = {
       agentId: "main",
       sessionKey,
-      sessionId,
+      sessionId: entry.sessionId,
       storePath: path.join(state.sessionsDir(), "sessions.json"),
     };
     await replaceSessionEntry(scope, entry);
-    await replaceTranscriptEvents(scope, [{ type: "session", version: 3, id: sessionId }]);
+    await replaceTranscriptEvents(scope, [{ type: "session", version: 3, id: entry.sessionId }]);
     const head = readTranscriptDisplayDelta(scope);
     assert(head.kind === "page", "Expected an initial transcript cursor");
-    const cursor = head.cursor;
     const call = {
       role: "assistant",
       __openclaw: { runId: "command-run" },
@@ -72,11 +69,11 @@ it.each([
     ] as const) {
       await appendTranscriptMessage(scope, { eventId, message });
     }
-    const saved = readTranscriptDisplayDelta(scope, { cursor });
+    const saved = readTranscriptDisplayDelta(scope, { cursor: head.cursor });
     const page = await readChatHistoryPage({
       entry,
       provider: "openai",
-      sessionId,
+      sessionId: entry.sessionId,
       storePath: scope.storePath,
       sessionAgentId: "main",
       canonicalKey: sessionKey,
@@ -89,14 +86,10 @@ it.each([
     });
     const delta = await readChatHistoryDelta({
       agentId: "main",
-      cursor,
+      cursor: head.cursor,
       scope,
       sessionKey,
-      sessionSnapshot: buildGatewaySessionSnapshot({
-        agentId: "main",
-        includeSession: true,
-        sessionRow: { key: sessionKey, kind: "direct", ...entry },
-      }),
+      sessionSnapshot: {},
     });
     assert(delta.kind === "delta", "Expected the command exchange delta");
     const completed = { toolCallId: "command", phase: "end", status: "completed" };
@@ -117,6 +110,6 @@ it.each([
         [call, user, status, result].map(({ role, content }) => ({ role, content })),
       );
     }
-    expect(readTranscriptDisplayDelta(scope, { cursor })).toEqual(saved);
+    expect(readTranscriptDisplayDelta(scope, { cursor: head.cursor })).toEqual(saved);
   }),
 );

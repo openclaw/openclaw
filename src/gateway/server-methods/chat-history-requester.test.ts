@@ -32,6 +32,7 @@ it.each(["chat.history", "chat.startup"] as const)(
         senderId: "PRIVATE_SENDER",
         senderName: "PRIVATE_NAME",
       };
+      const redacted = { senderId: "redacted", senderName: "Anonymous" };
       const recorder = createUserTurnTranscriptRecorder({
         input: {
           text: "Visible request",
@@ -40,42 +41,27 @@ it.each(["chat.history", "chat.startup"] as const)(
           sender: { id: requesterOrigin.senderId, name: requesterOrigin.senderName },
         },
         target: { ...scope, sessionEntry: undefined },
-        beforeMessageWrite: ({ message }) => ({
-          ...message,
-          __openclaw: { senderId: "redacted", senderName: "Anonymous" },
-        }),
+        beforeMessageWrite: ({ message }) => ({ ...message, __openclaw: redacted }),
       });
       try {
         expect(
           await recorder.stageApproved!({ runId: "redacted-request", assertCurrent: () => {} }),
         ).toBe(true);
         const persisted = await recorder.persistApproved();
-        expect(persisted?.message["__openclaw"]).toMatchObject({
-          senderId: "redacted",
-          senderName: "Anonymous",
-          requesterOrigin,
-        });
+        expect(persisted?.message["__openclaw"]).toMatchObject({ ...redacted, requesterOrigin });
         expect(readUserTurnRequesterOrigin(recorder)).toMatchObject(requesterOrigin);
 
+        const params = { sessionKey: scope.sessionKey };
         const response = expectHistorySuccess(
-          await requestHistory(
-            method,
-            { sessionKey: scope.sessionKey },
-            await createHistoryReadContext(),
-          ),
+          await requestHistory(method, params, await createHistoryReadContext()),
         );
         expect(response.sessionId).toBe(scope.sessionId);
         const serialized = JSON.stringify(response);
-        for (const text of [
-          "Visible request",
-          '"senderId":"redacted"',
-          '"senderName":"Anonymous"',
-        ]) {
-          expect(serialized).toContain(text);
-        }
-        for (const text of ["PRIVATE_", "requesterOrigin"]) {
-          expect(serialized).not.toContain(text);
-        }
+        expect(serialized).toContain("Visible request");
+        expect(serialized).toContain('"senderId":"redacted"');
+        expect(serialized).toContain('"senderName":"Anonymous"');
+        expect(serialized).not.toContain("PRIVATE_");
+        expect(serialized).not.toContain("requesterOrigin");
         expect(readUserTurnRequesterOrigin(recorder)).toMatchObject(requesterOrigin);
         expect(persisted?.message["__openclaw"]?.requesterOrigin).toMatchObject(requesterOrigin);
       } finally {
