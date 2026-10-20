@@ -377,6 +377,7 @@ export function ChatPaneMobileComposition(props: {
   const desktopViewActions = () =>
     layoutModel().actions.filter((action) => action.id === "close-pane");
   const desktopSessionActions = (): HeaderMenuSessionAction[] => [
+    ...(layoutModel().createClawAction ? [layoutModel().createClawAction!] : []),
     ...(props.header.sessionMenuAction?.sessionActions ?? []),
     ...(!props.header.mergedChrome
       ? layoutModel().actions.flatMap((action) =>
@@ -390,6 +391,7 @@ export function ChatPaneMobileComposition(props: {
     return source ? companionClearAction(source) : undefined;
   });
   const nativeActions = createMemo((): HeaderMenuSessionAction[] => [
+    ...(layoutModel().createClawAction ? [layoutModel().createClawAction!] : []),
     ...(clearSideChat() ? [clearSideChat()!] : []),
     ...(props.header.runAction
       ? [

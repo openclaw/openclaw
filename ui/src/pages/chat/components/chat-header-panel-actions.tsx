@@ -178,21 +178,22 @@ export function chatPaneLayoutModel(props: ChatPaneLayoutMenuProps) {
     layout && isSidebarSlotVisible(layout, "companion")
       ? definitions.find((definition) => definition.slot === "companion")?.view?.onCreateClaw
       : undefined;
-  if (createClaw) {
-    actions.push({
-      id: "create-claw",
-      label: t("clawsDraft.title"),
-      description: t("clawsDraft.railHint"),
-      icon: "box",
-      onActivate: createClaw,
-    });
-  }
+  const createClawAction = createClaw
+    ? {
+        id: "create-claw",
+        label: t("clawsDraft.title"),
+        description: t("clawsDraft.railHint"),
+        icon: "box" as const,
+        onActivate: createClaw,
+      }
+    : undefined;
   const panelActions: ChatQuickAction[] = props.panelMenuActions ?? [];
   const allActions = [...actions, ...panelActions];
   return {
     actions,
     panelActions,
     allActions,
+    createClawAction,
     mainHeaderActionView: mainDefinition?.headerActionView,
     sideHeaderActionView: sideDefinition?.headerActionView,
     mainHeaderLink: mainDefinition?.headerLink,
