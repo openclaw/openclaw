@@ -1,6 +1,5 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
-import { expect } from "vitest";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import {
   installMockGateway,
@@ -8,6 +7,7 @@ import {
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectAttribute } from "./sidebar-assertions.test-support.ts";
 
 const SIDEBAR_PROOF_USER = {
   self: true,
@@ -56,7 +56,7 @@ export async function setSidebarProofTheme(page: Page, mode: "dark" | "light") {
     root.dataset.themeResolved = nextMode;
     root.style.colorScheme = nextMode;
   }, mode);
-  await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(mode);
+  await expectAttribute(page.locator("html"), "data-theme-mode", mode);
 }
 
 export async function captureUnionProof(

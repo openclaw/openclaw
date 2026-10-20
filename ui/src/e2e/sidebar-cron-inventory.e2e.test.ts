@@ -1,9 +1,9 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
+import type { CronJob } from "../api/types.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { compactCronJobFixture, cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectCount } from "./sidebar-assertions.test-support.ts";
 import { sidebarCronJob } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Compact Inbox automation inventory" });
@@ -26,12 +26,7 @@ suite.define(() => {
         state: { lastRunStatus: "ok", nextRunAtMs: now + 60_000 },
       }),
     );
-    const setJob = (
-      index: number,
-      name: string,
-      state: (typeof jobs)[number]["state"],
-      enabled = true,
-    ) => {
+    const setJob = (index: number, name: string, state: CronJob["state"], enabled = true) => {
       jobs[index] = { ...jobs[index]!, name, state, enabled };
     };
     setJob(50, "Failed daily report", { lastStatus: "error" });
@@ -86,7 +81,7 @@ suite.define(() => {
         await sidebar.locator(".sidebar-issues-button").click();
         await sidebar.getByRole("tab", { name: /Automations/ }).click();
         const rows = sidebar.locator("[data-attention-kind]");
-        await expect.poll(() => rows.count()).toBe(3);
+        await expectCount(rows, 3);
         for (const name of ["Failed daily report", "Disabled after failures", "Overdue report"]) {
           await rows.getByText(name, { exact: true }).waitFor();
         }
@@ -98,19 +93,6 @@ suite.define(() => {
           return sum + bytes(params.compact === true, params.offset ?? 0);
         }, 0);
         const fullBytes = bytes(false, 0) + bytes(false, 50);
-        const proof = {
-          responseBytes,
-          fullBytes,
-          requests: requests.map((request) => request.params),
-          renderedRows: 3,
-        };
-        await writeFile(
-          path.join(suite.artifactDir, "inventory.json"),
-          `${JSON.stringify(proof, null, 2)}\n`,
-        );
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          await page.screenshot({ path: path.join(suite.artifactDir, "inbox.png") });
-        }
         expect(responseBytes).toBeLessThan(fullBytes / 10);
         expect(requests).toHaveLength(2);
       },

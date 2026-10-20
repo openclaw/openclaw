@@ -1,7 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -50,11 +47,6 @@ suite.define(() => {
       });
       expect(colors.danger).not.toBe("");
       expect(colors.badge).toBe(colors.danger);
-
-      const artifactDir = createControlUiE2eArtifactDir("dev-branch");
-      await page
-        .locator(".sidebar-shell__footer")
-        .screenshot({ path: path.join(artifactDir, "footer-dev-branch.png") });
     });
   });
 
@@ -87,13 +79,11 @@ suite.define(() => {
         await sidebar.locator(".sidebar-identity-card").waitFor();
         await sidebar.getByRole("button", { name: "Show more", exact: true }).click();
         await sidebar.getByText("CI timer", { exact: true }).waitFor();
-        const frame = await takeControlUiScreenshotFrame(page, sidebar, [body], {
+        await takeControlUiScreenshotFrame(page, sidebar, [body], {
           animations: "disabled",
           scrollTo: sidebar.getByText("CI timer", { exact: true }),
           elements: [sidebar],
         });
-        const artifactDir = createControlUiE2eArtifactDir(`sidebar-footer-space-${viewport.name}`);
-        await writeFile(path.join(artifactDir, "sidebar.png"), frame.elements[0]!.png);
         const gap = await body.evaluate((element) => {
           const shell = element.closest(".sidebar-shell")!;
           const style = getComputedStyle(shell);
