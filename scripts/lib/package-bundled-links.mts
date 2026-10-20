@@ -1,8 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { list as listTar } from "tar";
 import { collectNpmPackInventory } from "./npm-pack-inventory.mts";
 import { listBundleDependencies } from "./package-bundled-dependencies.mts";
 import { isRecord } from "./record-shared.mjs";
+
+export async function hasMissingBundledDependencies(tarballPath: string): Promise<boolean> {
+  const entries = new Set<string>();
+  const manifest: Buffer[] = [];
+  await listTar({
+    file: tarballPath,
+    onReadEntry(entry) {
+      entries.add(entry.path);
+      if (entry.path === "package/package.json") {
+        entry.on("data", (chunk: Buffer) => {
+          manifest.push(chunk);
+        });
+      }
+      entry.resume();
+    },
+  });
+  return listBundleDependencies(JSON.parse(Buffer.concat(manifest).toString("utf8"))).some(
+    (name) => !entries.has(`package/node_modules/${name}/package.json`),
+  );
+}
 
 async function directory(target: string) {
   await fs.mkdir(target).catch((error: unknown) => {
@@ -22,13 +43,14 @@ export async function materializeMissingBundledDependencies(
   sourceDir: string,
   packedRoot: string,
   timeoutMs: number,
-): Promise<void> {
+): Promise<boolean> {
   if (!(await fs.lstat(packedRoot)).isDirectory()) {
     throw new Error(`Bundled package destination is not a directory: ${packedRoot}`);
   }
   const manifest: unknown = JSON.parse(
     await fs.readFile(path.join(packedRoot, "package.json"), "utf8"),
   );
+  let changed = false;
   for (const name of new Set(listBundleDependencies(manifest))) {
     if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9][a-z0-9._-]*$/u.test(name)) {
       throw new Error(`Invalid bundled dependency name: ${name}`);
@@ -109,6 +131,7 @@ export async function materializeMissingBundledDependencies(
       if (current.dev !== original.dev || current.ino !== original.ino) {
         throw new Error(`Bundled package source changed while packing: ${packagePath}`);
       }
+      changed = true;
     } catch (error) {
       try {
         const current = await fs.lstat(destination);
@@ -130,4 +153,5 @@ export async function materializeMissingBundledDependencies(
       throw error;
     }
   }
+  return changed;
 }

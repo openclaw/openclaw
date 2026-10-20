@@ -740,7 +740,11 @@ export async function prepareBundledAiRuntimePackage(
   }
 }
 
-async function normalizeOpenClawTarballModes(tarballPath: string, sourceDir: string) {
+async function normalizeOpenClawTarballModes(
+  tarballPath: string,
+  sourceDir: string,
+  normalizeModes: boolean,
+) {
   // npm can retain restrictive source read bits. Normalize those for non-root
   // installers while preserving the archive's executable intent. pnpm derives
   // that intent from bin and publishConfig.executableFiles, not source modes.
@@ -749,11 +753,14 @@ async function normalizeOpenClawTarballModes(tarballPath: string, sourceDir: str
     await runPackageTar("extract", tarballPath, stageDir);
     const { materializeMissingBundledDependencies } =
       await import("./lib/package-bundled-links.mts");
-    await materializeMissingBundledDependencies(
+    const repaired = await materializeMissingBundledDependencies(
       sourceDir,
       path.join(stageDir, "package"),
       resolveTimeoutMs("OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS", DEFAULT_PACKAGE_PACK_TIMEOUT_MS),
     );
+    if (!normalizeModes && !repaired) {
+      return;
+    }
     let stagedFileCount = 0;
     const normalizeStagedModes = async (dir: string): Promise<void> => {
       for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
@@ -1030,10 +1037,15 @@ export async function packOpenClawPackageForDocker(
         tarball = target;
       }
     }
-    if (packageOptions.normalizeTarballModes) {
-      await packageOptions.normalizeTarballModes(tarball);
-    } else {
-      await normalizeOpenClawTarballModes(tarball, sourcePath);
+    const { hasMissingBundledDependencies } = await import("./lib/package-bundled-links.mts");
+    // Preserve complete pnpm archives exactly. Only npm's source modes or an
+    // omitted declared bundle require rebuilding the private extracted archive.
+    if (!packageOptions.pnpmPack || (await hasMissingBundledDependencies(tarball))) {
+      if (packageOptions.normalizeTarballModes) {
+        await packageOptions.normalizeTarballModes(tarball);
+      } else {
+        await normalizeOpenClawTarballModes(tarball, sourcePath, !packageOptions.pnpmPack);
+      }
     }
     if (packageOptions.packJsonPath) {
       // npm's original receipt predates normalization. Inspect the finished bytes;
