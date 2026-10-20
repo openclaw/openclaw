@@ -18,7 +18,6 @@ import { DetachedDiscussionBindingRetention } from "./binding-retention.js";
 import {
   attachBindingToCurrentActiveSession,
   getClickClackDiscussionBindingStore,
-  MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
   readDiscussionSessionEntry,
   type ClickClackDiscussionBinding,
   type ClickClackDiscussionBindingStore,
@@ -83,7 +82,6 @@ export class ClickClackDiscussionService {
     this.#detachedBindings = new DetachedDiscussionBindingRetention({
       runtime,
       store: this.#store,
-      maxRetained: MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
     });
     this.provider = {
       id: "clickclack",

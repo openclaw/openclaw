@@ -21,7 +21,6 @@ const DEFAULT_AZURE_SPEECH_LANG = "en-US";
 const DEFAULT_AZURE_SPEECH_AUDIO_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 const DEFAULT_AZURE_SPEECH_VOICE_NOTE_FORMAT = "ogg-24khz-16bit-mono-opus";
 const DEFAULT_AZURE_SPEECH_TELEPHONY_FORMAT = "raw-8khz-8bit-mono-mulaw";
-const DEFAULT_AZURE_SPEECH_MAX_BYTES = 16 * 1024 * 1024;
 // Voice discovery should fail boundedly instead of waiting forever when the
 // Azure Speech voices endpoint accepts the connection but never responds.
 const DEFAULT_AZURE_SPEECH_VOICE_LIST_TIMEOUT_MS = 30_000;
@@ -67,11 +66,10 @@ function escapeXmlAttr(value: string): string {
   return escapeXmlText(value).replace(/"/g, "&quot;").replace(/'/g, "&apos;");
 }
 
-function buildAzureSpeechSsml(params: { text: string; voice: string; lang?: string }): string {
-  const lang = trimToUndefined(params.lang) ?? DEFAULT_AZURE_SPEECH_LANG;
+function buildAzureSpeechSsml(params: { text: string; voice: string; lang: string }): string {
   return (
     `<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" ` +
-    `xml:lang="${escapeXmlAttr(lang)}">` +
+    `xml:lang="${escapeXmlAttr(params.lang)}">` +
     `<voice name="${escapeXmlAttr(params.voice)}">${escapeXmlText(params.text)}</voice>` +
     `</speak>`
   );
@@ -168,8 +166,6 @@ async function listAzureSpeechVoices(params: {
 async function azureSpeechTTS(
   params: Awaited<ReturnType<typeof resolveAzureSpeechTtsRequest>>,
 ): Promise<Buffer> {
-  const voice = trimToUndefined(params.voice) ?? DEFAULT_AZURE_SPEECH_VOICE;
-  const outputFormat = trimToUndefined(params.outputFormat) ?? DEFAULT_AZURE_SPEECH_AUDIO_FORMAT;
   const url = azureSpeechUrl({ ...params, path: "/cognitiveservices/v1" });
   const { assertOkOrThrowProviderError, readProviderBinaryResponse } =
     await import("openclaw/plugin-sdk/provider-http");
@@ -182,12 +178,12 @@ async function azureSpeechTTS(
       headers: {
         "Content-Type": "application/ssml+xml",
         "Ocp-Apim-Subscription-Key": params.apiKey,
-        "X-Microsoft-OutputFormat": outputFormat,
+        "X-Microsoft-OutputFormat": params.outputFormat,
         "User-Agent": "OpenClaw",
       },
       body: buildAzureSpeechSsml({
         text: params.text,
-        voice,
+        voice: params.voice,
         lang: params.lang,
       }),
     },
@@ -199,7 +195,7 @@ async function azureSpeechTTS(
   try {
     await assertOkOrThrowProviderError(response, "Azure Speech TTS API error");
     return await readProviderBinaryResponse(response, "Azure Speech TTS API error", "audio", {
-      maxBytes: params.maxBytes ?? DEFAULT_AZURE_SPEECH_MAX_BYTES,
+      maxBytes: params.maxBytes,
       onOverflow: ({ maxBytes }) =>
         new Error(`Azure Speech TTS audio response exceeds ${maxBytes} bytes`),
     });
@@ -214,22 +210,22 @@ function readAzureSpeechEnvRegion(): string | undefined {
   );
 }
 
-function normalizeAzureSpeechProviderConfig(rawConfig: Record<string, unknown>) {
-  const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.["azure-speech"]) ?? asOptionalRecord(providers?.azure);
-  const region = trimToUndefined(raw?.region) ?? readAzureSpeechEnvRegion();
+function normalizeAzureSpeechFields(
+  raw: Record<string, unknown> | undefined,
+  apiKey: string | undefined,
+) {
+  const configuredRegion = trimToUndefined(raw?.region);
+  const region = configuredRegion ?? readAzureSpeechEnvRegion();
   const endpoint =
-    trimToUndefined(raw?.endpoint) ?? trimToUndefined(process.env.AZURE_SPEECH_ENDPOINT);
+    trimToUndefined(raw?.endpoint) ??
+    (configuredRegion ? undefined : trimToUndefined(process.env.AZURE_SPEECH_ENDPOINT));
   const baseUrl = normalizeAzureSpeechBaseUrl({
     baseUrl: trimToUndefined(raw?.baseUrl),
     endpoint,
     region,
   });
   return {
-    apiKey: normalizeResolvedSecretInputString({
-      value: raw?.apiKey,
-      path: "tts.providers.azure-speech.apiKey",
-    }),
+    apiKey,
     region,
     endpoint,
     baseUrl,
@@ -242,27 +238,20 @@ function normalizeAzureSpeechProviderConfig(rawConfig: Record<string, unknown>) 
   };
 }
 
+function normalizeAzureSpeechProviderConfig(rawConfig: Record<string, unknown>) {
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.["azure-speech"]) ?? asOptionalRecord(providers?.azure);
+  return normalizeAzureSpeechFields(
+    raw,
+    normalizeResolvedSecretInputString({
+      value: raw?.apiKey,
+      path: "tts.providers.azure-speech.apiKey",
+    }),
+  );
+}
+
 function readAzureSpeechProviderConfig(config: SpeechProviderConfig) {
-  const defaults = normalizeAzureSpeechProviderConfig({});
-  const region = trimToUndefined(config.region) ?? defaults.region;
-  const endpoint = trimToUndefined(config.endpoint) ?? defaults.endpoint;
-  const baseUrl = normalizeAzureSpeechBaseUrl({
-    baseUrl: trimToUndefined(config.baseUrl) ?? defaults.baseUrl,
-    endpoint,
-    region,
-  });
-  return {
-    apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
-    region,
-    endpoint,
-    baseUrl,
-    voice: trimToUndefined(config.voice ?? config.voiceId) ?? defaults.voice,
-    lang: trimToUndefined(config.lang ?? config.languageCode) ?? defaults.lang,
-    outputFormat: trimToUndefined(config.outputFormat) ?? defaults.outputFormat,
-    voiceNoteOutputFormat:
-      trimToUndefined(config.voiceNoteOutputFormat) ?? defaults.voiceNoteOutputFormat,
-    timeoutMs: asFiniteNumber(config.timeoutMs) ?? defaults.timeoutMs,
-  };
+  return normalizeAzureSpeechFields(config, trimToUndefined(config.apiKey));
 }
 
 const parseDirectiveToken = createSpeechDirectiveParser({
@@ -308,8 +297,6 @@ async function resolveAzureSpeechTtsRequest(
     text: req.text,
     apiKey,
     baseUrl: config.baseUrl,
-    endpoint: config.endpoint,
-    region: config.region,
     voice: voice ?? config.voice,
     lang: lang ?? config.lang,
     outputFormat:

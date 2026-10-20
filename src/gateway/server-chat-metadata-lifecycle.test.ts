@@ -363,7 +363,7 @@ describe("gateway chat metadata lifecycle", () => {
       const before = await harness.lifecycle.read({ agentId: "main" });
       harness.refresh.mockClear();
       harness.broadcast.mockClear();
-      notifySkillsWatchAvailable({ workspaceDir, sourceScope: {} });
+      notifySkillsWatchAvailable({ workspaceDir });
       expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
       expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
       expect(harness.refresh).not.toHaveBeenCalled();

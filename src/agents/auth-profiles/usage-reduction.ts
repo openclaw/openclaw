@@ -135,12 +135,6 @@ export type PersonalAuthProfileUsageReduction =
   | { kind: "success"; expectedProfile: AuthProfileCredential; lastUsed: number; modelId?: string }
   | ({ kind: "failure" } & AuthProfileFailureReduction);
 
-export type PersonalAuthProfileUsageResult = {
-  previous: ProfileUsageStats | undefined;
-  next: ProfileUsageStats;
-  now: number;
-};
-
 /** Both writers reduce their current row using the same prepared provider observation. */
 export function reduceAuthProfileFailure(
   profile: AuthProfileCredential | undefined,

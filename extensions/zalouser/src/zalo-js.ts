@@ -868,31 +868,8 @@ export async function sendZaloTypingEvent(
   });
 }
 
-async function resolveOwnUserId(api: API): Promise<string> {
-  try {
-    const info = await api.fetchAccountInfo();
-    const resolved = toNumberId(normalizeAccountInfoUser(info)?.userId);
-    if (resolved) {
-      return resolved;
-    }
-  } catch {
-    // Fall back to getOwnId when account info shape changes.
-  }
-
-  try {
-    const ownId = toNumberId(api.getOwnId());
-    if (ownId) {
-      return ownId;
-    }
-  } catch {
-    // Ignore fallback probe failures and keep mention detection conservative.
-  }
-
-  return "";
-}
-
 export async function resolveZaloOwnUserId(profileInput?: string | null): Promise<string> {
-  return await withZaloApi(profileInput, resolveOwnUserId);
+  return await withZaloApi(profileInput, async (api) => toNumberId(api.getOwnId()));
 }
 
 export async function sendZaloReaction(params: {

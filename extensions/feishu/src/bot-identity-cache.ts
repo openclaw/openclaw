@@ -12,7 +12,7 @@ type FeishuBotIdentityCacheState = {
   fetchedAt: string;
 };
 
-type CachedFeishuBotIdentity = Omit<FeishuBotIdentityCacheState, "appId">;
+type CachedFeishuBotIdentity = Pick<FeishuBotIdentityCacheState, "botOpenId" | "botName">;
 
 function openFeishuBotIdentityCache() {
   return getFeishuRuntime().state.openKeyedStore<FeishuBotIdentityCacheState>({
@@ -55,7 +55,6 @@ export async function readCachedFeishuBotIdentity(params: {
   return {
     botOpenId: cached.botOpenId,
     botName: cached.botName,
-    fetchedAt: cached.fetchedAt,
   };
 }
 
