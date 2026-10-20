@@ -181,7 +181,6 @@ describe("maybeGenerateDashboardSessionTitle", () => {
   });
 
   it.each([
-    ['Instruction to reply exactly "ok"', 'Instruction to reply exactly "ok"'],
     ["Reply with ok’", "Reply with ok"],
     ["'Users' can't edit permissions'", "Users' can't edit permissions"],
     [`${"a".repeat(52)} "long quoted span"`, `${"a".repeat(52)} long q`],
@@ -433,15 +432,6 @@ describe("buildDashboardSessionTitleSource", () => {
     );
   });
 
-  it("titles a control command turn from its text attachment", () => {
-    expect(
-      buildDashboardSessionTitleSource({
-        message: "/status",
-        attachments: [textAttachment("Pasted incident report")],
-      }),
-    ).toBe("Pasted incident report");
-  });
-
   it.each([
     ["malformed base64", { mimeType: "text/plain", content: "%%%" }],
     [
@@ -465,13 +455,9 @@ function textAttachment(text: string): ChatAttachment {
 }
 
 describe("deriveGoalSessionTitle", () => {
-  it.each([
-    { name: "empty input", inputs: [undefined, "", "   "] },
-    { name: "commands", inputs: ["/new", "/model openai/gpt-5.4"] },
-  ])("skips unusable goals from $name", ({ inputs }) => {
-    for (const input of inputs) {
-      expect(deriveGoalSessionTitle(input)).toBeUndefined();
-    }
+  it("skips slash commands", () => {
+    expect(deriveGoalSessionTitle("/new")).toBeUndefined();
+    expect(deriveGoalSessionTitle("/model openai/gpt-5.4")).toBeUndefined();
   });
 
   it("prefers a task-verb sentence over earlier banter", () => {

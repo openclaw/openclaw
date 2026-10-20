@@ -1,9 +1,10 @@
 import { vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { CronJob } from "../cron/types.js";
-import type { ProcessScopeCleanupPolicy } from "../process/supervisor/types.js";
+import type { ProcessScopeCleanupPolicy, RunExit } from "../process/supervisor/types.js";
+import { runExit } from "./server-cron.process.test-support.js";
 
-type Exit = { exitCode: number | null; reason: string };
+type Exit = Pick<RunExit, "exitCode" | "reason">;
 
 export function makeFakeSupervisor(
   opts: { deferSpawn?: boolean; cleanup?: () => Promise<void> } = {},
@@ -41,16 +42,7 @@ export function makeFakeSupervisor(
       return {
         runId,
         startedAtMs: 0,
-        wait: () =>
-          deferred.promise.then((e) => ({
-            ...e,
-            exitSignal: null,
-            durationMs: 1,
-            stdout: "",
-            stderr: "",
-            timedOut: false,
-            noOutputTimedOut: false,
-          })),
+        wait: () => deferred.promise.then(runExit),
         cancel: () => {
           runCancels.push(runId);
         },

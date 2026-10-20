@@ -9,6 +9,7 @@ import type {
 } from "../process/supervisor/types.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createCronStreamWatchers } from "./cron-stream-watchers.js";
+import { runExit } from "./server-cron.process.test-support.js";
 type WatcherParams = Parameters<typeof createCronStreamWatchers>[0];
 
 export function job(overrides: Partial<CronJob> = {}): CronJob {
@@ -49,17 +50,7 @@ export function createCronStreamMatchingJob(match: string): CronJob {
 }
 
 export function exitResult(overrides: Partial<RunExit> = {}): RunExit {
-  return {
-    reason: "exit",
-    exitCode: 0,
-    exitSignal: null,
-    durationMs: 1,
-    stdout: "",
-    stderr: "",
-    timedOut: false,
-    noOutputTimedOut: false,
-    ...overrides,
-  };
+  return runExit({ reason: "exit", exitCode: 0, ...overrides });
 }
 
 export function fakeSupervisor() {

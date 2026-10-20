@@ -4,9 +4,8 @@ import {
   isSessionEntryDataSql,
   observeHostDataSql,
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { patchSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
+import * as entries from "../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -31,21 +30,8 @@ async function fixture() {
     agentId: "main",
     path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }),
   });
-  const actor = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    { assertCurrent() {}, assertReadable() {} },
-  );
-  const entry = { sessionId: "title", updatedAt: 1, incognito: true };
-  try {
-    const result = await actor.storage!.mutate(
-      { type: "session.entry.create", input: { entry } },
-      authority,
-    );
-    readSessionActorStorageResult(result);
-  } finally {
-    await actor.release();
-  }
   const scope = { agentId: "main", sessionKey, storePath: owner.path };
+  await entries.replaceSessionEntry(scope, { sessionId: "title", updatedAt: 1, incognito: true });
   const params = { cfg, ...scope, sessionId: "title", userMessage: "Plan my workspace" };
   return {
     scope,
@@ -85,7 +71,7 @@ it("keeps a user title saved while automatic title inference is running", async 
   const settled = pending.catch(() => {});
   try {
     await awaitGateBeforeSettlement(entered.promise, pending, "title inference was skipped");
-    await patchSessionEntryCore(target.scope, () => ({ displayName: "My chosen title" }));
+    await entries.patchSessionEntryCore(target.scope, () => ({ displayName: "My chosen title" }));
     resume.resolve("Generated title");
     expect(await pending).toBe(false);
     expect(target.title()).toBe("My chosen title");
