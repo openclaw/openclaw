@@ -8,19 +8,21 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import type { ProviderPlugin } from "../plugins/types.js";
 import {
   createOpenClawTestState,
-  type OpenClawTestState,
+  type OpenClawTestState as State,
 } from "../test-utils/openclaw-test-state.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 
-const { resolveRuntimePluginDiscoveryProviders } = vi.hoisted(() => ({
-  resolveRuntimePluginDiscoveryProviders: vi.fn(),
-}));
+const { discoverProviders } = vi.hoisted(() => ({ discoverProviders: vi.fn() }));
 vi.mock("../plugins/provider-discovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/provider-discovery.js")>()),
-  resolveRuntimePluginDiscoveryProviders,
+  resolveRuntimePluginDiscoveryProviders: discoverProviders,
 }));
 
-import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models-config.js";
+import {
+  ensureOpenClawModelsJson as ensureModels,
+  planOpenClawModelsJsonSource as planSource,
+} from "./models-config.js";
 import {
   loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -31,41 +33,59 @@ const native: ModelProviderConfig = {
   baseUrl: "https://native.example/v1",
   api: "openai-completions",
   models: [
-    {
-      id: "native-model",
+    modelDefinition("native-model", {
       name: "Native model",
       reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 128000,
-      maxTokens: 8192,
-    },
+    }),
   ],
 };
+const manualProvider = {
+  ...native,
+  baseUrl: "https://manual.example/v1",
+  headers: { "X-Manual": "preserve" },
+};
 function createMetadata() {
+  const aliases = { latest: "middle", middle: "final" };
+  const providers = { fixture: { aliases }, "cached-fixture": { aliases } };
   return createPluginMetadataSnapshotFixture({
     plugins: [
       {
         id: "catalog-owner",
         providers: ["fixture", "cached-fixture"],
-        modelIdNormalization: {
-          providers: {
-            fixture: { aliases: { latest: "middle", middle: "final" } },
-            "cached-fixture": { aliases: { latest: "middle", middle: "final" } },
-          },
-        },
+        modelIdNormalization: { providers },
       },
     ],
   });
 }
+function discovery(provider = native, hookAliases?: string[]): ProviderPlugin {
+  return {
+    id: "fixture",
+    pluginId: "catalog-owner",
+    label: "Fixture",
+    auth: [],
+    hookAliases,
+    staticCatalog: { order: "simple", run: async () => ({ provider }) },
+  };
+}
+const ids = (provider: ModelProviderConfig) => provider.models.map(({ id }) => id);
 
 describe("manual root catalog authorship", () => {
-  let state: OpenClawTestState;
+  let state: State;
   let metadata: ReturnType<typeof createMetadata>;
+  let agentDir: string;
+  let rootPath: string;
+  const context = () => ({ env: state.env, pluginMetadataSnapshot: metadata });
+  const ensureConfigured = () =>
+    ensureModels({ models: { providers: { configured: native } } }, agentDir, context());
   beforeEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();
     state = await createOpenClawTestState({ label: "manual-root-catalog" });
     metadata = createMetadata();
+    agentDir = state.agentDir();
+    rootPath = path.join(agentDir, "models.json");
+    await fs.mkdir(agentDir, { recursive: true });
+    discoverProviders.mockResolvedValue([]);
   });
   afterEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();
@@ -77,57 +97,31 @@ describe("manual root catalog authorship", () => {
     { name: "missing", contents: undefined },
     { name: "malformed JSON", contents: "{broken" },
   ])("rebuilds a $name root catalog", async ({ contents }) => {
-    resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
-    const agentDir = state.agentDir();
-    const rootPath = path.join(agentDir, "models.json");
-    await fs.mkdir(agentDir, { recursive: true });
     if (contents !== undefined) {
       await fs.writeFile(rootPath, contents);
     }
 
-    await expect(
-      ensureOpenClawModelsJson({ models: { providers: { configured: native } } }, agentDir, {
-        env: state.env,
-        pluginMetadataSnapshot: metadata,
-      }),
-    ).resolves.toMatchObject({ wrote: true });
+    await expect(ensureConfigured()).resolves.toMatchObject({ wrote: true });
     expect(JSON.parse(await fs.readFile(rootPath, "utf8"))).toMatchObject({
       providers: { configured: { baseUrl: native.baseUrl, models: [{ id: "native-model" }] } },
     });
   });
 
   it("preserves manual catalog bytes when the existing file cannot be read", async () => {
-    resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
-    const agentDir = state.agentDir();
-    const rootPath = path.join(agentDir, "models.json");
-    const originalBytes = Buffer.from(
-      `${JSON.stringify(
-        {
-          providers: {
-            manual: {
-              ...native,
-              baseUrl: "https://manual.example/v1",
-              headers: { "X-Manual": "preserve" },
-            },
-          },
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await fs.mkdir(agentDir, { recursive: true });
+    const root = { providers: { manual: manualProvider } };
+    const originalBytes = Buffer.from(`${JSON.stringify(root, null, 2)}\n`);
     await fs.writeFile(rootPath, originalBytes);
 
     const ioError = Object.assign(new Error("fixture models.json read failed"), { code: "EIO" });
     const readError = new FsSafeError("read-failed", "models.json could not be read", {
       cause: ioError,
     });
-    const actualPrivateFileStore = privateFileStoreRuntime.privateFileStore;
+    const createStore = privateFileStoreRuntime.privateFileStore;
     let faultTriggered = false;
     const storeSpy = vi
       .spyOn(privateFileStoreRuntime, "privateFileStore")
       .mockImplementation((rootDir) => {
-        const store = actualPrivateFileStore(rootDir);
+        const store = createStore(rootDir);
         if (rootDir !== agentDir) {
           return store;
         }
@@ -143,18 +137,9 @@ describe("manual root catalog authorship", () => {
         };
       });
     try {
-      const outcome = await ensureOpenClawModelsJson(
-        { models: { providers: { configured: native } } },
-        agentDir,
-        { env: state.env, pluginMetadataSnapshot: metadata },
-      ).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-
+      await expect(ensureConfigured()).rejects.toBe(readError);
       expect(faultTriggered).toBe(true);
       expect(await fs.readFile(rootPath)).toEqual(originalBytes);
-      expect(outcome).toBe(readError);
     } finally {
       storeSpy.mockRestore();
     }
@@ -163,20 +148,12 @@ describe("manual root catalog authorship", () => {
   it("keeps manual, implicit, and generated ids literal across replanning", async () => {
     const modelIds = ["latest", "middle"];
     const models = modelIds.map((id) => ({ ...native.models[0]!, id, name: id }));
-    const discovered = { ...native, models: [...native.models, ...models] };
-    const provider: ProviderPlugin = {
-      id: "fixture",
-      pluginId: "catalog-owner",
-      label: "Fixture",
-      auth: [],
-      staticCatalog: { order: "simple", run: async () => ({ provider: discovered }) },
-    };
-    resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
+    discoverProviders.mockResolvedValue([
+      discovery({ ...native, models: [...native.models, ...models] }),
+    ]);
     const manual: ModelProviderConfig = {
-      ...native,
-      baseUrl: "https://manual.example/v1",
+      ...manualProvider,
       apiKey: "manual-root-key",
-      headers: { "X-Manual": "preserve" },
       models: [
         {
           ...native.models[0]!,
@@ -187,11 +164,9 @@ describe("manual root catalog authorship", () => {
         ...models,
       ],
     };
-    const cached = { ...native, models };
     const root = {
       providers: { fixture: manual, "auth-only": { apiKey: "auth-only-key", models: [] } },
     };
-    const rootPath = path.join(state.agentDir(), "models.json");
     let rootContents = JSON.stringify(root);
     let pluginContents = JSON.stringify({
       generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -201,22 +176,20 @@ describe("manual root catalog authorship", () => {
           baseUrl: "https://persisted.example/v1",
           apiKey: "persisted-plugin-key",
         },
-        "cached-fixture": cached,
+        "cached-fixture": { ...native, models },
       },
     });
-    await fs.mkdir(state.agentDir(), { recursive: true });
 
     for (let pass = 0; pass < 3; pass++) {
       // Each pass starts from the prior planned generation, installed only by this fixture.
       await fs.writeFile(rootPath, rootContents);
       await replacePersistedPluginModelCatalogs({
-        agentDir: state.agentDir(),
+        agentDir,
         pluginCatalogWrites: { "plugins/catalog-owner/catalog.json": pluginContents },
       });
-      const persistedCatalogs = loadPersistedPluginModelCatalogsReadOnly(state.agentDir());
-      const planned = await planOpenClawModelsJsonSource({}, state.agentDir(), {
-        env: state.env,
-        pluginMetadataSnapshot: metadata,
+      const persistedCatalogs = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+      const planned = await planSource({}, agentDir, {
+        ...context(),
         providerDiscoveryProviderIds: ["fixture"],
         providerDiscoveryEntriesOnly: true,
       });
@@ -224,9 +197,7 @@ describe("manual root catalog authorship", () => {
       assert(planned.modelsJsonContents, "The plan must retain the manual root catalog");
       const plannedRoot = JSON.parse(planned.modelsJsonContents);
       expect(plannedRoot).toEqual(root);
-      expect(plannedRoot.providers.fixture.models.map((model: { id: string }) => model.id)).toEqual(
-        ["manual-model", ...modelIds],
-      );
+      expect(ids(plannedRoot.providers.fixture)).toEqual(["manual-model", ...modelIds]);
       expect(planned.pluginCatalogs).toHaveLength(1);
       const generated = planned.pluginCatalogs.find(({ pluginId }) => pluginId === "catalog-owner");
       assert(generated, "The refreshed plugin catalog must remain independently generated");
@@ -235,15 +206,10 @@ describe("manual root catalog authorship", () => {
         baseUrl: "https://persisted.example/v1",
         apiKey: "persisted-plugin-key",
       });
-      expect(generatedProviders.fixture.models.map((model: { id: string }) => model.id)).toEqual([
-        "native-model",
-        ...modelIds,
-      ]);
-      expect(
-        generatedProviders["cached-fixture"].models.map((model: { id: string }) => model.id),
-      ).toEqual(modelIds);
+      expect(ids(generatedProviders.fixture)).toEqual(["native-model", ...modelIds]);
+      expect(ids(generatedProviders["cached-fixture"])).toEqual(modelIds);
       expect(await fs.readFile(rootPath, "utf8")).toBe(rootContents);
-      expect(loadPersistedPluginModelCatalogsReadOnly(state.agentDir())).toEqual(persistedCatalogs);
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual(persistedCatalogs);
       rootContents = planned.modelsJsonContents;
       pluginContents = generated.contents;
     }
@@ -252,20 +218,9 @@ describe("manual root catalog authorship", () => {
   it("keeps discovery output under an unowned hook alias out of the root catalog", async () => {
     // Discovery copies a {provider} result to every hook alias. No manifest owns this alias, so
     // the owner lookup fails; the copy must still stay with the plugin that produced it.
-    const provider: ProviderPlugin = {
-      id: "fixture",
-      pluginId: "catalog-owner",
-      hookAliases: ["fixture-alias"],
-      label: "Fixture",
-      auth: [],
-      staticCatalog: { order: "simple", run: async () => ({ provider: native }) },
-    };
-    resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
+    discoverProviders.mockResolvedValue([discovery(native, ["fixture-alias"])]);
 
-    const planned = await planOpenClawModelsJsonSource({}, state.agentDir(), {
-      env: state.env,
-      pluginMetadataSnapshot: metadata,
-    });
+    const planned = await planSource({}, agentDir, context());
 
     assert(planned.modelsJsonContents, "The plan must write a root catalog");
     expect(JSON.parse(planned.modelsJsonContents)).toEqual({ providers: {} });

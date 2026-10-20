@@ -4,16 +4,23 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { modelDefinition } from "./model-auth.fixtures.test-support.js";
 import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 
 const fixture = vi.hoisted(() => ({ providers: new Array<ProviderPlugin>() }));
 vi.mock("../plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => fixture.providers,
 }));
+
+const catalog = (name: string, id = "shared"): ModelProviderConfig => ({
+  baseUrl: "https://catalog.example.invalid/v1",
+  models: [modelDefinition(id, { name, reasoning: false, contextWindow: 32768, maxTokens: 4096 })],
+});
 
 it("keeps canonical outcome authority when only its alias is selected", async () => {
   await withOpenClawTestState({ label: "implicit-catalog-outcomes" }, async (state) => {
@@ -25,9 +32,9 @@ it("keeps canonical outcome authority when only its alias is selected", async ()
     fixture.providers = [
       {
         id: "canonical",
-        pluginId: "catalog-owner",
         label: "canonical",
         auth: [],
+        pluginId: "catalog-owner",
         aliases: ["alias"],
         hookAliases: ["sibling"],
         catalog: {
@@ -35,21 +42,7 @@ it("keeps canonical outcome authority when only its alias is selected", async ()
           run: async (ctx) => {
             expect(ctx.providerIds).toEqual(["alias"]);
             return {
-              provider: {
-                baseUrl: "https://catalog.example.invalid/v1",
-                api: "openai-completions",
-                models: [
-                  {
-                    id: "learned",
-                    name: "learned",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 32768,
-                    maxTokens: 4096,
-                  },
-                ],
-              },
+              provider: { ...catalog("learned", "learned"), api: "openai-completions" },
               outcomes: [
                 failure,
                 { provider: "sibling", profileId: "sibling:account", status: "auth-rejected" },
@@ -96,20 +89,6 @@ it("bounds concurrent discovery and preserves merge order when catalogs finish o
     let active = 0;
     let peak = 0;
     let lateStarted = false;
-    const catalog = (name: string) => ({
-      baseUrl: "https://catalog.example.invalid/v1",
-      models: [
-        {
-          id: "shared",
-          name,
-          reasoning: false,
-          input: ["text" as const],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 32768,
-          maxTokens: 4096,
-        },
-      ],
-    });
     fixture.providers = delays.map((delay, index) => ({
       id: `provider-${index}`,
       label: `provider-${index}`,
