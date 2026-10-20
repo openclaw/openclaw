@@ -3,19 +3,7 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 
 const callGatewayMock = vi.fn();
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
-
 let mockConfig: Record<string, unknown> = {};
-vi.mock("../config/config.js", async () => {
-  const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
-  return {
-    ...actual,
-    getRuntimeConfig: () => mockConfig,
-    resolveGatewayPort: () => 18789,
-  };
-});
 function history(sandboxed?: boolean) {
   return createSessionsHistoryTool({
     agentSessionKey: "main",

@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   createSubagentSpawnTestConfig,
   loadSubagentSpawnModuleForTest,
@@ -12,29 +13,25 @@ const hoisted = vi.hoisted(() => ({
 let resetSubagentRegistryForTests: typeof import("./subagents/registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 let spawnSubagentDirect: typeof import("./subagents/spawn/subagent-spawn.js").spawnSubagentDirect;
 
+type AgentTree = NonNullable<OpenClawConfig["agents"]>;
 function resolveAgentConfigFromEntries(cfg: Record<string, unknown>, agentId: string) {
-  return (cfg.agents as { entries?: Record<string, Record<string, unknown>> } | undefined)
-    ?.entries?.[agentId];
-}
-function readSandboxMode(value: unknown) {
-  return value && typeof value === "object" ? (value as { mode?: string }).mode : undefined;
+  return (cfg.agents as AgentTree | undefined)?.entries?.[agentId];
 }
 function setConfig(main = {}, targets = {}, defaults?: Record<string, unknown>) {
   hoisted.configOverride = createSubagentSpawnTestConfig(undefined, {
     agents: { entries: { main, ...targets }, ...(defaults ? { defaults } : {}) },
   });
 }
-async function spawn(agentId?: string, sandbox?: "require") {
-  return await spawnSubagentDirect(
+const spawn = (agentId?: string, sandbox?: "require") =>
+  spawnSubagentDirect(
     { task: "do thing", agentId, sandbox },
     { agentSessionKey: "agent:main:main", agentChannel: "mobilechat" },
   );
-}
 function expectRejected(result: Awaited<ReturnType<typeof spawn>>, error?: string) {
-  expect(result.status).toBe("forbidden");
-  if (error) {
-    expect(result.error).toContain(error);
-  }
+  expect(result).toMatchObject({
+    status: "forbidden",
+    ...(error ? { error: expect.stringContaining(error) } : {}),
+  });
   expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
 }
 
@@ -43,21 +40,12 @@ beforeAll(async () => {
     callGatewayMock: hoisted.callGatewayMock,
     getRuntimeConfig: () => hoisted.configOverride,
     resolveAgentConfig: resolveAgentConfigFromEntries,
-    resolveSandboxRuntimeStatus: ({
-      cfg = {},
-      sessionKey,
-    }: {
-      cfg?: Record<string, unknown>;
-      sessionKey?: string;
-    }) => {
+    resolveSandboxRuntimeStatus: ({ cfg = {}, sessionKey }) => {
       const agent = resolveAgentConfigFromEntries(cfg, sessionKey?.split(":")[1] ?? "");
-      const explicitMode = readSandboxMode(agent?.sandbox);
-      const defaultMode = readSandboxMode(
-        (cfg.agents as { defaults?: { sandbox?: unknown } } | undefined)?.defaults?.sandbox,
-      );
+      const explicitMode = agent?.sandbox?.mode;
+      const defaultMode = (cfg.agents as AgentTree | undefined)?.defaults?.sandbox?.mode;
       return {
-        sandboxed:
-          explicitMode === "all" ? true : explicitMode === "off" ? false : defaultMode === "all",
+        sandboxed: explicitMode === "all" || (explicitMode !== "off" && defaultMode === "all"),
       };
     },
     resetModules: false,

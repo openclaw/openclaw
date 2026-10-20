@@ -683,12 +683,10 @@ registerSessionsSendRequesterRetirementTests({
   drainRootWork: () => settleRootWork(true),
 });
 
-it.each([
-  { direction: "requester", child: true },
-  { direction: "target", child: false },
-])(
-  "uses the registered alternate store for $direction with child=$child",
-  async ({ direction, child }) => {
+it.each(["requester", "target"])(
+  "uses the registered alternate store for %s",
+  async (direction) => {
+    const child = direction === "requester";
     const peerKey = "agent:peer:main";
     const alternateKey = child ? "agent:main:dashboard:alternate" : "agent:main:subagent:root";
     const alternate = openOpenClawAgentDatabase({ agentId: "main" });
@@ -818,54 +816,40 @@ it.each(["requester", "target"])(
   },
 );
 
-it.each([
-  {
-    name: "hidden child with opaque direct token under main DM scope",
-    requesterKey: "agent:main:subagent:direct:peer-1",
-    targetKey: "agent:peer:main",
-    entry: {},
-    timeoutSeconds: 0,
-  },
-  {
-    name: "restored child with cyclic lineage",
-    requesterKey: "agent:main:dashboard:cycle",
-    entry: { spawnedBy: "agent:main:dashboard:cycle" },
-    timeoutSeconds: 1,
-  },
-])(
-  "sessions_send does not start reply turns for $name after timeoutSeconds=$timeoutSeconds",
-  async ({ requesterKey, entry, timeoutSeconds, targetKey = "agent:main:main" }) => {
-    await writeEntry(requesterKey, { sessionId: "child", updatedAt: 1, ...entry });
-    await writeEntry(targetKey, { sessionId: "target", updatedAt: 1 });
-    mockGatewayReply({ status: "timeout" });
-    const result = await send(requesterKey, targetKey, timeoutSeconds);
-    if (entry.spawnedBy) {
-      expect(result.details).toMatchObject({
-        status: "forbidden",
-        error: "Session communication ancestry is invalid.",
-      });
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(calls.map((call) => call.method)).toEqual(["sessions.resolve"]);
-      return;
-    }
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      delivery: { status: "skipped" },
-    });
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
-    const agentCalls = calls.filter((call) => call.method === "agent");
-    expect(agentCalls).toHaveLength(1);
-    expect(agentCalls[0]?.params).toMatchObject({
-      sessionKey: targetKey,
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: requesterKey,
-        sourceTool: "sessions_send",
-      },
-    });
-    expect(agentParams(agentCalls[0] ?? {}).inputProvenance?.sourceRole).toBe("subagent");
-    expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(
-      timeoutSeconds === 0 ? 0 : 1,
-    );
-  },
-);
+it("does not start reply turns for an opaque child token under main DM scope", async () => {
+  const requesterKey = "agent:main:subagent:direct:peer-1";
+  const targetKey = "agent:peer:main";
+  await writeEntry(requesterKey, { sessionId: "child", updatedAt: 1 });
+  await writeEntry(targetKey, { sessionId: "target", updatedAt: 1 });
+  mockGatewayReply({ status: "timeout" });
+  expect((await send(requesterKey, targetKey, 0)).details).toMatchObject({
+    status: "accepted",
+    delivery: { status: "skipped" },
+  });
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  const agentCalls = calls.filter((call) => call.method === "agent");
+  expect(agentCalls).toHaveLength(1);
+  expect(agentCalls[0]?.params).toMatchObject({
+    sessionKey: targetKey,
+    inputProvenance: {
+      kind: "inter_session",
+      sourceSessionKey: requesterKey,
+      sourceTool: "sessions_send",
+      sourceRole: "subagent",
+    },
+  });
+  expect(calls.filter((call) => call.method === "agent.wait")).toHaveLength(0);
+});
+
+it("rejects cyclic child ancestry before dispatch", async () => {
+  const requesterKey = "agent:main:dashboard:cycle";
+  await writeEntry(requesterKey, { sessionId: "child", updatedAt: 1, spawnedBy: requesterKey });
+  await writeEntry("agent:main:main", { sessionId: "target", updatedAt: 1 });
+  mockGatewayReply({ status: "timeout" });
+  expect((await send(requesterKey, "agent:main:main", 1)).details).toMatchObject({
+    status: "forbidden",
+    error: "Session communication ancestry is invalid.",
+  });
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
+  expect(calls.map((call) => call.method)).toEqual(["sessions.resolve"]);
+});

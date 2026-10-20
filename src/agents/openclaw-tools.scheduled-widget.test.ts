@@ -10,19 +10,14 @@ vi.mock("./openclaw-plugin-tools.js", () => ({
 beforeEach(() => setRuntimeConfigSnapshot({}));
 afterEach(() => clearRuntimeConfigSnapshot());
 
-function expectWidget(tools: ReturnType<typeof createOpenClawTools>) {
-  const tool = tools.find((candidate) => candidate.name === "show_widget");
-  if (!tool) {
-    throw new Error("Expected show_widget to be registered");
-  }
-  return tool;
+function widget(tools: ReturnType<typeof createOpenClawTools>) {
+  return tools.find((candidate) => candidate.name === "show_widget");
 }
 
-function expectPinnedOnlySchema(tool: ReturnType<typeof expectWidget>): void {
-  expect(tool.requiredClientCaps).toBeUndefined();
-  expect(tool.parameters).toMatchObject({
-    required: expect.arrayContaining(["pin"]),
-    properties: { pin: { const: true } },
+function expectPinnedOnlySchema(tools: ReturnType<typeof createOpenClawTools>): void {
+  expect(widget(tools)?.requiredClientCaps).toBeUndefined();
+  expect(widget(tools)).toMatchObject({
+    parameters: { required: expect.arrayContaining(["pin"]), properties: { pin: { const: true } } },
   });
 }
 
@@ -30,7 +25,7 @@ it.each([undefined, "agent:main:cron:job:run:detached"])(
   "requires a persistent session for recovered authoring (%s)",
   (agentSessionKey) => {
     const tools = createOpenClawTools({ agentSessionKey, pinnedWidgetAuthoring: true });
-    expect(tools.some((tool) => tool.name === "show_widget")).toBe(false);
+    expect(widget(tools)).toBeUndefined();
   },
 );
 
@@ -46,31 +41,28 @@ it("applies tool policy to recovered dashboard authoring", () => {
       includePluginTools: false,
     },
   };
-  expectPinnedOnlySchema(expectWidget(createOpenClawCodingTools(options)));
+  expectPinnedOnlySchema(createOpenClawCodingTools(options));
   const deniedTools = createOpenClawCodingTools({
     ...options,
     config: { tools: { deny: ["show_widget"] } },
   });
-  expect(deniedTools.some((tool) => tool.name === "show_widget")).toBe(false);
+  expect(widget(deniedTools)).toBeUndefined();
 });
 
 it.each([
-  { reason: "provenance alone cannot grant a widget cap", options: {} },
+  {},
   {
-    reason: "explicit denial overrides the widget cap",
-    options: {
-      runtimeToolAllowlist: ["show_widget"],
-      config: { tools: { deny: ["show_widget"] } },
-    },
+    runtimeToolAllowlist: ["show_widget"],
+    config: { tools: { deny: ["show_widget"] } },
   },
-])("omits scheduled widgets when $reason", ({ options }) => {
+])("applies scheduled widget capability and deny policy: %j", (options) => {
   const tools = createOpenClawTools({
     agentSessionKey: "agent:main:dashboard:scheduled",
     gatewayCallerScheduled: true,
     ...options,
   });
 
-  expect(tools.some((tool) => tool.name === "show_widget")).toBe(false);
+  expect(widget(tools)).toBeUndefined();
 });
 
 it("lets a server-authorized canvas cap select pinned widget authoring", () => {
@@ -85,11 +77,11 @@ it("lets a server-authorized canvas cap select pinned widget authoring", () => {
     toolConstructionPlan: plan.codingToolConstructionPlan,
   });
 
-  expectPinnedOnlySchema(expectWidget(tools));
+  expectPinnedOnlySchema(tools);
 });
 
 it("keeps scheduled turns with a real inline client on the normal widget surface", () => {
-  const tool = expectWidget(
+  const tool = widget(
     createOpenClawTools({
       agentSessionKey: "agent:main:dashboard:scheduled",
       gatewayCallerScheduled: true,
@@ -97,8 +89,6 @@ it("keeps scheduled turns with a real inline client on the normal widget surface
       clientCaps: ["inline-widgets"],
     }),
   );
-  const schema = tool.parameters as { required?: string[] };
-
-  expect(tool.requiredClientCaps).toEqual(["inline-widgets"]);
-  expect(schema.required).not.toContain("pin");
+  expect(tool).toMatchObject({ requiredClientCaps: ["inline-widgets"] });
+  expect(tool?.parameters.required).not.toContain("pin");
 });

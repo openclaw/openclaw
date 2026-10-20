@@ -5,10 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { getSessionControllerOperation } from "../sessions/session-controller.js";
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "./admitted-run-context.js";
+import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import {
   detachActiveEmbeddedRun as clearActiveEmbeddedRun,
   attachActiveEmbeddedRun as setActiveEmbeddedRun,
@@ -93,15 +90,7 @@ export async function setSessionsSendTestActiveRun(
   const operation = getSessionControllerOperation(sessionKey, target);
   const runId = handle.runId ?? `sessions-target:${sessionId}`;
   const sessionFile = `/tmp/${sessionId}.jsonl`;
-  const admission = prepareAgentRunAdmission({
-    cfg: config,
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      agentId,
-      runId,
-      ingress: { kind: "system", state: "present", boundary: "sessions-send-test" },
-    },
-  });
+  const admission = prepareSystemAgentRunAdmission(config, runId, agentId, "sessions-send-test");
   const ready = createDeferred();
   const closed = createDeferred();
   const completion = (async () => {

@@ -8,11 +8,11 @@ import {
   type OpenClawPluginToolOptions,
 } from "./openclaw-tools.plugin-context.js";
 
-vi.mock("../config/sessions/session-delivery-generation.js", async () => {
-  const { fakeSessionGenerationModule } =
-    await import("../plugins/memory-audience.test-support.js");
-  return fakeSessionGenerationModule;
-});
+vi.mock(
+  "../config/sessions/session-delivery-generation.js",
+  async () =>
+    (await import("../plugins/memory-audience.test-support.js")).fakeSessionGenerationModule,
+);
 
 function resolve(options: OpenClawPluginToolOptions) {
   return resolveOpenClawPluginToolInputs({
@@ -23,12 +23,13 @@ function resolve(options: OpenClawPluginToolOptions) {
 
 it("forwards one host-minted memory audience and its currency assertion", async () => {
   const sessionId = randomUUID();
+  const sessionKey = "agent:main:direct:owner";
   const entry = { sessionId, updatedAt: 1, chatType: "direct" as const };
-  fakeSessionOwner.rows.set("agent:main:direct:owner", entry);
+  fakeSessionOwner.rows.set(sessionKey, entry);
   const resolution = await resolveMemoryAudienceFromEntry(
     {
       agentId: "main",
-      sessionKey: "agent:main:direct:owner",
+      sessionKey,
       sessionId,
       senderIsOwner: true,
       storePath: "/tmp/openclaw-tools/main.sqlite",
@@ -37,14 +38,10 @@ it("forwards one host-minted memory audience and its currency assertion", async 
   );
   const memoryAudience = resolution.status === "granted" ? resolution.audience : undefined;
   expect(memoryAudience).toBeDefined();
-  const result = resolve({
-    memoryAudience,
-    agentSessionKey: "agent:main:direct:owner",
-  });
+  const result = resolve({ memoryAudience, agentSessionKey: sessionKey });
 
   expect(result.memoryAudience).toBe(memoryAudience);
-  expect(result.assertMemoryAudienceCurrent).toEqual(expect.any(Function));
-  expect(() => result.assertMemoryAudienceCurrent?.()).not.toThrow();
+  result.assertMemoryAudienceCurrent!();
   expect(() => resolve({ memoryAudience, agentSessionKey: "agent:main:other" })).toThrow(
     "memory audience is bound to a different session",
   );
