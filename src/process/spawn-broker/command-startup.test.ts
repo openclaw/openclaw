@@ -1,11 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, onTestFinished, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-  withTestTimeout,
-} from "../../../test/helpers/promise.js";
+import { withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { runCommandWithTimeout, runExec } from "../exec.js";
 import { signalFixturePid } from "./broker-fixture.test-support.js";
@@ -23,11 +18,7 @@ async function commandFixture(waitForAdmission = false) {
     signalFixturePid(host.pid, "SIGCONT");
     if (remote) {
       if (waitForAdmission) {
-        await withTestTimeout(
-          remote.child.ready(),
-          5_000,
-          "late command did not reach readiness",
-        ).catch(() => {});
+        await withTestTimeout(remote.child.ready(), 5_000, "late readiness").catch(() => {});
       }
       remote.child.kill("SIGKILL");
       await remote.result.catch(() => {});
@@ -54,7 +45,7 @@ it.skipIf(skipBrokerTests).each([false, true])(
         process.stdout.write('started');process.stderr.write('diagnostic');
         setInterval(()=>{},1000);
       `;
-    const outputReady = createDeferred();
+    const outputReady = Promise.withResolvers<void>();
     const output = { stdout: "", stderr: "" };
     process.kill(host.pid!, "SIGSTOP");
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
@@ -74,11 +65,12 @@ it.skipIf(skipBrokerTests).each([false, true])(
     await vi.advanceTimersByTimeAsync(900);
     expect(fixture.remote().child.pid).toBeUndefined();
     process.kill(host.pid!, "SIGCONT");
-    await awaitGateBeforeSettlement(
+    await Promise.race([
       outputReady.promise,
-      outcome,
-      "command ended before output readiness",
-    );
+      outcome.then(() => {
+        throw new Error("command ended before output readiness");
+      }),
+    ]);
     await vi.advanceTimersByTimeAsync(1099);
     expect(fixture.remote().child.killed).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
@@ -99,15 +91,16 @@ it.skipIf(skipBrokerTests).each([false, true])(
   },
 );
 
+const runnerResult = (termination: string) => ({ value: { termination, cleanup: "uncertain" } });
 it.skipIf(skipBrokerTests).for([
-  { api: "exec", reason: "timeout" },
-  { api: "exec", reason: "signal" },
-  { api: "runner", reason: "timeout" },
-  { api: "runner", reason: "signal" },
-  { api: "runner", reason: "no-output-timeout" },
+  ["exec", "timeout", { error: { timedOut: true } }],
+  ["exec", "signal", { error: { isCanceled: true } }],
+  ["runner", "timeout", runnerResult("timeout")],
+  ["runner", "signal", runnerResult("signal")],
+  ["runner", "no-output-timeout", runnerResult("no-output-timeout")],
 ] as const)(
-  "settles $api $reason while the broker cannot complete startup",
-  async ({ api, reason }, { signal }) => {
+  "settles %s %s while the broker cannot complete startup",
+  async ([api, reason, expected], { signal }) => {
     const fixture = await commandFixture(true);
     const { host } = fixture;
     const controller = new AbortController();
@@ -141,13 +134,7 @@ it.skipIf(skipBrokerTests).for([
       delay(500).then(() => ({ pending: true })),
     ]);
     expect(outcome).not.toHaveProperty("pending");
-    if (api === "exec") {
-      expect(outcome).toMatchObject({
-        error: reason === "timeout" ? { timedOut: true } : { isCanceled: true },
-      });
-    } else {
-      expect(outcome).toMatchObject({ value: { termination: reason, cleanup: "uncertain" } });
-    }
+    expect(outcome).toMatchObject(expected);
     expect(beforeInput).not.toHaveBeenCalled();
     expect(fixture.remote()).toBeDefined();
     process.kill(host.pid!, "SIGCONT");

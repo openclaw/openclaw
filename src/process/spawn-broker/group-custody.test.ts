@@ -3,7 +3,11 @@ import path from "node:path";
 import { afterEach, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
-import { signalFixturePid, startPreloadedBroker } from "./broker-fixture.test-support.js";
+import {
+  brokerSpawnPreload,
+  signalFixturePid,
+  startPreloadedBroker,
+} from "./broker-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -15,15 +19,8 @@ it.skipIf(process.platform === "win32").each(["native", "execa"] as const)(
     const preload = path.join(directory, "crash.mjs");
     await writeFile(
       preload,
-      `
-        import childProcess from 'node:child_process';
-        import {writeFileSync} from 'node:fs';
-        import {syncBuiltinESMExports} from 'node:module';
-        if (/\\/spawn-broker\\/worker\\.(?:ts|js)$/.test(process.argv[1] ?? '')) {
-          const nativeSpawn = childProcess.spawn;
-          childProcess.spawn = function(...args) {
-            const child = nativeSpawn.apply(this,args);
-            if (args[0] === '/bin/sleep' && args[1]?.[0] === '30' && child.pid) {
+      brokerSpawnPreload(
+        `if (args[0] === '/bin/sleep' && args[1]?.[0] === '30' && child.pid) {
               try {
                 const probe = childProcess.spawnSync('/bin/ps', ['-o','pid=,pgid=','-p',process.pid+','+child.pid], {encoding:'utf8'});
                 if (probe.status !== 0) throw new Error('group probe failed');
@@ -35,12 +32,9 @@ it.skipIf(process.platform === "win32").each(["native", "execa"] as const)(
                 }), {flag:'wx',mode:0o600});
               } catch(error) {child.kill('SIGKILL');throw error;}
               process.kill(process.pid,'SIGKILL');
-            }
-            return child;
-          };
-          syncBuiltinESMExports();
-        }
-      `,
+            }`,
+        "const {writeFileSync} = await import('node:fs');",
+      ),
     );
     const host = await startPreloadedBroker(preload);
     const options = { detached: false, stdio: "ignore", env: { PATH: "/usr/bin:/bin" } } as const;

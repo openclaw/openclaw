@@ -5,7 +5,7 @@ import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { startPreloadedBroker } from "./broker-fixture.test-support.js";
+import { brokerSpawnPreload, startPreloadedBroker } from "./broker-fixture.test-support.js";
 import { BrokerChild } from "./child.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -44,35 +44,23 @@ it.each(["exit", "disconnect", "requested disconnect"] as const)(
     expect(events).toEqual(
       exitFirst ? ["exit", "disconnect", "close"] : ["disconnect", "exit", "close"],
     );
-    expect(child.connected).toBe(false);
-    expect(child.signalCode).toBe("SIGKILL");
+    expect(child).toMatchObject({ connected: false, signalCode: "SIGKILL" });
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "keeps startup IPC ahead of messages arriving while its first write drains",
-  async ({ signal }) => {
-    const preload = path.join(tempDirs.make("openclaw-broker-event-order-"), "backpressure.mjs");
-    await writeFile(
-      preload,
-      `
-      import childProcess from 'node:child_process';
-      import {syncBuiltinESMExports} from 'node:module';
-      if (/\\/spawn-broker\\/worker\\.(?:ts|js)$/.test(process.argv[1] ?? '')) {
-        let sawB = false, sawC = false, publishSpawned, finishA;
-        const nativeSpawn = childProcess.spawn;
-        childProcess.spawn = function(...args) {
-          const child = nativeSpawn.apply(this,args);
-          if (args[1]?.[1]?.includes('openclaw-event-order')) {
+it.skipIf(process.platform === "win32")("orders IPC during backpressure", async ({ signal }) => {
+  const preload = path.join(tempDirs.make("openclaw-broker-event-order-"), "backpressure.mjs");
+  await writeFile(
+    preload,
+    brokerSpawnPreload(
+      `if (args[1]?.[1]?.includes('openclaw-event-order')) {
             child.on('message', message => {
               if (message === 'B') { sawB = true; publishSpawned?.(); }
               if (message === 'C') { sawC = true; finishA?.(); }
             });
-          }
-          return child;
-        };
-        syncBuiltinESMExports();
-        const nativeSend = process.send.bind(process);
+          }`,
+      "let sawB = false, sawC = false, publishSpawned, finishA;",
+      `const nativeSend = process.send.bind(process);
         process.send = (message, handle, options, callback) => {
           if (message.type === 'spawned' && !sawB) {
             publishSpawned = () => nativeSend(message, handle, options, callback);
@@ -86,36 +74,35 @@ it.skipIf(process.platform === "win32")(
           }
           return nativeSend(message, handle, options, callback);
         };
-      }
     `,
-    );
-    const host = await startPreloadedBroker(preload);
-    const child = host.spawn(
-      process.execPath,
-      [
-        "-e",
-        `// openclaw-event-order
+    ),
+  );
+  const host = await startPreloadedBroker(preload);
+  const child = host.spawn(
+    process.execPath,
+    [
+      "-e",
+      `// openclaw-event-order
           process.on('message', () => process.send('C', () => process.disconnect()));
           process.send('A'); process.send('B');
         `,
-      ],
-      { stdio: ["ignore", "ignore", "ignore", "ipc"] },
-    );
-    const messages: unknown[] = [];
-    let continueDelivery: Promise<void> | undefined;
-    child.on("message", (message: unknown) => {
-      messages.push(message);
-      if (message === "A") {
-        continueDelivery = new Promise<void>((resolve, reject) => {
-          child.send("continue", (error) => (error ? reject(error) : resolve()));
-        });
-        void continueDelivery.catch(() => {});
-      }
-    });
-    await child.ready();
-    await withinTest(child.waitForClose(), signal);
-    await continueDelivery;
-    expect(messages).toEqual(["A", "B", "C"]);
-    expect(child.exitCode).toBe(0);
-  },
-);
+    ],
+    { stdio: ["ignore", "ignore", "ignore", "ipc"] },
+  );
+  const messages: unknown[] = [];
+  let continueDelivery: Promise<void> | undefined;
+  child.on("message", (message: unknown) => {
+    messages.push(message);
+    if (message === "A") {
+      continueDelivery = new Promise<void>((resolve, reject) => {
+        child.send("continue", (error) => (error ? reject(error) : resolve()));
+      });
+      void continueDelivery.catch(() => {});
+    }
+  });
+  await child.ready();
+  await withinTest(child.waitForClose(), signal);
+  await continueDelivery;
+  expect(messages).toEqual(["A", "B", "C"]);
+  expect(child.exitCode).toBe(0);
+});

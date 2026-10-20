@@ -38,10 +38,9 @@ it.skipIf(process.platform === "win32").each(["exit", "timeout"] as const)(
       import {runExec} from ${JSON.stringify(execUrl)};
       import {getSpawnBroker} from ${JSON.stringify(contextUrl)};
       const state = globalThis[Symbol.for(${JSON.stringify(stateKey)})];
-      async function parent() {
-        const result = await runExec(process.execPath,['-e','console.log(process.ppid)'],{logOutput:false});
-        state.parents.push(Number(result.stdout));
-      }
+      const parent = async () => state.parents.push(Number(
+        (await runExec(process.execPath,['-e','console.log(process.ppid)'],{logOutput:false})).stdout
+      ));
       export async function startGatewayServerCore() {
         state.brokers.push(getSpawnBroker()?.pid ?? null);
         await parent();
