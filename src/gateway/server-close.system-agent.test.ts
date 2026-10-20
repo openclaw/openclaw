@@ -82,28 +82,23 @@ it("settles an accepted system-agent turn before Gateway close retires its audit
     kernel.scheduler.signal.addEventListener("abort", () => preludeEntered.resolve(), {
       once: true,
     });
-    let closed = false;
-    closing = server.close({ reason: "system-agent audit close regression" }).then(() => {
-      closed = true;
-    });
+    const closed = vi.fn<() => void>();
+    closing = server.close({ reason: "system-agent audit close regression" }).then(closed);
     await gate(preludeEntered.promise, closing, "Gateway skipped its close prelude");
-    expect(closed).toBe(false);
+    expect(closed).not.toHaveBeenCalled();
     expect(shared.isOpen).toBe(true);
     await expect(chat("Too late")).rejects.toThrow("Gateway request entry is closed");
     releaseRecording.resolve();
     await withinTest(Promise.all([turning.catch(() => undefined), closing]), signal);
     expect(shared.isOpen).toBe(false);
-    readClosedDatabase(resolveOpenClawStateSqlitePath(fixture.state.env), (database) => {
-      const rows = database
-        .prepare(
-          "SELECT payload_json FROM diagnostic_events WHERE scope = 'system-agent-transcript' ORDER BY sequence",
-        )
-        .all();
-      expect(rows.map((row) => JSON.parse(String(row.payload_json)))).toEqual([
-        { role: "user", text: "Accepted question", at: expect.any(Number) },
-        { role: "assistant", text: "Accepted answer", at: expect.any(Number) },
-      ]);
-    });
+    const rows = readClosedDatabase(
+      resolveOpenClawStateSqlitePath(fixture.state.env),
+      "SELECT payload_json FROM diagnostic_events WHERE scope = 'system-agent-transcript' ORDER BY sequence",
+    );
+    expect(rows.map((row) => JSON.parse(String(row.payload_json)))).toEqual([
+      { role: "user", text: "Accepted question", at: expect.any(Number) },
+      { role: "assistant", text: "Accepted answer", at: expect.any(Number) },
+    ]);
   } finally {
     releaseRecording.resolve();
     await Promise.allSettled([turning, closing]);

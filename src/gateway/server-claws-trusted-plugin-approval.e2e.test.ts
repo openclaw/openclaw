@@ -139,53 +139,43 @@ it("lets the installed plugin request review and gates its effect on Allow once 
     },
   });
   clawhub.artifact.mockResolvedValue({ version: { version, sha256hash: archive.integrity } });
-  clawhub.security.mockResolvedValue({
-    ...clawHubSecurityResponse(
-      packageName,
-      version,
-      { moderationState: "approved" },
-      "Synthetic official plugin fixture",
-    ),
-    package: { name: packageName, displayName: "Lobster", family: "code-plugin" },
-  });
+  clawhub.security.mockResolvedValue(
+    clawHubSecurityResponse(packageName, version, { moderationState: "approved" }),
+  );
   clawhub.download.mockResolvedValue({ ...archive, cleanup: async () => {} });
 
-  const envSnapshot = captureEnv([
-    "HOME",
-    ...MANUAL_GATEWAY_ENV_KEYS,
-    "OPENCLAW_HOME",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_CLAWHUB_URL",
-    "CLAWHUB_URL",
-    "OPENCLAW_GATEWAY_URL",
-    "OPENCLAW_GATEWAY_TOKEN",
-    "OPENCLAW_GATEWAY_PASSWORD",
-    "OPENCLAW_TEST_MINIMAL_GATEWAY",
-  ]);
+  const env: Record<string, string | undefined> = {
+    HOME: home,
+    OPENCLAW_HOME: home,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_CLAWHUB_URL: undefined,
+    CLAWHUB_URL: undefined,
+    OPENCLAW_GATEWAY_URL: undefined,
+    OPENCLAW_GATEWAY_TOKEN: undefined,
+    OPENCLAW_GATEWAY_PASSWORD: undefined,
+    OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+  };
+  const envSnapshot = captureEnv([...MANUAL_GATEWAY_ENV_KEYS, ...Object.keys(env)]);
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let caller: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
   let reviewer: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
   try {
-    setTestEnvValue("HOME", home);
-    setTestEnvValue("OPENCLAW_HOME", home);
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
-    deleteTestEnvValue("OPENCLAW_CLAWHUB_URL");
-    deleteTestEnvValue("CLAWHUB_URL");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) {
+        deleteTestEnvValue(key);
+      } else {
+        setTestEnvValue(key, value);
+      }
+    }
     configureManualGatewayBackgroundEnv(home);
-    setTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY", "0");
 
     const source = await readClawManifestFile(manifestPath);
     assert(source.ok, "Expected a valid Claw package");
     const plan = await buildGatewayClawAddPlan(source, { config, sourceMcpServers: {} });
     expect(plan.blockers).toEqual([]);
     const review = projectClawPluginCapabilityReviews(plan)[0];
-    assert(review, "Expected an official plugin capability review");
-    expect(review.pluginId).toBe("lobster");
+    assert(review?.pluginId === "lobster", "Expected an official lobster capability review");
     const pluginConsent = bindClawPluginInstallConsent([review], [review], () => {});
     const added = await applyClawAddPlanStateless(plan, {
       config,
@@ -213,9 +203,9 @@ it("lets the installed plugin request review and gates its effect on Allow once 
       }),
     );
     let requested = createDeferredCore<string>();
+    const connection = { url, token, timeoutMs: 60_000 };
     reviewer = await connectGatewayClient({
-      url,
-      token,
+      ...connection,
       clientDisplayName: "plugin approval reviewer",
       scopes: [APPROVALS_SCOPE],
       caps: [GATEWAY_CLIENT_CAPS.APPROVALS],
@@ -228,15 +218,12 @@ it("lets the installed plugin request review and gates its effect on Allow once 
           requested.resolve(id);
         }
       },
-      timeoutMs: 60_000,
     });
     caller = await connectGatewayClient({
-      url,
-      token,
+      ...connection,
       clientDisplayName: "write-only plugin tool caller",
       scopes: [WRITE_SCOPE],
       requestTimeoutMs: 15_000,
-      timeoutMs: 60_000,
     });
     const invoke = () =>
       caller!.request("tools.invoke", {

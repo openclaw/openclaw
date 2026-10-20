@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -9,41 +9,34 @@ import * as codeRegions from "../shared/text/code-regions.js";
 import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import { createChatRunState } from "./server-chat-state.js";
 
-const codeDirective = "`[[reply_to_current]]`";
+const directive = "`[[reply_to_current]]`";
 
 let state: ReturnType<typeof createChatRunState>;
 beforeEach(() => {
   state = createChatRunState();
 });
+afterEach(() => vi.restoreAllMocks());
 
 function expectUpdate(input: Parameters<typeof state.updateBuffer>[1], text: string | undefined) {
   state.updateBuffer("reply", input);
   expect(state.resolveBuffer("reply").text).toBe(text);
 }
 
-function source(name: string, prefix: string, suffix: string, expected = suffix) {
-  return { name, prefix, suffix, expected };
-}
-
 it.each([
-  source("literal trailing marker", "The token is ", SILENT_REPLY_TOKEN),
-  source("punctuated literal suffix", "The token is ", `${SILENT_REPLY_TOKEN}.`),
-  source("prepared literal marker", "", SILENT_REPLY_TOKEN),
-  source("prepared short reply", SILENT_REPLY_TOKEN.slice(0, 1), SILENT_REPLY_TOKEN.slice(1, 2)),
-  source(
-    "runtime directive crossing occurrences",
+  ["literal trailing marker", "The token is ", SILENT_REPLY_TOKEN],
+  ["punctuated literal suffix", "The token is ", `${SILENT_REPLY_TOKEN}.`],
+  ["prepared literal marker", "", SILENT_REPLY_TOKEN],
+  ["prepared short reply", SILENT_REPLY_TOKEN.slice(0, 1), SILENT_REPLY_TOKEN.slice(1, 2)],
+  [
+    "runtime directive",
     `Opening\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\nPrivate`,
     ` context\n${INTERNAL_RUNTIME_CONTEXT_END}\nVisible`,
     " context\nVisible",
-  ),
-  source("media directive crossing occurrences", "Opening\nMEDIA", ":./model.png\nVisible"),
-  source("code literal crossing occurrences", "`", "[[reply_to_current]]`", "`"),
-  source(
-    "media URL retained after its directive prefix commits",
-    "Opening\nMEDIA:prose ./model.png ",
-    "https://example.com/a.png\n",
-  ),
-])("preserves prepared source for $name", ({ prefix, suffix, expected }) => {
+  ],
+  ["media directive", "Opening\nMEDIA", ":./model.png\nVisible"],
+  ["code literal", "`", "[[reply_to_current]]`", "`"],
+  ["media URL", "Opening\nMEDIA:prose ./model.png ", "https://example.com/a.png\n"],
+])("preserves prepared source for %s", (_name, prefix, suffix, expected = suffix) => {
   const runId = "source-classification";
   if (prefix) {
     state.updateBuffer(runId, { itemId: "native", occurrenceId: "a", text: prefix });
@@ -85,16 +78,17 @@ it.each(["anonymous", "native"])("aligns %s deltas after empty items", (kind) =>
   const visible = state.resolveBuffer("reply").text;
   const delta = state.takeBufferDelta("reply", visible);
   const wire = delta?.replace ? delta.deltaText : baseline + (delta?.deltaText ?? "");
-  expect(visible).toBe("Visible.\n\nX");
-  expect(wire).toBe(visible);
+  expect([visible, wire]).toEqual(["Visible.\n\nX", "Visible.\n\nX"]);
 });
 
 it("retains commits received before text", () => {
   state.retireBuffer("reply", ["saved"]);
   state.updateBuffer("reply", { itemId: "saved", text: "Saved." });
   expectUpdate({ itemId: "tail", text: "Tail." }, "Tail.");
-  expect(state.resolveBuffer("reply", { final: true }).text).toBe("Saved.\n\nTail.");
-  expect(state.resolveBuffer("reply", { final: true }).displayText).toBe("Tail.");
+  expect(state.resolveBuffer("reply", { final: true })).toMatchObject({
+    text: "Saved.\n\nTail.",
+    displayText: "Tail.",
+  });
 });
 
 it.each(["Saved.", "Saved.\n\n"])("corrects text after committed prefix %j", (prefix) => {
@@ -119,72 +113,63 @@ it.each(["visible", "empty"])("retires owned bytes when %s commits first", (firs
   expect(state.resolveBuffer("reply").text).toBe("");
 });
 
-it.each([undefined, "reused-display-id"])(
-  "separates private occurrences (displayId=%s)",
-  (itemId) => {
-    const first: AgentAssistantSourceReceipt = {};
-    const second: AgentAssistantSourceReceipt = {};
-    state.updateBuffer("reply", { itemId, text: "Saved." }, first);
-    first.committedMessageSeq = 2;
-    state.retireSource("reply", first);
-    state.updateBuffer("reply", { itemId, text: "Unsaved.", delta: "" }, second);
-    expect(state.resolveBuffer("reply").text).toBe("Unsaved.");
-    second.committedMessageSeq = 3;
-    state.retireSource("reply", second);
-    state.updateBuffer("reply", { itemId, text: "Corrected.", replace: true }, second);
-    expect(state.resolveBuffer("reply").text).toBe("");
-  },
-);
+it.each([undefined, "reused-display-id"])("separates occurrences (id=%s)", (itemId) => {
+  const first: AgentAssistantSourceReceipt = {};
+  const second: AgentAssistantSourceReceipt = {};
+  state.updateBuffer("reply", { itemId, text: "Saved." }, first);
+  first.committedMessageSeq = 2;
+  state.retireSource("reply", first);
+  state.updateBuffer("reply", { itemId, text: "Unsaved.", delta: "" }, second);
+  expect(state.resolveBuffer("reply").text).toBe("Unsaved.");
+  second.committedMessageSeq = 3;
+  state.retireSource("reply", second);
+  state.updateBuffer("reply", { itemId, text: "Corrected.", replace: true }, second);
+  expect(state.resolveBuffer("reply").text).toBe("");
+});
 
 it.each([
-  { identified: true, committedBeforeAppend: false },
-  { identified: false, committedBeforeAppend: false },
-  { identified: true, committedBeforeAppend: true },
-  { identified: false, committedBeforeAppend: true },
-])(
-  "retains unsaved text (identified=$identified, committed=$committedBeforeAppend)",
-  ({ identified, committedBeforeAppend }) => {
-    state.updateBuffer("reply", { ...(identified ? { itemId: "first" } : {}), text: "Unsaved." });
-    state.updateBuffer("reply", { itemId: "second", text: "Saved." });
-    if (committedBeforeAppend) {
-      state.retireBuffer("reply", ["second"]);
-    }
-    let wire = state.resolveBuffer("reply").text;
-    state.takeBufferDelta("reply", wire);
-    state.updateBuffer("reply", { delta: "More." });
-    if (!committedBeforeAppend) {
-      state.retireBuffer("reply", ["second"]);
-    }
-    const delta = state.takeBufferDelta("reply", state.resolveBuffer("reply").text);
-    if (delta) {
-      wire = delta.replace ? delta.deltaText : wire + delta.deltaText;
-    }
-    expect(wire).toBe("Unsaved.\n\nMore.");
-    expect(state.resolveBuffer("reply").text).toBe("Unsaved.\n\nMore.");
-    if (identified) {
-      state.retireBuffer("reply", ["first"]);
-      expect(state.resolveBuffer("reply").text).toBe("More.");
-    }
-  },
-);
-
-it.each([true, false])(
-  "retires exact bytes across anonymous append (before=%s)",
-  (committedBefore) => {
-    state.updateBuffer("reply", { itemId: "saved", text: "Saved." });
-    state.takeBufferDelta("reply", "Saved.");
-    if (committedBefore) {
-      state.retireBuffer("reply", ["saved"]);
-      state.takeBufferDelta("reply", "");
-    }
-    state.updateBuffer("reply", { delta: "More." });
-    if (!committedBefore) {
-      state.retireBuffer("reply", ["saved"]);
-    }
+  [true, false],
+  [false, false],
+  [true, true],
+  [false, true],
+])("retains unsaved text (identified=%s, committed=%s)", (identified, committedBeforeAppend) => {
+  state.updateBuffer("reply", { ...(identified ? { itemId: "first" } : {}), text: "Unsaved." });
+  state.updateBuffer("reply", { itemId: "second", text: "Saved." });
+  if (committedBeforeAppend) {
+    state.retireBuffer("reply", ["second"]);
+  }
+  let wire = state.resolveBuffer("reply").text;
+  state.takeBufferDelta("reply", wire);
+  state.updateBuffer("reply", { delta: "More." });
+  if (!committedBeforeAppend) {
+    state.retireBuffer("reply", ["second"]);
+  }
+  const delta = state.takeBufferDelta("reply", state.resolveBuffer("reply").text);
+  if (delta) {
+    wire = delta.replace ? delta.deltaText : wire + delta.deltaText;
+  }
+  expect(wire).toBe("Unsaved.\n\nMore.");
+  expect(state.resolveBuffer("reply").text).toBe("Unsaved.\n\nMore.");
+  if (identified) {
+    state.retireBuffer("reply", ["first"]);
     expect(state.resolveBuffer("reply").text).toBe("More.");
-    expect(state.takeBufferDelta("reply", "More.")?.deltaText).toBe("More.");
-  },
-);
+  }
+});
+
+it.each([true, false])("retires bytes across append (before=%s)", (committedBefore) => {
+  state.updateBuffer("reply", { itemId: "saved", text: "Saved." });
+  state.takeBufferDelta("reply", "Saved.");
+  if (committedBefore) {
+    state.retireBuffer("reply", ["saved"]);
+    state.takeBufferDelta("reply", "");
+  }
+  state.updateBuffer("reply", { delta: "More." });
+  if (!committedBefore) {
+    state.retireBuffer("reply", ["saved"]);
+  }
+  expect(state.resolveBuffer("reply").text).toBe("More.");
+  expect(state.takeBufferDelta("reply", "More.")?.deltaText).toBe("More.");
+});
 
 it.each([false, true])("consumes late committed text (snapshot=%s)", (snapshot) => {
   state.updateBuffer("reply", { itemId: "first", text: "First" });
@@ -193,11 +178,7 @@ it.each([false, true])("consumes late committed text (snapshot=%s)", (snapshot) 
   expect(state.takeBufferDelta("reply", "")).toEqual({ deltaText: "", replace: true });
   expect(state.resolveBuffer("reply", { final: true }).text).toBe("First");
   expectUpdate(
-    {
-      itemId: "first",
-      delta: " note",
-      ...(snapshot ? { text: "First note" } : {}),
-    },
+    { itemId: "first", delta: " note", ...(snapshot ? { text: "First note" } : {}) },
     "",
   );
   expect(state.resolveBuffer("reply", { final: true }).text).toBe("First note");
@@ -209,56 +190,41 @@ it("bounds parsing of growing literal directives", () => {
   const regions = vi.spyOn(codeRegions, "findCodeRegions");
   const ownership = vi.spyOn(codeRegions, "findCodeOwnership");
   const run = state.getOrCreate("reply");
-  const literal = `The marker is ${codeDirective}.\n\nNext paragraph.\n\n`;
+  const literal = `The marker is ${directive}.\n\nNext paragraph.\n\n`;
   const block = "```ts\nconst value = 1;\n```\n\n";
-  try {
-    expectUpdate({ delta: literal }, literal);
-    for (let index = 1; index <= 100; index++) {
-      expectUpdate({ delta: block }, literal + block.repeat(index));
-    }
-    const parsedChars = [...regions.mock.calls, ...ownership.mock.calls].reduce(
-      (total, [text]) => total + text.length,
-      0,
-    );
-    expect(parsedChars).toBeLessThan((run.rawBuffer?.length ?? 0) * 4);
-  } finally {
-    regions.mockRestore();
-    ownership.mockRestore();
+  expectUpdate({ delta: literal }, literal);
+  for (let index = 1; index <= 100; index++) {
+    expectUpdate({ delta: block }, literal + block.repeat(index));
   }
+  const calls = [...regions.mock.calls, ...ownership.mock.calls];
+  const parsedChars = calls.reduce((total, [text]) => total + text.length, 0);
+  expect(parsedChars).toBeLessThan((run.rawBuffer?.length ?? 0) * 4);
 });
 
 it.each([1, 4])("bounds code-point reads across %i messages", (messages) => {
   const codePointAt = vi.spyOn(String.prototype, "codePointAt");
   const chunks = 32;
   const delta = "word";
-  try {
-    for (let message = 0; message < messages; message++) {
-      for (let chunk = 1; chunk <= chunks; chunk++) {
-        state.updateBuffer("reply", {
-          itemId: `message-${message}`,
-          text: delta.repeat(chunk),
-          delta,
-        });
-      }
+  for (let message = 0; message < messages; message++) {
+    for (let chunk = 1; chunk <= chunks; chunk++) {
+      state.updateBuffer("reply", {
+        itemId: `message-${message}`,
+        text: delta.repeat(chunk),
+        delta,
+      });
     }
-    expect(codePointAt.mock.calls.length).toBeLessThanOrEqual(messages * chunks * 2);
-  } finally {
-    codePointAt.mockRestore();
   }
+  expect(codePointAt.mock.calls.length).toBeLessThanOrEqual(messages * chunks * 2);
+  codePointAt.mockRestore();
   expect(state.resolveBuffer("reply", { final: true }).text).toBe(
     Array.from({ length: messages }, () => delta.repeat(chunks)).join("\n\n"),
   );
 });
 
-it.each([
-  { name: "an ordinary append", first: "Launch ", delta: "🚀", frame: { deltaText: "🚀" } },
-  {
-    name: "a completed split surrogate pair",
-    first: "Launch \uD83D",
-    delta: "\uDE80",
-    frame: { deltaText: "Launch 🚀", replace: true },
-  },
-])("preserves code points after $name", ({ first, delta, frame }) => {
+it.each<[string, string, { deltaText: string; replace?: boolean }]>([
+  ["Launch ", "🚀", { deltaText: "🚀" }],
+  ["Launch \uD83D", "\uDE80", { deltaText: "Launch 🚀", replace: true }],
+])("preserves code points after %j + %j", (first, delta, frame) => {
   state.updateBuffer("reply", { itemId: "answer", text: first, delta: first });
   state.takeBufferDelta("reply", state.resolveBuffer("reply").text);
   state.updateBuffer("reply", { itemId: "answer", text: "Launch 🚀", delta });
@@ -267,24 +233,24 @@ it.each([
 
 it.each([
   {
-    name: "a closing backtick restores a previously stripped marker",
-    frames: ["before `[[reply_to_current]]", `before ${codeDirective} after`],
-    visible: ["before `", `before ${codeDirective} after`],
+    name: "closing backtick",
+    frames: ["before `[[reply_to_current]]", `before ${directive} after`],
+    visible: ["before `", `before ${directive} after`],
   },
   {
-    name: "a later image reference changes earlier code ownership",
-    frames: [`![${codeDirective}][x]\n\nnext`, `![${codeDirective}][x]\n\nnext\n\n[x]: /image.png`],
-    visible: [`![${codeDirective}][x]\n\nnext`, "![``][x]\n\nnext\n\n[x]: /image.png"],
+    name: "image reference",
+    frames: [`![${directive}][x]\n\nnext`, `![${directive}][x]\n\nnext\n\n[x]: /image.png`],
+    visible: [`![${directive}][x]\n\nnext`, "![``][x]\n\nnext\n\n[x]: /image.png"],
   },
   {
-    name: "a new directive crosses the append boundary after settled code",
-    frames: [`${codeDirective}\n\nNext [`, `${codeDirective}\n\nNext [[reply_to_current]] after`],
-    visible: [`${codeDirective}\n\nNext`, `${codeDirective}\n\nNext  after`],
+    name: "directive across append boundary",
+    frames: [`${directive}\n\nNext [`, `${directive}\n\nNext [[reply_to_current]] after`],
+    visible: [`${directive}\n\nNext`, `${directive}\n\nNext  after`],
   },
   {
-    name: "a replacement retires the old literal prefix",
-    frames: [`${codeDirective}\n\nNext`, "[[reply_to_current]] visible"],
-    visible: [`${codeDirective}\n\nNext`, " visible"],
+    name: "replacement",
+    frames: [`${directive}\n\nNext`, "[[reply_to_current]] visible"],
+    visible: [`${directive}\n\nNext`, " visible"],
   },
 ])("reprojects Markdown after $name", ({ frames, visible }) => {
   let previous = "";
@@ -302,9 +268,9 @@ it.each([
 
 it("isolates terminal tail release and clears retired projection", () => {
   const run = state.getOrCreate("reply");
-  expectUpdate({ delta: `${codeDirective}\n\nNext [` }, `${codeDirective}\n\nNext`);
+  expectUpdate({ delta: `${directive}\n\nNext [` }, `${directive}\n\nNext`);
   expect(state.resolveBuffer("reply", { final: true }).text).toBe(run.rawBuffer);
-  expect(state.resolveBuffer("reply").text).toBe(`${codeDirective}\n\nNext`);
+  expect(state.resolveBuffer("reply").text).toBe(`${directive}\n\nNext`);
   state.clearRun("reply");
   expect(state.runs.has("reply")).toBe(false);
   expectUpdate({ delta: "[[reply_to_current]] visible" }, " visible");
@@ -327,11 +293,11 @@ it("retains pending deltas and reconciles terminal whitespace", () => {
 });
 
 it("reprojects managed media without leaking terminal tails", () => {
-  const text = `${codeDirective}\n\nPicture\nMEDIA:./plot.png\nDone`;
+  const text = `${directive}\n\nPicture\nMEDIA:./plot.png\nDone`;
   expectUpdate({ delta: text }, text);
   expect(state.takeBufferDelta("reply", text)).toEqual({ deltaText: text });
   state.updateBuffer("reply", { managedMediaUrls: ["./plot.png"] });
-  const visible = `${codeDirective}\n\nPicture\nDone`;
+  const visible = `${directive}\n\nPicture\nDone`;
   expect(state.resolveBuffer("reply").text).toBe(visible);
   expect(state.takeBufferDelta("reply", visible)).toEqual({ deltaText: visible, replace: true });
 });

@@ -15,8 +15,7 @@ import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
-import { createTestGate } from "./server-close.lifecycle.test-support.js";
-import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
+import { createCloseTestDeps, createTestGate } from "./server-close.lifecycle.test-support.js";
 import * as lifecyclePersistence from "./session-lifecycle-persistence-owner.js";
 
 it("settles accepted writes and all cleanup before Gateway close resolves", async ({ signal }) => {
@@ -37,14 +36,8 @@ it("settles accepted writes and all cleanup before Gateway close resolves", asyn
   const preRestartHook = vi.fn();
   registerInternalHook("gateway:shutdown", shutdownHook);
   registerInternalHook("gateway:pre-restart", preRestartHook);
-  const createDeps = createGatewayCloseTestDepsFactory({
-    disposeAllBundleLspRuntimes: async () => {},
-    stopGmailWatcher: async () => {},
-    disposeAllCodeModeRuns: async () => {},
-    closeProviderTransportDispatcherPool: async () => {},
-    drainRetainedEmbeddingProviders: async () => runtimesDrained.resolve(),
-  });
-  const params = createDeps({
+  const params = createCloseTestDeps({
+    drainRetainedOpenAiEmbeddingProviders: async () => runtimesDrained.resolve(),
     channelIds: ["telegram"],
     agentUnsub: async () => {
       terminalDraining.resolve();

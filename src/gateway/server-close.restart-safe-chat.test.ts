@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import "../test-utils/prepare-compiled-subprocesses.js";
-import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
@@ -10,7 +9,7 @@ import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.j
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import * as writeAdmission from "../state/openclaw-agent-write-admission.js";
-import { createTestGate } from "./server-close.lifecycle.test-support.js";
+import { createTestGate, readClosedDatabase } from "./server-close.lifecycle.test-support.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import { terminalizeRestartSafeChatAdmission } from "./server-methods/chat-restart-recovery.js";
 
@@ -28,7 +27,6 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
   let job: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
   let callerSignal: AbortSignal | undefined;
-  let observer: DatabaseSync | undefined;
   let sql: ReturnType<typeof observeHostDataSql> | undefined;
   const settlementAuthority = new AbortController();
   try {
@@ -59,7 +57,6 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
       target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
       readSource: read.source,
     };
-    observer = new DatabaseSync(target.storePath, { readOnly: true });
     const write = writeAdmission.runOpenClawAgentWorkerWrite;
     let held = false;
     vi.spyOn(writeAdmission, "runOpenClawAgentWorkerWrite").mockImplementation(
@@ -130,17 +127,14 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
     settlementAuthority.abort(new Error("Terminal settlement completed"));
     sql.restore();
     sql = undefined;
-    expect(
-      observer
-        .prepare(
-          `SELECT status, json_extract(entry_json, '$.lastRunId') AS lastRunId,
+    const rows = readClosedDatabase(
+      target.storePath,
+      `SELECT status, json_extract(entry_json, '$.lastRunId') AS lastRunId,
             json_extract(entry_json, '$.restartRecoveryDeliveryRunId') AS claim
            FROM session_nodes WHERE session_key = ?`,
-        )
-        .get(target.sessionKey),
-    ).toEqual({ status: "killed", lastRunId: "close-run", claim: null });
-    observer.close();
-    observer = undefined;
+      target.sessionKey,
+    );
+    expect(rows).toEqual([{ status: "killed", lastRunId: "close-run", claim: null }]);
     finish.resolve();
     await withinTest(closing, signal);
   } finally {
@@ -149,7 +143,6 @@ it("joins accepted restart-safe terminal persistence after the real close prelud
     release.resolve();
     finish.resolve();
     sql?.restore();
-    observer?.close();
     await Promise.allSettled([job, closing]);
     settlementAuthority.abort(new Error("Terminal fixture closed"));
     await work.drain();

@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { CliDeps } from "../cli/deps.types.js";
+import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { waitForActiveCronTaskRuns } from "../cron/service/active-run-cancellation.js";
 import { createCronServiceState } from "../cron/service/state.js";
 import { executeJobCoreWithTimeout } from "../cron/service/timer-job-runner.js";
@@ -17,17 +18,10 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { completeGatewayClose, prepareGatewayClose } from "./server-close.js";
-import { createGatewayCloseTestDepsFactory } from "./server-close.test-support.js";
+import { createCloseTestDeps } from "./server-close.lifecycle.test-support.js";
 import { buildGatewayCronService } from "./server-cron.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const createGatewayCloseTestDeps = createGatewayCloseTestDepsFactory({
-  disposeAllCodeModeRuns: async () => {},
-  disposeAllBundleLspRuntimes: async () => {},
-  drainRetainedEmbeddingProviders: async () => {},
-  stopGmailWatcher: async () => {},
-  closeProviderTransportDispatcherPool: async () => {},
-});
 
 afterEach(() => vi.useRealTimers());
 
@@ -74,15 +68,7 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
     },
   });
   const run = (job: Pick<CronJob, "id" | "name" | "payload" | "sessionTarget" | "agentId">) =>
-    executeJobCoreWithTimeout(core, {
-      enabled: true,
-      createdAtMs: Date.now(),
-      updatedAtMs: Date.now(),
-      schedule: { kind: "every", everyMs: 60_000 },
-      wakeMode: "next-heartbeat",
-      state: {},
-      ...job,
-    });
+    executeJobCoreWithTimeout(core, makeCronJob(job));
   const sibling = run({
     id: "admitted-sibling",
     name: "admitted sibling",
@@ -116,7 +102,7 @@ it("settles queued heartbeat cron work before joining its shutdown drain", async
   });
   let closed = false;
   const sharedStateClosed = vi.fn();
-  const deps = createGatewayCloseTestDeps({
+  const deps = createCloseTestDeps({
     cron,
     heartbeatRunner: runner,
     clearSecretsRuntimeSnapshot: sharedStateClosed,
