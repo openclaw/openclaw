@@ -58,18 +58,11 @@ describe("bundled plugin doctor contract declarations", () => {
         const declaration = expectDefined(record.doctorContract, record.id);
         const { summary } = await contract(artifactPath);
         for (const surface of DOCTOR_CONTRACT_SURFACES) {
-          if (
-            surface === "sessionRouteStateOwners" &&
-            record.sessionRouteStateOwners !== undefined
-          ) {
-            expect(summary.sessionRouteStateOwners, `${record.id}: owners must use manifest`).toBe(
-              false,
-            );
-            continue;
-          }
           const value = declaration[surface];
           const declared =
-            value === true || (surface === "stateMigrations" && Array.isArray(value));
+            surface === "sessionRouteStateOwners" && record.sessionRouteStateOwners !== undefined
+              ? false
+              : value === true || (surface === "stateMigrations" && Array.isArray(value));
           expect(summary[surface], `${record.id}:${surface}`).toBe(declared);
         }
       }),

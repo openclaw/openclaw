@@ -7,20 +7,18 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { registerTestPlugin } from "../plugin-sdk/plugin-test-contracts.js";
 import { createPluginRuntimeMock } from "../plugin-sdk/plugin-test-runtime.js";
-import {
-  createPluginBlobStore,
-  resetPluginBlobStoreForTests,
-} from "../plugin-state/plugin-blob-store.js";
+import * as blobs from "../plugin-state/plugin-blob-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createPluginRegistry } from "./registry.js";
 import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
-import { createPluginRecord } from "./status.test-helpers.js";
+import { createPluginRecord as pluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginDefinition } from "./types.js";
 
 const temporaryRoot = vi.hoisted(() => ({ value: "" }));
+const id = "diffs";
 vi.mock("../infra/tmp-openclaw-dir.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/tmp-openclaw-dir.js")>()),
   resolvePreferredOpenClawTmpDir: () => temporaryRoot.value,
@@ -52,21 +50,17 @@ it.each([false, true])(
       vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
       const { default: diffsPlugin } = await loadBundledPluginFacade<{
         default: OpenClawPluginDefinition;
-      }>({ pluginId: "diffs", artifactBasename: "index.js" });
+      }>({ pluginId: id, artifactBasename: "index.js" });
       assert(diffsPlugin.register, "Diffs has no plugin registration entry point");
       const config = {};
       const builder = createPluginRegistry({
         logger: { info() {}, warn() {}, error() {}, debug() {} },
         runtime: createPluginRuntimeMock({ config: { current: () => config } }),
       });
-      const record = createPluginRecord({
-        id: "diffs",
-        origin: "bundled",
-        contracts: { tools: ["diffs"] },
-      });
-      instance = new PluginInstance("diffs", { record, registry: builder.registry });
+      const record = pluginRecord({ id, origin: "bundled", contracts: { tools: [id] } });
+      instance = new PluginInstance(id, { record, registry: builder.registry });
       registerTestPlugin({ registry: builder, config, record, register: diffsPlugin.register });
-      const opened = vi.mocked(createPluginBlobStore).mock.results.at(-1);
+      const opened = vi.mocked(blobs.createPluginBlobStore).mock.results.at(-1);
       assert(opened?.type === "return", "Diffs did not open its registered Blob store");
       const store = opened.value;
       services = await startPluginServices({ registry: builder.registry, config });
@@ -80,10 +74,10 @@ it.each([false, true])(
       const failedId = "b".repeat(20);
       const filesRoot = path.join(root, "openclaw-diffs");
       const heldDirectory = path.join(filesRoot, heldId);
-      for (const id of [heldId, failedId]) {
-        const directory = path.join(filesRoot, id);
+      for (const artifactId of [heldId, failedId]) {
+        const directory = path.join(filesRoot, artifactId);
         await fs.mkdir(directory, { recursive: true });
-        await fs.writeFile(path.join(directory, "preview.png"), id);
+        await fs.writeFile(path.join(directory, "preview.png"), artifactId);
         const old = new Date(Date.now() - 25 * 60 * 60 * 1_000);
         await fs.utimes(directory, old, old);
       }
@@ -95,9 +89,7 @@ it.each([false, true])(
         .mockImplementationOnce(async () => {
           writeEntered.resolve();
           await releaseQuota.promise;
-          throw Object.assign(new Error("fixture namespace quota reached"), {
-            code: "PLUGIN_BLOB_LIMIT_EXCEEDED",
-          });
+          throw Object.assign(new Error("quota reached"), { code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
         });
       const lookup = store.lookup.bind(store);
       vi.spyOn(store, "lookup").mockImplementation(async (key) => {
@@ -122,15 +114,10 @@ it.each([false, true])(
         removals.push(pending);
         return pending;
       });
-      let finished = false;
-      let drained = false;
-      const invocation = tool.execute("late-cleanup", {
-        before: "one\n",
-        after: "two\n",
-        mode: "view",
-      });
+      const settled = { invocation: false, drain: false };
+      const invocation = tool.execute("cleanup", { before: "a\n", after: "b\n", mode: "view" });
       const settle = <T>(value: T, error?: unknown) => {
-        finished = true;
+        settled.invocation = true;
         return { value, error };
       };
       const result = invocation.then(
@@ -138,36 +125,29 @@ it.each([false, true])(
         (error: unknown) => settle(undefined, error),
       );
       invocationSettlement = result;
-      const beforeInvocationSettles = (milestone: Promise<void>) =>
-        awaitGateBeforeSettlement(
-          milestone,
-          result,
-          "Diffs invocation settled before the fixture milestone",
-        );
-      await beforeInvocationSettles(writeEntered.promise);
+      const beforeSettlement = (gate: Promise<void>) =>
+        awaitGateBeforeSettlement(gate, result, "Diffs settled before its fixture gate");
+      await beforeSettlement(writeEntered.promise);
       // The service stops background sweeps; the accepted tool still owns its late work.
       await services.stop();
       draining = instance.drain().then((value) => {
-        drained = true;
+        settled.drain = true;
         return value;
       });
       releaseQuota.resolve();
-      await beforeInvocationSettles(siblingFinished.promise);
+      await beforeSettlement(siblingFinished.promise);
       await setImmediate();
-      expect({ finished, drained }).toEqual({ finished: false, drained: false });
+      expect(settled).toEqual({ invocation: false, drain: false });
       expect(await fs.readFile(path.join(heldDirectory, "preview.png"), "utf8")).toBe(heldId);
       releaseRemoval.resolve();
       const outcome = await result;
       await Promise.allSettled(removals);
       expect(await draining).toEqual({ errors: [] });
       expect(await fs.readdir(filesRoot)).toEqual(failSibling ? [failedId] : []);
-      if (failSibling) {
-        expect(outcome.error).toBe(failure);
-        expect(register).toHaveBeenCalledTimes(1);
-      } else {
-        expect(outcome.error).toBeUndefined();
+      expect(outcome.error).toBe(failSibling ? failure : undefined);
+      expect(register).toHaveBeenCalledTimes(failSibling ? 1 : 2);
+      if (!failSibling) {
         expect(outcome.value?.details).toMatchObject({ changed: true });
-        expect(register).toHaveBeenCalledTimes(2);
         expect(await store.entries()).toHaveLength(1);
       }
     } finally {
@@ -180,7 +160,7 @@ it.each([false, true])(
       await services?.stop();
       await instance?.dispose();
       await closeOpenClawStateDatabaseAsync();
-      resetPluginBlobStoreForTests();
+      blobs.resetPluginBlobStoreForTests();
       vi.restoreAllMocks();
       await fs.rm(root, { recursive: true, force: true });
     }

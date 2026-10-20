@@ -50,11 +50,11 @@ it.each(["plain", "overlapping package", "native companion", "external dependenc
     if (layout === "overlapping package") {
       const shared = path.join(plugin.rootDir, "shared");
       fs.mkdirSync(shared);
-      write(shared, "package.json", '{"name":"shared","main":"index.cjs"}');
+      write(shared, "package.json", '{"main":"index.cjs"}');
       write(shared, "index.cjs", 'module.exports = "shared";');
       fs.mkdirSync(path.join(plugin.rootDir, "node_modules"));
       fs.symlinkSync(shared, path.join(plugin.rootDir, "node_modules", "shared"), "junction");
-      write(plugin.rootDir, "package.json", '{"type":"module","dependencies":{"shared":"1.0.0"}}');
+      write(plugin.rootDir, "package.json", '{"dependencies":{"shared":"*"}}');
     } else if (layout === "external dependency junctions") {
       // Windows junctions are absolute even when capture supplies a relative target.
       const dependencies = dirs.make("doctor-custody-dependencies-");
@@ -62,14 +62,10 @@ it.each(["plain", "overlapping package", "native companion", "external dependenc
       const consumer = path.join(dependencies, "consumer");
       fs.mkdirSync(shared);
       fs.mkdirSync(path.join(consumer, "node_modules"), { recursive: true });
-      write(shared, "package.json", '{"name":"shared","type":"module","main":"index.mjs"}');
+      write(shared, "package.json", '{"main":"index.mjs"}');
       write(shared, "index.mjs", 'export const value = "first";');
       write(shared, "resource.txt", "first");
-      write(
-        consumer,
-        "package.json",
-        '{"name":"consumer","type":"module","main":"index.mjs","dependencies":{"shared":"1.0.0"}}',
-      );
+      write(consumer, "package.json", '{"main":"index.mjs","dependencies":{"shared":"*"}}');
       write(
         consumer,
         "index.mjs",
@@ -82,11 +78,7 @@ it.each(["plain", "overlapping package", "native companion", "external dependenc
       fs.mkdirSync(path.join(plugin.rootDir, "node_modules"));
       fs.symlinkSync(consumer, path.join(plugin.rootDir, "node_modules", "consumer"), "junction");
       fs.symlinkSync(shared, path.join(plugin.rootDir, "node_modules", "shared"), "junction");
-      write(
-        plugin.rootDir,
-        "package.json",
-        '{"type":"module","dependencies":{"consumer":"1.0.0","shared":"1.0.0"}}',
-      );
+      write(plugin.rootDir, "package.json", '{"dependencies":{"consumer":"*","shared":"*"}}');
       fs.writeFileSync(plugin.actions, "export { version } from 'consumer';");
     } else if (layout === "native companion") {
       write(plugin.rootDir, "a.so", "synthetic native fixture");
@@ -98,8 +90,7 @@ it.each(["plain", "overlapping package", "native companion", "external dependenc
       const acquisitions: number[] = [];
       for (let phase = 0; phase < 2; phase++) {
         await using cache = createPluginCache();
-        const migration = withPluginCache(cache, plugin.load);
-        results.push(await migration.migrateLegacyState(plugin.input));
+        results.push(await withPluginCache(cache, plugin.load).migrateLegacyState(plugin.input));
         acquisitions.push(copies.mock.calls.filter(([source]) => source === plugin.source).length);
       }
       expect(results.map((result) => result.changes.slice(0, 3))).toEqual([

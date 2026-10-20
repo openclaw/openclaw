@@ -10,10 +10,10 @@ import {
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
-  detachPluginConversationBinding,
-  getCurrentPluginConversationBinding,
-  requestPluginConversationBinding,
-  resolvePluginConversationBindingApproval,
+  detachPluginConversationBinding as detach,
+  getCurrentPluginConversationBinding as current,
+  requestPluginConversationBinding as request,
+  resolvePluginConversationBindingApproval as resolveApproval,
 } from "./conversation-binding.js";
 import { seedPluginConversationBindingApprovalForTest } from "./conversation-binding.test-fixtures.js";
 import {
@@ -23,19 +23,13 @@ import {
 } from "./runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
+const channel = "binding-test";
 function installGenericBindingChannel(): void {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "binding-test",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "binding-test" }),
-          conversationBindings: { supportsCurrentConversationBinding: true },
-        },
-      },
-    ]),
-  );
+  const plugin = {
+    ...createChannelTestPluginBase({ id: channel }),
+    conversationBindings: { supportsCurrentConversationBinding: true },
+  };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: channel, source: "test", plugin }]));
 }
 
 async function closeState() {
@@ -44,17 +38,12 @@ async function closeState() {
 }
 
 async function approve(
-  request: Awaited<ReturnType<typeof requestPluginConversationBinding>>,
+  requested: Awaited<ReturnType<typeof request>>,
   decision: "allow-always" | "allow-once",
 ) {
-  assert(request.status === "pending", "Expected a plugin binding approval request");
-  await expect(
-    resolvePluginConversationBindingApproval({
-      approvalId: request.approvalId,
-      decision,
-      senderId: "user-1",
-    }),
-  ).resolves.toMatchObject({ status: "approved" });
+  assert(requested.status === "pending", "Expected a plugin binding approval request");
+  const choice = { approvalId: requested.approvalId, decision, senderId: "user-1" };
+  await expect(resolveApproval(choice)).resolves.toMatchObject({ status: "approved" });
 }
 
 const tempDirs: string[] = [];
@@ -82,29 +71,17 @@ it.each(["pending approval", "persistent approval"] as const)(
   "keeps an opaque target usable across restart after %s",
   async (approval) => {
     const owner = { pluginId: "fixture-runtime", pluginRoot: "/plugins/fixture-runtime" };
-    const conversation = {
-      channel: "binding-test",
-      accountId: "default",
-      conversationId: "room:shared",
-    };
-    const input = {
-      ...owner,
-      conversation,
-      requestedBySenderId: "user-1",
-      binding: {
-        summary: "Continue the plugin conversation",
-        detachHint: "/detach",
-        data: { externalThread: "thread-17" },
-      },
-    };
+    const conversation = { channel, accountId: "default", conversationId: "room:shared" };
     const owned = { ...owner, conversation };
+    const binding = { summary: "Continue", detachHint: "/detach", data: { externalThread: "17" } };
+    const input = { ...owned, requestedBySenderId: "user-1", binding };
     const foreign = { pluginRoot: "/plugins/other-runtime", conversation };
     if (approval === "persistent approval") {
       await seedPluginConversationBindingApprovalForTest({ ...owner, ...conversation });
     }
 
     const service = getSessionBindingService();
-    const requested = await requestPluginConversationBinding(input);
+    const requested = await request(input);
     if (approval === "pending approval") {
       expect(service.resolveByConversation(conversation)).toBeNull();
       await approve(requested, "allow-always");
@@ -112,32 +89,23 @@ it.each(["pending approval", "persistent approval"] as const)(
       expect(requested.status).toBe("bound");
     }
 
-    const record = expectDefined(
-      service.resolveByConversation(conversation),
-      "approved plugin binding persisted",
-    );
+    const record = expectDefined(service.resolveByConversation(conversation), "approved binding");
     expect(record.targetSessionKey).toMatch(/^plugin-binding:fixture-runtime:/);
     expect(record.metadata).toMatchObject({ ...owner, ...input.binding });
     expect(service.listBySession(record.targetSessionKey)).toEqual([record]);
 
     const workConversation = { ...conversation, accountId: "work" };
-    const workRequest = await requestPluginConversationBinding({
-      ...input,
-      conversation: workConversation,
-    });
+    const workRequest = await request({ ...input, conversation: workConversation });
     expect(service.resolveByConversation(workConversation)).toBeNull();
     await approve(workRequest, "allow-once");
-    const workRecord = expectDefined(
-      service.resolveByConversation(workConversation),
-      "separate account binding persisted",
-    );
+    const workRecord = expectDefined(service.resolveByConversation(workConversation), "work");
     expect(workRecord.targetSessionKey).not.toBe(record.targetSessionKey);
 
     await drainGlobalSingletonLifecycleState();
     await closeState();
     installGenericBindingChannel();
 
-    await expect(getCurrentPluginConversationBinding(owned)).resolves.toMatchObject({
+    await expect(current(owned)).resolves.toMatchObject({
       bindingId: record.bindingId,
       ...owner,
       ...conversation,
@@ -153,12 +121,10 @@ it.each(["pending approval", "persistent approval"] as const)(
       lastActivityAt: touchedAt,
     });
 
-    await expect(getCurrentPluginConversationBinding(foreign)).resolves.toBeNull();
-    await expect(detachPluginConversationBinding(foreign)).resolves.toEqual({ removed: false });
+    await expect(current(foreign)).resolves.toBeNull();
+    await expect(detach(foreign)).resolves.toEqual({ removed: false });
     expect(service.listBySession(record.targetSessionKey)).toHaveLength(1);
-    await expect(detachPluginConversationBinding(owned)).resolves.toEqual({
-      removed: true,
-    });
+    await expect(detach(owned)).resolves.toEqual({ removed: true });
     expect(service.resolveByConversation(conversation)).toBeNull();
     expect(service.listBySession(record.targetSessionKey)).toEqual([]);
     expect(service.resolveByConversation(workConversation)).toEqual(workRecord);
