@@ -7,6 +7,7 @@ import * as stateDatabase from "../state/openclaw-state-db.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
 import { commitExecAuthorizationsInWorker } from "./exec-approvals-authorization.worker.js";
 import type { ExecAuthorizationCommitInput } from "./exec-approvals-contracts.js";
+import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import { writeExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import * as workerAdmission from "./sqlite-worker-operation-admission.js";
 
@@ -35,17 +36,16 @@ const input: ExecAuthorizationCommitInput = {
 };
 const usage = { ...input, matches: [entry] };
 const changed = { ok: false, message: "Exec approval changed before execution" };
-function fixture() {
+function fixture(agents: ExecApprovalsFile["agents"] = { main: { allowlist: [entry] } }) {
   const root = tempDirs.make("openclaw-exec-authorization-batch-");
   const options = {
     path: path.join(root, "state", "openclaw.sqlite"),
     env: { OPENCLAW_STATE_DIR: root },
   };
   const database = stateDatabase.openOpenClawStateDatabase(options);
-  writeExecApprovalsConfigRow({
-    db: database.db,
-    file: { version: 1, agents: { main: { allowlist: [entry] } } },
-  });
+  const save = (file: ExecApprovalsFile) => writeExecApprovalsConfigRow({ db: database.db, file });
+  save({ version: 1, agents });
+  const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
   const context: WorkerWriteOperationContext = {
     open: () => database,
     writeAdmitted: () => {
@@ -70,41 +70,36 @@ function fixture() {
   };
   return {
     database,
+    save,
+    writes,
     commit: (...items: ExecAuthorizationCommitInput[]) =>
       commitExecAuthorizationsInWorker({ items }, context),
   };
 }
 
 it("does not acquire writer admission for an unchanged authorization batch", () => {
-  const { commit } = fixture();
-  const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
+  const { commit, writes } = fixture();
   const outcomes = commit(input, input);
   expect(outcomes.map((outcome) => outcome.ok)).toEqual([true, true]);
   expect(writes).not.toHaveBeenCalled();
 });
 
 it("coalesces usage writes and rereads policy after writer admission", () => {
-  const { commit, database } = fixture();
   const write = stateDatabase.runOpenClawStateWriteTransaction;
-  const writes = vi
-    .spyOn(stateDatabase, "runOpenClawStateWriteTransaction")
-    .mockImplementationOnce((operation, owner, transactionOptions) => {
-      writeExecApprovalsConfigRow({
-        db: database.db,
-        file: { version: 1, defaults: { security: "deny" } },
-      });
-      return write(operation, owner, transactionOptions);
-    });
+  const { commit, save, writes } = fixture();
+  writes.mockImplementationOnce((operation, owner, transactionOptions) => {
+    save({ version: 1, defaults: { security: "deny" } });
+    return write(operation, owner, transactionOptions);
+  });
   const outcomes = commit(usage, { ...usage, command: "echo last" });
   expect(writes).toHaveBeenCalledTimes(1);
   expect(outcomes).toEqual([changed, changed]);
 });
 
 it("commits accepted usage once and preserves the agent deletion fence", () => {
-  const { commit, database } = fixture();
-  writeExecApprovalsConfigRow({
-    db: database.db,
-    file: { version: 1, agents: { main: { allowlist: [entry] }, deleted: { allowlist: [entry] } } },
+  const { commit, database, writes } = fixture({
+    main: { allowlist: [entry] },
+    deleted: { allowlist: [entry] },
   });
   database.db
     .prepare(
@@ -112,7 +107,6 @@ it("commits accepted usage once and preserves the agent deletion fence", () => {
     )
     .run();
   publishAgentDeletionJournalStatus(database.db, "deleted", "pending");
-  const writes = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
   const outcomes = commit(
     usage,
     { ...usage, agentId: "deleted" },

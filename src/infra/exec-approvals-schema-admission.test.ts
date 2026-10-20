@@ -1,4 +1,3 @@
-import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { AuditWriterRequest } from "../audit/audit-event-writer.types.js";
@@ -41,29 +40,7 @@ function fixture() {
     db: source.db,
     file: { version: 1, defaults: { security: "allowlist", ask: "on-miss" } },
   });
-  return { root, env, databasePath: path.join(root, "state", "openclaw.sqlite") };
-}
-
-function prepareExec() {
-  return commitExecAuthorizationLocked({
-    agentId: "main",
-    matches: [],
-    command: "printf synthetic",
-    authorization: {
-      source: "current-policy",
-      security: "allowlist",
-      ask: "on-miss",
-      allowlistSatisfied: true,
-    },
-  });
-}
-
-async function audit(env: NodeJS.ProcessEnv, input: AuditWriterRequest) {
-  const result = await executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
-    type: "audit.writer.process",
-    input: [input],
-  });
-  expect(result).toEqual([{ status: "settled" }]);
+  return env;
 }
 
 type Surface = "roster" | "profiles" | "approval binding" | "message progress" | "message binding";
@@ -82,11 +59,6 @@ async function useFeature(surface: Surface, env: NodeJS.ProcessEnv, id: string) 
           presentation: {
             kind: "exec",
             commandText: "printf synthetic",
-            commandPreview: "printf synthetic",
-            warningText: null,
-            host: "gateway",
-            nodeId: null,
-            agentId: "main",
             allowedDecisions: ["allow-once", "allow-always", "deny"],
           },
           source: { runId: token.runId },
@@ -98,46 +70,41 @@ async function useFeature(surface: Surface, env: NodeJS.ProcessEnv, id: string) 
       }),
     ).toMatchObject({ outcome: "inserted" });
   } else {
-    const common = {
-      sourceId: id,
-      sourceSequence: 1,
-      occurredAt: token.createdAt + 1,
-      kind: "message" as const,
-      actorType: "agent" as const,
-      actorId: "main",
-      runId: token.runId,
-      direction: "outbound" as const,
-      channel: "qa-channel",
-      conversationKind: "direct" as const,
-    };
-    await audit(env, {
+    const binding = surface === "message binding";
+    const input: AuditWriterRequest = {
       type: "record-event",
       eventId: `admission-${surface}`,
-      input:
-        surface === "message progress"
-          ? {
-              ...common,
-              action: "message.outbound.queued",
-              status: "started",
-              outcome: "queued",
-              resultCount: 0,
-            }
-          : {
-              ...common,
-              action: "message.outbound.finished",
-              status: "succeeded",
-              outcome: "sent",
-              resultCount: 1,
-              executionIdentityToken: token,
-            },
-    });
+      input: {
+        sourceId: id,
+        sourceSequence: 1,
+        occurredAt: token.createdAt + 1,
+        kind: "message",
+        actorType: "agent",
+        actorId: "main",
+        runId: token.runId,
+        direction: "outbound",
+        channel: "qa-channel",
+        conversationKind: "direct",
+        action: binding ? "message.outbound.finished" : "message.outbound.queued",
+        status: binding ? "succeeded" : "started",
+        outcome: binding ? "sent" : "queued",
+        resultCount: binding ? 1 : 0,
+        ...(binding ? { executionIdentityToken: token } : {}),
+      },
+    };
+    await expect(
+      executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env }), {
+        type: "audit.writer.process",
+        input: [input],
+      }),
+    ).resolves.toEqual([{ status: "settled" }]);
   }
 }
 
 it.each<Surface>(["roster", "profiles", "approval binding", "message progress", "message binding"])(
   "keeps prepared exec authority through the first %s operation after reopen",
   async (surface) => {
-    const { env } = fixture();
+    const env = fixture();
     if (surface === "message binding") {
       prepareExecutionIdentityContextAtAdmission(
         {
@@ -159,7 +126,17 @@ it.each<Surface>(["roster", "profiles", "approval binding", "message progress", 
     await closeOpenClawStateDatabaseAsync();
     const source = openOpenClawStateDatabase({ env });
     const before = source.db.prepare("PRAGMA schema_version").get();
-    const assertCurrent = await prepareExec();
+    const assertCurrent = await commitExecAuthorizationLocked({
+      agentId: "main",
+      matches: [],
+      command: "printf synthetic",
+      authorization: {
+        source: "current-policy",
+        security: "allowlist",
+        ask: "on-miss",
+        allowlistSatisfied: true,
+      },
+    });
     expect(assertCurrent).not.toThrow();
     await useFeature(surface, env, "after-authorization");
     expect(source.db.prepare("PRAGMA schema_version").get()).toEqual(before);

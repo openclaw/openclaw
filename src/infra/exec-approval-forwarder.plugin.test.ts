@@ -1,7 +1,5 @@
-// Plugin approval fallback routing and durable queue eligibility.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { ApprovalRequestInput } from "./approval-types.js";
@@ -13,10 +11,10 @@ import {
 } from "./exec-approval-forwarder.test-support.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
-const cfg: OpenClawConfig = {
-  approvals: {
-    plugin: { enabled: true, mode: "targets", targets: [{ channel: "slack", to: "U123" }] },
-  },
+const pluginConfig = {
+  enabled: true,
+  mode: "targets" as const,
+  targets: [{ channel: "slack", to: "U123" }],
 };
 const request: PluginApprovalRequest = {
   id: "plugin:req-sage",
@@ -30,7 +28,7 @@ const request: PluginApprovalRequest = {
   expiresAtMs: 6000,
 };
 
-function registerSlackApprovalCapability(approvalCapability: ChannelPlugin["approvalCapability"]) {
+function fixture(approvalCapability: ChannelPlugin["approvalCapability"], scoped = false) {
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -40,84 +38,84 @@ function registerSlackApprovalCapability(approvalCapability: ChannelPlugin["appr
       },
     ]),
   );
+  const plugin = {
+    ...pluginConfig,
+    slack: scoped ? { plugins: { sage: { approvers: [] } } } : undefined,
+  };
+  const options = {
+    cfg: { approvals: { plugin } },
+    nativeRoutes: scoped
+      ? []
+      : [{ channel: "slack", accountId: "default", handledKinds: ["plugin" as const] }],
+  };
+  return { ...createForwarder(options), replay: () => createForwarder(options).forwarder };
 }
 
-describe("plugin approval forwarding", () => {
-  beforeEach(() => setActivePluginRegistry(emptyRegistry));
-  afterEach(async () => {
-    await stopForwarderFixtures();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    setActivePluginRegistry(emptyRegistry);
+beforeEach(() => setActivePluginRegistry(emptyRegistry));
+afterEach(async () => {
+  await stopForwarderFixtures();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  setActivePluginRegistry(emptyRegistry);
+});
+
+it("passes the plugin request to fallback suppression for pending and uncached resolved approvals", async () => {
+  vi.useFakeTimers();
+  const shouldSuppressForwardingFallback = vi.fn(
+    ({ request: approval }: { request: ApprovalRequestInput }) => !("title" in approval.request),
+  );
+  const { deliver, forwarder, replay } = fixture({
+    delivery: { shouldSuppressForwardingFallback },
   });
 
-  it("passes the plugin request to fallback suppression for pending and uncached resolved approvals", async () => {
-    vi.useFakeTimers();
-    const shouldSuppressForwardingFallback = vi.fn(
-      ({ request: approval }: { request: ApprovalRequestInput }) => !("title" in approval.request),
-    );
-    registerSlackApprovalCapability({ delivery: { shouldSuppressForwardingFallback } });
-    const options = {
-      cfg,
-      nativeRoutes: [{ channel: "slack", accountId: "default", handledKinds: ["plugin" as const] }],
-    };
-    const { deliver, forwarder } = createForwarder(options);
+  await expect(forwarder.handlePluginApprovalRequested?.(request)).resolves.toBe(true);
+  await flushPendingDelivery();
+  expect(shouldSuppressForwardingFallback).toHaveBeenCalledWith(
+    expect.objectContaining({ approvalKind: "plugin", request }),
+  );
+  expect(deliver).toHaveBeenCalledTimes(1);
+  expect(deliver.mock.calls[0]?.[0]).not.toHaveProperty("skipQueue");
 
-    await expect(forwarder.handlePluginApprovalRequested?.(request)).resolves.toBe(true);
-    await flushPendingDelivery();
-    expect(shouldSuppressForwardingFallback).toHaveBeenCalledWith(
-      expect.objectContaining({ approvalKind: "plugin", request }),
-    );
-    expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver.mock.calls[0]?.[0]).not.toHaveProperty("skipQueue");
-
-    const pendingDeliveryCount = deliver.mock.calls.length;
-    const replay = createForwarder(options);
-    await replay.forwarder.handlePluginApprovalResolved?.({
-      id: request.id,
-      decision: "deny",
-      ts: 2000,
-      request: request.request,
-    });
-    expect(shouldSuppressForwardingFallback).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        approvalKind: "plugin",
-        request: expect.objectContaining({ id: request.id, request: request.request }),
-      }),
-    );
-    expect(deliver.mock.calls.length - pendingDeliveryCount).toBe(1);
-    expect(deliver.mock.calls[pendingDeliveryCount]?.[0]).not.toHaveProperty("skipQueue");
+  await replay().handlePluginApprovalResolved?.({
+    id: request.id,
+    decision: "deny",
+    ts: 2000,
+    request: request.request,
   });
+  expect(shouldSuppressForwardingFallback).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      approvalKind: "plugin",
+      request: expect.objectContaining({ id: request.id, request: request.request }),
+    }),
+  );
+  expect(deliver).toHaveBeenCalledTimes(2);
+  expect(deliver.mock.calls[1]?.[0]).not.toHaveProperty("skipQueue");
+});
 
-  it("blocks a selected reviewer policy even without a running native handler", async () => {
-    const shouldBlockForwardingFallback = vi.fn(
-      ({ request: approval }: { request: ApprovalRequestInput }) =>
-        (approval.request as PluginApprovalRequest["request"]).policySubject?.pluginKey === "sage",
-    );
-    registerSlackApprovalCapability({
+it("blocks a selected reviewer policy even without a running native handler", async () => {
+  const shouldBlockForwardingFallback = vi.fn(
+    ({ request: approval }: { request: ApprovalRequestInput }) =>
+      (approval.request as PluginApprovalRequest["request"]).policySubject?.pluginKey === "sage",
+  );
+  const { deliver, forwarder } = fixture(
+    {
       supportsScopedPluginApprovalApprovers: true,
       delivery: { shouldBlockForwardingFallback },
-    });
-    const { deliver, forwarder } = createForwarder({
-      cfg: {
-        approvals: {
-          plugin: { ...cfg.approvals!.plugin, slack: { plugins: { sage: { approvers: [] } } } },
-        },
-      },
-    });
+    },
+    true,
+  );
 
-    await expect(forwarder.handlePluginApprovalRequested?.(request)).resolves.toBe(false);
-    await flushPendingDelivery();
-    expect(deliver).not.toHaveBeenCalled();
-    await expect(
-      forwarder.handlePluginApprovalRequested?.({
-        ...request,
-        id: "plugin:req-other",
-        request: { ...request.request, policySubject: { pluginKey: "other" } },
-      }),
-    ).resolves.toBe(true);
-    await flushPendingDelivery();
-    expect(deliver).toHaveBeenCalledTimes(1);
-    expect(deliver.mock.calls[0]?.[0]).not.toHaveProperty("skipQueue");
-  });
+  await expect(forwarder.handlePluginApprovalRequested?.(request)).resolves.toBe(false);
+  await flushPendingDelivery();
+  expect(deliver).not.toHaveBeenCalled();
+  await expect(
+    forwarder.handlePluginApprovalRequested?.({
+      ...request,
+      id: "plugin:req-other",
+      request: { ...request.request, policySubject: { pluginKey: "other" } },
+    }),
+  ).resolves.toBe(true);
+  await flushPendingDelivery();
+  expect(deliver).toHaveBeenCalledTimes(1);
+  expect(deliver.mock.calls[0]?.[0]).not.toHaveProperty("skipQueue");
 });
