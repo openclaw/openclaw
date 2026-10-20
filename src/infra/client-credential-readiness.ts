@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { chunkItems } from "../utils/chunk-items.js";
 import { readIndependentClientCredentialSource } from "./client-credential-native-bootstrap.js";
 import {
   CLIENT_CREDENTIAL_LEGACY_KEYS,
@@ -177,17 +178,11 @@ function prepareClientCredentialReceipt(
       executeSqliteQuerySync(database, db.deleteFrom("device_auth_tokens"));
       executeSqliteQuerySync(database, db.deleteFrom("device_identities"));
       executeSqliteQuerySync(database, db.deleteFrom("gateway_origin_device_tokens"));
-      if (source.rows.identities.length) {
-        executeSqliteQuerySync(
-          database,
-          db.insertInto("device_identities").values(source.rows.identities),
-        );
+      for (const batch of chunkItems(source.rows.identities, 500)) {
+        executeSqliteQuerySync(database, db.insertInto("device_identities").values(batch));
       }
-      if (source.rows.tokens.length) {
-        executeSqliteQuerySync(
-          database,
-          db.insertInto("device_auth_tokens").values(source.rows.tokens),
-        );
+      for (const batch of chunkItems(source.rows.tokens, 500)) {
+        executeSqliteQuerySync(database, db.insertInto("device_auth_tokens").values(batch));
       }
       stored.receipt.source = {
         kind: "independent",
