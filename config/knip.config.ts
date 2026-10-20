@@ -1035,6 +1035,8 @@ const config = {
         "src/test-helpers/proof-video.ts!",
         "index.html!",
         "src/main.{ts,tsx}!",
+        // The generated foreign-locale modules import this factory by absolute path.
+        "src/i18n/lib/lazy-catalog.ts!",
         "src/lib/browser-redact.{ts,tsx}!",
         "vite.config.ts!",
         "vitest*.ts!",

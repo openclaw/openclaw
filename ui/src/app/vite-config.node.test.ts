@@ -137,14 +137,15 @@ async function executeControlUiLocaleModule(
       JSON.stringify(dataModuleUrl(source)),
     );
   }
-  executableSource += `\nexport { getLocaleNamespaceLoader } from ${JSON.stringify(lazyCatalogUrl)};`;
+  const metadataUrl = pathToFileURL(path.join(repoRoot, "ui/src/i18n/lib/locale-catalog.ts")).href;
+  executableSource += `\nexport { getLazyLocaleCatalog } from ${JSON.stringify(metadataUrl)};`;
   const module: {
     default: TranslationMap;
-    getLocaleNamespaceLoader: typeof import("../i18n/lib/lazy-catalog.ts").getLocaleNamespaceLoader;
+    getLazyLocaleCatalog: typeof import("../i18n/lib/locale-catalog.ts").getLazyLocaleCatalog;
   } = await import(dataModuleUrl(executableSource));
   const catalog = module.default;
   const loadNamespace = async (namespace: string) => {
-    await module.getLocaleNamespaceLoader(catalog, namespace)?.();
+    await module.getLazyLocaleCatalog(catalog)?.load(namespace);
   };
   const loadAll = async () => {
     for (const namespace of namespaces) {

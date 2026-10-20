@@ -79,7 +79,7 @@ it("uses lazy English as fallback without replacing the active language", async 
   expect(manager.t("commandPalette.newSessionSettings")).toBe("New session settings");
 });
 
-it("loads only the requested namespace once and publishes translated copy without losing base siblings", async () => {
+it("prepares registered English namespaces before publishing a locale without loading unopened ones", async () => {
   registerCommandPaletteEnglish();
   const page = deferred<{ default: TranslationMap }>();
   const loadPage = vi.fn(() => page.promise);
@@ -89,18 +89,18 @@ it("loads only the requested namespace once and publishes translated copy withou
     { commandPalette: loadPage, configHints: loadHints },
   );
   manager.registerTranslation("de", catalog);
-  await manager.setLocale("de");
   const subscriber = vi.fn();
   manager.subscribe(subscriber);
-  expect(loadPage).not.toHaveBeenCalled();
-  expect(manager.t("commandPalette.rememberUnavailable")).toBe("Reconnect to remember settings.");
+  const changing = manager.setLocale("de");
+  expect(manager.getLocale()).toBe("en");
   expect(manager.t("commandPalette.rememberUnavailable")).toBe("Reconnect to remember settings.");
   expect(loadPage).toHaveBeenCalledOnce();
   expect(loadHints).not.toHaveBeenCalled();
   page.resolve({
     default: { commandPalette: { rememberUnavailable: "Zum Speichern erneut verbinden." } },
   });
-  await vi.waitFor(() => expect(subscriber).toHaveBeenCalledExactlyOnceWith("de"));
+  await changing;
+  expect(subscriber).toHaveBeenCalledExactlyOnceWith("de");
   expect(manager.t("commandPalette.rememberUnavailable")).toBe("Zum Speichern erneut verbinden.");
   expect(manager.t("commandPalette.newSessionSettings")).toBe("Neue Sitzung");
   expect(manager.t("common.health")).toBe("Gesundheit");

@@ -9,7 +9,7 @@ import {
 import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { en } from "../locales/en.ts";
-import { getLocaleNamespaceLoader } from "./lazy-catalog.ts";
+import { getLazyLocaleCatalog } from "./locale-catalog.ts";
 import { loadLazyLocaleTranslation } from "./registry.ts";
 import type { TranslationMap } from "./types.ts";
 
@@ -56,7 +56,7 @@ class I18nManager {
   // disconnected/failed load remains retryable on the next connected transition.
   private inFlightLocaleLoads = new Map<Locale, Promise<TranslationMap | null>>();
   private localeLoadRecovery: LocaleLoadRecovery | undefined;
-  private namespaceLoads = new WeakMap<TranslationMap, Map<string, Promise<void>>>();
+  private observedNamespaceLoads = new WeakSet<Promise<void>>();
 
   constructor(
     private readonly loadLocaleTranslation: LocaleTranslationLoader = loadLazyLocaleTranslation,
@@ -141,20 +141,26 @@ class I18nManager {
       return;
     }
 
-    if (needsTranslationLoad) {
+    if (locale !== DEFAULT_LOCALE) {
       this.pendingLocale = locale;
       this.pendingLocaleShouldPersist = shouldPersist;
       try {
-        const translation = await getOrCreatePromise(
-          this.inFlightLocaleLoads,
-          locale,
-          () => this.loadLocaleTranslation(locale),
-          { evictOnSettled: true },
-        );
-        if (!translation) {
-          return;
+        if (needsTranslationLoad) {
+          const translation = await getOrCreatePromise(
+            this.inFlightLocaleLoads,
+            locale,
+            () => this.loadLocaleTranslation(locale),
+            { evictOnSettled: true },
+          );
+          if (!translation) {
+            return;
+          }
+          this.translations[locale] = translation;
         }
-        this.translations[locale] = translation;
+        const lazyCatalog = getLazyLocaleCatalog(this.translations[locale]!);
+        if (lazyCatalog) {
+          await lazyCatalog.prepare();
+        }
       } catch (e) {
         const isCurrentRequest = this.localeRequestGeneration === requestGeneration;
         if (retrying && isCurrentRequest && this.localeLoadRecovery?.isUnrecoverableError(e)) {
@@ -216,27 +222,16 @@ class I18nManager {
       return value;
     }
     const namespace = keys[0]!;
-    const load = getLocaleNamespaceLoader(catalog, namespace);
-    if (load) {
-      let loads = this.namespaceLoads.get(catalog);
-      if (!loads) {
-        loads = new Map();
-        this.namespaceLoads.set(catalog, loads);
-      }
-      void getOrCreatePromise(
-        loads,
-        namespace,
-        async () => {
-          try {
-            await load();
-            if (this.translations[this.locale] === catalog) {
-              this.notify();
-            }
-          } catch (error) {
-            console.error(`Failed to load locale namespace: ${namespace}`, error);
+    const load = getLazyLocaleCatalog(catalog)?.load(namespace);
+    if (load && !this.observedNamespaceLoads.has(load)) {
+      this.observedNamespaceLoads.add(load);
+      void load.then(
+        () => {
+          if (this.translations[this.locale] === catalog) {
+            this.notify();
           }
         },
-        { evictOnSettled: true },
+        (error: unknown) => console.error(`Failed to load locale namespace: ${namespace}`, error),
       );
     }
     return value;

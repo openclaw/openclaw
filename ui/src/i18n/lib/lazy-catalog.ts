@@ -1,14 +1,44 @@
+import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
+import { en } from "../locales/en.ts";
+import { registerLazyLocaleCatalog } from "./locale-catalog.ts";
 import type { TranslationMap } from "./types.ts";
 
 type NamespaceLoader = () => Promise<{ default: TranslationMap }>;
-const loadersByCatalog = new WeakMap<TranslationMap, Record<string, NamespaceLoader>>();
 
 // Vite supplies the same base/page split as English, using canonical translation memory.
 export function createLazyLocaleCatalog(
   base: TranslationMap,
   loaders: Record<string, NamespaceLoader>,
 ): TranslationMap {
-  loadersByCatalog.set(base, loaders);
+  const pending = new Map<string, Promise<void>>();
+  const load = (namespace: string) => {
+    const loader = loaders[namespace];
+    if (!loader) {
+      return undefined;
+    }
+    return getOrCreatePromise(
+      pending,
+      namespace,
+      async () => {
+        mergeCatalog(base, (await loader()).default);
+        delete loaders[namespace];
+      },
+      { evictOnSettled: true },
+    );
+  };
+  registerLazyLocaleCatalog(base, {
+    load,
+    async prepare() {
+      // A language change must translate already-loaded English surfaces before
+      // publishing. Empty English anchors keep unopened pages lazy.
+      await Promise.all(
+        Object.keys(loaders)
+          .filter((namespace) => hasMissingEnglish(en[namespace], base[namespace]))
+          .map(load)
+          .filter((request) => request !== undefined),
+      );
+    },
+  });
   return base;
 }
 
@@ -23,17 +53,14 @@ function mergeCatalog(target: TranslationMap, source: TranslationMap): void {
   }
 }
 
-export function getLocaleNamespaceLoader(
-  catalog: TranslationMap,
-  namespace: string,
-): (() => Promise<void>) | undefined {
-  const loaders = loadersByCatalog.get(catalog);
-  const load = loaders?.[namespace];
-  if (!load) {
-    return undefined;
+function hasMissingEnglish(
+  english: string | TranslationMap | undefined,
+  translated: string | TranslationMap | undefined,
+): boolean {
+  if (typeof english === "string") {
+    return typeof translated !== "string";
   }
-  return async () => {
-    mergeCatalog(catalog, (await load()).default);
-    delete loaders[namespace];
-  };
+  return Object.entries(english ?? {}).some(([key, value]) =>
+    hasMissingEnglish(value, typeof translated === "object" ? translated[key] : undefined),
+  );
 }
