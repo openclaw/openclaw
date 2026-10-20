@@ -386,7 +386,9 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
 
       const openrouterCard = page.locator(".model-providers__row", { hasText: "OpenRouter" });
       await openrouterCard.waitFor();
-      await openrouterCard.getByRole("button", { name: "Set API key", exact: true }).waitFor();
+      await openrouterCard
+        .getByRole("button", { name: "Set API key: OpenRouter", exact: true })
+        .waitFor();
       expect(await openrouterCard.locator(".model-providers__profile").textContent()).toContain(
         "openrouter:default",
       );
@@ -615,7 +617,7 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       }
 
       await openaiCard.getByRole("button", { name: "Set API key" }).click();
-      await openaiCard.getByLabel("API key").fill(openaiInputValue);
+      await openaiCard.getByLabel("API key", { exact: true }).fill(openaiInputValue);
       const keyWriteCount = (await gateway.getRequests("models.authSetApiKey")).length;
       await gateway.deferNext("models.authSetApiKey");
       await openaiCard.getByRole("button", { name: "Save" }).click();

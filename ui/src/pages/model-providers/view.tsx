@@ -252,6 +252,7 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
         <button
           class="btn btn--sm"
           data-models-connect-provider={props.card.id}
+          aria-label={t("modelProviders.login.actionNamed", { name: props.card.displayName })}
           disabled={configMutationDisabled(props) || props.loginBusy}
           onClick={() => props.onConnect(props.card)}
         >
@@ -270,6 +271,11 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
             !props.probeAvailable
               ? t("modelProviders.probe.unavailable")
               : (props.mutationBlockedReason ?? "")
+          }
+          aria-label={
+            props.busy[`probe:${props.card.id}`]
+              ? undefined
+              : t("modelProviders.probe.testNamed", { name: props.card.displayName })
           }
           onClick={() =>
             props.onProbe(
@@ -292,6 +298,7 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
           class="btn btn--sm"
           disabled={keyDisabled()}
           title={keyTitle()}
+          aria-label={t("modelProviders.apiKey.setNamed", { name: props.card.displayName })}
           onClick={() => props.onOpenKeyEditor(props.card.id)}
         >
           {t("modelProviders.apiKey.set")}
@@ -309,6 +316,7 @@ function ProviderActions(props: ModelProvidersViewProps & { card: ModelProviderC
           class="btn btn--sm danger"
           disabled={keyDisabled()}
           title={keyTitle()}
+          aria-label={t("modelProviders.apiKey.removeNamed", { name: props.card.displayName })}
           onClick={() => props.onRemoveKey(props.card.id, props.card.configKey ?? props.card.id)}
         >
           {t("modelProviders.apiKey.remove")}

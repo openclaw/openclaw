@@ -89,7 +89,7 @@ suite.define(() => {
           await card.waitFor();
           await page.screenshot({ path: path.join(suite.artifactDir, "before-edit.png") });
           await card.getByRole("button", { name: "Set API key" }).click();
-          await card.getByLabel("API key").fill(key);
+          await card.getByLabel("API key", { exact: true }).fill(key);
           await card.getByRole("button", { name: "Save", exact: true }).click();
           await expect.poll(() => card.textContent()).toContain("Secret saved.");
           const saved = await persistedAuth();
@@ -104,7 +104,7 @@ suite.define(() => {
           expect(saved.model).toBe("fixture/current");
           expect(await card.textContent()).not.toContain("could not refresh");
 
-          await card.getByRole("button", { name: "Remove key", exact: true }).click();
+          await card.getByRole("button", { name: /^Remove key: / }).click();
           await expect.poll(() => card.textContent()).toContain("Saved API keys removed.");
           const removed = await persistedAuth();
           observations.push({ action: "ui-remove", state: removed });
@@ -171,7 +171,7 @@ suite.define(() => {
           await page.reload();
           await waitForControlUiGatewayReady(page);
           await expect
-            .poll(() => card.getByRole("button", { name: "Remove key", exact: true }).count())
+            .poll(() => card.getByRole("button", { name: /^Remove key: / }).count())
             .toBe(0);
           await page.screenshot({ path: path.join(suite.artifactDir, "after-cli-removal.png") });
         },

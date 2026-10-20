@@ -115,7 +115,7 @@ suite.define(() => {
         await page.setViewportSize({ height: 900, width: 1280 });
         await button(page.locator(".model-setup-discovery"), "Close").click();
         const currentProvider = page.locator('[data-provider-id="openai"]');
-        await button(currentProvider, "Test connection").click();
+        await button(currentProvider, "Test connection: OpenAI").click();
         const verify = await gateway.waitForRequest("models.probe");
         expect(verify.params).toEqual({ provider: "openai", agentId: "main" });
         await currentProvider
@@ -128,10 +128,10 @@ suite.define(() => {
           .waitFor();
         const detectCountBeforeRefresh = (await gateway.getRequests(rpc.detect)).length;
         const verifyCountBeforeRefresh = (await gateway.getRequests("models.probe")).length;
-        await button(currentProvider, "Test connection").click();
+        await button(currentProvider, "Test connection: OpenAI").click();
         await pollRequestCount(gateway, "models.probe").toBe(verifyCountBeforeRefresh + 1);
         expect((await gateway.getRequests(rpc.detect)).length).toBe(detectCountBeforeRefresh);
-        await button(currentProvider, "Test connection").waitFor();
+        await button(currentProvider, "Test connection: OpenAI").waitFor();
         await currentProvider
           .locator(".model-providers__probe-target")
           .getByText("Connected · Request round-trip: 1234 ms", { exact: true })
@@ -310,7 +310,7 @@ suite.define(() => {
           page.locator(".model-providers__defaults openclaw-select-picker").first(),
           "qwen3-8b-instruct",
         );
-        await button(selectedModel, "Test connection").click();
+        await button(selectedModel, "Test connection: LM Studio").click();
         await selectedModel
           .locator(".model-providers__probe-summary")
           .getByText("Connection failed", { exact: true })
@@ -319,7 +319,7 @@ suite.define(() => {
           selectedModel.locator(".model-providers__probe"),
           "The connection probe failed.",
         );
-        await button(selectedModel, "Test connection").waitFor();
+        await button(selectedModel, "Test connection: LM Studio").waitFor();
         await expectRequestCounts(gateway, { [rpc.prepare]: 0, [rpc.activate]: 0 });
 
         await page.setViewportSize({ height: 844, width: 390 });
