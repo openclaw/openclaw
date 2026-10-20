@@ -124,6 +124,20 @@ const updateOptions = createChangedPostCoreUpdateOptions({
 const pluginUpdate = updateOptions.pluginUpdate;
 pluginUpdate.npm = { changed: false, outcomes: [] };
 
+function complete(overrides: Partial<Parameters<typeof completePostCorePluginUpdate>[0]> = {}) {
+  return completePostCorePluginUpdate({ ...updateOptions, ...overrides });
+}
+
+const doctorArgs = [
+  "/opt/openclaw/dist/index.js",
+  "doctor",
+  "--repair",
+  "--non-interactive",
+  "--no-workspace-suggestions",
+  "--yes",
+];
+const validateArgs = ["/opt/openclaw/dist/index.js", "config", "validate", "--json"];
+
 const validConfigSnapshot = {
   exists: true,
   valid: true as const,
@@ -205,7 +219,7 @@ describe("post-plugin update readiness", () => {
       const run =
         phase === "pre-plugin"
           ? runUpdateFinalizationDoctorInFreshProcess({ ...updateOptions, phase, onWarnings })
-          : completePostCorePluginUpdate({ ...updateOptions, onWarnings });
+          : complete({ onWarnings });
       await expect(run).rejects.toMatchObject(
         kind === "deferred"
           ? { refusal, message: warning }
@@ -235,7 +249,7 @@ describe("post-plugin update readiness", () => {
       };
       await expect(
         revoked
-          ? completePostCorePluginUpdate({ ...updateOptions, opts })
+          ? complete({ opts })
           : runUpdateFinalizationDoctorInFreshProcess({
               ...updateOptions,
               opts,
@@ -397,23 +411,14 @@ describe("post-plugin update readiness", () => {
         stdout: supported ? "  --full-integrity-check  Check all indexes\n" : "  --fix  Repair\n",
         stderr: "",
       });
-      await completePostCorePluginUpdate({
-        ...updateOptions,
+      await complete({
         opts: { ...updateOptions.opts, fullIntegrityCheck },
         timeoutMs,
       });
 
       expect(mocks.command.mock.calls.map(([, args]) => args)).toEqual([
-        [
-          "/opt/openclaw/dist/index.js",
-          "doctor",
-          "--repair",
-          "--non-interactive",
-          "--no-workspace-suggestions",
-          "--yes",
-          ...(fullIntegrityCheck && supported ? ["--full-integrity-check"] : []),
-        ],
-        ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
+        [...doctorArgs, ...(fullIntegrityCheck && supported ? ["--full-integrity-check"] : [])],
+        validateArgs,
       ]);
       expect(mocks.cliHelp).toHaveBeenCalledTimes(fullIntegrityCheck ? 1 : 0);
       expect(mocks.runUtf8).toHaveBeenCalledExactlyOnceWith(
@@ -491,8 +496,7 @@ describe("post-plugin update readiness", () => {
         return readdir(...args);
       });
       try {
-        const result = await completePostCorePluginUpdate({
-          ...updateOptions,
+        const result = await complete({
           pluginUpdate: { ...pluginUpdate, changed: !configured },
           timeoutMs: undefined,
         });
@@ -521,8 +525,7 @@ describe("post-plugin update readiness", () => {
       });
       const beforeDoctor = vi.fn(async () => undefined);
 
-      await completePostCorePluginUpdate({
-        ...updateOptions,
+      await complete({
         pluginUpdate: { ...pluginUpdate, changed: false },
         beforeDoctor,
       });
@@ -531,14 +534,7 @@ describe("post-plugin update readiness", () => {
       expect(beforeDoctor.mock.invocationCallOrder[0]).toBeLessThan(
         mocks.command.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
       );
-      expect(mocks.command.mock.calls[0]?.[1]).toEqual([
-        "/opt/openclaw/dist/index.js",
-        "doctor",
-        "--repair",
-        "--non-interactive",
-        "--no-workspace-suggestions",
-        "--yes",
-      ]);
+      expect(mocks.command.mock.calls[0]?.[1]).toEqual(doctorArgs);
       expect(mocks.command.mock.calls[0]?.[2]).toMatchObject({
         env: { OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1" },
       });
@@ -572,8 +568,7 @@ describe("post-plugin update readiness", () => {
           }
           return { stdout: "", stderr: "" };
         });
-        const result = await completePostCorePluginUpdate({
-          ...updateOptions,
+        const result = await complete({
           pluginUpdate: { ...pluginUpdate, changed },
         });
         expect(result.configSnapshot).toMatchObject({ exists: created, valid: !created });
@@ -627,8 +622,7 @@ describe("post-plugin update readiness", () => {
     vi.mocked(defaultRuntime.log).mockClear();
     vi.mocked(defaultRuntime.error).mockClear();
 
-    const { pluginUpdate: result } = await completePostCorePluginUpdate({
-      ...updateOptions,
+    const { pluginUpdate: result } = await complete({
       pluginUpdate: { ...pluginUpdate, changed: false },
     });
 
@@ -665,8 +659,7 @@ describe("post-plugin update readiness", () => {
         mocks.resolveEntrypoint.mockResolvedValue(undefined);
         mocks.readConfig.mockResolvedValue({ ...validConfigSnapshot, valid: false });
       }
-      const { pluginUpdate: result } = await completePostCorePluginUpdate({
-        ...updateOptions,
+      const { pluginUpdate: result } = await complete({
         beforeDoctor,
       });
       expect(result).toMatchObject({
@@ -731,7 +724,7 @@ describe("post-plugin update readiness", () => {
           runUpdateFinalizationDoctorInFreshProcess({ ...updateOptions, phase: "pre-plugin" }),
         ).rejects.toMatchObject({ failureFacts, exitCode: 23 });
       }
-      const result = await completePostCorePluginUpdate({ ...updateOptions, onWarnings });
+      const result = await complete({ onWarnings });
       expect(result.pluginUpdate).toMatchObject(
         status === "ok" ? { status } : { status, failureFacts },
       );
@@ -788,8 +781,7 @@ describe("post-plugin update readiness", () => {
       mocks.readConfig.mockImplementation(configOwner.readConfigFileSnapshot);
       const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
       try {
-        const result = await completePostCorePluginUpdate({
-          ...updateOptions,
+        const result = await complete({
           pluginUpdate: { ...pluginUpdate, changed: false },
         });
         expect(result.pluginUpdate.status).toBe("ok");
@@ -828,8 +820,7 @@ describe("post-plugin update readiness", () => {
         await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
       mocks.readConfig.mockImplementation(configOwner.readConfigFileSnapshot);
 
-      const result = await completePostCorePluginUpdate({
-        ...updateOptions,
+      const result = await complete({
         pluginUpdate: { ...pluginUpdate, changed: false },
       });
 
@@ -885,7 +876,7 @@ describe("post-plugin update readiness", () => {
           warnings: failed ? [] : [finding],
         }),
       });
-      const result = await completePostCorePluginUpdate(updateOptions);
+      const result = await complete();
       expect(result.pluginUpdate).toMatchObject({
         status: severity,
         ...(failed
@@ -931,7 +922,7 @@ describe("post-plugin update readiness", () => {
               : "",
         });
       }
-      const { pluginUpdate: result } = await completePostCorePluginUpdate(updateOptions);
+      const { pluginUpdate: result } = await complete();
       expect(result).toMatchObject({
         status: "warning",
         reason: "post-plugin-update-readiness-execution-failed",
@@ -985,7 +976,7 @@ describe("post-plugin update readiness", () => {
       };
       mocks.runUtf8.mockResolvedValue(execution);
 
-      const { pluginUpdate: result } = await completePostCorePluginUpdate(updateOptions);
+      const { pluginUpdate: result } = await complete();
 
       expect(result.status).toBe("warning");
       expect(result.doctorLint).toMatchObject({
@@ -1012,8 +1003,7 @@ describe("post-plugin update readiness", () => {
       vi.mocked(defaultRuntime.log).mockClear();
       vi.mocked(defaultRuntime.error).mockClear();
 
-      const result = await completePostCorePluginUpdate({
-        ...updateOptions,
+      const result = await complete({
         runId: run.runId,
         pluginUpdate: { ...pluginUpdate, changed: false },
         beforeDoctor,
@@ -1023,9 +1013,7 @@ describe("post-plugin update readiness", () => {
       expect(result.pluginUpdate.doctorLint).toMatchObject({ exitCode: 0, termination: "exit" });
       expect(beforeDoctor).not.toHaveBeenCalled();
       expect(result.configSnapshot.valid).toBe(false);
-      expect(mocks.command.mock.calls.map(([, args]) => args)).toEqual([
-        ["/opt/openclaw/dist/index.js", "config", "validate", "--json"],
-      ]);
+      expect(mocks.command.mock.calls.map(([, args]) => args)).toEqual([validateArgs]);
       expect(mocks.runUtf8).toHaveBeenCalledOnce();
       expect(getUpdateRun(run.runId)).toEqual(before);
       expect(defaultRuntime.log).not.toHaveBeenCalled();
