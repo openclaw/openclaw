@@ -14,6 +14,13 @@ function canonical(
 ): ProjectionCase {
   return { raw, expected: { kind: "canonical", hasParentId, entry } };
 }
+function messageFacts(
+  message: unknown,
+  facts: { assistantResponseId?: string; assistantRunId?: string } = {},
+) {
+  return canonical({ ...base, type: "message", message }, { ...base, type: "message", ...facts });
+}
+const assistant = { role: "assistant", content: [] };
 
 it.each<ProjectionCase>([
   ...(
@@ -51,31 +58,17 @@ it.each<ProjectionCase>([
       [42, "  ", {}],
     ] as const
   ).map(([responseId, runId, expected]) =>
-    canonical(
-      {
-        ...base,
-        type: "message",
-        message: { role: "assistant", content: [], responseId, __openclaw: { runId } },
-      },
-      { ...base, type: "message", ...expected },
-    ),
+    messageFacts({ ...assistant, responseId, __openclaw: { runId } }, expected),
   ),
-  canonical(
-    {
-      ...base,
-      type: "message",
-      message: {
-        role: "toolResult",
-        content: [],
-        toolCallId: "call",
-        toolName: "read",
-        isError: false,
-        responseId: "response",
-        __openclaw: { runId: "run" },
-      },
-    },
-    { ...base, type: "message" },
-  ),
+  messageFacts({
+    role: "toolResult",
+    content: [],
+    toolCallId: "call",
+    toolName: "read",
+    isError: false,
+    responseId: "response",
+    __openclaw: { runId: "run" },
+  }),
   ...[undefined, "side", { mode: "side" }].flatMap((appendMode): ProjectionCase[] => {
     const entry = {
       id: "hook",

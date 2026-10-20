@@ -3,7 +3,6 @@ import { expect, it } from "vitest";
 import { mcpTool, pluginTool, resultText as modelText } from "./code-mode.test-support.js";
 import {
   INCOMPLETE_INSTRUCTIONS_HINT,
-  UNRETRIEVABLE_INSTRUCTIONS_HINT,
   addClientToolsToToolCatalog,
   compactToolSearchCatalogEntry,
 } from "./tool-search-catalog.js";
@@ -162,7 +161,9 @@ it("keeps describe input schemas visible ahead of long MCP instructions", async 
   };
   const search = await execute(TOOL_SEARCH_RAW_TOOL_NAME, { query: entry.id, limit: 1 });
   const searchText = modelText(search);
-  expect(searchText).toContain(UNRETRIEVABLE_INSTRUCTIONS_HINT);
+  expect(searchText).toContain(
+    "Server instructions exceed the tool_describe response limit; only the visible excerpt can be returned.",
+  );
   expect(searchText).not.toContain(INCOMPLETE_INSTRUCTIONS_HINT);
   const result = await execute(TOOL_DESCRIBE_RAW_TOOL_NAME, { id: entry.id });
   const text = modelText(result);

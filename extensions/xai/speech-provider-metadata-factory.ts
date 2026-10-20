@@ -25,7 +25,7 @@ export function normalizeXaiTtsBaseUrl(baseUrl?: string): string {
   return normalizeOptionalString(baseUrl)?.replace(/\/+$/, "") ?? XAI_BASE_URL;
 }
 
-export function isValidXaiTtsVoice(voice: string): boolean {
+function isValidXaiTtsVoice(voice: string): boolean {
   return normalizeOptionalString(voice) !== undefined;
 }
 

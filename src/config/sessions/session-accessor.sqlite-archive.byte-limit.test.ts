@@ -130,6 +130,13 @@ it("bounds each framed record before reading more input and excludes its final n
   await expect(readTranscriptArchiveRecords(chunks(), 8).next()).rejects.toThrow(
     "record exceeds the task-history read capacity",
   );
+  async function* quotedChunks() {
+    yield* buffers('{"x":"', "xxxx");
+    throw new Error("Read beyond the quoted record capacity");
+  }
+  await expect(readTranscriptArchiveRecords(quotedChunks(), 8).next()).rejects.toThrow(
+    "record exceeds the task-history read capacity",
+  );
   const records = [];
   for await (const record of readTranscriptArchiveRecords(buffers('{\n"x":0', "}\n{}"), 8)) {
     records.push(record.toString("utf8"));
@@ -139,6 +146,23 @@ it("bounds each framed record before reading more input and excludes its final n
     value: Buffer.from('{"x":"xx"}'),
     done: false,
   });
+});
+
+it("frames quoted controls and invalid raw newlines across chunk boundaries", async () => {
+  const quoted = JSON.stringify({ value: 'braces {} [], slash \\, quote ", unicode 🦞' });
+  const input = Buffer.from(`${quoted}\n{"x":"raw\nnewline"}\n{}\n`);
+  for (const size of [1, 17, input.byteLength]) {
+    async function* chunks() {
+      for (let offset = 0; offset < input.byteLength; offset += size) {
+        yield input.subarray(offset, offset + size);
+      }
+    }
+    const records = [];
+    for await (const record of readTranscriptArchiveRecords(chunks())) {
+      records.push(record.toString("utf8"));
+    }
+    expect(records).toEqual([quoted, '{"x":"raw', 'newline"}', "{}"]);
+  }
 });
 
 it("aborts encoded output at the cap and removes staging files", async () => {
