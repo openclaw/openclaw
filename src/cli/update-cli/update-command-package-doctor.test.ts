@@ -51,6 +51,36 @@ const updateRun = (env: NodeJS.ProcessEnv) => ({
   runId: createUpdateRun({ trigger: "cli" }, { env }).runId,
   env,
 });
+const advisoryReceipt = (message = "Configured plugin repair deferred.") =>
+  createDeferredConfiguredPluginRepairDoctorResult([message]);
+const refusal: NonNullable<UpdatePostInstallDoctorResult["configWriteRefusal"]> = {
+  reason: "include-ownership",
+  message: "Config writer refused.",
+  keys: ["agents"],
+};
+const reportedFailure = {
+  check: "config",
+  code: "invalid-config",
+  message: "Doctor reported invalid configuration.",
+};
+type CommandOptions = Parameters<typeof processRunner.runCommandWithTimeout>[1];
+
+function mockDoctor(run: (options: CommandOptions) => Promise<ReturnType<typeof processResult>>) {
+  return vi
+    .spyOn(processRunner, "runCommandWithTimeout")
+    .mockImplementation(async (argv, options) => {
+      expect(argv).toContain("doctor");
+      return run(options);
+    });
+}
+async function writeReceipt(
+  options: CommandOptions,
+  result: UpdatePostInstallDoctorResult = { status: "ok" },
+) {
+  const resultPath = doctorResultPath(options);
+  await writeUpdatePostInstallDoctorResult({ resultPath, result });
+  return resultPath;
+}
 
 async function createDoctorFixture() {
   const root = tempDirs.make("update-package-doctor-");
@@ -150,9 +180,9 @@ it.each([
           message: expect.stringContaining("deferred"),
         },
       });
-      expect(step && isFailedUpdateStep(step)).toBe(false);
-      expect(step?.advisory?.message).toContain("openclaw update status");
-      expect(step?.advisory?.message).toContain("openclaw doctor");
+      expect(isFailedUpdateStep(step)).toBe(false);
+      expect(step.advisory?.message).toContain("openclaw update status");
+      expect(step.advisory?.message).toContain("openclaw doctor");
       expect(results).toEqual([step]);
       expect(onStepComplete).toHaveBeenCalledWith(expect.objectContaining(step));
       const run = updateRun(env);
@@ -208,24 +238,17 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
         },
       );
     }
-    const invokeDoctor = vi
-      .spyOn(processRunner, "runCommandWithTimeout")
-      .mockImplementation(async (argv, options) => {
-        expect(argv).toContain("doctor");
-        const resultPath = doctorResultPath(options);
-        await writeUpdatePostInstallDoctorResult({
-          resultPath,
-          result: completeGraph
-            ? {
-                ...createDeferredConfiguredPluginRepairDoctorResult(["Optional repair deferred."]),
-                configHash: "unchanged",
-              }
-            : { status: "ok", configHash: "unchanged" },
-        });
-        return processResult({
-          code: completeGraph ? UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE : 0,
-        });
+    const invokeDoctor = mockDoctor(async (options) => {
+      await writeReceipt(options, {
+        ...(completeGraph
+          ? createDeferredConfiguredPluginRepairDoctorResult(["Optional repair deferred."])
+          : { status: "ok" }),
+        configHash: "unchanged",
       });
+      return processResult({
+        code: completeGraph ? UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE : 0,
+      });
+    });
     const onConfigSnapshot = vi.fn();
     const onStepComplete = vi.fn();
     const stateRead = vi.spyOn(stateSnapshots, "withOpenClawStateDatabaseReadSnapshot");
@@ -239,7 +262,6 @@ it.each(["missing", "malformed", "newer-schema", "changed-during-capture"] as co
         results,
       }),
     );
-
     expect(isFailedUpdateStep(step), JSON.stringify(step)).toBe(false);
     expect(stateRead).not.toHaveBeenCalled();
     expect(invokeDoctor).toHaveBeenCalledOnce();
@@ -299,7 +321,6 @@ it("does not spawn Doctor when the installed runtime has no entrypoint", async (
   const spawn = vi
     .spyOn(processRunner, "runCommandWithTimeout")
     .mockRejectedValue(new Error("Doctor must not spawn without an installed entrypoint."));
-
   await expect(doctor({ timeoutMs: 1_000 })).resolves.toBeNull();
   expect(spawn).not.toHaveBeenCalled();
 });
@@ -320,21 +341,11 @@ it.each([
     const advisory = cause === "advisory" || cause === "refusal";
     const reason = cause === "refusal" ? "include-ownership" : undefined;
     const outputLimitExceeded = cause === "output-limit";
-    const failureFacts = [
-      {
-        check: "config",
-        code: "invalid-config",
-        message: "Doctor reported invalid configuration.",
-      },
-    ];
+    const failureFacts = [reportedFailure];
     const receipt: UpdatePostInstallDoctorResult =
       outputLimitExceeded || advisory
         ? {
-            ...createDeferredConfiguredPluginRepairDoctorResult([
-              outputLimitExceeded
-                ? "Configured repair deferred."
-                : "Configured plugin repair deferred.",
-            ]),
+            ...advisoryReceipt(outputLimitExceeded ? "Configured repair deferred." : undefined),
             ...(outputLimitExceeded ? { warnings: ["Doctor left a warning."] } : {}),
           }
         : {
@@ -351,14 +362,13 @@ it.each([
       ];
     }
     if (reason) {
-      receipt.configWriteRefusal = { reason, message: "Config writer refused.", keys: ["agents"] };
+      receipt.configWriteRefusal = refusal;
     }
     const onStepComplete = vi.fn();
-    vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      expect(argv).toContain("doctor");
+    mockDoctor(async (options) => {
       const resultPath = doctorResultPath(options);
       if (writerReceipt) {
-        await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });
+        await writeReceipt(options, receipt);
       } else {
         await fs.writeFile(
           resultPath,
@@ -376,7 +386,6 @@ it.each([
         ...(!writerReceipt ? { outputLimitExceeded } : {}),
       });
     });
-
     const run = writerReceipt ? undefined : updateRun(env);
     const steps: UpdateStepResult[] = [];
     const step = await doctor({
@@ -390,7 +399,6 @@ it.each([
         : { onStepComplete },
       ...(writerReceipt ? { results: steps } : {}),
     });
-
     assert(step);
     expect(step.deferredInspectionCheckIds).toEqual(receipt.deferredInspectionCheckIds ?? null);
     if (run) {
@@ -409,6 +417,10 @@ it.each([
       return;
     }
     expect(isFailedUpdateStep(step)).toBe(Boolean(reason));
+    const expectedAdvisory =
+      advisory && !reason
+        ? expect.objectContaining({ kind: "package-post-install-doctor" })
+        : undefined;
     const expected = {
       exitCode,
       deferredInspectionCheckIds: receipt.deferredInspectionCheckIds ?? null,
@@ -417,10 +429,6 @@ it.each([
         ? { stderrTail: expect.stringContaining(`agents. ${reason}: Config writer refused.`) }
         : {}),
     };
-    const expectedAdvisory =
-      advisory && !reason
-        ? expect.objectContaining({ kind: "package-post-install-doctor" })
-        : undefined;
     expect(step).toMatchObject(expected);
     expect(steps).toEqual([step]);
     expect(step.configWriteRefusal).toEqual(receipt.configWriteRefusal);
@@ -453,19 +461,17 @@ it("leaves the run ledger unchanged while the activation Doctor child is pending
   const guards = createUpdateCommandExecutionGuards({ run }, root);
   const progress = createUpdateRunProgress(run, { onStepComplete }, guards.recordStep);
   let doctorEnv: NodeJS.ProcessEnv | undefined;
-  vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (_argv, options) => {
+  mockDoctor(async (options) => {
     doctorEnv = typeof options === "object" ? options.env : undefined;
     spawned.resolve();
     await exited.promise;
-    const resultPath = doctorResultPath(options);
-    await writeUpdatePostInstallDoctorResult({ resultPath, result: { status: "ok" } });
+    await writeReceipt(options);
     return processResult();
   });
   const running = doctor({
     timeoutMs: ABANDONED_UPDATE_RUN_MS * 2,
     progress,
   });
-
   try {
     await spawned.promise;
     expect(doctorEnv).toMatchObject({
@@ -531,7 +537,7 @@ it("records the activation Doctor's traced sections on its step and run record",
     `${JSON.stringify({ level: "info", message: trace("doctor.maintenance-ready", 900).trim() })}\n`,
   ].join("");
   let doctorEnv: NodeJS.ProcessEnv | undefined;
-  vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (_argv, options) => {
+  mockDoctor(async (options) => {
     assert(typeof options === "object");
     doctorEnv = options.env;
     // Lines arrive split across pipe chunks.
@@ -539,16 +545,13 @@ it("records the activation Doctor's traced sections on its step and run record",
     for (let offset = 0; offset < bytes.length; offset += 7) {
       options.onOutputChunk?.(bytes.subarray(offset, offset + 7), "stderr");
     }
-    const resultPath = doctorResultPath(options);
-    await writeUpdatePostInstallDoctorResult({ resultPath, result: { status: "ok" } });
+    await writeReceipt(options);
     return processResult({ stderr });
   });
-
   const step = await doctor({
     timeoutMs: 60_000,
     progress,
   });
-
   const sections =
     "Doctor sections: maintenance.begin 0.1 s, database-preflight 12.3 s, config-flow 4.1 s, contributions 300.2 s, maintenance-ready 0.9 s; slowest contributions: gateway-services 250.0 s, plugins 40.0 s, sessions 9.0 s, skills 1.0 s, auth 0.7 s";
   expect(doctorEnv?.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
@@ -578,14 +581,10 @@ it.each([
       receiptKind === "none"
         ? undefined
         : receiptKind === "advisory"
-          ? createDeferredConfiguredPluginRepairDoctorResult(["Configured plugin repair deferred."])
+          ? advisoryReceipt()
           : {
               status: "error",
-              configWriteRefusal: {
-                reason: "include-ownership",
-                message: "Config writer refused.",
-                keys: ["agents"],
-              },
+              configWriteRefusal: refusal,
               failureFacts: [{ check: "config", code: "include-ownership", affectedKey: "agents" }],
             };
     if (receipt) {
@@ -599,25 +598,23 @@ it.each([
         throw reportingError;
       }
     });
-    vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (_argv, options) => {
+    mockDoctor(async (options) => {
       expect(onStepComplete).not.toHaveBeenCalled();
       resultPath = doctorResultPath(options);
       if (receipt) {
-        await writeUpdatePostInstallDoctorResult({ resultPath, result: receipt });
+        await writeReceipt(options, receipt);
         receiptBytes = await fs.readFile(resultPath, "utf8");
       }
       throw failed;
     });
     const steps: UpdateStepResult[] = [];
     const onConfigSnapshot = vi.fn();
-
     const error = await doctor({
       timeoutMs: 1_000,
       progress: { onStepComplete },
       results: steps,
       onConfigSnapshot,
     }).catch((cause: unknown) => cause);
-
     if (reportingFails) {
       assert(error instanceof AggregateError);
       expect(error.errors).toEqual([failed, reportingError]);
@@ -626,43 +623,40 @@ it.each([
     }
     expect(hasCommandProcessCleanupError(error)).toBe(cleanupUncertain);
     const consumedReceipt = cleanupUncertain ? undefined : receipt;
+    const completion = {
+      name: "openclaw doctor",
+      exitCode: 1,
+      configChanges: consumedReceipt?.configChanges,
+      configWriteRefusal: consumedReceipt?.configWriteRefusal,
+    };
     if (cleanupUncertain) {
       expect(onStepComplete).not.toHaveBeenCalled();
     } else {
-      expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          name: "openclaw doctor",
-          exitCode: 1,
-          configChanges: consumedReceipt?.configChanges,
-          configWriteRefusal: consumedReceipt?.configWriteRefusal,
-        }),
-      );
+      expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(completion));
     }
+    const [step] = steps;
+    assert(step);
     expect(steps).toMatchObject([
       {
-        name: "openclaw doctor",
-        exitCode: 1,
+        name: completion.name,
+        exitCode: completion.exitCode,
         stderrTail: expect.stringContaining(
           consumedReceipt?.configWriteRefusal
             ? "include-ownership: Config writer refused."
             : failed.message,
         ),
+        failureFacts: expect.arrayContaining([
+          ...(consumedReceipt?.failureFacts ?? []),
+          expect.objectContaining({
+            check: "openclaw doctor",
+            message: expect.stringContaining(failed.message),
+          }),
+        ]),
       },
     ]);
-    const [step] = steps;
-    assert(step);
     expect(step.configChanges).toEqual(consumedReceipt?.configChanges);
     expect(step.configWriteRefusal).toEqual(consumedReceipt?.configWriteRefusal);
     expect(step.advisory).toBeUndefined();
-    expect(step.failureFacts).toEqual(
-      expect.arrayContaining([
-        ...(consumedReceipt?.failureFacts ?? []),
-        expect.objectContaining({
-          check: "openclaw doctor",
-          message: expect.stringContaining(failed.message),
-        }),
-      ]),
-    );
     assert(resultPath);
     if (cleanupUncertain) {
       expect(onConfigSnapshot).not.toHaveBeenCalled();
@@ -679,27 +673,19 @@ it("completes Doctor as failed when config attribution cannot read the settled o
   const onStepComplete = vi.fn();
   const onConfigSnapshot = vi.fn();
   const steps: UpdateStepResult[] = [];
-  vi.spyOn(processRunner, "runCommandWithTimeout").mockImplementation(async (_argv, options) => {
+  mockDoctor(async (options) => {
     expect(onStepComplete).not.toHaveBeenCalled();
-    const resultPath = doctorResultPath(options);
-    await writeUpdatePostInstallDoctorResult({
-      resultPath,
-      result: createDeferredConfiguredPluginRepairDoctorResult([
-        "Configured plugin repair deferred.",
-      ]),
-    });
+    await writeReceipt(options, advisoryReceipt());
     await fs.rename(env.OPENCLAW_CONFIG_PATH, `${env.OPENCLAW_CONFIG_PATH}.previous`);
     await fs.mkdir(env.OPENCLAW_CONFIG_PATH);
     return processResult({ code: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE });
   });
-
   const error = await doctor({
     timeoutMs: 1_000,
     progress: { onStepComplete },
     results: steps,
     onConfigSnapshot,
   }).catch((cause: unknown) => cause);
-
   expect(error).toMatchObject({ code: "EISDIR" });
   expect(onConfigSnapshot).not.toHaveBeenCalled();
   expect(onStepComplete).toHaveBeenCalledExactlyOnceWith(

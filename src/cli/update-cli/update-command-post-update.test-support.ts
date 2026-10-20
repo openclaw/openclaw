@@ -23,6 +23,8 @@ import { finishParams, updateResult } from "./update-command-maintenance-fixture
 import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import * as sourceRuntime from "./update-command-runtime.js";
+import type * as revalidation from "./update-command-service-revalidation.js";
+import type * as service from "./update-command-service.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 
 vi.mock("./update-command-verification.js", async (importOriginal) => ({
@@ -56,6 +58,16 @@ export function createManagedServiceIdentityFixture(home: string) {
 }
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
+type FixtureMocks = {
+  parkForeground: Mock;
+  updatePlugins: Mock;
+  completePluginUpdate: Mock;
+  printResult: Mock;
+  stopService: Mock<typeof service.maybeStopManagedServiceBeforeMutableUpdate>;
+  restartService: Mock<typeof service.maybeRestartService>;
+  readServiceState: Mock;
+  revalidateService: Mock<typeof revalidation.revalidateManagedGatewayServiceAfterUpdate>;
+};
 const resolveInstallKind = updateCheck.resolveUpdateInstallKind;
 
 export function recordVerifiedGatewayRun(
@@ -201,14 +213,7 @@ export function registerForegroundFinalizationTests({
   mocks,
 }: {
   tempDirs: { make(prefix: string): string };
-  mocks: {
-    parkForeground: Mock;
-    updatePlugins: Mock;
-    completePluginUpdate: Mock;
-    printResult: Mock;
-    stopService: Mock;
-    restartService: Mock;
-  };
+  mocks: Omit<FixtureMocks, "readServiceState" | "revalidateService">;
 }): void {
   it.each([
     ...(["noop", "runtime", "plugins", "park-failed"] as const).flatMap((outcome) =>
@@ -232,7 +237,6 @@ export function registerForegroundFinalizationTests({
         vi.stubEnv(UPDATE_RUN_ID_ENV, run.runId);
         recordUpdateModelRetirement("deferred");
       }
-      const opts: FinishUpdateParams["opts"] = { run, json: true };
       const events: string[] = [];
       mocks.parkForeground.mockImplementation(async () => {
         events.push("park");
@@ -267,7 +271,6 @@ export function registerForegroundFinalizationTests({
       const finishing = finishSuccessfulPackageSwitch(
         { packageRoot: root, run, json: true },
         {
-          opts,
           coreAlreadyCurrent: outcome !== "retirement",
           shouldRestart: true,
           result: updateResult({
@@ -299,13 +302,12 @@ export function registerForegroundFinalizationTests({
           );
         }
         expect(events).toEqual(
-          outcome === "noop"
-            ? []
-            : outcome === "runtime"
-              ? ["park", "publish"]
-              : outcome === "retirement"
-                ? ["doctor"]
-                : ["park", "doctor"],
+          {
+            noop: [],
+            runtime: ["park", "publish"],
+            plugins: ["park", "doctor"],
+            retirement: ["doctor"],
+          }[outcome],
         );
         expect(getUpdateRun(run.runId)).toMatchObject(
           outcome === "noop"
@@ -329,10 +331,7 @@ export function registerManagedInstallEnvironmentTest({
   mocks,
 }: {
   tempDirs: { make(prefix: string): string };
-  mocks: {
-    readServiceState: Mock;
-    restartService: Mock<typeof import("./update-command-service.js").maybeRestartService>;
-  };
+  mocks: Pick<FixtureMocks, "readServiceState" | "restartService">;
 }): void {
   it("removes operator overrides and process identity from the managed install environment", async () => {
     const packageRoot = tempDirs.make("openclaw-post-update-package-");
@@ -392,17 +391,20 @@ export function registerManagedInstallEnvironmentTest({
       });
 
       const installEnv = mocks.restartService.mock.lastCall?.[0].serviceInstallEnv;
-      expect(installEnv?.OPENAI_API_KEY).toBeUndefined();
-      expect(installEnv?.UNSET_PROVIDER_KEY).toBeUndefined();
-      expect(installEnv?.ANTHROPIC_API_KEY).toBe("managed-provider");
-      expect(installEnv?.MANAGED_VALUE).toBe("base");
-      expect(installEnv?.GEMINI_API_KEY).toBe("allowed-runtime-credential");
-      expect(installEnv?.OPENCLAW_PROFILE).toBeUndefined();
-      expect(installEnv?.OPENCLAW_STATE_DIR).toBeUndefined();
-      expect(installEnv?.OPENCLAW_CONFIG_PATH).toBeUndefined();
-      expect(installEnv?.OPENCLAW_SERVICE_MARKER).toBeUndefined();
-      expect(installEnv?.OPENCLAW_SERVICE_KIND).toBeUndefined();
-      expect(installEnv?.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
+      const expectedEnvironment = {
+        ...managedEnvironment,
+        GEMINI_API_KEY: "allowed-runtime-credential",
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENAI_API_KEY: undefined,
+        UNSET_PROVIDER_KEY: undefined,
+        OPENCLAW_PROFILE: undefined,
+        OPENCLAW_STATE_DIR: undefined,
+        OPENCLAW_CONFIG_PATH: undefined,
+      };
+      expect(
+        Object.fromEntries(Object.keys(expectedEnvironment).map((key) => [key, installEnv?.[key]])),
+      ).toEqual(expectedEnvironment);
     } finally {
       vi.unstubAllEnvs();
       identity.restore();
@@ -438,17 +440,7 @@ export function expectUpdateFailure(
 
 export function registerServiceInstallationConvergenceTests(
   makeHome: () => string,
-  mocks: {
-    revalidateService: Mock<
-      typeof import("./update-command-service-revalidation.js").revalidateManagedGatewayServiceAfterUpdate
-    >;
-    readServiceState: Mock;
-    stopService: Mock<
-      typeof import("./update-command-service.js").maybeStopManagedServiceBeforeMutableUpdate
-    >;
-    restartService: Mock<typeof import("./update-command-service.js").maybeRestartService>;
-    printResult: Mock;
-  },
+  mocks: Omit<FixtureMocks, "parkForeground" | "updatePlugins" | "completePluginUpdate">,
 ) {
   it.each([
     { drift: false, restart: true, outcome: "ok", status: "skipped" },

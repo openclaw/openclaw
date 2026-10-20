@@ -39,8 +39,8 @@ import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   finishParams,
+  processResult,
   updateResult,
-  updateStep,
 } from "./update-command-maintenance-fixtures.test-support.js";
 import { registerCurrentF3Controls } from "./update-command-original-service-current.test-support.js";
 import { observeOriginalManagedServiceRuntime } from "./update-command-original-service.js";
@@ -330,17 +330,10 @@ beforeEach(async () => {
   });
   mocks.inspect.mockImplementation(healthyRuntime);
   mocks.health.mockImplementation(healthyRuntime);
-  mocks.restart.mockImplementation(async (params, action, preserve) => {
-    params.assertCurrent();
-    expect(action).toBe("restart");
-    expect(preserve).toBe(true);
-    expect(params.result.root).toBe(rootA);
-    expect(params.nodeRunner).toBe(serviceNodeRunner);
-    if (mocks.windows) {
-      expect(mocks.resume).toHaveBeenCalledTimes(1);
-    }
-    mocks.running = true;
-    return "accepted";
+  mocks.restart.mockImplementation(() => {
+    throw new Error(
+      "Split-root recovery must use the native restart; override for transport tests.",
+    );
   });
   // Seed through the sync storage owner; this fixture does not exercise session writer startup.
   replaceSessionEntrySync(
@@ -692,7 +685,6 @@ it.each([
   const packageBefore = await fs.readFile(path.join(rootB, "package.json"));
   const configBefore = await fs.readFile(state.env.OPENCLAW_CONFIG_PATH!);
   let activated = false;
-  const failure = new Error("write EPIPE: delegated Doctor exited before input");
   if (scenario === "missing-node") {
     before.serviceNodeRunner = undefined;
   }
@@ -724,10 +716,6 @@ it.each([
       status: "error",
       root: rootB,
       reason: "doctor-failed",
-      before: { version: "2026.9.4", buildId: "build-B" },
-      after: { version: "2026.9.5", buildId: "candidate-B" },
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      steps: [updateStep("doctor", { cwd: rootB, exitCode: 97, stderrTail: failure.message })],
     });
   });
   await withUpdateCommandExecutor(run.runId, async (executor) => {
@@ -740,16 +728,14 @@ it.each([
     }
     const execution = await executePackageUpdate(opts, scenario !== "no-restart");
     expect(execution, execution?.failure?.detail).not.toBeNull();
-    if (scenario === "no-restart") {
-      expect(activated, execution?.failure?.detail).toBe(true);
-      expect(stopped).toBe(false);
-    } else {
-      expect(activated).toBe(false);
-      expect(stopped).toBe(false);
-      expect(execution!.result.status).toBe("error");
-      expect(execution!.result.reason, execution!.failure?.detail).toBe(
-        scenario === "missing-env" ? "managed-service-preflight" : "original-service-unverified",
-      );
+    expect(activated, execution?.failure?.detail).toBe(scenario === "no-restart");
+    expect(stopped).toBe(false);
+    if (scenario !== "no-restart") {
+      expect(execution!.result, execution!.failure?.detail).toMatchObject({
+        status: "error",
+        reason:
+          scenario === "missing-env" ? "managed-service-preflight" : "original-service-unverified",
+      });
       expect(mocks.restart).not.toHaveBeenCalled();
       expect(mocks.running).toBe(true);
     }
@@ -780,26 +766,24 @@ it.each([false, true])(
       const { runUpdatedInstallGatewayCommand } = await vi.importActual<
         typeof import("./update-command-service-command.js")
       >("./update-command-service-command.js");
-      const command = vi.spyOn(commandProcess, "runCommandWithTimeout").mockResolvedValue({
-        stdout: JSON.stringify({
-          action: "install",
-          ok: false,
-          error: mutated ? "activation failed after compensation" : "pre-write refused",
-          rebind: {
-            ...(mutated ? { mutated: true } : {}),
-            before: original.definition.fingerprint,
-            after: original.definition.fingerprint,
-            runtimePinBefore: original.definition.runtimePin?.revision,
-            runtimePinAfter: original.definition.runtimePin?.revision,
-          },
+      const command = vi.spyOn(commandProcess, "runCommandWithTimeout").mockResolvedValue(
+        processResult({
+          stdout: JSON.stringify({
+            action: "install",
+            ok: false,
+            error: mutated ? "activation failed after compensation" : "pre-write refused",
+            rebind: {
+              ...(mutated ? { mutated: true } : {}),
+              before: original.definition.fingerprint,
+              after: original.definition.fingerprint,
+              runtimePinBefore: original.definition.runtimePin?.revision,
+              runtimePinAfter: original.definition.runtimePin?.revision,
+            },
+          }),
+          code: 1,
+          cleanup: "normal",
         }),
-        stderr: "",
-        code: 1,
-        signal: null,
-        killed: false,
-        termination: "exit",
-        cleanup: "normal",
-      });
+      );
       if (mutated) {
         mocks.running = false;
         mocks.nativeInstall.mockImplementation(async (args) => {
