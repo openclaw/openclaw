@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { createWorkerEnvironmentAccess } from "./environment-access.js";
 import {
@@ -40,26 +41,24 @@ it.each([
   let callerCurrent = true;
   let identityCurrent = true;
   const revalidate = vi.fn(async () => {
-    if (scenario === "access lost after binding") {
-      throw new Error("Repository access is no longer available");
-    }
+    assert(
+      scenario !== "access lost after binding",
+      new Error("Repository access is no longer available"),
+    );
   });
   admit.mockReset().mockImplementation(async (params) => {
     expect([params.expected, params.namespace]).toEqual([project, "gateway"]);
     params.assertCurrent();
-    if (scenario === "source unavailable") {
-      throw new Error("Repository access is no longer available");
-    }
+    assert(
+      scenario !== "source unavailable",
+      new Error("Repository access is no longer available"),
+    );
     callerCurrent = scenario !== "caller revoked";
     return {
       project,
       setupRecipe: undefined,
       recipe: { source: "none", inputs: {}, env: {} },
-      assertCurrent: () => {
-        if (!identityCurrent) {
-          throw new Error("Repository identity changed");
-        }
-      },
+      assertCurrent: () => assert(identityCurrent, new Error("Repository identity changed")),
       revalidate,
     };
   });
@@ -105,11 +104,7 @@ it.each([
     preparationKey: PREPARATION_KEY,
     cacheKey: "9".repeat(64),
     signal: fixture.abort.signal,
-    assertCurrent: () => {
-      if (!callerCurrent) {
-        throw new Error("Dispatch caller retired");
-      }
-    },
+    assertCurrent: () => assert(callerCurrent, new Error("Dispatch caller retired")),
   });
   if (scenario === "reopened store") {
     const binding = await result;

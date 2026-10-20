@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { vi } from "vitest";
 import type {
   WorkerTranscriptCommitParams,
   WorkerTranscriptMessage,
@@ -40,32 +41,26 @@ export function createInterruptedCommitter(
   store: WorkerTranscriptCommitStore,
   message: string,
 ) {
-  let interruptCompletion = true;
   return createWorkerTranscriptCommitter({
     getConfig,
     store: {
       ...store,
-      complete: (input, assertCurrent) => {
-        if (interruptCompletion) {
-          interruptCompletion = false;
-          throw new Error(message);
-        }
-        return store.complete(input, assertCurrent);
-      },
+      complete: vi.fn(store.complete).mockImplementationOnce(() => {
+        throw new Error(message);
+      }),
     },
   });
 }
 
 export const ZERO_USAGE = createZeroUsageFixture();
+const MODEL = { provider: "openai", api: "openai-responses", model: "gpt-5.5" };
 export const PROVIDER_REPLAY = {
   v: 1 as const,
   type: "openai-responses-compaction",
   id: "cmp_worker_commit",
   data: "opaque-worker-commit",
   replayIndex: 1,
-  provider: "openai",
-  api: "openai-responses",
-  model: "gpt-5.5",
+  ...MODEL,
   baseUrlHash: "ozhevd1smnk8s",
   sessionHash: "171dzdv17gum5g",
   authProfileHash: "oe8bkr3r8947",
@@ -77,7 +72,6 @@ export function createTurnMessages(userText = "Inspect the workspace"): WorkerTr
     {
       role: "assistant",
       content: [
-        { type: "thinking", thinking: "I will inspect it." },
         {
           type: "toolCall",
           id: "call-read-1",
@@ -85,18 +79,8 @@ export function createTurnMessages(userText = "Inspect the workspace"): WorkerTr
           arguments: { path: "README.md" },
         },
       ],
-      api: "openai-responses",
-      provider: "openai",
-      model: "gpt-5.5",
+      ...MODEL,
       providerReplay: structuredClone(PROVIDER_REPLAY),
-      diagnostics: [
-        {
-          type: "provider-warning",
-          timestamp: 201,
-          error: { name: "", message: "diagnostic", stack: "", code: 0 },
-          details: { empty: "", enabled: false },
-        },
-      ],
       usage: ZERO_USAGE,
       stopReason: "toolUse",
       timestamp: 200,

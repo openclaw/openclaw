@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { placementClaim } from "./placement-suite.test-support.js";
 import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
@@ -45,18 +46,7 @@ it.each(["live", "recovery-only"] as const)(
         seedEnvironment: false,
       },
     );
-    const claim = await placements.claimTurn({
-      sessionId: SESSION_ID,
-      sessionKey: placement.sessionKey,
-      agentId: placement.agentId,
-      claimId: "claim-stale-result-owner",
-      runId: "run-stale-result-owner",
-      owner: {
-        kind: "worker",
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: attached.ownerEpoch,
-      },
-    });
+    const claim = await placements.claimTurn(placementClaim(placement, "stale-result-owner"));
     await createWorkerSessionPlacementGate(placements).updateAckCursors({ claim, liveSeq: 1 });
     const placementStore = createWorkerSessionPlacementGate(placements, {
       recoveryPlacements: owner === "recovery-only" ? await placements.listAsync() : [],

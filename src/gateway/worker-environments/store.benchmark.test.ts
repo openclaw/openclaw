@@ -69,21 +69,18 @@ it.skipIf(!["1", "baseline"].includes(process.env.OPENCLAW_WORKER_INVENTORY_BENC
           ? "dc8fe897b3f1531952e5dcf7ac59820fd7d442a6cd1d73fa7b62103cc5020adb"
           : "04f39389262b61ce99433d6ea9f913ac46ab80d11f90687c265135bd13eae6c9",
       );
-      const samples = [];
-      for (let round = 0; round < 6; round += 1) {
+      const samples = Array.from({ length: 6 }, () => {
         const cpu = process.threadCpuUsage();
         const started = performance.now();
         for (let viewer = 0; viewer < 50; viewer += 1) {
           inventory[name]();
         }
         const used = process.threadCpuUsage(cpu);
-        if (round > 0) {
-          samples.push({
-            cpu: (used.user + used.system) / 1_000 / 50,
-            wall: (performance.now() - started) / 50,
-          });
-        }
-      }
+        return {
+          cpu: (used.user + used.system) / 1_000 / 50,
+          wall: (performance.now() - started) / 50,
+        };
+      }).slice(1);
       console.log(
         JSON.stringify({
           operation: name,

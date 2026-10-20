@@ -15,10 +15,8 @@ async function fixture({ hold = false, cooperate = true, timeoutMs = 0 } = {}) {
   const release = createDeferredCore();
   const settled = createDeferredCore();
   const effect = vi.fn();
-  let retained: (() => void) | undefined;
   const resolveIdentity = vi.fn(
     async (request: WorkerSshIdentityRequest & { assertCurrent?: () => void }) => {
-      retained = request.assertCurrent;
       entered.resolve();
       try {
         if (hold) {
@@ -65,9 +63,6 @@ async function fixture({ hold = false, cooperate = true, timeoutMs = 0 } = {}) {
     settled,
     effect,
     resolveIdentity,
-    get retained() {
-      return retained;
-    },
     lookup: () => track(service.resolveSshIdentity(environment.environmentId)),
     start: () =>
       track(
@@ -114,8 +109,9 @@ it.each(["tunnel stop", "timeout"] as const)(
 it("closes retained assertions but permits subsequent legacy lookups", async () => {
   await using f = await fixture();
   await expect(f.lookup()).resolves.toEqual(IDENTITY);
-  expect(f.retained).toBeTypeOf("function");
-  expect(() => f.retained?.()).toThrow("identity invocation is closed");
+  const retained = f.resolveIdentity.mock.calls[0]?.[0].assertCurrent;
+  expect(retained).toBeTypeOf("function");
+  expect(() => retained?.()).toThrow("identity invocation is closed");
   await expect(f.lookup()).resolves.toEqual(IDENTITY);
   expect(f.resolveIdentity).toHaveBeenCalledTimes(2);
 });

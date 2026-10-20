@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { NodeWorkerSupervisorTransport } from "../node-registry-private.js";
 import { createGatewayNodeWorkerBundleInstaller } from "./node-worker-bundle-installer.js";
 import { createNodeWorkerBundleTransferService } from "./node-worker-bundle-transfer-service.js";
 import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
+import { create, providerService } from "./provider-lifecycle.test-support.js";
 import * as support from "./service.test-support.js";
 
 function createHeldInstaller(boundary: "attachment read" | "discovery" | "installation") {
@@ -58,8 +59,8 @@ function createHeldInstaller(boundary: "attachment read" | "discovery" | "instal
       transfer,
     }),
   );
-  const service = support.createService(
-    support.createProvider({
+  const service = providerService(
+    {
       supportedExecutionModes: ["worker-turn"],
       provisionBeforeInstallation: true,
       provision: async () => ({
@@ -68,18 +69,19 @@ function createHeldInstaller(boundary: "attachment read" | "discovery" | "instal
         sharedHost: false,
       }),
       destroy,
-    }),
+    },
     { ensureNodeWorkerBundle: install },
   );
   const controller = new AbortController();
   const settled = vi.fn();
-  const creation = service
-    .createWithRequest({
-      profileId: "development",
-      idempotencyKey: boundary === "installation" ? "held-installation" : "held-discovery",
+  const creation = create(
+    service,
+    boundary === "installation" ? "held-installation" : "held-discovery",
+    {
       executionMode: "worker-turn",
       signal: boundary === "installation" ? undefined : controller.signal,
-    })
+    },
+  )
     .catch((error: unknown) => ({ error }))
     .finally(settled);
   return {
@@ -101,78 +103,63 @@ function createHeldInstaller(boundary: "attachment read" | "discovery" | "instal
   };
 }
 
-describe("node provisioning installer ownership", () => {
-  support.setupWorkerEnvironmentServiceSuite();
+support.setupWorkerEnvironmentServiceSuite();
 
-  it.each([
-    { boundary: "discovery", change: "destroy intent" },
-    { boundary: "discovery", change: "replacement owner" },
-    { boundary: "attachment read", change: "destroy intent" },
-    { boundary: "attachment read", change: "replacement owner" },
-    { boundary: "attachment read", change: "cancellation" },
-  ] as const)(
-    "refuses installation after $change during $boundary",
-    async ({ boundary, change }) => {
-      await using fixture = createHeldInstaller(boundary);
-      const { controller, creation } = fixture;
-      await Promise.race([fixture.entered.promise, creation]);
-      const record = support.testState.store.list()[0]!;
-      expect(record.state).toBe("provisioning");
-      if (change === "cancellation") {
-        controller.abort(new DOMException("Provisioning cancelled", "AbortError"));
-      } else if (change === "destroy intent") {
-        await support.testState.store.requestDestroy({
-          environmentId: record.environmentId,
-          state: record.state,
-        });
-      } else {
-        await support.testState.store.transition({
-          environmentId: record.environmentId,
-          from: record.state,
-          to: "ready",
-          patch: {
-            ...support.readyPatch(record.environmentId),
-            leaseId: "replacement-lease",
-            nodeDeviceId: fixture.node.nodeId,
-            sharedHost: false,
-          },
-        });
-      }
-      const replacement = support.testState.store.get(record.environmentId);
-      expect(controller.signal.aborted).toBe(change === "cancellation");
-      fixture.release.resolve();
-      expect(await creation).toHaveProperty("error");
-      expect(fixture.grant).not.toHaveBeenCalled();
-      expect(fixture.invoke).not.toHaveBeenCalled();
-      if (boundary === "attachment read") {
-        expect(fixture.install).not.toHaveBeenCalled();
-      }
-      if (change !== "replacement owner") {
-        expect(fixture.destroy).toHaveBeenCalledOnce();
-        expect(support.testState.store.get(record.environmentId)?.state).toBe("destroyed");
-      } else {
-        expect(fixture.destroy).not.toHaveBeenCalled();
-        expect(support.testState.store.get(record.environmentId)).toEqual(replacement);
-      }
-    },
-  );
-
-  it("drains an admitted installation before destroying its lease", async () => {
-    await using fixture = createHeldInstaller("installation");
-    const { creation } = fixture;
-    await Promise.race([fixture.entered.promise, creation]);
-    const record = support.testState.store.list()[0]!;
+it.each([
+  { boundary: "discovery", change: "destroy intent" },
+  { boundary: "discovery", change: "replacement owner" },
+  { boundary: "attachment read", change: "destroy intent" },
+  { boundary: "attachment read", change: "replacement owner" },
+  { boundary: "attachment read", change: "cancellation" },
+  { boundary: "installation", change: "destroy intent" },
+] as const)("fences $change during $boundary", async ({ boundary, change }) => {
+  await using fixture = createHeldInstaller(boundary);
+  const { controller, creation } = fixture;
+  await Promise.race([fixture.entered.promise, creation]);
+  const record = support.testState.store.list()[0]!;
+  expect(record.state).toBe("provisioning");
+  if (change === "cancellation") {
+    controller.abort(new DOMException("Provisioning cancelled", "AbortError"));
+  } else if (change === "destroy intent") {
     await support.testState.store.requestDestroy({
       environmentId: record.environmentId,
       state: record.state,
     });
+  } else {
+    await support.testState.store.transition({
+      environmentId: record.environmentId,
+      from: record.state,
+      to: "ready",
+      patch: {
+        ...support.readyPatch(record.environmentId),
+        leaseId: "replacement-lease",
+        nodeDeviceId: fixture.node.nodeId,
+        sharedHost: false,
+      },
+    });
+  }
+  const replacement = support.testState.store.get(record.environmentId);
+  expect(controller.signal.aborted).toBe(change === "cancellation");
+  if (boundary === "installation") {
     expect(fixture.grant).toHaveBeenCalledOnce();
     expect(fixture.invoke).toHaveBeenCalledOnce();
     expect(fixture.destroy).not.toHaveBeenCalled();
     expect(fixture.settled).not.toHaveBeenCalled();
-    fixture.release.resolve();
-    expect(await creation).toHaveProperty("error");
+  }
+  fixture.release.resolve();
+  expect(await creation).toHaveProperty("error");
+  if (boundary !== "installation") {
+    expect(fixture.grant).not.toHaveBeenCalled();
+    expect(fixture.invoke).not.toHaveBeenCalled();
+  }
+  if (boundary === "attachment read") {
+    expect(fixture.install).not.toHaveBeenCalled();
+  }
+  if (change !== "replacement owner") {
     expect(fixture.destroy).toHaveBeenCalledOnce();
     expect(support.testState.store.get(record.environmentId)?.state).toBe("destroyed");
-  });
+  } else {
+    expect(fixture.destroy).not.toHaveBeenCalled();
+    expect(support.testState.store.get(record.environmentId)).toEqual(replacement);
+  }
 });

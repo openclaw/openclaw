@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { commandResult } from "../../agents/github-identity.test-support.js";
 import {
   GitHubIdentityError,
   installManagedGitHubProfile,
@@ -173,10 +174,9 @@ async function installProfile(scope: "agent" | "system" = "system") {
   return profileDir;
 }
 
-function grantRequest(
-  fact: Awaited<ReturnType<typeof prepareGitHubPublicationFact>>,
-  assertCurrent = () => {},
-) {
+type PublicationFact = Awaited<ReturnType<typeof prepareGitHubPublicationFact>>;
+
+function grantRequest(fact: PublicationFact, assertCurrent = () => {}) {
   return {
     session,
     fact,
@@ -203,10 +203,7 @@ function grantRequest(
   };
 }
 
-async function bindPreparedGrant(
-  fact: Awaited<ReturnType<typeof prepareGitHubPublicationFact>>,
-  assertCurrent = () => {},
-) {
+async function bindPreparedGrant(fact: PublicationFact, assertCurrent = () => {}) {
   // Renewal tests isolate turn attachment; placement-owner tests cover admission.
   using attachment = vi.spyOn(turnClaims, "bindWorkerTurnGitHubGrant");
   attachment.mockImplementation(() => {});
@@ -254,11 +251,7 @@ describe("worker GitHub launch binding", () => {
         worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
       },
     });
-    mocks.nativeToken.mockReset().mockResolvedValue({
-      code: 0,
-      stdout: Buffer.from(token),
-      stderr: Buffer.alloc(0),
-    });
+    mocks.nativeToken.mockReset().mockResolvedValue(commandResult(token));
   });
   afterEach(() => {
     clearRuntimeConfigSnapshot();
@@ -286,14 +279,12 @@ describe("worker GitHub launch binding", () => {
     }
     if (scenario === "no identity" || scenario === "unavailable native identity") {
       config = {};
-      mocks.nativeToken.mockImplementation(async (argv: string[]) => ({
-        code: argv[2] === "token" ? 1 : 0,
-        termination: "exit",
-        stdout: Buffer.from(
+      mocks.nativeToken.mockImplementation(async (argv: string[]) =>
+        commandResult(
           scenario === "no identity" ? '{"hosts":{}}' : '{"hosts":{"github.com":[{}]}}',
+          argv[2] === "token" ? 1 : 0,
         ),
-        stderr: Buffer.alloc(0),
-      }));
+      );
     }
     setRuntimeConfigSnapshot(config);
     const reachedSync = new Error("repository sync reached");
