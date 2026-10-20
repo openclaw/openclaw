@@ -8,6 +8,7 @@ import { assertNotUpdateCapturePath } from "./update-capture-paths.js";
 // These bytes are the producer contract, not an inferred JSON schema.
 const markerName = ".openclaw-private-update-capture";
 const markerContent = "openclaw-private-update-capture-v1\n";
+const directoryLink = process.platform === "win32" ? "junction" : "dir";
 
 let root: string;
 let marker: string;
@@ -27,21 +28,18 @@ afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 
-it.each(["version", "oversized", "dangling symlink"])(
-  "refuses a present %s marker without treating the artifact as ordinary data",
-  (kind) => {
-    if (kind === "dangling symlink") {
-      fs.symlinkSync(path.join(root, "missing"), marker);
-    } else {
-      fs.writeFileSync(
-        marker,
-        kind === "version" ? "openclaw-private-update-capture-v2\n" : "x".repeat(4096),
-      );
-    }
-    expectInvalidMarker();
-    expect(fs.readFileSync(source, "utf8")).toBe("synthetic retained bytes");
-  },
-);
+it.each(["version", "oversized", "dangling symlink"])("rejects %s markers", (kind) => {
+  if (kind === "dangling symlink") {
+    fs.symlinkSync(path.join(root, "missing"), marker);
+  } else {
+    fs.writeFileSync(
+      marker,
+      kind === "version" ? "openclaw-private-update-capture-v2\n" : "x".repeat(4096),
+    );
+  }
+  expectInvalidMarker();
+  expect(fs.readFileSync(source, "utf8")).toBe("synthetic retained bytes");
+});
 
 it.skipIf(process.platform === "win32")("refuses a FIFO marker without opening it", () => {
   execFileSync("mkfifo", [marker]);
@@ -54,11 +52,7 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   "refuses an unreadable marker",
   () => {
     fs.writeFileSync(marker, markerContent, { mode: 0o000 });
-    try {
-      expectInvalidMarker();
-    } finally {
-      fs.chmodSync(marker, 0o600);
-    }
+    expectInvalidMarker();
   },
 );
 
@@ -75,28 +69,16 @@ it("refuses marker replacement during a bounded read even with identical bytes",
   const original = fs.statSync(marker, { bigint: true });
   const read = fs.readSync.bind(fs);
   let replaced = false;
-  vi.spyOn(fs, "readSync").mockImplementation(
-    (
-      descriptor: number,
-      buffer: NodeJS.ArrayBufferView,
-      offsetOrOptions: number | fs.ReadOptions = {},
-      length?: number,
-      position?: fs.ReadPosition | null,
-    ) => {
-      const options =
-        typeof offsetOrOptions === "number"
-          ? { offset: offsetOrOptions, length, position }
-          : offsetOrOptions;
-      const result = read(descriptor, buffer, options);
-      const opened = fs.fstatSync(descriptor, { bigint: true });
-      if (!replaced && opened.dev === original.dev && opened.ino === original.ino) {
-        replaced = true;
-        fs.renameSync(marker, `${marker}.old`);
-        fs.writeFileSync(marker, markerContent);
-      }
-      return result;
-    },
-  );
+  vi.spyOn(fs, "readSync").mockImplementation((...args) => {
+    const result = read(...args);
+    const opened = fs.fstatSync(args[0], { bigint: true });
+    if (!replaced && opened.dev === original.dev && opened.ino === original.ino) {
+      replaced = true;
+      fs.renameSync(marker, `${marker}.old`);
+      fs.writeFileSync(marker, markerContent);
+    }
+    return result;
+  });
   expectInvalidMarker();
   expect(replaced).toBe(true);
 });
@@ -108,11 +90,7 @@ it.each([
   fs.mkdirSync(path.join(privateDir, "child"), { recursive: true });
   fs.writeFileSync(path.join(privateDir, markerName), markerContent);
   fs.writeFileSync(path.join(privateDir, "raw.txt"), "private bytes");
-  fs.symlinkSync(
-    path.join(privateDir, "child"),
-    path.join(root, "hop"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
+  fs.symlinkSync(path.join(privateDir, "child"), path.join(root, "hop"), directoryLink);
   const alias = path.join(root, "alias");
   fs.symlinkSync(target, alias);
   const assertion = expect(() => assertNotUpdateCapturePath(alias, stateDir));

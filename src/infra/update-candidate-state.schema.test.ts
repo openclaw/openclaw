@@ -61,11 +61,8 @@ it.each(["malformed", "nonregular-wal", "empty-worker"])(
       kind === "empty-worker" ? { root: candidateRoot } : {},
     ).catch((error: unknown) => error);
     assert(failure instanceof Error);
-    expect(failure).toHaveProperty(
-      "message",
-      expect.stringContaining("State schema inspection failed"),
-    );
     const message = failure.message;
+    expect(message).toContain("State schema inspection failed");
     expect
       .soft(message)
       .toContain(kind === "empty-worker" ? path.join(stateDir, "state", "openclaw.sqlite") : file);
@@ -93,9 +90,7 @@ it("reports a best-effort generation verification failure for its actual sources
   const preload = path.join(stateDir, "write-between-reads.cjs");
   // Wait for the private image to close, then commit between the final generation
   // reads. A write during provisional capture can instead fail snapshot acquisition.
-  fs.writeFileSync(
-    preload,
-    `
+  const generationProbe = `
     const fs = require('node:fs'), path = require('node:path');
     const { DatabaseSync } = require('node:sqlite');
     const source = ${JSON.stringify(file)};
@@ -115,8 +110,8 @@ it("reports a best-effort generation verification failure for its actual sources
       }
       return open.call(this, file, ...args);
     };
-  `,
-  );
+  `;
+  fs.writeFileSync(preload, generationProbe);
 
   const failure = await readUpdateDatabaseGenerationsIsolated([file, missing], {
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir, ...sqliteWorkerPreloadEnv(preload) },
@@ -144,9 +139,7 @@ it.skipIf(process.platform === "win32")(
     const preload = path.join(stateDir, "replace-source.cjs");
     // Replace the pathname while the canonical owner still holds its original
     // descriptor. A numeric result from that retired inode must not be published.
-    fs.writeFileSync(
-      preload,
-      `
+    const replacementProbe = `
       const fs = require('node:fs');
       const source = ${JSON.stringify(file)};
       const open = fs.openSync, read = fs.readSync;
@@ -165,8 +158,8 @@ it.skipIf(process.platform === "win32")(
         }
         return count;
       };
-    `,
-    );
+    `;
+    fs.writeFileSync(preload, replacementProbe);
     await expect(
       inspect(stateDir, { env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) } }),
     ).rejects.toThrow(/SQLite source changed/);
@@ -184,9 +177,7 @@ it("discovers an agent registered after directory enumeration in the shared snap
   const preload = path.join(stateDir, "late-registration.cjs");
   // Insert after enumeration returns its old directory list. Only discovery
   // from the subsequently captured shared generation can find this new store.
-  fs.writeFileSync(
-    preload,
-    `
+  const registrationProbe = `
     const fs = require('node:fs'), path = require('node:path');
     const { DatabaseSync } = require('node:sqlite');
     const agents = ${JSON.stringify(path.join(stateDir, "agents"))};
@@ -204,8 +195,8 @@ it("discovers an agent registered after directory enumeration in the shared snap
       }
       return entries;
     };
-  `,
-  );
+  `;
+  fs.writeFileSync(preload, registrationProbe);
   const after = await inspect(stateDir, {
     env: { ...process.env, ...sqliteWorkerPreloadEnv(preload) },
   });
@@ -242,15 +233,11 @@ it("fences WAL schema migration without copying a large registered agent payload
   writer.exec(`
     PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
     CREATE TABLE payload(data BLOB); INSERT INTO payload VALUES(zeroblob(67108864));
-    CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, app_version TEXT);
-    INSERT INTO schema_meta VALUES('primary','baseline');
     PRAGMA user_version=3; PRAGMA wal_checkpoint(TRUNCATE);
   `);
   expect(fs.statSync(agentPath).size).toBeGreaterThan(64 * 1024 * 1024);
   // Shared discovery gets one native snapshot; agent metadata must not copy its payload.
-  fs.writeFileSync(
-    preload,
-    `
+  const boundedReadProbe = `
     const fs = require('node:fs'), sqlite = require('node:sqlite');
     const source = ${JSON.stringify(agentPath)}, shared = ${JSON.stringify(sharedPath)};
     const marker = ${JSON.stringify(copiedShared)};
@@ -273,8 +260,8 @@ it("fences WAL schema migration without copying a large registered agent payload
       fs.writeFileSync(marker, 'copied');
       return pages;
     };
-  `,
-  );
+  `;
+  fs.writeFileSync(preload, boundedReadProbe);
   const env = { ...process.env, ...sqliteWorkerPreloadEnv(preload), XDG_CACHE_HOME: cache };
   const read = () => inspect(stateDir, { env });
   // Only WAL records the committed candidate version; the main header stays at 3.

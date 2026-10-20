@@ -13,9 +13,8 @@ import {
   UpdateCandidateStateSnapshotSchema as SnapshotSchema,
 } from "./update-candidate-state.js";
 
-type Snapshot = Parameters<typeof snapshot>[0];
-type Admission = Pick<Snapshot, "pluginPlanPath" | "databaseInventory">;
-type Input = Omit<Snapshot, keyof Admission>;
+type Admission = Pick<Parameters<typeof snapshot>[0], "pluginPlanPath" | "databaseInventory">;
+type Input = Omit<Parameters<typeof snapshot>[0], keyof Admission>;
 const entrypoint = runtimeProcessEntrypoints.updateCandidateState;
 
 /** Wake the inspection deadline without replacing native process-cleanup timers. */
@@ -43,14 +42,12 @@ export async function materializeUpdateCandidateStateWorker(candidateRoot: strin
     ? `const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
       register({ tsconfig: ${JSON.stringify(fileURLToPath(new URL("../../tsconfig.json", import.meta.url)))} });`
     : "";
-  await fs.mkdir(path.dirname(worker), { recursive: true });
-  await fs.writeFile(
-    worker,
-    `void (async () => {
+  const program = `void (async () => {
       ${loader}
       await import(${JSON.stringify(source.href)});
-    })();`,
-  );
+    })();`;
+  await fs.mkdir(path.dirname(worker), { recursive: true });
+  await fs.writeFile(worker, program);
 }
 
 async function runWorker(input: Input, mode: "inventory" | "snapshot", admitted?: Admission) {

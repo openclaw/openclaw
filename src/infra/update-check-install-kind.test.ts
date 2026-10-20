@@ -6,9 +6,9 @@ import * as processExec from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
-  checkUpdateStatus,
-  resolveUpdateInstallIdentity,
-  resolveUpdateInstallKind,
+  checkUpdateStatus as checkStatus,
+  resolveUpdateInstallIdentity as resolveIdentity,
+  resolveUpdateInstallKind as resolveKind,
 } from "./update-check.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
@@ -67,12 +67,11 @@ it.each([
     const options = { timeoutMs, signal: undefined };
     const pending =
       scope === "kind"
-        ? resolveUpdateInstallKind(root, options)
-        : scope === "identity"
-          ? resolveUpdateInstallIdentity({ root, ...options }).then((result) => result.installKind)
-          : checkUpdateStatus({ root, ...options, includeRegistry: false }).then(
-              (result) => result.installKind,
-            );
+        ? resolveKind(root, options)
+        : (scope === "identity"
+            ? resolveIdentity({ root, ...options })
+            : checkStatus({ root, ...options, includeRegistry: false })
+          ).then(({ installKind }) => installKind);
     const outcome =
       timeoutMs !== undefined && timeoutMs < discoveryMs
         ? expect(pending).rejects.toThrow("Git did not finish within its 0.05s budget")
@@ -94,11 +93,9 @@ it("classifies roots, aliases and nested packages with two Git probes", async ()
   await fs.writeFile(path.join(nested, "package.json"), '{"name":"openclaw"}');
   const runCommand = vi.spyOn(processExec, "runCommandWithTimeout");
 
-  expect([
-    await resolveUpdateInstallKind(root),
-    await resolveUpdateInstallKind(alias),
-    await resolveUpdateInstallKind(nested),
-  ]).toEqual(["git", "git", "package"]);
+  await expect(resolveKind(root)).resolves.toBe("git");
+  await expect(resolveKind(alias)).resolves.toBe("git");
+  await expect(resolveKind(nested)).resolves.toBe("package");
 
   expect(runCommand).toHaveBeenCalledTimes(2);
 });
@@ -115,7 +112,7 @@ it.each(["absent", "invalid-file", "invalid-directory"])(
     }
 
     const runCommand = vi.spyOn(processExec, "runCommandWithTimeout");
-    await expect(resolveUpdateInstallKind(root)).resolves.toBe("package");
+    await expect(resolveKind(root)).resolves.toBe("package");
     expect(runCommand).toHaveBeenCalledTimes(marker === "absent" ? 0 : 1);
   },
 );
@@ -128,14 +125,12 @@ it("honors GIT_DIR and GIT_WORK_TREE without a marker", async () => {
   await git("init", "--bare", gitDir);
 
   await withEnvAsync({ GIT_DIR: gitDir, GIT_WORK_TREE: root }, async () => {
-    await expect(resolveUpdateInstallKind(root)).resolves.toBe("git");
+    await expect(resolveKind(root)).resolves.toBe("git");
   });
 });
 
 it("leaves unavailable and undiscovered roots unclassified", async () => {
   const base = makeRoot();
-  expect([
-    await resolveUpdateInstallKind(path.join(base, "missing")),
-    await resolveUpdateInstallKind(null),
-  ]).toEqual(["unknown", "unknown"]);
+  await expect(resolveKind(path.join(base, "missing"))).resolves.toBe("unknown");
+  await expect(resolveKind(null)).resolves.toBe("unknown");
 });
