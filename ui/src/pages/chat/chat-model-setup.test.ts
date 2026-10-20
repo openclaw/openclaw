@@ -1,40 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { resolveChatModelSetup, requiresChatModelSetup } from "./chat-model-setup.ts";
 
-describe("requiresChatModelSetup", () => {
-  it("requires setup after the selected agent loads without a model route", () => {
-    expect(
-      requiresChatModelSetup({
-        catalog: false,
-        connected: true,
-        agentsLoaded: true,
-        selectedAgentFound: true,
-      }),
-    ).toBe(true);
-  });
+const loaded = {
+  catalog: false,
+  connected: true,
+  agentsLoaded: true,
+  selectedAgentFound: true,
+};
 
-  it("accepts a configured agent model", () => {
-    expect(
-      requiresChatModelSetup({
-        catalog: false,
-        connected: true,
-        agentsLoaded: true,
-        selectedAgentFound: true,
-        agentModel: "openai/gpt-5.4",
-      }),
-    ).toBe(false);
-  });
-
-  it("does not block while connection or agent data is unresolved", () => {
-    expect(
-      requiresChatModelSetup({
-        catalog: false,
-        connected: true,
-        agentsLoaded: false,
-        selectedAgentFound: false,
-      }),
-    ).toBe(false);
-  });
+it.each([
+  ["missing model route", {}, true],
+  ["configured model", { agentModel: "openai/gpt-5.4" }, false],
+  ["unresolved agent", { agentsLoaded: false, selectedAgentFound: false }, false],
+] as const)("requiresChatModelSetup: %s", (_name, overrides, required) => {
+  expect(requiresChatModelSetup({ ...loaded, ...overrides })).toBe(required);
 });
 
 describe("worker inference credential banner", () => {
@@ -64,17 +43,21 @@ describe("worker inference credential banner", () => {
           unavailableReason,
         },
       ];
+      const session = {
+        key: "agent:main:worker-test",
+        kind: "direct" as const,
+        updatedAt: 1,
+        model: "gpt-4.1-mini",
+        modelProvider: "openai",
+      };
       const banner = (
-        placement?:
-          | (Omit<typeof active, "inference"> & { inference?: "worker" })
-          | (Omit<typeof active, "state"> & { state: "reclaimed" | "local" }),
+        placement?: NonNullable<
+          Parameters<typeof resolveChatModelSetup>[0]["activeSession"]
+        >["placement"],
         overrides: Partial<Parameters<typeof resolveChatModelSetup>[0]> = {},
       ) =>
         resolveChatModelSetup({
-          catalog: false,
-          connected: true,
-          agentsLoaded: true,
-          selectedAgentFound: true,
+          ...loaded,
           agentModel: "openai/gpt-4.1-mini",
           chatModelCatalog: catalog,
           modelOverrides: {},
@@ -82,28 +65,16 @@ describe("worker inference credential banner", () => {
           sessionsResult: null,
           catalogError: null,
           onSetup: () => undefined,
-          activeSession: {
-            key: "agent:main:worker-test",
-            kind: "direct",
-            updatedAt: 1,
-            model: "gpt-4.1-mini",
-            modelProvider: "openai",
-            placement,
-          },
+          activeSession: { ...session, placement },
           ...overrides,
         }).modelUnavailableBanner;
       expect(banner()).toBeDefined();
       expect(banner(active)).toBeUndefined();
-      // Selection validation has already committed this model. Its current
-      // worker binding, not later Gateway credential loss, owns turn auth.
+      // The current worker binding, not later Gateway credential loss, owns turn auth.
       expect(
         banner(active, {
           activeSession: {
-            key: "agent:main:worker-test",
-            kind: "direct",
-            updatedAt: 1,
-            model: "gpt-4.1-mini",
-            modelProvider: "openai",
+            ...session,
             modelOverrideSource: "user",
             placement: active,
           },

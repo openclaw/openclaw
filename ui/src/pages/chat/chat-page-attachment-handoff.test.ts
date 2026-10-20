@@ -14,11 +14,9 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
   nativeGatewaysCapability: () => null,
 }));
 
-import { createChatSubmissions } from "../../app/chat-submissions.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { settleChatPage, createChatPageSessions } from "./chat-page.test-support.ts";
+import { settleChatPage, setNavigationContext, stubMatchMedia } from "./chat-page.test-support.ts";
 import "./chat-page.ts";
 
 type RenderedPane = HTMLElement & {
@@ -29,48 +27,21 @@ type RenderedPane = HTMLElement & {
   resumeStagedAttachments?: () => void;
 };
 
-function configure(page: HTMLElementTagNameMap["openclaw-chat-page"]) {
-  const context = {
-    chatSubmissions: createChatSubmissions(),
-    sessions: { ...createChatPageSessions(), patch: vi.fn() },
-    placementStartup: { get: vi.fn(() => null), subscribe: () => () => undefined },
-    agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-    gateway: {
-      snapshot: { hello: null },
-      setSessionKey: vi.fn(),
-      subscribe: () => () => undefined,
-    },
-    navigate: vi.fn(),
-    replace: vi.fn(),
-    agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
-    chatAttachmentHandoff: {
-      prepare: vi.fn(),
-      consume: vi.fn(() => null),
-      clearPane: vi.fn(),
-      dispose: vi.fn(),
-    },
-  } as unknown as ApplicationContext;
-  (page as unknown as { context: ApplicationContext }).context = context;
-  page.data = { sessionKey: "main" };
+async function split(page: HTMLElementTagNameMap["openclaw-chat-page"]) {
+  window.dispatchEvent(
+    new CustomEvent(UI_COMMAND_EVENT, {
+      cancelable: true,
+      detail: { command: { kind: "split", direction: "right", sessionKey: "main" } },
+    }),
+  );
+  await settleChatPage(page);
 }
 
 describe("chat page staged attachment rebound", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
     vi.stubGlobal("sessionStorage", createStorageMock());
-    vi.stubGlobal(
-      "matchMedia",
-      vi.fn((query: string) => ({
-        matches: false,
-        media: query,
-        onchange: null,
-        addEventListener: vi.fn(),
-        removeEventListener: vi.fn(),
-        addListener: vi.fn(),
-        removeListener: vi.fn(),
-        dispatchEvent: vi.fn(),
-      })),
-    );
+    stubMatchMedia(false);
   });
 
   afterEach(() => {
@@ -80,16 +51,11 @@ describe("chat page staged attachment rebound", () => {
 
   it("reactivates a closed pane when delayed MCP teardown rebounds to the same owner", async () => {
     const page = document.createElement("openclaw-chat-page");
-    configure(page);
+    setNavigationContext(page);
+    page.data = { sessionKey: "main" };
     document.body.append(page);
     await settleChatPage(page);
-    window.dispatchEvent(
-      new CustomEvent(UI_COMMAND_EVENT, {
-        cancelable: true,
-        detail: { command: { kind: "split", direction: "right", sessionKey: "main" } },
-      }),
-    );
-    await settleChatPage(page);
+    await split(page);
 
     const closingPane = page.querySelectorAll<RenderedPane>("openclaw-chat-pane")[1]!;
     const discard = vi.fn();
@@ -109,13 +75,7 @@ describe("chat page staged attachment rebound", () => {
     expect(discard).toHaveBeenCalledOnce();
     expect(closingPane.isConnected).toBe(true);
 
-    window.dispatchEvent(
-      new CustomEvent(UI_COMMAND_EVENT, {
-        cancelable: true,
-        detail: { command: { kind: "split", direction: "right", sessionKey: "main" } },
-      }),
-    );
-    await settleChatPage(page);
+    await split(page);
     expect(resume).toHaveBeenCalled();
 
     teardown.resolve();
