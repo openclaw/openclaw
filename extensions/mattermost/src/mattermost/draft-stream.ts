@@ -59,6 +59,7 @@ export function createMattermostDraftStream(params: {
   rootId?: string;
   maxChars?: number;
   throttleMs?: number;
+  renderText?: (text: string) => string;
   chunkText?: (text: string) => string[];
   log?: (message: string) => void;
   warn?: (message: string) => void;
@@ -105,7 +106,8 @@ export function createMattermostDraftStream(params: {
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     const target = currentGeneration;
-    const normalized = normalizeMattermostDraftText(text, maxChars);
+    const rendered = params.renderText?.(text) ?? text;
+    const normalized = normalizeMattermostDraftText(rendered, maxChars);
     if (!normalized) {
       return false;
     }
@@ -202,7 +204,8 @@ export function createMattermostDraftStream(params: {
           return;
         }
         const sourceText = pendingText.trim() ? pendingText : sealed.latestSourceText;
-        const finalizedText = sourceText.trim();
+        const rendered = params.renderText?.(sourceText) ?? sourceText;
+        const finalizedText = rendered.trim();
         const chunks =
           params.chunkText?.(finalizedText) ??
           chunkMarkdownTextWithMode(finalizedText, maxChars, "length");

@@ -4,10 +4,14 @@ import {
 } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
+  resolveChannelStreamingBlockCoalesce,
   resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingChunkMode,
   resolveChannelPreviewStreamMode,
   type StreamingMode,
+  type TextChunkMode,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { BlockStreamingCoalesceConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveSecretInputString,
   type SecretInputStringResolutionMode,
@@ -40,8 +44,10 @@ export type ResolvedMattermostAccount = {
   oncharPrefixes?: string[];
   requireMention?: boolean;
   textChunkLimit?: number;
+  chunkMode?: TextChunkMode;
   streamingMode: StreamingMode;
   blockStreaming?: boolean;
+  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
 };
 
 const {
@@ -122,8 +128,10 @@ function resolveMattermostAccountWithMode(params: {
     oncharPrefixes: merged.oncharPrefixes,
     requireMention,
     textChunkLimit: merged.textChunkLimit,
+    chunkMode: resolveChannelStreamingChunkMode(merged),
     streamingMode: resolveChannelPreviewStreamMode(merged, "partial"),
     blockStreaming: resolveChannelStreamingBlockEnabled(merged),
+    blockStreamingCoalesce: resolveChannelStreamingBlockCoalesce(merged),
   };
 }
 
