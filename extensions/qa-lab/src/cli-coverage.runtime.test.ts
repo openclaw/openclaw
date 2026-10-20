@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { makeRuntimeParitySummary } from "./agentic-parity-report-test-helpers.js";
 import { runQaCoverageReportCommand } from "./cli-coverage.runtime.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -19,7 +19,7 @@ vi.mock("./suite-launch.runtime.js", async (importOriginal) => ({
 const tempDirs = createTempDirHarness();
 
 describe("qa coverage command", () => {
-  let stdoutWrite: ReturnType<typeof vi.spyOn>;
+  let stdoutWrite: MockInstance<typeof process.stdout.write>;
   let priorExitCode: typeof process.exitCode;
 
   function expectWrites(...fragments: string[]) {

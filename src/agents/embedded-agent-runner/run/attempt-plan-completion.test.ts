@@ -20,6 +20,7 @@ import { createProgressCardTool } from "../../tools/progress-card-tool.js";
 import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "../runs.test-support.js";
 import { prepareCatalogExecutor } from "./attempt-stream-prepare.test-support.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
+import type { EmbeddedRunCompletionCheck } from "./terminal-retry-state.js";
 import { mergeAttemptToolMediaPayloads } from "./tool-media-payloads.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -72,7 +73,7 @@ function prepare(options: Parameters<typeof prepareCatalogExecutor>[0]) {
 }
 
 async function planSession(
-  completionCheck: { unfinishedPlan: boolean },
+  completionCheck: EmbeddedRunCompletionCheck,
   options: Parameters<typeof prepareCatalogExecutor>[0] = {},
 ) {
   const progress = createProgressCardTool({

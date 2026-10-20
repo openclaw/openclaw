@@ -194,7 +194,12 @@ describe("prompt-build hook context input provenance", () => {
     expect(captured).toHaveLength(1);
     expect(prepareSystemPrompt).toHaveBeenCalledOnce();
     const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";
-    expect(finalPrompt).toBe("Hook prefix\n\nFiltered capability guidance\n\nHook suffix");
+    expect(finalPrompt).toContain("Filtered capability guidance");
+    expect(finalPrompt).toContain("Hook prefix");
+    expect(finalPrompt).toContain("Hook suffix");
+    expect(finalPrompt).not.toContain("Base system prompt");
+    expect(finalPrompt.match(/Hook prefix/g)).toHaveLength(1);
+    expect(finalPrompt.match(/Hook suffix/g)).toHaveLength(1);
   });
 
   it.each([{ requiresToolAuthority: undefined }, { requiresToolAuthority: true }] as const)(

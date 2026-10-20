@@ -192,7 +192,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     });
     expect(active.promptForSession).toBe("Visible request");
     deleteSession("exec-a");
-    const nextTurn = await prepareEmbeddedAttemptPromptContext({
+    const nextTurn = await prepareContext({
       ...fixture.input,
       appendOnlyRuntimeContext: true,
       messages: [...messages, active.runtimeContextMessageForCurrentTurn!],

@@ -216,7 +216,7 @@ it("reuses native authentication for consecutive options requests and refreshes 
   });
 });
 
-it.each(["token", "native"] as const)(
+it.for(["token", "native"] as const)(
   "serves stale options while %s authentication refreshes without waiting",
   async (source, { signal }) => {
     useRealIdentity(source === "token" ? "synthetic-options-stale-token" : undefined);
