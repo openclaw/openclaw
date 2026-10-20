@@ -10,7 +10,7 @@ import {
 import { assertSessionStoreMigrationComplete as assertMigrated } from "../config/sessions/startup-migration.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import { runSessionSnapshotsHealth } from "../flows/doctor-health-contribution-runners.state.js";
+import { initialDoctorHealthContribution } from "../flows/doctor-health-contributions-selection.test-support.js";
 import * as packageRoots from "../infra/openclaw-root.js";
 import { readMigrationArtifactIdentity } from "../infra/session-sqlite-migration-artifact.js";
 import * as bundledSkills from "../skills/loading/bundled-dir.js";
@@ -283,7 +283,7 @@ describe("doctor session snapshot stale runtime metadata", () => {
         const options = { repair: true, nonInteractive: true };
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-        await runSessionSnapshotsHealth({
+        await initialDoctorHealthContribution("doctor:session-snapshots").run({
           cfg,
           cfgForPersistence: cfg,
           configResult: { cfg },

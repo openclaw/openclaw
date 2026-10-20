@@ -4864,14 +4864,22 @@ jobs:
         if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
         env:
           CI: "true"
-        run: >-
-          pnpm install --frozen-lockfile --prefer-offline --optional
-          --filter '@openclaw/mermaid-renderer...'
-          --filter '@openclaw/gateway-protocol...'
-          --config.ignore-scripts=false
-          --config.engine-strict=false
-          --config.enable-pre-post-scripts=true
-          --config.side-effects-cache=true
+          MACOS_NATIVE_PHASE: ${{ matrix.phase }}
+        run: |
+          set -euo pipefail
+          native_install_args=(install --frozen-lockfile --prefer-offline --optional)
+          if [[ "$MACOS_NATIVE_PHASE" != "tests" || ! -f apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift ]]; then
+            native_install_args+=(--filter '@openclaw/mermaid-renderer...' --filter '@openclaw/gateway-protocol...')
+          fi
+          pnpm "${native_install_args[@]}" \
+            --config.ignore-scripts=false \
+            --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true \
+            --config.side-effects-cache=true
+
+      - name: Prepare native test CLI
+        if: matrix.phase == 'tests' && hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') != ''
+        run: pnpm build:runtime
 
       - name: Setup Node.js for native test tooling
         id: macos-node-tooling

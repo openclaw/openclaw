@@ -28,7 +28,6 @@ import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import type { AppearanceBackgroundView as BackgroundViewProps } from "./view-appearance-background.tsx";
 
 registerEnglishCatalog(registerSettingsEnglish);
 type BackgroundSnapshot = Extract<UsersBackgroundResult, { status: "ok" }>;
@@ -51,7 +50,10 @@ export function createAppearanceBackground(
   // Owner publications can arrive during another component's tracked computation.
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const publish = () => setRevision((value) => value + 1);
-  const [message, setMessage] = createSignal<BackgroundViewProps["message"]>(null);
+  const [message, setMessage] = createSignal<{
+    kind: "error" | "status";
+    text: string;
+  } | null>(null);
 
   let connected = false;
   let imageUrl: string | null = null;
@@ -482,7 +484,7 @@ export function createAppearanceBackground(
     }
   }
 
-  function viewProps(): BackgroundViewProps {
+  function viewProps() {
     revision();
     const scope = captureScope();
     const writeStatus = readWriteStatus();
@@ -508,11 +510,11 @@ export function createAppearanceBackground(
           ? t("configView.appearance.background.readOnly")
           : t("configView.appearance.background.private"),
       message: displayedMessage,
-      onSource: (source) => selectSource(source),
-      onChange: (patch) => change(patch),
+      onSource: (source: BackgroundPreference["source"]["kind"]) => selectSource(source),
+      onChange: (patch: Partial<BackgroundPreference>) => change(patch),
       onChooseImage: chooseFile,
       onRemoveImage: () => void mutate(),
-      onFile: (file) => void mutate(file),
+      onFile: (file: File) => void mutate(file),
       onPreviewStart: startCanvasPreview,
       onPreviewInput: () => showCanvasPreview(),
       onPreviewEnd: endCanvasPreview,

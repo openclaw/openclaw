@@ -72,6 +72,16 @@ records and publish `complete`. Interrupted work resumes through the same owner;
 normal clients refuse a pending or stale receipt. Shared records stay authoritative
 until this verified retirement finishes in that custody.
 
+Credential copies use bounded insert batches within the same transaction, so
+large stores do not exceed SQLite's statement parameter limit. If an older
+cutover build reports `too many SQL variables`, the shared credentials remain
+authoritative. Install a build with this fix and rerun `openclaw doctor --fix`;
+do not delete credentials or pair clients again to work around the error.
+
+Doctor’s verified offline NOCOW rewrite transfers a matching credential receipt
+to the replacement shared database file. Existing tokens remain usable after
+the rewrite; an unrelated file replacement remains fenced.
+
 Canonical receipt bindings relative to the local store root survive matched archive activation by directory rename; independent native-source bindings remain absolute.
 
 Outside an update, Doctor takes a fresh table-scoped backup in the same source
