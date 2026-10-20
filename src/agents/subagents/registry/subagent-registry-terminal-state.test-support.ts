@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, type Mock } from "vitest";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -75,12 +76,10 @@ export function registerTerminalStateSignalAuthorityTests({
               return captureSessionEntryCurrentRead(target, owner);
             },
           );
-          if (!current.source) {
-            throw new Error("Terminal fixture requires a durable child source");
-          }
+          const source = expectDefined(current.source, "durable child source");
           const writer = openOpenClawAgentDatabase({
             agentId: "main",
-            path: current.source.path,
+            path: source.path,
             env: database.env,
           });
           changeNativeEntry = () => {
@@ -92,7 +91,7 @@ export function registerTerminalStateSignalAuthorityTests({
             });
           };
           nativeCheck = {
-            source: current.source,
+            source,
             assertCurrent(facts) {
               current.assertSourceCurrent();
               if (facts?.lifecycleRunId !== sessionEntry.lifecycleRunId) {
@@ -124,18 +123,12 @@ export function registerTerminalStateSignalAuthorityTests({
               successorWrite = mutateSubagentRuns(
                 [entry.runId],
                 (rows) => {
-                  const current = rows.get(entry.runId);
-                  if (!current) {
-                    throw new Error("Terminal fixture lost admitted run");
-                  }
+                  const current = expectDefined(rows.get(entry.runId), "admitted run");
                   const draft = structuredClone(current);
                   if (change === "provisional kill") {
                     draft.killReconciliation = { killedAt: 4_001 };
                   } else {
-                    draft.execution = {
-                      ...draft.execution,
-                      outcome: { status: "error", error: "corrected outcome" },
-                    };
+                    draft.execution.outcome = { status: "error", error: "corrected outcome" };
                   }
                   return { value: undefined, postimages: new Map([[draft.runId, draft]]) };
                 },

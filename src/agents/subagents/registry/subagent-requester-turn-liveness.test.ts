@@ -22,6 +22,13 @@ afterEach(async () => {
   resetSessionControllerStateForTest();
 });
 
+function attach(operation: ReplyOperation) {
+  operations.push(operation);
+  const backend = { kind: "embedded" as const, runId: "requester-turn", cancel() {} };
+  operation.attachBackend(backend);
+  return { operation, backend };
+}
+
 function requesterTurn() {
   const operation = createReplyOperation({
     sessionKey: "global",
@@ -35,14 +42,11 @@ function requesterTurn() {
       agentId: "main",
     }),
   });
-  operations.push(operation);
   operation.setPhase("running");
-  const backend = { kind: "embedded" as const, runId: "requester-turn", cancel: () => {} };
-  operation.attachBackend(backend);
-  return { operation, backend };
+  return attach(operation);
 }
 
-function child() {
+function child(overrides: Partial<ReturnType<typeof createSubagentRunRecord>> = {}) {
   return createSubagentRunRecord({
     runId: "liveness-child",
     childSessionKey: "agent:main:subagent:liveness-child",
@@ -51,6 +55,7 @@ function child() {
     requesterStorePath: storePath,
     requesterTurnRunId: "requester-turn",
     expectsCompletionMessage: true,
+    ...overrides,
   });
 }
 
@@ -78,6 +83,7 @@ it.each([
   ["key", { requesterSessionKey: "other-requester" }],
   ["agent", { requesterAgentId: "research" }],
   ["turn", { requesterTurnRunId: "other-turn" }],
+  ["missing turn", { requesterTurnRunId: undefined }],
   ["no obligation", { expectsCompletionMessage: false }],
 ] as const)(
   "does not borrow live requester ownership across a different %s",
@@ -87,19 +93,10 @@ it.each([
   },
 );
 
-it("does not retain a claim when the recorded requester turn is absent", () => {
-  const entry = child();
-  expect(isClaimedByLiveRequesterTurn(entry)).toBe(false);
-
-  requesterTurn();
-  entry.requesterTurnRunId = undefined;
-  expect(isClaimedByLiveRequesterTurn(entry)).toBe(false);
-});
-
 it.each(["default", "custom"] as const)(
   "retains a real requester admitted through its %s logical store locator",
-  async (layout) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+  (layout) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:main";
       const logicalStore =
         layout === "custom"
@@ -124,24 +121,20 @@ it.each(["default", "custom"] as const)(
       if (admitted.status !== "owned") {
         throw new Error("Requester did not acquire its turn");
       }
-      const operation = admitted.operation;
-      const backend = { kind: "embedded" as const, runId: "requester-turn", cancel() {} };
-      operation.attachBackend(backend);
-      const entry = {
-        ...child(),
+      const turn = attach(admitted.operation);
+      const entry = child({
         requesterSessionKey: sessionKey,
         requesterStorePath: physicalStore,
-      };
+      });
       try {
         expect(
           isClaimedByLiveRequesterTurn({ ...entry, requesterStorePath: physicalStore + ".other" }),
         ).toBe(false);
-        settleRequester({ operation, backend }, entry);
+        settleRequester(turn, entry);
       } finally {
-        operation.complete();
-        await operation.ownerSettlement;
+        turn.operation.complete();
+        await turn.operation.ownerSettlement;
       }
       expect(isClaimedByLiveRequesterTurn(entry)).toBe(false);
-    });
-  },
+    }),
 );
