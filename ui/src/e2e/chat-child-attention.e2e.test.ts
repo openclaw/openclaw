@@ -1,11 +1,14 @@
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { exactButton } from "./chat-presentation.test-support.ts";
+import { exactButton, layoutBox } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { sessionsListResponse } from "./session-management.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat child attention" });
+function session(key: string, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow {
+  return { key, sessionId: key, kind: "direct", status: "done", updatedAt: Date.now(), ...fields };
+}
 
 suite.define(() => {
   it.each([
@@ -14,25 +17,17 @@ suite.define(() => {
   ])("aligns a blocked child notice with its parent's composer at $width px", async (viewport) => {
     await suite.withPage({ viewport, locale: "en-US" }, async ({ page }) => {
       const now = Date.now();
-      const parent = {
-        key: "agent:main:dashboard:diagnostic-parent",
-        sessionId: "diagnostic-parent",
-        kind: "direct",
+      const parent = session("agent:main:dashboard:parent", {
         label: "Messaging channel setup",
-        status: "done",
         hasActiveRun: false,
         updatedAt: now,
         childSessions: ["agent:main:subagent:debugger"],
-      } satisfies GatewaySessionRow;
-      const child = {
-        key: parent.childSessions![0]!,
-        sessionId: "debugger-child",
-        kind: "direct",
+      });
+      const child = session(parent.childSessions![0]!, {
         classification: "subagent",
         label: "Debugger diagnostic",
         spawnedBy: parent.key,
         parentSessionKey: parent.key,
-        status: "done",
         hasActiveRun: false,
         updatedAt: now,
         endedAt: now,
@@ -42,11 +37,10 @@ suite.define(() => {
           attention: "key",
           expiresAt: now + 60_000,
         },
-      } satisfies GatewaySessionRow;
+      });
       await installMockGateway(page, {
         sessionKey: parent.key,
         sessions: [parent, child],
-        communityInvite: false,
         historyMessages: [
           { role: "assistant", content: "The diagnostic has resumed. Waiting for its result." },
         ],
@@ -60,19 +54,19 @@ suite.define(() => {
       const composer = pane.locator(".agent-chat__input");
       await notice.waitFor();
       expect(await notice.textContent()).toContain(child.agentStatus!.note);
-      expect(await notice.getAttribute("data-child-session-key")).toBe(child.key);
       expect(
-        await notice
-          .locator(".chat-composer-neighbor-card__copy span")
-          .evaluate((node) => getComputedStyle(node).whiteSpace),
-      ).toBe("normal");
+        await notice.evaluate((node) => ({
+          key: node.getAttribute("data-child-session-key"),
+          whitespace: getComputedStyle(
+            node.querySelector(".chat-composer-neighbor-card__copy span")!,
+          ).whiteSpace,
+        })),
+      ).toEqual({ key: child.key, whitespace: "normal" });
       await exactButton(notice, "Open session").click({ trial: true });
-      const noticeBox = await notice.boundingBox();
-      const composerBox = await composer.boundingBox();
-      expect(noticeBox).not.toBeNull();
-      expect(composerBox).not.toBeNull();
-      expect(noticeBox!.x).toBeCloseTo(composerBox!.x, 0);
-      expect(noticeBox!.width).toBeCloseTo(composerBox!.width, 0);
+      const noticeBox = await layoutBox(notice);
+      const composerBox = await layoutBox(composer);
+      expect(noticeBox.x).toBeCloseTo(composerBox.x, 0);
+      expect(noticeBox.width).toBeCloseTo(composerBox.width, 0);
       expect(await notice.evaluate((node) => getComputedStyle(node).borderRadius)).toBe(
         await composer.evaluate((node) => getComputedStyle(node).borderRadius),
       );
@@ -81,25 +75,16 @@ suite.define(() => {
 
   it("never flashes a child the parent's child query no longer links", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const parent = {
-        key: "agent:main:dashboard:expired-parent",
-        sessionId: "expired-parent",
-        kind: "direct",
-        status: "done",
-        updatedAt: Date.now(),
-      } satisfies GatewaySessionRow;
+      const parent = session("agent:main:dashboard:expired-parent");
       // The broad roster keeps spawnedBy after the Gateway retires the child link.
-      const expired = {
-        key: "agent:main:subagent:expired",
-        sessionId: "expired-child",
-        kind: "direct",
+      const expired = session("agent:main:subagent:expired", {
         classification: "subagent",
         label: "Expired diagnostic",
         spawnedBy: parent.key,
         status: "timeout",
         updatedAt: 1,
         endedAt: 1,
-      } satisfies GatewaySessionRow;
+      });
       await page.addInitScript(() => {
         const seen = { flashed: false };
         Object.assign(window, { childAttentionSeen: seen });
@@ -110,7 +95,6 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         sessionKey: parent.key,
         sessions: [parent, expired],
-        communityInvite: false,
         historyMessages: [{ role: "assistant", content: "Parent history loaded." }],
         methodResponses: {
           "sessions.list": {

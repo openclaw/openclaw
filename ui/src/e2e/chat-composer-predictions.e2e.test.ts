@@ -23,8 +23,6 @@ suite.define(() => {
               config: {},
               raw: "{}",
               hash: "predictions-config",
-              appliedConfigHash: "predictions-config",
-              configRevisionHash: "predictions-config",
               issues: [],
               valid: true,
             },
@@ -63,26 +61,24 @@ suite.define(() => {
         );
         const textarea = page.locator(".agent-chat__composer-combobox textarea");
         const ghost = page.locator(".agent-chat__composer-prediction");
+        const sendAndFinish = async () => {
+          await gateway.waitForRequest("chat.startup");
+          await expect.poll(() => textarea.isDisabled()).toBe(false);
+          const send = await sendChat(page, gateway, "Explain the trade-offs.");
+          const runId = requireString(send.idempotencyKey, "run id");
+          await gateway.emitChatFinal({
+            runId,
+            text: "An example makes these trade-offs easier to compare.",
+          });
+          return runId;
+        };
         await page.goto(suite.server.baseUrl + "chat");
-        await gateway.waitForRequest("chat.startup");
-        await expect.poll(() => textarea.isDisabled()).toBe(false);
-        const disabledSend = await sendChat(page, gateway, "Explain the trade-offs.");
-        await gateway.emitChatFinal({
-          runId: requireString(disabledSend.idempotencyKey, "run id"),
-          text: "An example makes these trade-offs easier to compare.",
-        });
+        await sendAndFinish();
         expect(await gateway.getRequests("chat.predict")).toHaveLength(0);
 
         enabled = true;
         await page.reload();
-        await gateway.waitForRequest("chat.startup");
-        await expect.poll(() => textarea.isDisabled()).toBe(false);
-        const send = await sendChat(page, gateway, "Explain the trade-offs.");
-        const runId = requireString(send.idempotencyKey, "run id");
-        await gateway.emitChatFinal({
-          runId,
-          text: "An example makes these trade-offs easier to compare.",
-        });
+        const runId = await sendAndFinish();
         const prediction = await gateway.waitForRequest("chat.predict");
         expect(prediction.params).toMatchObject({ runId });
         await gateway.resolveDeferred("chat.predict", { text: suggestion });

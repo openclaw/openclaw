@@ -23,6 +23,21 @@ async function startRun(page: Page, gateway: Gateway, prompt: string) {
   const request = await gateway.waitForRequest("chat.send");
   return requireString(requireRecord(request.params).idempotencyKey, "chat send idempotency key");
 }
+function emitDelta(
+  gateway: Gateway,
+  runId: string,
+  text: string,
+  deltaText?: string,
+  timestamp?: number,
+) {
+  return gateway.emitGatewayEvent("chat", {
+    deltaText,
+    runId,
+    sessionKey: "main",
+    state: "delta",
+    message: chatMessage("assistant", text, timestamp === undefined ? {} : { timestamp }),
+  });
+}
 
 function fencedJson(lineCount: number): string {
   const values = Array.from({ length: lineCount - 2 }, (_, index) => `  ${index},`);
@@ -68,16 +83,7 @@ suite.define(() => {
           { length: 9 },
           (_, index) => `const check${index} = "${"deployment check ".repeat(8)}";`,
         ).join("\n");
-      const emitDelta = async (text: string, deltaText: string) => {
-        await gateway.emitGatewayEvent("chat", {
-          deltaText,
-          message: { role: "assistant", content: [{ type: "text", text }] },
-          runId,
-          sessionKey: "main",
-          state: "delta",
-        });
-      };
-      await emitDelta(initial, initial);
+      await emitDelta(gateway, runId, initial, initial);
       const wrapper = page.locator(".chat-bubble.streaming .code-block-wrapper");
       await wrapper.locator(".code-block-expand").click();
       await wrapper.locator(".code-block-wrap").click();
@@ -85,7 +91,7 @@ suite.define(() => {
       await polledAttribute(wrapper, "class").toContain("is-expanded");
       await polledAttribute(wrapper, "class").toContain("is-wrapped");
       const suffix = "\n```\n\nAll deployment checks are ready.";
-      await emitDelta(initial + suffix, suffix);
+      await emitDelta(gateway, runId, initial + suffix, suffix);
       await expect
         .poll(() => page.locator(".chat-bubble.streaming .chat-text").textContent())
         .toContain("All deployment checks are ready.");
@@ -162,12 +168,7 @@ suite.define(() => {
         const first = "    *first";
         const second = `${first}\n\n    second`;
         for (const text of [first, second]) {
-          await gateway.emitGatewayEvent("chat", {
-            message: { role: "assistant", content: [{ type: "text", text }] },
-            runId,
-            sessionKey: "main",
-            state: "delta",
-          });
+          await emitDelta(gateway, runId, text);
           const code = page.locator(".chat-bubble.streaming pre code");
           await expect
             .poll(() => code.allTextContents())
@@ -191,21 +192,7 @@ suite.define(() => {
 
       const runId = await startRun(page, gateway, "show TypeScript");
       const openFence = "```ts\nconst value = 1 < 2;";
-      const emitDelta = async (text: string, deltaText: string) => {
-        await gateway.emitGatewayEvent("chat", {
-          deltaText,
-          message: {
-            content: [{ text, type: "text" }],
-            role: "assistant",
-            timestamp: Date.now(),
-          },
-          runId,
-          sessionKey: "main",
-          state: "delta",
-        });
-      };
-
-      await emitDelta(openFence, openFence);
+      await emitDelta(gateway, runId, openFence, openFence, Date.now());
       const streamingCode = page.locator(".chat-bubble.streaming code.language-ts");
       await expect.poll(() => streamingCode.textContent()).toContain("const value = 1 < 2;");
       expect(await streamingCode.locator("span").count()).toBe(0);
@@ -213,7 +200,7 @@ suite.define(() => {
       expect(await page.locator(".chat-bubble.streaming .code-block-copy").count()).toBe(1);
 
       const completedFence = `${openFence}\n\`\`\``;
-      await emitDelta(completedFence, "\n```");
+      await emitDelta(gateway, runId, completedFence, "\n```", Date.now());
       await polledAttribute(streamingCode, "class").toContain("hljs");
       expect(await streamingCode.locator("span").count()).toBeGreaterThan(0);
 

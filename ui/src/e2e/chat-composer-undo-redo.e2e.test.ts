@@ -1,7 +1,7 @@
-// Native value write-back must not clobber undo/redo bookkeeping (#131708).
 import type { Page } from "playwright";
 import { beforeAll, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { newChatPage } from "./chat-flow.test-support.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -17,8 +17,7 @@ let page: Page;
 
 suite.define(() => {
   beforeAll(async () => {
-    const context = await suite.newBrowserContext({});
-    page = await context.newPage();
+    page = await newChatPage(suite, {});
     await installMockGateway(page);
     await page.addInitScript(() => {
       const descriptor = Object.getOwnPropertyDescriptor(
@@ -58,7 +57,7 @@ suite.define(() => {
     });
   }
 
-  it("does not re-apply the textarea value after native input", async () => {
+  it("preserves native undo/redo without textarea write-back (#131708)", async () => {
     const textarea = page.locator(COMPOSER_TEXTAREA);
     await textarea.click();
 

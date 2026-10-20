@@ -62,24 +62,21 @@ suite.define(() => {
         const trigger = composer.locator(triggerSelector);
         await trigger.waitFor({ state: "visible" });
 
-        await outside.focus();
-        await trigger.click();
-        expect(await outside.evaluate((element) => document.activeElement === element)).toBe(true);
-        await trigger.click();
-
-        await textarea.focus();
-        await trigger.click();
-        expect(await textarea.evaluate((element) => document.activeElement === element)).toBe(true);
-        await trigger.click();
+        for (const origin of [outside, textarea]) {
+          await origin.focus();
+          await trigger.click();
+          expect(await origin.evaluate((element) => document.activeElement === element)).toBe(true);
+          await trigger.click();
+        }
 
         await trigger.focus();
         await trigger.press("Enter");
-        expect(await trigger.evaluate((element) => document.activeElement === element)).toBe(true);
         expect(
-          await trigger.evaluate(
-            (element) => element.closest<HTMLDetailsElement>("details")?.open ?? false,
-          ),
-        ).toBe(true);
+          await trigger.evaluate((element) => ({
+            focused: document.activeElement === element,
+            open: element.closest<HTMLDetailsElement>("details")?.open ?? false,
+          })),
+        ).toEqual({ focused: true, open: true });
         await trigger.press("Enter");
       }
 
