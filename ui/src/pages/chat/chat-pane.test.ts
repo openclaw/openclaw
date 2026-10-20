@@ -96,7 +96,7 @@ describe("chat pane retained presentation", () => {
           defaults: { modelProvider: null, model: null, contextTokens: null },
           sessions: [{ key: state.sessionKey, kind: "direct", updatedAt }],
         } satisfies NonNullable<ApplicationContext["sessions"]["state"]["result"]>;
-        pane.applySessionsState({
+        Object.assign(pane.context.sessions.state, {
           agentId: "main",
           deletedSessions: [],
           error: null,
@@ -107,6 +107,7 @@ describe("chat pane retained presentation", () => {
           result,
           sectionOrder: [],
         });
+        pane.applySessionsState(pane.context.sessions.state);
         expect(state.sessionsResult).toBe(result);
       }
 

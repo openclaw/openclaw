@@ -305,12 +305,8 @@ describe("chat pane approval requester identity", () => {
         decideApproval,
       } as unknown as ApplicationContext["overlays"],
       sessions: createSessionCapabilityFixture({
-        presentation: {
-          result: sessionsResult([{ ...host, label: "Unrelated pane title" }], 1),
-          agentId: "main",
-        },
         state: {
-          result: null,
+          result: sessionsResult([{ ...host, label: "Unrelated pane title" }], 1),
           agentId: "main",
           modelOverrides: {},
           deletedSessions: [],
@@ -398,8 +394,7 @@ describe("chat pane approval requester identity", () => {
 
     try {
       for (const [row, title] of publications) {
-        pane.applySessionsState({
-          ...context.sessions.state,
+        Object.assign(context.sessions.state, {
           result: {
             ts: now,
             path: "",
@@ -408,6 +403,7 @@ describe("chat pane approval requester identity", () => {
             sessions: row ? [host, row] : [host],
           },
         });
+        pane.applySessionsState(context.sessions.state);
         await waitForSolid(() => {
           const card = container.querySelector(".chat-inline-approval .exec-approval-card");
           expect(card?.getAttribute("data-approval-id")).toBe(approval.id);
