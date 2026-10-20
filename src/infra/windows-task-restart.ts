@@ -24,16 +24,9 @@ function quotePowerShellSingleQuotedLiteral(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-function resolveWindowsTaskName(env: NodeJS.ProcessEnv): string {
-  const override = env.OPENCLAW_WINDOWS_TASK_NAME?.trim();
-  if (override) {
-    return override;
-  }
-  return resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
-}
-
 export function relaunchGatewayScheduledTask(env: NodeJS.ProcessEnv = process.env): RestartAttempt {
-  const taskName = resolveWindowsTaskName(env);
+  const taskName =
+    env.OPENCLAW_WINDOWS_TASK_NAME?.trim() || resolveGatewayWindowsTaskName(env.OPENCLAW_PROFILE);
   const taskScriptPath = resolveTaskScriptPath(env);
   const scriptPath = path.join(
     resolvePreferredOpenClawTmpDir(),
