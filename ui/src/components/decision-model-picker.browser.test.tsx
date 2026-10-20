@@ -34,7 +34,7 @@ async function mount(overrides: Partial<Parameters<typeof DecisionModelPicker>[0
   await update();
   const picker = container.querySelector<SelectPicker>("openclaw-select-picker")!;
   const find = (selector: string) => picker.querySelector<HTMLElement>(selector)!;
-  const trigger = find(".picker-select__trigger");
+  const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
   await userEvent.click(trigger);
   await expect.element(find("input")).toHaveFocus();
   const rows = () => [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
