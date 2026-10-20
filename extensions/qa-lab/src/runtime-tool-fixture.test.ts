@@ -676,6 +676,28 @@ async function runTranscriptFixture(
 }
 
 describe("runtime tool fixture transcript evidence", () => {
+  it.each(["missing", "empty"])(
+    "reports a %s transcript with its fixture sessions",
+    async (state) => {
+      const env = await makeEnv();
+      if (state === "empty") {
+        await writeRuntimeToolTranscripts(env, "read", [], []);
+      }
+      const result = runLiveFixture(env);
+      await expect(result).rejects.toThrow(
+        state === "missing"
+          ? "session transcript entry not found for agent:qa:runtime-tool:read:happy"
+          : "session transcript is empty for agent:qa:runtime-tool:read:happy",
+      );
+      await expect(result).rejects.toThrow(
+        "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:happy",
+      );
+      await expect(result).rejects.toThrow(
+        "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:read:failure",
+      );
+    },
+  );
+
   it("prepares the authored config instead of seeding a stale runtime store", async () => {
     const env = await makeEnv();
     const staleStorePath = path.join(env.gateway.tempRoot, "state", "stale.sqlite");
